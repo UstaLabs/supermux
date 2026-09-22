@@ -61,9 +61,18 @@ void     ghostty_free(const GhosttyAllocator*, uint8_t* ptr, size_t len);
 - Buffers returned by `*_alloc` APIs (formatter, selection, snapshot,
   continuation) are freed with `ghostty_free(same_allocator, ptr, len)`.
 - **[smoke]** A counting allocator passed to 1,000 `ghostty_terminal_new`/`free`
-  cycles ends at 0 live allocations / 0 live bytes. This is the hook for a
-  per-terminal hard memory budget (fail `alloc` when over budget), independent
-  of the scrollback limits below.
+  cycles ends at 0 live allocations / 0 live bytes.
+- ⚠️ Terminal **pages** (all cell/scrollback storage) do NOT come from this
+  allocator: `PageList` allocates them from `std.heap.page_allocator` (mmap,
+  demand-paged; Darwin: tagged mach pages; wasm: a module-wide page free list
+  that never shrinks). The `GhosttyAllocator` only sees the small non-page heap
+  (render state, nodes, pins, formatter output: ~10–50 KB per terminal). So a
+  custom allocator can NOT enforce a hard memory budget; the scrollback byte
+  limit (§6) is what bounds page memory. (Verified by
+  `tests/terminal_bridge_test.c` history fixtures: RSS grows with the byte
+  budget while the counting allocator stays at ~10 KB.)
+- `ghostty_alloc(alloc, n)` requests alignment 1 (log2 0); the st_* wrapper
+  over-allocates to align its own structures.
 
 ## 2. Terminal lifecycle
 
@@ -307,8 +316,11 @@ void ghostty_terminal_scroll_viewport(GhosttyTerminal, GhosttyTerminalScrollView
   **page-granular estimates** (a page is ~400 KB; the line limit is usually
   exceeded by dozens–~100 lines). Lowering prunes immediately; bytes=0 disables
   scrollback. **[smoke]** round-trips both.
-  → A byte budget *is* enforceable to within one page per screen; for a hard
-  cap on total native memory use the custom allocator (§1).
+  → A byte budget *is* enforceable to within one page per screen (measured:
+  RSS growth 0.96–0.99 × budget for plain text, 1.2 × with grapheme-heavy
+  pages; README "History budgets"). The line limit always keeps at least one
+  page of rows (0 still keeps ~a page: use bytes = 0 for "no scrollback").
+  The custom allocator (§1) does not see page memory.
 - Scrolling is purely local state: nothing is written to the pty.
 
 ## 7. Modes
@@ -348,7 +360,7 @@ GhosttyResult ghostty_key_encoder_encode(enc, ev, char* out, size_t cap, size_t*
 
 Mouse (`mouse/event.h`, `mouse/encoder.h`):
 ```c
-ghostty_mouse_event_new/free; _set_action(PRESS=0,RELEASE=1,MOTION=2); _set_button(LEFT=1,RIGHT=2,MIDDLE=3,FOUR..ELEVEN; xterm convention: 4/5 wheel up/down, 6/7 left/right — not yet smoke-tested);
+ghostty_mouse_event_new/free; _set_action(PRESS=0,RELEASE=1,MOTION=2); _set_button(LEFT=1,RIGHT=2,MIDDLE=3,FOUR..ELEVEN; xterm convention: 4/5 wheel up/down, 6/7 left/right — SGR encodes them as 64/65/66/67, tested in `terminal_bridge_test.c`);
 _clear_button (motion without button); _set_mods(GhosttyMods); _set_position(GhosttyMousePosition{float x, y} /* surface PIXELS */);
 ghostty_mouse_encoder_new/free/reset;
 ghostty_mouse_encoder_setopt(enc, OPT_EVENT(GhosttyMouseTrackingMode NONE/X10/NORMAL/BUTTON/ANY) | OPT_FORMAT(X10/UTF8/SGR/URXVT/SGR_PIXELS)

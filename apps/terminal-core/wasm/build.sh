@@ -4,11 +4,14 @@
 #
 #   bash apps/terminal-core/wasm/build.sh [--test]
 #
-# Output: apps/terminal-core/build/wasm/ghostty-vt.wasm + manifest.json.
-# Only the VT engine is built; ghostty-web's renderer/DOM terminal is never
-# used. The module exports its linear memory and a growable indirect function
-# table (for effect callbacks); the host owns every buffer it passes in and
-# frees it with ghostty_wasm_free.
+# Output: apps/terminal-core/build/wasm/supermux-terminal.wasm (libghostty-vt
+# + the st_* wrapper, native/src/terminal_bridge.c, linked into one module
+# exporting st_* and, for now, ghostty_*), the raw upstream ghostty-vt.wasm,
+# and manifest.json. Only the VT engine is built; ghostty-web's renderer/DOM
+# terminal is never used. The module exports its linear memory and a growable
+# indirect function table (for effect callbacks); the host owns every buffer
+# it passes in and frees it with ghostty_wasm_free (st_* output buffers with
+# st_free_buffer). The smoke fixture runs against supermux-terminal.wasm.
 #
 # Environment overrides:
 #   ST_NODE     node binary (default: node on PATH, else newest ~/.nvm version)
@@ -52,12 +55,32 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 cp "$WORK_DIR/ghostty/bin/ghostty-vt.wasm" "$OUT_DIR/ghostty-vt.wasm"
 
-for n in "$HOME" "$PKG_DIR"; do
-  if grep -aqF "$n" "$OUT_DIR/ghostty-vt.wasm"; then
-    die "ghostty-vt.wasm contains absolute developer path '$n'"
-  fi
+# st_* wrapper: the same terminal_bridge.c as every native target, compiled
+# freestanding (it uses no libc) and linked with the wasm libghostty-vt.a.
+NATIVE_DIR="$WASM_DIR/../native"
+ST_ABI_VERSION="$(sed -n 's/^#define ST_ABI_VERSION \([0-9]*\)u$/\1/p' "$NATIVE_DIR/include/supermux_terminal.h")"
+export ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE" ZIG_LOCAL_CACHE_DIR="$BUILD_DIR/zig-cache/wasm32"
+log "compile st_* wrapper for $ZIG_TARGET (ABI $ST_ABI_VERSION)"
+"$ZIG" cc -target "$ZIG_TARGET" -mcpu=generic+simd128 -std=c11 -Os -g0 -Wall -Wextra -Werror \
+  -fvisibility=hidden -DGHOSTTY_STATIC "-ffile-prefix-map=$PKG_DIR/=" \
+  -I "$NATIVE_DIR/include" -I "$UPSTREAM_DIR/include" \
+  -c "$NATIVE_DIR/src/terminal_bridge.c" -o "$WORK_DIR/terminal_bridge.o"
+log "link supermux-terminal.wasm (st_* + ghostty_* exports, growable table)"
+"$ZIG" cc -target "$ZIG_TARGET" -mcpu=generic+simd128 -nostdlib \
+  "$WORK_DIR/terminal_bridge.o" "$WORK_DIR/ghostty/lib/libghostty-vt.a" \
+  -Wl,--no-entry -Wl,--export-dynamic -Wl,--export-table -Wl,-z,stack-size=131072 -Wl,--strip-all \
+  -o "$WORK_DIR/supermux-terminal.unpatched.wasm"
+python3 "$WASM_DIR/patch_growable_table.py" "$WORK_DIR/supermux-terminal.unpatched.wasm" \
+  "$OUT_DIR/supermux-terminal.wasm"
+
+for f in ghostty-vt.wasm supermux-terminal.wasm; do
+  for n in "$HOME" "$PKG_DIR"; do
+    if grep -aqF "$n" "$OUT_DIR/$f"; then
+      die "$f contains absolute developer path '$n'"
+    fi
+  done
 done
-log "no absolute developer paths in ghostty-vt.wasm"
+log "no absolute developer paths in the wasm modules"
 
 # ---------------------------------------------------------------- test ----
 find_node() {
@@ -95,7 +118,7 @@ if [[ $RUN_TEST -eq 1 ]]; then
   fi
   RUNTIMES+=("node $("$NODE" --version)")
   log "running smoke fixture"
-  if "$NODE" "$WASM_DIR/smoke.mjs" "$OUT_DIR/ghostty-vt.wasm" "${browser_args[@]}" \
+  if "$NODE" "$WASM_DIR/smoke.mjs" "$OUT_DIR/supermux-terminal.wasm" "${browser_args[@]}" \
        --work "$BUILD_DIR/wasm-smoke"; then
     TEST_RESULT="passed"
   else
@@ -107,14 +130,15 @@ runtimes_json="$(printf '%s\n' "${RUNTIMES[@]+"${RUNTIMES[@]}"}" | python3 -c 'i
 python3 - "$OUT_DIR" <<PY
 import hashlib, json, os, sys
 out = sys.argv[1]
-wasm = os.path.join(out, "ghostty-vt.wasm")
-data = open(wasm, "rb").read()
+def entry(name):
+    data = open(os.path.join(out, name), "rb").read()
+    return {"path": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
 manifest = {
     "schema": 1,
     "target": "wasm32",
     "zig_target": "$ZIG_TARGET",
-    "abi_version": 0,
-    "wrapper": False,
+    "abi_version": $ST_ABI_VERSION,
+    "wrapper": True,
     "ghostty_commit": "$GHOSTTY_SHA",
     "libghostty_vt_version": "$LIBVT_VERSION",
     "zig_version": "$ZIG_VERSION",
@@ -123,7 +147,7 @@ manifest = {
     "runtime_tested": "$TEST_RESULT" == "passed",
     "test_result": "$TEST_RESULT",
     "test_runtimes": $runtimes_json,
-    "files": [{"path": "ghostty-vt.wasm", "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}],
+    "files": [entry("supermux-terminal.wasm"), entry("ghostty-vt.wasm")],
 }
 json.dump(manifest, open(os.path.join(out, "manifest.json"), "w"), indent=2)
 PY

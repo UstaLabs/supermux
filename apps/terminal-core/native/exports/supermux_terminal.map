@@ -1,0 +1,12 @@
+/* ELF version script for libsupermux_terminal.so (Linux, Android): export
+ * only the owned st_* ABI and the JNI entry points; everything else, including
+ * every libghostty-vt, wuffs and highway symbol from the static archive, is
+ * local. */
+{
+  global:
+    st_*;
+    Java_*;
+    JNI_On*;
+  local:
+    *;
+};

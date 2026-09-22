@@ -3,8 +3,11 @@
 This directory builds upstream Ghostty's `libghostty-vt` (the VT engine only:
 parser, screen/scrollback state, render state, input encoders) from a pinned
 commit, and proves with a native smoke test that the pinned C API does what
-supermux needs. The supermux wrapper (`st_*` C ABI, JNI, cinterop) comes in
-later tasks and plugs into the same build (see "Wrapper hook").
+supermux needs. On top of it sits the package-owned **`st_*` C ABI v1**
+([`include/supermux_terminal.h`](include/supermux_terminal.h),
+[`src/terminal_bridge.c`](src/terminal_bridge.c)) — the single implementation
+of terminal semantics that JNI, cinterop and the wasm loader all call (see
+"st_* ABI v1" below).
 
 - Pin + toolchain: [`upstream.lock.json`](upstream.lock.json)
 - API summary for wrapper/binding design: [`API-NOTES.md`](API-NOTES.md)
@@ -67,12 +70,29 @@ What `native/build.sh` does, in order:
    member names `NNNN_<object>.o` (upstream's `zig ar -M` combine step names
    members by absolute Zig-cache paths). pkg-config files are dropped (they
    embed the absolute prefix).
-8. Wrapper hook (no-op until `WRAPPER_SOURCES` is populated).
+8. **Wrapper** (`WRAPPER_SOURCES`, `ST_ABI_VERSION=1`, must match the header):
+   compile `src/terminal_bridge.c` (`-fvisibility=hidden -fPIC -Werror`), fold
+   it and `libghostty-vt.a` into one static archive
+   `lib/libsupermux_terminal.a` (`scripts/combine_archive.py`), link
+   `lib/libsupermux_terminal.{so,dylib}` / `supermux_terminal.dll` (not iOS)
+   exporting only `st_*`/`Java_*`/`JNI_On*` (ELF version script
+   `exports/supermux_terminal.map`, Mach-O `exports/supermux_terminal.exp`,
+   PE dllexport), and **fail if the shared library exports anything else**
+   (or fewer than the 18 `st_*`). Stage `include/supermux_terminal.h`.
 9. Compile the smoke test with `-Wall -Wextra -Werror` and link it against the
    **static** archive (Zig `cc` + Zig's libc++; Android: NDK clang +
    `-static-libstdc++`, 16 KB page size).
-10. Fail if any artifact contains `$HOME`, the package path or the build path.
-11. `--test`: run the smoke test only if the target matches this host (or, for
+   Then compile `tests/terminal_bridge_test.c` and link it against
+   `libsupermux_terminal.a` → `bin/terminal_bridge_test`.
+10. Fail if any artifact contains `$HOME`, the package path or the build path;
+    fail if `src/commonTest/.../CodecGolden.kt` is not what
+    `scripts/gen_codec_golden.py` generates from `fixtures/codec/*.bin`.
+11. `--test`: run the smoke test, the bridge test (with
+    `ST_FIXTURES_DIR=fixtures/codec`, so golden buffers are compared byte for
+    byte), a `dlopen` check of the shared library (python ctypes drives one
+    terminal through the exported symbols only) and, on a Linux host with
+    `gcc`, the bridge test again under **ASan + UBSan + LeakSanitizer**
+    (`ST_SKIP_HEAVY=1`), only if the target matches this host (or, for
     Android, an adb device with the matching ABI). Otherwise the manifest says
     `runtime_tested: false` with the reason, and the script exits 3.
 12. Write `build/native/<target>/manifest.json`: target, Zig triple/cpu, ABI
@@ -113,14 +133,301 @@ features, `-Demit-xcframework` (macOS host) for an Apple xcframework.
 Environment: `ST_ZIG_JOBS` (default 2), `ST_ZIG_HOME`, `ST_ALLOW_UNVERIFIED_ZIG`, `ANDROID_NDK_HOME`,
 `ST_LLVM_OBJCOPY`; wasm: `ST_NODE`, `ST_CHROME`, `ST_NO_BROWSER=1`.
 
-## Wrapper hook
+## st_* ABI v1
 
-`build.sh` has `WRAPPER_SOURCES=()` and `ST_ABI_VERSION=0`. The wrapper task
-adds `native/src/terminal_bridge.c` (+ `terminal_jni.c` for JVM/Android) to
-that array, implements `build_wrapper()` (compile against
-`build/native/<target>/include`, link the static `libghostty-vt.a`, export
-only `st_*`/`Java_*`), and bumps `ST_ABI_VERSION`. The manifest already
-carries `abi_version` and `wrapper`.
+The owned C ABI every binding calls. Header:
+[`include/supermux_terminal.h`](include/supermux_terminal.h) (the normative
+per-function contract); implementation:
+[`src/terminal_bridge.c`](src/terminal_bridge.c); tests:
+[`tests/terminal_bridge_test.c`](tests/terminal_bridge_test.c); Kotlin decoder:
+`src/commonMain/.../ViewportCodec.kt`.
+
+### Functions
+
+All sizes are fixed-width; every fallible call returns `st_status` (`int32_t`);
+outputs are written only on `ST_OK`.
+
+```c
+uint32_t  st_abi_version(void);                                  /* == 1 */
+st_status st_create(uint32_t abi_version, uint32_t columns, uint32_t rows,
+                    uint32_t cell_width_px, uint32_t cell_height_px,
+                    uint32_t history_lines, uint64_t history_bytes,
+                    const struct GhosttyAllocator *allocator /* NULL = default */,
+                    st_handle *out_handle);
+st_status st_destroy(st_handle);                                 /* idempotent */
+st_status st_feed(st_handle, const uint8_t *data, uint32_t len, uint32_t origin /* 0 LIVE, 1 REPLAY */);
+st_status st_reset(st_handle);
+st_status st_resize(st_handle, uint32_t columns, uint32_t rows, uint32_t cell_width_px, uint32_t cell_height_px);
+st_status st_colors(st_handle, const uint64_t *colors, uint32_t count /* 259: fg, bg, cursor, palette[256] */);
+st_status st_read_viewport(st_handle, uint32_t flags /* 1 FORCE_FULL | 2 BREAK_HOLD */,
+                           uint8_t **out_buf, uint32_t *out_len, uint32_t *out_frame_flags /* 1 HELD; may be NULL */);
+st_status st_acknowledge(st_handle, int64_t generation);
+st_status st_scroll_to(st_handle, int64_t row);
+st_status st_key(st_handle, uint32_t physical_code, const uint8_t *text, uint32_t text_len,
+                 uint32_t modifiers, uint32_t action);
+st_status st_mouse(st_handle, int32_t column, int32_t row, uint32_t button, uint32_t modifiers, uint32_t action);
+st_status st_paste(st_handle, const uint8_t *text, uint32_t len, uint32_t flags /* 1 ALLOW_UNSAFE */);
+st_status st_focus(st_handle, uint32_t focused);
+st_status st_select(st_handle, uint32_t has_selection, int64_t start_row, uint32_t start_column,
+                    int64_t end_row, uint32_t end_column);
+st_status st_selected_text(st_handle, uint8_t **out_buf, uint32_t *out_len);
+st_status st_drain_effects(st_handle, uint8_t **out_buf, uint32_t *out_len);
+st_status st_free_buffer(uint8_t *buf);                          /* NULL ok */
+```
+
+Status: `ST_OK 0`, `INVALID_HANDLE -1`, `ABI_MISMATCH -2`,
+`INVALID_ARGUMENT -3`, `OUT_OF_MEMORY -4`, `LIMIT -5` (terminal table full,
+envelope > 8 MiB, effect queue full), `REJECTED -6` (unsafe paste),
+`INTERNAL -7`. Integer-coded inputs use the package constants
+(`TerminalConstants.kt`), converted by `switch`/table code in C (see the
+mapping tables below); unknown values → `INVALID_ARGUMENT` (unknown physical
+keys → `UNIDENTIFIED`).
+
+### Handles
+
+`st_handle` is an opaque `uint32_t` from a process-wide table of
+`ST_MAX_TERMINALS = 1024` slots: `generation << 10 | slot`, never 0, never a
+pointer. 0, a destroyed handle (including one whose slot was reused) and any
+value never issued fail with `ST_ERR_INVALID_HANDLE` without touching freed
+memory; `st_destroy` is therefore idempotent. `st_create` rejects any
+`abi_version` other than 1 with `ST_ERR_ABI_MISMATCH`. Slots are claimed and
+released with C11 atomics, so different terminals may live on different
+threads; one handle must be used by one thread at a time. No callback ever
+crosses the ABI.
+
+### Ownership and freeing
+
+- Every output buffer (`st_read_viewport`, `st_drain_effects`,
+  `st_selected_text`) is a complete, caller-owned envelope. It stays valid and
+  unchanged across later calls **and after `st_destroy`**, until passed to
+  `st_free_buffer` exactly once — the one freeing function. The buffer carries
+  a 48-byte hidden header (raw pointer, length, a copy of the allocator,
+  magic) so it can be freed with only its pointer; a pointer without that
+  header is rejected (`INVALID_ARGUMENT`); double free is undefined.
+- Bindings copy the bytes (JNI `byte[]`, Kotlin/Native `ByteArray`, JS
+  `Uint8Array.slice`) and free immediately.
+- `st_drain_effects` is atomic: on failure nothing is consumed.
+- A custom `GhosttyAllocator` must outlive the terminal and every buffer
+  returned for it.
+
+### Portability / memory
+
+`terminal_bridge.c` uses **no libc** (no stdio, `malloc` or `string.h`; only
+`stdint/stddef/stdbool/stdatomic` and the Ghostty API), so the identical file
+compiles for every native target and `wasm32-freestanding`. All wrapper
+memory comes from `ghostty_alloc`/`ghostty_free` with the terminal's allocator
+(NULL → Ghostty's default: libc malloc on native, the module allocator on
+wasm), over-allocated by 64 bytes for 16-byte alignment + the free header.
+
+### Codec
+
+```text
+u32 magic = 0x53545654; u16 abi = 1; u16 kind; u32 payloadBytes; payload
+All integers little-endian. Buffer length is exactly 12 + payloadBytes.
+Limits: payload <= 8 MiB; columns/rows 1..4096; strings fit the payload.
+kind=1 viewport, kind=2 effects, kind=3 selected text.
+str = u32 byte length + UTF-8 (always valid: invalid input bytes become U+FFFD)
+bytes = u32 length + raw bytes; bool = u8 0/1; nullable = u8 presence + value
+Long = i64 except colours (u64, TerminalColor); Int = i32; list = u32 count + items
+```
+
+Payloads:
+
+```text
+viewport (kind 1), TerminalViewport field order:
+  i64 generation
+  i32 columns, i32 rows, i32 cellWidthPx, i32 cellHeightPx
+  u32 rowCount; rows[]:  i32 index (ascending), u32 cellCount (== columns),
+                         cells[]: str text, i32 width (0/1/2), u64 fg, u64 bg, i32 flags, i32 underline
+  i32 cursorColumn, i32 cursorRow, i32 shape, bool visible
+  bool alternateScreen, bool mouseTracking, bool bracketedPaste
+  i64 historyRows, i64 viewportTop, bool full
+  u32 linkCount; links[]: i32 row, i32 firstColumn, i32 lastColumn, str uri
+  bool hasSelection; [i64 startRow, i32 startColumn, i64 endRow, i32 endColumn]
+effects (kind 2):
+  u32 count; effects[]: u8 tag, then
+    1 Response: bytes   2 Input: bytes   3 Title: str   4 Bell: -
+    5 ClipboardRequest: bool write, bool hasText, [str text]
+selected text (kind 3):
+  str text
+```
+
+Decoders (C test, `ViewportCodec.kt`) reject: short buffers, bad
+magic/ABI/kind, payload length ≠ remaining bytes or > 8 MiB, trailing bytes,
+counts whose minimum encoding cannot fit the remaining bytes (row 8 B, cell
+32 B, link 16 B, effect 1 B), sizes outside 1..4096, rows out of order/range
+or not `columns` wide, full frames without every row, width ∉ 0..2, invalid
+colours (bits 33..63, or DEFAULT with RGBA bits), flags beyond 8 bits,
+underline ∉ 0..5, shape ∉ 0..3, booleans ∉ {0,1}, unknown effect tags, a
+clipboard read carrying text, links/selection outside the grid, scroll
+position `viewportTop > historyRows`, and invalid UTF-8
+(`TerminalCodecException` in Kotlin).
+
+Golden fixtures shared by C and Kotlin: `fixtures/codec/*.bin` (written by
+the bridge test with `ST_WRITE_GOLDEN=1`, compared byte for byte on every
+native `--test` run and in the ASan run); `CodecGolden.kt` is generated from
+them by `scripts/gen_codec_golden.py` and `build.sh` fails when it is stale.
+To change the encoding: bump the ABI, rerun the bridge test with
+`ST_WRITE_GOLDEN=1 ST_FIXTURES_DIR=apps/terminal-core/fixtures/codec`, then
+the generator.
+
+### Effects
+
+- `st_feed` sets the origin for the duration of the call. Ghostty's
+  `WRITE_PTY` bytes become **Response** (LIVE only); **Bell** and
+  **ClipboardRequest** are LIVE only; **Title** (OSC 0/2) is reported for
+  both origins. During REPLAY Ghostty still processes queries, but their
+  replies are dropped and clipboard writes are denied.
+- `st_key` / `st_mouse` / `st_paste` / `st_focus` queue **Input** (user input
+  bytes), never Response. Paste output (which Ghostty streams through
+  `WRITE_PTY` in chunks) is routed to Input for that call.
+- Consecutive chunks of the same kind within one call are merged into one
+  effect (a CSI 6n reply is one Response; a bracketed paste is one Input).
+  Order across kinds is stream order.
+- OSC 52/1337/5522 writes arrive decoded; the text is the first `text/plain`
+  (else first `text/*`) representation, `null` = clear.
+- OSC 52 **reads** must be answered synchronously by Ghostty's API; the
+  engine cannot wait for the embedder, so it always **denies** (the program
+  receives an empty clipboard, xterm's behaviour for a disallowed read — a
+  `Response ESC]52;c;BEL` effect follows the ClipboardRequest) and reports
+  `ClipboardRequest(write=false)` for information only. Answering reads would
+  need an ABI addition (a pre-set clipboard policy/content); v1 does not.
+- DA1/DA2 (`CSI c`, `CSI > c`) answer as a VT220-class terminal with ANSI
+  colour (`ESC[?62;22c`); XTWINOPS size queries (`CSI 14/16/18 t`) and mode
+  2048 reports use the current size; XTVERSION reports `libghostty`.
+- The queue is bounded by the 8 MiB payload; an effect that does not fit (or
+  cannot be allocated) is dropped and the running call returns
+  `ST_ERR_LIMIT`/`ST_ERR_OUT_OF_MEMORY` (the screen is updated regardless).
+
+### Generations and dirty rows
+
+The engine keeps a generation counter (bumped after every mutating call —
+feed, reset, resize, colours, scroll, select — and once more when a
+synchronized-output frame is captured), the generation its render state
+reflects (`rs_gen`), and the last serialized frame (`ser_gen`, whether the
+render state is still exactly that frame, whether it was full).
+
+- `st_read_viewport` updates the render state (unless a hold is active) and
+  serializes it. The frame is **full** when forced, when a full-requiring
+  event happened since the last *acknowledged* full frame (first frame,
+  resize, reset, colours, a scroll that moved the viewport, a failed
+  serialization, an invalid acknowledgement), or when Ghostty reports its
+  render state fully dirty (screen switch, …). Otherwise it carries the rows
+  Ghostty marks dirty **since the last acknowledged frame** (render-state dirt
+  accumulates until cleaned). Cursor, modes, scroll position, links and
+  selection are always sent whole.
+- `st_acknowledge(g)` cleans the render state **only if** `g` is the most
+  recently serialized frame and the render state has not been updated since
+  (no later read, no hold capture). Mutations fed after that frame were
+  serialized are *not* lost by the clean: they live in the terminal's own
+  dirty tracking and move into the render state at the next update (tested).
+  Acknowledging an older/superseded frame is a no-op (`ST_OK`) — a pending
+  generation is never cleaned by an older ack (tested). An ack of a
+  generation never produced returns `INVALID_ARGUMENT` and forces the next
+  frame full. A full frame that is never acknowledged keeps the next frames
+  full.
+- Rows are copied into the buffer; nothing in a returned frame aliases
+  engine memory.
+- Tested by a 400-step randomized run (feeds, CUP, erase, scroll, resize,
+  alt screen, graphemes, selection, sync output; 1 in 6 partial frames
+  "dropped": neither applied nor acknowledged) in which the owner's model
+  built from partial frames always equals a forced full frame.
+
+### Synchronized output (mode 2026)
+
+The engine installs `RENDER_HOLD`. When a hold begins it captures the frame
+the program wants shown (render-state update inside the callback, new
+generation) and stops updating the render state; `st_read_viewport` then
+returns that frame with `ST_FRAME_HELD` in `out_frame_flags`. The hold ends
+when the program resets 2026, on RIS/`st_reset`, on `st_resize`, or when the
+owner passes `ST_READ_BREAK_HOLD` — **Task 6's owner loop must do this after
+~1 s of `ST_FRAME_HELD`** (the engine has no clock). If the capture fails the
+hold is ignored (frames stay live). Begin+end within one chunk yields the
+live frame (tested).
+
+### Coordinates
+
+- **Viewport** coordinates (rows, cursor, links, `TerminalMouse`): row 0 = top
+  visible row, column 0 = left.
+- **Absolute** rows (`TerminalPoint.row`, `st_select`, `st_scroll_to`,
+  `viewportTop`): Ghostty's `GHOSTTY_POINT_TAG_SCREEN` y coordinate = the
+  scrollbar row space: 0 = the **oldest retained** history row of the active
+  screen; `historyRows` = scrollbar `total − len` (rows above the active
+  area, 0 on the alternate screen); the first active row is `historyRows`.
+  When history is pruned, absolute numbers of surviving rows decrease;
+  Ghostty tracks the active selection across pruning/scrolling and the frame
+  reports its current absolute points.
+- `st_scroll_to(row)` clamps to `[0, historyRows]`; `viewportTop ==
+  historyRows` means following the bottom.
+- The cursor is reported in viewport coordinates even when scrolled off
+  screen (then `visible = false`, row may be ≥ rows).
+- `st_select` points must be inside the screen (row < historyRows + rows,
+  column < columns); both ends inclusive, either order. Selected text is
+  Ghostty's plain formatter with `unwrap` (soft wraps joined) and `trim`.
+- Links: every viewport row whose row flag says "has hyperlink" is scanned
+  cell by cell through `VIEWPORT` grid refs; runs of equal URIs (spacer tails
+  of wide characters included) become one `TerminalLink`. They are captured
+  together with the render state, so a held frame shows its own links.
+
+### Input details
+
+- Keys: HID usage → `GhosttyKey` table (`ST_KEYS`); layout text is passed as
+  `utf8` unless it contains C0/DEL or is not UTF-8 (then ignored); the
+  unshifted codepoint is the lower-cased single ASCII letter of the text, else
+  the US-layout base character of the physical key; Shift is marked consumed
+  when text is present. `setopt_from_terminal` runs before every encode.
+- Mouse: cell → pixel at the cell centre with the current cell size, encoder
+  `OPT_SIZE` = columns×cellWidth by rows×cellHeight, `setopt_from_terminal`
+  before every encode, `ANY_BUTTON_PRESSED` from tracked left/right/middle
+  state, motion de-duplicated per cell. Wheel buttons 4–7 under SGR (1006):
+  `ESC[<64;x;yM`, `65`, `66`, `67` (tested; Ctrl adds 16; X10 encoding
+  tested too).
+- Focus: only while mode 1004 is set. Paste: `ghostty_terminal_paste` with
+  source TEXT (never a kitty paste event), `text/plain`.
+
+### History budgets
+
+`history_lines` → `OPT_SCROLLBACK_MAX_LINES`, `history_bytes` →
+`OPT_SCROLLBACK_MAX_BYTES`; `history_lines = 0` also sets bytes to 0 because
+Ghostty's line limit always keeps at least one page. Kitty image storage is
+disabled (limit 0: the package renders no images). Ghostty enforces both
+limits by **evicting whole pages, oldest first** (a standard page is 215×215
+cells of capacity, ~0.5 MiB); terminal pages come from the OS page allocator
+(`mmap`, demand-paged; on wasm a module-wide page free list), **not** from the
+`GhosttyAllocator`, so the byte budget is measured on process RSS. Measured
+on linux-x64 (80×24, `tests/terminal_bridge_test.c`, 2026-09-22):
+
+| fixture | limit | history rows kept | RSS growth | non-page heap |
+|---|---|---|---|---|
+| 60,000 lines | 10,000 lines | 9,691 (−309: page-granular) | — | — |
+| 60,000 styled lines | 2 MiB | 2,755 | 1.91 MiB (0.96×) | 10.7 KB |
+| 60,000 styled lines | 8 MiB | 11,425 | 7.66 MiB (0.96×) | 18.2 KB |
+| 120,000 styled lines | 32 MiB | 47,727 | 31.77 MiB (0.99×) | 49.9 KB |
+| 20,000 lines × 40 cells × 9-codepoint graphemes | 4 MiB | 903 | 4.79 MiB (1.20×: grapheme pages exceed the standard size) | 9.6 KB |
+| same | 2,000 lines (64 MiB) | 1,481 | 9.04 MiB | 10.6 KB |
+
+Every fixture checks that the oldest retained row is exactly
+`N − 22 − historyRows` (eviction is oldest-first and nothing else is lost) and
+that graphemes survive. The documented, asserted bound is **resident growth ≤
+history_bytes + 2 MiB** (the active page, one partially filled/pooled page,
+grapheme-overflow pages and the small non-page heap), and the line limit
+holds to within ±1,500 rows (one page). No source patch was needed.
+
+### Tests (`bash apps/terminal-core/native/build.sh linux-x64 --test`)
+
+`terminal_bridge_test` (real pinned engine, every observation decoded through
+a strict C mirror of `ViewportCodec.kt`): handles/ABI/argument validation for
+every function, red/empty/wide/styled cells, effects and replay suppression,
+key/mouse (incl. wheel 4–7)/focus/paste encodings, links, selection and
+absolute coordinates, reset/resize, generations (older ack, post-serialization
+mutation, invalid ack, randomized model check), synchronized output, buffer
+ownership (valid after more output and after destroy; freed exactly once; no
+leaks), framing (every truncation, trailing/magic/ABI/kind/impossible count/
+> 8 MiB; a 4096×64 frame → `ST_ERR_LIMIT`, 4096×60 fits), whole vs split
+input at every byte boundary of a 93-byte fixture (identical frames and
+effects), allocation failure injected at every allocation of a session (only
+`OK`/`OUT_OF_MEMORY`, no leaks, engine usable afterwards), golden fixtures,
+history budgets, the 1,024-terminal limit.
 
 ## Results
 
@@ -138,8 +445,8 @@ Toolchain IDs:
 
 | target | built | runtime-tested | result / notes |
 |---|---|---|---|
-| linux-x64 | yes | **yes** (this host) | `native/build.sh linux-x64 --test`: **66 checks, 0 failures — SMOKE PASSED**. `libghostty-vt.a` 3.3 MB (sha256 `727bd6eb4cfa…`), `.so` 2.4 MB (`c5a5b48ae08a…`); identical hashes across two builds. `.so` needs glibc ≤ 2.27 symbols. |
-| wasm32 | yes | **yes** (Node 24 + headless Chrome 148) | `wasm/build.sh --test`: **30 checks, 0 failures in each runtime — WASM SMOKE PASSED**. `ghostty-vt.wasm` 814 KB ReleaseSmall (sha256 `75f0ed5b23ef…`), 187 function exports, all `ghostty_*`. |
+| linux-x64 | yes | **yes** (this host) | `native/build.sh linux-x64 --test`: **66 checks, 0 failures — SMOKE PASSED**; st_* bridge test **196 checks, 0 failures — BRIDGE TEST PASSED**; `dlopen` check OK; ASan+UBSan+LSan bridge run **175 checks, 0 failures**. `libghostty-vt.a` 3.3 MB (sha256 `727bd6eb4cfa…`), `.so` 2.4 MB (`c5a5b48ae08a…`); identical hashes across two builds. `libsupermux_terminal.a` 3.4 MB (`fb26df366b41…`), `libsupermux_terminal.so` 2.4 MB (`2e53dcb19abd…`, exports exactly the 18 `st_*`, needs libc/librt only). `.so` files need glibc ≤ 2.27 symbols. |
+| wasm32 | yes | **yes** (Node 24 + headless Chrome 148) | `wasm/build.sh --test`: **47 checks, 0 failures in each runtime — WASM SMOKE PASSED** (run against `supermux-terminal.wasm`). `supermux-terminal.wasm` 831 KB (sha256 `e8f5df919983…`): the same `terminal_bridge.c` compiled `wasm32-freestanding` and linked with the wasm `libghostty-vt.a` by `zig cc` (`--export-dynamic --export-table`, 128 KiB stack, table made growable by `wasm/patch_growable_table.py`), 205 function exports = 187 `ghostty_*` + the 18 `st_*`, no imports. Raw upstream `ghostty-vt.wasm` 814 KB (`75f0ed5b23ef…`) is still staged. |
 | linux-arm64 | yes | no (no arm64 host/qemu here) | smoke test cross-linked (`aarch64`, glibc 2.28). |
 | windows-x64 | yes | no (no Windows host/wine) | `x86_64-windows-gnu`: `ghostty-vt-static.lib`, `ghostty-vt.dll` + import lib, smoke `.exe`; imports only KERNEL32/ntdll/UCRT (`api-ms-win-crt-*`). PDBs dropped. |
 | android-arm64 | yes | no (no adb device attached) | API 26, NDK-linked smoke test; `.so` has 16 KB-aligned LOAD segments, needs only libc/libm. Run `build.sh android-arm64 --test` with a device attached. |
@@ -176,8 +483,12 @@ took ~14–23 min on this loaded host at `-j2`; cached rebuilds take ~20 s–2 m
 
 ### What the WASM smoke proves (`wasm/smoke-core.mjs`, same code in Node and Chrome)
 
-No imports; explicit export surface (every function export is `ghostty_*`, required
-exports present, `memory` + `__indirect_function_table` exported); host
+No imports; explicit export surface (every function export is `ghostty_*` or `st_*`,
+exactly the 18 `st_*`, required exports present, `memory` +
+`__indirect_function_table` exported); through `st_*` + the codec envelope: the
+red-cell fixture (three `palette[1]` cells, empty cell with DEFAULT fg), a
+REPLAY `CSI 6n` queuing nothing and a LIVE one queuing exactly `ESC[1;4R`, and
+predictable failure after `st_destroy` (u64 parameters are BigInts in JS); host
 allocation/free (256 distinct 16-byte-aligned buffers, zero-length → NULL);
 struct layouts and enum values read from `ghostty_type_json()`; the red-cell
 fixture through the render-state API; `CSI 6n` response and BEL delivered to

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build pinned upstream libghostty-vt (+ supermux wrapper, once it exists) for
+# Build pinned upstream libghostty-vt + the supermux st_* wrapper for
 # one target and emit it to apps/terminal-core/build/native/<target>/.
 #
 #   bash apps/terminal-core/native/build.sh <target> [--test]
@@ -9,9 +9,11 @@
 #
 # Everything is resolved from native/upstream.lock.json: the Ghostty commit
 # (never a moving branch), the Zig version and its tarball SHA256, and the
-# per-target Zig triple. --test runs the native smoke test only when the
-# target matches this host (or, for Android, an attached adb device with a
-# matching ABI). A cross-compiled artifact is never reported as runtime-tested.
+# per-target Zig triple. --test runs the native smoke test and the st_*
+# bridge test only when the target matches this host (or, for Android, an
+# attached adb device with a matching ABI); on a Linux host with gcc it also
+# runs the bridge test under ASan/UBSan. A cross-compiled artifact is never
+# reported as runtime-tested.
 #
 # Environment overrides:
 #   ST_ZIG_JOBS       parallel zig jobs (default 2 — shared build host)
@@ -43,15 +45,17 @@ source "$NATIVE_DIR/common.sh"
 OUT_DIR="$BUILD_DIR/native/$TARGET"
 WORK_DIR="$BUILD_DIR/work/$TARGET"
 
-# Package-owned ABI version of the supermux wrapper (st_* functions). 0 means
-# "no wrapper yet: raw libghostty-vt only". Bumped by the wrapper task.
-ST_ABI_VERSION=0
+# Package-owned ABI version of the supermux wrapper (st_* functions); must
+# match ST_ABI_VERSION in include/supermux_terminal.h (checked below).
+ST_ABI_VERSION=1
 
-# Wrapper sources hook: later tasks add native/src/terminal_bridge.c and
-# native/src/terminal_jni.c here. When non-empty, they are compiled and linked
-# against the static libghostty-vt into lib<WRAPPER_NAME> for the target.
+# Wrapper sources: compiled and linked against the static libghostty-vt into
+# lib<WRAPPER_NAME> (static archive with libghostty-vt folded in, plus a
+# shared library exporting only st_*/Java_*/JNI_On* where the target has
+# one). The JNI glue (terminal_jni.c) joins this list in the next task.
 WRAPPER_NAME="supermux_terminal"
-WRAPPER_SOURCES=()
+WRAPPER_SOURCES=("$NATIVE_DIR/src/terminal_bridge.c")
+FIXTURES_DIR="$PKG_DIR/fixtures/codec"
 
 ZIG_TARGET="$(lock_opt "targets.$TARGET.zig_target")"
 [[ -n "$ZIG_TARGET" ]] || die "unknown target '$TARGET'"
@@ -141,13 +145,166 @@ header_probe() {
     -o "$WORK_DIR/probe/header_probe.o"
 }
 
+header_abi="$(sed -n 's/^#define ST_ABI_VERSION \([0-9]*\)u$/\1/p' "$NATIVE_DIR/include/supermux_terminal.h")"
+[[ "$header_abi" == "$ST_ABI_VERSION" ]] || die "ST_ABI_VERSION=$ST_ABI_VERSION but supermux_terminal.h says '$header_abi'"
+
+# Compile a C source for the target with the given extra flags into $2.
+cc_target() {
+  local src="$1" obj="$2"; shift 2
+  if [[ "$TARGET" == android-* ]]; then
+    "$NDK_BIN/clang" "--target=$(lock "targets.$TARGET.ndk_clang_target")" "$@" -c "$src" -o "$obj"
+  else
+    "$ZIG" cc -target "$ZIG_TARGET" "-mcpu=$ZIG_CPU" "$@" -c "$src" -o "$obj"
+  fi
+}
+
+# Every symbol the shared library exports must be ours.
+verify_exports() {
+  local lib="$1" nm readobj syms
+  nm="$(dirname "$LLVM_OBJCOPY")/llvm-nm"; [[ -x "$nm" ]] || nm="$(command -v llvm-nm || command -v nm)"
+  readobj="$(dirname "$LLVM_OBJCOPY")/llvm-readobj"; [[ -x "$readobj" ]] || readobj="$(command -v llvm-readobj || true)"
+  case "$lib" in
+    *.so) syms="$("$nm" -D --defined-only "$lib" | awk '{print $NF}')" ;;
+    *.dylib) syms="$("$nm" -g --defined-only "$lib" | awk '{print $NF}')" ;;
+    *.dll) [[ -n "$readobj" ]] || die "llvm-readobj needed to verify $lib exports"
+           syms="$("$readobj" --coff-exports "$lib" | sed -n 's/^ *Name: //p')" ;;
+  esac
+  local bad
+  bad="$(printf '%s\n' "$syms" | grep -v '^$' | grep -Ev '^_?(st_|Java_|JNI_On)' || true)"
+  [[ -z "$bad" ]] || die "$(basename "$lib") exports foreign symbols: $(echo "$bad" | head -5 | tr '\n' ' ')"
+  local n
+  n="$(printf '%s\n' "$syms" | grep -Ec '^_?st_' || true)"
+  [[ "$n" -ge 18 ]] || die "$(basename "$lib") exports only $n st_* symbols"
+  log "$(basename "$lib"): exports $n st_* symbols and nothing else"
+}
+
 build_wrapper() {
-  # TODO(Task 3/4): the JNI/shared wrapper library must link the STATIC
-  # libghostty-vt archive with -fvisibility=hidden plus a version script
-  # (ELF) / exported-symbols list (Mach-O) / .def (PE) so that ONLY st_* and
-  # Java_* are exported (the upstream .so also leaks wuffs_*/hwy_* symbols).
-  [[ ${#WRAPPER_SOURCES[@]} -gt 0 ]] || { log "wrapper: no sources yet (ST_ABI_VERSION=$ST_ABI_VERSION)"; return 0; }
-  die "wrapper build not implemented yet; add it together with WRAPPER_SOURCES"
+  [[ ${#WRAPPER_SOURCES[@]} -gt 0 ]] || { log "wrapper: no sources (ST_ABI_VERSION=$ST_ABI_VERSION)"; return 0; }
+  local wdir="$WORK_DIR/wrapper" objs=() src obj
+  rm -rf "$wdir"; mkdir -p "$wdir"
+  local cflags=(-std=c11 -O2 -g0 -Wall -Wextra -Werror -fvisibility=hidden -DGHOSTTY_STATIC
+                "-ffile-prefix-map=$PKG_DIR/=" -I "$NATIVE_DIR/include" -I "$OUT_DIR/include")
+  [[ "$TARGET" == windows-* ]] && cflags+=(-DST_BUILDING_SHARED) || cflags+=(-fPIC)
+  log "wrapper: compile ${#WRAPPER_SOURCES[@]} source(s)"
+  for src in "${WRAPPER_SOURCES[@]}"; do
+    obj="$wdir/$(basename "${src%.c}").o"
+    cc_target "$src" "$obj" "${cflags[@]}"
+    objs+=("$obj")
+  done
+  cp "$NATIVE_DIR/include/supermux_terminal.h" "$OUT_DIR/include/"
+
+  # Static: libghostty-vt folded in, one archive to link.
+  local ghostty_static="$OUT_DIR/lib/libghostty-vt.a" ar_format=gnu
+  WRAPPER_STATIC="$OUT_DIR/lib/lib$WRAPPER_NAME.a"
+  case "$TARGET" in
+    windows-*) ghostty_static="$OUT_DIR/lib/ghostty-vt-static.lib"; WRAPPER_STATIC="$OUT_DIR/lib/$WRAPPER_NAME-static.lib"; ar_format=coff ;;
+    macos-*|ios-*) ar_format=darwin ;;
+  esac
+  python3 "$NATIVE_DIR/scripts/combine_archive.py" "$ZIG" "$ar_format" "$ghostty_static" "$WRAPPER_STATIC" \
+    "$wdir/combine" "${objs[@]}"
+
+  # Shared: only st_*/Java_*/JNI_On* exported (version script / exported
+  # symbols list / dllexport). iOS has no shared library (cinterop links the
+  # static archive).
+  local shared=""
+  case "$TARGET" in
+    linux-*)
+      shared="$OUT_DIR/lib/lib$WRAPPER_NAME.so"
+      "$ZIG" cc -target "$ZIG_TARGET" "-mcpu=$ZIG_CPU" -shared "${objs[@]}" "$ghostty_static" -lc++ \
+        "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
+        "-Wl,-soname,lib$WRAPPER_NAME.so" -o "$shared" ;;
+    android-*)
+      shared="$OUT_DIR/lib/lib$WRAPPER_NAME.so"
+      "$NDK_BIN/clang++" "--target=$(lock "targets.$TARGET.ndk_clang_target")" -shared "${objs[@]}" "$ghostty_static" \
+        -static-libstdc++ "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
+        -Wl,-z,max-page-size=16384 "-Wl,-soname,lib$WRAPPER_NAME.so" -o "$shared" ;;
+    macos-*)
+      shared="$OUT_DIR/lib/lib$WRAPPER_NAME.dylib"
+      "$ZIG" cc -target "$ZIG_TARGET" "-mcpu=$ZIG_CPU" -shared "${objs[@]}" "$ghostty_static" -lc++ \
+        "-Wl,-exported_symbols_list,$NATIVE_DIR/exports/$WRAPPER_NAME.exp" \
+        "-Wl,-install_name,@rpath/lib$WRAPPER_NAME.dylib" -o "$shared" ;;
+    windows-*)
+      shared="$OUT_DIR/lib/$WRAPPER_NAME.dll"
+      "$ZIG" cc -target "$ZIG_TARGET" "-mcpu=$ZIG_CPU" -shared "${objs[@]}" "$ghostty_static" -lc++ \
+        -lntdll -lkernel32 -o "$shared"
+      rm -f "${shared%.dll}.pdb" ;;
+  esac
+  if [[ -n "$shared" ]]; then
+    "$LLVM_OBJCOPY" --strip-debug "$shared"
+    verify_exports "$shared"
+  fi
+  WRAPPER_SHARED="$shared"
+}
+
+# Load the shared library on its own (dlopen) and drive one terminal through
+# it: proves the export list is complete for a JNI-style consumer.
+run_shared_load_check() {
+  [[ -n "${WRAPPER_SHARED:-}" && "$WRAPPER_SHARED" != *.dll ]] || return 0
+  log "dlopen $(basename "$WRAPPER_SHARED") and drive a terminal through it"
+  python3 - "$WRAPPER_SHARED" <<'PY'
+import ctypes, sys
+lib = ctypes.CDLL(sys.argv[1])
+assert lib.st_abi_version() == 1, "abi"
+h = ctypes.c_uint32(0)
+lib.st_create.argtypes = [ctypes.c_uint32] * 6 + [ctypes.c_uint64, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+assert lib.st_create(1, 80, 24, 8, 16, 100, 1 << 20, None, ctypes.byref(h)) == 0 and h.value, "create"
+data = b"\x1b[31mred\x1b[0m\x1b[6n"
+assert lib.st_feed(h, data, len(data), 0) == 0, "feed"
+buf, n = ctypes.POINTER(ctypes.c_uint8)(), ctypes.c_uint32(0)
+assert lib.st_drain_effects(h, ctypes.byref(buf), ctypes.byref(n)) == 0, "drain"
+raw = bytes(buf[:n.value])
+assert raw[:4] == b"TVTS" and raw.endswith(b"\x1b[1;4R"), raw
+lib.st_free_buffer(buf)
+assert lib.st_read_viewport(h, 1, ctypes.byref(buf), ctypes.byref(n), None) == 0 and n.value > 12, "read"
+lib.st_free_buffer(buf)
+assert lib.st_destroy(h) == 0 and lib.st_destroy(h) == -1, "destroy"
+print("shared library load check OK", file=sys.stderr)
+PY
+}
+
+# The st_* contract test, linked against the combined static archive.
+build_bridge_test() {
+  [[ ${#WRAPPER_SOURCES[@]} -gt 0 ]] || return 0
+  local exe="terminal_bridge_test" obj="$WORK_DIR/terminal_bridge_test.o"
+  [[ "$TARGET" == windows-* ]] && exe="terminal_bridge_test.exe"
+  BRIDGE_EXE="$OUT_DIR/bin/$exe"
+  local cflags=(-std=c11 -O2 -g0 -Wall -Wextra -Werror "-ffile-prefix-map=$PKG_DIR/="
+                -I "$NATIVE_DIR/include" -I "$OUT_DIR/include")
+  log "compile + link st_* bridge test against lib$WRAPPER_NAME"
+  cc_target "$NATIVE_DIR/tests/terminal_bridge_test.c" "$obj" "${cflags[@]}"
+  if [[ "$TARGET" == android-* ]]; then
+    "$NDK_BIN/clang++" "--target=$(lock "targets.$TARGET.ndk_clang_target")" "$obj" "$WRAPPER_STATIC" \
+      -static-libstdc++ -Wl,-z,max-page-size=16384 -o "$BRIDGE_EXE"
+  else
+    local extra=(-lc++)
+    [[ "$TARGET" == windows-* ]] && extra+=(-lntdll -lkernel32)
+    "$ZIG" cc -target "$ZIG_TARGET" "$obj" "$WRAPPER_STATIC" "${extra[@]}" -o "$BRIDGE_EXE"
+  fi
+  "$LLVM_OBJCOPY" --strip-debug "$BRIDGE_EXE"
+  rm -f "${BRIDGE_EXE%.exe}.pdb"
+}
+
+# Sanitizer build of the bridge test (Linux host only: gcc ships ASan/UBSan
+# runtimes, zig cc has UBSan but no ASan runtime). Not an artifact.
+build_bridge_asan() {
+  BRIDGE_ASAN_EXE=""
+  [[ ${#WRAPPER_SOURCES[@]} -gt 0 && "$TARGET" == linux-* && "$host_os" == linux ]] || return 0
+  [[ "$TARGET" == linux-x64 && "$host_arch" == x86_64 || "$TARGET" == linux-arm64 && "$host_arch" == aarch64 ]] || return 0
+  command -v gcc >/dev/null || { log "gcc not found: sanitizer run skipped"; return 0; }
+  BRIDGE_ASAN_EXE="$WORK_DIR/terminal_bridge_test_asan"
+  log "compile bridge test with ASan + UBSan (gcc)"
+  gcc -std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+    -Wall -Wextra -Werror -I "$NATIVE_DIR/include" -I "$OUT_DIR/include" \
+    "${WRAPPER_SOURCES[@]}" "$NATIVE_DIR/tests/terminal_bridge_test.c" "$OUT_DIR/lib/libghostty-vt.a" -lm \
+    -o "$BRIDGE_ASAN_EXE" || { log "sanitizer build failed"; return 1; }
+}
+
+# CodecGolden.kt must be generated from the checked-in fixtures/codec/*.bin.
+check_codec_golden() {
+  [[ -d "$FIXTURES_DIR" ]] || return 0
+  python3 "$NATIVE_DIR/scripts/gen_codec_golden.py" --check "$FIXTURES_DIR" \
+    "$PKG_DIR/src/commonTest/kotlin/dev/supermux/terminal/CodecGolden.kt" ||
+    die "CodecGolden.kt is out of date: run native/scripts/gen_codec_golden.py"
 }
 
 build_smoke() {
@@ -255,12 +412,28 @@ run_smoke() {
     return 3
   fi
   log "running smoke test on host $HOST_KEY"
-  if "$SMOKE_EXE"; then
-    RUNTIME_TESTED=true; TEST_RESULT="passed"; TEST_HOST="$HOST_KEY $(uname -r)"
-  else
-    TEST_RESULT="failed"; TEST_HOST="$HOST_KEY $(uname -r)"
+  TEST_HOST="$HOST_KEY $(uname -r)"
+  if ! "$SMOKE_EXE"; then
+    TEST_RESULT="failed"
     return 1
   fi
+  if [[ -n "${BRIDGE_EXE:-}" ]]; then
+    log "running st_* bridge test on host $HOST_KEY"
+    if ! ST_FIXTURES_DIR="$FIXTURES_DIR" "$BRIDGE_EXE"; then
+      TEST_RESULT="failed"
+      return 1
+    fi
+  fi
+  run_shared_load_check || { TEST_RESULT="failed"; return 1; }
+  if [[ -n "${BRIDGE_ASAN_EXE:-}" ]]; then
+    log "running st_* bridge test under ASan + UBSan (heavy fixtures skipped)"
+    if ! ST_FIXTURES_DIR="$FIXTURES_DIR" ST_SKIP_HEAVY=1 ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
+         UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 "$BRIDGE_ASAN_EXE"; then
+      TEST_RESULT="failed"
+      return 1
+    fi
+  fi
+  RUNTIME_TESTED=true; TEST_RESULT="passed"
 }
 
 run_smoke_android() {
@@ -279,9 +452,10 @@ run_smoke_android() {
     TEST_RESULT="no-matching-device"
     return 3
   fi
-  log "running smoke test on adb device $serial ($want_abi)"
+  log "running smoke + bridge tests on adb device $serial ($want_abi)"
   adb -s "$serial" push "$SMOKE_EXE" /data/local/tmp/ghostty_smoke_test >/dev/null
-  if adb -s "$serial" shell 'chmod 755 /data/local/tmp/ghostty_smoke_test && /data/local/tmp/ghostty_smoke_test; echo "exit=$?"' | tee "$WORK_DIR/android-test.log" | grep -q '^exit=0'; then
+  adb -s "$serial" push "$BRIDGE_EXE" /data/local/tmp/terminal_bridge_test >/dev/null
+  if adb -s "$serial" shell 'cd /data/local/tmp && chmod 755 ghostty_smoke_test terminal_bridge_test && ./ghostty_smoke_test && ./terminal_bridge_test; echo "exit=$?"' | tee "$WORK_DIR/android-test.log" | grep -q '^exit=0'; then
     RUNTIME_TESTED=true; TEST_RESULT="passed"
   else
     TEST_RESULT="failed"
@@ -347,7 +521,12 @@ stage_outputs
 normalize_outputs
 build_wrapper
 build_smoke
+build_bridge_test
 check_no_abs_paths
+check_codec_golden
+if [[ $RUN_TEST -eq 1 ]]; then
+  build_bridge_asan
+fi
 
 status=0
 if [[ $RUN_TEST -eq 1 ]]; then

@@ -8,7 +8,10 @@
 // Verifies: explicit export surface, host-owned allocation/free, memory growth
 // with view re-acquisition, the ESC[31mredESC[0m three-red-cells fixture via
 // the render-state API, and terminal response callback delivery (CSI 6n ->
-// write_pty) through the exported, growable indirect function table.
+// write_pty) through the exported, growable indirect function table. When the
+// module carries the st_* wrapper (supermux-terminal.wasm) the same red-cell
+// fixture, effects and replay suppression are also checked through st_* and
+// the codec envelope.
 
 export const REQUIRED_EXPORTS = [
   'memory', '__indirect_function_table',
@@ -28,6 +31,12 @@ export const REQUIRED_EXPORTS = [
   'ghostty_key_encoder_new', 'ghostty_key_encoder_encode',
   'ghostty_mouse_encoder_new', 'ghostty_mouse_encoder_encode',
   'ghostty_terminal_selection_format_alloc',
+];
+
+export const ST_EXPORTS = [
+  'st_abi_version', 'st_create', 'st_destroy', 'st_feed', 'st_reset', 'st_resize', 'st_colors',
+  'st_read_viewport', 'st_acknowledge', 'st_scroll_to', 'st_key', 'st_mouse', 'st_paste', 'st_focus',
+  'st_select', 'st_selected_text', 'st_drain_effects', 'st_free_buffer',
 ];
 
 // Minimal hand-assembled wasm module: imports env.f with the given i32-only
@@ -74,8 +83,15 @@ export async function runSmoke(wasmBytes, log = console.log) {
   const missing = REQUIRED_EXPORTS.filter((n) => !(n in x));
   require(missing.length === 0, `required exports present (missing: ${missing.join(',') || 'none'})`);
   const fnExports = Object.keys(x).filter((k) => typeof x[k] === 'function');
-  const nonGhostty = fnExports.filter((k) => !k.startsWith('ghostty_'));
-  check(nonGhostty.length === 0, `every function export is ghostty_* (${fnExports.length} exports; others: ${nonGhostty.join(',') || 'none'})`);
+  const nonGhostty = fnExports.filter((k) => !k.startsWith('ghostty_') && !k.startsWith('st_'));
+  check(nonGhostty.length === 0, `every function export is ghostty_* or st_* (${fnExports.length} exports; others: ${nonGhostty.join(',') || 'none'})`);
+  const hasSt = 'st_abi_version' in x;
+  if (hasSt) {
+    const stMissing = ST_EXPORTS.filter((n) => !(n in x));
+    const stExtra = fnExports.filter((k) => k.startsWith('st_') && !ST_EXPORTS.includes(k));
+    require(stMissing.length === 0 && stExtra.length === 0,
+      `st_* ABI exports exactly the 18 functions (missing: ${stMissing.join(',') || 'none'}; extra: ${stExtra.join(',') || 'none'})`);
+  }
 
   const memory = x.memory;
   const u8 = () => new Uint8Array(memory.buffer); // re-acquire on every access
@@ -204,6 +220,71 @@ export async function runSmoke(wasmBytes, log = console.log) {
     check(ok, `cell ${col} = '${text}' fg=palette[${palIdx}] rgb(${rgb.join(',')})`);
   }
   check(redCells === 3, `exactly three red cells (${redCells})`);
+
+  // ---- the same fixture through the st_* ABI + codec -----------------------
+  if (hasSt) {
+    check(x.st_abi_version() === 1, 'st_abi_version() === 1');
+    const u32Slot = alloc(8);
+    const lenSlot = alloc(4);
+    require(x.st_create(1, 80, 24, 8, 16, 100, 1n << 20n, 0, u32Slot) === 0, 'st_create(ABI 1, 80x24)');
+    const h = dv().getUint32(u32Slot, true);
+    const stFeed = (str, origin = 0) => {
+      const data = new TextEncoder().encode(str);
+      const p = alloc(data.length);
+      u8().set(data, p);
+      const r = x.st_feed(h, p, data.length, origin);
+      x.ghostty_wasm_free(p, data.length);
+      return r;
+    };
+    const take = (status, what) => {
+      require(status === 0, `${what} -> ST_OK`);
+      const p = dv().getUint32(u32Slot, true);
+      const n = dv().getUint32(lenSlot, true);
+      const bytes = u8().slice(p, p + n); // owned copy before the next call can grow memory
+      check(x.st_free_buffer(p) === 0, `${what}: st_free_buffer`);
+      return new DataView(bytes.buffer);
+    };
+    const envelope = (v, kind) =>
+      v.getUint32(0, true) === 0x53545654 && v.getUint16(4, true) === 1 && v.getUint16(6, true) === kind &&
+      v.getUint32(8, true) === v.byteLength - 12;
+    check(stFeed('\x1b[31mred\x1b[0m') === 0, 'st_feed red fixture');
+    const vp = take(x.st_read_viewport(h, 1, u32Slot, lenSlot, 0), 'st_read_viewport(FORCE_FULL)');
+    check(envelope(vp, 1), `viewport envelope (${vp.byteLength} bytes)`);
+    const redRgba = BigInt(((red[0] << 24) | (red[1] << 16) | (red[2] << 8) | 0xff) >>> 0);
+    let off = 12 + 8 + 16;
+    const rowCount = vp.getUint32(off, true);
+    off += 4;
+    const row0 = vp.getInt32(off, true);
+    const cellCount = vp.getUint32(off + 4, true);
+    off += 8;
+    let stRed = 0;
+    for (let i = 0; i < 4; i++) {
+      const tl = vp.getUint32(off, true);
+      const text = new TextDecoder().decode(new Uint8Array(vp.buffer, off + 4, tl));
+      off += 4 + tl;
+      const width = vp.getInt32(off, true);
+      const fg = vp.getBigUint64(off + 4, true);
+      const bg = vp.getBigUint64(off + 12, true);
+      off += 4 + 8 + 8 + 4 + 4;
+      if (i < 3 && text === 'red'[i] && width === 1 && fg === redRgba && bg === 1n << 32n) stRed++;
+      if (i === 3) check(text === '' && fg === 1n << 32n, 'st: cell 3 empty with DEFAULT fg');
+    }
+    check(rowCount === 24 && row0 === 0 && cellCount === 80 && stRed === 3,
+      `st: full frame 24 rows x 80 cells, three red cells fg=0x${redRgba.toString(16)}`);
+    check(stFeed('\x1b[6n', 1) === 0, 'st_feed REPLAY CSI 6n');
+    const none = take(x.st_drain_effects(h, u32Slot, lenSlot), 'st_drain_effects (replay)');
+    check(envelope(none, 2) && none.getUint32(12, true) === 0, 'st: REPLAY query queues no effects');
+    stFeed('\x1b[6n');
+    const fx = take(x.st_drain_effects(h, u32Slot, lenSlot), 'st_drain_effects (live)');
+    const fxLen = fx.getUint32(17, true);
+    const reply = new TextDecoder().decode(new Uint8Array(fx.buffer, 21, fxLen));
+    check(envelope(fx, 2) && fx.getUint32(12, true) === 1 && fx.getUint8(16) === 1 && reply === '\x1b[1;4R',
+      `st: LIVE CSI 6n -> one Response ${JSON.stringify(reply)}`);
+    check(x.st_destroy(h) === 0 && x.st_destroy(h) === -1 && x.st_feed(h, 0, 0, 0) === -1,
+      'st_destroy; second destroy and later calls -> ST_ERR_INVALID_HANDLE');
+    x.ghostty_wasm_free(u32Slot, 8);
+    x.ghostty_wasm_free(lenSlot, 4);
+  }
 
   // ---- terminal responses + bell -----------------------------------------
   write(term, '\x1b[6n\x07');
