@@ -61,7 +61,7 @@ export async function transport(
   conn = await connectKeeper({
     stateDirectory: options.keeper.stateDirectory,
     sessionId: options.sessionId,
-    spec: { command: options.command, args: options.args, cwd: options.cwd, env: options.env, frameShape: 'jsonrpc' },
+    spec: { command: options.command, args: options.args, cwd: options.cwd, env: options.env, frameShape: 'jsonrpc', captureStderr: false },
     limits: {
       maxFrameBytes: options.maxFrameBytes,
       shutdownTimeoutMs: options.shutdownTimeoutMs,

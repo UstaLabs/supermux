@@ -269,6 +269,17 @@ export function createAcpNormalizer(options: { vendor?: "grok" } = {}): ((update
   }
 
   function mapNative(method: string, params: unknown): NormalizedBody[] {
+    if (method === "stderr") {
+      // OpenCode with --print-logs --log-level ERROR (verified 1.16.2): the provider failure
+      // that the ACP turn hides is logged as
+      //   ERROR <ts> +<ms> service=session.processor session.id=<id> messageID=<id> error=<message> stack=...
+      // The llm-service line before it repeats the same failure with the raw HTTP body; keep only
+      // the processor line so each failure surfaces once.
+      const line = typeof rec(params)?.line === "string" ? String(rec(params)!.line) : ""
+      const m = /^ERROR\b.*\bservice=session\.processor\b.*?\berror=(.*?)(?:\s+stack=|$)/.exec(line)
+      if (!m) return []
+      return [{ kind: "error", message: m[1]!.trim(), errorType: "provider", recoverable: false }]
+    }
     if (options.vendor === "grok" && (method === "_x.ai/session_notification" || method === "_x.ai/session/update")) {
       const nested = rec(params)
       const update = nested && "update" in nested ? rec(nested.update) : nested

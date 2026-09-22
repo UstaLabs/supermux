@@ -31,6 +31,8 @@ export type AcpOptions = {
   keeper: AcpKeeperOptions
   /** Applied right after session/new|resume|load via session/set_config_option (select options such as OpenCode's `model`). Absent = nothing sent. */
   sessionConfig?: Record<string, string>
+  /** Forward the agent's stderr lines as native updates {method:'stderr', params:{line}} so a normalizer can map logged errors. Required, no default. */
+  captureStderr: boolean
   /** Delay between same-prompt cancel retries. */
   cancelRetryIntervalMs: number
   /**
@@ -80,7 +82,7 @@ function sameRpcId(a: unknown, b: unknown) {
 
 export function acp(options: AcpOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('ACP options are required')
-  for (const field of ['id', 'command', 'args', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs'] as const) {
+  for (const field of ['id', 'command', 'args', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'captureStderr'] as const) {
     if (options[field] === undefined) throw new TypeError(`ACP ${field} is required`)
   }
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('ACP id is required')
@@ -127,6 +129,8 @@ export function acp(options: AcpOptions): AgentDriver {
       maxFrameBytes,
       keeper,
       onStale: ev => handleStale(ev),
+      captureStderr: options.captureStderr,
+      onStderr(line) { if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'stderr', params: { line } } }) },
       onOutgoingLine(line) {
         try {
           const parsed = JSON.parse(line)

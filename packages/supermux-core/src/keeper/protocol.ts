@@ -14,6 +14,8 @@ export type KeeperSpec = {
   cwd: string
   env: NodeJS.ProcessEnv
   frameShape: FrameShape
+  /** Forward the agent's stderr lines to the attacher as `stderr` messages (journaled as dir 'err'). */
+  captureStderr: boolean
 }
 
 export type KeeperStatus = {
@@ -32,7 +34,7 @@ export type KeeperStatus = {
 
 export type JournalEntry = {
   seq: number
-  dir: 'in' | 'out'
+  dir: 'in' | 'out' | 'err'
   line: string
   stale?: boolean
 }
@@ -56,6 +58,7 @@ export type KeeperWelcome = {
 }
 export type KeeperFrame = { type: 'frame'; seq: number; line: string; stale?: true }
 export type KeeperParked = { type: 'parked'; seq: number; line: string }
+export type KeeperStderr = { type: 'stderr'; seq: number; line: string }
 export type KeeperExit = { type: 'exit'; code: number | null }
 export type KeeperReplaced = { type: 'replaced' }
 export type KeeperError = { type: 'error'; message: string }
@@ -63,6 +66,7 @@ export type KeeperMessage =
   | KeeperWelcome
   | KeeperFrame
   | KeeperParked
+  | KeeperStderr
   | KeeperExit
   | KeeperReplaced
   | KeeperError
@@ -76,6 +80,7 @@ export const KEEPER_ENV = {
   token: 'SUPERMUX_KEEPER_TOKEN',
   limits: 'SUPERMUX_KEEPER_LIMITS',
   frameShape: 'SUPERMUX_KEEPER_FRAME_SHAPE',
+  captureStderr: 'SUPERMUX_KEEPER_CAPTURE_STDERR',
 } as const
 
 function parseObject(line: string): any | undefined {

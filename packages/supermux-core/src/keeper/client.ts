@@ -15,7 +15,7 @@ export type ConnectKeeperOptions = {
   cursor: number | 'acked'
 }
 
-export type KeeperFrameEvent = { type: 'frame' | 'parked'; seq: number; line: string; stale?: true }
+export type KeeperFrameEvent = { type: 'frame' | 'parked' | 'stderr'; seq: number; line: string; stale?: true }
 
 export type KeeperConnection = {
   welcome: KeeperWelcome
@@ -60,6 +60,7 @@ function validateSpec(spec: KeeperSpec): KeeperSpec {
   if (!Array.isArray(spec.args) || spec.args.some(a => typeof a !== 'string')) throw new TypeError('invalid spec.args')
   if (!spec.env || typeof spec.env !== 'object') throw new TypeError('invalid spec.env')
   if (spec.frameShape !== 'jsonrpc' && spec.frameShape !== 'claude-control') throw new TypeError('invalid spec.frameShape')
+  if (typeof spec.captureStderr !== 'boolean') throw new TypeError('spec.captureStderr is required')
   return spec
 }
 
@@ -157,6 +158,7 @@ async function connectLocked(options: {
         [KEEPER_ENV.token]: token,
         [KEEPER_ENV.limits]: JSON.stringify(options.limits),
         [KEEPER_ENV.frameShape]: options.spec.frameShape,
+        [KEEPER_ENV.captureStderr]: String(options.spec.captureStderr),
       },
     })
     child.unref()
@@ -229,7 +231,7 @@ async function connectLocked(options: {
         }
         if (msg.type === 'replaced') { replaced = true; push({ err: 'replaced' }); sock.end(); continue }
         if (msg.type === 'exit') { exitCode = msg.code ?? null; push({ done: true }); continue }
-        if (msg.type === 'frame' || msg.type === 'parked') {
+        if (msg.type === 'frame' || msg.type === 'parked' || msg.type === 'stderr') {
           const ev: KeeperFrameEvent = { type: msg.type, seq: msg.seq, line: msg.line }
           if (msg.stale === true) ev.stale = true
           for (const cb of frameCbs) cb(ev)

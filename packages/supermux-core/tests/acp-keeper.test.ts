@@ -58,6 +58,7 @@ function libraryAcp(extra: Record<string, unknown> = {}) {
     maxOutstandingActivity: 256,
     cancelRetryIntervalMs: 250,
     cancelRetryTimeoutMs: 10_000,
+    captureStderr: false,
     classifyActivity,
     ...extra,
   } as Parameters<typeof acp>[0])

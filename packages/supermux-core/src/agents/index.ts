@@ -8,7 +8,7 @@ import { requireCloseMode } from '../types.js'
 
 const EFFORTS = new Set(['low', 'medium', 'high'])
 
-export type GrokOptions = Omit<AcpOptions, 'id' | 'command' | 'args'> & {
+export type GrokOptions = Omit<AcpOptions, 'id' | 'command' | 'args' | 'captureStderr' | 'sessionConfig'> & {
   id: string
   /** Exact executable. Suffix is not inspected; use commandArgs to prefix a script. */
   command: string
@@ -144,6 +144,7 @@ function grokAcp(options: GrokOptions, overrides: SessionConfiguration) {
     maxFrameBytes: options.maxFrameBytes,
     maxOutstandingActivity: options.maxOutstandingActivity,
     keeper: options.keeper,
+    captureStderr: false,
     cancelRetryIntervalMs: options.cancelRetryIntervalMs,
     cancelRetryTimeoutMs: options.cancelRetryTimeoutMs,
     classifyActivity: createGrokClassifyActivity(),
@@ -346,7 +347,7 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
   }
 }
 
-export type OpenCodeOptions = Omit<AcpOptions, 'args' | 'sessionConfig'> & { /** OpenCode model id such as `opencode-go/deepseek-v4-flash`; sent as the `model` config option after the session opens. Absent = OpenCode's own default. */ model?: string }
+export type OpenCodeOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'captureStderr'> & { /** OpenCode model id such as `opencode-go/deepseek-v4-flash`; sent as the `model` config option after the session opens. Absent = OpenCode's own default. */ model?: string }
 /** Uses OpenCode's ACP entrypoint. No library HTTP listener or broker globals. */
 export function opencode(options: OpenCodeOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('OpenCode options are required')
@@ -357,5 +358,6 @@ export function opencode(options: OpenCodeOptions): AgentDriver {
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('OpenCode command is required')
   if (options.model !== undefined && (typeof options.model !== 'string' || !options.model)) throw new TypeError('OpenCode model must be a nonempty string')
   const { model, ...rest } = options
-  return acp({ ...rest, args: ['acp'], ...(model ? { sessionConfig: { model } } : {}) })
+  // --print-logs is the only place OpenCode reports provider failures (the ACP turn ends as a normal completion).
+  return acp({ ...rest, args: ['acp', '--print-logs', '--log-level', 'ERROR'], captureStderr: true, ...(model ? { sessionConfig: { model } } : {}) })
 }

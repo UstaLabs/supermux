@@ -19,6 +19,9 @@ export type ConnectAcpProcessOptions = {
   maxFrameBytes: number
   keeper: { stateDirectory: string; limits: AcpKeeperLimits }
   onStale?: (event: KeeperFrameEvent) => void
+  /** Forward the agent's stderr lines (keeper captureStderr). Required decision, no default. */
+  captureStderr: boolean
+  onStderr?: (line: string) => void
   onOutgoingLine?: (line: string) => void
 }
 
@@ -52,7 +55,7 @@ export async function connectAcpProcess(options: ConnectAcpProcessOptions): Prom
   const conn: KeeperConnection = await connectKeeper({
     stateDirectory: options.keeper.stateDirectory,
     sessionId: options.sessionId,
-    spec: { command: options.command, args: options.args, cwd: options.cwd, env: options.env, frameShape: 'jsonrpc' },
+    spec: { command: options.command, args: options.args, cwd: options.cwd, env: options.env, frameShape: 'jsonrpc', captureStderr: options.captureStderr },
     limits: {
       maxFrameBytes: options.maxFrameBytes,
       shutdownTimeoutMs: options.shutdownTimeoutMs,
@@ -83,6 +86,11 @@ export async function connectAcpProcess(options: ConnectAcpProcessOptions): Prom
     void (async () => {
       try {
         for await (const ev of conn.frames) {
+          if (ev.type === 'stderr') {
+            options.onStderr?.(ev.line)
+            conn.ack(ev.seq)
+            continue
+          }
           if (ev.stale === true) {
             options.onStale?.(ev)
             conn.ack(ev.seq)

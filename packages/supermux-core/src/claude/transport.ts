@@ -69,7 +69,7 @@ export async function transport(
   conn = await connectKeeper({
     stateDirectory: options.keeper.stateDirectory,
     sessionId: options.sessionId,
-    spec: { command: options.command, args: options.args, cwd: options.cwd, env: options.env, frameShape: 'claude-control' },
+    spec: { command: options.command, args: options.args, cwd: options.cwd, env: options.env, frameShape: 'claude-control', captureStderr: false },
     limits: {
       maxFrameBytes: options.maxFrameBytes,
       shutdownTimeoutMs: options.shutdownTimeoutMs,
@@ -86,6 +86,7 @@ export async function transport(
       try {
         for await (const ev of conn.frames) {
           if (ev.type === 'frame' || ev.type === 'parked') dispatchLine(ev.line, ev.seq, ev.stale)
+          else if (ev.type === 'stderr') conn.ack(ev.seq)
         }
         if (!closed) fail(new Error('Claude process exited'), true)
       } catch (error) {

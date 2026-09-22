@@ -71,6 +71,9 @@ async function main() {
   const frameShapeRaw = requiredEnv(KEEPER_ENV.frameShape)
   if (frameShapeRaw !== 'jsonrpc' && frameShapeRaw !== 'claude-control') throw new TypeError('invalid spec.frameShape')
   const frameShape: FrameShape = frameShapeRaw
+  const captureStderrRaw = requiredEnv(KEEPER_ENV.captureStderr)
+  if (captureStderrRaw !== 'true' && captureStderrRaw !== 'false') throw new TypeError('invalid spec.captureStderr')
+  const captureStderr = captureStderrRaw === 'true'
   if (!Array.isArray(args) || args.some(a => typeof a !== 'string')) throw new TypeError('invalid args')
 
   const sockPath = join(sessionDir, 'keeper.sock')
@@ -198,7 +201,25 @@ async function main() {
     stdio: ['pipe', 'pipe', 'pipe'],
     shell: false,
   })
-  agent.stderr?.resume()
+  if (!captureStderr) agent.stderr?.resume()
+  else {
+    // Some agents (OpenCode with --print-logs) only report provider failures on stderr.
+    let errBuffer = ''
+    agent.stderr?.on('data', (chunk: Buffer) => {
+      errBuffer += chunk.toString('utf8')
+      let nl: number
+      while ((nl = errBuffer.indexOf('\n')) >= 0) {
+        const line = errBuffer.slice(0, nl); errBuffer = errBuffer.slice(nl + 1)
+        if (!line.trim()) continue
+        if (Buffer.byteLength(line) > limits.maxFrameBytes) continue
+        lastSeq += 1
+        const seq = lastSeq
+        appendJournal({ seq, dir: 'err', line })
+        writeStatus()
+        sendClient(client, { type: 'stderr', seq, line })
+      }
+    })
+  }
 
   function fail(message: string) {
     statusError = message
@@ -308,7 +329,8 @@ async function main() {
     // own past requests as if the agent had sent them.
     for (const e of journal) {
       if (e.seq <= cursor) continue
-      if (e.dir !== 'out') continue
+      if (e.dir === 'in') continue
+      if (e.dir === 'err') { sendClient(sock, { type: 'stderr', seq: e.seq, line: e.line }); continue }
       if (keep.has(e.seq)) continue
       const resp = responseId(e.line, frameShape)
       const stale = Boolean(resp !== undefined && !currentAttacherRequestIds.has(rpcIdKey(resp)))

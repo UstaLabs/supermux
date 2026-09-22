@@ -129,3 +129,15 @@ test("a turn that produced nothing but usage flushes as a warning, a turn with c
   expect(full.some(b => b.kind === "warning")).toBe(false)
   expect(full.some(b => b.kind === "assistant-message")).toBe(true)
 })
+
+test("OpenCode stderr log lines: the session.processor error becomes an error event, the llm line does not", () => {
+  const n = createAcpNormalizer()
+  const llm = 'ERROR 2026-09-22T07:57:16 +5128ms service=llm providerID=opencode-go modelID=deepseek-v4-flash session.id=ses_1 small=false agent=build mode=primary error={"error":{"name":"AI_APICallError","url":"https://x"}}'
+  const proc = 'ERROR 2026-09-22T07:57:16 +8ms service=session.processor session.id=ses_1 messageID=msg_1 error=Upstream request failed: This Go model requires Global regions. Select Global in your workspace\'s Privacy settings to use it. stack=AI_APICallError: Upstream request failed'
+  expect(n({ protocol: "native", value: { method: "stderr", params: { line: llm } } })).toEqual([])
+  expect(n({ protocol: "native", value: { method: "stderr", params: { line: "INFO service=x" } } })).toEqual([])
+  expect(n({ protocol: "native", value: { method: "stderr", params: { line: proc } } })).toEqual([
+    { kind: "error", message: "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it.", errorType: "provider", recoverable: false },
+  ])
+  expect(n.flush().some(b => b.kind === "warning")).toBe(false)
+})

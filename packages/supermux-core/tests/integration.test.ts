@@ -24,6 +24,7 @@ test("public core lifecycle works through a real ACP subprocess", async () => {
     maxOutstandingActivity: 256,
     cancelRetryIntervalMs: 250,
     cancelRetryTimeoutMs: 10_000,
+    captureStderr: false,
     keeper: { stateDirectory, limits: { parkedDeadlineMs: 15_000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } },
   })
   const core = createCore({

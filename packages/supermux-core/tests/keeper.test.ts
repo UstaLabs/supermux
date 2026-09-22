@@ -35,7 +35,7 @@ async function open(sessionId: string, extraEnv: Record<string, string> = {}, li
   const conn = await connectKeeper({
     stateDirectory,
     sessionId,
-    spec: { command: process.execPath, args: [fixture], cwd: process.cwd(), env: { PATH: process.env.PATH ?? '', ...extraEnv }, frameShape: 'jsonrpc' },
+    spec: { command: process.execPath, args: [fixture], cwd: process.cwd(), env: { PATH: process.env.PATH ?? '', ...extraEnv }, frameShape: 'jsonrpc', captureStderr: false },
     limits: lim,
     cursor,
   })
@@ -345,7 +345,7 @@ test('oversize frame fails honestly', async () => {
 test('missing limits throw TypeError', () => {
   expect(() => connectKeeper({
     stateDirectory: '/tmp', sessionId: 'x', cursor: 0,
-    spec: { command: 'x', args: [], cwd: '/', env: {}, frameShape: 'jsonrpc' },
+    spec: { command: 'x', args: [], cwd: '/', env: {}, frameShape: 'jsonrpc', captureStderr: false },
     limits: { maxFrameBytes: 1 } as any,
   })).toThrow(TypeError)
 })
@@ -394,7 +394,7 @@ test('response for a previous attacher request is delivered stale; current attac
   const b = await connectKeeper({
     stateDirectory,
     sessionId,
-    spec: { command: process.execPath, args: [fixture], cwd: process.cwd(), env: { PATH: process.env.PATH ?? '' }, frameShape: 'jsonrpc' },
+    spec: { command: process.execPath, args: [fixture], cwd: process.cwd(), env: { PATH: process.env.PATH ?? '' }, frameShape: 'jsonrpc', captureStderr: false },
     limits: limits(),
     cursor: 'acked',
   })
@@ -445,7 +445,7 @@ createInterface({input:process.stdin}).on('line', line => {
       args: ['-e', claudeAsk],
       cwd: process.cwd(),
       env: { PATH: process.env.PATH ?? '' },
-      frameShape: 'claude-control',
+      frameShape: 'claude-control', captureStderr: false,
     },
     limits: limits({ parkedDeadlineMs: 15_000 }),
     cursor: 'acked',
@@ -464,7 +464,7 @@ createInterface({input:process.stdin}).on('line', line => {
       args: ['-e', claudeAsk],
       cwd: process.cwd(),
       env: { PATH: process.env.PATH ?? '' },
-      frameShape: 'claude-control',
+      frameShape: 'claude-control', captureStderr: false,
     },
     limits: limits(),
     cursor: 'acked',
