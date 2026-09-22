@@ -105,7 +105,9 @@ data class TerminalSessionConfig(
  * `onEngineError` and the loop carries on. Anything else stops the owner: the engine is closed, the
  * mailbox is closed and every queued command is failed, so suspending calls throw that error (and
  * a suspended [paste] / [selectedText] / [receive] fails instead of hanging) while the non-blocking
- * enqueues return [EnqueueResult.Rejected] with [RejectionReason.CLOSED]. [close] rethrows it.
+ * enqueues return [EnqueueResult.Rejected] with [RejectionReason.CLOSED]. [close] rethrows it. It is
+ * also published on [failure], which is the only way a renderer that never awaits anything can tell
+ * a dead terminal from an idle one.
  *
  * Create one with [open]; always [close] it (it owns native memory).
  */
@@ -128,6 +130,9 @@ class TerminalSession private constructor(
     /** Newest requested rendering state (see [setRenderingEnabled]). */
     private val renderingRequests = Channel<Boolean>(Channel.CONFLATED)
 
+    /** Pending "make the next frame full" request (see [requestFullFrame]). */
+    private val fullFrameRequests = Channel<Unit>(Channel.CONFLATED)
+
     private val outputBudget = ByteBudget(config.maxPendingOutputBytes)
     private val inputBudget = ByteBudget(config.maxPendingInputBytes)
 
@@ -148,9 +153,26 @@ class TerminalSession private constructor(
     val viewports: StateFlow<TerminalViewport>
         get() = checkNotNull(state) { "TerminalSession is not open" }
 
-    /** Set once the owner loop stopped because of an unrecoverable engine error. */
-    @Volatile
-    private var failure: Throwable? = null
+    private val failureState = MutableStateFlow<Throwable?>(null)
+
+    /**
+     * The error that stopped the owner loop, or null while the session is healthy.
+     *
+     * Observable on purpose: a renderer that only uses the NON-BLOCKING calls (`key`, `mouse`,
+     * `acknowledge`, …) never awaits anything, so without this flow a fatal engine failure would
+     * only show up as a screen that silently stopped updating. Collect it and surface the error;
+     * [close] still rethrows it and every suspending call still throws it.
+     *
+     * It is set exactly once, on the owner coroutine, before the mailbox is drained — so a
+     * collector that sees it non-null also knows every queued reply has been (or is about to be)
+     * failed. An ordinary [close] leaves it null.
+     */
+    val failure: StateFlow<Throwable?> get() = failureState
+
+    /** Internal alias of [failureState]'s value; the loop reads/writes the failure through it. */
+    private var fatal: Throwable?
+        get() = failureState.value
+        set(value) { failureState.value = value }
 
     @Volatile
     private var closedByHost = false
@@ -252,6 +274,20 @@ class TerminalSession private constructor(
     }
 
     /**
+     * Ask for the next published frame to be FULL.
+     *
+     * A renderer keeps its own row model and patches it from partial frames, so a renderer that
+     * attaches to an ALREADY RUNNING session (a re-mounted view, a second surface) has no rows to
+     * patch: the newest published frame it sees may be partial. This is how it recovers without
+     * touching the engine or closing anything. Non-blocking, conflated and idempotent; applied by
+     * the owner loop.
+     */
+    fun requestFullFrame() {
+        fullFrameRequests.trySend(Unit)
+        wakeup.trySend(Unit)
+    }
+
+    /**
      * Stop the session and close the engine. Idempotent; queued commands are drained first so
      * nothing already accepted is silently lost. Rethrows the error that stopped the owner loop, if
      * any.
@@ -263,7 +299,7 @@ class TerminalSession private constructor(
         mailbox.close()
         wakeup.trySend(Unit)
         withContext(NonCancellable) { owner?.join() }
-        failure?.let { throw it }
+        fatal?.let { throw it }
     }
 
     /** Cancel everything at once (cancelled [open]); the engine is still closed by the owner. */
@@ -277,19 +313,19 @@ class TerminalSession private constructor(
     // ------------------------------------------------------------------ enqueuing ----
 
     private suspend fun send(command: Command) {
-        failure?.let { throw it }
+        fatal?.let { throw it }
         try {
             mailbox.send(command)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            throw failure ?: IllegalStateException("TerminalSession is closed", e)
+            throw fatal ?: IllegalStateException("TerminalSession is closed", e)
         }
         wakeup.trySend(Unit)
     }
 
     private inline fun offerInput(bytes: Int, command: (permits: Int) -> Command): EnqueueResult {
-        if (closedByHost || failure != null) return EnqueueResult.Rejected(RejectionReason.CLOSED)
+        if (closedByHost || fatal != null) return EnqueueResult.Rejected(RejectionReason.CLOSED)
         val permits = inputBudget.tryAcquire(bytes) ?: return EnqueueResult.Rejected(RejectionReason.QUEUE_FULL)
         val result = mailbox.trySend(command(permits))
         if (!result.isSuccess) {
@@ -332,7 +368,7 @@ class TerminalSession private constructor(
             val engine = try {
                 engineFactory(size, limits)
             } catch (t: Throwable) {
-                if (t !is CancellationException) failure = t
+                if (t !is CancellationException) fatal = t
                 terminate()
                 ready.completeExceptionally(t)
                 return@launch
@@ -358,7 +394,7 @@ class TerminalSession private constructor(
                 // Recorded, NOT rethrown: the failure reaches the host through close() and through
                 // every suspending call, whereas rethrowing here would only reach the platform's
                 // unhandled-coroutine-exception hook — which on Kotlin/Native terminates the process.
-                failure = t
+                fatal = t
             } finally {
                 // The engine's native memory is released exactly once, on the owner coroutine,
                 // whatever stopped the loop (close, cancellation, engine failure) — and then the
@@ -367,7 +403,7 @@ class TerminalSession private constructor(
                     engine.close()
                 } catch (t: Throwable) {
                     if (t is CancellationException) throw t
-                    if (failure == null) failure = t
+                    if (fatal == null) fatal = t
                 } finally {
                     terminate()
                 }
@@ -388,6 +424,7 @@ class TerminalSession private constructor(
             // render state, so hiding does not silently force the next frame full.
             applyAcknowledgements(engine)
             applyRenderingRequests()
+            applyFullFrameRequests()
             val wait = renderStep(engine, flow)
             when (drained) {
                 Drained.CLOSED -> return
@@ -518,6 +555,13 @@ class TerminalSession private constructor(
         }
     }
 
+    private fun applyFullFrameRequests() {
+        if (fullFrameRequests.tryReceive().isSuccess) {
+            forceFull = true
+            dirty = true
+        }
+    }
+
     private fun applyAcknowledgements(engine: TerminalEngine) {
         while (true) {
             val generation = acks.tryReceive().getOrNull() ?: return
@@ -558,6 +602,7 @@ class TerminalSession private constructor(
     }
 
     private fun read(engine: TerminalEngine, flow: MutableStateFlow<TerminalViewport>, breakHold: Boolean) {
+        val wantedFull = forceFull
         val viewport = try {
             engine.viewport(forceFull = forceFull, breakHold = breakHold)
         } catch (e: TerminalNativeException) {
@@ -574,6 +619,16 @@ class TerminalSession private constructor(
         lastReadAt = now
         heldSince = if (viewport.held) heldSince ?: now else null
         if (viewport.generation == publishedGeneration) {
+            // A FULL read that nothing else made dirty ([requestFullFrame] from a renderer that
+            // attached mid-stream): the generation is the one already on screen, but the frame now
+            // carries every row, so publish it — unless it is identical to what the flow already
+            // holds, in which case the attaching renderer has the full rows anyway and publishing
+            // nothing keeps `pendingGeneration` from waiting for an ack that will never come.
+            if (wantedFull && viewport != flow.value) {
+                pendingGeneration = viewport.generation
+                flow.value = viewport
+                return
+            }
             // A hold poll re-serialized the frame the renderer already drew: acknowledge it again so
             // the engine's render state stays clean (an unacknowledged frame forces the next full).
             try {
@@ -608,7 +663,7 @@ class TerminalSession private constructor(
     }
 
     private fun abandon(command: Command) {
-        val error = failure ?: IllegalStateException("TerminalSession is closed")
+        val error = fatal ?: IllegalStateException("TerminalSession is closed")
         when (command) {
             is Command.Paste -> command.reply.completeExceptionally(error)
             is Command.SelectedText -> command.reply.completeExceptionally(error)

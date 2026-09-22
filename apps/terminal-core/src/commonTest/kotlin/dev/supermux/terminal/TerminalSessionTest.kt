@@ -9,6 +9,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -507,6 +509,72 @@ class TerminalSessionTest {
             seen,
         )
         assertEquals(1, errors.size)
+        session.close()
+    }
+
+    @Test fun theFailureFlowPublishesWhatStoppedTheOwnerLoop() = terminalTest {
+        val engine = RecordingTerminalEngine(size)
+        val session = openSession(engine)
+        session.acknowledgeCurrent()
+        assertNull(session.failure.value, "a healthy session has no failure")
+
+        engine.failingCalls += "feed"
+        session.receive("boom".encodeToByteArray())
+        clock.advanceUntilIdle()
+
+        // A renderer that only uses the non-blocking calls sees the failure HERE and nowhere else:
+        // key() only says "closed", and it never awaits anything that could throw.
+        val published = assertNotNull(session.failure.value, "the fatal failure must be observable")
+        assertTrue(published is IllegalStateException, "got $published")
+        assertEquals(
+            EnqueueResult.Rejected(RejectionReason.CLOSED),
+            session.key(TerminalKey(TerminalKeys.A, "a", Modifiers.NONE, KeyAction.PRESS)),
+        )
+        assertSame(published, runCatching { session.close() }.exceptionOrNull())
+    }
+
+    @Test fun anOrdinaryCloseLeavesTheFailureFlowEmpty() = terminalTest {
+        val engine = RecordingTerminalEngine(size)
+        val session = openSession(engine)
+        session.acknowledgeCurrent()
+        session.receive("hi".encodeToByteArray())
+        clock.advanceUntilIdle()
+        session.close()
+        assertNull(session.failure.value, "close() is not a failure")
+    }
+
+    // ------------------------------------------------------------------ full-frame requests ----
+
+    @Test fun requestFullFrameRepublishesEveryRowForARendererThatAttachedMidStream() = terminalTest {
+        val engine = RecordingTerminalEngine(size)
+        val session = openSession(engine)
+        session.acknowledgeCurrent()
+
+        // Two acknowledged feeds: the second frame is PARTIAL (only the rows that changed), which
+        // is all a renderer attaching now would see.
+        session.receive("first\n".encodeToByteArray())
+        clock.advanceUntilIdle()
+        session.acknowledgeCurrent()
+        session.receive("second".encodeToByteArray())
+        clock.advanceUntilIdle()
+        val partial = session.viewports.value
+        assertFalse(partial.full, "the mid-stream frame is partial")
+        session.acknowledgeCurrent()
+
+        // Nothing changes the screen afterwards: only the request may produce the next frame.
+        session.requestFullFrame()
+        clock.advanceUntilIdle()
+        val full = session.viewports.value
+        assertTrue(full.full, "requestFullFrame() must publish a full frame")
+        assertEquals(size.rows, full.rows.size)
+        assertEquals("first", full.rowTextOrNull(0))
+        assertEquals("second", full.rowTextOrNull(1))
+
+        // And the cadence is intact: the full frame is acknowledgeable and later output flows again.
+        session.acknowledgeCurrent()
+        session.receive("third".encodeToByteArray())
+        clock.advanceUntilIdle()
+        assertEquals("secondthird", session.viewports.value.rowTextOrNull(1))
         session.close()
     }
 }
