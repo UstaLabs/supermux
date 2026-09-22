@@ -8,7 +8,7 @@ import type { McpServerSpec } from "../../../../packages/supermux-core/src/envir
 import { claudePersonalAssistantInstructions, claudeWorkerInstructions, writeSessionMemoryPreamble } from "./preamble-writer"
 import { claudeSpawnArgs } from "../../plugins"
 import { environmentMdPath, promptsDir, replyFallbackPath } from "../../runtime-assets"
-import { STATE_DIR } from "../../../shared/paths"
+import { SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
 import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("agents/claude/core-host")
@@ -176,7 +176,18 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         nativeMemory: false,
         coreReplyContract: true,
       })
-      return { env: prepared.env, args: prepared.args }
+      // Claude keeps the user's global ~/.claude.json, whose `mux-shim` MCP entry
+      // reads the session identity from the PROCESS env (the tmux-era spawn set
+      // it the same way); without these the shim registers as a random id on
+      // the default sockets dir and the session's tools never connect.
+      const identity = {
+        MUX_SESSION_ID: extra.sessionId,
+        MUX_DISPLAY_NAME: extra.sessionName,
+        MUX_AGENT_KIND: "claude",
+        MUX_SOCKETS_DIR: SOCKETS_DIR,
+        MUX_SESSION_ROLE: extra.pa ? "personal_assistant" : "worker",
+      }
+      return { env: { ...prepared.env, ...identity }, args: prepared.args }
     },
   })
 }

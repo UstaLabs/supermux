@@ -76,6 +76,8 @@ export class CoreCursorAdapter extends EventEmitter implements AgentAdapter {
   private inputEpoch = 0
   private stopped = false
   private starting?: Promise<void>
+  /** In-flight config restart (stop → re-register → start): sends wait for it instead of failing. */
+  private restarting?: Promise<void>
   private stopping?: Promise<void>
   private sendTail: Promise<void> = Promise.resolve()
   private continueAfterConfirmedInterrupt = false
@@ -137,6 +139,8 @@ export class CoreCursorAdapter extends EventEmitter implements AgentAdapter {
   async setConfiguration(patch: { model?: string; effort?: string }): Promise<void> {
     if ("effort" in patch && !("model" in patch)) return
     if (!("model" in patch)) return
+    // Re-selecting the current model must not restart the native session.
+    if (patch.model === this._model) return
     const session = this.requireSession()
     if (session.snapshot().state === "running") {
       throw new CoreError("session_busy", "cursor session is busy")
@@ -146,18 +150,21 @@ export class CoreCursorAdapter extends EventEmitter implements AgentAdapter {
     const generation = this.startEpoch
     this._model = patch.model
     this.nativeSessionId = nativeSessionId
-    try {
-      await this.handle.stop({ mode: "shutdown" })
-      this.session = undefined
-      this.unsubscribe?.()
-      this.unsubscribe = undefined
-      this.handle = this.reregister({ model: this._model, prompts: this._prompts })
-      if (this.stopped || generation !== this.startEpoch) return
-      await this.start()
-    } catch (err) {
-      if (!this.stopped && generation === this.startEpoch) this._model = previous
-      throw asError(err)
-    }
+    this.restarting = (async () => {
+      try {
+        await this.handle.stop({ mode: "shutdown" })
+        this.session = undefined
+        this.unsubscribe?.()
+        this.unsubscribe = undefined
+        this.handle = this.reregister({ model: this._model, prompts: this._prompts })
+        if (this.stopped || generation !== this.startEpoch) return
+        await this.start()
+      } catch (err) {
+        if (!this.stopped && generation === this.startEpoch) this._model = previous
+        throw asError(err)
+      }
+    })()
+    try { await this.restarting } finally { this.restarting = undefined }
   }
 
   async setEffort(effort: string | undefined): Promise<void> {
@@ -238,6 +245,9 @@ export class CoreCursorAdapter extends EventEmitter implements AgentAdapter {
   }
 
   async send(text: string, meta?: InboundMeta): Promise<void> {
+    // A model/prompts change restarts the native session; a message that lands
+    // in that window belongs to the restarted session, not to an error toast.
+    if (this.restarting) await this.restarting.catch(() => {})
     const epoch = this.inputEpoch
     let releaseGate!: () => void
     const gate = new Promise<void>((resolve) => { releaseGate = once(resolve) })

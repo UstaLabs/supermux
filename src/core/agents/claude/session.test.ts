@@ -67,10 +67,12 @@ describe("claude applyConfig dialect", () => {
 function fakeChildFactory(options: { nativeId?: string; failOpens?: number } = {}) {
   const opens: DriverContext[] = []
   let openAttempts = 0
-  const factory = (_gopts: ClaudeOptions, _overrides: SessionConfiguration): AgentDriver => ({
+  const envs: Record<string, string>[] = []
+  const factory = (gopts: ClaudeOptions, _overrides: SessionConfiguration): AgentDriver => ({
     id: "claude",
     async open(ctx) {
       openAttempts++
+      envs.push({ ...(gopts.env ?? {}) })
       if (openAttempts <= (options.failOpens ?? 0)) throw new Error("open failed")
       opens.push(ctx)
       const runtime: AgentRuntime = {
@@ -83,7 +85,7 @@ function fakeChildFactory(options: { nativeId?: string; failOpens?: number } = {
       return runtime
     },
   })
-  return { factory, opens }
+  return { factory, opens, envs }
 }
 
 const hosts: ClaudeCoreHost[] = []
@@ -135,6 +137,30 @@ describe("claude core spawn/resume dialect", () => {
     expect(order).toContain("persist:native-new")
     expect(reg.get("broker-id-1")?.core).toBe(true)
     expect(child.opens[0]?.resumeId).toBeUndefined()
+  })
+
+  // The user's global ~/.claude.json declares the mux-shim MCP server, which
+  // reads the session identity from the process env; a Core session must set
+  // it or the shim registers as a random id on the default sockets dir.
+  test("the shim identity env reaches the claude driver", async () => {
+    const child = fakeChildFactory({ nativeId: "native-env" })
+    const host = await makeHost(child.factory)
+    const reg = registry()
+    const workdir = mkdtempSync(join(tmpdir(), "mux-claude-wd-"))
+    dirs.push(workdir)
+    await spawn({ registry: reg, bind: async () => {}, tmuxSession: "mux", claudeHost: host }, {
+      workdir,
+      requestedName: "cl-env",
+      agent: AgentKind.Claude,
+      id: "broker-id-env",
+    })
+    const env = child.envs[0]!
+    expect(env.MUX_SESSION_ID).toBe("broker-id-env")
+    expect(env.MUX_DISPLAY_NAME).toBe("cl-env")
+    expect(env.MUX_AGENT_KIND).toBe("claude")
+    expect(env.MUX_SESSION_ROLE).toBe("worker")
+    expect(env.MUX_SOCKETS_DIR).toMatch(/sockets$/)
+    expect(env.MUX_CORE).toBe("1")
   })
 
   test("resume of an existing native id adopts then exact-resumes", async () => {

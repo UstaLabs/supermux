@@ -423,6 +423,38 @@ test("setConfiguration({ model }) stops and resumes the same native id with the 
   expect(fake.opens[1]?.resumeId).toBe("native-keep")
 })
 
+test("re-selecting the current model does not restart the native session", async () => {
+  const fake = fakeAgentDriver({ nativeId: "native-keep" })
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-same", sessionName: "s1", workdir,
+    persistSessionId: async () => {},
+    model: "same/model",
+  })
+  await adapter.start()
+  await adapter.setConfiguration({ model: "same/model" })
+  await adapter.setPrompts(false)
+  expect(fake.opens).toHaveLength(1)
+})
+
+test("a send that lands during a model restart is delivered to the restarted session", async () => {
+  const fake = fakeAgentDriver({ nativeId: "native-keep" })
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-restart", sessionName: "s1", workdir,
+    persistSessionId: async () => {},
+    model: "old/model",
+  })
+  const errors: unknown[] = []
+  adapter.on("error", (e) => errors.push(e))
+  await adapter.start()
+  const restart = adapter.setConfiguration({ model: "new/model" })
+  const sent = adapter.send("hello after switch")
+  await Promise.all([restart, sent])
+  await flush()
+  expect(fake.opens).toHaveLength(2)
+  expect(fake.prompts.flat()).toContain("hello after switch")
+  expect(errors).toHaveLength(0)
+})
+
 test("setConfiguration({ model }) throws session_busy while a turn is running", async () => {
   const fake = fakeAgentDriver()
   const { host, workdir } = await harness(fake)
