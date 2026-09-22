@@ -886,6 +886,32 @@ export class SessionManager {
     return { ok: true, status: "applied" }
   }
 
+  async switchPrompts(
+    sessionId: string,
+    enabled: boolean,
+  ): Promise<{ ok: true; status: "applied" } | { ok: false; error: string }> {
+    const session = this.registry.get(sessionId)
+    if (!session) return { ok: false, error: `no such session: ${sessionId}` }
+    if (session.agent === AgentKind.Cursor && enabled) {
+      return { ok: false, error: "cursor sessions cannot prompt" }
+    }
+    const adapter = this.runtimes.get(session.id)?.adapter as
+      | { setPrompts?: (enabled: boolean) => Promise<void> }
+      | undefined
+    if (adapter?.setPrompts) {
+      try {
+        await adapter.setPrompts(enabled)
+      } catch (err) {
+        const code = typeof err === "object" && err !== null && "code" in err ? String((err as { code: unknown }).code) : ""
+        if (code === "session_busy") return { ok: false, error: "session_busy" }
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+    this.registry.setPrompts(sessionId, enabled)
+    this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: session.id, prompts: enabled })
+    return { ok: true, status: "applied" }
+  }
+
   private async switchModel(
     sessionId: string,
     newModel: string,

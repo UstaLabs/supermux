@@ -165,6 +165,7 @@ export interface SessionSnapshot {
   role?: "personal_assistant" | "worker"
   isDefault?: boolean
   model?: string
+  prompts?: boolean
   session_branch?: string
   repo_root?: string
   git?: import("../../core/worktree/lite-status").GitLiteStatus
@@ -213,6 +214,9 @@ export interface WebChannelOpts {
   // resolves the levels an agent+model offers before spawn. Codex's are per-model.
   getReasoningLevels?: (agent: AgentKind, model?: string) => { agent: string; levels: { id: string; description?: string }[]; visible: boolean }
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
+  switchPrompts?: (id: string, enabled: boolean) => Promise<{ ok: true; status: "applied" } | { ok: false; error: string }>
+  getSessionRequests?: (id: string) => unknown[]
+  respondRequest?: (sessionId: string, requestId: string, answer: unknown) => Promise<{ ok: true } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
   finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
@@ -1011,7 +1015,12 @@ export class WebChannel implements Channel {
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
+      const requests: Record<string, unknown[]> = {}
+      for (const s of sessions) {
+        const sessionKey = s.id ?? s.name
+        requests[sessionKey] = this.opts.getSessionRequests?.(sessionKey) ?? []
+      }
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests }))
       return
     }
     if (frame.type === "ping") {
@@ -1114,6 +1123,24 @@ export class WebChannel implements Channel {
       // user's other devices too (the sender's composer already cleared locally).
       this.opts.setDraft?.(frame.session, null)
       this.broadcastToOthers({ type: "draft_clear", session: frame.session }, ws)
+      return
+    }
+    if (frame.type === "set_prompts" && frame.session && typeof frame.enabled === "boolean") {
+      if (!this.opts.switchPrompts) {
+        ws.send(JSON.stringify({ type: "error", reason: "prompts not available" }))
+        return
+      }
+      const result = await this.opts.switchPrompts(frame.session, frame.enabled)
+      if (!result.ok) ws.send(JSON.stringify({ type: "error", reason: result.error }))
+      return
+    }
+    if (frame.type === "request_respond" && frame.session && frame.requestId) {
+      if (!this.opts.respondRequest) {
+        ws.send(JSON.stringify({ type: "error", reason: "requests not available" }))
+        return
+      }
+      const result = await this.opts.respondRequest(frame.session, frame.requestId, frame.answer)
+      if (!result.ok) ws.send(JSON.stringify({ type: "error", reason: result.error }))
       return
     }
     if (frame.type === "editor_open" && frame.session) {

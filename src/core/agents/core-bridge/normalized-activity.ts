@@ -417,6 +417,40 @@ export function createNormalizedActivity(opts: { workdir?: string }) {
       })
       return []
     }
+    if (body.kind === "reasoning" || body.kind === "reasoning-delta") {
+      if (body.kind === "reasoning-delta") return []
+      const redacted = body.redacted === true
+      const text = redacted ? "" : (body.text ?? body.summary?.join("\n") ?? "")
+      const title = redacted ? "Thinking (redacted)" : "Thinking"
+      const detail = redacted ? undefined : (text ? clip(text, DETAIL_MAX).text : undefined)
+      return [{
+        ts: new Date(now).toISOString(),
+        kind: "reasoning",
+        title,
+        ...(detail ? { detail } : {}),
+      }]
+    }
+    if (body.kind === "plan") {
+      const lines = body.entries.map((e) => `${e.status}: ${e.content}`)
+      const detail = [body.explanation, ...lines].filter(Boolean).join("\n")
+      return [{
+        ts: new Date(now).toISOString(),
+        kind: "plan",
+        title: "Plan",
+        ...(detail ? { detail: clip(detail, DETAIL_MAX).text } : {}),
+      }]
+    }
+    if (body.kind === "task") {
+      const title = body.label || body.taskKind
+      return [{
+        ts: new Date(now).toISOString(),
+        kind: "task",
+        title,
+        detail: `${body.taskKind} ${body.phase}`,
+        phase: body.phase === "started" ? "started" : "completed",
+        ...(body.parentCallId ? { callId: body.parentCallId } : {}),
+      }]
+    }
     if (body.kind !== "tool-call") return []
     const p = get(body.callId)
     p.tool = body.tool || p.tool

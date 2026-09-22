@@ -27,6 +27,7 @@ export type OpenCodePrepareExtra = {
   cwd: string
   nativeSessionId?: string
   model?: string
+  prompts?: boolean
 }
 
 function opencodeOpts(stateDirectory: string, env: Record<string, string>, model: string | undefined): OpenCodeOptions {
@@ -76,6 +77,7 @@ function asPrepareExtra(registration: HostRegistration): OpenCodePrepareExtra {
     cwd,
     nativeSessionId: typeof native === "string" ? native : undefined,
     model: typeof model === "string" ? model : undefined,
+    prompts: extra.prompts === true,
   }
 }
 

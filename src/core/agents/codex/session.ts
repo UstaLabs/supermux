@@ -63,24 +63,28 @@ function persistNativeId(
 
 function createBoundAdapter(opts: {
   handle: HostHandle
+  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
   core: Core
   id: string
   sessionName: string
   workdir: string
   model?: string
   effort?: string
+  prompts?: boolean
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
 }): CoreCodexAdapter {
   const adapter = new CoreCodexAdapter({
     handle: opts.handle,
+    reregister: opts.reregister,
     core: opts.core,
     id: opts.id,
     sessionName: opts.sessionName,
     workdir: opts.workdir,
     model: opts.model,
     effort: opts.effort,
+    prompts: opts.prompts,
     initialThreadId: opts.initialSessionId,
     persistThreadId: opts.persistSessionId,
     resolveAttachment: opts.resolveAttachment,
@@ -95,6 +99,7 @@ function prepareExtra(opts: {
   sessionHome: string
   workdir: string
   nativeSessionId?: string
+  prompts?: boolean
 }): CodexPrepareExtra {
   return {
     sessionHome: opts.sessionHome,
@@ -103,6 +108,7 @@ function prepareExtra(opts: {
     workdir: opts.workdir,
     cwd: opts.workdir,
     nativeSessionId: opts.nativeSessionId,
+    prompts: opts.prompts === true,
   }
 }
 
@@ -130,6 +136,13 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
 
     adapter = createBoundAdapter({
       handle,
+      reregister: (fields) => host.register({
+        id,
+        env: {},
+        command: resolveCodexCommand({}),
+        args: brokerCodexArgs(name),
+        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, prompts: fields.prompts }),
+      }),
       core: host.core,
       id,
       sessionName: name,
@@ -197,7 +210,7 @@ export async function resumeCodexSession(
     onThreadId?: (name: string, sid: string) => void
     codexHost?: CodexCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string; prompts?: boolean },
 ): Promise<{ adapter: CoreCodexAdapter }> {
   const host = resolveHost(deps.codexHost)
   const sessionHome = session.agent_home
@@ -213,18 +226,34 @@ export async function resumeCodexSession(
       sessionHome,
       workdir: session.workdir,
       nativeSessionId: initialSessionId,
+      prompts: session.prompts,
     }),
   })
   let adapter: CoreCodexAdapter | undefined
   try {
     adapter = createBoundAdapter({
       handle,
+      reregister: (fields) => host.register({
+        id: session.id,
+        env: {},
+        command: resolveCodexCommand({}),
+        args: brokerCodexArgs(session.name),
+        extra: prepareExtra({
+          id: session.id,
+          sessionName: session.name,
+          sessionHome,
+          workdir: session.workdir,
+          nativeSessionId: initialSessionId,
+          prompts: fields.prompts,
+        }),
+      }),
       core: host.core,
       id: session.id,
       sessionName: session.name,
       workdir: session.workdir,
       model: session.model,
       effort: session.effort,
+      prompts: session.prompts,
       initialSessionId,
       persistSessionId: persistNativeId(deps.onThreadId, session.name),
       resolveAttachment: deps.resolveAttachment,
@@ -278,6 +307,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onThreadId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       codexHost: ctx.codexHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), agent_session_id: session.agent_session_id },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), agent_session_id: session.agent_session_id, prompts: session.prompts },
   )
 }

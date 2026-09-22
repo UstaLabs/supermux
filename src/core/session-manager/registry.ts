@@ -206,6 +206,12 @@ export class Registry {
     this.sessions.setReasoningLevel(id, reasoningLevel)
   }
 
+  setPrompts(id: string, prompts: boolean): void {
+    const s = this.sessions.getById(id)
+    if (!s) throw new Error(`no such session: ${id}`)
+    this.sessions.setPrompts(id, prompts)
+  }
+
   listPAs(): Session[] {
     return this.sessions.list().filter(s => s.role === "personal_assistant" && s.status !== "archived")
   }

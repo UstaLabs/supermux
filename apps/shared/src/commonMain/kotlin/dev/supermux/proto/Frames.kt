@@ -26,6 +26,8 @@ data class SessionInfo(
     val model: String? = null,
     /** Thinking/effort level (claude/codex); carried on the snapshot + session_state. */
     val reasoningLevel: String? = null,
+    /** Opt-in permission prompts (default false = auto-approve). */
+    val prompts: Boolean = false,
     val repo_root: String? = null,
     val role: String? = null,
     /** Worktree session's pinned branch (present only for worktree-backed sessions). */
@@ -300,6 +302,7 @@ sealed interface ServerFrame {
         val projects: List<ProjectDto> = emptyList(),
         /** workspaceId → projectId for active AND archived workspaces. Empty on older brokers. */
         val projectMembership: Map<String, String> = emptyMap(),
+        val requests: Map<String, List<PromptRequest>> = emptyMap(),
     ) : ServerFrame
 
     /**
@@ -377,6 +380,7 @@ sealed interface ServerFrame {
         val connected: Boolean? = null,
         val model: String? = null,
         val reasoningLevel: String? = null,
+        val prompts: Boolean? = null,
     ) : ServerFrame
 
     @Serializable @SerialName("agent_state")
@@ -526,7 +530,35 @@ sealed interface ServerFrame {
         val ok: Boolean = false,
         val error: String? = null,
     ) : ServerFrame
+
+    @Serializable @SerialName("request_open")
+    data class RequestOpen(val session: String, val request: PromptRequest) : ServerFrame
+
+    @Serializable @SerialName("request_closed")
+    data class RequestClosed(
+        val session: String,
+        val requestId: String,
+        val outcome: String,
+    ) : ServerFrame
 }
+
+@Serializable
+data class PromptRequestOption(
+    val id: String,
+    val label: String,
+    val kind: String? = null,
+)
+
+@Serializable
+data class PromptRequest(
+    val requestId: String,
+    val kind: String,
+    val title: String = "",
+    val body: String = "",
+    val options: List<PromptRequestOption> = emptyList(),
+    val allowFreeText: Boolean = false,
+    val blocking: Boolean = true,
+)
 
 @Serializable
 sealed interface ClientFrame {
@@ -562,6 +594,16 @@ sealed interface ClientFrame {
         val session: String?,
         val visible: Boolean,
         val sessions: List<String>? = null,
+    ) : ClientFrame
+
+    @Serializable @SerialName("set_prompts")
+    data class SetPrompts(val session: String, val enabled: Boolean) : ClientFrame
+
+    @Serializable @SerialName("request_respond")
+    data class RequestRespond(
+        val session: String,
+        val requestId: String,
+        val answer: JsonObject,
     ) : ClientFrame
 
     @Serializable @SerialName("send")

@@ -1,5 +1,6 @@
 import { EventEmitter } from "events"
-import type { AgentAdapter, AgentKind, InboundMeta } from "../types"
+import type { AgentAdapter, AgentKind, BrokerRequest, InboundMeta, RequestAnswerInput } from "../types"
+import { mapPendingRequest, toCoreAnswer } from "../core-bridge/request-map"
 import { createNormalizedBridge } from "../core-bridge/normalized-bridge"
 import { createNormalizedActivity } from "../core-bridge/normalized-activity"
 import type {
@@ -19,7 +20,7 @@ const DEFAULT_STALL_MS = 90_000
 export type CoreOpenCodeAdapterOpts = {
   handle: HostHandle
   /** Host.stop() terminals the handle; model restart re-registers then starts. */
-  reregister: (model?: string) => HostHandle
+  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
   core: Core
   id: string
   sessionName: string
@@ -28,6 +29,7 @@ export type CoreOpenCodeAdapterOpts = {
   persistSessionId: (nativeId: string) => Promise<void>
   model?: string
   effort?: string
+  prompts?: boolean
   resolveAttachment?: (file_id: string) => Promise<string>
   stallTimeoutMs?: number
 }
@@ -57,7 +59,7 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
   availableCommands: { name: string; description?: string; _meta?: { scope?: string; path?: string } }[] = []
 
   private handle: HostHandle
-  private readonly reregister: (model?: string) => HostHandle
+  private readonly reregister: CoreOpenCodeAdapterOpts["reregister"]
   private readonly core: Core
   private readonly persistSessionId: (nativeId: string) => Promise<void>
   private readonly resolveAttachment?: (file_id: string) => Promise<string>
@@ -67,6 +69,7 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   private _model?: string
   private _effort?: string
+  private _prompts: boolean
   private session?: Session
   private unsubscribe?: () => void
   private startEpoch = 0
@@ -105,6 +108,7 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
     this.nativeSessionId = opts.initialSessionId
     this._model = opts.model
     this._effort = opts.effort
+    this._prompts = opts.prompts === true
     this.resolveAttachment = opts.resolveAttachment
     this.stallTimeoutMs = opts.stallTimeoutMs ?? DEFAULT_STALL_MS
     this.activity = createNormalizedActivity({ workdir: opts.workdir })
@@ -112,6 +116,41 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   get model(): string | undefined { return this._model }
   get effort(): string | undefined { return this._effort }
+  get prompts(): boolean { return this._prompts }
+
+  openRequests(): BrokerRequest[] {
+    const session = this.session
+    if (!session) return []
+    return session.requests.list().map(mapPendingRequest)
+  }
+
+  async respondRequest(requestId: string, answer: RequestAnswerInput): Promise<void> {
+    await this.requireSession().requests.respond(requestId, toCoreAnswer(answer))
+  }
+
+  async setPrompts(enabled: boolean): Promise<void> {
+    const session = this.requireSession()
+    if (session.snapshot().state === "running") {
+      throw new CoreError("session_busy", "opencode session is busy")
+    }
+    const nativeSessionId = session.snapshot().agentSessionId
+    const previous = this._prompts
+    const generation = this.startEpoch
+    this._prompts = enabled
+    this.nativeSessionId = nativeSessionId
+    try {
+      await this.handle.stop({ mode: "shutdown" })
+      this.session = undefined
+      this.unsubscribe?.()
+      this.unsubscribe = undefined
+      this.handle = this.reregister({ model: this._model, prompts: this._prompts })
+      if (this.stopped || generation !== this.startEpoch) return
+      await this.start()
+    } catch (err) {
+      if (!this.stopped && generation === this.startEpoch) this._prompts = previous
+      throw asError(err)
+    }
+  }
 
   async setConfiguration(patch: { model?: string; effort?: string }): Promise<void> {
     if ("effort" in patch && !("model" in patch)) return
@@ -130,7 +169,7 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
       this.session = undefined
       this.unsubscribe?.()
       this.unsubscribe = undefined
-      this.handle = this.reregister(this._model)
+      this.handle = this.reregister({ model: this._model, prompts: this._prompts })
       if (this.stopped || generation !== this.startEpoch) return
       await this.start()
     } catch (err) {

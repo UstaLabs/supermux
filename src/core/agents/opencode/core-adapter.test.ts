@@ -152,10 +152,10 @@ function makeAdapter(host: Host, opts: {
   const handle = host.register({ id: opts.id, env: {}, extra })
   const adapter = new CoreOpenCodeAdapter({
     handle,
-    reregister: (model) => host.register({
+    reregister: (fields) => host.register({
       id: opts.id,
       env: {},
-      extra: { ...extra, ...(model ? { model } : {}) },
+      extra: { ...extra, ...(fields.model ? { model: fields.model } : {}), prompts: fields.prompts === true },
     }),
     core: host.core,
     ...opts,

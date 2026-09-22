@@ -347,3 +347,29 @@ describe("proxy commands", () => {
     expect(result.text).toContain("nope")
   })
 })
+
+test("/prompts with no args shows current for active session", async () => {
+  r.setActive("chat-1", anaId)
+  const result = await handleSlash({ command: "prompts", rest: "" }, ctx)
+  expect(result.text).toContain("prompts off")
+})
+
+test("/prompts on switches active session", async () => {
+  r.setActive("chat-1", anaId)
+  const result = await handleSlash({ command: "prompts", rest: "on" }, ctx)
+  expect(result.text).toContain("prompts on")
+  expect(r.get(anaId)?.prompts).toBe(true)
+})
+
+test("/prompts on session name", async () => {
+  const result = await handleSlash({ command: "prompts", rest: "on zoom" }, ctx)
+  expect(r.get(zoomId)?.prompts).toBe(true)
+  expect(result.text).toContain("zoom")
+})
+
+test("/prompts on cursor session errors", async () => {
+  const cur = r.register({ name: "curs", workdir: "/c", pid: 9, agent: "cursor" })
+  const result = await handleSlash({ command: "prompts", rest: `on ${cur.name}` }, ctx)
+  expect(result.text).toBe("cursor sessions cannot prompt")
+  expect(r.get(cur.id)?.prompts).toBe(false)
+})

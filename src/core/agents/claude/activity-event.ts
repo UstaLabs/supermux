@@ -6,7 +6,7 @@ export type { ActivityToolBody }
 
 export interface ActivityEvent {
   ts: string
-  kind: "thinking" | "tool" | "tool_result" | "interrupt"
+  kind: "thinking" | "tool" | "tool_result" | "interrupt" | "reasoning" | "plan" | "task"
   tool?: string
   title: string
   /** Medium-mode / expand preview (may be truncated). */

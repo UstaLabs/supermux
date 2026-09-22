@@ -1,0 +1,6 @@
+{
+  "type": "request_closed",
+  "session": "s1",
+  "requestId": "r1",
+  "outcome": "answered"
+}

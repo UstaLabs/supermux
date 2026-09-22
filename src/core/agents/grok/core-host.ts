@@ -26,9 +26,10 @@ export type GrokPrepareExtra = {
   workdir: string
   cwd: string
   nativeSessionId?: string
+  prompts?: boolean
 }
 
-function grokOpts(stateDirectory: string, env: Record<string, string>): GrokOptions {
+function grokOpts(stateDirectory: string, env: Record<string, string>, prompts: boolean): GrokOptions {
   return {
     id: "grok",
     command: "grok",
@@ -37,7 +38,7 @@ function grokOpts(stateDirectory: string, env: Record<string, string>): GrokOpti
     inheritEnv: true,
     mcpServers: [],
     noLeader: false,
-    alwaysApprove: true,
+    alwaysApprove: !prompts,
     setupTimeoutMs: 30_000,
     shutdownTimeoutMs: 2_000,
     maxFrameBytes: 16 * 1024 * 1024,
@@ -72,6 +73,7 @@ function asPrepareExtra(registration: HostRegistration): GrokPrepareExtra {
     workdir,
     cwd,
     nativeSessionId: typeof native === "string" ? native : undefined,
+    prompts: extra.prompts === true,
   }
 }
 
@@ -83,9 +85,11 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "grok",
-    driver: (registration) => {
-      const opts = grokOpts(stateDirectory, registration.env)
-      return factory ? grok(opts, factory) : grok(opts)
+    driver: (registration, ctx) => {
+      const prompts = registration.extra?.prompts === true
+      const opts = grokOpts(stateDirectory, registration.env, prompts)
+      const overrides: SessionConfiguration = ctx.configuration ? { ...ctx.configuration } : {}
+      return factory ? factory(opts, overrides) : grok(opts)
     },
     prepare: async (registration) => {
       const extra = asPrepareExtra(registration)

@@ -327,6 +327,29 @@ test("parity: real grok-turn.ndjson tool cards", () => {
   expect(cards.some((c) => c.kind === "tool_result")).toBe(true)
 })
 
+test("reasoning redacted becomes Thinking (redacted) card", () => {
+  const act = createNormalizedActivity({ workdir: WD })
+  const cards = act.handle(envelope("grok", { kind: "reasoning", reasoningId: "x", redacted: true }, 1, {}), NOW)
+  expect(cards[0]).toMatchObject({ kind: "reasoning", title: "Thinking (redacted)" })
+})
+
+test("plan and task become activity cards", () => {
+  const act = createNormalizedActivity({ workdir: WD })
+  const plan = act.handle(envelope("grok", {
+    kind: "plan",
+    entries: [{ content: "do it", status: "pending" }],
+  }, 1, {}), NOW)
+  expect(plan[0]?.kind).toBe("plan")
+  const task = act.handle(envelope("grok", {
+    kind: "task",
+    taskId: "t1",
+    taskKind: "shell",
+    phase: "started",
+    label: "build",
+  }, 2, {}), NOW)
+  expect(task[0]).toMatchObject({ kind: "task", title: "build" })
+})
+
 test("parity: real cursor-turn.ndjson tool cards", () => {
   const frames = loadNdjson("cursor-turn.ndjson")
   const n = createCursorNormalizer()

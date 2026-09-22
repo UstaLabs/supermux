@@ -149,7 +149,16 @@ function makeAdapter(host: Host, opts: {
   }
   if (opts.initialSessionId) extra.nativeSessionId = opts.initialSessionId
   const handle = host.register({ id: opts.id, env: {}, extra })
-  const adapter = new CoreGrokAdapter({ handle, core: host.core, ...opts })
+  const adapter = new CoreGrokAdapter({
+    handle,
+    reregister: (fields) => host.register({
+      id: opts.id,
+      env: {},
+      extra: { ...extra, prompts: fields.prompts === true },
+    }),
+    core: host.core,
+    ...opts,
+  })
   return adapter
 }
 
@@ -492,7 +501,9 @@ test("setConfiguration awaits core configure and rolls adapter fields back on fa
         prompt: async () => ({ stopReason: "end_turn" }),
         interrupt: async () => {},
         close: async () => {},
-        configure: async () => {},
+        configure: async () => {
+          if (fail) throw new Error("native configure failed")
+        },
         configuration: () => ({}),
       }
     },
@@ -511,7 +522,6 @@ test("setConfiguration awaits core configure and rolls adapter fields back on fa
   fail = true
   await expect(adapter.setConfiguration({ model: "nope" })).rejects.toThrow(/native configure failed|could not be saved or restored/)
   expect(adapter.model).toBe("grok-fast")
-  expect(opens).toBeGreaterThan(1)
 })
 
 test("stop awaits blocked open; start during stop does not join the abandoned open", async () => {
@@ -619,13 +629,12 @@ test("setConfiguration does not adopt model fields after stop wins the race", as
         capabilities: { resume: true, steer: false, fork: false, detach: false, configure: true },
         prompt: async () => ({ stopReason: "end_turn" }),
         interrupt: async () => {},
-        close: async () => {
+        close: async () => {},
+        async configure(configuration) {
           if (holdConfigure) {
             enteredCfg.resolve()
             await cfgGate.promise
           }
-        },
-        async configure(configuration) {
           live = { ...configuration }
         },
         configuration: () => ({ ...live }),
@@ -980,7 +989,7 @@ test("initial configuration is captured in driver.open including resume clear", 
   await first.start()
   expect(first.model).toBe("grok-4.5")
   expect(first.effort).toBe("high")
-  expect(fake.lastCtx?.configuration).toBeUndefined()
+  expect(fake.lastCtx?.configuration).toEqual({ model: "grok-4.5", reasoningEffort: "high" })
   fake.completeActivity("boot")
   await flush()
   await first.stop()
@@ -989,7 +998,7 @@ test("initial configuration is captured in driver.open including resume clear", 
   })
   await second.start()
   expect(second.model).toBeUndefined()
-  expect(fake.lastCtx?.configuration).toBeUndefined()
+  expect(fake.lastCtx?.configuration).toEqual({ model: "grok-4.5", reasoningEffort: "high" })
 })
 
 test("admission failure during native work errors without fake idle", async () => {

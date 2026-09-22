@@ -1,5 +1,6 @@
 import type { AgentEvent, ToolCallEvent } from "../types"
 import type { EventEnvelope, NormalizedBody } from "../../../../packages/supermux-core/src/events/normalized.js"
+import { mapPermissionRequest, mapUserQuestion } from "./request-map"
 import {
   createCodexNativeItemState,
   handleCodexItemCompleted,
@@ -98,6 +99,42 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
     }
     if (kind === "error") {
       opts.emit({ kind: "error", error: new Error(event.message) })
+      return
+    }
+    if (kind === "permission-request") {
+      const mapped = mapPermissionRequest(event)
+      opts.emit({
+        kind: "request-open",
+        requestId: mapped.requestId,
+        requestKind: mapped.kind,
+        title: mapped.title,
+        body: mapped.body,
+        options: mapped.options,
+        allowFreeText: mapped.allowFreeText,
+        blocking: mapped.blocking,
+      })
+      return
+    }
+    if (kind === "user-question") {
+      const mapped = mapUserQuestion(event)
+      opts.emit({
+        kind: "request-open",
+        requestId: mapped.requestId,
+        requestKind: mapped.kind,
+        title: mapped.title,
+        body: mapped.body,
+        options: mapped.options,
+        allowFreeText: mapped.allowFreeText,
+        blocking: mapped.blocking,
+      })
+      return
+    }
+    if (kind === "request-resolved") {
+      opts.emit({
+        kind: "request-closed",
+        requestId: event.requestId,
+        outcome: event.outcome,
+      })
       return
     }
     if (kind === "usage" && event.rateLimits != null) {

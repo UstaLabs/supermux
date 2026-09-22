@@ -49,24 +49,28 @@ function persistNativeId(
 
 function createBoundAdapter(opts: {
   handle: HostHandle
+  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
   core: Core
   id: string
   sessionName: string
   workdir: string
   model?: string
   effort?: string
+  prompts?: boolean
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
 }): CoreGrokAdapter {
   return new CoreGrokAdapter({
     handle: opts.handle,
+    reregister: opts.reregister,
     core: opts.core,
     id: opts.id,
     sessionName: opts.sessionName,
     workdir: opts.workdir,
     model: opts.model,
     effort: opts.effort,
+    prompts: opts.prompts,
     initialSessionId: opts.initialSessionId,
     persistSessionId: opts.persistSessionId,
     resolveAttachment: opts.resolveAttachment,
@@ -79,6 +83,7 @@ function prepareExtra(opts: {
   sessionHome: string
   workdir: string
   nativeSessionId?: string
+  prompts?: boolean
 }): GrokPrepareExtra {
   return {
     sessionHome: opts.sessionHome,
@@ -87,6 +92,7 @@ function prepareExtra(opts: {
     workdir: opts.workdir,
     cwd: opts.workdir,
     nativeSessionId: opts.nativeSessionId,
+    prompts: opts.prompts === true,
   }
 }
 
@@ -120,6 +126,11 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
 
     adapter = createBoundAdapter({
       handle,
+      reregister: (fields) => host.register({
+        id,
+        env: {},
+        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, prompts: fields.prompts }),
+      }),
       core: host.core,
       id,
       sessionName: name,
@@ -187,7 +198,7 @@ export async function resumeGrokSession(
     onGrokSessionId?: (name: string, sid: string) => void
     grokHost?: GrokCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string; prompts?: boolean },
 ): Promise<{ adapter: CoreGrokAdapter }> {
   const host = resolveHost(deps.grokHost)
   const sessionHome = session.agent_home
@@ -201,18 +212,32 @@ export async function resumeGrokSession(
       sessionHome,
       workdir: session.workdir,
       nativeSessionId: initialSessionId,
+      prompts: session.prompts,
     }),
   })
   let adapter: CoreGrokAdapter | undefined
   try {
     adapter = createBoundAdapter({
       handle,
+      reregister: (fields) => host.register({
+        id: session.id,
+        env: {},
+        extra: prepareExtra({
+          id: session.id,
+          sessionName: session.name,
+          sessionHome,
+          workdir: session.workdir,
+          nativeSessionId: initialSessionId,
+          prompts: fields.prompts,
+        }),
+      }),
       core: host.core,
       id: session.id,
       sessionName: session.name,
       workdir: session.workdir,
       model: session.model,
       effort: session.effort,
+      prompts: session.prompts,
       initialSessionId,
       persistSessionId: persistNativeId(deps.onGrokSessionId, session.name),
       resolveAttachment: deps.resolveAttachment,
@@ -274,6 +299,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onGrokSessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       grokHost: ctx.grokHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), agent_session_id: session.agent_session_id },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), agent_session_id: session.agent_session_id, prompts: session.prompts },
   )
 }

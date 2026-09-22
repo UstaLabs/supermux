@@ -1,6 +1,8 @@
 import { EventEmitter } from "events"
 import { readFile } from "node:fs/promises"
-import type { AgentAdapter, AgentKind, InboundMeta } from "../types"
+import type { AgentAdapter, AgentKind, BrokerRequest, InboundMeta, RequestAnswerInput } from "../types"
+import { mapPendingRequest, toCoreAnswer } from "../core-bridge/request-map"
+import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { makeLogger } from "../../../shared/log"
 import type { CodexUsage } from "../../usage/index"
 import { codexUsageFromRateLimits } from "../../usage/local"
@@ -23,6 +25,7 @@ const log = makeLogger("agents/codex/core-adapter")
 
 export type CoreCodexAdapterOpts = {
   handle: HostHandle
+  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
   core: Core
   id: string
   sessionName: string
@@ -31,6 +34,7 @@ export type CoreCodexAdapterOpts = {
   persistThreadId: (nativeId: string) => Promise<void>
   model?: string
   effort?: string
+  prompts?: boolean
   resolveAttachment?: (file_id: string) => Promise<string>
   onUsageUpdate?: (data: CodexUsage) => void
   getPrevUsage?: () => CodexUsage | null
@@ -81,7 +85,8 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
   onUsageUpdate?: (data: CodexUsage) => void
   getPrevUsage?: () => CodexUsage | null
 
-  private readonly handle: HostHandle
+  private handle: HostHandle
+  private readonly reregister: CoreCodexAdapterOpts["reregister"]
   private readonly core: Core
   private readonly persistThreadId: (nativeId: string) => Promise<void>
   private readonly resolveAttachment?: (file_id: string) => Promise<string>
@@ -89,6 +94,7 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
 
   private _model?: string
   private _effort?: string
+  private _prompts: boolean
   private session?: Session
   private unsubscribe?: () => void
   private startEpoch = 0
@@ -118,6 +124,7 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
   constructor(opts: CoreCodexAdapterOpts) {
     super()
     this.handle = opts.handle
+    this.reregister = opts.reregister
     this.core = opts.core
     this.id = opts.id
     this.sessionName = opts.sessionName
@@ -126,6 +133,7 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
     this.initialThreadId = opts.initialThreadId
     this._model = opts.model
     this._effort = opts.effort
+    this._prompts = opts.prompts === true
     this.resolveAttachment = opts.resolveAttachment
     this.onUsageUpdate = opts.onUsageUpdate
     this.getPrevUsage = opts.getPrevUsage
@@ -134,6 +142,41 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
 
   get model(): string | undefined { return this._model }
   get effort(): string | undefined { return this._effort }
+  get prompts(): boolean { return this._prompts }
+
+  openRequests(): BrokerRequest[] {
+    const session = this.session
+    if (!session) return []
+    return session.requests.list().map(mapPendingRequest)
+  }
+
+  async respondRequest(requestId: string, answer: RequestAnswerInput): Promise<void> {
+    await this.requireSession().requests.respond(requestId, toCoreAnswer(answer))
+  }
+
+  async setPrompts(enabled: boolean): Promise<void> {
+    const session = this.requireSession()
+    if (session.snapshot().state === "running") {
+      throw new CoreError("session_busy", "codex session is busy")
+    }
+    const nativeSessionId = session.snapshot().agentSessionId
+    const previous = this._prompts
+    const generation = this.startEpoch
+    this._prompts = enabled
+    this.lastNativeId = nativeSessionId
+    try {
+      await this.handle.stop({ mode: "shutdown" })
+      this.session = undefined
+      this.unsubscribe?.()
+      this.unsubscribe = undefined
+      this.handle = this.reregister({ model: this._model, prompts: this._prompts })
+      if (this.stopped || generation !== this.startEpoch) return
+      await this.start()
+    } catch (err) {
+      if (!this.stopped && generation === this.startEpoch) this._prompts = previous
+      throw asError(err)
+    }
+  }
 
   attachRuntimeRequest(request: (method: string, params: unknown) => Promise<unknown>): void {
     this.runtimeRequest = request
@@ -336,7 +379,7 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
       this.session = await this.handle.start({
         cwd: this.workdir,
         configuration: this.desiredConfiguration(),
-        nativeSessionId: this.initialThreadId,
+        nativeSessionId: this.lastNativeId ?? this.initialThreadId,
         onOpened: async (session) => {
           const nativeId = session.snapshot().agentSessionId
           this.lastNativeId = nativeId
@@ -373,7 +416,10 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
   }
 
   private desiredConfiguration(): SessionConfiguration {
-    return { model: this._model, reasoningEffort: this._effort }
+    const requested: SessionConfiguration = {}
+    if (this._model) requested.model = this._model
+    if (this._effort) requested.reasoningEffort = this._effort
+    return requested
   }
 
   private async buildContent(text: string, meta: InboundMeta | undefined, epoch: number): Promise<ContentBlock[]> {

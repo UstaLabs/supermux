@@ -92,6 +92,7 @@ export class SessionStore {
       base_branch: input.base_branch,
       session_branch: input.session_branch,
       self_renamed: false,
+      prompts: false,
       user_status,
       sort_order,
       draft_payload: input.draft_payload,
@@ -227,6 +228,13 @@ export class SessionStore {
     if (!session) return
     this.db.run("UPDATE sessions SET reasoning_level = ? WHERE id = ?", [reasoningLevel ?? null, id])
     session.reasoningLevel = reasoningLevel
+  }
+
+  setPrompts(id: string, prompts: boolean): void {
+    const session = this.cache.get(id)
+    if (!session) return
+    this.db.run("UPDATE sessions SET prompts = ? WHERE id = ?", [prompts ? 1 : 0, id])
+    session.prompts = prompts
   }
 
   setAgentSessionId(id: string, agentSessionId: string): void {

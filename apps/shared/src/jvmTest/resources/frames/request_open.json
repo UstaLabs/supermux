@@ -1,0 +1,16 @@
+{
+  "type": "request_open",
+  "session": "s1",
+  "request": {
+    "requestId": "r1",
+    "kind": "permission",
+    "title": "Bash",
+    "body": "execute ls",
+    "options": [
+      { "id": "allow_once", "label": "Allow once", "kind": "allow_once" },
+      { "id": "reject_once", "label": "Reject", "kind": "reject_once" }
+    ],
+    "allowFreeText": false,
+    "blocking": true
+  }
+}

@@ -34,6 +34,41 @@ export type AgentErrorEvent   = { kind: "error"; error: Error; errorType?: strin
 
 export type ActivityCardsEvent = { kind: "activity"; events: ActivityEvent[] }
 
+export type BrokerRequestOption = { id: string; label: string; kind?: string }
+
+export type BrokerRequest = {
+  requestId: string
+  kind: "permission" | "question"
+  title: string
+  body: string
+  options: BrokerRequestOption[]
+  allowFreeText: boolean
+  blocking: boolean
+}
+
+export type RequestOpenEvent = {
+  kind: "request-open"
+  requestId: string
+  requestKind: "permission" | "question"
+  title: string
+  body: string
+  options: BrokerRequestOption[]
+  allowFreeText: boolean
+  blocking: boolean
+}
+
+export type RequestClosedEvent = {
+  kind: "request-closed"
+  requestId: string
+  outcome: "answered" | "expired" | "cancelled"
+  answer?: string
+}
+
+export type RequestAnswerInput =
+  | { optionId: string; message?: string }
+  | { answers: Record<string, string | string[]> }
+  | { decline: true }
+
 export type AgentEvent =
   | AssistantMessageEvent
   | ToolCallEvent
@@ -41,6 +76,8 @@ export type AgentEvent =
   | TurnCompleteEvent
   | AgentErrorEvent
   | ActivityCardsEvent
+  | RequestOpenEvent
+  | RequestClosedEvent
 
 export type InboundMeta = {
   chat_id?: string
@@ -67,4 +104,6 @@ export interface AgentAdapter extends EventEmitter {
 
   send(text: string, meta?: InboundMeta): Promise<void>
   interrupt(): Promise<void>
+  respondRequest?(requestId: string, answer: RequestAnswerInput): Promise<void>
+  openRequests?(): BrokerRequest[]
 }

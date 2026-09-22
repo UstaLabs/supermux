@@ -48,12 +48,13 @@ function persistNativeId(
 
 function createBoundAdapter(opts: {
   handle: HostHandle
-  reregister: (model?: string) => HostHandle
+  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
   core: Core
   id: string
   sessionName: string
   workdir: string
   model?: string
+  prompts?: boolean
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
@@ -61,6 +62,7 @@ function createBoundAdapter(opts: {
   return new CoreOpenCodeAdapter({
     handle: opts.handle,
     reregister: opts.reregister,
+    prompts: opts.prompts,
     core: opts.core,
     id: opts.id,
     sessionName: opts.sessionName,
@@ -79,6 +81,7 @@ function prepareExtra(opts: {
   workdir: string
   nativeSessionId?: string
   model?: string
+  prompts?: boolean
 }): OpenCodePrepareExtra {
   return {
     sessionHome: opts.sessionHome,
@@ -88,6 +91,7 @@ function prepareExtra(opts: {
     cwd: opts.workdir,
     nativeSessionId: opts.nativeSessionId,
     model: opts.model,
+    prompts: opts.prompts === true,
   }
 }
 
@@ -113,10 +117,10 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
 
     adapter = createBoundAdapter({
       handle,
-      reregister: (model) => host.register({
+      reregister: (fields) => host.register({
         id,
         env: {},
-        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model }),
+        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: fields.model, prompts: fields.prompts }),
       }),
       core: host.core,
       id,
@@ -177,7 +181,7 @@ export async function resumeOpenCodeSession(
     onOpenCodeSessionId?: (name: string, sid: string) => void
     opencodeHost?: OpenCodeCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; prompts?: boolean },
 ): Promise<{ adapter: CoreOpenCodeAdapter }> {
   const host = resolveHost(deps.opencodeHost)
   const sessionHome = session.agent_home
@@ -192,13 +196,14 @@ export async function resumeOpenCodeSession(
       workdir: session.workdir,
       nativeSessionId: initialSessionId,
       model: session.model,
+      prompts: session.prompts,
     }),
   })
   let adapter: CoreOpenCodeAdapter | undefined
   try {
     adapter = createBoundAdapter({
       handle,
-      reregister: (model) => host.register({
+      reregister: (fields) => host.register({
         id: session.id,
         env: {},
         extra: prepareExtra({
@@ -207,7 +212,8 @@ export async function resumeOpenCodeSession(
           sessionHome,
           workdir: session.workdir,
           nativeSessionId: initialSessionId,
-          model,
+          model: fields.model,
+          prompts: fields.prompts,
         }),
       }),
       core: host.core,
@@ -215,6 +221,7 @@ export async function resumeOpenCodeSession(
       sessionName: session.name,
       workdir: session.workdir,
       model: session.model,
+      prompts: session.prompts,
       initialSessionId,
       persistSessionId: persistNativeId(deps.onOpenCodeSessionId, session.name),
       resolveAttachment: deps.resolveAttachment,
@@ -268,6 +275,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onOpenCodeSessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       opencodeHost: ctx.opencodeHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, prompts: session.prompts },
   )
 }

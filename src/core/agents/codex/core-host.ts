@@ -26,6 +26,7 @@ export type CodexPrepareExtra = {
   workdir: string
   cwd: string
   nativeSessionId?: string
+  prompts?: boolean
 }
 
 type RuntimeAttachable = {
@@ -74,6 +75,7 @@ function asPrepareExtra(registration: HostRegistration): CodexPrepareExtra {
     workdir,
     cwd,
     nativeSessionId: typeof native === "string" ? native : undefined,
+    prompts: extra.prompts === true,
   }
 }
 
@@ -86,8 +88,11 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "codex",
     driver: (registration, ctx) => {
+      const prompts = registration.extra?.prompts === true
       const opts: CodexOptions = {
         ...BROKER_CODEX_OPTIONS,
+        approvalPolicy: prompts ? "on-request" : "never",
+        permissionPrompts: prompts ? "host" : "none",
         id: "codex",
         command: registration.command ?? "codex",
         args: registration.args ? [...registration.args] : ["app-server"],

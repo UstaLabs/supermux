@@ -1,5 +1,7 @@
 import { EventEmitter } from "events"
-import type { AgentAdapter, AgentKind, InboundMeta } from "../types"
+import type { AgentAdapter, AgentKind, BrokerRequest, InboundMeta, RequestAnswerInput } from "../types"
+import { mapPendingRequest, toCoreAnswer } from "../core-bridge/request-map"
+import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { createNormalizedBridge } from "../core-bridge/normalized-bridge"
 import { createNormalizedActivity } from "../core-bridge/normalized-activity"
 import type {
@@ -17,6 +19,7 @@ const DEFAULT_STALL_MS = 90_000
 
 export type CoreGrokAdapterOpts = {
   handle: HostHandle
+  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
   core: Core
   id: string
   sessionName: string
@@ -25,6 +28,7 @@ export type CoreGrokAdapterOpts = {
   persistSessionId: (nativeId: string) => Promise<void>
   model?: string
   effort?: string
+  prompts?: boolean
   resolveAttachment?: (file_id: string) => Promise<string>
   stallTimeoutMs?: number
 }
@@ -53,15 +57,18 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
   availableModels: { modelId: string }[] = []
   availableCommands: { name: string; description?: string; _meta?: { scope?: string; path?: string } }[] = []
 
-  private readonly handle: HostHandle
+  private handle: HostHandle
+  private readonly reregister: CoreGrokAdapterOpts["reregister"]
   private readonly core: Core
   private readonly persistSessionId: (nativeId: string) => Promise<void>
   private readonly resolveAttachment?: (file_id: string) => Promise<string>
   private readonly stallTimeoutMs: number
   private readonly initialSessionId?: string
+  private nativeSessionId?: string
 
   private _model?: string
   private _effort?: string
+  private _prompts: boolean
   private session?: Session
   private unsubscribe?: () => void
   private startEpoch = 0
@@ -90,14 +97,17 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
   constructor(opts: CoreGrokAdapterOpts) {
     super()
     this.handle = opts.handle
+    this.reregister = opts.reregister
     this.core = opts.core
     this.id = opts.id
     this.sessionName = opts.sessionName
     this.workdir = opts.workdir
     this.persistSessionId = opts.persistSessionId
     this.initialSessionId = opts.initialSessionId
+    this.nativeSessionId = opts.initialSessionId
     this._model = opts.model
     this._effort = opts.effort
+    this._prompts = opts.prompts === true
     this.resolveAttachment = opts.resolveAttachment
     this.stallTimeoutMs = opts.stallTimeoutMs ?? DEFAULT_STALL_MS
     this.activity = createNormalizedActivity({ workdir: opts.workdir })
@@ -105,6 +115,41 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
 
   get model(): string | undefined { return this._model }
   get effort(): string | undefined { return this._effort }
+  get prompts(): boolean { return this._prompts }
+
+  openRequests(): BrokerRequest[] {
+    const session = this.session
+    if (!session) return []
+    return session.requests.list().map(mapPendingRequest)
+  }
+
+  async respondRequest(requestId: string, answer: RequestAnswerInput): Promise<void> {
+    await this.requireSession().requests.respond(requestId, toCoreAnswer(answer))
+  }
+
+  async setPrompts(enabled: boolean): Promise<void> {
+    const session = this.requireSession()
+    if (session.snapshot().state === "running") {
+      throw new CoreError("session_busy", "grok session is busy")
+    }
+    const nativeSessionId = session.snapshot().agentSessionId
+    const previous = this._prompts
+    const generation = this.startEpoch
+    this._prompts = enabled
+    this.nativeSessionId = nativeSessionId
+    try {
+      await this.handle.stop({ mode: "shutdown" })
+      this.session = undefined
+      this.unsubscribe?.()
+      this.unsubscribe = undefined
+      this.handle = this.reregister({ model: this._model, prompts: this._prompts })
+      if (this.stopped || generation !== this.startEpoch) return
+      await this.start()
+    } catch (err) {
+      if (!this.stopped && generation === this.startEpoch) this._prompts = previous
+      throw asError(err)
+    }
+  }
 
   async setConfiguration(patch: { model?: string; effort?: string }): Promise<void> {
     const session = this.requireSession()
@@ -275,9 +320,11 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
       this.session = await this.handle.start({
         cwd: this.workdir,
         configuration: this.desiredConfiguration(),
-        nativeSessionId: this.initialSessionId,
+        nativeSessionId: this.nativeSessionId ?? this.initialSessionId,
         onOpened: async (session) => {
-          await this.persistSessionId(session.snapshot().agentSessionId)
+          const nativeId = session.snapshot().agentSessionId
+          this.nativeSessionId = nativeId
+          await this.persistSessionId(nativeId)
         },
       })
       if (this.abandoned(epoch)) {
@@ -310,7 +357,10 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
   }
 
   private desiredConfiguration(): SessionConfiguration {
-    return { model: this._model, reasoningEffort: this._effort }
+    const requested: SessionConfiguration = {}
+    if (this._model) requested.model = this._model
+    if (this._effort) requested.reasoningEffort = this._effort
+    return requested
   }
 
   private async withAttachment(text: string, fileId: string | undefined, epoch: number): Promise<string> {

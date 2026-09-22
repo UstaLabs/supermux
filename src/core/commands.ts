@@ -19,6 +19,7 @@ export type CommandCtx = {
   listModels?: (agent: AgentKind) => { id: string; displayName: string }[]
   switchModel?: (sessionId: string, model: string) => Promise<{ ok: true } | { ok: false; error: string }>
   switchReasoningLevel?: (sessionId: string, level: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  switchPrompts?: (sessionId: string, enabled: boolean) => Promise<{ ok: true } | { ok: false; error: string }>
   listReasoningLevels?: (agent: AgentKind, model?: string) => { id: string; description?: string }[]
   resolveReasoningLevel?: (sessionId: string) => string | undefined
   proxyBaseDomain?: string
@@ -62,6 +63,7 @@ export async function handleSlash(input: SlashInput, ctx: CommandCtx): Promise<S
     case "grant_orchestrate": return cmdGrantOrch(input.rest, ctx)
     case "model":             return cmdModel(input.rest, ctx)
     case "effort":            return cmdEffort(input.rest, ctx)
+    case "prompts":           return cmdPrompts(input.rest, ctx)
     case "usage":            return cmdUsage(ctx)
     case "proxy":             return cmdProxy(input.rest, ctx)
     case "unproxy":           return cmdUnproxy(input.rest, ctx)
@@ -393,6 +395,75 @@ async function cmdEffort(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   }
   ctx.registry.setReasoningLevel(activeId, level)
   return { text: `${session.name}: effort set to ${level}` }
+}
+
+async function cmdPrompts(rest: string, ctx: CommandCtx): Promise<SlashReply> {
+  const parts = rest.trim().split(/\s+/).filter(Boolean)
+
+  if (parts.length === 0) {
+    const activeId = ctx.registry.getActive(ctx.chat_id)
+    if (!activeId) return { text: "no active session" }
+    const session = ctx.registry.get(activeId)
+    if (!session) return { text: "no active session" }
+    const state = session.prompts ? "on" : "off"
+    return { text: `${session.name} [${session.agent}]: prompts ${state}\nUse /prompts on|off to switch.` }
+  }
+
+  const parseFlag = (raw: string): boolean | undefined => {
+    const v = raw.toLowerCase()
+    if (v === "on" || v === "true" || v === "1") return true
+    if (v === "off" || v === "false" || v === "0") return false
+    return undefined
+  }
+
+  if (parts.length === 2) {
+    const flagFirst = parseFlag(parts[0]!)
+    const flagSecond = parseFlag(parts[1]!)
+    const sessionFromSecond = ctx.registry.get(parts[1]!) ?? ctx.registry.resolveName(parts[1]!)
+    const sessionFromFirst = ctx.registry.get(parts[0]!) ?? ctx.registry.resolveName(parts[0]!)
+    if (flagFirst !== undefined && sessionFromSecond) {
+      return applyPrompts(sessionFromSecond.id, sessionFromSecond.name, sessionFromSecond.agent, flagFirst, ctx)
+    }
+    if (flagSecond !== undefined && sessionFromFirst) {
+      return applyPrompts(sessionFromFirst.id, sessionFromFirst.name, sessionFromFirst.agent, flagSecond, ctx)
+    }
+    return { text: "usage: /prompts on|off [session]" }
+  }
+
+  const sessionByName = ctx.registry.get(parts[0]!) ?? ctx.registry.resolveName(parts[0]!)
+  const enabled = parseFlag(parts[0]!)
+  if (enabled === undefined) {
+    if (sessionByName) {
+      const state = sessionByName.prompts ? "on" : "off"
+      return { text: `${sessionByName.name} [${sessionByName.agent}]: prompts ${state}\nUse /prompts on|off to switch.` }
+    }
+    return { text: "usage: /prompts on|off [session]" }
+  }
+
+  const activeId = ctx.registry.getActive(ctx.chat_id)
+  if (!activeId) return { text: "no active session" }
+  const session = ctx.registry.get(activeId)
+  if (!session) return { text: "no active session" }
+  return applyPrompts(activeId, session.name, session.agent, enabled, ctx)
+}
+
+async function applyPrompts(
+  sessionId: string,
+  name: string,
+  agent: string,
+  enabled: boolean,
+  ctx: CommandCtx,
+): Promise<SlashReply> {
+  if (agent === "cursor" && enabled) {
+    return { text: "cursor sessions cannot prompt" }
+  }
+  if (ctx.switchPrompts) {
+    const result = await ctx.switchPrompts(sessionId, enabled)
+    if (!result.ok) return { text: `prompts switch failed: ${result.error}` }
+    return { text: `${name}: prompts ${enabled ? "on" : "off"}` }
+  }
+  ctx.registry.setPrompts(sessionId, enabled)
+  return { text: `${name}: prompts ${enabled ? "on" : "off"}` }
 }
 
 function cmdShow(rest: string, ctx: CommandCtx): SlashReply {

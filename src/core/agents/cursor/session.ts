@@ -32,7 +32,7 @@ function persistNativeId(
 
 function createBoundAdapter(opts: {
   handle: HostHandle
-  reregister: (model?: string) => HostHandle
+  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
   core: Core
   id: string
   sessionName: string
@@ -97,10 +97,10 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
 
     adapter = createBoundAdapter({
       handle,
-      reregister: (model) => host.register({
+      reregister: (fields) => host.register({
         id,
         env: {},
-        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model }),
+        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: fields.model }),
       }),
       core: host.core,
       id,
@@ -182,7 +182,7 @@ export async function resumeCursorSession(
   try {
     adapter = createBoundAdapter({
       handle,
-      reregister: (model) => host.register({
+      reregister: (fields) => host.register({
         id: session.id,
         env: {},
         extra: prepareExtra({
@@ -191,7 +191,7 @@ export async function resumeCursorSession(
           sessionHome,
           workdir: session.workdir,
           nativeSessionId: initialSessionId,
-          model,
+          model: fields.model,
         }),
       }),
       core: host.core,

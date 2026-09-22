@@ -138,7 +138,16 @@ function makeAdapter(host: Host, opts: {
   }
   if (opts.initialThreadId) extra.nativeSessionId = opts.initialThreadId
   const handle = host.register({ id: opts.id, env: {}, extra })
-  return new CoreCodexAdapter({ handle, core: host.core, ...opts })
+  return new CoreCodexAdapter({
+    handle,
+    reregister: (fields) => host.register({
+      id: opts.id,
+      env: {},
+      extra: { ...extra, prompts: fields.prompts === true },
+    }),
+    core: host.core,
+    ...opts,
+  })
 }
 
 afterEach(async () => {

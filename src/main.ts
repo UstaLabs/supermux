@@ -1098,6 +1098,45 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   // The agent pushed a fresh command/skill list (grok: ACP
   // available_commands_update) — recompute this session's slash commands. The
   // provider reads the adapter's cached list via resolveSession.
+  adapter.on("request-open", (ev: { requestId: string; requestKind: "permission" | "question"; title: string; body: string; options: { id: string; label: string; kind?: string }[]; allowFreeText: boolean; blocking: boolean }) => {
+    const request = {
+      requestId: ev.requestId,
+      kind: ev.requestKind,
+      title: ev.title,
+      body: ev.body,
+      options: ev.options,
+      allowFreeText: ev.allowFreeText,
+      blocking: ev.blocking,
+    }
+    webChannel?.broadcastToAll({ type: "request_open", session: sessionId, request })
+    const session = registry.get(sessionId)
+    const destination = resolveReplyTarget(sessionId)
+    const addressed = parseAddress(destination)
+    if (addressed?.channel === "telegram" && telegram) {
+      const labels = ev.options.map((o) => o.label)
+      const text = `${session?.name ?? sessionId}: ${ev.title}\n${ev.body}`
+      void telegram.send({
+        op: "reply",
+        chat_id: addressed.chatId,
+        text,
+        keyboard: labels,
+        disable_notification: false,
+      })
+    }
+  })
+  adapter.on("request-closed", (ev: { requestId: string; outcome: "answered" | "expired" | "cancelled"; answer?: string }) => {
+    webChannel?.broadcastToAll({ type: "request_closed", session: sessionId, requestId: ev.requestId, outcome: ev.outcome })
+    const destination = resolveReplyTarget(sessionId)
+    const addressed = parseAddress(destination)
+    if (addressed?.channel === "telegram" && telegram) {
+      void telegram.send({
+        op: "reply",
+        chat_id: addressed.chatId,
+        text: `answered: ${ev.answer ?? ev.outcome}`,
+        disable_notification: true,
+      })
+    }
+  })
   adapter.on("commands-update", () => {
     const name = registry.get(sessionId)?.name
     if (name) {
@@ -1456,6 +1495,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         isDefault: s.is_default,
         model: s.model,
         reasoningLevel: s.reasoningLevel,
+        prompts: !!s.prompts,
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
@@ -1567,6 +1607,28 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(id)
       if (!s) return { ok: false, error: "session not found" }
       return switchSessionReasoningLevel(s.id, reasoningLevel, { applyNow })
+    },
+    switchPrompts: async (id, enabled) => {
+      const s = registry.get(id)
+      if (!s) return { ok: false, error: "session not found" }
+      return sessionManager.switchPrompts(s.id, enabled)
+    },
+    getSessionRequests: (id) => {
+      const s = registry.get(id)
+      const adapter = s ? sessionManager.adapterFor(s.id) : undefined
+      return adapter?.openRequests?.() ?? []
+    },
+    respondRequest: async (sessionId, requestId, answer) => {
+      const s = registry.get(sessionId)
+      if (!s) return { ok: false, error: "session not found" }
+      const adapter = sessionManager.adapterFor(s.id)
+      if (!adapter?.respondRequest) return { ok: false, error: "session cannot answer requests" }
+      try {
+        await adapter.respondRequest(requestId, answer as import("./core/agents/types").RequestAnswerInput)
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
     },
     getReasoningLevels: (agent, model) => {
       const models = lookupModels(agent)
@@ -2682,6 +2744,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       listModels: (agent: AgentKind) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
       switchModel: switchSessionModel,
       switchReasoningLevel: switchSessionReasoningLevel,
+      switchPrompts: (id: string, enabled: boolean) => sessionManager.switchPrompts(id, enabled),
       listReasoningLevels: (agent: AgentKind, model?: string) =>
         supportedReasoningLevels(agent, lookupModels(agent), model),
       resolveReasoningLevel: (sessionName: string) => {
@@ -2791,6 +2854,27 @@ ch.on("inbound", async (msg: InboundMessage) => {
     }
   }
 
+  const activeId = registry.getActive(msg.chat_id)
+  if (ch.name === "telegram" && activeId === session.id) {
+    const adapter = sessionManager.adapterFor(session.id)
+    const pending = adapter?.openRequests?.() ?? []
+    if (pending.length > 0) {
+      const open = pending[0]!
+      const { answerFromTelegramText } = await import("./core/agents/core-bridge/request-map")
+      const answer = answerFromTelegramText(open, decision.text)
+      if (answer && adapter?.respondRequest) {
+        try {
+          await adapter.respondRequest(open.requestId, answer)
+          const label = open.options.find((o) => o.id === ("optionId" in answer ? answer.optionId : undefined))?.label
+            ?? decision.text
+          await ch.send({ op: "reply", chat_id: msg.chat_id, text: `answered: ${label}`, disable_notification: true })
+        } catch (err) {
+          log.warn("request_respond_failed", { session: session.id, err: String(err) })
+        }
+        return
+      }
+    }
+  }
   log.debug("send_inbound.before", { session: session.name, text: decision.text.slice(0, 80) })
   // chat_id is namespaced ("telegram:<id>" / "whatsapp:<jid>"), so embedding it in
   // the entry id disambiguates the same message_id arriving in DM vs group.
