@@ -37,6 +37,10 @@ try {
 
 const stateDir = mkdtempSync(join(TMP, "mux-test-state-"))
 process.env.MUX_STATE_DIR = stateDir
+// Same for session worktrees: createWorktree() (manager.ts worktreesRoot()) would
+// otherwise create <slug>/<uuid> folders in the LIVE ~/.mux/worktrees on every
+// run — ~24k had leaked by 2026-09-22. Removed with stateDir below.
+process.env.MUX_WORKTREES_ROOT = join(stateDir, "worktrees")
 
 // ...and remove this run's dir on the way out. `process.on("exit")` is dead
 // code here: bun (verified on 1.3.14) never emits "exit"/"beforeExit" when a

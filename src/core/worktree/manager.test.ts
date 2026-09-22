@@ -2,9 +2,9 @@
 import { test, expect } from "bun:test"
 import { execFileSync } from "child_process"
 import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "fs"
-import { tmpdir } from "os"
-import { join } from "path"
-import { createWorktree, removeWorktree, deriveSessionBranch, ensureWorktreeAt, existingBranchNames } from "./manager"
+import { homedir, tmpdir } from "os"
+import { join, resolve, sep } from "path"
+import { createWorktree, removeWorktree, deriveSessionBranch, ensureWorktreeAt, existingBranchNames, worktreesRoot } from "./manager"
 
 function tmpRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "mux-wt-"))
@@ -15,6 +15,28 @@ function tmpRepo(): string {
   execFileSync("git", ["-C", dir, "add", "."]); execFileSync("git", ["-C", dir, "commit", "-m", "init"])
   return dir
 }
+
+test("tests never create worktrees in the live ~/.mux/worktrees (preload sets MUX_WORKTREES_ROOT)", async () => {
+  const live = resolve(homedir(), ".mux", "worktrees")
+  expect(resolve(worktreesRoot())).not.toBe(live)
+  const h = await createWorktree({ repoRoot: tmpRepo(), baseBranch: "main", sessionName: "iso" })
+  expect(resolve(h.worktreeDir).startsWith(live + sep)).toBe(false)
+  expect(resolve(h.worktreeDir).startsWith(resolve(process.env.MUX_WORKTREES_ROOT!) + sep)).toBe(true)
+  await removeWorktree(h.repoRoot, h.worktreeDir, h.sessionBranch)
+})
+
+test("worktreesRoot reads MUX_WORKTREES_ROOT at call time", () => {
+  const prev = process.env.MUX_WORKTREES_ROOT
+  try {
+    process.env.MUX_WORKTREES_ROOT = "/tmp/x-root"
+    expect(worktreesRoot()).toBe("/tmp/x-root")
+    delete process.env.MUX_WORKTREES_ROOT
+    expect(worktreesRoot()).toBe(join(process.env.HOME || homedir(), ".mux", "worktrees"))
+  } finally {
+    if (prev === undefined) delete process.env.MUX_WORKTREES_ROOT
+    else process.env.MUX_WORKTREES_ROOT = prev
+  }
+})
 
 test("deriveSessionBranch slugs and prefixes, avoiding collisions", () => {
   expect(deriveSessionBranch("My Feature!", new Set())).toBe("mux/my-feature")

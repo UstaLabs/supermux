@@ -18,7 +18,12 @@ export interface WorktreeHandle {
   repoRoot: string
 }
 
-export function worktreesRoot(): string { return join(home(), ".mux", "worktrees") }
+/** Where session worktrees live. MUX_WORKTREES_ROOT (read per call, not at module load)
+ *  overrides it — the test preload points it at a throwaway dir so tests never create
+ *  folders in the live ~/.mux/worktrees (~24k leaked before 2026-09-22). */
+export function worktreesRoot(): string {
+  return process.env.MUX_WORKTREES_ROOT || join(home(), ".mux", "worktrees")
+}
 
 export function repoSlug(repoRoot: string): string {
   const h = createHash("sha1").update(repoRoot).digest("hex").slice(0, 8)
