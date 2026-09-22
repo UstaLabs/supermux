@@ -277,7 +277,10 @@ export class Session {
     this.changeState("closing")
     this.pending.clear()
     this.cancelPendingRequests()
-    this.abort?.abort()
+    // Detach drops THIS process's view only: the agent keeps working behind the keeper and a
+    // later resume re-attaches to the same turn. Aborting the prompt here would interrupt it.
+    // Shutdown stops the agent, so the owned turn is cancelled for real.
+    if (mode === "shutdown") this.abort?.abort()
     this.active?.finish({ status: "cancelled" })
     this.closing = Promise.resolve().then(async () => {
       if (this.configuring) await this.configuring.catch(() => {})

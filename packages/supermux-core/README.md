@@ -136,6 +136,18 @@ Nonempty **create/resume-open** `configuration` requires the opened runtime to a
 
 Crash leaves `.core.lock` for **manual** recovery after proving the owner is dead. There is no synthetic transcript fork.
 
+
+## Try it against a real agent
+
+`examples/console.mjs` is an interactive console over the library with no broker code: it creates or re-attaches a session, prints the normalized event stream, and lets you answer permission requests and questions, steer, interrupt, detach or shut down. Every flag is required (no defaults):
+
+```sh
+bun run build
+bun examples/console.mjs --agent codex --cwd /path/to/project --state /tmp/core-state --session demo
+```
+
+Type text to send it. Commands: `/steer <text>`, `/interrupt`, `/requests`, `/allow <n> [always]`, `/reject <n> [message]`, `/answer <n> <optionId|free text>`, `/decline <n>`, `/status`, `/deltas`, `/detach`, `/quit`. Run the same command again (same `--state` and `--session`) after `/detach` or after killing the console: for Codex, Claude and Grok the agent kept running behind the keeper and you re-attach to the live turn. Agents use your own logins (`~/.codex`, `~/.claude`, `~/.grok`). Cursor needs `--model auto` on a free plan.
+
 ## Examples
 
 `API.md` and `examples/` ship in the packed package (`files`). Run them from a project that **depends on the installed package**, or from this repository **after** `bun run build`. Do not use `NODE_PATH` for ESM.

@@ -362,3 +362,31 @@ test("core.close({agents:'detach'}) leaves keeper-backed agent alive and release
   await waitDead(status.keeperPid)
   await waitDead(status.agentPid)
 })
+
+test('detach never interrupts the running turn; resume re-attaches to it', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'ck-detach-turn-'))
+  dirs.push(stateDirectory)
+  const trace = join(stateDirectory, 'trace')
+  const { createCore } = await import('../src/index.js')
+  const mk = () => createCore({ stateDirectory: join(stateDirectory, 'core'), limits: { interruptTimeoutMs: 5000, maxPending: 8, outstandingActivity: 64 }, agents: [codex({
+    id: 'codex', command: process.execPath, args: [fixture], inheritEnv: false, env: { MODE: 'overlap-turns', TRACE: trace },
+    sandbox: 'read-only', approvalPolicy: 'never', permissionPrompts: 'none', setupTimeoutMs: 5000, requestTimeoutMs: 8000, shutdownTimeoutMs: 500, maxFrameBytes: 4096,
+    keeper: { stateDirectory, limits: keeperLimits() },
+  })] })
+  const core1 = mk()
+  const s1 = await core1.sessions.create({ id: 'dt', agent: 'codex', cwd: process.cwd() })
+  const receipt = await s1.send({ content: [{ type: 'text', text: 'hang' }], whenBusy: 'reject' })
+  for (let i = 0; i < 100 && !(await readFile(trace, 'utf8').catch(() => '')).includes('"method":"turn/start"'); i++) await new Promise(x => setTimeout(x, 20))
+  await new Promise(x => setTimeout(x, 150))
+  await s1.close({ mode: 'detach' })
+  expect((await receipt.completed).status).toBe('cancelled')
+  await core1.close({ agents: 'detach' })
+  const lines = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(l => JSON.parse(l))
+  expect(lines.some(x => x.method === 'turn/interrupt')).toBe(false)
+  const core2 = mk()
+  const s2 = await core2.sessions.resume('dt')
+  expect(s2.snapshot().state).toBe('running')
+  expect((await s2.interrupt({ pending: 'discard' })).status).toBe('stopped')
+  await s2.close({ mode: 'shutdown' })
+  await core2.close({ agents: 'shutdown' })
+})
