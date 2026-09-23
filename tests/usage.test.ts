@@ -11,6 +11,8 @@ import {
   fetchGrokUsage,
   fetchAllUsage,
   redeemCodexReset,
+  redeemClaudeReset,
+  claudeCliVersion,
 } from "../src/core/usage"
 
 let tmpDir: string
@@ -42,9 +44,11 @@ test("fetchClaudeUsage returns usage when credentials valid", async () => {
   )
 
   globalThis.fetch = (async (url: any, init: any) => {
-    expect(url).toBe("https://api.anthropic.com/api/oauth/usage")
+    expect(url).toBe("https://api.anthropic.com/api/oauth/usage?cedar_ember=1")
     expect(init?.headers.Authorization).toBe("Bearer test-token")
     expect(init?.headers["anthropic-beta"]).toBe("oauth-2025-04-20")
+    // The reset block is only answered for the Claude Code CLI surface.
+    expect(init?.headers["User-Agent"]).toMatch(/^claude-cli\/\d+\.\d+\.\d+ \(external, cli\)$/)
     return new Response(
       JSON.stringify({
         five_hour: { utilization: 42, resets_at: "2026-05-25T12:00:00Z" },
@@ -488,6 +492,105 @@ test("fetchAllUsage assembles all providers, captures errors when all creds miss
   expect(result.errors.cursor).toBe("credentials not found")
   expect(result.errors.opencode).toBe("no usage recorded yet")
   expect(result.errors.grok).toBe("credentials not found or token expired")
+})
+
+// ── Claude banked resets ──
+
+function writeClaudeCreds(): string {
+  const credsPath = join(tmpDir, "credentials.json")
+  writeFileSync(credsPath, JSON.stringify({ claudeAiOauth: { accessToken: "tok", expiresAt: Date.now() + 3600_000 } }))
+  return credsPath
+}
+
+test("fetchClaudeUsage maps the cedar_ember banked-reset block", async () => {
+  const credsPath = writeClaudeCreds()
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        five_hour: { utilization: 5, resets_at: "2026-09-23T11:00:00Z" },
+        seven_day: { utilization: 51, resets_at: "2026-09-28T12:00:00Z" },
+        cedar_ember: {
+          eligible: true,
+          ineligible_reason: null,
+          at_limit: false,
+          exhausted: [],
+          grants: [
+            {
+              id: "opus55-launch-promax-20260921",
+              label: "Claude Opus 5.5 launch: one usage-limit reset for Pro and Max",
+              resets_total: 1,
+              resets_left: 1,
+              starts_at: "2026-09-22T16:00:00+00:00",
+              ends_at: "2026-10-22T16:00:00+00:00",
+              clears: ["five_hour", "seven_day", "seven_day_overage_included"],
+              paused: false,
+              usable_now: true,
+              use_requires_limit: false,
+            },
+            { id: "BAD ID", resets_left: 3 },
+          ],
+          next_grant_id: "opus55-launch-promax-20260921",
+          cooldown_until: null,
+        },
+      }),
+    )) as unknown as typeof fetch
+
+  const r = (await fetchClaudeUsage(credsPath))!.resets!
+  expect(r.eligible).toBe(true)
+  expect(r.nextGrantId).toBe("opus55-launch-promax-20260921")
+  // The malformed grant is dropped, so it adds nothing to the count.
+  expect(r.grants).toHaveLength(1)
+  expect(r.resetsLeft).toBe(1)
+  expect(r.grants[0]!.endsAtIso).toBe("2026-10-22T16:00:00.000Z")
+  expect(r.grants[0]!.useRequiresLimit).toBe(false)
+  expect(r.grants[0]!.clears).toEqual(["five_hour", "seven_day", "seven_day_overage_included"])
+})
+
+test("fetchClaudeUsage reports null resets when the payload has no cedar_ember block", async () => {
+  const credsPath = writeClaudeCreds()
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ five_hour: {}, seven_day: {} }))) as unknown as typeof fetch
+  expect((await fetchClaudeUsage(credsPath))!.resets).toBeNull()
+})
+
+test("claudeCliVersion picks the newest installed CLI, never below the fallback", () => {
+  const dir = join(tmpDir, "versions")
+  rmSync(dir, { recursive: true, force: true })
+  require("fs").mkdirSync(dir)
+  for (const v of ["2.1.9", "2.1.300", "2.1.281", "notes"]) require("fs").mkdirSync(join(dir, v))
+  expect(claudeCliVersion(dir)).toBe("2.1.300")
+  expect(claudeCliVersion(join(tmpDir, "missing"))).toBe("2.1.280")
+})
+
+test("redeemClaudeReset posts the grant to the org reset endpoint", async () => {
+  const credsPath = writeClaudeCreds()
+  const claudeJsonPath = join(tmpDir, "claude.json")
+  writeFileSync(claudeJsonPath, JSON.stringify({ oauthAccount: { organizationUuid: "org-1" } }))
+
+  globalThis.fetch = (async (url: any, init: any) => {
+    expect(url).toBe("https://api.anthropic.com/api/organizations/org-1/reset_rate_limits")
+    expect(init?.method).toBe("POST")
+    expect(init?.headers.Authorization).toBe("Bearer tok")
+    expect(JSON.parse(init.body)).toEqual({ program: "cedar_ember", grant_id: "grant-1", request_id: "req-1" })
+    return new Response(JSON.stringify({ result: "reset", resets_left: 0, cleared: ["five_hour", "seven_day"] }))
+  }) as typeof fetch
+
+  const r = await redeemClaudeReset("grant-1", { credsPath, claudeJsonPath, requestId: "req-1" })
+  expect(r).toEqual({ result: "reset", reason: null, resetsLeft: 0, cleared: ["five_hour", "seven_day"] })
+})
+
+test("redeemClaudeReset refuses a malformed grant id without calling the API", async () => {
+  let called = false
+  globalThis.fetch = (async () => { called = true; return new Response("{}") }) as unknown as typeof fetch
+  await expect(redeemClaudeReset("../x", { credsPath: writeClaudeCreds() })).rejects.toThrow()
+  expect(called).toBe(false)
+})
+
+test("redeemClaudeReset throws when the organization is unknown", async () => {
+  const credsPath = writeClaudeCreds()
+  await expect(
+    redeemClaudeReset("grant-1", { credsPath, claudeJsonPath: join(tmpDir, "nope.json") }),
+  ).rejects.toThrow("organization")
 })
 
 // ── Codex reset redemption ──

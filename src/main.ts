@@ -166,6 +166,8 @@ import { suggestVerify } from "./core/worktree/verify-suggest"
 import { loadFinishConfig } from "./core/worktree/finish-config"
 import { computeLiteStatus } from "./core/worktree/lite-status"
 import { GitStatusService, type ServiceSession } from "./core/worktree/git-status-service"
+import { WorktreeService } from "./core/worktree/service"
+import type { OwnerRow } from "./core/worktree/inventory"
 import { deriveName, ensureUnique } from "./core/session-manager/naming"
 
 const log = makeLogger("main")
@@ -1121,6 +1123,17 @@ if (channelCheck.error) { log.error("no_channel_configured", { error: channelChe
 const MUX_WEB_PORT = process.env.MUX_WEB_PORT ? parseInt(process.env.MUX_WEB_PORT, 10) : undefined
 const MUX_WEB_PUBLIC_URL = process.env.MUX_WEB_PUBLIC_URL
 let webChannel: WebChannel | undefined
+// Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). Constructed
+// BEFORE the WebChannel so its opts can call into it; its broadcast closes over
+// webChannel the same way every other service below does — only invoked at
+// request/event time, well after webChannel is assigned.
+const worktreeService = new WorktreeService({
+  root: worktreesRoot(),
+  owners: () => registry.db
+    .query("SELECT id, name, status, user_status, workdir, base_branch, session_branch FROM sessions")
+    .all() as OwnerRow[],
+  broadcast: (frame) => webChannel?.broadcastToAll(frame),
+})
 // Background liveness poller for exposed proxies. Constructed BEFORE the
 // WebChannel so the channel opts (listProxies/createProxy/updateProxy) can call
 // monitor.getStatus; its onChange closes over webChannel (assigned just below)
@@ -1873,6 +1886,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       // spec §9.3: closing the last chat does not close the workspace.
       if (workspaceId) archiveWorkspaceIfEmpty(workspaceId)
     },
+    worktrees: {
+      root: () => worktreesRoot(),
+      list: () => worktreeService.list(),
+      changes: (id) => worktreeService.changes(id),
+      forWorkdir: (w) => worktreeService.forWorkdir(w),
+      remove: (ids) => worktreeService.remove(ids),
+    },
     renameSession: async (id, newName) => {
       const s = registry.get(id)
       if (!s) throw new Error("session not found")
@@ -2532,7 +2552,7 @@ async function spawnSession(args: {
   let effectiveWorkdir = workdir
   let wt: WorktreeHandle | undefined
   if (args.worktree !== false) {
-    const info = getRepoInfo(workdir)
+    const info = await getRepoInfo(workdir)
     if (info.eligible && info.repoRoot) {
       try {
         wt = await createWorktree({

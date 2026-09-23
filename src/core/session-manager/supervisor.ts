@@ -1,7 +1,5 @@
 import { randomUUID } from "crypto"
-import { existsSync } from "fs"
-import { isWorktreeReclaimable } from "../worktree/gc"
-import { removeWorktree } from "../worktree/manager"
+import { mkdirSync } from "fs"
 import { Registry } from "./registry"
 import { isProcessAlive } from "./pid-file"
 import { seedSoulName } from "../memory/init"
@@ -259,15 +257,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     await opts.reapInternalWorkers?.()
   }
 
-  async function sweepArchivedWorktrees() {
-    for (const w of opts.registry.sessions.listArchivedWorktrees()) {
-      if (!existsSync(w.workdir)) continue                                   // already cleaned → skip (no churn)
-      if (!isWorktreeReclaimable(w.workdir, w.session_branch, w.base_branch)) continue
-      await removeWorktree(w.repo_root, w.workdir, w.session_branch).catch(() => {})
-    }
-  }
-
-  timer = setInterval(() => { if (!stopped) { void reconcile().catch(() => {}); void sweepArchivedWorktrees().catch(() => {}) } }, 30_000)
+  timer = setInterval(() => { if (!stopped) { void reconcile().catch(() => {}) } }, 30_000)
 
   return {
     ensurePersonalAssistants,

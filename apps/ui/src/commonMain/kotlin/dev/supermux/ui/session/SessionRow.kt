@@ -32,6 +32,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -194,7 +197,23 @@ internal fun GroupLetterTile(letter: String, color: Color, size: androidx.compos
             .background(color),
         contentAlignment = Alignment.Center,
     ) {
-        Text(letter, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        // The default style pads the line above and below the glyph (font ascent/descent and
+        // platform font padding), so a letter "centred" in the box sits visibly low. Trim the line
+        // to the font size and centre the glyph inside it.
+        Text(
+            letter,
+            color = Color.White,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            style = LocalTextStyle.current.copy(
+                lineHeight = 10.sp,
+                lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.Both,
+                ),
+            ),
+        )
     }
 }
 

@@ -78,3 +78,28 @@ fun chooseDefaultProject(
     if (picked || composing) return current
     return recent.firstOrNull() ?: current
 }
+
+/** What the project picker shows under a project: how many sessions live there, and when one last spoke. */
+data class ProjectActivity(val sessions: Int, val lastActiveMs: Long?)
+
+/**
+ * Per-project activity keyed by the project path ([sessionProjectPath]) — the same key the picker's
+ * project list uses. [lastTsMs] is a session's last message time in epoch millis, null if unknown.
+ */
+fun projectActivity(sessions: List<SessionInfo>, lastTsMs: (SessionInfo) -> Long?): Map<String, ProjectActivity> =
+    sessions
+        .mapNotNull { s -> sessionProjectPath(s)?.let { it to s } }
+        .groupBy({ it.first }, { it.second })
+        .mapValues { (_, list) -> ProjectActivity(list.size, list.mapNotNull(lastTsMs).maxOrNull()) }
+
+/** Compact age for a tile or row: "now", "5m", "3h", "2d", "4w". */
+fun formatAgoShort(nowMs: Long, thenMs: Long): String {
+    val sec = ((nowMs - thenMs) / 1000L).coerceAtLeast(0L)
+    return when {
+        sec < 60L -> "now"
+        sec < 3_600L -> "${sec / 60}m"
+        sec < 86_400L -> "${sec / 3_600}h"
+        sec < 86_400L * 14 -> "${sec / 86_400}d"
+        else -> "${sec / (86_400L * 7)}w"
+    }
+}

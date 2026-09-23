@@ -22,6 +22,7 @@ class ContractTest {
             "sessions_reordered", "session_read",
             "walkthrough_updated", "review_comment",
             "request_open", "request_closed", "error",
+            "worktree_sizes", "worktrees_removed",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -71,6 +72,8 @@ class ContractTest {
                 // The chosen answer has to survive the wire — the transcript line quotes it.
                 is ServerFrame.RequestClosed -> assertEquals("Allow always", frame.answerLabel)
                 is ServerFrame.Error -> {}
+                is ServerFrame.WorktreeSizes -> {}
+                is ServerFrame.WorktreesRemoved -> {}
             }
         }
     }

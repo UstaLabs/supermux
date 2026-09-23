@@ -74,7 +74,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -94,9 +93,14 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
+import dev.supermux.ui.widgets.IosBackSwipe
 import dev.supermux.ui.widgets.SettingsDetailMaxWidth
+import dev.supermux.ui.widgets.SwipeBackHandler
+import dev.supermux.ui.widgets.SwipeBackPages
+import dev.supermux.ui.widgets.rememberIosBackSwipe
 import dev.supermux.ui.widgets.settingsFieldColors
 import dev.supermux.ui.widgets.submitOnEnter
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -233,7 +237,8 @@ fun VoiceSettingsScreen(
 
     // The sub-page's own back, registered BELOW the hub's — so it runs first and the gesture
     // returns to the voice page instead of collapsing the whole section.
-    BackHandler(enabled = subPage) { glossaryOpen = false }
+    val glossarySwipe = rememberIosBackSwipe()
+    SwipeBackHandler(enabled = subPage, swipe = glossarySwipe) { glossaryOpen = false }
 
     if ((standalone || compact) && !topBarShown) {
         Scaffold(
@@ -270,6 +275,7 @@ fun VoiceSettingsScreen(
                 onGlossaryOpenChange = { glossaryOpen = it },
                 // The bar above already carries the sub-page's Back.
                 subPageBackInBody = false,
+                glossarySwipe = glossarySwipe,
                 modifier = modifier.padding(padding),
             )
         }
@@ -282,6 +288,7 @@ fun VoiceSettingsScreen(
             // Someone else painted the chrome, and their Back leaves the whole section — so the
             // sub-page carries its own, in the body, or a phone would be stuck on the glossary.
             subPageBackInBody = true,
+            glossarySwipe = glossarySwipe,
             modifier = modifier,
         )
     }
@@ -294,19 +301,31 @@ private fun VoiceSettingsBody(
     glossaryOpen: Boolean,
     onGlossaryOpenChange: (Boolean) -> Unit,
     subPageBackInBody: Boolean,
+    glossarySwipe: IosBackSwipe,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    // Remembered ABOVE the sub-page's early return: the engine saves launch into this scope, and a
-    // scope remembered after the return would be disposed the moment the glossary is pushed —
+    // Remembered HERE, above both pages: the engine saves launch into this scope, and a scope
+    // remembered inside the voice page would be disposed the moment the glossary is pushed —
     // cancelling a save that is still in flight.
     val scope = rememberCoroutineScope()
 
-    // The pushed sub-page REPLACES the voice page (Android's behaviour): coming back reloads the
-    // config, exactly as re-entering `VoiceSettingsPage` did.
-    if (pushed && glossaryOpen) {
+    if (!pushed) {
+        VoiceMainPage(actions, pushed, glossaryOpen, onGlossaryOpenChange, scope, modifier)
+        return
+    }
+    // The pushed sub-page covers the voice page (Android's behaviour), which is only composed again
+    // under an iOS back swipe or once the glossary closes: coming back reloads the config, exactly
+    // as re-entering `VoiceSettingsPage` did.
+    SwipeBackPages(
+        pushed = glossaryOpen,
+        swipe = glossarySwipe,
+        pageBackground = cs.background,
+        modifier = modifier,
+        under = { VoiceMainPage(actions, pushed, glossaryOpen, onGlossaryOpenChange, scope, Modifier) },
+    ) {
         Box(
-            modifier
+            Modifier
                 .fillMaxSize()
                 .background(cs.background)
                 .testTag("voice_glossary_page"),
@@ -349,9 +368,19 @@ private fun VoiceSettingsBody(
                 )
             }
         }
-        return
     }
+}
 
+@Composable
+private fun VoiceMainPage(
+    actions: VoiceSettingsActions,
+    pushed: Boolean,
+    glossaryOpen: Boolean,
+    onGlossaryOpenChange: (Boolean) -> Unit,
+    scope: CoroutineScope,
+    modifier: Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
     val previewTts = LocalPlatform.current.tts
     var models by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
     var sttEngine by remember { mutableStateOf(DEFAULT_STT_ENGINE) }

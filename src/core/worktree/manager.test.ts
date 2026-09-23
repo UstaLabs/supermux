@@ -2,9 +2,9 @@
 import { test, expect } from "bun:test"
 import { execFileSync } from "child_process"
 import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "fs"
-import { tmpdir } from "os"
-import { join } from "path"
-import { createWorktree, removeWorktree, deriveSessionBranch, ensureWorktreeAt, existingBranchNames } from "./manager"
+import { homedir, tmpdir } from "os"
+import { join, resolve, sep } from "path"
+import { createWorktree, removeWorktree, deriveSessionBranch, ensureWorktreeAt, existingBranchNames, worktreesRoot } from "./manager"
 
 function tmpRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "mux-wt-"))
@@ -15,6 +15,28 @@ function tmpRepo(): string {
   execFileSync("git", ["-C", dir, "add", "."]); execFileSync("git", ["-C", dir, "commit", "-m", "init"])
   return dir
 }
+
+test("tests never create worktrees in the live ~/.mux/worktrees (preload sets MUX_WORKTREES_ROOT)", async () => {
+  const live = resolve(homedir(), ".mux", "worktrees")
+  expect(resolve(worktreesRoot())).not.toBe(live)
+  const h = await createWorktree({ repoRoot: tmpRepo(), baseBranch: "main", sessionName: "iso" })
+  expect(resolve(h.worktreeDir).startsWith(live + sep)).toBe(false)
+  expect(resolve(h.worktreeDir).startsWith(resolve(process.env.MUX_WORKTREES_ROOT!) + sep)).toBe(true)
+  await removeWorktree(h.repoRoot, h.worktreeDir, h.sessionBranch)
+})
+
+test("worktreesRoot reads MUX_WORKTREES_ROOT at call time", () => {
+  const prev = process.env.MUX_WORKTREES_ROOT
+  try {
+    process.env.MUX_WORKTREES_ROOT = "/tmp/x-root"
+    expect(worktreesRoot()).toBe("/tmp/x-root")
+    delete process.env.MUX_WORKTREES_ROOT
+    expect(worktreesRoot()).toBe(join(process.env.HOME || homedir(), ".mux", "worktrees"))
+  } finally {
+    if (prev === undefined) delete process.env.MUX_WORKTREES_ROOT
+    else process.env.MUX_WORKTREES_ROOT = prev
+  }
+})
 
 test("deriveSessionBranch slugs and prefixes, avoiding collisions", () => {
   expect(deriveSessionBranch("My Feature!", new Set())).toBe("mux/my-feature")
@@ -51,7 +73,7 @@ test("ensureWorktreeAt recreates a worktree at the same path when the dir AND it
   // Simulate finish→merge cleanup: worktree dir removed AND branch deleted.
   await removeWorktree(repo, h.worktreeDir, h.sessionBranch)
   expect(existsSync(h.worktreeDir)).toBe(false)
-  expect(existingBranchNames(repo).has(h.sessionBranch)).toBe(false)
+  expect((await existingBranchNames(repo)).has(h.sessionBranch)).toBe(false)
 
   await ensureWorktreeAt({ repoRoot: repo, workdir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" })
 
@@ -71,7 +93,7 @@ test("ensureWorktreeAt reuses the existing branch when the dir is gone but the b
   // Remove the worktree dir but KEEP the branch.
   await removeWorktree(repo, h.worktreeDir, h.sessionBranch, { keepBranch: true })
   expect(existsSync(h.worktreeDir)).toBe(false)
-  expect(existingBranchNames(repo).has(h.sessionBranch)).toBe(true)
+  expect((await existingBranchNames(repo)).has(h.sessionBranch)).toBe(true)
 
   await ensureWorktreeAt({ repoRoot: repo, workdir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" })
 
@@ -96,11 +118,26 @@ test("ensureWorktreeAt prunes a stale registration when the dir was removed with
   // Manual/partial deletion: remove the dir but leave git's worktree registration + branch.
   execFileSync("rm", ["-rf", h.worktreeDir])
   expect(existsSync(h.worktreeDir)).toBe(false)
-  expect(existingBranchNames(repo).has(h.sessionBranch)).toBe(true)
+  expect((await existingBranchNames(repo)).has(h.sessionBranch)).toBe(true)
 
   await ensureWorktreeAt({ repoRoot: repo, workdir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" })
 
   expect(existsSync(h.worktreeDir)).toBe(true)
   const head = execFileSync("git", ["-C", h.worktreeDir, "branch", "--show-current"], { encoding: "utf-8" }).trim()
   expect(head).toBe(h.sessionBranch)
+})
+
+test("createWorktree does not block the event loop while the setup hook runs", async () => {
+  const repo = tmpRepo()
+  const { mkdirSync } = await import("fs")
+  mkdirSync(join(repo, ".mux"), { recursive: true })
+  writeFileSync(join(repo, ".mux", "worktree-setup.sh"), "sleep 1\n")
+  let fired = 0
+  const t0 = Date.now()
+  const timer = setTimeout(() => { fired = Date.now() - t0 }, 50)
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "hook" })
+  clearTimeout(timer)
+  expect(fired).toBeGreaterThan(0)
+  expect(fired).toBeLessThan(500)
+  await removeWorktree(repo, h.worktreeDir, h.sessionBranch)
 })

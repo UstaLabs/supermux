@@ -891,3 +891,35 @@ describe("onRegister already-known Core Claude row", () => {
     expect(m.registry.get(s.id)?.pid).toBe(0)
   })
 })
+
+describe("SessionManager.kill worktree", () => {
+  // Worktree cleanup is explicit (user-confirmed) only. A clean worktree with no
+  // commits used to be auto-removed on kill — which also deleted it from under a
+  // live session sharing it (Continue-in-new-conversation) and took git-ignored
+  // files (e.g. docs/) with it.
+  test("never removes the session's worktree, even when clean and merged", async () => {
+    const { mkdtempSync, existsSync } = await import("fs")
+    const { tmpdir } = await import("os")
+    const { execFileSync } = await import("child_process")
+    const git = (cwd: string, args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" })
+    const root = mkdtempSync(join(tmpdir(), "mux-kill-wt-"))
+    const repo = join(root, "repo")
+    const wt = join(root, "wt")
+    execFileSync("mkdir", ["-p", repo])
+    git(repo, ["init", "-q", "-b", "main"])
+    git(repo, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"])
+    git(repo, ["worktree", "add", "-q", "-b", "mux/test-1", wt, "main"])
+
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const registry = new Registry(db)
+    const m = new SessionManager(registry, fakePorts(db))
+    const s = registry.sessions.register({ name: "wt-kill", agent: "cursor", workdir: wt } as any)
+    registry.sessions.setWorktree(s.id, { repo_root: repo, base_branch: "main", session_branch: "mux/test-1" })
+
+    await m.kill(s.id)
+
+    expect(existsSync(wt)).toBe(true)
+    expect(String(git(repo, ["branch", "--list", "mux/test-1"]))).toContain("mux/test-1")
+  })
+})

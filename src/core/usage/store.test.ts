@@ -328,3 +328,24 @@ test("seedFromLocal applies fresher local data only", async () => {
   expect(store.snapshot().cursor?.totalPercentUsed).toBe(9)
   expect(store.snapshot().source.cursor).toBe("agent")
 })
+
+test("a local Claude seed keeps the banked resets the last live fetch found", () => {
+  const store = makeStore()
+  const resets = {
+    eligible: true,
+    ineligibleReason: null,
+    atLimit: false,
+    grants: [],
+    nextGrantId: null,
+    resetsLeft: 1,
+    cooldownUntilIso: null,
+  }
+  store.apply("claude", { ...claude(10), resets }, "live", new Date(1_000))
+  // The local reader (~/.claude.json cache) has no resets field at all.
+  store.apply("claude", claude(20), "local", new Date(2_000))
+  expect(store.snapshot().claude!.fiveHour.used).toBe(20)
+  expect(store.snapshot().claude!.resets).toEqual(resets)
+  // A live fetch that reports none (null) does clear it.
+  store.apply("claude", { ...claude(30), resets: null }, "live", new Date(3_000))
+  expect(store.snapshot().claude!.resets).toBeNull()
+})

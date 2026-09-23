@@ -50,6 +50,10 @@ data class HostState(
     val lastError: String? = null,
     /** Catalog of permission modes per agent (from the snapshot). */
     val permissionModes: Map<String, List<dev.supermux.proto.PermissionModeInfo>> = emptyMap(),
+    /** Worktree id → bytes, from `worktree_sizes` frames (spec 2026-09-22-explicit-worktree-cleanup). */
+    val worktreeSizes: Map<String, Long> = emptyMap(),
+    /** Worktree ids another device (or an archive) deleted since this client connected. */
+    val removedWorktreeIds: Set<String> = emptySet(),
 )
 
 /** How many just-closed prompts a session keeps on screen. */

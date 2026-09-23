@@ -22,6 +22,8 @@
 package dev.supermux.ui.shell
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.Spring
@@ -41,9 +43,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.systemBars
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -51,8 +50,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -62,6 +64,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -71,6 +74,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -159,7 +163,14 @@ import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.usage.UsageScreen
 import dev.supermux.ui.usage.rememberUsageActions
+import dev.supermux.ui.widgets.IosBackSwipe
+import dev.supermux.ui.widgets.IosPushIn
+import dev.supermux.ui.widgets.SwipeBackHandler
+import dev.supermux.ui.widgets.iosStyleBackSwipe
+import dev.supermux.ui.widgets.iosSwipeUnderLayer
+import dev.supermux.ui.widgets.iosSwipedLayer
 import dev.supermux.ui.widgets.keepAlivePanel
+import dev.supermux.ui.widgets.rememberIosBackSwipe
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.ui.workspace.rememberWorkspaceSession
 import dev.supermux.workspace.LayoutNode
@@ -648,15 +659,24 @@ fun SupermuxApp(
     var backProgress by remember { mutableFloatStateOf(0f) }
     val canPopLayer = compact && ui.currentRoute is Route.Home && ui.selectedId != null
     BackHandler(enabled = ui.overlayOpen) { ui.goBack() }
-    PredictiveBackHandler(enabled = canPopLayer) { events ->
-        try {
-            events.collect { e -> backProgress = e.progress }
-            ui.selectedId = null
-        } catch (_: Throwable) {
-            // Cancelled gesture: keep the selection, drop the scale.
+    // iOS draws the swipe as UIKit's interactive pop instead (widgets/BackSwipe.kt).
+    val iosSwipe = rememberIosBackSwipe()
+    if (iosStyleBackSwipe) {
+        SwipeBackHandler(enabled = canPopLayer, swipe = iosSwipe) { ui.selectedId = null }
+    } else {
+        PredictiveBackHandler(enabled = canPopLayer) { events ->
+            try {
+                events.collect { e -> backProgress = e.progress }
+                ui.selectedId = null
+            } catch (_: Throwable) {
+                // Cancelled gesture: keep the selection, drop the scale.
+            }
+            backProgress = 0f
         }
-        backProgress = 0f
     }
+    // Every full-screen route sits directly on Home (`navigate` replaces, never stacks), so one
+    // swipe serves them all: the route's layer slides off and Home is the page underneath.
+    val routeSwipe = rememberIosBackSwipe()
 
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
@@ -703,7 +723,12 @@ fun SupermuxApp(
                                 openWorkspaceByWorkspaceId = openByWorkspace,
                                 workspaces = workspaces,
                                 home = home,
-                                activeId = if (openByWorkspace) {
+                                // No open row on a phone: the list only shows with nothing open,
+                                // except under an iOS back swipe, where a highlighted row would
+                                // lose its highlight the moment the swipe lands.
+                                activeId = if (standalone) {
+                                    null
+                                } else if (openByWorkspace) {
                                     workspaces.firstOrNull { w -> w.chatSessionIds().contains(ui.selectedId) }?.id
                                 } else {
                                     ui.selectedId
@@ -807,18 +832,23 @@ fun SupermuxApp(
                             )
                         }
 
+                    val routeOnBack: () -> Unit = {
+                        when (ui.currentRoute) {
+                            is Route.Settings -> settingsTryClose?.invoke() ?: run { ui.goBack() }
+                            else -> ui.goBack()
+                        }
+                    }
+                    val currentRouteOnBack by rememberUpdatedState(routeOnBack)
+                    val routeBack = remember(routeSwipe) { RouteBack(routeSwipe) { currentRouteOnBack() } }
+                    CompositionLocalProvider(LocalRouteBack provides routeBack) {
                     NavDisplay(
                         backStack = ui.backStack,
                         modifier = Modifier.fillMaxSize(),
-                        onBack = {
-                            when (ui.currentRoute) {
-                                is Route.Settings -> settingsTryClose?.invoke() ?: run { ui.goBack() }
-                                else -> ui.goBack()
-                            }
-                        },
+                        onBack = routeOnBack,
                         sceneStrategies = listOf(fullPaneOverlay),
                         entryProvider = entryProvider {
                             entry<Route.Home> {
+                                Box(Modifier.fillMaxSize().iosSwipeUnderLayer(routeSwipe)) {
                                 ShellHome(
                                     fleet = fleet,
                                     ui = ui,
@@ -847,7 +877,9 @@ fun SupermuxApp(
                                     onTearOutTab = onTearOutTab,
                                     chatFallback = chatFallback,
                                     backProgress = backProgress,
+                                    iosSwipe = iosSwipe,
                                 )
+                                }
                             }
 
                             // The launcher and the Usage card are ROUTES on both hosts (G8's
@@ -1057,6 +1089,7 @@ fun SupermuxApp(
                             }
                         },
                     )
+                    }
 
                     // ── Usage fallback when the sidebar is collapsed (no footer icon to anchor) ──
                     if (ui.usageOpen && usageIsPopover && ui.sidebarCollapsed) {
@@ -1151,6 +1184,7 @@ private fun ShellHome(
     onTearOutTab: (String) -> Unit,
     chatFallback: (@Composable (session: SessionInfo, visible: Boolean, onBack: () -> Unit) -> Unit)?,
     backProgress: Float,
+    iosSwipe: IosBackSwipe,
 ) {
     val cs = MaterialTheme.colorScheme
     val sessionNames = remember(sessions) { sessions.associate { it.id to it.name } }
@@ -1306,12 +1340,26 @@ private fun ShellHome(
     }
     SharedTransitionLayout {
         Box(Modifier.fillMaxSize()) {
+            // iOS: opening a chat pushes it in from the right over the list (the list parallaxes
+            // away underneath); switching chats inside an open one is not a push.
+            IosPushIn(iosSwipe, key = if (ui.selectedId != null) Unit else null, animateInitial = false)
+            // iOS: the list is already underneath while the chat is swiped off it (or pushed on).
+            if (iosSwipe.revealing && ui.selectedId != null) {
+                Box(Modifier.fillMaxSize().iosSwipeUnderLayer(iosSwipe)) {
+                    sidebarList(true, listState)
+                }
+            }
             Box(
-                Modifier.graphicsLayer {
-                    val scale = 1f - backProgress * 0.05f
-                    scaleX = scale
-                    scaleY = scale
-                    alpha = 1f - backProgress * 0.3f
+                if (iosStyleBackSwipe) {
+                    // Opaque, or the list underneath shows through a panel with no background.
+                    Modifier.fillMaxSize().iosSwipedLayer(iosSwipe).background(cs.background)
+                } else {
+                    Modifier.graphicsLayer {
+                        val scale = 1f - backProgress * 0.05f
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = 1f - backProgress * 0.3f
+                    }
                 },
             ) {
                 workspaceLayer(true)
@@ -1350,27 +1398,36 @@ private fun ShellHome(
             AnimatedContent(
                 targetState = ui.selectedId == null,
                 transitionSpec = {
-                    val showList = targetState
-                    val enter = slideInHorizontally(
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMediumLow,
-                        ),
-                        initialOffsetX = { if (showList) -it / 3 else it },
-                    ) + fadeIn(spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow))
-                    val exit = slideOutHorizontally(
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMediumLow,
-                        ),
-                        targetOffsetX = { if (showList) it else -it / 3 },
-                    ) + fadeOut(spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow))
-                    enter togetherWith exit
+                    // A finished iOS swipe already moved the list into place, and an iOS open is
+                    // the chat's own push-in over the list underneath.
+                    if (iosSwipe.landed || (iosStyleBackSwipe && !targetState)) {
+                        EnterTransition.None togetherWith ExitTransition.None
+                    } else {
+                        val showList = targetState
+                        val enter = slideInHorizontally(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMediumLow,
+                            ),
+                            initialOffsetX = { if (showList) -it / 3 else it },
+                        ) + fadeIn(spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow))
+                        val exit = slideOutHorizontally(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMediumLow,
+                            ),
+                            targetOffsetX = { if (showList) it else -it / 3 },
+                        ) + fadeOut(spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow))
+                        enter togetherWith exit
+                    }
                 },
                 label = "sessionListOverlay",
-                modifier = Modifier.zIndex(2f),
+                modifier = Modifier.fillMaxSize().zIndex(2f),
             ) { showList ->
-                if (showList) sidebarList(true, listState)
+                // Both states fill the screen. An empty state measured 0×0, so every open and close
+                // animated the container between that and full size: on a back the list grew out
+                // of the top-left corner, and on an open the leaving list drifted down the screen.
+                if (showList) sidebarList(true, listState) else Box(Modifier.fillMaxSize())
             }
         }
     }

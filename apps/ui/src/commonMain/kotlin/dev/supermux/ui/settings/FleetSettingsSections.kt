@@ -94,6 +94,11 @@ fun FleetSettingsSection(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
+        SettingsSection.Worktrees -> WorktreesSettingsScreen(
+            actions = rememberWorktreesSettingsActions(fleet),
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
+        )
     }
 }
 

@@ -31,6 +31,8 @@
 // [shouldResetBaseBranchOnWorkdirChange].
 package dev.supermux.ui.session
 
+import dev.supermux.chat.parseChatTs
+import dev.supermux.session.projectActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.LocalIndication
@@ -93,6 +95,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
@@ -359,6 +363,9 @@ fun SessionLauncherScreen(
     var modelMenu by remember { mutableStateOf(false) }
     var reasoningMenu by remember { mutableStateOf(false) }
     var projectMenu by remember { mutableStateOf(false) }
+    /** The project heading's width — the picker centres its dropdown under it. */
+    var projectHeadingWidth by remember { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
 
     // ── Persistent projects (Task 10) ──
     // A workspace tab is locked to its directory and never consults projects: it gets an empty
@@ -372,7 +379,6 @@ fun SessionLauncherScreen(
     // Catalog known AND non-empty → project picker; otherwise today's path omnibox.
     val useCatalog = workspaceWorkdir == null && catalog.isNotEmpty()
     val projectHostKey = selectedHost.orEmpty()
-    var catalogMenu by remember { mutableStateOf(false) }
     var catalogLocationsFor by remember { mutableStateOf<String?>(null) }
     // A location-less project waiting for the omnibox to name a folder to register.
     var pendingLocationProject by remember { mutableStateOf<ProjectDto?>(null) }
@@ -566,6 +572,10 @@ fun SessionLauncherScreen(
     val recentProjectPaths = remember(sessions, lastBySession) {
         recentWorkdirs(sessionsByRecency(sessions, lastTs))
     }
+    // The picker tiles' "● 2m": sessions per project and when one last spoke.
+    val pickerActivity = remember(sessions, lastBySession) {
+        projectActivity(sessions) { parseChatTs(lastBySession[it.id]?.ts) }
+    }
     // Picker list: recently-active projects first (web orderProjectsByRecency parity).
     val projects = remember(knownProjects, recentProjectPaths) {
         orderProjectsByRecency(recentProjectPaths, knownProjects)
@@ -621,7 +631,7 @@ fun SessionLauncherScreen(
         projectError = null
         projectConflict = null
         pendingLocationProject = null
-        catalogMenu = false
+        projectMenu = false
         catalogLocationsFor = null
         projectLocations = projectLocations + (projectLocationKey(projectHostKey, project.id) to path)
         onPrefsChange(currentPrefs())
@@ -634,12 +644,11 @@ fun SessionLauncherScreen(
             is LaunchLocation.Chosen -> pickProjectLocation(project, loc.path)
             is LaunchLocation.Choose -> {
                 catalogLocationsFor = project.id
-                catalogMenu = true
+                projectMenu = true
             }
             LaunchLocation.NeedsLocation -> {
                 // The existing path entry (typed path → validatePath, known folders, clone/create)
                 // names the folder; registration happens when it picks.
-                catalogMenu = false
                 catalogLocationsFor = null
                 pendingLocationProject = project
                 projectMenu = true
@@ -867,7 +876,9 @@ fun SessionLauncherScreen(
                         // renders as a dropdown that must hang off this heading.
                         // A workspace tab is locked to its directory: the folder caption under the
                         // composer names it, so there is no project dropdown here.
-                        if (workspaceWorkdir == null) Box {
+                        if (workspaceWorkdir == null) Box(
+                            Modifier.onSizeChanged { projectHeadingWidth = with(density) { it.width.toDp() } },
+                        ) {
                             Row(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(Space.sm))
@@ -876,13 +887,9 @@ fun SessionLauncherScreen(
                                     // clobbered by the restore effect settling — ignore taps until
                                     // restore lands.
                                     .clickable(enabled = !launcherRestoring) {
-                                        if (useCatalog) {
-                                            catalogLocationsFor = null
-                                            catalogMenu = true
-                                        } else {
-                                            pendingLocationProject = null
-                                            projectMenu = true
-                                        }
+                                        catalogLocationsFor = null
+                                        pendingLocationProject = null
+                                        projectMenu = true
                                     }
                                     .padding(horizontal = Space.sm, vertical = Space.xs)
                                     .testTag("launcher_project_field"),
@@ -925,29 +932,19 @@ fun SessionLauncherScreen(
                                         workdir = path; workdirTouched = true; error = null; projectError = null; projectConflict = null
                                     }
                                 },
-                                onDismiss = { projectMenu = false; pendingLocationProject = null },
+                                onDismiss = { projectMenu = false; pendingLocationProject = null; catalogLocationsFor = null },
+                                activity = pickerActivity,
+                                anchorWidth = projectHeadingWidth,
+                                // One picker: the catalog's projects when the host has one — except
+                                // while a location-less project waits for a folder, which is path entry.
+                                catalog = if (useCatalog && pendingLocationProject == null) catalog else emptyList(),
+                                catalogHostKey = projectHostKey,
+                                loadCatalogImage = loadCatalogImage,
+                                catalogLocationsFor = catalogLocationsFor?.let { id -> catalog.firstOrNull { it.id == id } },
+                                onCatalogProject = { applyProject(it) },
+                                onCatalogLocation = { p, path -> pickProjectLocation(p, path) },
+                                onCatalogLocationsBack = { catalogLocationsFor = null },
                             )
-                            if (useCatalog) {
-                                CatalogProjectPicker(
-                                    expanded = catalogMenu,
-                                    projects = catalog,
-                                    hostId = projectHostKey,
-                                    current = workdir,
-                                    home = home,
-                                    locationsFor = catalogLocationsFor,
-                                    loadImage = loadCatalogImage,
-                                    onProject = { applyProject(it) },
-                                    onShowLocations = { catalogLocationsFor = it },
-                                    onLocation = { p, path -> pickProjectLocation(p, path) },
-                                    onOther = {
-                                        catalogMenu = false
-                                        catalogLocationsFor = null
-                                        pendingLocationProject = null
-                                        projectMenu = true
-                                    },
-                                    onDismiss = { catalogMenu = false; catalogLocationsFor = null },
-                                )
-                            }
                         }
                         pendingLocationProject?.let { p ->
                             Text(

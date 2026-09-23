@@ -66,6 +66,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.net.ClaudeResetResult
+import dev.supermux.net.ClaudeResets
 import dev.supermux.net.ClaudeUsage
 import dev.supermux.net.CodexModelUsage
 import dev.supermux.net.CodexResetResult
@@ -131,6 +133,52 @@ fun codexModelStatus(model: CodexModelUsage, now: Long = nowMs()): String {
         back.isNotEmpty() -> "locked · back $back"
         model.creditsWouldEnable -> "locked · credits would unlock"
         else -> "locked"
+    }
+}
+
+/**
+ * Value of the Claude card's "Resets banked" row: the count, plus the use-by date of the grant a
+ * redeem would spend (or the first grant with resets left). "1 · use by Oct 22".
+ */
+fun claudeResetsValue(resets: ClaudeResets): String {
+    val grant = resets.grants.firstOrNull { it.id == resets.nextGrantId }
+        ?: resets.grants.firstOrNull { it.resetsLeft > 0 }
+    val endsMs = grant?.endsAtIso?.let { parseIsoMillis(it) }
+    val by = endsMs?.let { shortMonthDayLabel(it) }.orEmpty()
+    return if (by.isEmpty()) "${resets.resetsLeft}" else "${resets.resetsLeft} · use by $by"
+}
+
+/**
+ * Why a banked Claude reset can't be spent right now, or null when it can ([ClaudeResets.nextGrantId]
+ * set). Shown under the row in place of the button.
+ */
+fun claudeResetBlockedHint(resets: ClaudeResets): String? {
+    if (resets.nextGrantId != null) return null
+    val live = resets.grants.filter { it.resetsLeft > 0 }
+    return when {
+        live.isEmpty() -> null
+        live.all { it.paused } -> "Reset paused"
+        resets.cooldownUntilIso != null -> "Try again in a minute"
+        live.all { it.useRequiresLimit } && !resets.atLimit -> "Usable once you hit a limit"
+        else -> "Not usable right now"
+    }
+}
+
+/** "5-hour and 7-day limits" from a grant's `clears`; unknown window ids are left out. */
+fun claudeResetClears(clears: List<String>): String {
+    val names = clears.mapNotNull {
+        when (it) {
+            "five_hour" -> "5-hour"
+            "seven_day" -> "7-day"
+            "seven_day_sonnet" -> "7-day Sonnet"
+            "seven_day_opus" -> "7-day Opus"
+            else -> null
+        }
+    }
+    return when (names.size) {
+        0 -> "usage limits"
+        1 -> "${names[0]} limit"
+        else -> names.dropLast(1).joinToString(", ") + " and ${names.last()} limits"
     }
 }
 
@@ -326,6 +374,11 @@ fun UsageFooterRow(label: String, value: String, valueColor: Color? = null) {
 
 // ─── Provider cards ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * `onRedeem` — null hides the "Use a reset" affordance. On confirm: spends 1 banked limit reset via
+ * [onRedeem], shows the resulting [claudeResetNote] inline, then calls [onRedeemed] — the same
+ * flow as [CodexUsageCard].
+ */
 @Composable
 fun ClaudeUsageCard(
     claude: ClaudeUsage?,
@@ -333,8 +386,16 @@ fun ClaudeUsageCard(
     asOf: String? = null,
     refreshing: Boolean = false,
     now: Long = nowMs(),
+    onRedeem: (suspend () -> ClaudeResetResult?)? = null,
+    onRedeemed: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    // Un-keyed for the same reason as CodexUsageCard: the note outlives the refreshed `claude`.
+    var redeeming by remember { mutableStateOf(false) }
+    var showDialog by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf<String?>(null) }
+    val resets = claude?.resets?.takeIf { it.resetsLeft > 0 }
     UsageCard(
         title = "Claude",
         subtitle = "Pro plan",
@@ -355,7 +416,83 @@ fun ClaudeUsageCard(
             claude.extraUsage?.takeIf { it.enabled }?.let { e ->
                 UsageFooterRow("Extra usage", "${dollars(e.usedCredits)} / ${dollars(e.monthlyLimit)}")
             }
+            if (resets != null) {
+                UsageFooterRow("🎟️ Resets banked", claudeResetsValue(resets))
+                val hint = claudeResetBlockedHint(resets)
+                if (hint != null) {
+                    Text(
+                        hint,
+                        color = cs.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(top = Space.xs).testTag("claude_redeem_hint"),
+                    )
+                } else if (onRedeem != null) {
+                    OutlinedButton(
+                        onClick = { showDialog = true },
+                        enabled = !redeeming,
+                        modifier = Modifier.padding(top = Space.sm).testTag("claude_redeem_button"),
+                    ) {
+                        Text(if (redeeming) "Redeeming…" else "Use a reset", color = cs.onSurface, fontSize = 13.sp)
+                    }
+                }
+            }
+            note?.let {
+                Text(
+                    it,
+                    color = cs.onSurfaceVariant,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = Space.xs).testTag("claude_redeem_note"),
+                )
+            }
         }
+    }
+    if (showDialog && resets != null) {
+        val grant = resets.grants.firstOrNull { it.id == resets.nextGrantId }
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Use a banked reset?") },
+            text = {
+                Text(
+                    "Refills your ${claudeResetClears(grant?.clears.orEmpty())} now. " +
+                        "Spends 1 of ${resets.resetsLeft}; your weekly reset day stays the same.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDialog = false
+                        scope.launch {
+                            redeeming = true
+                            val r = onRedeem?.invoke()
+                            note = claudeResetNote(r)
+                            redeeming = false
+                            onRedeemed()
+                        }
+                    },
+                    modifier = Modifier.testTag("claude_redeem_confirm"),
+                ) { Text("Use reset", color = cs.primary) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showDialog = false },
+                    modifier = Modifier.testTag("claude_redeem_cancel"),
+                ) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+/** The transient inline status line after a Claude redeem attempt. */
+fun claudeResetNote(r: ClaudeResetResult?): String {
+    if (r == null) return "Reset failed"
+    return when (r.result) {
+        "reset" -> "✓ Limits reset" + (r.resetsLeft?.let { " · $it left" } ?: "")
+        "not_limited" -> "Your limits were already clear — nothing was used"
+        "already_used" -> "That reset was already used"
+        "cooldown" -> "A reset is still going through — try again in a minute"
+        "ineligible", "no_reset" -> "No reset available to use"
+        "unavailable" -> "Couldn't use a reset right now — try again later"
+        else -> "Reset request completed"
     }
 }
 
@@ -612,6 +749,8 @@ class UsageActions(
     /** POST /usage/refresh — force a live re-fetch. Null on failure. */
     val refresh: suspend () -> UsageResponse?,
     val redeem: suspend () -> CodexResetResult?,
+    /** POST /usage/claude/reset — spend one banked Claude limit reset. Null on failure. */
+    val redeemClaude: suspend () -> ClaudeResetResult? = { null },
 )
 
 /** [UsageActions] against one paired host — desktop's wiring. */
@@ -625,6 +764,13 @@ fun rememberUsageActions(app: HostStore): UsageActions = remember(app) {
             val r = app.redeemCodexReset()
             if (r?.code == "reset" && r.codex != null) {
                 app.usageSnapshot.value?.copy(codex = r.codex)?.let { app.applyUsage(it) }
+            }
+            r
+        },
+        redeemClaude = {
+            val r = app.redeemClaudeReset()
+            if (r?.claude != null) {
+                app.usageSnapshot.value?.copy(claude = r.claude)?.let { app.applyUsage(it) }
             }
             r
         },
@@ -642,6 +788,13 @@ fun rememberUsageActions(fleet: FleetStore): UsageActions = remember(fleet) {
             val r = fleet.redeemCodexReset()
             if (r?.code == "reset" && r.codex != null) {
                 fleet.usageSnapshot.value?.copy(codex = r.codex)?.let { fleet.applyUsage(it) }
+            }
+            r
+        },
+        redeemClaude = {
+            val r = fleet.redeemClaudeReset()
+            if (r?.claude != null) {
+                fleet.usageSnapshot.value?.copy(claude = r.claude)?.let { fleet.applyUsage(it) }
             }
             r
         },
@@ -681,6 +834,7 @@ fun UsageScreen(
         loading = loading,
         onBack = onBack,
         onRedeem = actions.redeem,
+        onRedeemClaude = actions.redeemClaude,
         // Android re-fetched the WHOLE payload after a redeem; the holder's `redeem` only swaps
         // the refreshed Codex block into the held snapshot, so the other providers would keep
         // showing pre-redeem numbers without this.
@@ -721,6 +875,7 @@ fun UsageScreen(
     topBarShown: Boolean = false,
     standalone: Boolean = false,
     onRedeemed: () -> Unit = {},
+    onRedeemClaude: (suspend () -> ClaudeResetResult?)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val semantics = LocalSemantics.current
@@ -763,13 +918,13 @@ fun UsageScreen(
             containerColor = cs.background,
             modifier = Modifier.testTag("usage_screen"),
         ) { padding ->
-            UsageBody(usage, loading, onRedeem, now, onRedeemed, modifier.padding(padding))
+            UsageBody(usage, loading, onRedeem, onRedeemClaude, now, onRedeemed, modifier.padding(padding))
         }
     } else {
         Column(modifier.fillMaxSize().testTag("usage_screen")) {
             UsageHeaderRow(loading, onBack, onRefresh)
             HorizontalDivider(color = cs.outlineVariant)
-            UsageBody(usage, loading, onRedeem, now, onRedeemed, Modifier)
+            UsageBody(usage, loading, onRedeem, onRedeemClaude, now, onRedeemed, Modifier)
         }
     }
 }
@@ -822,6 +977,7 @@ private fun UsageBody(
     usage: UsageResponse?,
     loading: Boolean,
     onRedeem: suspend () -> CodexResetResult?,
+    onRedeemClaude: (suspend () -> ClaudeResetResult?)?,
     now: Long,
     onRedeemed: () -> Unit,
     modifier: Modifier,
@@ -856,6 +1012,8 @@ private fun UsageBody(
                         asOf = formatFetchedAt(usage?.fetchedAt?.get("claude"), now),
                         refreshing = usage?.refreshing?.contains("claude") == true,
                         now = now,
+                        onRedeem = onRedeemClaude,
+                        onRedeemed = onRedeemed,
                     )
                     CodexUsageCard(
                         usage?.codex,

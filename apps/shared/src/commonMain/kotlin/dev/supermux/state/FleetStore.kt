@@ -12,6 +12,7 @@ import dev.supermux.host.hostViewsFrom
 import dev.supermux.host.isLegacyHostDisplayName
 import dev.supermux.host.mergeSessions
 import dev.supermux.host.previousHostClearSessionId
+import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.util.TransportPolicy
@@ -30,6 +31,7 @@ import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ChunkSource
+import dev.supermux.net.ClaudeResetResult
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.CuratorSettingsResponse
@@ -1425,6 +1427,7 @@ class FleetStore(
         return activeApp()?.refreshUsage()?.also { publishUsage(target, it) }
     }
     suspend fun redeemCodexReset(): CodexResetResult? = activeApp()?.redeemCodexReset()
+    suspend fun redeemClaudeReset(): ClaudeResetResult? = activeApp()?.redeemClaudeReset()
     /** Replace the active host's held snapshot (the Codex redeem updates one provider in place). */
     fun applyUsage(usage: UsageResponse) {
         val target = synchronized(lock) { activeRecordId() }
@@ -1455,6 +1458,27 @@ class FleetStore(
     suspend fun addDevice(name: String): AddDeviceResponse? = activeApp()?.addDevice(name)
     /** Revoke a device; true when the broker accepted the DELETE (cluster E4). */
     suspend fun revokeDevice(name: String): Boolean = activeApp()?.revokeDevice(name) == true
+    // ── Worktrees ─────────────────────────────────────────────────────────
+    suspend fun worktrees() = activeApp()?.worktrees()
+    suspend fun worktreeChanges(id: String) = activeApp()?.worktreeChanges(id)
+    /** Archive-dialog lookups go to the host that OWNS the session / workspace (not the active
+     *  host), the same routing the archive-and-delete calls below use. */
+    suspend fun worktreeForSessionWorkdir(sessionId: String, workdir: String) = appFor(sessionId)?.worktreeForWorkdir(workdir)
+    suspend fun worktreeForWorkspaceWorkdir(workspaceId: String, workdir: String) =
+        appForWorkspace(workspaceId)?.worktreeForWorkdir(workdir)
+    suspend fun deleteWorktrees(ids: List<String>) = activeApp()?.deleteWorktrees(ids)
+    suspend fun killAndDeleteWorktree(id: String, worktreeIds: List<String>) = appFor(id)?.killAndDeleteWorktree(id, worktreeIds)
+    suspend fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>) =
+        appForWorkspace(id)?.archiveWorkspaceAndDeleteWorktree(id, worktreeIds)
+    suspend fun closeViewAndDeleteWorktree(workspaceId: String, viewId: String, worktreeIds: List<String>) =
+        appForWorkspace(workspaceId)?.closeViewAndDeleteWorktree(workspaceId, viewId, worktreeIds)
+    /** Fire-and-forget variants (see [HostStore.killAndDeleteWorktree]); no owning host → onDone(null). */
+    fun killAndDeleteWorktree(id: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit) {
+        appFor(id)?.killAndDeleteWorktree(id, worktreeIds, onDone) ?: onDone(null)
+    }
+    fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit) {
+        appForWorkspace(id)?.archiveWorkspaceAndDeleteWorktree(id, worktreeIds, onDone) ?: onDone(null)
+    }
     suspend fun archived(): List<ArchivedDto> = activeApp()?.archived().orEmpty()
     suspend fun updateStatus(): UpdateStatus? = activeApp()?.updateStatus()
     suspend fun checkUpdate(): UpdateStatus? = activeApp()?.checkUpdate()

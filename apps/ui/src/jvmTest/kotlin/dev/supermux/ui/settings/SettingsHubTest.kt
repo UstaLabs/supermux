@@ -14,6 +14,7 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.navigationevent.NavigationEvent
 import androidx.navigationevent.NavigationEventDispatcher
@@ -407,7 +408,11 @@ class SettingsHubTest {
         onNodeWithTag("settings_row_appearance").assertExists()
         onNodeWithTag("settings_row_appupdate").assertExists()
 
-        onNodeWithTag("settings_row_appearance").performClick()
+        // Scroll first: the index is a plain scrolled Column, and with enough sections above it
+        // (e.g. Worktrees) the Appearance row sits below the test window's fixed viewport —
+        // performClick() dispatches at the node's actual position, so an off-screen click is a
+        // silent no-op rather than a failure at the click site itself.
+        onNodeWithTag("settings_row_appearance").performScrollTo().performClick()
         waitForIdle()
         onNodeWithTag("extra_appearance").assertExists()
 

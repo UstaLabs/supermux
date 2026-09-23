@@ -96,4 +96,26 @@ class BrokerApiUsageTest {
         assertEquals(0, r.windowsReset)
         assertEquals("", r.codex?.plan)
     }
+
+    @Test fun claude_resets_decode_from_the_broker_shape() = runTest {
+        val usage = api(
+            """{"claude": {"fiveHour": {"used": 5.0}, "resets": {"eligible": true, "ineligibleReason": null,
+               "atLimit": false, "nextGrantId": "g1", "resetsLeft": 1, "cooldownUntilIso": null,
+               "grants": [{"id": "g1", "label": "Launch", "resetsTotal": 1, "resetsLeft": 1,
+               "startsAtIso": null, "endsAtIso": "2026-10-22T16:00:00.000Z", "clears": ["five_hour"],
+               "paused": false, "usableNow": true, "useRequiresLimit": false}]}}}""",
+        ).usage()
+        val resets = assertNotNull(usage.claude?.resets)
+        assertEquals("g1", resets.nextGrantId)
+        assertEquals(1, resets.resetsLeft)
+        assertEquals(false, resets.grants.single().useRequiresLimit)
+    }
+
+    @Test fun the_claude_reset_result_is_lenient_too() = runTest {
+        val r = api("""{"result": null, "resetsLeft": null, "cleared": null, "claude": {"resets": null}}""").redeemClaudeReset()
+        assertEquals("", r.result)
+        assertEquals(null, r.resetsLeft)
+        assertTrue(r.cleared.isEmpty())
+        assertEquals(null, r.claude?.resets)
+    }
 }

@@ -45,12 +45,12 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -68,7 +68,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -100,12 +99,15 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
+import dev.supermux.ui.widgets.SwipeBackHandler
+import dev.supermux.ui.widgets.SwipeBackPages
+import dev.supermux.ui.widgets.rememberIosBackSwipe
 import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.WorkspaceGroup
 import dev.supermux.workspace.groupArchivedWorkspaces
+import kotlin.time.Clock
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlin.time.Clock
 
 /** Material's minimum touch target, applied to the row actions when there is no pointer. */
 private val TouchTargetMin = 48.dp
@@ -323,7 +325,8 @@ fun ArchivedScreen(
 
     // The transcript's own back, registered BELOW whatever pushed this screen — so the gesture
     // returns to the list instead of popping the whole route.
-    BackHandler(enabled = opened != null) { openedId = null }
+    val openedSwipe = rememberIosBackSwipe()
+    SwipeBackHandler(enabled = opened != null, swipe = openedSwipe) { openedId = null }
 
     // Keep focus on the root across list ⇄ chat navigation (a row click moves focus to the row),
     // so Escape is always caught by the onPreviewKeyEvent below — even with no field focused.
@@ -346,49 +349,57 @@ fun ArchivedScreen(
                 }
             },
     ) {
-        if (opened != null) {
-            ArchivedChatView(
-                sessionId = opened.id,
-                name = opened.name,
-                loadLogs = loadLogs,
-                resumed = opened.id in resumedIds,
-                onResume = {
-                    onResume(opened.id)
-                    resumedIds = resumedIds + opened.id
-                },
-                onBack = { openedId = null },
-                barOwned = barOwned,
-            )
-        } else {
-            ArchivedList(
-                archived = archived,
-                loading = loading,
-                projects = sessionProjects,
-                groups = groups,
-                useWorkspaces = useWorkspaces,
-                home = home,
-                selectedProject = selectedProject,
-                onSelectProject = { selectedProject = it },
-                filterOpen = filterOpen,
-                onFilterOpenChange = { filterOpen = it },
-                query = query,
-                onQueryChange = { query = it },
-                onOpen = { openedId = it },
-                onResume = { id ->
-                    onResume(id)
-                    resumedIds = resumedIds + id
-                },
-                resumedIds = resumedIds,
-                onRestore = { id ->
-                    onRestore(id)
-                    restoredIds = restoredIds + id
-                },
-                restoredIds = restoredIds,
-                barOwned = barOwned,
-                onBack = onBack,
-                loadProjectImage = cachedProjectImage,
-                onProjectSettings = onProjectSettings,
-            )
+        // A pushed transcript over the list; on iOS an edge swipe drags it back off the list.
+        SwipeBackPages(
+            pushed = opened != null,
+            swipe = openedSwipe,
+            pageBackground = cs.surfaceContainerHigh,
+            under = {
+                ArchivedList(
+                    archived = archived,
+                    loading = loading,
+                    projects = sessionProjects,
+                    groups = groups,
+                    useWorkspaces = useWorkspaces,
+                    home = home,
+                    selectedProject = selectedProject,
+                    onSelectProject = { selectedProject = it },
+                    filterOpen = filterOpen,
+                    onFilterOpenChange = { filterOpen = it },
+                    query = query,
+                    onQueryChange = { query = it },
+                    onOpen = { openedId = it },
+                    onResume = { id ->
+                        onResume(id)
+                        resumedIds = resumedIds + id
+                    },
+                    resumedIds = resumedIds,
+                    onRestore = { id ->
+                        onRestore(id)
+                        restoredIds = restoredIds + id
+                    },
+                    restoredIds = restoredIds,
+                    barOwned = barOwned,
+                    onBack = onBack,
+                    loadProjectImage = cachedProjectImage,
+                    onProjectSettings = onProjectSettings,
+                )
+            },
+        ) {
+            if (opened != null) {
+                ArchivedChatView(
+                    sessionId = opened.id,
+                    name = opened.name,
+                    loadLogs = loadLogs,
+                    resumed = opened.id in resumedIds,
+                    onResume = {
+                        onResume(opened.id)
+                        resumedIds = resumedIds + opened.id
+                    },
+                    onBack = { openedId = null },
+                    barOwned = barOwned,
+                )
+            }
         }
     }
 }

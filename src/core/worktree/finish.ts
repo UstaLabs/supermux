@@ -1,6 +1,6 @@
 // src/core/worktree/finish.ts
-import { execFileSync } from "child_process"
 import { resolve, sep } from "path"
+import { gitAsync } from "../git/exec"
 import { syncBaseIntoBranch, integrateFastForward, dirtyFiles, mergeInProgress } from "../git/integrate"
 import { resolveVerifyCommand, runVerify } from "./verify"
 import { removeWorktree, worktreesRoot } from "./manager"
@@ -27,10 +27,8 @@ export type FinishResult =
   | { status: "uncommitted"; files: string[] }
   | { status: "error"; message: string }
 
-function hasCommitsToIntegrate(repoRoot: string, base: string, branch: string): boolean {
-  try {
-    return execFileSync("git", ["-C", repoRoot, "rev-list", "--count", `${base}..${branch}`], { encoding: "utf-8" }).trim() !== "0"
-  } catch { return false }
+async function hasCommitsToIntegrate(repoRoot: string, base: string, branch: string): Promise<boolean> {
+  try { return (await gitAsync(repoRoot, ["rev-list", "--count", `${base}..${branch}`])) !== "0" } catch { return false }
 }
 
 /** Only worktrees mux itself created (under worktreesRoot()) may be auto-removed. */
@@ -59,10 +57,10 @@ export async function finishWorktree(s: FinishSession, opts?: FinishOpts, onProg
     await progress("Committing…")
     const msg = opts.commitMessage?.trim() || "Session changes"
     try {
-      execFileSync("git", ["-C", s.worktreeDir, "add", "-A"], { encoding: "utf-8" })
-      execFileSync("git", ["-C", s.worktreeDir, "commit", "-m", msg, "--no-verify"], { encoding: "utf-8" })
+      await gitAsync(s.worktreeDir, ["add", "-A"])
+      await gitAsync(s.worktreeDir, ["commit", "-m", msg, "--no-verify"])
     } catch (e: any) {
-      return { status: "error", message: `commit failed: ${(e?.stderr ?? e?.message ?? e)?.toString?.().trim?.() ?? String(e)}` }
+      return { status: "error", message: `commit failed: ${String(e?.message ?? e).trim()}` }
     }
   }
 
@@ -72,7 +70,7 @@ export async function finishWorktree(s: FinishSession, opts?: FinishOpts, onProg
   if (sync.status === "conflict") return { status: "sync_conflict", files: sync.files }
 
   // 2) Nothing to integrate? (after sync, the branch has no commits beyond base)
-  if (!hasCommitsToIntegrate(s.repoRoot, s.baseBranch, s.sessionBranch)) return { status: "nothing_to_do" }
+  if (!(await hasCommitsToIntegrate(s.repoRoot, s.baseBranch, s.sessionBranch))) return { status: "nothing_to_do" }
 
   // 3) Verify on the merged result by running .mux/verify.sh (or refuse loudly).
   let verified: string | null = null
@@ -106,10 +104,10 @@ export async function finishWorktree(s: FinishSession, opts?: FinishOpts, onProg
 /** Deterministic PR title/body from a branch's commits (no LLM). Title = the
  *  oldest commit's subject (usually the headline change); body = a bullet list
  *  of all subjects. Falls back to the branch name when there are no commits. */
-export function derivePrText(repoRoot: string, base: string, branch: string): { title: string; body: string } {
+export async function derivePrText(repoRoot: string, base: string, branch: string): Promise<{ title: string; body: string }> {
   let subjects: string[] = []
   try {
-    const out = execFileSync("git", ["-C", repoRoot, "log", "--reverse", "--format=%s", `${base}..${branch}`], { encoding: "utf-8" }).trim()
+    const out = await gitAsync(repoRoot, ["log", "--reverse", "--format=%s", `${base}..${branch}`])
     subjects = out ? out.split("\n").map((s) => s.trim()).filter(Boolean) : []
   } catch { subjects = [] }
   const title = subjects[0] || branch
@@ -132,15 +130,15 @@ export async function openPrForSession(s: FinishSession, opts?: FinishOpts, onPr
     if (!opts?.commitFirst) return { status: "uncommitted", files: dirty }
     await progress("Committing…")
     try {
-      execFileSync("git", ["-C", s.worktreeDir, "add", "-A"], { encoding: "utf-8" })
-      execFileSync("git", ["-C", s.worktreeDir, "commit", "-m", opts.commitMessage?.trim() || "Session changes", "--no-verify"], { encoding: "utf-8" })
-    } catch (e: any) { return { status: "error", message: `commit failed: ${String(e?.stderr ?? e?.message ?? e).trim()}` } }
+      await gitAsync(s.worktreeDir, ["add", "-A"])
+      await gitAsync(s.worktreeDir, ["commit", "-m", opts.commitMessage?.trim() || "Session changes", "--no-verify"])
+    } catch (e: any) { return { status: "error", message: `commit failed: ${String(e?.message ?? e).trim()}` } }
   }
 
   await progress(`Syncing ${s.baseBranch}…`)
   const sync = syncBaseIntoBranch(s.worktreeDir, s.baseBranch)
   if (sync.status === "conflict") return { status: "sync_conflict", files: sync.files }
-  if (!hasCommitsToIntegrate(s.repoRoot, s.baseBranch, s.sessionBranch)) return { status: "nothing_to_do" }
+  if (!(await hasCommitsToIntegrate(s.repoRoot, s.baseBranch, s.sessionBranch))) return { status: "nothing_to_do" }
 
   let verified: string | null = null
   let red = false
@@ -161,7 +159,7 @@ export async function openPrForSession(s: FinishSession, opts?: FinishOpts, onPr
 
   await progress("Opening PR…")
   const draft = red || !!opts?.draft
-  const drafted = (!opts?.prTitle || !opts?.prBody) ? derivePrText(s.repoRoot, s.baseBranch, s.sessionBranch) : null
+  const drafted = (!opts?.prTitle || !opts?.prBody) ? await derivePrText(s.repoRoot, s.baseBranch, s.sessionBranch) : null
   const title = opts?.prTitle || drafted?.title || s.sessionBranch
   const body = opts?.prBody || drafted?.body || ""
   const pr = openPullRequest(s.worktreeDir, { title, body, base: s.baseBranch, draft })

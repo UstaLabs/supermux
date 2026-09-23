@@ -20,6 +20,7 @@ import io.ktor.http.isSuccess
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.utils.io.readUTF8Line
 import dev.supermux.proto.LayoutNodeDto
@@ -394,6 +395,35 @@ data class ClaudeExtraUsage(
     val currency: String = "",
 )
 
+/** One banked usage-limit reset grant (Claude Code's `/limit-reset`). [endsAtIso] is the use-by date. */
+@Serializable
+data class ClaudeResetGrant(
+    val id: String = "",
+    val label: String = "",
+    val resetsTotal: Int = 0,
+    val resetsLeft: Int = 0,
+    val startsAtIso: String? = null,
+    val endsAtIso: String? = null,
+    /** Limit windows one use refills (five_hour, seven_day, …). */
+    val clears: List<String> = emptyList(),
+    val paused: Boolean = false,
+    val usableNow: Boolean = false,
+    /** true = only usable while at a limit; false = usable any time. */
+    val useRequiresLimit: Boolean = true,
+)
+
+@Serializable
+data class ClaudeResets(
+    val eligible: Boolean = false,
+    val ineligibleReason: String? = null,
+    val atLimit: Boolean = false,
+    val grants: List<ClaudeResetGrant> = emptyList(),
+    /** The grant a redeem spends next; null when none is usable right now. */
+    val nextGrantId: String? = null,
+    val resetsLeft: Int = 0,
+    val cooldownUntilIso: String? = null,
+)
+
 @Serializable
 data class ClaudeUsage(
     val fiveHour: ClaudeWindow = ClaudeWindow(),
@@ -402,6 +432,8 @@ data class ClaudeUsage(
     val sevenDaySonnet: ClaudeWindow? = null,
     val sevenDayFable: ClaudeWindow? = null,
     val extraUsage: ClaudeExtraUsage? = null,
+    /** Banked limit resets; null on an account without the program or an older broker. */
+    val resets: ClaudeResets? = null,
 )
 
 @Serializable
@@ -514,6 +546,18 @@ data class CodexResetResult(
     val code: String = "",
     val windowsReset: Int = 0,
     val codex: CodexUsage? = null,
+)
+
+// Result of redeeming a banked Claude limit reset (POST /usage/claude/reset).
+// `result` ∈ reset | already_used | not_limited | cooldown | ineligible | unavailable |
+// no_reset (broker: nothing usable to spend); `claude` is the refreshed usage.
+@Serializable
+data class ClaudeResetResult(
+    val result: String = "",
+    val reason: String? = null,
+    val resetsLeft: Int? = null,
+    val cleared: List<String> = emptyList(),
+    val claude: ClaudeUsage? = null,
 )
 
 // ─── Git status + finish (chat header) ───────────────────────────────────────
@@ -1548,6 +1592,51 @@ class BrokerApi(
         })
     }
 
+    // ── Worktrees (spec 2026-09-22-explicit-worktree-cleanup) ──────────────
+
+    /** GET /worktrees — every worktree folder; sizes follow as `worktree_sizes` frames. */
+    suspend fun worktrees(): WorktreeListDto = getJson("$httpBase/worktrees")
+
+    /** GET /worktrees/{id}/changes — id is "<slug>/<uuid>": [percentEncode] (RFC 3986, UTF-8)
+     *  makes it ONE path segment, slash included. Same encoding for the worktree query params. */
+    suspend fun worktreeChanges(id: String): WorktreeChangesDto =
+        getJson("$httpBase/worktrees/${percentEncode(id)}/changes")
+
+    /** GET /worktrees/by-workdir — null when the workdir is not an existing worktree (404). */
+    suspend fun worktreeForWorkdir(workdir: String): WorktreeForWorkdirDto? {
+        val resp = http.get("$httpBase/worktrees/by-workdir?path=${percentEncode(workdir)}") { authHeader() }
+        if (resp.status == HttpStatusCode.NotFound) return null
+        return decode(resp)
+    }
+
+    /** DELETE /worktrees {ids} — deletes regardless of changes; refuses live-owned ones per id. */
+    suspend fun deleteWorktrees(ids: List<String>): List<WorktreeDeleteResultDto> {
+        val resp = http.delete("$httpBase/worktrees") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(WorktreeDeleteBody(ids)))
+        }
+        return decode<WorktreeDeleteResponse>(resp).results
+    }
+
+    /** `deleteWorktree=<id>` once per worktree id the archive dialog displayed and the user
+     *  confirmed ("a%2Fb" — the id's slash is encoded). The broker deletes EXACTLY these ids
+     *  after the archive, never ids it derives itself (live owners are still refused per id). */
+    private fun deleteWorktreeQuery(worktreeIds: List<String>): String =
+        worktreeIds.joinToString("&") { "deleteWorktree=${percentEncode(it)}" }
+
+    /** DELETE /sessions/{id}?deleteWorktree=<id>[&deleteWorktree=<id>…] — archive, then delete exactly those worktrees. */
+    suspend fun killAndDeleteWorktree(id: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto> =
+        decode<ArchiveWithWorktreeResponse>(http.delete("$httpBase/sessions/$id?${deleteWorktreeQuery(worktreeIds)}") { authHeader() }).worktree
+
+    /** DELETE /workspaces/{id}?deleteWorktree=<id>[&deleteWorktree=<id>…] */
+    suspend fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto> =
+        decode<ArchiveWithWorktreeResponse>(http.delete("$httpBase/workspaces/$id?${deleteWorktreeQuery(worktreeIds)}") { authHeader() }).worktree
+
+    /** DELETE /workspaces/{wid}/views/{vid}?deleteWorktree=<id>[&deleteWorktree=<id>…] */
+    suspend fun closeViewAndDeleteWorktree(workspaceId: String, viewId: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto> =
+        decode<ArchiveWithWorktreeResponse>(http.delete("$httpBase/workspaces/$workspaceId/views/$viewId?${deleteWorktreeQuery(worktreeIds)}") { authHeader() }).worktree
+
     /** GET /archived-workspaces */
     suspend fun listArchivedWorkspaces(): List<WorkspaceDto> =
         getJson<WorkspacesResponse>("$httpBase/archived-workspaces").workspaces
@@ -2006,6 +2095,10 @@ class BrokerApi(
     /** POST /usage/codex/reset → redeem one banked Codex rate-limit reset. */
     suspend fun redeemCodexReset(): CodexResetResult =
         postReturningJson("$httpBase/usage/codex/reset", EmptyBody())
+
+    /** POST /usage/claude/reset → spend one banked Claude limit reset. */
+    suspend fun redeemClaudeReset(): ClaudeResetResult =
+        postReturningJson("$httpBase/usage/claude/reset", EmptyBody())
 
     /** GET /devices */
     suspend fun devices(): List<DeviceDto> =

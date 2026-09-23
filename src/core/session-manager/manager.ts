@@ -21,8 +21,6 @@ import { AgentKind, isAgentKind } from "../../shared/agents"
 import { isPermissionMode } from "../agents/permission-modes"
 
 import { isDraftSession } from "./supervisor"
-import { isWorktreeReclaimable } from "../worktree/gc"
-import { removeWorktree } from "../worktree/manager"
 import { transformOutbound, parseAddress } from "../routing"
 import { resolveDownloadAttachment, type DownloadableApi } from "./download"
 import { propagateSessionRename } from "../workspace/name"
@@ -350,16 +348,8 @@ export class SessionManager {
     this.recentInbound.clear(s.id)
     this.pendingReapply.clear(s.id)
     // Do NOT delete agent_home — needed for resume
-
-    // Reclaim this session's worktree if it has no unsaved/unmerged work; otherwise
-    // keep it (recoverable). Only on kill — never on suspend.
-    if (s.repo_root && s.session_branch && s.workdir) {
-      if (isWorktreeReclaimable(s.workdir, s.session_branch, s.base_branch || "HEAD")) {
-        await removeWorktree(s.repo_root, s.workdir, s.session_branch).catch(() => {})
-      } else {
-        log.warn("worktree_kept_unclean", { id, workdir: s.workdir })
-      }
-    }
+    // Nor the worktree: cleanup is explicit and user-confirmed only. A worktree
+    // can be shared (Continue-in-new-conversation) and can hold git-ignored work.
   }
 
   unregister(id: string): void {
