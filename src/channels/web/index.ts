@@ -149,7 +149,7 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve }
 }
 
-type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
+type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
 
 export interface SessionSnapshot {
   id?: string
@@ -679,6 +679,23 @@ export class WebChannel implements Channel {
       const terminalId = kind === "agent"
         ? "agent"
         : ((url.searchParams.get("terminal") ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 64) || "main")
+      // NEW TERMINAL vs RECONNECT. `tmux new-session -A` conflated them, which
+      // is how a reconnect to a terminal whose shell had exited came back alive
+      // and empty with the exit never reported. The backend splits creation
+      // from attachment, so the client has to say which it means:
+      //
+      //   ?create=1   a UI "new terminal"
+      //   ?create=0   a reconnect; a missing terminal is an error, never a
+      //               fresh shell
+      //
+      // Omitting it is what every client sends today, and it keeps the old
+      // behaviour by the safest route available: attach first, create only if
+      // there is genuinely nothing there. Plan 4 Task 1 is where the clients
+      // start saying it and this default goes away.
+      const createParam = url.searchParams.get("create")
+      const intent = createParam === null
+        ? undefined
+        : (createParam === "1" || createParam === "true" ? "create" as const : "attach" as const)
       const auth = this.authenticate(req)
       if (!auth.ok) return this.authFailureResponse(auth)
       const dev = auth.device
@@ -708,7 +725,7 @@ export class WebChannel implements Channel {
         if (!agentTarget) return new Response("agent terminal unsupported", { status: 404 })
       }
       const upgraded = server.upgrade(req, {
-        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind, terminalSession: scopeKey, terminalId, terminalAgentTarget: agentTarget } as WSData,
+        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind, terminalSession: scopeKey, terminalId, terminalAgentTarget: agentTarget, terminalIntent: intent } as WSData,
       })
       if (upgraded) return undefined
       return new Response("upgrade failed", { status: 500 })
@@ -802,11 +819,17 @@ export class WebChannel implements Channel {
         rows: 24,
         kind: ws.data.terminalKind ?? "scratch",
         agentTarget: ws.data.terminalAgentTarget,
+        intent: ws.data.terminalIntent,
+        // The backing target re-synchronised (a new replay epoch): everything
+        // drawn so far is void. Same frame the open above sends, so no client
+        // needs to learn anything new to stop drawing over a stale screen.
+        onReset: () => { try { ws.send(JSON.stringify({ type: "reset" })) } catch {} },
         onData: (data) => {
           try { ws.sendBinary(data) } catch {}
-          // Past the high-water mark: hand pumpOutput a promise that resolves on
-          // the socket's `drain`, so we stop pulling pty-helper output (→ tmux
-          // sees a slow client and redraws current state instead of replaying).
+          // Past the high-water mark: return a promise that resolves on the
+          // socket's `drain`. The backend awaits it before handing us more, so
+          // a congested client becomes backpressure on the target rather than
+          // an unbounded queue in the broker.
           if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
             const d = ws.data._termDrain ?? makeDeferred()
             ws.data._termDrain = d
@@ -848,7 +871,7 @@ export class WebChannel implements Channel {
             typeof frame.rows === "number" ? frame.rows : undefined,
           )
         } else if (frame.type === "close") {
-          // Explicit close: destroy the tmux session, then drop the socket.
+          // Explicit close: destroy the backing target, then drop the socket.
           void tm.close(sessionName, terminalId)
           try { ws.close() } catch {}
         }
@@ -864,7 +887,7 @@ export class WebChannel implements Channel {
     // ending — otherwise it would await a drain that never comes.
     const d = ws.data._termDrain
     if (d) { ws.data._termDrain = undefined; d.resolve() }
-    // Socket dropped (reload / nav / network): DETACH — the tmux session lives on.
+    // Socket dropped (reload / nav / network): DETACH — the backing target lives on.
     this.opts.terminalManager?.detach(ws.data.deviceName, ws.data.terminalSession!, ws.data.terminalId!)
   }
 

@@ -3,17 +3,34 @@ import { mkdtempSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { TerminalManager, type TermProc, type SpawnFn } from "../src/core/terminal/manager"
-import type { TmuxRunner } from "../src/core/terminal/tmux-term"
 import type { RuntimeTarget, RuntimeViewer, SessionBackend } from "../src/core/runtime/session-backend"
 import { sessiondTerminalGroup, sessiondTerminalName } from "../src/core/terminal/sessiond-term"
+import {
+  WorkspaceTerminalError,
+  type WorkspaceTerminalBackend,
+  type WorkspaceTerminalEvent,
+  type WorkspaceTerminalKey,
+  type WorkspaceTerminalSummary,
+  type WorkspaceTerminalViewer,
+} from "../src/core/terminal/workspace-backend"
 
-// Hermetic: a fake subprocess + a fake tmux "world" sharing in-memory state, so
-// these tests spawn NOTHING real (no tmux, no shell, no pty-helper) and can't
-// hang the runner on live process handles. Real tmux persistence is covered by
-// the manual smoke test / e2e, not the unit suite.
+// Hermetic: these tests spawn NOTHING real (no zmx, no tmux, no shell, no
+// pty-helper) and cannot hang the runner on live process handles.
+//
+// WORKSPACE terminals are tested against an injected WorkspaceTerminalBackend,
+// because that is now the whole of what the manager does with them: what is
+// worth pinning here is the WIRING — which backend call a UI action turns into,
+// which one a reconnect must NOT turn into, and who the events reach. Whether a
+// backend honours those calls correctly is the shared contract suite's job
+// (src/core/terminal/workspace-backend.contract.ts), run by each backend
+// against itself.
+//
+// AGENT terminals still ride the agent tmux server through pty-helper, so they
+// keep the fake subprocess below.
 
 const STATE = mkdtempSync(join(tmpdir(), "muxterm-test-"))
 const flush = () => new Promise((r) => setTimeout(r, 0))
+const utf8 = (value: Uint8Array) => new TextDecoder().decode(value)
 
 interface FakeProc extends TermProc {
   writes: Uint8Array[]
@@ -41,204 +58,428 @@ function makeFakeProc(): FakeProc {
   }
 }
 
-/** In-memory stand-in for the muxterm tmux server: the fake spawn "creates" a
- * session (mirroring `tmux new-session -A`) and the fake runner queries it. */
-function fakeTmuxWorld() {
-  const sessions = new Map<string, number>()
-  const procs: FakeProc[] = []
-  const calls: string[][] = []
-  let clock = 100
-  const run: TmuxRunner = async (args) => {
-    calls.push(args)
-    const cmd = args[0]
-    const targetOf = () => args[args.indexOf("-t") + 1] ?? ""
-    if (cmd === "list-sessions") {
-      const stdout = [...sessions].map(([n, c]) => `${n}\t${c}`).join("\n")
-      return { code: sessions.size ? 0 : 1, stdout, stderr: sessions.size ? "" : "no server running" }
-    }
-    if (cmd === "has-session") return { code: sessions.has(targetOf()) ? 0 : 1, stdout: "", stderr: "" }
-    if (cmd === "kill-session") { sessions.delete(targetOf()); return { code: 0, stdout: "", stderr: "" } }
-    return { code: 0, stdout: "", stderr: "" }
+// ---------------------------------------------------------------------------
+//  A recording workspace backend: what the manager asked for, and when
+// ---------------------------------------------------------------------------
+
+const keyOf = (key: WorkspaceTerminalKey) => `${key.scope}/${key.terminalId}`
+
+class FakeWorkspaceViewer implements WorkspaceTerminalViewer {
+  writes: string[] = []
+  replies: string[] = []
+  resizes: Array<[number, number]> = []
+  focuses: Array<[boolean, number, number]> = []
+  detached = false
+  constructor(
+    readonly key: WorkspaceTerminalKey,
+    readonly viewerId: string,
+    readonly emit: (event: WorkspaceTerminalEvent) => Promise<void>,
+    private readonly world: FakeWorkspaceBackend,
+  ) {}
+  write(bytes: Uint8Array): boolean {
+    if (this.detached) return false
+    this.writes.push(utf8(bytes))
+    return true
   }
-  const spawn: SpawnFn = (cmd) => {
-    if (cmd.includes("new-session")) {
-      const name = cmd[cmd.indexOf("-s") + 1]!
-      if (!sessions.has(name)) sessions.set(name, clock++)
-    }
-    const p = makeFakeProc()
-    procs.push(p)
-    return p
+  reply(bytes: Uint8Array): boolean {
+    if (this.detached) return false
+    this.replies.push(utf8(bytes))
+    return true
   }
-  return { sessions, procs, calls, run, spawn }
+  async resize(cols: number, rows: number): Promise<void> { this.resizes.push([cols, rows]) }
+  async focus(active: boolean, cols: number, rows: number): Promise<void> {
+    this.focuses.push([active, cols, rows])
+  }
+  async detach(): Promise<void> {
+    this.detached = true
+    this.world.calls.push(`detach ${keyOf(this.key)} ${this.viewerId}`)
+    this.world.live.delete(this)
+  }
 }
 
-function makeMgr(world = fakeTmuxWorld()) {
-  const mgr = new TerminalManager({ stateDir: STATE, socket: "test", run: world.run, spawn: world.spawn })
-  return { mgr, world }
+class FakeWorkspaceBackend implements WorkspaceTerminalBackend {
+  calls: string[] = []
+  targets = new Map<string, number>()
+  live = new Set<FakeWorkspaceViewer>()
+  creates = 0
+  clock = 100
+  attachGate?: Promise<void>
+
+  async ensure(key: WorkspaceTerminalKey): Promise<void> {
+    this.calls.push(`ensure ${keyOf(key)}`)
+    if (this.targets.has(keyOf(key))) return
+    this.creates++
+    this.targets.set(keyOf(key), this.clock++)
+  }
+  async attachExisting(
+    key: WorkspaceTerminalKey,
+    viewerId: string,
+    emit: (event: WorkspaceTerminalEvent) => Promise<void>,
+  ): Promise<WorkspaceTerminalViewer> {
+    this.calls.push(`attach ${keyOf(key)} ${viewerId}`)
+    await this.attachGate
+    if (!this.targets.has(keyOf(key))) {
+      throw new WorkspaceTerminalError("target-not-found", `no workspace terminal ${keyOf(key)}`)
+    }
+    const viewer = new FakeWorkspaceViewer(key, viewerId, emit, this)
+    this.live.add(viewer)
+    return viewer
+  }
+  async list(scope: string): Promise<WorkspaceTerminalSummary[]> {
+    this.calls.push(`list ${scope}`)
+    return [...this.targets]
+      .filter(([id]) => id.startsWith(`${scope}/`))
+      .map(([id, createdAt]) => ({ scope, terminalId: id.slice(scope.length + 1), createdAt }))
+      .sort((a, b) => a.createdAt - b.createdAt)
+  }
+  async exists(key: WorkspaceTerminalKey): Promise<boolean> {
+    return this.targets.has(keyOf(key))
+  }
+  async close(key: WorkspaceTerminalKey): Promise<void> {
+    this.calls.push(`close ${keyOf(key)}`)
+    this.targets.delete(keyOf(key))
+    for (const viewer of [...this.live]) {
+      if (keyOf(viewer.key) === keyOf(key)) { viewer.detached = true; this.live.delete(viewer) }
+    }
+  }
+  async closeScope(scope: string): Promise<void> {
+    this.calls.push(`closeScope ${scope}`)
+    for (const id of [...this.targets.keys()]) {
+      if (id.startsWith(`${scope}/`)) this.targets.delete(id)
+    }
+  }
+  async shutdownViewers(): Promise<void> {
+    this.calls.push("shutdownViewers")
+    for (const viewer of [...this.live]) { viewer.detached = true; this.live.delete(viewer) }
+  }
+
+  viewerFor(scope: string, terminalId: string, viewerId?: string): FakeWorkspaceViewer {
+    const found = [...this.live].find(viewer =>
+      keyOf(viewer.key) === `${scope}/${terminalId}` && (viewerId === undefined || viewer.viewerId === viewerId))
+    if (!found) throw new Error(`no viewer for ${scope}/${terminalId}`)
+    return found
+  }
+}
+
+function makeMgr(workspaceBackend = new FakeWorkspaceBackend()) {
+  const spawned: string[][] = []
+  const mgr = new TerminalManager({
+    stateDir: STATE,
+    workspaceBackend,
+    spawn: (cmd) => { spawned.push(cmd); return makeFakeProc() },
+  })
+  return { mgr, backend: workspaceBackend, spawned }
 }
 
 const baseAttach = { workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} }
 
-describe("TerminalManager (hermetic)", () => {
-  it("attach creates a tmux session; detach keeps it; re-attach reuses it", async () => {
-    const { mgr } = makeMgr()
-    expect((await mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })).ok).toBe(true)
-    expect(mgr.has("d", "s", "t1")).toBe(true)
-    expect(await mgr.hasSession("s", "t1")).toBe(true)
+describe("TerminalManager (workspace terminals)", () => {
+  it("a UI 'new terminal' creates; a reconnect attaches and NEVER creates", async () => {
+    const { mgr, backend } = makeMgr()
+    expect((await mgr.attach({
+      deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create",
+    })).ok).toBe(true)
+    expect(backend.calls).toEqual(["ensure w:one/t1", "attach w:one/t1 d"])
 
-    mgr.detach("d", "s", "t1")
-    expect(mgr.has("d", "s", "t1")).toBe(false)
-    expect(await mgr.hasSession("s", "t1")).toBe(true) // ← persists across detach
-
-    expect((await mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })).ok).toBe(true)
-    expect(mgr.has("d", "s", "t1")).toBe(true)
+    mgr.detach("d", "w:one", "t1")
+    backend.calls.length = 0
+    // `tmux new-session -A` could not tell these apart. This must.
+    expect((await mgr.attach({
+      deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "attach",
+    })).ok).toBe(true)
+    expect(backend.calls).toEqual(["attach w:one/t1 d"])
+    expect(backend.creates).toBe(1)
   })
 
-  it("close destroys the tmux session and viewer", async () => {
-    const { mgr } = makeMgr()
-    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })
-    await mgr.close("s", "t1")
-    expect(mgr.has("d", "s", "t1")).toBe(false)
-    expect(await mgr.hasSession("s", "t1")).toBe(false)
+  it("a reconnect to a terminal whose shell exited is refused, not resurrected", async () => {
+    const { mgr, backend } = makeMgr()
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create" })
+    // The shell ended and the target is gone.
+    await backend.close({ scope: "w:one", terminalId: "t1" })
+
+    const result = await mgr.attach({
+      deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "attach",
+    })
+    expect(result).toEqual({ ok: false, error: "no workspace terminal w:one/t1" })
+    expect(backend.creates).toBe(1)
+    expect(mgr.has("d", "w:one", "t1")).toBe(false)
   })
 
-  it("supports multiple terminals per session and lists them sorted", async () => {
-    const { mgr } = makeMgr()
-    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })
-    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t2", ...baseAttach })
-    const list = await mgr.listForSession("s")
-    expect(list.map((l) => l.id)).toEqual(["t1", "t2"])
-  })
+  it("the legacy intent attaches first and only creates when there is nothing there", async () => {
+    const { mgr, backend } = makeMgr()
+    // No `intent`: what every client sends today.
+    expect((await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach })).ok).toBe(true)
+    expect(backend.calls).toEqual(["attach w:one/t1 d", "ensure w:one/t1", "attach w:one/t1 d"])
 
-  it("killAllForSession clears one session, leaves others", async () => {
-    const { mgr } = makeMgr()
-    mgr.attach({ deviceName: "d", sessionName: "s1", terminalId: "t1", ...baseAttach })
-    mgr.attach({ deviceName: "d", sessionName: "s2", terminalId: "t1", ...baseAttach })
-    await mgr.killAllForSession("s1")
-    expect(await mgr.hasSession("s1", "t1")).toBe(false)
-    expect(await mgr.hasSession("s2", "t1")).toBe(true)
-  })
-
-  it("a natural exit fires onExit; an intentional detach does NOT", async () => {
-    const { mgr, world } = makeMgr()
-    const naturalExits: number[] = []
-    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach, onExit: (c) => { naturalExits.push(c) } })
-    world.procs[0]!.end(0) // shell/tmux ended on its own
+    // A LIVE terminal is attached to, never re-created.
+    mgr.detach("d", "w:one", "t1")
     await flush()
-    expect(naturalExits).toEqual([0])
+    backend.calls.length = 0
+    expect((await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach })).ok).toBe(true)
+    expect(backend.calls).toEqual(["attach w:one/t1 d"])
+    expect(backend.creates).toBe(1)
+  })
+
+  it("detach keeps the target; close destroys it", async () => {
+    const { mgr, backend } = makeMgr()
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create" })
+    expect(mgr.has("d", "w:one", "t1")).toBe(true)
+    expect(await mgr.hasSession("w:one", "t1")).toBe(true)
+
+    mgr.detach("d", "w:one", "t1")
+    expect(mgr.has("d", "w:one", "t1")).toBe(false)
+    expect(await mgr.hasSession("w:one", "t1")).toBe(true) // ← persists across detach
+
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach })
+    await mgr.close("w:one", "t1")
+    expect(mgr.has("d", "w:one", "t1")).toBe(false)
+    expect(await mgr.hasSession("w:one", "t1")).toBe(false)
+  })
+
+  it("lists a scope's terminals from the backend, oldest first", async () => {
+    const { mgr } = makeMgr()
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create" })
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t2", ...baseAttach, intent: "create" })
+    expect((await mgr.listForSession("w:one")).map(entry => entry.id)).toEqual(["t1", "t2"])
+  })
+
+  it("killAllForSession closes exactly that scope", async () => {
+    const { mgr, backend } = makeMgr()
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create" })
+    await mgr.attach({ deviceName: "d", sessionName: "w:two", terminalId: "t1", ...baseAttach, intent: "create" })
+    await mgr.killAllForSession("w:one")
+    expect(backend.calls.at(-1)).toBe("closeScope w:one")
+    expect(await mgr.hasSession("w:one", "t1")).toBe(false)
+    expect(await mgr.hasSession("w:two", "t1")).toBe(true)
+  })
+
+  it("a target exit fires onExit with what the backend knew; a detach does NOT", async () => {
+    const { mgr, backend } = makeMgr()
+    const exits: Array<[number, unknown]> = []
+    await mgr.attach({
+      deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create",
+      onExit: (code, detail) => { exits.push([code, detail]) },
+    })
+    await backend.viewerFor("w:one", "t1").emit({ type: "exit", known: true, code: 3, signal: null })
+    expect(exits).toEqual([[3, { known: true, code: 3, signal: null }]])
+    expect(mgr.has("d", "w:one", "t1")).toBe(false)
 
     const detachExits: number[] = []
-    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t2", ...baseAttach, onExit: (c) => { detachExits.push(c) } })
-    mgr.detach("d", "s", "t2")
-    await flush()
+    await mgr.attach({
+      deviceName: "d", sessionName: "w:one", terminalId: "t2", ...baseAttach, intent: "create",
+      onExit: (code) => { detachExits.push(code) },
+    })
+    const viewer = backend.viewerFor("w:one", "t2")
+    mgr.detach("d", "w:one", "t2")
+    await viewer.emit({ type: "exit", known: true, code: 0, signal: null })
     expect(detachExits).toEqual([]) // detach is intentional → no exit frame
   })
 
-  it("relays viewer output to onData", async () => {
-    const { mgr, world } = makeMgr()
-    let received = ""
-    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach, onData: (d) => { received += new TextDecoder().decode(d) } })
-    world.procs[0]!.emit("hello world")
-    await flush()
-    expect(received).toContain("hello world")
+  it("an unreaped exit reports its uncertainty rather than inventing a clean one", async () => {
+    const { mgr, backend } = makeMgr()
+    const exits: Array<[number, unknown]> = []
+    await mgr.attach({
+      deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create",
+      onExit: (code, detail) => { exits.push([code, detail]) },
+    })
+    await backend.viewerFor("w:one", "t1").emit({ type: "exit", known: false, code: null, signal: null })
+    expect(exits).toEqual([[0, { known: false, code: null, signal: null }]])
   })
 
-  it("backpressure: pauses reading until onData's returned promise resolves", async () => {
-    const { mgr, world } = makeMgr()
+  it("a backend failure reaches onFailure and is never reported as an exit", async () => {
+    const { mgr, backend } = makeMgr()
+    const exits: number[] = []
+    const failures: string[] = []
+    await mgr.attach({
+      deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create",
+      onExit: (code) => { exits.push(code) },
+      onFailure: (reason) => { failures.push(reason) },
+    })
+    await backend.viewerFor("w:one", "t1").emit({
+      type: "failure", code: "backend-unavailable", recoverable: true, message: "zmx helper exited",
+    })
+    expect(failures).toEqual(["zmx helper exited"])
+    expect(exits).toEqual([])
+    expect(await mgr.hasSession("w:one", "t1")).toBe(true)
+  })
+
+  it("a re-synchronising target tells the client to drop what it drew", async () => {
+    const { mgr, backend } = makeMgr()
+    const resets: number[] = []
+    await mgr.attach({
+      deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create",
+      onReset: () => { resets.push(1) },
+    })
+    const viewer = backend.viewerFor("w:one", "t1")
+    await viewer.emit({ type: "reset", epoch: "1" })
+    await viewer.emit({ type: "replay-start", epoch: "1" })
+    await viewer.emit({ type: "replay-end", epoch: "1" })
+    await viewer.emit({ type: "reset", epoch: "2" })
+    expect(resets).toHaveLength(2)
+  })
+
+  it("relays backend output to onData, and onData's promise is the backpressure path", async () => {
+    const { mgr, backend } = makeMgr()
     const received: string[] = []
     let release!: () => void
-    mgr.attach({
-      deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach,
+    await mgr.attach({
+      deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create",
       onData: (d) => {
-        received.push(new TextDecoder().decode(d))
-        // First chunk only: return a pending promise to simulate a congested
-        // socket. pumpOutput must not pull chunk 2 until we release().
+        received.push(utf8(d))
         if (received.length === 1) return new Promise<void>((r) => { release = r })
       },
     })
-    const proc = world.procs[0]!
-    proc.emit("chunk-1")
-    proc.emit("chunk-2")
-    proc.emit("chunk-3")
+    const viewer = backend.viewerFor("w:one", "t1")
+    const first = viewer.emit({ type: "output", bytes: new TextEncoder().encode("chunk-1") })
+    let firstDone = false
+    void first.then(() => { firstDone = true })
     await flush()
-    expect(received).toEqual(["chunk-1"]) // paused: 2 & 3 still buffered upstream
-
+    expect(received).toEqual(["chunk-1"])
+    // The backend is told to wait: emitting is what it awaits before reading more.
+    expect(firstDone).toBe(false)
     release()
-    await flush() // pumpOutput's awaited continuation resumes + drains (microtasks)
-    await flush() // belt-and-suspenders macrotask margin; not load-bearing
-    expect(received).toEqual(["chunk-1", "chunk-2", "chunk-3"]) // resumed, drained
+    await first
+    await viewer.emit({ type: "output", bytes: new TextEncoder().encode("chunk-2") })
+    expect(received).toEqual(["chunk-1", "chunk-2"])
   })
 
-  it("write/resize target the viewer's stdin and reject unknown terminals", () => {
-    const { mgr, world } = makeMgr()
-    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })
-    expect(mgr.write("d", "s", "t1", new TextEncoder().encode("ls\n"))).toBe(true)
-    expect(mgr.resize("d", "s", "t1", 120, 40)).toBe(true)
-    // stdin saw the input plus the NUL-prefixed resize escape
-    const all = world.procs[0]!.writes.map((w) => new TextDecoder().decode(w)).join("")
-    expect(all).toContain("ls\n")
-    expect(all).toContain("R120:40")
-    expect(mgr.write("d", "s", "nope", new TextEncoder().encode("x"))).toBe(false)
-    expect(mgr.resize("d", "s", "nope", 80, 24)).toBe(false)
+  it("write, reply and resize route to the viewer and reject unknown terminals", async () => {
+    const { mgr, backend } = makeMgr()
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create" })
+    const viewer = backend.viewerFor("w:one", "t1")
+    expect(mgr.write("d", "w:one", "t1", new TextEncoder().encode("ls\n"))).toBe(true)
+    expect(mgr.reply("d", "w:one", "t1", new TextEncoder().encode("\x1b[?62c"))).toBe(true)
+    expect(mgr.resize("d", "w:one", "t1", 120, 40)).toBe(true)
+    await flush()
+    // Typing and a query answer stay apart: only the second is owner-gated.
+    expect(viewer.writes).toEqual(["ls\n"])
+    expect(viewer.replies).toEqual(["\x1b[?62c"])
+    expect(viewer.resizes).toEqual([[120, 40]])
+
+    expect(mgr.write("d", "w:one", "nope", new TextEncoder().encode("x"))).toBe(false)
+    expect(mgr.reply("d", "w:one", "nope", new TextEncoder().encode("x"))).toBe(false)
+    expect(mgr.resize("d", "w:one", "nope", 80, 24)).toBe(false)
   })
 
-  it("hands shared size ownership to the newest focused client and restores the prior client", async () => {
-    const { mgr, world } = makeMgr()
-    mgr.attach({ deviceName: "phone", sessionName: "s", terminalId: "t", ...baseAttach })
-    mgr.attach({ deviceName: "desktop", sessionName: "s", terminalId: "t", ...baseAttach })
+  it("focus is the BACKEND's to arbitrate: every claim goes to it, in order", async () => {
+    const { mgr, backend } = makeMgr()
+    await mgr.attach({ deviceName: "phone", sessionName: "w:one", terminalId: "t", ...baseAttach, intent: "create" })
+    await mgr.attach({ deviceName: "desktop", sessionName: "w:one", terminalId: "t", ...baseAttach })
 
-    expect(mgr.focus("phone", "s", "t", true, 52, 24)).toBe(true)
-    expect(mgr.focus("desktop", "s", "t", true, 118, 42)).toBe(true)
-    await flush()
+    expect(mgr.focus("phone", "w:one", "t", true, 52, 24)).toBe(true)
+    expect(mgr.focus("desktop", "w:one", "t", true, 118, 42)).toBe(true)
+    expect(mgr.focus("phone", "w:one", "t", false)).toBe(true)
     await flush()
 
-    const forced = world.calls.filter(call => call[0] === "resize-window")
-    expect(forced.slice(-2).map(call => [call[4], call[6]])).toEqual([["52", "24"], ["118", "42"]])
+    expect(backend.viewerFor("w:one", "t", "phone").focuses).toEqual([[true, 52, 24], [false, 0, 0]])
+    expect(backend.viewerFor("w:one", "t", "desktop").focuses).toEqual([[true, 118, 42]])
 
-    // A still-connected phone may reflow in the background, but it cannot steal
-    // the target from the newer desktop focus claim.
-    const callsBeforeBackgroundResize = world.calls.length
-    expect(mgr.resize("phone", "s", "t", 60, 26)).toBe(true)
+    // A background client may keep reporting layout; whether it lands is the
+    // backend's lease decision, not a second arbitration here.
+    expect(mgr.resize("phone", "w:one", "t", 60, 26)).toBe(true)
     await flush()
-    expect(world.calls.length).toBe(callsBeforeBackgroundResize)
-
-    // Once desktop disappears, the phone's remembered latest geometry resumes.
-    mgr.detach("desktop", "s", "t")
-    await flush()
-    await flush()
-    const fallback = world.calls.filter(call => call[0] === "resize-window").at(-1)!
-    expect([fallback[4], fallback[6]]).toEqual(["60", "26"])
-
-    mgr.detach("phone", "s", "t")
-    await flush()
-    await flush()
-    expect(world.calls.at(-1)).toEqual([
-      "set-window-option", "-t", expect.any(String), "window-size", "latest",
-    ])
+    expect(backend.viewerFor("w:one", "t", "phone").resizes).toEqual([[60, 26]])
   })
 
-  it("shutdown detaches all viewers without destroying tmux sessions", async () => {
+  it("a focus claim with no usable geometry is refused", async () => {
     const { mgr } = makeMgr()
-    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })
-    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t2", ...baseAttach })
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t", ...baseAttach, intent: "create" })
+    expect(mgr.focus("d", "w:one", "t", true)).toBe(false)
+    expect(mgr.focus("d", "w:one", "t", true, 0, 24)).toBe(false)
+  })
+
+  it("a second attach for one key replaces the first viewer", async () => {
+    const { mgr, backend } = makeMgr()
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t", ...baseAttach, intent: "create" })
+    const first = backend.viewerFor("w:one", "t")
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t", ...baseAttach })
+    await flush()
+    expect(first.detached).toBe(true)
+    expect(mgr.has("d", "w:one", "t")).toBe(true)
+    expect(backend.live.size).toBe(1)
+  })
+
+  it("a superseded in-flight attach drops its late viewer and reports the replacement", async () => {
+    const backend = new FakeWorkspaceBackend()
+    await backend.ensure({ scope: "w:one", terminalId: "t" })
+    const { mgr } = makeMgr(backend)
+    let release!: () => void
+    backend.attachGate = new Promise<void>(resolve => { release = resolve })
+
+    const first = mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t", ...baseAttach, intent: "attach" })
+    const second = mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t", ...baseAttach, intent: "attach" })
+    release()
+    const [firstResult, secondResult] = await Promise.all([first, second])
+    expect(firstResult.ok).toBe(false)
+    expect(secondResult.ok).toBe(true)
+    expect(backend.live.size).toBe(1)
+    expect(mgr.has("d", "w:one", "t")).toBe(true)
+  })
+
+  it("a close racing an attach leaves no viewer and no target", async () => {
+    const backend = new FakeWorkspaceBackend()
+    await backend.ensure({ scope: "w:one", terminalId: "t" })
+    const { mgr } = makeMgr(backend)
+    let release!: () => void
+    backend.attachGate = new Promise<void>(resolve => { release = resolve })
+
+    const attaching = mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t", ...baseAttach, intent: "attach" })
+    await flush()
+    await mgr.close("w:one", "t")
+    release()
+    expect((await attaching).ok).toBe(false)
+    expect(mgr.has("d", "w:one", "t")).toBe(false)
+    expect(backend.live.size).toBe(0)
+    expect(await mgr.hasSession("w:one", "t")).toBe(false)
+  })
+
+  it("shutdown detaches every viewer and destroys nothing", async () => {
+    const { mgr, backend } = makeMgr()
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create" })
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t2", ...baseAttach, intent: "create" })
     expect(mgr.count()).toBe(2)
     mgr.shutdown()
+    await flush()
     expect(mgr.count()).toBe(0)
-    expect(await mgr.hasSession("s", "t1")).toBe(true) // tmux sessions survive a broker stop
+    expect(backend.live.size).toBe(0)
+    // The targets outlive the broker; that is the whole point of them.
+    expect(await mgr.hasSession("w:one", "t1")).toBe(true)
   })
 
-  it("agent kind: attach builds a grouped-viewer argv; detach kills the viewer, not the agent", async () => {
-    const { viewerSessionName } = await import("../src/core/terminal/agent-tmux")
+  it("a device disconnect detaches only its own viewers", async () => {
+    const { mgr, backend } = makeMgr()
+    await mgr.attach({ deviceName: "phone", sessionName: "w:one", terminalId: "t", ...baseAttach, intent: "create" })
+    await mgr.attach({ deviceName: "desktop", sessionName: "w:one", terminalId: "t", ...baseAttach })
+    mgr.detachAllForDevice("phone")
+    await flush()
+    expect(mgr.has("phone", "w:one", "t")).toBe(false)
+    expect(mgr.has("desktop", "w:one", "t")).toBe(true)
+    expect(await mgr.hasSession("w:one", "t")).toBe(true)
+  })
+
+  it("a workspace terminal never spawns a broker child", async () => {
+    const { mgr, spawned } = makeMgr()
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t", ...baseAttach, intent: "create" })
+    expect(spawned).toEqual([])
+  })
+})
+
+describe("TerminalManager (agent terminals on tmux)", () => {
+  function makeAgentMgr() {
     const spawnedArgs: string[][] = []
-    const spawn = (cmd: string[]): TermProc => { spawnedArgs.push(cmd); return makeFakeProc() }
     const agentCalls: string[][] = []
     const mgr = new TerminalManager({
       stateDir: STATE,
-      socket: "test",
-      run: async () => ({ code: 0, stdout: "", stderr: "" }),
-      spawn,
+      workspaceBackend: new FakeWorkspaceBackend(),
+      spawn: (cmd: string[]): TermProc => { spawnedArgs.push(cmd); return makeFakeProc() },
       agentRun: async (a) => { agentCalls.push(a); return { code: 0, stdout: "", stderr: "" } },
     })
+    return { mgr, spawnedArgs, agentCalls }
+  }
+
+  it("attach builds a grouped-viewer argv; detach kills the viewer, not the agent", async () => {
+    const { viewerSessionName } = await import("../src/core/terminal/agent-tmux")
+    const { mgr, spawnedArgs, agentCalls } = makeAgentMgr()
 
     const r = await mgr.attach({
       deviceName: "d", sessionName: "s", terminalId: "agent",
@@ -262,16 +503,13 @@ describe("TerminalManager (hermetic)", () => {
     expect(kills.flat()).not.toContain("mux:s")
   })
 
-  it("agent kind: close destroys the grouped viewer, not the agent", async () => {
+  it("close destroys the grouped viewer, not the agent", async () => {
     const { viewerSessionName } = await import("../src/core/terminal/agent-tmux")
-    const agentCalls: string[][] = []
-    const mgr = new TerminalManager({
-      stateDir: STATE, socket: "test",
-      run: async () => ({ code: 0, stdout: "", stderr: "" }),
-      spawn: () => makeFakeProc(),
-      agentRun: async (a) => { agentCalls.push(a); return { code: 0, stdout: "", stderr: "" } },
+    const { mgr, agentCalls } = makeAgentMgr()
+    await mgr.attach({
+      deviceName: "d", sessionName: "s", terminalId: "agent", ...baseAttach,
+      kind: "agent", agentTarget: "mux:s",
     })
-    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "agent", ...baseAttach, kind: "agent", agentTarget: "mux:s" })
     await mgr.close("s", "agent")
     await flush()
     const kills = agentCalls.filter((c) => c[0] === "kill-session")
@@ -279,18 +517,115 @@ describe("TerminalManager (hermetic)", () => {
     expect(kills[0]![2]).toBe(viewerSessionName("d", "mux:s"))
   })
 
-  it("scratch detach does NOT call killViewer (agent cleanup is agent-only)", async () => {
-    const agentCalls: string[][] = []
-    const mgr = new TerminalManager({
-      stateDir: STATE, socket: "test",
-      run: async () => ({ code: 0, stdout: "", stderr: "" }),
-      spawn: () => makeFakeProc(),
-      agentRun: async (a) => { agentCalls.push(a); return { code: 0, stdout: "", stderr: "" } },
-    })
-    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })
-    mgr.detach("d", "s", "t1")
+  it("a missing agentTarget is refused rather than guessed at", async () => {
+    const { mgr } = makeAgentMgr()
+    expect(await mgr.attach({
+      deviceName: "d", sessionName: "s", terminalId: "agent", ...baseAttach, kind: "agent",
+    })).toEqual({ ok: false, error: "agentTarget is required for kind=agent" })
+  })
+
+  it("a workspace detach does NOT call killViewer (agent cleanup is agent-only)", async () => {
+    const { mgr, agentCalls } = makeAgentMgr()
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create" })
+    mgr.detach("d", "w:one", "t1")
     await flush()
     expect(agentCalls.flat()).not.toContain("kill-session")
+  })
+
+  it("focus arbitration is the manager's for agents: the newest claim sizes the window", async () => {
+    const { mgr, agentCalls } = makeAgentMgr()
+    await mgr.attach({
+      deviceName: "phone", sessionName: "s", terminalId: "agent", ...baseAttach,
+      kind: "agent", agentTarget: "mux:s",
+    })
+    await mgr.attach({
+      deviceName: "desktop", sessionName: "s", terminalId: "agent", ...baseAttach,
+      kind: "agent", agentTarget: "mux:s",
+    })
+    expect(mgr.focus("phone", "s", "agent", true, 52, 24)).toBe(true)
+    expect(mgr.focus("desktop", "s", "agent", true, 118, 42)).toBe(true)
+    await flush()
+    await flush()
+
+    const forced = agentCalls.filter(call => call[0] === "resize-window")
+    expect(forced.slice(-2).map(call => [call[4], call[6]])).toEqual([["52", "24"], ["118", "42"]])
+
+    // A still-connected phone may reflow in the background, but it cannot steal
+    // the window from the newer desktop focus claim.
+    const before = agentCalls.length
+    expect(mgr.resize("phone", "s", "agent", 60, 26)).toBe(true)
+    await flush()
+    expect(agentCalls.length).toBe(before)
+
+    // Once desktop disappears, the phone's remembered latest geometry resumes.
+    mgr.detach("desktop", "s", "agent")
+    await flush()
+    await flush()
+    const fallback = agentCalls.filter(call => call[0] === "resize-window").at(-1)!
+    expect([fallback[4], fallback[6]]).toEqual(["60", "26"])
+
+    mgr.detach("phone", "s", "agent")
+    await flush()
+    await flush()
+    expect(agentCalls.filter(call => call[0] === "set-window-option").at(-1)).toEqual([
+      "set-window-option", "-t", expect.any(String), "window-size", "latest",
+    ])
+  })
+
+  it("a natural agent viewer exit fires onExit; an intentional detach does NOT", async () => {
+    const procs: FakeProc[] = []
+    const agentCalls: string[][] = []
+    const mgr = new TerminalManager({
+      stateDir: STATE,
+      workspaceBackend: new FakeWorkspaceBackend(),
+      spawn: () => { const p = makeFakeProc(); procs.push(p); return p },
+      agentRun: async (a) => { agentCalls.push(a); return { code: 0, stdout: "", stderr: "" } },
+    })
+    const naturalExits: number[] = []
+    await mgr.attach({
+      deviceName: "d", sessionName: "s", terminalId: "agent", ...baseAttach,
+      kind: "agent", agentTarget: "mux:s", onExit: (c) => { naturalExits.push(c) },
+    })
+    procs[0]!.end(0)
+    await flush()
+    expect(naturalExits).toEqual([0])
+  })
+
+  it("relays agent viewer output to onData", async () => {
+    const procs: FakeProc[] = []
+    const mgr = new TerminalManager({
+      stateDir: STATE,
+      workspaceBackend: new FakeWorkspaceBackend(),
+      spawn: () => { const p = makeFakeProc(); procs.push(p); return p },
+      agentRun: async () => ({ code: 0, stdout: "", stderr: "" }),
+    })
+    let received = ""
+    await mgr.attach({
+      deviceName: "d", sessionName: "s", terminalId: "agent", ...baseAttach,
+      kind: "agent", agentTarget: "mux:s", onData: (d) => { received += utf8(d) },
+    })
+    procs[0]!.emit("hello world")
+    await flush()
+    expect(received).toContain("hello world")
+  })
+
+  it("agent writes and resizes reach the viewer process stdin", async () => {
+    const procs: FakeProc[] = []
+    const mgr = new TerminalManager({
+      stateDir: STATE,
+      workspaceBackend: new FakeWorkspaceBackend(),
+      spawn: () => { const p = makeFakeProc(); procs.push(p); return p },
+      agentRun: async () => ({ code: 0, stdout: "", stderr: "" }),
+    })
+    await mgr.attach({
+      deviceName: "d", sessionName: "s", terminalId: "agent", ...baseAttach,
+      kind: "agent", agentTarget: "mux:s",
+    })
+    expect(mgr.write("d", "s", "agent", new TextEncoder().encode("ls\n"))).toBe(true)
+    expect(mgr.resize("d", "s", "agent", 120, 40)).toBe(true)
+    const all = procs[0]!.writes.map(utf8).join("")
+    expect(all).toContain("ls\n")
+    expect(all).toContain("R120:40")
   })
 })
 
@@ -368,8 +703,13 @@ function makeWindowsMgr(backend = new ManagerBackend(), spawn?: SpawnFn) {
   }
 }
 
+// Windows lifecycle regressions. A workspace terminal here goes through
+// SessiondWorkspaceBackend (ConPTY + @xterm/headless, NOT zmx); an agent pane
+// still goes through createSessiondTerm, because an agent target belongs to
+// whoever started it. None of this is runtime-verified: there is no Windows
+// host in this environment, so these pin the contract, not the platform.
 describe("TerminalManager (Windows sessiond)", () => {
-  it("selects SessiondTerm without touching pty-helper and detaches without killing scratch", async () => {
+  it("runs a workspace terminal on sessiond without touching pty-helper, and detaches without killing it", async () => {
     let spawnCalls = 0
     const { mgr, backend } = makeWindowsMgr(undefined, () => { spawnCalls++; throw new Error("must not spawn") })
     expect((await mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t", ...baseAttach })).ok).toBe(true)
