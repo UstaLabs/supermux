@@ -42,6 +42,10 @@ class HostBinariesTest {
         assertEquals("frpc", HostBinaries.fileName(Binary.Frpc, Os.LINUX))
         assertEquals("frpc.exe", HostBinaries.fileName(Binary.Frpc, Os.WINDOWS))
         assertEquals("tmux", HostBinaries.fileName(Binary.Tmux, Os.MAC))
+        // The zmx bundle is staged flat and never suffixed: it exists on POSIX only.
+        assertEquals("zmx", HostBinaries.fileName(Binary.Zmx, Os.LINUX))
+        assertEquals("mux-zmx-helper", HostBinaries.fileName(Binary.ZmxHelper, Os.MAC))
+        assertEquals("zmx-manifest.json", HostBinaries.fileName(Binary.ZmxManifest, Os.LINUX))
     }
 
     // ── isBundled: Windows is client-only (frpc only, for when it later hosts) ────────
@@ -53,7 +57,16 @@ class HostBinariesTest {
             assertTrue(HostBinaries.isBundled(Binary.Tmux, os))
             assertTrue(HostBinaries.isBundled(Binary.Frpc, os))
             assertFalse(HostBinaries.isBundled(Binary.Sessiond, os))
+            // Workspace terminals: the pinned zmx daemon, its framed helper, their manifest.
+            assertTrue(HostBinaries.isBundled(Binary.Zmx, os))
+            assertTrue(HostBinaries.isBundled(Binary.ZmxHelper, os))
+            assertTrue(HostBinaries.isBundled(Binary.ZmxManifest, os))
         }
+        // Windows persistent terminals are sessiond's; a zmx in the MSI would be a second
+        // backend claiming the same workspaces.
+        assertFalse(HostBinaries.isBundled(Binary.Zmx, Os.WINDOWS))
+        assertFalse(HostBinaries.isBundled(Binary.ZmxHelper, Os.WINDOWS))
+        assertFalse(HostBinaries.isBundled(Binary.ZmxManifest, Os.WINDOWS))
         // Windows: the native broker uses sessiond instead of tmux.
         assertTrue(HostBinaries.isBundled(Binary.Broker, Os.WINDOWS))
         assertTrue(HostBinaries.isBundled(Binary.Sessiond, Os.WINDOWS))
@@ -144,6 +157,46 @@ class HostBinariesTest {
         assertEquals(bins.binDir, bins.sessiondPath.parent)
         assertEquals(bins.binDir, bins.frpcPath.parent)
         assertNull(bins.tmuxPath, "native Windows uses sessiond, never tmux")
+        assertNull(bins.zmxDir, "native Windows uses sessiond, never zmx")
+    }
+
+    // ── the zmx bundle: three flat slots become the layout the broker verifies ────────
+
+    @Test fun resolvePackagedRebuildsTheZmxBundleLayout() {
+        val resDir = tmp()
+        Files.writeString(resDir.resolve("supermux-broker"), "broker")
+        Files.writeString(resDir.resolve("zmx"), "zmx-daemon-bytes")
+        Files.writeString(resDir.resolve("mux-zmx-helper"), "helper-bytes")
+        Files.writeString(resDir.resolve("zmx-manifest.json"), """{"schema":1,"abi":1}""")
+        val stateDir = tmp()
+
+        val bins = HostBinaries.resolve(stateDir = stateDir, os = Os.LINUX, resourcesDir = resDir, onPath = { null })
+
+        val zmxDir = assertNotNull(bins.zmxDir, "a staged bundle must resolve to a directory")
+        // Exactly the shape src/core/terminal/zmx/helper.ts reads: bin/<two binaries> + manifest.json.
+        assertEquals("zmx-daemon-bytes", Files.readString(zmxDir.resolve("bin/zmx")))
+        assertEquals("helper-bytes", Files.readString(zmxDir.resolve("bin/mux-zmx-helper")))
+        assertTrue(Files.readString(zmxDir.resolve("manifest.json")).contains("\"abi\":1"))
+        assertTrue(Files.isExecutable(zmxDir.resolve("bin/zmx")), "the daemon must keep its exec bit")
+        assertTrue(Files.isExecutable(zmxDir.resolve("bin/mux-zmx-helper")), "the helper must keep its exec bit")
+        // And it is NOT on PATH: the bin dir the broker's PATH gets holds no zmx.
+        assertNotNull(bins.binDir)
+        assertFalse(Files.exists(bins.binDir.resolve("zmx")), "zmx must never be PATH-resolvable")
+        assertFalse(bins.binDir.startsWith(zmxDir), "the bundle lives outside the PATH bin dir")
+    }
+
+    @Test fun anIncompleteZmxBundleResolvesToNothing() {
+        // A manifest without its binaries is not a degraded bundle — it is a description of
+        // something that is not there, and the broker would fail its hash check at the first
+        // attach with an error nobody can act on.
+        val resDir = tmp()
+        Files.writeString(resDir.resolve("supermux-broker"), "broker")
+        Files.writeString(resDir.resolve("zmx"), "zmx-daemon-bytes")
+        Files.writeString(resDir.resolve("zmx-manifest.json"), """{"schema":1}""")
+        // mux-zmx-helper deliberately absent.
+        val bins = HostBinaries.resolve(stateDir = tmp(), os = Os.LINUX, resourcesDir = resDir, onPath = { null })
+        assertNull(bins.zmxDir, "two of three files is no bundle")
+        assertNotNull(bins.brokerPath, "the rest of the image still resolves")
     }
 
     // ── resolve PACKAGED tolerates an unfilled slot (e.g. tmux the packager didn't stage) ─
