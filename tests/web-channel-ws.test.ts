@@ -494,3 +494,53 @@ test("legacy resize/focus geometry is bounded, exactly like revision 2's", async
   expect(focusCalls).toEqual([[undefined, undefined]])
   ws.close()
 })
+
+// The CSRF guard exempts websockets, and this socket now replays a target's
+// FULL SCROLLBACK on attach — so one socket opened by page JS on any origin the
+// cookie reaches reads back everything the user has typed. The mutating HTTP
+// routes have had an Origin check all along; the terminal upgrade did not.
+test("/ws/term is Origin-checked: the app's own origin connects, another site does not", async () => {
+  const attachCalls: any[] = []
+  await ch.stop()
+  ch = new WebChannel({
+    port: PORT,
+    devicesFile: DEV_PATH,
+    publicUrl: "http://127.0.0.1:" + PORT,
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getSessionWorkdir: () => "/w",
+    terminalManager: {
+      attach: (o: any) => { attachCalls.push(o); return { ok: true } },
+      detach: () => {},
+    } as any,
+  })
+  await ch.start()
+
+  const open = (headers: Record<string, string>) => new Promise<string>((resolve) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch`, { headers })
+    ws.onopen = () => { ws.close(); resolve("open") }
+    ws.onerror = () => resolve("refused")
+    setTimeout(() => resolve("timeout"), 2000)
+  })
+
+  const cookie = { Cookie: `cmux_token=${token}` }
+  // The PWA: a cookie and the broker's own origin.
+  expect(await open({ ...cookie, Origin: `http://127.0.0.1:${PORT}` })).toBe("open")
+  // A page on the broker's origin in SUBDOMAIN proxy mode, or any other site:
+  // the Lax cookie may still be attached, and the socket is refused anyway.
+  expect(await open({ ...cookie, Origin: "http://evil.example" })).toBe("refused")
+  expect(await open({ ...cookie, Origin: `http://slug.127.0.0.1:${PORT}` })).toBe("refused")
+  // A NATIVE client: bearer auth, no ambient cookie, and — as every non-browser
+  // WebSocket client does — no Origin header at all. A browser cannot reach
+  // this branch; it is required to send Origin on a handshake it opens.
+  expect(await open({ Authorization: `Bearer ${token}` })).toBe("open")
+  // Belt and braces: a cookie client that somehow sends no Origin is still
+  // allowed, matching `sameOriginOk` exactly rather than inventing a stricter
+  // rule for this one route.
+  expect(await open(cookie)).toBe("open")
+
+  // Only the three accepted sockets ever reached the manager.
+  expect(attachCalls.length).toBe(3)
+})

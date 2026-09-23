@@ -735,6 +735,38 @@ export class WebChannel implements Channel {
       if (!auth.ok) return this.authFailureResponse(auth)
       const dev = auth.device
 
+      // ORIGIN. The CSRF guard in `routeRequest` exempts websockets — "GET/WS
+      // are exempt" — which was defensible when this socket carried a live
+      // screen and no history. It does not carry a live screen and no history
+      // any more: a revision-2 attach opens with the target's FULL SCROLLBACK
+      // replayed (measured at ~797 KB against ~6.9 KB before), so one socket
+      // opened by page JS reads back everything the user has typed and
+      // everything their shell has printed.
+      //
+      // The same rule the mutating HTTP routes use, for the same reason and
+      // with the same two exemptions:
+      //
+      //   * BEARER-AUTHED CLIENTS ARE SKIPPED. The native apps authenticate
+      //     with `Authorization: Bearer` (`KtorTerminalTransport`), carry no
+      //     ambient cookie, and there is nothing for a third party to ride.
+      //   * A MISSING `Origin` IS ALLOWED, and here that is not the soft
+      //     judgement it is for HTTP: a browser is REQUIRED to send `Origin`
+      //     on a WebSocket handshake it opens (WHATWG WebSocket, step 10), so
+      //     no header means no browser, which means no ambient cookie. The
+      //     desktop and mobile clients are the ones that land here.
+      //
+      // WHAT THIS DOES NOT CLOSE, said plainly. In PATH proxy mode the broker
+      // serves arbitrary proxied content at `/p/<slug>/…` on its OWN origin,
+      // so JS in a proxied page sends an `Origin` that matches by construction
+      // and this check waves it through. Subdomain mode is different — the
+      // proxied page is on `<slug>.<base>`, which is not the app origin, so it
+      // is rejected here even though the `Domain=.<base>` cookie is attached.
+      // Closing the path-mode case means giving proxied content an origin of
+      // its own, which is a structural change and not this one.
+      if (!authedViaBearer(req) && !sameOriginOk(req, this.opts.publicUrl, this.getRelayUrl?.())) {
+        return new Response("bad origin", { status: 403 })
+      }
+
       if (sessionName && workspaceId) {
         return new Response("pass session or workspace, not both", { status: 400 })
       }
