@@ -4,6 +4,7 @@
 // this same instance to surface progress via setState() and to read the last
 // good manifest via latestManifest().
 import {
+  channelFor,
   compareVersions,
   isUpdateAvailable,
   parseVersionsJson,
@@ -182,8 +183,9 @@ export class UpdateChecker {
     this.manifest = parsed.data
     const etag = res.headers.get("etag")
     if (etag) this.lastEtag = etag
-    this.latest = parsed.data.channels.stable.version
-    this.notesUrl = parsed.data.channels.stable.notesUrl
+    const channel = channelFor(parsed.data, this.currentVersion)
+    this.latest = channel.version
+    this.notesUrl = channel.notesUrl
     this.lastError = null
   }
 

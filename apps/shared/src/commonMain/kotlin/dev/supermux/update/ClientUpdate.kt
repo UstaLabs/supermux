@@ -57,6 +57,8 @@ data class ChannelInfo(
 @Serializable
 data class ChannelsWrapper(
     val stable: ChannelInfo = ChannelInfo(),
+    /** Opt-in prerelease train (vX.Y.Z-alpha.N tags); absent until the first alpha ships. */
+    val alpha: ChannelInfo? = null,
 )
 
 @Serializable
@@ -148,8 +150,42 @@ fun compareVersions(a: String, b: String): Int {
     if (pa.prerelease == null && pb.prerelease == null) return 0
     if (pa.prerelease == null) return 1
     if (pb.prerelease == null) return -1
-    return pa.prerelease.compareTo(pb.prerelease)
+    return comparePrerelease(pa.prerelease, pb.prerelease)
 }
+
+/**
+ * semver §11: dot-separated identifiers, numeric ones compared as numbers (alpha.2 < alpha.10),
+ * numeric below alphanumeric, and a shorter list below a longer one it prefixes.
+ */
+private fun comparePrerelease(a: String, b: String): Int {
+    val xs = a.split('.')
+    val ys = b.split('.')
+    for (i in 0 until minOf(xs.size, ys.size)) {
+        val x = xs[i]
+        val y = ys[i]
+        val xn = x.toLongOrNull()?.takeIf { x.all(Char::isDigit) }
+        val yn = y.toLongOrNull()?.takeIf { y.all(Char::isDigit) }
+        val cmp = when {
+            xn != null && yn != null -> xn.compareTo(yn)
+            xn != null -> -1
+            yn != null -> 1
+            else -> x.compareTo(y)
+        }
+        if (cmp != 0) return if (cmp < 0) -1 else 1
+    }
+    return xs.size.compareTo(ys.size).coerceIn(-1, 1)
+}
+
+/** Does [version] carry a prerelease suffix (0.12.0-alpha.1)? False for "dev"/unparseable. */
+fun isPrerelease(version: String): Boolean = parseVersion(version)?.prerelease != null
+
+/**
+ * The channel a build follows, decided by its OWN version: a prerelease build follows
+ * `channels.alpha`, everything else follows `channels.stable`. Opting in to the alpha is
+ * installing an alpha build; a stable build can never be offered one.
+ */
+fun VersionsManifest.channelFor(currentVersion: String): ChannelInfo =
+    channels.alpha?.takeIf { isPrerelease(currentVersion) } ?: channels.stable
 
 /**
  * Is [latest] strictly newer than [current]?
@@ -165,8 +201,8 @@ fun isUpdateAvailable(current: String, latest: String): Boolean {
 /**
  * Fetch versions.json (GitHub fallback) and decide whether a client update is available.
  *
- * Comparison prefers client-specific marketing versions from `channels.stable.clients`
- * when present; otherwise falls back to the release tag (`channels.stable.version`).
+ * Comparison prefers client-specific marketing versions from the build's channel (`channelFor`) `clients`
+ * when present; otherwise falls back to that channel's release tag.
  * Android also compares [currentVersionCode] against `clients.android.versionCode` when both set.
  */
 class ClientUpdateChecker(
@@ -228,14 +264,14 @@ class ClientUpdateChecker(
             resp.bodyAsText()
         }
         val manifest = json.decodeFromString(VersionsManifest.serializer(), text)
-        val stable = manifest.channels.stable
-        val clientInfo = clientInfoFor(platform, stable.clients)
+        val channel = manifest.channelFor(currentVersion)
+        val clientInfo = clientInfoFor(platform, channel.clients)
         val latestVersion = clientInfo?.version?.takeIf { it.isNotBlank() }
-            ?: stable.version.takeIf { it.isNotBlank() }
+            ?: channel.version.takeIf { it.isNotBlank() }
         val latestCode = clientInfo?.versionCode
         val latestBuild = clientInfo?.build
         val assetKey = platform.assetKey()
-        val asset = if (assetKey.isNotEmpty()) stable.assets[assetKey] else null
+        val asset = if (assetKey.isNotEmpty()) channel.assets[assetKey] else null
         val available = computeAvailable(
             platform = platform,
             currentVersion = currentVersion,
@@ -251,7 +287,7 @@ class ClientUpdateChecker(
             latestVersion = latestVersion,
             latestVersionCode = latestCode,
             updateAvailable = available,
-            notesUrl = stable.notesUrl.ifBlank { null },
+            notesUrl = channel.notesUrl.ifBlank { null },
             downloadUrl = asset?.url?.ifBlank { null },
             sha256 = asset?.sha256?.ifBlank { null },
             canInstall = platform.canSideloadInstall() && !asset?.url.isNullOrBlank(),

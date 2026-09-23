@@ -197,6 +197,10 @@ jobs:
       # compileSdk 37 (forced by Compose Multiplatform 1.12's androidx AAR metadata). android-37.0
       # is only published on the sdkmanager BETA channel today, hence --channel=1.
       - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
       - name: Install Android SDK packages
         run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
 
@@ -278,6 +282,10 @@ jobs:
       # compileSdk 37 (forced by Compose Multiplatform 1.12's androidx AAR metadata). android-37.0
       # is only published on the sdkmanager BETA channel today, hence --channel=1.
       - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
       - name: Install Android SDK packages
         run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
       - run: bun install --frozen-lockfile

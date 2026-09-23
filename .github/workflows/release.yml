@@ -3,6 +3,13 @@
 # image, GitHub Release with checksums, versions.json + pinned compose pushed
 # to supermux-website (skipped if the WEBSITE_PUSH_TOKEN secret is absent).
 # workflow_dispatch = dry run: builds + smokes everything, publishes nothing.
+#
+# The TAG picks the release channel (see the `classify` job):
+#   vX.Y.Z          stable, cut from main — everything above.
+#   vX.Y.Z-alpha.N  alpha, cut from dev — a GitHub PRE-release, docker `:alpha`, and ONLY
+#                   channels.alpha in versions.json. It never touches what a stable install
+#                   reads (channels.stable, releases/latest, docker :latest, the pinned compose),
+#                   so nobody on stable is ever prompted to install an alpha.
 name: release
 on:
   push:
@@ -18,6 +25,32 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  classify:
+    # Tag → channel, and the guard that each channel is cut from its own branch. Everything that
+    # PUBLISHES (docker, release, publish-website) needs this job, so a mis-cut tag ships nothing.
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.c.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Classify tag + check its branch
+        id: c
+        run: |
+          # A prerelease suffix (v0.12.0-alpha.1) means alpha; a dry run has no tag at all.
+          case "${GITHUB_REF_NAME}" in
+            v*-*) CHANNEL=alpha; BRANCH=dev ;;
+            *) CHANNEL=stable; BRANCH=main ;;
+          esac
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL"
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then exit 0; fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$BRANCH"; then
+            echo "::error::${GITHUB_REF_NAME} is on the $CHANNEL channel but its commit is not on origin/$BRANCH"
+            exit 1
+          fi
+
   build-binaries:
     strategy:
       fail-fast: false   # one arch failing must not cancel the other's evidence
@@ -111,6 +144,7 @@ jobs:
         run: scripts/test-update-flow.sh
 
   docker:
+    needs: classify
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -130,9 +164,14 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/supermux
+          # latest=false: by default the action ALSO tags `latest` for any git tag, which put
+          # v0.12.0-alpha.1 on :latest. The only `latest` is the explicit stable-only line below.
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=tag
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && needs.classify.outputs.channel == 'stable' }}
+            type=raw,value=alpha,enable=${{ github.ref_type == 'tag' && needs.classify.outputs.channel == 'alpha' }}
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -174,6 +213,10 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
       - name: Install SDK packages
         run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
       - name: Resolve Android client version
@@ -277,7 +320,7 @@ jobs:
         # and the host falls back to a system tmux on $PATH.
         run: ../scripts/stage-desktop-binaries.sh linux-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Build .deb
-        run: ./gradlew :desktop:packageDeb --console=plain --no-daemon
+        run: ./gradlew :desktop:packageDeb --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
       - name: Stage .deb + checksum
         run: |
           mkdir -p ../dist
@@ -359,7 +402,7 @@ jobs:
             if ($helper.Length -le 0) { throw "empty host helper: $($helper.FullName)" }
           }
       - name: Build distributable image and .msi
-        run: ./gradlew.bat :desktop:createDistributable :desktop:packageMsi --console=plain --no-daemon
+        run: ./gradlew.bat :desktop:createDistributable :desktop:packageMsi --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
       - name: Assert packaged host helpers
         shell: pwsh
         run: |
@@ -467,15 +510,32 @@ jobs:
           # not SHA-1 — opposite of raw codesign against a non-default keychain.
           security list-keychains -d user -s "$KEYCHAIN"
           echo "MACOS_COMPOSE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+      - name: Sign host helper binaries
+        # jpackage copies these into Contents/app/resources as plain files, and Compose's signing
+        # pass does not reach them — Apple then rejects the DMG (unsigned, no hardened runtime, no
+        # secure timestamp). Sign them where they are staged, before packaging; the app signature
+        # that follows seals them. Same recipe the retired SwiftUI Mac lane shipped with.
+        if: steps.signing.outputs.have == '1'
+        working-directory: .
+        run: |
+          # Raw codesign against a non-default keychain needs the SHA-1, not the label.
+          IDENTITY=$(security find-identity -v -p codesigning "$MACOS_COMPOSE_KEYCHAIN" | awk -v label="$DEVELOPER_ID_APPLICATION" 'index($0, label) { print $2; exit }')
+          for helper in supermux-broker frpc tmux; do
+            codesign --force --options runtime --timestamp \
+              --keychain "$MACOS_COMPOSE_KEYCHAIN" \
+              --sign "$IDENTITY" "apps/desktop/resources/macos-arm64/$helper"
+            codesign --verify --strict --verbose=2 "apps/desktop/resources/macos-arm64/$helper"
+          done
       - name: Build signed Compose DMG
         if: steps.signing.outputs.have == '1'
         run: >
           ./gradlew :desktop:packageDmg --console=plain --no-daemon
+          -PsupermuxVersion="${{ steps.ver.outputs.version }}"
           -PsmMacSignIdentity="${{ env.DEVELOPER_ID_APPLICATION }}"
           -PsmMacSignKeychain="${{ env.MACOS_COMPOSE_KEYCHAIN }}"
       - name: Build unsigned Compose DMG
         if: steps.signing.outputs.have != '1'
-        run: ./gradlew :desktop:packageDmg --console=plain --no-daemon
+        run: ./gradlew :desktop:packageDmg --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
       - name: Stage DMG
         working-directory: .
         run: |
@@ -502,11 +562,24 @@ jobs:
             "$COMPOSE_MACOS_DMG"
           NOTARY_KEY="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
           printf '%s' "$APPLE_NOTARY_KEY_P8_BASE64" | base64 --decode > "$NOTARY_KEY"
+          # `submit --wait` exits 0 even when Apple answers "Invalid", and the reason lives only
+          # in the submission's log — so read the verdict and print that log before failing.
           xcrun notarytool submit "$COMPOSE_MACOS_DMG" \
             --key "$NOTARY_KEY" \
             --key-id "$APPLE_NOTARY_KEY_ID" \
             --issuer "$APPLE_NOTARY_ISSUER_ID" \
-            --wait
+            --output-format json \
+            --wait | tee "$RUNNER_TEMP/notary.json"
+          NOTARY_ID=$(plutil -extract id raw "$RUNNER_TEMP/notary.json")
+          NOTARY_STATUS=$(plutil -extract status raw "$RUNNER_TEMP/notary.json")
+          if [ "$NOTARY_STATUS" != "Accepted" ]; then
+            echo "::error::notarization $NOTARY_ID ended as $NOTARY_STATUS"
+            xcrun notarytool log "$NOTARY_ID" \
+              --key "$NOTARY_KEY" \
+              --key-id "$APPLE_NOTARY_KEY_ID" \
+              --issuer "$APPLE_NOTARY_ISSUER_ID" || true
+            exit 1
+          fi
           xcrun stapler staple "$COMPOSE_MACOS_DMG"
           xcrun stapler validate "$COMPOSE_MACOS_DMG"
           spctl --assess --type open --context context:primary-signature --verbose=2 "$COMPOSE_MACOS_DMG"
@@ -607,17 +680,28 @@ jobs:
           fi
           echo "have=$have" >> "$GITHUB_OUTPUT"
           echo "upload=$upload" >> "$GITHUB_OUTPUT"
+      - name: Give the Kotlin/Native release link enough heap
+        # The framework's release link runs inside the Gradle daemon, and apps/gradle.properties
+        # caps that at 2g (sized for the dev box) — it dies with "Java heap space" here. The
+        # user-home gradle.properties outranks the project's, so raise it for this runner only.
+        run: |
+          mkdir -p ~/.gradle
+          echo "org.gradle.jvmargs=-Xmx5g" >> ~/.gradle/gradle.properties
       - name: Validate compile (unsigned)
         # Dry runs and secret-less tag builds stop here: a device build with signing off
         # proves the archive compiles without needing any Apple credentials.
         if: steps.signing.outputs.upload != '1'
         working-directory: apps/iosApp
         run: |
+          # -skipPackagePluginValidation: SwiftTerm ships a build-tool plugin and headless
+          # xcodebuild refuses an unvalidated one. Same flags as the ci.yml iOS lane.
           xcodebuild \
             -scheme Supermux \
             -configuration Release \
             -destination "generic/platform=iOS" \
             -derivedDataPath build/dd-ios \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
             CODE_SIGNING_ALLOWED=NO \
             build
@@ -651,12 +735,16 @@ jobs:
         if: steps.signing.outputs.upload == '1'
         working-directory: apps/iosApp
         run: |
+          # -skipPackagePluginValidation: SwiftTerm ships a build-tool plugin and headless
+          # xcodebuild refuses an unvalidated one. Same flags as the ci.yml iOS lane.
           xcodebuild \
             -scheme Supermux \
             -configuration Release \
             -destination "generic/platform=iOS" \
             -archivePath build/Supermux.xcarchive \
             -derivedDataPath build/dd-ios \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
             OTHER_CODE_SIGN_FLAGS="--keychain $IOS_RELEASE_KEYCHAIN" \
             archive
@@ -717,7 +805,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [build-binaries, docker, build-android, build-desktop-linux, build-desktop-windows, build-compose-desktop-macos]
+    needs: [classify, build-binaries, docker, build-android, build-desktop-linux, build-desktop-windows, build-compose-desktop-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -731,6 +819,7 @@ jobs:
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ needs.classify.outputs.channel }}
         run: |
           assets=(
             dist/supermux-linux-x64
@@ -748,15 +837,20 @@ jobs:
             dist/supermux-desktop-macos.dmg
             dist/supermux-desktop-macos.dmg.sha256
           )
+          # An alpha is a GitHub PRE-release: releases/latest (the updater's fallback and every
+          # README/website download link) skips it, so it stays invisible to stable installs.
+          prerelease=()
+          if [ "$CHANNEL" = "alpha" ]; then prerelease=(--prerelease); fi
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" --clobber "${assets[@]}"
+            if [ "$CHANNEL" = "alpha" ]; then gh release edit "${GITHUB_REF_NAME}" --prerelease --latest=false; fi
           else
-            gh release create "${GITHUB_REF_NAME}" --generate-notes "${assets[@]}"
+            gh release create "${GITHUB_REF_NAME}" --generate-notes "${prerelease[@]}" "${assets[@]}"
           fi
 
   publish-website:
     if: github.ref_type == 'tag'
-    needs: [release]
+    needs: [classify, release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -778,6 +872,7 @@ jobs:
         if: steps.tok.outputs.have == '1'
         env:
           TOKEN: ${{ secrets.WEBSITE_PUSH_TOKEN }}
+          CHANNEL: ${{ needs.classify.outputs.channel }}
         run: |
           V="${GITHUB_REF_NAME#v}"
           SHA_LINUX_X64=$(cut -d' ' -f1 dist/supermux-linux-x64.sha256)
@@ -800,20 +895,30 @@ jobs:
             CLIENT_ANDROID_VERSION=$(sed -n 's/.*defaultVersionName = "\([^"]*\)".*/\1/p' apps/android/build.gradle.kts | head -1)
             CLIENT_ANDROID_CODE=$(sed -n 's/.*defaultVersionCode = \([0-9]*\).*/\1/p' apps/android/build.gradle.kts | head -1)
           fi
-          # Desktop / iOS marketing versions still live in source (independent of the v* tag).
-          CLIENT_DESKTOP_VERSION=$(sed -n 's/.*packageVersion = "\([^"]*\)".*/\1/p' apps/desktop/build.gradle.kts | head -1)
+          # Desktop carries the tag as its version (-PsupermuxVersion in the desktop jobs).
+          # iOS marketing versions still live in source (independent of the v* tag).
+          CLIENT_DESKTOP_VERSION="$V"
           CLIENT_IOS_VERSION=$(sed -n 's/.*MARKETING_VERSION: "\([^"]*\)".*/\1/p' apps/iosApp/project.yml | head -1)
           CLIENT_IOS_BUILD=$(sed -n 's/.*CURRENT_PROJECT_VERSION: "\([^"]*\)".*/\1/p' apps/iosApp/project.yml | head -1)
           export CLIENT_ANDROID_VERSION CLIENT_ANDROID_CODE CLIENT_DESKTOP_VERSION CLIENT_IOS_VERSION CLIENT_IOS_BUILD
           echo "clients.android version=${CLIENT_ANDROID_VERSION} versionCode=${CLIENT_ANDROID_CODE}"
           git clone "https://x-access-token:${TOKEN}@github.com/AhmetHuseyinDOK/supermux-website.git" site
-          bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" \
+          # VERSIONS_PREVIOUS = what is published right now. The generator files this release
+          # under its channel and, for an alpha, carries channels.stable over untouched (it
+          # refuses to run without one). Written to a temp file first: a failed run must never
+          # truncate the live manifest.
+          VERSIONS_PREVIOUS=site/versions.json \
+            bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" \
             "$SHA_ANDROID" "$SHA_DESKTOP_LINUX" "$SHA_DESKTOP_WINDOWS" \
-            "$SHA_COMPOSE_DESKTOP_MACOS" > site/versions.json
-          sed "s|__SUPERMUX_TAG__|v${V}|" .github/release-assets/docker-compose.release.yml > site/docker-compose.yml
+            "$SHA_COMPOSE_DESKTOP_MACOS" > versions.new.json
+          mv versions.new.json site/versions.json
+          # The pinned compose is what a stable `docker compose up` installs — an alpha leaves it.
+          if [ "$CHANNEL" = "stable" ]; then
+            sed "s|__SUPERMUX_TAG__|v${V}|" .github/release-assets/docker-compose.release.yml > site/docker-compose.yml
+          fi
           cd site
           git config user.name "supermux-release"
           git config user.email "release@supermux.dev"
           git add versions.json docker-compose.yml
-          git commit -m "release: v${V} (versions.json + pinned compose)" || echo "nothing to commit"
+          git commit -m "release: v${V} [${CHANNEL}] (versions.json + pinned compose)" || echo "nothing to commit"
           git push
