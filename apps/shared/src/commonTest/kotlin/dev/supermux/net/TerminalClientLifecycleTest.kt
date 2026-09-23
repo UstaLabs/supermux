@@ -246,6 +246,62 @@ class TerminalClientLifecycleTest {
         job.cancelAndJoin()
     }
 
+    @Test fun a_session_scoped_terminal_answers_no_query_at_all_because_it_is_still_revision_1() = runTest {
+        // A BEHAVIOUR CHANGE NOTHING ELSE RECORDS, pinned here so it cannot drift
+        // unnoticed and so the cutover runbook has something to point at (§5.1).
+        //
+        // Session-scoped scratch terminals — `HostStore.connectTerminal`, i.e.
+        // `ViewHost`, `TerminalTabs`, the desktop `Main` and Android's
+        // `SessionChatFallback` — now run on the SAME zmx backend as workspace
+        // terminals, but they still open `?session=…` with no `terminalProtocol`,
+        // so `revision` is 1. Revision 1 has no `owner` frame, so the synthesised
+        // `Ready` says `replyOwner = false` and NOTHING ever turns it on. Every
+        // DSR/DA/DECRQSS answer this viewer's emulator produces is therefore
+        // refused, forever — not "refused until it owns the size", which is the
+        // workspace behaviour above.
+        //
+        // The renderers this replaced answered these queries themselves, locally,
+        // and did so for every viewer. A program that blocks on `ESC [ 6 n` in a
+        // session-scoped terminal will now block until it times out.
+        val transport = FakeTransport()
+        val terminal = TerminalClient(
+            baseUrl = "ws://h:1",
+            token = "t",
+            http = HttpClient(MockEngine { respond("{}") }),
+            sessionId = "s1",
+            terminalId = "main",
+            workspaceId = null,   // <- session-scoped: no `terminalProtocol=2`
+            transport = transport,
+        )
+        val job = launch { terminal.run() }
+        advanceUntilIdle()
+        val socket = transport.sockets[0]
+        // The URL is the reason for all of it: no protocol parameter, no revision 2.
+        assertTrue(!transport.urls[0].contains("terminalProtocol"), transport.urls[0])
+
+        // Legacy synthesises its own `ready`; nothing needs to arrive first.
+        advanceUntilIdle()
+        assertTrue(terminal.inputEnabled.value)   // typing works
+        assertTrue(!terminal.replyOwner.value)    // answering does not
+
+        // The program asks where the cursor is. The emulator answers. The answer
+        // stops here.
+        socket.pushBytes("\u001b[6n".encodeToByteArray())
+        advanceUntilIdle()
+        assertEquals(TerminalSendResult.NOT_OWNER, terminal.sendReply("\u001b[24;1R".encodeToByteArray()))
+
+        // ...and there is no frame on this wire that could carry one anyway.
+        // Typing on the same connection still goes out, so this is not a dead
+        // socket — it is a socket with no reply channel.
+        assertEquals(TerminalSendResult.ACCEPTED, terminal.sendInput("ls\r".encodeToByteArray()))
+        advanceUntilIdle()
+        assertEquals(emptyList(), socket.texts)
+        assertEquals(listOf("ls\r"), socket.binaries.map { it.decodeToString() })
+
+        terminal.stop()
+        job.cancelAndJoin()
+    }
+
     @Test fun only_an_exit_ends_the_terminal_a_recoverable_failure_reconnects() = runTest {
         val transport = FakeTransport()
         val terminal = client(transport)
