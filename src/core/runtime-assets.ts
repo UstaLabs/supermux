@@ -18,7 +18,7 @@ import replyFallbackEmbedded from "../../prompts/reply-fallback.md" with { type:
 import frpcEmbedded from "./relay/frpc-embedded" with { type: "file" }
 import zmxEmbedded from "./terminal/zmx/embedded/zmx" with { type: "file" }
 import zmxHelperEmbedded from "./terminal/zmx/embedded/mux-zmx-helper" with { type: "file" }
-import zmxManifestEmbedded from "./terminal/zmx/embedded/manifest.json" with { type: "file" }
+import zmxManifestEmbedded from "./terminal/zmx/embedded/manifest" with { type: "file" }
 
 export function materializeAsset(opts: { stateDir: string; name: string; sourcePath: string; executable?: boolean }): string {
   const dest = join(opts.stateDir, "runtime-assets", BUILD_VERSION, opts.name)

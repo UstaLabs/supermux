@@ -31,6 +31,7 @@
 #   6. bun build --compile (version/commit injected via --define)
 #   7. restore the working tree (manifest stub + committed native helpers) — the
 #      embedded copies now live INSIDE the binary, the tree goes back to clean.
+#      Restored from file backups taken at the top, never from git.
 set -eu
 
 OUT="${1:?usage: build-binary.sh <outfile> [version] [commit]}"
@@ -62,18 +63,26 @@ esac
 # Restore workspace mutations unconditionally (on success, failure, or signal):
 # the embedded copies live inside $OUT now; the tree goes back to its prior state.
 # frpc uses an explicit backup so this also preserves an uncommitted local stub.
-FRPC_BACKUP="$(mktemp)"
-cp src/core/relay/frpc-embedded "$FRPC_BACKUP"
-# The zmx slots the same way: an 18 MB daemon+helper pair goes in, and the
-# committed placeholders have to come back — including an uncommitted local one,
-# which `git checkout --` would silently discard.
-ZMX_SLOT_BACKUP="$(mktemp -d)"
-cp -a src/core/terminal/zmx/embedded/. "$ZMX_SLOT_BACKUP/"
+# Back the mutated files up as FILES, not as git state. `git checkout --` was the
+# old restore for the static manifest and the pty-helper, and it is a poor one:
+# it takes several pathspecs and restores NONE of them if one fails, it discards
+# an uncommitted local edit rather than putting it back, and it is silenced with
+# `2>/dev/null || true` so a failure leaves a dirty tree and says nothing.
+# Observed doing exactly that on this host (2026-09-23): a completed build left
+# the generated static manifest — 60 lines of embedded imports — behind in the
+# working tree. Copies cannot fail that way.
+BACKUP_DIR="$(mktemp -d)"
+mkdir -p "$BACKUP_DIR/zmx"
+cp src/core/relay/frpc-embedded "$BACKUP_DIR/frpc-embedded"
+cp src/channels/web/static-manifest.generated.ts "$BACKUP_DIR/static-manifest.generated.ts"
+cp src/core/terminal/pty-helper "$BACKUP_DIR/pty-helper"
+cp -a src/core/terminal/zmx/embedded/. "$BACKUP_DIR/zmx/"
 cleanup() {
-  git checkout -- src/channels/web/static-manifest.generated.ts src/core/terminal/pty-helper 2>/dev/null || true
-  cp "$FRPC_BACKUP" src/core/relay/frpc-embedded 2>/dev/null || true
-  cp -a "$ZMX_SLOT_BACKUP/." src/core/terminal/zmx/embedded/ 2>/dev/null || true
-  rm -rf "$FRPC_BACKUP" "$ZMX_SLOT_BACKUP"
+  cp "$BACKUP_DIR/frpc-embedded" src/core/relay/frpc-embedded 2>/dev/null || true
+  cp "$BACKUP_DIR/static-manifest.generated.ts" src/channels/web/static-manifest.generated.ts 2>/dev/null || true
+  cp "$BACKUP_DIR/pty-helper" src/core/terminal/pty-helper 2>/dev/null || true
+  cp -a "$BACKUP_DIR/zmx/." src/core/terminal/zmx/embedded/ 2>/dev/null || true
+  rm -rf "$BACKUP_DIR"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -132,7 +141,7 @@ if [ "$TARGET" != "windows-x64" ]; then
     scripts/check-zmx-bundle.sh "$ZMX_DIR" "$TARGET"
     cp "$ZMX_DIR/bin/zmx" src/core/terminal/zmx/embedded/zmx
     cp "$ZMX_DIR/bin/mux-zmx-helper" src/core/terminal/zmx/embedded/mux-zmx-helper
-    cp "$ZMX_DIR/manifest.json" src/core/terminal/zmx/embedded/manifest.json
+    cp "$ZMX_DIR/manifest.json" src/core/terminal/zmx/embedded/manifest
     chmod +x src/core/terminal/zmx/embedded/zmx src/core/terminal/zmx/embedded/mux-zmx-helper
   fi
 fi

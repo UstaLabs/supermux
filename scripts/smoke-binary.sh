@@ -103,10 +103,15 @@ printf '#!/bin/sh\nexit 0\n' > "$TMP/stubbin/claude"
 printf '#!/bin/sh\ncase "$1" in -V) echo "tmux 3.4";; esac\nexit 0\n' > "$TMP/stubbin/tmux"
 chmod +x "$TMP/stubbin/claude" "$TMP/stubbin/tmux"
 
+# The WhatsApp webhook listener defaults to :3001, which is NOT derived from
+# MUX_WEB_PORT — so on any machine already running a broker the smoke died at
+# boot with EADDRINUSE on a port it never meant to use. Isolate it the same way
+# as the web port: a live broker must be irrelevant to this run.
 PATH="$PATH:$TMP/stubbin" \
 MUX_HOME="$TMP" \
 MUX_STATE_DIR="$TMP/state" \
 MUX_WEB_PORT="$PORT" \
+MUX_WHATSAPP_WEBHOOK_PORT="$((PORT + 1))" \
 MUX_WEB_PUBLIC_URL="$BASE" \
   "$BIN" >"$BOOT_LOG" 2>&1 &
 BROKER_PID=$!

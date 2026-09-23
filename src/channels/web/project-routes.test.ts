@@ -255,7 +255,8 @@ test("PUT image: a chunked body with no content-length is still capped as it str
     method: "PUT",
     headers: { authorization: `Bearer ${token}`, "content-type": "image/png" },
     body,
-    // @ts-expect-error Bun/undici requires duplex for a streaming request body.
+    // `duplex` is in the lockfile's RequestInit now; the @ts-expect-error that used
+    // to sit here became an error of its own ("unused directive") and failed the lane.
     duplex: "half",
   })
   expect(res.status).toBe(413)

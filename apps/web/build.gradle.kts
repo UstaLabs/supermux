@@ -135,15 +135,25 @@ tasks.withType<org.jetbrains.kotlin.gradle.targets.js.testing.KotlinJsTest>().co
 val brokerStaticDir: File = rootProject.projectDir.resolve("../src/channels/web/static")
 val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 
-// Ceiling on the gzipped download (spec §8): app + skiko wasm + loader js under assets/.
-// MEASURED on this branch, gzipped: skiko.wasm 3.18 MiB (the immovable floor), the app wasm — all
-// of `:ui` + `:shared` — 2.58 MiB, the webpack loader app.js 0.20 MiB; 5.94 MiB (6085 KiB) total.
-// 8 MiB is a bloat catch with roughly 2 MiB of headroom — NOT a target to grow into.
+// Ceiling on the gzipped download (spec §8): the wasm/js/mjs files directly under assets/ — which
+// is what the guard below actually sums, top level only, so fonts and composeResources are outside
+// it.
 //
-// The terminal's weight MOVED in Plan 4 rather than vanishing: the 0.10 MiB of xterm.js counted
-// above went with the DOM renderer, and the engine is now `supermux-terminal.wasm`, emitted as its
-// own hashed asset under assets/ — so it is inside this ceiling too, and the figures above predate
-// it. Re-measure before reading the headroom as spare.
+// RE-MEASURED 2026-09-23, after the Ghostty terminal replaced xterm.js (numbers from this task's
+// own `stageForBroker` run, which prints the same total it checks):
+//
+//     skiko.wasm                3.18 MiB   the immovable floor
+//     supermux-apps-web.wasm    3.00 MiB   all of `:ui` + `:shared` (was 2.58)
+//     supermux-terminal.wasm    0.27 MiB   the engine, in place of ~0.10 MiB of xterm.js
+//     app.js                    0.12 MiB   the webpack loader (was 0.20)
+//     terminal-loader.mjs      ~0.00 MiB
+//     ------------------------------------
+//     total                     6.57 MiB   (6724 KiB)
+//
+// So the headroom under the 8 MiB ceiling is 1.43 MiB, not the ~2 MiB the previous note claimed:
+// the cutover cost ~0.6 MiB net, most of it in the app wasm rather than in the engine module. It
+// remains a bloat catch, NOT a target to grow into — one more feature the size of this one would
+// put the ceiling in reach.
 //
 // The staged `editor/` bundle (CodeMirror, 1.3 MB raw) sits outside assets/ and is deliberately not
 // counted: it is a separate, lazily-loaded page.
