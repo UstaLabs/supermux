@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "fs"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { basename, join } from "path"
 import {
@@ -48,6 +48,8 @@ const encoder = new TextEncoder()
 type FakeTarget = {
   name: string
   socket: string
+  /** What `zmx list` reports: the SESSION pid, i.e. the shell. */
+  pid: number
   createdAtSeconds: number
   cols: number
   rows: number
@@ -62,6 +64,10 @@ class FakeZmx {
   readonly targets = new Map<string, FakeTarget>()
   creates = 0
   clock = 1_700_000_000
+  nextPid = 90_000
+  /** A daemon busy flooding output never gets round to reading `.Kill`:
+   * `cmdKill` still answers `ok`, and the target keeps running. */
+  ignoreKill = false
   epoch = 0
   createGate?: Promise<void>
   attachGate?: Promise<void>
@@ -153,6 +159,7 @@ class FakeHelper implements ZmxHelperFacade {
     this.world.targets.set(command.socket, {
       name: command.name,
       socket: command.socket,
+      pid: ++this.world.nextPid,
       createdAtSeconds: this.world.clock++,
       cols: command.cols,
       rows: command.rows,
@@ -185,7 +192,7 @@ class FakeHelper implements ZmxHelperFacade {
       .map(target => ({
         socket: basename(target.socket),
         name: target.name,
-        pid: 4242,
+        pid: target.pid,
         createdAt: target.createdAtSeconds,
         clients: target.viewers.length,
       }))
@@ -230,6 +237,9 @@ class FakeHelper implements ZmxHelperFacade {
     const target = this.world.targets.get(command.socket)
     if (!target) return // already gone is success
     this.#verify(target, command.name)
+    // ANSWERED, NOT ACTED ON. `cmdKill` resolves when the daemon has been SENT
+    // `.Kill`; whether it reads it is the daemon's business.
+    if (this.world.ignoreKill) return
     this.world.targets.delete(command.socket)
     for (const viewer of [...target.viewers]) {
       // The daemon hangs up; a helper sees EOF and reports a LOST target,
@@ -412,6 +422,118 @@ describe("ZmxWorkspaceBackend", () => {
     expect(await backend.exists(CONTRACT_A)).toBe(true)
     const kill = fake.commands.find(command => command.op === "kill")!
     expect(kill).toMatchObject({ name: encodeName(CONTRACT_A) })
+  })
+
+  // ---- close means CLOSED -------------------------------------------------
+  //
+  // `cmdKill` answers when the daemon has been sent `.Kill`, not when it has
+  // died, and a daemon busy flooding output measurably never acts on it (about
+  // one run in six — vendor/zmx/VERIFICATION.md §6). A workspace whose delete
+  // left a shell running is the failure; these pin the confirmation and the
+  // escalation that now stand between the two.
+
+  /** A stand-in process table: which pids exist, who their parent is, and what
+   * a SIGKILL does to them. No real process is ever signalled. */
+  class FakeProcesses {
+    readonly killed: number[] = []
+    readonly parents = new Map<number, number>()
+    readonly dead = new Set<number>()
+    /** What dying means for the world outside the process table. */
+    onKill: (pid: number) => void = () => {}
+
+    /** `list` reports the shell; the daemon is its parent. */
+    daemonOf(sessionPid: number): number {
+      const daemon = sessionPid - 1
+      this.parents.set(sessionPid, daemon)
+      return daemon
+    }
+
+    readonly control = {
+      daemonPidOf: (sessionPid: number) => this.parents.get(sessionPid) ?? null,
+      isAlive: (pid: number) => !this.dead.has(pid),
+      kill: (pid: number) => {
+        this.killed.push(pid)
+        this.dead.add(pid)
+        this.onKill(pid)
+      },
+    }
+  }
+
+  test("close waits for the target to be GONE, not for the kill to be delivered", async () => {
+    const processes = new FakeProcesses()
+    const { fake, backend } = harness({ processes: processes.control, closeConfirmMs: 500 })
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    const target = fake.target(CONTRACT_A)!
+    const daemon = processes.daemonOf(target.pid)
+    // The socket file a killed daemon never gets to unlink.
+    writeFileSync(target.socket, "")
+
+    fake.ignoreKill = true // the flooding daemon: answers `ok`, keeps running
+    processes.onKill = pid => {
+      // Killing the daemon is what actually ends the session.
+      if (pid === daemon) fake.targets.delete(target.socket)
+    }
+
+    await backend.close(CONTRACT_A)
+
+    // The daemon first — it owns the socket and the pty — and only pids the
+    // DAEMON reported for our own label.
+    expect(processes.killed[0]).toBe(daemon)
+    expect(processes.killed).not.toContain(process.pid)
+    expect(await backend.exists(CONTRACT_A)).toBe(false)
+    // A killed daemon runs no teardown, so the socket it bound is ours to clear.
+    expect(existsSync(target.socket)).toBe(false)
+  })
+
+  test("a target that will not die is a typed failure, never a quiet success", async () => {
+    const processes = new FakeProcesses()
+    const { fake, backend } = harness({ processes: processes.control, closeConfirmMs: 100 })
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    processes.daemonOf(fake.target(CONTRACT_A)!.pid)
+    fake.ignoreKill = true // nothing, including SIGKILL, makes it go
+
+    const error = await backend.close(CONTRACT_A).then(() => null, (e: unknown) => e)
+    expect(error).toBeInstanceOf(WorkspaceTerminalError)
+    expect((error as WorkspaceTerminalError).code).toBe("backend-unavailable")
+    expect((error as WorkspaceTerminalError).message).toContain("still running")
+    expect(await backend.exists(CONTRACT_A)).toBe(true)
+  })
+
+  test("a target that dies on the Kill is never signalled", async () => {
+    const processes = new FakeProcesses()
+    const { fake, backend } = harness({ processes: processes.control, closeConfirmMs: 5_000 })
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    processes.daemonOf(fake.target(CONTRACT_A)!.pid)
+
+    const started = Date.now()
+    await backend.close(CONTRACT_A)
+
+    expect(processes.killed).toEqual([])
+    // Confirmed from the listing, which is the same authority `exists` uses —
+    // and confirmed at once, not after the budget.
+    expect(Date.now() - started).toBeLessThan(1_000)
+    const ops = fake.commands.map(command => command.op)
+    expect(ops.slice(ops.indexOf("kill"))).toEqual(["kill", "list"])
+  })
+
+  test("closeScope attempts every target even when one refuses to die", async () => {
+    const processes = new FakeProcesses()
+    const { fake, backend } = harness({ processes: processes.control, closeConfirmMs: 100 })
+    const stubborn = { scope: "w:scope", terminalId: "flooding" }
+    const quiet = { scope: "w:scope", terminalId: "quiet" }
+    await backend.ensure(stubborn, CONTRACT_ENSURE)
+    await backend.ensure(quiet, CONTRACT_ENSURE)
+    // Only the flooded one ignores the kill; its neighbour must still go.
+    fake.ignoreKill = true
+    processes.daemonOf(fake.target(stubborn)!.pid)
+    const quietDaemon = processes.daemonOf(fake.target(quiet)!.pid)
+    const quietSocket = fake.target(quiet)!.socket
+    processes.onKill = pid => { if (pid === quietDaemon) fake.targets.delete(quietSocket) }
+
+    const error = await backend.closeScope("w:scope").then(() => null, (e: unknown) => e)
+    expect(error).toBeInstanceOf(WorkspaceTerminalError)
+    expect(await backend.exists(quiet)).toBe(false)
+    expect(await backend.exists(stubborn)).toBe(true)
   })
 
   test("attach refuses a session whose label is not ours", async () => {

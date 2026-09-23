@@ -10,8 +10,8 @@ scrollback the restore erased (§6), the backpressure that was not one (§5), an
 the reason a mid-restore drop could not state (§5). All three have since been
 addressed, each with the measurement that found it kept beside what it now
 reads; a fourth, found while re-running the suite and older than this branch, is
-still open (§6). Every one is pinned by an assertion, so a regression shows up
-as a change to this suite.
+now closed in the BROKER rather than in the daemon (§6). Every one is pinned by
+an assertion, so a regression shows up as a change to this suite.
 
 ---
 
@@ -318,7 +318,7 @@ drawing a few bytes it then discards on the real epoch.
 | `close()` racing an in-flight `attachExisting` | `target-not-found` | the neighbouring target in the same scope |
 | `closeScope()` while 695,449 bytes were draining | **no** `failure` and no `exit` — a close we asked for is not a loss | the other scope's target, exactly, and it still ran commands |
 
-### OPEN DEFECT: `closeScope` can leave a FLOODING target running
+### FIXED IN THE BROKER: `closeScope` could leave a FLOODING target running
 
 Found while re-running this suite, present in the original recorded run's code
 as well (bisected: the same failure reproduces at `7c80b7d2`, 2 runs in 8, and
@@ -342,6 +342,62 @@ the daemon's client loop, not the broker's). What is known:
 The suite now waits for the scope to empty with a bounded 15 s budget instead
 of a fixed 800 ms sleep, and names what survived when it does not, so this
 shows up as the defect it is rather than as a flaky sleep.
+
+**What was done.** Not in the daemon — the root cause is its client loop, and
+chasing it means another patch re-pin — but in the broker, where the guarantee
+belongs: `close()` no longer resolves when the kill has been *delivered*. It
+re-reads the listing (the same authority `exists()` uses) with a backed-off
+poll, and if the target is still there after `CLOSE_CONFIRM_MS` (4 s) it
+escalates to `SIGKILL` on the daemon pid and then the session pid, confirms
+again, and throws a typed `backend-unavailable` if even that leaves it running.
+Both pids come from a listing re-read immediately before the signal, for the
+socket carrying our own `mux.target` label, and the shell is signalled only
+while procfs still says it is that daemon's child — **no name matching, no
+`pkill`, no scan of the process table**. A daemon killed like that never
+unlinks its socket, so the stale file is removed once its pid is confirmed
+gone. `closeScope` now attempts every member before reporting a failure, so one
+stubborn target cannot spare the rest of the scope.
+
+**Measured, 2026-09-23, same host, same load (load average ~27), six runs each
+with only that confirmation toggled:**
+
+```
+without the confirmation   5 pass, 1 fail  — "deleting a workspace while output
+                                              drains": timed out after 15000ms,
+                                              the closed scope still lists ["one"]
+with the confirmation     13 whole-suite runs + 10 runs of that test alone:
+                          23/23 pass. One of the 13 logged the escalation —
+                          zmx_close_escalating {"scope":"w:scope-0009",
+                            "terminalId":"one","daemon":3488942,
+                            "session":3488943,"afterMs":4000}
+                          — so in that run the defect occurred and was absorbed.
+```
+
+i.e. the defect still occurs — it is the daemon's, and it is untouched — and it
+is now absorbed. (It needs the rest of the suite's load to show up at all: the
+ten runs of that test on its own never reached the escalation.) Pinned at the
+unit level in `src/core/terminal/zmx/backend.test.ts` ("close waits for the
+target to be GONE, not for the kill to be delivered", "a target that will not
+die is a typed failure, never a quiet success", "a target that dies on the Kill
+is never signalled", "closeScope attempts every target even when one refuses to
+die").
+
+**Two OTHER tests flake on a loaded box (load average ~27), and neither is this
+change's.** Over the 19 whole-suite runs:
+
+* *"a viewer that stops reading is detached recoverably"* — 3 times, in **both**
+  arms. The SIGSTOPped viewer was not inside its replay when the drop landed, so
+  the message is the bare "daemon closed the connection" §5 describes rather
+  than the annotated one. A race in what the test can arrange, not in what the
+  backend guarantees.
+* *"a target closed while an attach is in flight"* — once, in the
+  with-confirmation arm only. The attach's `verifyTarget` was cut off
+  mid-handshake and `cmdAttach` reported `backend-unavailable` instead of
+  `target-not-found`. It cannot be the confirmation's doing: the error the test
+  asserts on comes from the ATTACH, which has already failed by the time any of
+  the new code runs — but it is a real gap in `cmdAttach`'s mapping (a verify
+  cut short on a socket that is then gone is "no such target"), and closing it
+  means a helper change and a rebuild.
 
 `zmx list` reports the **session** pid, which is the shell. The daemon is its
 parent. Killing what `list` reports is the third row, not the second — a

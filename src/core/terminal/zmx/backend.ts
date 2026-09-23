@@ -41,7 +41,7 @@
 // Nothing in here ever falls back to tmux. A zmx that cannot be reached is a
 // typed `backend-unavailable`, which the client can retry; quietly starting a
 // tmux session instead would leave two backends owning one workspace.
-import { accessSync, constants, statSync } from "fs"
+import { accessSync, constants, readFileSync, rmSync, statSync } from "fs"
 import { isAbsolute } from "path"
 import { makeLogger } from "../../../shared/log"
 import { STATE_DIR } from "../../../shared/paths"
@@ -60,6 +60,7 @@ import {
   decodeName,
   encodeName,
   ensureSocketDir,
+  isProcessAlive,
   targetSocketPath,
   zmxSocketDir,
 } from "./names"
@@ -176,6 +177,68 @@ export function workspaceStartupEnvironment(
   return env
 }
 
+/**
+ * How long `close` waits for a target it has killed to ACTUALLY be gone —
+ * once after the IPC kill, and again after SIGKILL.
+ *
+ * `cmdKill` answers when the daemon has been SENT `.Kill`, not when it has
+ * acted on it, and a daemon busy flooding its viewers with output measurably
+ * never gets round to it (vendor/zmx/VERIFICATION.md §6: about one run in six,
+ * still listed 15 s later, while its quiet neighbour in the same `closeScope`
+ * died as asked). 15 s was never a timing margin there — the target simply
+ * never goes — so this budget only has to cover an honest slow death, not the
+ * defect.
+ */
+export const CLOSE_CONFIRM_MS = 4000
+
+/** First gap between "is it gone yet" listings, doubling to `CLOSE_POLL_MAX_MS`.
+ * Each listing is a helper process, so the common case (gone on the first ask)
+ * costs one and a stubborn target costs a handful, not forty. */
+const CLOSE_POLL_MS = 50
+const CLOSE_POLL_MAX_MS = 500
+
+/**
+ * How a target's own processes are observed and, as a last resort, ended.
+ *
+ * NOTHING HERE MATCHES ON A PROCESS NAME. Every pid is one the daemon itself
+ * reported for the socket carrying our `mux.target` label, read back a moment
+ * before it is used; there is no `pkill`, no `killall` and no scan of the
+ * process table, because a workspace terminal runs a user's shell and the
+ * blast radius of a pattern that matches one process too many is somebody
+ * else's work.
+ */
+export interface ZmxProcessControl {
+  /**
+   * The pid that owns the socket, given the pid `zmx list` reported.
+   *
+   * `list` reports the SESSION pid, which is the shell; the daemon is its
+   * parent (the daemon double-forks away from the CLI and then forks the shell
+   * into the pty). Null when it cannot be resolved, which is every host
+   * without procfs — there the shell pid is all we have.
+   */
+  daemonPidOf(sessionPid: number): number | null
+  isAlive(pid: number): boolean
+  /** SIGKILL. There is no softer signal worth trying: the polite request was
+   * the `.Kill` message, and this runs only because it was not acted on. */
+  kill(pid: number): void
+}
+
+const defaultProcessControl: ZmxProcessControl = {
+  daemonPidOf: sessionPid => {
+    try {
+      const status = readFileSync(`/proc/${sessionPid}/status`, "utf8")
+      const parent = Number(/^PPid:\s*(\d+)$/m.exec(status)?.[1])
+      // > 1: init is not a daemon of ours, it is what an orphan gets reparented
+      // to, and signalling it is not on the table.
+      return Number.isInteger(parent) && parent > 1 ? parent : null
+    } catch {
+      return null
+    }
+  },
+  isAlive: isProcessAlive,
+  kill: pid => { process.kill(pid, "SIGKILL") },
+}
+
 /** What `list` gets back from the helper, per socket it probed. */
 type ZmxListRow = {
   socket: string
@@ -245,6 +308,12 @@ export interface ZmxBackendOptions {
   /** Bytes a viewer may have queued behind its `emit`. Default
    * `VIEWER_PENDING_MAX`; exposed so a test does not have to flood a megabyte. */
   viewerPendingMax?: number
+  /** How a doomed target's processes are watched and, if they will not die,
+   * ended. Default: procfs + `process.kill`. */
+  processes?: ZmxProcessControl
+  /** Milliseconds `close` gives a target to disappear before it escalates, and
+   * again after. Default `CLOSE_CONFIRM_MS`. */
+  closeConfirmMs?: number
 }
 
 const keyOf = (key: WorkspaceTerminalKey) => `${encodeName(key)}`
@@ -280,6 +349,8 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
   readonly #options: ZmxBackendOptions
   readonly #launch: ZmxHelperLaunch
   readonly #probe: ZmxProbe
+  readonly #processes: ZmxProcessControl
+  readonly #confirmMs: number
   readonly #hostEnv: Readonly<Record<string, string | undefined>>
   readonly #targets = new Map<string, TargetState>()
   /** create/close serialisation, per logical target. */
@@ -300,6 +371,8 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
   constructor(options: ZmxBackendOptions = {}) {
     this.#options = options
     this.#probe = options.probe ?? defaultProbe
+    this.#processes = options.processes ?? defaultProcessControl
+    this.#confirmMs = options.closeConfirmMs ?? CLOSE_CONFIRM_MS
     this.#hostEnv = options.hostEnv ?? process.env
     this.#launch = options.launch ?? (handlers => ZmxHelper.launch(handlers, { binaries: options.binaries }))
   }
@@ -482,6 +555,9 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
       // `name` makes the kill identity-checked: a socket basename is a hash,
       // and killing a collision would destroy another workspace's shell.
       await this.#control(helper => helper.send({ op: "kill", socket, name }))
+      // ...and then WATCH IT DIE. The helper answers when the daemon has been
+      // sent `.Kill`, which is not the same fact.
+      await this.#confirmClosed(key, name, socket)
       log.info("zmx_target_closed", { scope: key.scope, terminalId: key.terminalId })
     })
     // Registered SYNCHRONOUSLY, in the same turn as the decision: an attach
@@ -499,13 +575,24 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
 
   async closeScope(scope: string): Promise<void> {
     const rows = await this.#list()
+    // One stubborn target must not spare the rest of the scope: every key is
+    // attempted, and the first failure is reported once they all have been.
+    let failure: unknown
     for (const row of rows) {
       const key = decodeName(row.name)
       // EXACT scope. `decodeName` is reversible, so "w:a" can never match
       // "w:ab" the way a prefix test on the socket name would.
       if (!key || key.scope !== scope) continue
-      await this.close(key)
+      try {
+        await this.close(key)
+      } catch (error) {
+        log.warn("zmx_close_scope_member_failed", {
+          scope, terminalId: key.terminalId, error: errorText(error),
+        })
+        failure ??= error
+      }
     }
+    if (failure !== undefined) throw failure
   }
 
   async shutdownViewers(): Promise<void> {
@@ -536,6 +623,100 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
   noteExit(target: TargetState): void {
     target.closing = true
     this.#forget(target)
+  }
+
+  /**
+   * Resolve only once the target is REALLY gone — or say, in a typed error,
+   * that it is not.
+   *
+   * THE DEFECT THIS CLOSES. `cmdKill` connects, verifies `mux.target`, sends
+   * `.Kill` and answers `ok`; the daemon acts on that message when it next
+   * reads its clients, and one that is busy flooding output measurably does
+   * not. About one run in six of "delete a workspace while output drains", the
+   * flooded target was still listed 15 seconds later with its shell alive,
+   * while its quiet neighbour in the same `closeScope` died as asked
+   * (vendor/zmx/VERIFICATION.md §6). `close()` had already resolved and the
+   * backend had already logged `zmx_target_closed`, so a deleted workspace
+   * kept a running shell and nothing said so.
+   *
+   * WHAT IS SIGNALLED, AND WHY IT IS SAFE. Only pids the daemon ITSELF
+   * reported, for the socket whose `mux.target` label is ours, re-read from a
+   * fresh listing immediately before the signal. The daemon first (it owns the
+   * socket and the pty), then the session pid it reported — the shell, which
+   * is the thing a closed workspace must not leave running. No name matching,
+   * no `pkill`, no process-table scan: those are what kill a bystander.
+   *
+   * The listing is the authority on "gone" for the same reason `exists()` uses
+   * it — the running daemons are the source of truth, not any state of ours.
+   */
+  async #confirmClosed(key: WorkspaceTerminalKey, name: string, socket: string): Promise<void> {
+    if (await this.#waitUnlisted(name)) return
+
+    // The kill was delivered and not acted on. Re-read the pids now: the row
+    // we are about to signal has to be one a live daemon answered with OUR
+    // label a moment ago, not one remembered from before the wait.
+    const row = await this.#rowFor(name)
+    if (!row) return
+    const session = Number.isInteger(row.pid) && row.pid > 1 ? row.pid : null
+    const daemon = session === null ? null : this.#processes.daemonPidOf(session)
+    // Asked BEFORE anything is signalled: killing the daemon reparents its
+    // shell to init within the instant, so afterwards this can no longer tell
+    // "our shell" from "a pid that was recycled in between".
+    const sessionIsOurs = session !== null && (daemon === null || this.#processes.daemonPidOf(session) === daemon)
+    log.warn("zmx_close_escalating", {
+      scope: key.scope, terminalId: key.terminalId, daemon, session, afterMs: this.#confirmMs,
+    })
+    const signal = (pid: number): void => {
+      if (!this.#processes.isAlive(pid)) return
+      try {
+        this.#processes.kill(pid)
+      } catch (error) {
+        log.warn("zmx_close_signal_failed", { scope: key.scope, pid, error: errorText(error) })
+      }
+    }
+    // The daemon first: it owns the socket and the pty, and closing the pty is
+    // what a SIGHUP-respecting shell dies of anyway. Then the shell itself,
+    // because one that ignores the hangup is still a shell a deleted workspace
+    // left running.
+    if (daemon !== null) signal(daemon)
+    if (session !== null && sessionIsOurs) signal(session)
+
+    if (!(await this.#waitUnlisted(name))) {
+      throw new WorkspaceTerminalError(
+        "backend-unavailable",
+        `workspace terminal ${name} is still running ${this.#confirmMs} ms after SIGKILL ` +
+        `(daemon pid ${daemon ?? "unknown"}, session pid ${session ?? "unknown"})`,
+        true,
+      )
+    }
+    // A daemon that is killed never runs its own teardown, so the socket file
+    // it bound outlives it. Nothing can be listening on it — we watched the
+    // pid go — and leaving it behind is a file the next `ensure` for this key
+    // has to bind over.
+    if (daemon !== null || session !== null) {
+      try { rmSync(socket, { force: true }) } catch (error) {
+        log.warn("zmx_stale_socket_left", { socket, error: errorText(error) })
+      }
+    }
+  }
+
+  /** Poll the listing until `name` is no longer in it, or the budget is out.
+   * Backs off, because every ask is a helper process. */
+  async #waitUnlisted(name: string): Promise<boolean> {
+    const deadline = Date.now() + this.#confirmMs
+    let step = CLOSE_POLL_MS
+    for (;;) {
+      if (!(await this.#rowFor(name))) return true
+      const left = deadline - Date.now()
+      if (left <= 0) return false
+      await Bun.sleep(Math.max(1, Math.min(step, left)))
+      step = Math.min(step * 2, CLOSE_POLL_MAX_MS)
+    }
+  }
+
+  /** The listing row carrying exactly this `mux.target`, or nothing. */
+  async #rowFor(name: string): Promise<ZmxListRow | null> {
+    return (await this.#list()).find(row => row.name === name) ?? null
   }
 
   async #list(): Promise<ZmxListRow[]> {

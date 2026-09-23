@@ -131,9 +131,19 @@ export interface WorkspaceTerminalBackend {
    * of truth is the running targets, not in-process state. */
   list(scope: string): Promise<WorkspaceTerminalSummary[]>
   exists(key: WorkspaceTerminalKey): Promise<boolean>
-  /** Destroy one target and its viewers. Idempotent. */
+  /**
+   * Destroy one target and its viewers. Idempotent.
+   *
+   * RESOLVES ONLY ONCE THE TARGET IS GONE — not once a request to end it has
+   * been delivered. A backend that asks another process to do the killing has
+   * to confirm it happened and escalate if it did not, because the caller's
+   * next move (deleting the workspace, dropping the tab) assumes the shell is
+   * no longer running. If it cannot be made to go, that is a thrown
+   * `WorkspaceTerminalError`, never a quiet success.
+   */
   close(key: WorkspaceTerminalKey): Promise<void>
-  /** Destroy every target in EXACTLY this scope — never a neighbouring one. */
+  /** Destroy every target in EXACTLY this scope — never a neighbouring one.
+   * Every member is attempted even if one of them refuses to die. */
   closeScope(scope: string): Promise<void>
   /** Broker shutdown: drop viewers, keep every target running. */
   shutdownViewers(): Promise<void>
