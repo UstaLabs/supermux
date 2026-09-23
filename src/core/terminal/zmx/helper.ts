@@ -264,6 +264,13 @@ export class ZmxHelper {
     return this.#done
   }
 
+  /** The helper process's pid. Diagnostics and tests: a viewer that dies for a
+   * reason of its own (a crash, an OOM kill) must be distinguishable from one
+   * we stopped, and `kill()` cannot tell you that because it IS us stopping it. */
+  get pid(): number {
+    return this.#proc.pid
+  }
+
   /** The tail of the helper's stderr. Diagnostics only; never parsed. */
   get stderr(): string {
     return this.#stderr
