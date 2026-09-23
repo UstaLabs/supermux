@@ -18,8 +18,18 @@ installed or replaced.**
 ```sh
 scripts/build-zmx.sh --check-patches   # verify the pin + patch (CI gate)
 scripts/build-zmx.sh --stock-test      # unpatched baseline
-scripts/build-zmx.sh                   # fetch + patch + build + test
+scripts/build-zmx.sh                   # fetch + patch + build + test (zmx AND helper)
+scripts/build-zmx.sh --target linux-x64 --test
+scripts/build-zmx.sh --helper-only     # just the broker helper
 ```
+
+The **broker helper** (`src/core/terminal/zmx/helper`) is built by the same
+script, against this tree's own `src/ipc.zig`, and lands beside `zmx` in
+`build/zmx/out/bin/` with a `manifest.json` naming the commit, the patch
+sha256, the helper ABI and both binaries' digests. `--target` cross-compiles
+(`linux-x64`, `linux-arm64`, `macos-x64`, `macos-arm64`); the host target is
+left unnamed on purpose so a native build cannot accidentally resolve a
+different libc and recompile ghostty from scratch.
 
 ---
 
@@ -310,11 +320,21 @@ corrupt every later snapshot. There is a test for it.
   unbounded path**, so the CLI is unchanged under load.
 * A snapshot over the ceiling aborts *that viewer* with
   `BrokerDetach{snapshot_overflow}` and emits no `Output` at all.
-* `BrokerExit` is sent **once**, on PTY EOF, after a non-blocking `waitpid`.
-  `known=0` when no status could be reaped — a stopped child (`WIFSTOPPED`) and
-  an unreaped one are reported as unknown rather than as exit code 0. **A lost
-  socket is never an exit**, and a helper must not synthesise one from EOF:
-  "your program ended" closes a tab, "I cannot see your program" retries.
+* `BrokerExit` is sent **once**, on PTY EOF, after `waitpid`. `known=0` when no
+  status could be reaped — a stopped child (`WIFSTOPPED`) and an unreaped one
+  are reported as unknown rather than as exit code 0. **A lost socket is never
+  an exit**, and a helper must not synthesise one from EOF: "your program
+  ended" closes a tab, "I cannot see your program" retries.
+
+  PTY EOF and the child becoming reapable **race** — the slave fd is released
+  as the process dies — so a single `WNOHANG` lands early often enough to
+  matter, and there is no second chance at the status: the message is
+  once-only and the teardown `defer`'s `waitpid` status is discarded.
+  `reportTargetExit` therefore retries `WNOHANG` for a bounded 200 ms
+  (`EXIT_REAP_BUDGET_MS`, 5 ms steps) before giving up and saying `known=0`.
+  The daemon is on its way out at that point and nothing else waits on the
+  loop. Verified end to end: `exit 7` in the shell arrives at the helper as
+  `{known:true, code:7, signal:null}`.
 * Daemon shutdown is a *different* message (`BrokerDetach{daemon_shutdown}`),
   suppressed if an exit was already reported so the two cannot contradict each
   other. Both are followed by a bounded (300 ms) best-effort flush, because
@@ -339,15 +359,22 @@ cd build/zmx/upstream && zig build test --summary all
 
 # patched
 cd build/zmx/upstream && zig build test --summary all
-#   Build Summary: 41/41 steps succeeded; 143/143 tests passed
+#   Build Summary: 41/41 steps succeeded; 145/145 tests passed
 ```
 
-(48 added: 95 upstream + 48. Both runs on x86_64-linux, Zig 0.16.0,
-2026-09-23.) `scripts/build-zmx.sh` wraps both — `--stock-test` and the default
+(50 added: 95 upstream + 50 — the last two are "a dropped connection never
+announces an exit" and "a viewer that leaves mid-replay takes its replay with
+it", which pin by construction that only the two intended call sites can emit
+`BrokerExit` and that a viewer's snapshot + staged output die with it. Both
+runs on x86_64-linux, Zig 0.16.0, 2026-09-23; the patched number was 143
+before those two.) `scripts/build-zmx.sh` wraps both — `--stock-test` and the default
 — and passes `ZIG_GLOBAL_CACHE_DIR`/`--cache-dir` into `build/zmx/`.
 
-A patch that applies is not validation, so there is also a live check.
-`tools/broker_smoke.py` speaks the protocol to a real daemon socket:
+A patch that applies is not validation, so there are two live checks. The
+helper's own end-to-end smoke is
+`src/core/terminal/zmx/helper/helper_smoke.py` (see §5); below is the
+lower-level one that speaks the protocol to a real daemon socket with no
+helper in the middle:
 
 ```sh
 zmx run brk1 'sleep 120'
@@ -372,19 +399,25 @@ clean pin + verified patch (pass), an unrelated edit in the upstream cache
 
 ## 5. Known gaps and things the next tasks must know
 
-* **`reply()` semantics contradict the TS doc comment.**
-  `src/core/terminal/workspace-backend.ts` says splitting `write`/`reply` lets
-  a backend "answer queries from a non-owning viewer". The Zig side does the
-  opposite — a non-owner's reply is **discarded** — because several viewers
-  render the same DA1 query and each answers it, and every answer after the
-  first is read by the shell as typed input. The task text asked for the
-  discard explicitly. **Task 4/5 should update that comment**, and the helper
-  must not expect a background tab's query answer to land.
+* ~~`reply()` semantics contradict the TS doc comment.~~ **Fixed in Task 4.**
+  The Zig behaviour (owner-only; a non-owner's reply is discarded) is the
+  intended one — several viewers render the same DA1 query and each answers
+  it, and every answer after the first is read by the shell as typed input —
+  and `src/core/terminal/workspace-backend.ts` now says so. The helper drops a
+  non-owner's reply on its own side too, so nothing pretends it landed.
 * **`--check-patches` does not run in CI yet.** Nothing wires it into the test
   job; that is a Task 5/6 item.
-* **Nothing reads this patch yet.** No supermux code builds or launches the
-  patched `zmx`; `build/zmx/out/bin/zmx` is a build artifact only, and no
-  system binary was touched.
+* **The helper reads this patch now.** `src/core/terminal/zmx/helper` is built
+  by `scripts/build-zmx.sh` against this tree's own `src/ipc.zig`, and
+  `src/core/terminal/zmx/helper/helper_smoke.py` drives it against a real
+  daemon. Nothing is installed system-wide: `build/zmx/out/` holds both
+  binaries and the manifest the TypeScript side verifies.
+* **A viewer is never told it LOST the lease.** The daemon sends `BrokerLease`
+  to the winner and nothing to the loser, so a helper that is superseded keeps
+  believing it owns the size until its next `BrokerResize` is silently
+  dropped. Harmless today (resize is advisory and the next focus claim fixes
+  it) but it means the `owner` event in the TS contract cannot be driven
+  purely from the wire; Task 5 should decide whether that needs a message.
 * **The two ghostty pins differ** (client `22391ed…`, zmx `8af6897…`). Harmless
   today because nothing shares VT state across them, but the snapshot the
   daemon produces is parsed by the client's emulator, so the pair needs a joint

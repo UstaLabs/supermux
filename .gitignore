@@ -35,3 +35,8 @@ graphify-out/cache/last_query_stamp
 # applied patch, the zig caches and the built binary. Reproducible from
 # vendor/zmx/upstream.lock.json, so none of it is tracked.
 /build/
+
+# `zig build` from inside the helper directory (without the --prefix
+# scripts/build-zmx.sh passes) drops its output here. The helper's real home
+# is /build/zmx/out, beside the zmx it is pinned to.
+src/core/terminal/zmx/helper/zig-out/

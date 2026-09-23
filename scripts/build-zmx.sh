@@ -2,10 +2,21 @@
 # Fetch the pinned zmx, apply the supermux session-contract patch, build it and
 # run its own test suite.
 #
-#   scripts/build-zmx.sh                 fetch + patch + build + test
+#   scripts/build-zmx.sh                 fetch + patch + build + test (zmx AND helper)
 #   scripts/build-zmx.sh --check-patches verify the pin and the patch only
 #   scripts/build-zmx.sh --stock-test    build+test the UNPATCHED tree (baseline)
 #   scripts/build-zmx.sh --no-test       skip the test step
+#   scripts/build-zmx.sh --test          run the tests (the default; explicit form)
+#   scripts/build-zmx.sh --helper-only   build only the broker helper
+#   scripts/build-zmx.sh --target NAME   linux-x64 | linux-arm64 | macos-x64 |
+#                                        macos-arm64 | native (default: native)
+#
+# The BROKER HELPER (src/core/terminal/zmx/helper) is built here too: it is
+# compiled against the patched tree's own src/ipc.zig, so the pin, the patch
+# and the helper are one decision and one cache. The build writes
+# build/zmx/out/manifest.json naming the zmx commit, the patch sha256, the
+# helper ABI and the sha256 of both binaries -- which is exactly what
+# src/core/terminal/zmx/helper.ts verifies before it execs anything.
 #
 # Everything is resolved from vendor/zmx/upstream.lock.json: the zmx commit
 # (never a branch), the patch and its sha256, and the Zig version. The Zig
@@ -26,6 +37,8 @@ VENDOR_DIR="$REPO_ROOT/vendor/zmx"
 LOCK="$VENDOR_DIR/upstream.lock.json"
 BUILD_DIR="$REPO_ROOT/build/zmx"
 UPSTREAM_DIR="$BUILD_DIR/upstream"
+HELPER_DIR="$REPO_ROOT/src/core/terminal/zmx/helper"
+OUT_DIR="$BUILD_DIR/out"
 ZIG_JOBS="${MUX_ZIG_JOBS:-2}"
 
 log() { printf '[zmx] %s\n' "$*" >&2; }
@@ -50,15 +63,43 @@ PATCH="$VENDOR_DIR/$PATCH_REL"
 TEST_STEP="$(lock build.test_step)"
 
 MODE=build
-for arg in "$@"; do
-  case "$arg" in
+TARGET_NAME=native
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --check-patches) MODE=check ;;
     --stock-test)    MODE=stock ;;
     --no-test)       MODE=build-only ;;
-    -h|--help)       sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) die "unknown argument: $arg" ;;
+    --test)          MODE=build ;;
+    --helper-only)   MODE=helper ;;
+    --target)        shift; TARGET_NAME="${1:-}"; [[ -n "$TARGET_NAME" ]] || die "--target needs a name" ;;
+    --target=*)      TARGET_NAME="${1#--target=}" ;;
+    -h|--help)       sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument: $1" ;;
   esac
+  shift
 done
+
+# Target mapping. A CROSS build gets an explicit -Dtarget; the host target is
+# deliberately left unspecified, because naming it (even identically) resolves
+# a libc of its own and can silently recompile ghostty from scratch -- half an
+# hour on a shared machine, for the binary that was already in the cache.
+HOST_ARCH="$(uname -m)"
+HOST_OS="$(uname -s)"
+ZIG_TARGET=""
+case "$TARGET_NAME" in
+  native) ;;
+  linux-x64)
+    [[ "$HOST_OS" == Linux && "$HOST_ARCH" == x86_64 ]] || ZIG_TARGET="x86_64-linux-musl" ;;
+  linux-arm64)
+    [[ "$HOST_OS" == Linux && "$HOST_ARCH" == aarch64 ]] || ZIG_TARGET="aarch64-linux-musl" ;;
+  macos-x64)
+    [[ "$HOST_OS" == Darwin && "$HOST_ARCH" == x86_64 ]] || ZIG_TARGET="x86_64-macos" ;;
+  macos-arm64)
+    [[ "$HOST_OS" == Darwin && "$HOST_ARCH" == arm64 ]] || ZIG_TARGET="aarch64-macos" ;;
+  *) die "unknown --target: $TARGET_NAME (linux-x64|linux-arm64|macos-x64|macos-arm64|native)" ;;
+esac
+TARGET_ARGS=()
+[[ -n "$ZIG_TARGET" ]] && TARGET_ARGS=("-Dtarget=$ZIG_TARGET")
 
 # ------------------------------------------------------------------ zig ----
 ZIG="${MUX_ZIG_HOME:-$HOME/.local/zig/$ZIG_VERSION}/zig"
@@ -128,11 +169,83 @@ apply_patch() {
 
 run_zig() {
   local dir="$1"; shift
-  ZIG_GLOBAL_CACHE_DIR="$BUILD_DIR/zig-global-cache" \
-    nice -n 10 "$ZIG" "$@" -j"$ZIG_JOBS" --cache-dir "$BUILD_DIR/zig-cache" \
-    2>&1 | sed "s|^|[zig] |"
-  return "${PIPESTATUS[0]}"
+  ( cd "$dir" &&
+    ZIG_GLOBAL_CACHE_DIR="$BUILD_DIR/zig-global-cache" \
+      nice -n 10 "$ZIG" "$@" -j"$ZIG_JOBS" --cache-dir "$BUILD_DIR/zig-cache" \
+      2>&1 | sed "s|^|[zig] |"
+    exit "${PIPESTATUS[0]}" )
 }
+
+sha256_of() { ( sha256sum "$1" 2>/dev/null || shasum -a 256 "$1" ) | cut -d' ' -f1; }
+
+# ------------------------------------------------------------- helper ------
+# The helper is built HERE, not by a separate script: it compiles against the
+# patched tree's own src/ipc.zig, so "which zmx" and "which helper" are one
+# decision, one pin and one cache.
+build_helper() {
+  log "building the broker helper against the patched tree"
+  run_zig "$HELPER_DIR" build \
+    --build-file "$HELPER_DIR/build.zig" \
+    "${TARGET_ARGS[@]}" \
+    -Dzmx-src="$UPSTREAM_DIR/src" \
+    -Dzmx-commit="$ZMX_SHA" \
+    -Dpatch-sha256="$PATCH_SHA" \
+    -Dhelper-version="$TARGET_NAME-$(date -u +%Y%m%dT%H%M%SZ)" \
+    --prefix "$OUT_DIR"
+}
+
+test_helper() {
+  log "running the helper framing tests"
+  run_zig "$HELPER_DIR" build test \
+    --build-file "$HELPER_DIR/build.zig" \
+    "${TARGET_ARGS[@]}" \
+    -Dzmx-src="$UPSTREAM_DIR/src" --summary all
+}
+
+# The manifest is the ONLY thing the TypeScript side trusts about these
+# binaries: it names what they were built from and what they hash to, and
+# src/core/terminal/zmx/helper.ts refuses to exec a binary whose bytes do not
+# match it.
+write_manifest() {
+  local helper_bin="$OUT_DIR/bin/mux-zmx-helper" zmx_bin="$OUT_DIR/bin/zmx"
+  [[ -x "$helper_bin" ]] || die "helper binary missing at $helper_bin"
+  [[ -x "$zmx_bin" ]] || die "zmx binary missing at $zmx_bin"
+  # The ABI comes from the helper's own source constant, so a cross-compiled
+  # binary we cannot execute still gets a correct manifest.
+  local abi
+  abi="$(sed -n 's/^pub const ABI_VERSION: u32 = \([0-9]*\);.*/\1/p' "$HELPER_DIR/protocol.zig")"
+  [[ -n "$abi" ]] || die "could not read ABI_VERSION from $HELPER_DIR/protocol.zig"
+  if [[ -z "$ZIG_TARGET" ]]; then
+    # Native build: make the BINARY say it too, and refuse a disagreement.
+    local reported
+    reported="$("$helper_bin" --version-json)" || die "helper --version-json failed"
+    MANIFEST_ABI="$abi" python3 -c '
+import json,os,sys
+got = json.loads(sys.argv[1])
+want = int(os.environ["MANIFEST_ABI"])
+if int(got["abi"]) != want:
+    raise SystemExit("helper reports ABI %s, source says %d" % (got["abi"], want))
+' "$reported" || die "helper ABI does not match its source"
+  fi
+  python3 -c '
+import json, sys, datetime
+out, abi, target, commit, patch, helper_sha, zmx_sha = sys.argv[1:8]
+with open(out, "w") as fh:
+    json.dump({
+        "schema": 1,
+        "abi": int(abi),
+        "target": target,
+        "builtAt": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "helper": {"sha256": helper_sha},
+        "zmx": {"commit": commit, "sha256": zmx_sha},
+        "patch": {"sha256": patch},
+    }, fh, indent=2)
+    fh.write("\n")
+' "$OUT_DIR/manifest.json" "$abi" "$TARGET_NAME" "$ZMX_SHA" "$PATCH_SHA" \
+    "$(sha256_of "$helper_bin")" "$(sha256_of "$zmx_bin")"
+  log "manifest: $OUT_DIR/manifest.json"
+}
+
 
 case "$MODE" in
   check)
@@ -146,18 +259,30 @@ case "$MODE" in
     [[ -z "$(git -C "$UPSTREAM_DIR" status --porcelain --untracked-files=no)" ]] ||
       die "--stock-test needs a pristine tree; delete build/zmx/upstream and re-run"
     log "running the UNPATCHED baseline: $TEST_STEP"
-    ( cd "$UPSTREAM_DIR" && run_zig "$UPSTREAM_DIR" build test --summary all )
+    run_zig "$UPSTREAM_DIR" build test --summary all
+    ;;
+  helper)
+    fetch_upstream
+    verify_patch_file
+    apply_patch
+    build_helper
+    [[ "$MODE" == build-only ]] || test_helper
+    write_manifest
+    log "helper: $OUT_DIR/bin/mux-zmx-helper (never installed system-wide)"
     ;;
   *)
     fetch_upstream
     verify_patch_file
     apply_patch
-    log "building zmx"
-    ( cd "$UPSTREAM_DIR" && run_zig "$UPSTREAM_DIR" build --prefix "$BUILD_DIR/out" )
+    log "building zmx for $TARGET_NAME"
+    run_zig "$UPSTREAM_DIR" build "${TARGET_ARGS[@]}" --prefix "$OUT_DIR"
+    build_helper
     if [[ "$MODE" != build-only ]]; then
       log "running the upstream test target: $TEST_STEP"
-      ( cd "$UPSTREAM_DIR" && run_zig "$UPSTREAM_DIR" build test --summary all )
+      run_zig "$UPSTREAM_DIR" build test --summary all
+      test_helper
     fi
-    log "binary: $BUILD_DIR/out/bin/zmx (never installed system-wide)"
+    write_manifest
+    log "binaries: $OUT_DIR/bin/{zmx,mux-zmx-helper} (never installed system-wide)"
     ;;
 esac
