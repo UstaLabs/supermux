@@ -19,7 +19,9 @@ plugins {
 repositories {
     mavenCentral()
     google()
-    maven("https://packages.jetbrains.team/maven/p/ij/intellij-dependencies") // JediTerm (M2)
+    // org.jetbrains.intellij.deps.jcef:jcef — the JCEF editor host. This was added for JediTerm
+    // too (M2); that terminal is gone, JCEF is the one artifact left that lives only here.
+    maven("https://packages.jetbrains.team/maven/p/ij/intellij-dependencies")
 }
 
 dependencies {
@@ -32,8 +34,6 @@ dependencies {
     implementation(libs.serialization.json)
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.websockets)
-    implementation(libs.jediterm.core) // both jediterm modules: dual LGPLv3/Apache-2.0 — used under Apache-2.0
-    implementation(libs.jediterm.ui)
     // macOS chrome: JBR custom-title-bar API (MacWindowChrome.kt). Safe no-op facade on non-JBR JVMs.
     implementation(libs.jbr.api)
     // Direct JetBrains JCEF compile API. At runtime the matching JBR's built-in `jcef` module wins
@@ -217,10 +217,10 @@ val jcefAddOpens: List<String> = buildList {
 // distributable built by packageDeb/Msi/Dmg is byte-for-byte what it was before — verified with
 // `:desktop:dependencies --configuration runtimeClasspath`.
 //
-// Two things do NOT hot-reload, both by construction: the editor pane (JCEF — a heavyweight
-// native Chromium window behind SwingPanel) and the terminal panes (JediTerm, AWT). Their Kotlin
-// reloads fine, but the native widgets keep whatever state they had; changing their setup code
-// needs a real restart. Everything drawn by Compose — chat, settings, host wizard, usage, tabs —
+// One thing does NOT hot-reload, by construction: the editor pane (JCEF — a heavyweight native
+// Chromium window behind SwingPanel). Its Kotlin reloads fine, but the native widget keeps
+// whatever state it had; changing its setup code needs a real restart. Everything drawn by
+// Compose — chat, settings, host wizard, usage, tabs, and since Plan 4 the terminal itself —
 // reloads normally.
 tasks.withType<ComposeHotRun>().configureEach {
     mainClass.set("dev.supermux.desktop.MainKt")

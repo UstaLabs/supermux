@@ -56,12 +56,6 @@ kotlin {
                 implementation(libs.serialization.json)
                 // kotlinx.browser / org.w3c — no longer in the wasm stdlib.
                 implementation(libs.kotlinx.browser)
-                // The terminal pane. KGP resolves these through its own yarn workspace
-                // (build/wasm/node_modules) and webpack bundles them into app.js; the stylesheet is
-                // NOT bundled, so `stageForBroker` copies xterm.css to the root of the served tree.
-                implementation(npm("@xterm/xterm", "5.5.0"))
-                implementation(npm("@xterm/addon-fit", "0.10.0"))
-                implementation(npm("@xterm/addon-webgl", "0.18.0"))
             }
         }
         wasmJsTest {
@@ -143,12 +137,16 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 
 // Ceiling on the gzipped download (spec §8): app + skiko wasm + loader js under assets/.
 // MEASURED on this branch, gzipped: skiko.wasm 3.18 MiB (the immovable floor), the app wasm — all
-// of `:ui` + `:shared` — 2.58 MiB, the webpack loader app.js 0.20 MiB; 5.94 MiB (6085 KiB) total,
-// of which xterm.js is 0.10 MiB — the same tree measured 5981 KiB before task 3 bundled it.
-// 8 MiB is a bloat catch with roughly 2 MiB of headroom for the
-// remaining panes of this plan — NOT a target to grow into. The staged `editor/` bundle
-// (CodeMirror, 1.3 MB raw) sits outside assets/ and is deliberately not counted: it is a separate,
-// lazily-loaded page.
+// of `:ui` + `:shared` — 2.58 MiB, the webpack loader app.js 0.20 MiB; 5.94 MiB (6085 KiB) total.
+// 8 MiB is a bloat catch with roughly 2 MiB of headroom — NOT a target to grow into.
+//
+// The terminal's weight MOVED in Plan 4 rather than vanishing: the 0.10 MiB of xterm.js counted
+// above went with the DOM renderer, and the engine is now `supermux-terminal.wasm`, emitted as its
+// own hashed asset under assets/ — so it is inside this ceiling too, and the figures above predate
+// it. Re-measure before reading the headroom as spare.
+//
+// The staged `editor/` bundle (CodeMirror, 1.3 MB raw) sits outside assets/ and is deliberately not
+// counted: it is a separate, lazily-loaded page.
 val maxGzipBytes = 8L * 1024 * 1024
 
 fun sha8(bytes: ByteArray): String =
@@ -161,14 +159,12 @@ fun gzipSize(bytes: ByteArray): Long {
 }
 
 // Extra sources `stageForBroker` copies in beside the webpack dist. Hoisted out of the task action
-// so they can be declared as INPUTS: editing the CodeMirror bundle or bumping xterm must re-run the
-// task, not leave a stale copy published under an up-to-date check.
+// so they can be declared as INPUTS: editing the CodeMirror bundle must re-run the task, not leave
+// a stale copy published under an up-to-date check.
 //
-// xterm.js's stylesheet is a real npm file that webpack never bundles, so it is lifted straight out
-// of KGP's yarn workspace. The editor bundle's single source of truth is the committed android
-// assets dir (desktop reads the same files).
-val xtermCssFile: File = rootProject.layout.buildDirectory
-    .file("wasm/node_modules/@xterm/xterm/css/xterm.css").get().asFile
+// The editor bundle's single source of truth is the committed android assets dir (desktop reads
+// the same files). There is no stylesheet to lift out of KGP's yarn workspace any more — the
+// terminal was the only npm package this app had, and the Compose renderer needs no CSS.
 val editorSrcDir: File = rootProject.projectDir.resolve("android/src/main/assets/editor")
 
 // NOT under `src/wasmJsMain/resources/`: everything there is copied to the webpack dist root, where
@@ -192,7 +188,6 @@ val stageForBroker by tasks.registering {
     // `files(...).optional()` rather than `file(...)`: a missing input must fail in the task action
     // with its own explanatory message, not as an opaque Gradle snapshotting error. The shim is
     // genuinely optional until task 4 creates it.
-    inputs.files(xtermCssFile).withPropertyName("xtermCss").optional()
     inputs.dir(editorSrcDir).withPropertyName("editorBundle")
     inputs.files(editorShimFile).withPropertyName("editorShim").optional()
     // `.optional()` like the editor shim above: a missing `pwa/` must fail in the task action
@@ -262,12 +257,6 @@ val stageForBroker by tasks.registering {
             dst.parentFile.mkdirs()
             if (f.name == "index.html") dst.writeText(rewrite(f.readText(), "")) else f.copyTo(dst, overwrite = true)
         }
-
-        // xterm.js's stylesheet, at the root of the served tree (no-cache, ~5 KB); index.html links
-        // it by name. Deliberately unhashed: cheap to revalidate, and one fewer rewrite rule. Fail
-        // loudly if the dependency moved rather than shipping a terminal with no CSS.
-        check(xtermCssFile.isFile) { "xterm.css not found at $xtermCssFile — did the npm dependency change?" }
-        xtermCssFile.copyTo(staging.resolve("xterm.css"), overwrite = true)
 
         // The CodeMirror editor bundle, staged at `editor/` in the ROOT, not under assets/: the page
         // references `cm6.js` by a relative bare name, so content-hashing would break it. 1.3 MB

@@ -23,7 +23,6 @@ composeBom = "2026.09.00"
 activityCompose = "1.10.1"
 lifecycle = "2.8.7"
 coreSplashscreen = "1.0.1"
-termlib = "0.0.35"
 skie = "0.10.14"
 zxingEmbedded = "4.3.0"
 zxingCore = "3.4.1"
@@ -43,7 +42,6 @@ navigation3 = "1.1.1"
 # :ui's jvmTest names it (to fire a real back gesture at a shared screen); production pulls the
 # same artifact transitively through ui-backhandler.
 navigationEvent = "1.1.0"  # CMP 1.12.0's ui module requires navigationevent-compose 1.1.0.
-jediterm = "3.73"
 # JBR API facade (Maven Central, Apache-2.0). Compiles against any JDK; at run time
 # JBR.getWindowDecorations() returns the real service under the pinned JetBrains Runtime used by
 # :desktop:run, :desktop:hotRun, and packaged apps; it remains a safe null facade in stock-JDK tests.
@@ -94,7 +92,6 @@ compose-material3 = { module = "androidx.compose.material3:material3" }
 compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 compose-animation = { module = "androidx.compose.animation:animation" }
-termlib = { module = "org.connectbot:termlib", version.ref = "termlib" }
 zxing-android-embedded = { module = "com.journeyapps:zxing-android-embedded", version.ref = "zxingEmbedded" }
 # Pure-Java QR encoder/decoder (no Android, no network) for the desktop first-run host wizard's
 # pairing QR (Plan 3 Task 3). Distinct from zxing-android-embedded above, which is Android-only.
@@ -103,8 +100,6 @@ androidx-datastore-preferences = { module = "androidx.datastore:datastore-prefer
 firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
 coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
-jediterm-core = { module = "org.jetbrains.jediterm:jediterm-core", version.ref = "jediterm" }
-jediterm-ui = { module = "org.jetbrains.jediterm:jediterm-ui", version.ref = "jediterm" }
 jbr-api = { module = "org.jetbrains.runtime:jbr-api", version.ref = "jbrApi" }
 jcef = { module = "org.jetbrains.intellij.deps.jcef:jcef", version.ref = "jcef" }
 # GFM markdown parser (multiplatform). Used by the Android + desktop chat renderers; iOS uses its
