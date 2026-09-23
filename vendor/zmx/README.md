@@ -412,12 +412,25 @@ clean pin + verified patch (pass), an unrelated edit in the upstream cache
   `src/core/terminal/zmx/helper/helper_smoke.py` drives it against a real
   daemon. Nothing is installed system-wide: `build/zmx/out/` holds both
   binaries and the manifest the TypeScript side verifies.
-* **A viewer is never told it LOST the lease.** The daemon sends `BrokerLease`
-  to the winner and nothing to the loser, so a helper that is superseded keeps
-  believing it owns the size until its next `BrokerResize` is silently
-  dropped. Harmless today (resize is advisory and the next focus claim fixes
-  it) but it means the `owner` event in the TS contract cannot be driven
-  purely from the wire; Task 5 should decide whether that needs a message.
+* ~~**A viewer is never told it LOST the lease.**~~ **Decided in Task 5: no
+  new message.** The daemon still sends `BrokerLease` to the winner only, and
+  the broker DERIVES the loser from it — every broker viewer of a target is a
+  helper of one process, so a lease landing on viewer X is proof that whoever
+  the broker last saw own that target has lost it.
+  `ZmxWorkspaceBackend.noteLease` is that deduction, and it is where the
+  contract's `owner:false` comes from; `owner:true` is never derived, it is
+  always the wire's own `lease`. A non-owner's `resize()` is not sent at all
+  and its `reply()` returns false, so nothing pretends a dropped message
+  landed. The one case this cannot see is a lease granted to a viewer in
+  ANOTHER broker process; there is none, because the socket lives in our
+  private 0700 directory and `setLeader` refuses to move a held lease.
+
+* **`kill` is identity-checked now** (Task 5). It was the one path that could
+  destroy a session without reading its `mux.target` label — the TS command
+  type had no `name` field, so the helper's check could never fire from the
+  broker — which made a socket-basename collision able to take another
+  workspace's shell with it. `name` is required on both sides and an
+  unverifiable session is left alone.
 * **The two ghostty pins differ** (client `22391ed…`, zmx `8af6897…`). Harmless
   today because nothing shares VT state across them, but the snapshot the
   daemon produces is parsed by the client's emulator, so the pair needs a joint
