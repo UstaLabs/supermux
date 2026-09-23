@@ -1,5 +1,46 @@
+// The Windows half of a workspace terminal.
+//
+// Windows does NOT run zmx. It runs sessiond, a broker-side service that owns
+// ConPTY handles and a headless terminal model per target (core/sessiond/), and
+// this file is the adapter between that and the platform-neutral
+// WorkspaceTerminalBackend contract. Nothing here speaks the zmx protocol and
+// nothing here should be read as if it did.
+//
+// What sessiond already gives us, and what it does not:
+//
+//   * ATOMIC REPLAY — yes. `SessionStore.attach` queues the target screen's
+//     raw history as one chunk INSIDE an output-order barrier, so a viewer
+//     never sees a half-consumed escape sequence and never misses a byte that
+//     was broadcast while it was attaching. `SessiondWorkspaceBackend` wraps
+//     exactly that chunk in the contract's `reset`/`replay-start`/`replay-end`
+//     boundary; it does not re-implement or re-order it.
+//
+//   * A FOCUS LEASE — no. sessiond has no notion of one owner among several
+//     viewers, so the lease lives HERE: the adapter tracks focus claims per
+//     target, applies only the owner's geometry, and emits the `owner` event
+//     itself. On zmx that authority is the daemon's; on Windows it is ours,
+//     and the contract is what makes the two look the same to a client.
+//
+//   * QUERY ANSWERS — no, and that is the point. The server's terminal model
+//     (core/sessiond/screen.ts, @xterm/headless) CONSUMES device-attribute and
+//     status queries and its own generated answers go nowhere: nothing
+//     subscribes to `Terminal.onData`. So the shell's query is answered by
+//     viewers and by nobody else, and every answer past the first is read by
+//     the shell as typed input. Two rules keep it to one: a reply must come
+//     from the viewer that owns the lease, and it must come after the replay
+//     boundary has closed — a replay hands a viewer the program's own earlier
+//     bytes, queries among them, and an answer to one of those is not an
+//     answer, it is keystrokes.
 import { randomUUID } from "node:crypto"
 import type { RuntimeViewer, SessionBackend } from "../runtime/session-backend"
+import {
+  WorkspaceTerminalError,
+  type WorkspaceTerminalBackend,
+  type WorkspaceTerminalEvent,
+  type WorkspaceTerminalKey,
+  type WorkspaceTerminalSummary,
+  type WorkspaceTerminalViewer,
+} from "./workspace-backend"
 
 export type SessiondTerminalKind = "scratch" | "agent"
 export type FindExecutable = (name: string) => string | null
@@ -261,5 +302,410 @@ export async function createSessiondTerm(options: SessiondTermOptions): Promise<
       }
     }
     throw error
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  The workspace contract, on sessiond
+// ---------------------------------------------------------------------------
+
+export interface SessiondWorkspaceOptions {
+  backend: SessionBackend
+  /** The environment a new target starts with. Defaults to the broker's own. */
+  environment?: Readonly<Record<string, string>>
+  findExecutable?: FindExecutable
+}
+
+/** Per-target state sessiond does not hold for us: who is watching, and which
+ * of them owns the size. */
+type SessiondTargetState = {
+  key: WorkspaceTerminalKey
+  viewers: Set<SessiondWorkspaceViewer>
+  /** Focus claims, oldest first. The newest owns the size; when it leaves, the
+   * one under it takes over. */
+  claims: SessiondWorkspaceViewer[]
+  owner: SessiondWorkspaceViewer | null
+  /** True from the moment `close` decides to kill, so the viewer teardown that
+   * follows is not reported to a client as "I lost your terminal". */
+  closing: boolean
+}
+
+const keyId = (key: WorkspaceTerminalKey) => `${sessiondTerminalGroup(key.scope)}\0${sessiondTerminalName(key.terminalId)}`
+
+export class SessiondWorkspaceBackend implements WorkspaceTerminalBackend {
+  readonly #backend: SessionBackend
+  readonly #environment?: Readonly<Record<string, string>>
+  readonly #findExecutable?: FindExecutable
+  readonly #targets = new Map<string, SessiondTargetState>()
+  /** create/close serialisation, per logical target. */
+  readonly #chain = new Map<string, Promise<unknown>>()
+
+  constructor(options: SessiondWorkspaceOptions) {
+    this.#backend = options.backend
+    this.#environment = options.environment
+    this.#findExecutable = options.findExecutable
+  }
+
+  #serialize<T>(key: WorkspaceTerminalKey, run: () => Promise<T>): Promise<T> {
+    const id = keyId(key)
+    const previous = this.#chain.get(id) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(run)
+    // The chain link never rejects — one failed create must not poison every
+    // later operation on that target — but the CALLER still sees the failure.
+    const tail = next.then(() => undefined, () => undefined)
+    this.#chain.set(id, tail)
+    void tail.finally(() => { if (this.#chain.get(id) === tail) this.#chain.delete(id) })
+    return next
+  }
+
+  #target(key: WorkspaceTerminalKey): SessiondTargetState {
+    const id = keyId(key)
+    let target = this.#targets.get(id)
+    if (!target) {
+      target = { key, viewers: new Set(), claims: [], owner: null, closing: false }
+      this.#targets.set(id, target)
+    }
+    return target
+  }
+
+  #forget(target: SessiondTargetState): void {
+    if (target.viewers.size > 0) return
+    const id = keyId(target.key)
+    if (this.#targets.get(id) === target) this.#targets.delete(id)
+  }
+
+  /**
+   * The shell a new target runs.
+   *
+   * A caller's `shell` is honoured when this host can actually find it, which
+   * on Windows it usually cannot — the contract's POSIX shell path is not a
+   * program here. PowerShell discovery is the fallback, which is what a
+   * Windows workspace terminal has always been.
+   */
+  #shellArgv(shell: string): string[] {
+    const find = this.#findExecutable ?? defaultFindExecutable
+    const resolved = shell ? find(shell) : null
+    if (resolved) return [resolved]
+    return [findPowerShell(this.#findExecutable), "-NoLogo"]
+  }
+
+  async ensure(key: WorkspaceTerminalKey, options: {
+    cwd: string
+    shell: string
+    env: Record<string, string>
+    cols: number
+    rows: number
+  }): Promise<void> {
+    const group = sessiondTerminalGroup(key.scope)
+    const name = sessiondTerminalName(key.terminalId)
+    await this.#serialize(key, async () => {
+      const resolved = await this.#backend.resolve(group, name)
+      if (resolved) {
+        if (await this.#backend.livePid(resolved) !== null) return
+        // A resolved target with no live process is a corpse, not a terminal.
+        // It is replaced, never attached to, and never silently reused.
+        await this.#backend.kill(resolved)
+      }
+      const argv = this.#shellArgv(options.shell)
+      const env = { ...(this.#environment ? { ...this.#environment } : processEnvironment()), ...options.env }
+      await this.#backend.create({
+        group, name, cwd: options.cwd, argv, env, cols: options.cols, rows: options.rows,
+      })
+    })
+  }
+
+  async attachExisting(
+    key: WorkspaceTerminalKey,
+    viewerId: string,
+    emit: (event: WorkspaceTerminalEvent) => Promise<void>,
+  ): Promise<WorkspaceTerminalViewer> {
+    const group = sessiondTerminalGroup(key.scope)
+    const name = sessiondTerminalName(key.terminalId)
+    const missing = () =>
+      new WorkspaceTerminalError("target-not-found", `no workspace terminal ${key.scope}/${key.terminalId}`)
+
+    const target = this.#target(key)
+    if (target.closing) { this.#forget(target); throw missing() }
+    const targetId = await this.#backend.resolve(group, name)
+    if (!targetId || await this.#backend.livePid(targetId) === null) {
+      this.#forget(target)
+      throw missing()
+    }
+
+    const viewer = new SessiondWorkspaceViewer(this, target, `${viewerId}-${randomUUID().slice(0, 8)}`, emit)
+    let runtime: RuntimeViewer
+    try {
+      runtime = await this.#backend.attach(targetId, viewer.id, data => viewer.accept(data))
+    } catch (error) {
+      this.#forget(target)
+      throw error
+    }
+    // Attaching is not instant, and the replay was queued INSIDE it. A close
+    // may have landed meanwhile: the target is gone and this viewer, which
+    // sessiond has already registered, must not outlive it.
+    if (target.closing || this.#targets.get(keyId(key)) !== target) {
+      try { runtime.close() } catch {}
+      this.#forget(target)
+      throw missing()
+    }
+    target.viewers.add(viewer)
+    await viewer.bind(runtime)
+    return viewer
+  }
+
+  async list(scope: string): Promise<WorkspaceTerminalSummary[]> {
+    const targets = await this.#backend.list(sessiondTerminalGroup(scope))
+    return targets
+      .map(target => parseSessiondTerminalName(target.name))
+      .filter((id): id is string => id !== null)
+      .map(id => ({ scope, terminalId: id, createdAt: 0 }))
+      // sessiond does not record a creation time, so the order is the stable
+      // one a client can rebuild a tab strip from rather than an invented age.
+      .sort((a, b) => a.terminalId.localeCompare(b.terminalId))
+  }
+
+  async exists(key: WorkspaceTerminalKey): Promise<boolean> {
+    const targetId = await this.#backend.resolve(
+      sessiondTerminalGroup(key.scope), sessiondTerminalName(key.terminalId))
+    return targetId !== null && await this.#backend.livePid(targetId) !== null
+  }
+
+  async close(key: WorkspaceTerminalKey): Promise<void> {
+    const group = sessiondTerminalGroup(key.scope)
+    const name = sessiondTerminalName(key.terminalId)
+    const target = this.#target(key)
+    target.closing = true
+    // Viewers first: a close we asked for must not reach a client as a failure.
+    for (const viewer of [...target.viewers]) viewer.discard()
+    this.#forget(target)
+    await this.#serialize(key, async () => {
+      const targetId = await this.#backend.resolve(group, name)
+      if (targetId) await this.#backend.kill(targetId)
+    })
+  }
+
+  async closeScope(scope: string): Promise<void> {
+    const group = sessiondTerminalGroup(scope)
+    // EXACTLY this scope: the group name is a hex encoding of it, so a
+    // neighbouring scope can never share the group of this one.
+    const targets = await this.#backend.list(group)
+    for (const target of targets) {
+      const terminalId = parseSessiondTerminalName(target.name)
+      if (terminalId === null) continue
+      await this.close({ scope, terminalId })
+    }
+  }
+
+  async shutdownViewers(): Promise<void> {
+    const targets = [...this.#targets.values()]
+    this.#targets.clear()
+    await Promise.all(targets.flatMap(target => [...target.viewers].map(viewer => viewer.detach())))
+  }
+
+  // ---- what viewers call back into ---------------------------------------
+
+  /** A focus claim. The newest wins; the loser is told, because on Windows
+   * there is no daemon to tell it. */
+  async claimFocus(target: SessiondTargetState, viewer: SessiondWorkspaceViewer): Promise<void> {
+    target.claims = target.claims.filter(claim => claim !== viewer)
+    target.claims.push(viewer)
+    const previous = target.owner
+    target.owner = viewer
+    if (previous && previous !== viewer) await previous.noteOwner(false)
+    await viewer.noteOwner(true)
+    await viewer.applyGeometry()
+  }
+
+  /** A release, a detach or a lost viewer. The size goes to the claim under
+   * the one that left, or nowhere. */
+  async releaseFocus(target: SessiondTargetState, viewer: SessiondWorkspaceViewer): Promise<void> {
+    target.claims = target.claims.filter(claim => claim !== viewer)
+    if (target.owner !== viewer) return
+    target.owner = null
+    await viewer.noteOwner(false)
+    const successor = [...target.claims].reverse().find(claim => claim.live)
+    if (!successor) return
+    target.owner = successor
+    await successor.noteOwner(true)
+    await successor.applyGeometry()
+  }
+
+  noteGone(target: SessiondTargetState, viewer: SessiondWorkspaceViewer): void {
+    target.viewers.delete(viewer)
+    target.claims = target.claims.filter(claim => claim !== viewer)
+    if (target.owner === viewer) target.owner = null
+    this.#forget(target)
+  }
+
+  /** The target's process ended. It is GONE; nothing attaches to it again. */
+  noteExit(target: SessiondTargetState): void {
+    target.closing = true
+    this.#forget(target)
+  }
+}
+
+/**
+ * One viewer of a Windows workspace terminal.
+ *
+ * The replay boundary is deterministic for an in-process sessiond: the store
+ * queues the history inside the attach barrier and its delivery loop calls
+ * `onData` synchronously from there, so everything that arrives before
+ * `attach()` resolves IS the replay. Across the sessiond SOCKET that ordering
+ * is not observable — the wire has no replay marker — so a remote attach
+ * reports an EMPTY boundary and the history arrives as live output. That is a
+ * known gap, not a claim: a `replay` flag on the sessiond data frame is what
+ * would close it.
+ */
+class SessiondWorkspaceViewer implements WorkspaceTerminalViewer {
+  #runtime?: RuntimeViewer
+  #dead = false
+  /** True while we are deliberately dropping this viewer, so the teardown that
+   * follows is never reported as a failure. */
+  #discarding = false
+  /** Bytes delivered before `attach()` resolved: sessiond's atomic replay. */
+  #replay: Uint8Array[] | null = []
+  #replayClosed = false
+  #owner = false
+  #cols = 80
+  #rows = 24
+  #unsubscribeExit?: () => void
+  #unsubscribeFailure?: () => void
+  #tail: Promise<void> = Promise.resolve()
+
+  constructor(
+    private readonly backend: SessiondWorkspaceBackend,
+    private readonly target: SessiondTargetState,
+    readonly id: string,
+    private readonly emit: (event: WorkspaceTerminalEvent) => Promise<void>,
+  ) {}
+
+  get live(): boolean {
+    return !this.#dead
+  }
+
+  /** Output from sessiond. Before the boundary closes it is the replay. */
+  accept(data: Uint8Array): void | Promise<void> {
+    if (this.#dead) return
+    if (this.#replay) { this.#replay.push(data.slice()); return }
+    return this.#deliver({ type: "output", bytes: data })
+  }
+
+  /** Close the replay boundary and start reporting exits and failures. */
+  async bind(runtime: RuntimeViewer): Promise<void> {
+    this.#runtime = runtime
+    if (this.#dead) { try { runtime.close() } catch {} ; return }
+
+    const replay = this.#replay ?? []
+    this.#replay = null
+    // One epoch, ours: sessiond has no epoch of its own to carry, and the
+    // boundary is what tells a client "everything before this is history".
+    const epoch = `sessiond-${this.id}`
+    await this.#deliver({ type: "reset", epoch })
+    await this.#deliver({ type: "replay-start", epoch })
+    for (const bytes of replay) await this.#deliver({ type: "output", bytes })
+    await this.#deliver({ type: "replay-end", epoch })
+    this.#replayClosed = true
+
+    if (runtime.onExit) this.#unsubscribeExit = runtime.onExit(code => { void this.#onExit(code) })
+    else void runtime.exited?.then(code => { void this.#onExit(code) }, () => undefined)
+    this.#unsubscribeFailure = runtime.onFailure?.(reason => { void this.#onFailure(reason) })
+  }
+
+  write(bytes: Uint8Array): boolean {
+    if (this.#dead || !this.#runtime) return false
+    try { return this.#runtime.write(bytes) } catch { return false }
+  }
+
+  reply(bytes: Uint8Array): boolean {
+    if (this.#dead || !this.#runtime) return false
+    // Owner-only, and after the replay. Both rules exist because the server's
+    // terminal model answers nothing itself: every answer a viewer sends
+    // reaches the shell, and the second one is typing.
+    if (!this.#owner || !this.#replayClosed) return false
+    try { return this.#runtime.write(bytes) } catch { return false }
+  }
+
+  async resize(cols: number, rows: number): Promise<void> {
+    if (Number.isInteger(cols) && cols > 0) this.#cols = cols
+    if (Number.isInteger(rows) && rows > 0) this.#rows = rows
+    // A background viewer may keep reporting layout; only the owner's reaches
+    // the ConPTY.
+    if (!this.#owner) return
+    await this.applyGeometry()
+  }
+
+  async focus(active: boolean, cols: number, rows: number): Promise<void> {
+    if (Number.isInteger(cols) && cols > 0) this.#cols = cols
+    if (Number.isInteger(rows) && rows > 0) this.#rows = rows
+    if (this.#dead) return
+    if (active) await this.backend.claimFocus(this.target, this)
+    else await this.backend.releaseFocus(this.target, this)
+  }
+
+  async applyGeometry(): Promise<void> {
+    if (this.#dead || !this.#runtime) return
+    try { this.#runtime.resize(this.#cols, this.#rows) } catch {}
+  }
+
+  async noteOwner(enabled: boolean): Promise<void> {
+    if (this.#owner === enabled) return
+    this.#owner = enabled
+    await this.#deliver({ type: "owner", enabled })
+  }
+
+  async detach(): Promise<void> {
+    if (this.#dead) return
+    this.#dead = true
+    this.#discarding = true
+    this.#teardown()
+    await this.backend.releaseFocus(this.target, this)
+    this.backend.noteGone(this.target, this)
+  }
+
+  /** Drop this viewer NOW, with no client event: the target is going away. */
+  discard(): void {
+    if (this.#dead) return
+    this.#dead = true
+    this.#discarding = true
+    this.#teardown()
+    this.backend.noteGone(this.target, this)
+  }
+
+  #teardown(): void {
+    this.#unsubscribeExit?.()
+    this.#unsubscribeExit = undefined
+    this.#unsubscribeFailure?.()
+    this.#unsubscribeFailure = undefined
+    const runtime = this.#runtime
+    this.#runtime = undefined
+    try { runtime?.close() } catch {}
+  }
+
+  async #onExit(code: number): Promise<void> {
+    if (this.#dead) return
+    this.#dead = true
+    this.#discarding = true
+    this.backend.noteExit(this.target)
+    this.backend.noteGone(this.target, this)
+    this.#teardown()
+    // sessiond reports a process exit CODE and nothing else; there is no
+    // signal on Windows and no "we could not reap it" state to represent.
+    await this.#deliver({ type: "exit", known: true, code, signal: null })
+  }
+
+  async #onFailure(reason: string): Promise<void> {
+    if (this.#dead || this.#discarding) return
+    this.#dead = true
+    this.backend.noteGone(this.target, this)
+    this.#teardown()
+    // A lost VIEWER, never the target: the ConPTY and its shell are untouched,
+    // and re-attaching is how a client recovers.
+    await this.#deliver({ type: "failure", code: "backend-unavailable", recoverable: true, message: reason })
+  }
+
+  #deliver(event: WorkspaceTerminalEvent): Promise<void> {
+    const next = this.#tail.catch(() => undefined).then(() => this.emit(event))
+    this.#tail = next.catch(() => undefined)
+    return next
   }
 }

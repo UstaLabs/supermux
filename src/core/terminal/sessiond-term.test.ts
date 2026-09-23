@@ -3,9 +3,19 @@ import type { RuntimeTarget, RuntimeViewer, SessionBackend } from "../runtime/se
 import {
   createSessiondTerm,
   parseSessiondTerminalName,
+  SessiondWorkspaceBackend,
   sessiondTerminalGroup,
   sessiondTerminalName,
 } from "./sessiond-term"
+import { isWorkspaceTerminalError, type WorkspaceTerminalKey } from "./workspace-backend"
+import {
+  CONTRACT_A,
+  CONTRACT_ENSURE,
+  recorder,
+  runWorkspaceBackendContract,
+  type Gate,
+  type WorkspaceBackendWorld,
+} from "./workspace-backend.contract"
 
 const bytes = (value: string) => new TextEncoder().encode(value)
 const text = (value: Uint8Array) => new TextDecoder().decode(value)
@@ -290,5 +300,248 @@ describe("SessiondTerm", () => {
       workdir: "C:\\w", cols: 80, rows: 24, environment: {}, findExecutable: () => "powershell.exe",
     })).rejects.toThrow("post-create liveness denied; target cleanup failed: cleanup denied")
     expect(backend.kills).toEqual(["target-1"])
+  })
+})
+
+// ---------------------------------------------------------------------------
+//  The workspace contract, on sessiond
+// ---------------------------------------------------------------------------
+
+/**
+ * A sessiond stand-in for the shared contract suite.
+ *
+ * It is faithful to the two behaviours of the real store that this adapter is
+ * built around: the replay is queued and DELIVERED synchronously inside
+ * `attach()` (SessionStore.pumpViewer runs its loop up to the first await
+ * before the attach barrier resolves), and a target has no notion of an owner,
+ * so nothing here grants one — the lease is entirely the adapter's.
+ */
+class ContractBackend implements SessionBackend {
+  targets = new Map<string, RuntimeTarget & { group: string; pty: string[]; cols: number; rows: number; history: string }>()
+  creates = 0
+  viewerCloses = 0
+  createGate?: Promise<void>
+  attachGate?: Promise<void>
+  private viewers = new Map<string, { targetId: string; exit(code: number): void; fail(reason: string): void }>()
+  private next = 1
+
+  async create(opts: Parameters<SessionBackend["create"]>[0]): Promise<RuntimeTarget> {
+    await this.createGate
+    this.creates++
+    const target = {
+      id: `sd-${this.next++}`,
+      name: opts.name,
+      pid: 5000 + this.next,
+      alive: true,
+      group: opts.group,
+      pty: [] as string[],
+      cols: opts.cols ?? 80,
+      rows: opts.rows ?? 24,
+      history: `${opts.cwd}$ `,
+    }
+    this.targets.set(target.id, target)
+    return target
+  }
+  async list(group?: string): Promise<RuntimeTarget[]> {
+    return [...this.targets.values()].filter(t => t.alive && (group === undefined || t.group === group))
+  }
+  async resolve(group: string, name: string): Promise<string | null> {
+    return [...this.targets.values()].find(t => t.alive && t.group === group && t.name === name)?.id ?? null
+  }
+  async livePid(targetId: string): Promise<number | null> { return this.targets.get(targetId)?.pid ?? null }
+  async write(targetId: string, data: Uint8Array): Promise<void> {
+    this.targets.get(targetId)?.pty.push(text(data))
+  }
+  async sendKeys(): Promise<void> {}
+  async resize(targetId: string, cols: number, rows: number): Promise<void> {
+    const target = this.targets.get(targetId)
+    if (target) { target.cols = cols; target.rows = rows }
+  }
+  async capture(): Promise<string | null> { return null }
+  async attach(targetId: string, viewerId: string, onData: (data: Uint8Array) => void | Promise<void>): Promise<RuntimeViewer> {
+    await this.attachGate
+    const target = this.targets.get(targetId)
+    if (!target) throw new Error("no such target")
+    let open = true
+    const entry = {
+      targetId,
+      exit: (code: number) => { exitHandler?.(code) },
+      fail: (reason: string) => { failureHandler?.(reason) },
+    }
+    let exitHandler: ((code: number) => void) | undefined
+    let failureHandler: ((reason: string) => void) | undefined
+    this.viewers.set(viewerId, entry)
+    // The atomic replay, delivered from inside the attach barrier.
+    if (target.history.length > 0) void onData(bytes(target.history))
+    return {
+      close: () => { if (open) { open = false; this.viewerCloses++; this.viewers.delete(viewerId) } },
+      write: data => {
+        if (!open || !target.alive) return false
+        target.pty.push(text(data))
+        return true
+      },
+      resize: (cols, rows) => {
+        if (!open || !target.alive) return false
+        target.cols = cols
+        target.rows = rows
+        return true
+      },
+      onExit: handler => { exitHandler = handler; return () => { exitHandler = undefined } },
+      onFailure: handler => { failureHandler = handler; return () => { failureHandler = undefined } },
+    }
+  }
+  async interrupt(): Promise<void> {}
+  async kill(targetId: string): Promise<void> {
+    const target = this.targets.get(targetId)
+    if (target) { target.alive = false; target.pid = null }
+  }
+
+  /** The LIVE target for a key, or the last corpse if the key has only those:
+   * a replaced target and the one that replaced it share a group and name. */
+  find(key: WorkspaceTerminalKey) {
+    const group = sessiondTerminalGroup(key.scope)
+    const name = sessiondTerminalName(key.terminalId)
+    const matches = [...this.targets.values()].filter(t => t.group === group && t.name === name)
+    return matches.find(t => t.alive) ?? matches.at(-1)
+  }
+  async endProcess(key: WorkspaceTerminalKey, code: number): Promise<void> {
+    const target = this.find(key)
+    if (!target) return
+    target.alive = false
+    target.pid = null
+    for (const [, viewer] of this.viewers) if (viewer.targetId === target.id) viewer.exit(code)
+    // sessiond reports an exit through a handler, not a promise the caller
+    // holds; give the adapter's delivery its turn before the test looks.
+    await tick()
+  }
+  failViewers(reason: string): void {
+    for (const [, viewer] of this.viewers) viewer.fail(reason)
+  }
+}
+
+function sessiondWorld(): WorkspaceBackendWorld {
+  const backend = new ContractBackend()
+  const options = {
+    backend,
+    environment: { Path: "C:\\bin" },
+    // The contract's POSIX shell is not a program here, so the adapter falls
+    // back to PowerShell discovery — which is what Windows always did.
+    findExecutable: (name: string) => (name === "pwsh.exe" ? "C:\\pwsh.exe" : null),
+  }
+  const gate = (which: "createGate" | "attachGate"): Gate => {
+    let resolve!: () => void
+    backend[which] = new Promise<void>(r => { resolve = r })
+    return { release: () => { backend[which] = undefined; resolve() } }
+  }
+  return {
+    backend: new SessiondWorkspaceBackend(options),
+    restart: () => new SessiondWorkspaceBackend(options),
+    creates: () => backend.creates,
+    pty: key => (backend.find(key)?.pty ?? []).join(""),
+    size: key => ({ cols: backend.find(key)?.cols ?? 0, rows: backend.find(key)?.rows ?? 0 }),
+    exit: (key, status) => backend.endProcess(key, status.code ?? 0),
+    gateCreate: () => gate("createGate"),
+    gateAttach: () => gate("attachGate"),
+    dispose: async () => {},
+  }
+}
+
+runWorkspaceBackendContract("sessiond", async () => sessiondWorld())
+
+describe("SessiondWorkspaceBackend", () => {
+  function harness() {
+    const backend = new ContractBackend()
+    return {
+      backend,
+      workspace: new SessiondWorkspaceBackend({
+        backend,
+        environment: { Path: "C:\\bin" },
+        findExecutable: name => (name === "pwsh.exe" ? "C:\\pwsh.exe" : null),
+      }),
+    }
+  }
+
+  test("a new target is PowerShell, in the workspace directory, with the broker environment", async () => {
+    const { backend, workspace } = harness()
+    await workspace.ensure(CONTRACT_A, { ...CONTRACT_ENSURE, cwd: "C:\\work", env: { EXTRA: "1" } })
+    const target = backend.find(CONTRACT_A)!
+    expect(target.history).toBe("C:\\work$ ")
+    expect(backend.creates).toBe(1)
+  })
+
+  test("the atomic replay is what sessiond queued, inside one epoch", async () => {
+    const { workspace } = harness()
+    await workspace.ensure(CONTRACT_A, { ...CONTRACT_ENSURE, cwd: "C:\\work" })
+    const { events, emit } = recorder()
+    await workspace.attachExisting(CONTRACT_A, "v1", emit)
+    expect(events.map(event => event.type)).toEqual(["reset", "replay-start", "output", "replay-end"])
+    expect(text((events[2] as { bytes: Uint8Array }).bytes)).toBe("C:\\work$ ")
+    const epochs = new Set(events.filter(e => "epoch" in e).map(e => (e as { epoch: string }).epoch))
+    expect(epochs.size).toBe(1)
+  })
+
+  test("a reply is refused until the viewer owns the lease AND the replay has closed", async () => {
+    const { backend, workspace } = harness()
+    await workspace.ensure(CONTRACT_A, { ...CONTRACT_ENSURE, cwd: "C:\\work" })
+    const viewer = await workspace.attachExisting(CONTRACT_A, "v1", recorder().emit)
+    // The server's terminal model answers nothing itself, so an unowned reply
+    // would be a second answer to the shell's one query.
+    expect(viewer.reply(bytes("\x1b[?1;2c"))).toBe(false)
+    await viewer.focus(true, 100, 30)
+    expect(viewer.reply(bytes("\x1b[?1;2c"))).toBe(true)
+    expect(backend.find(CONTRACT_A)!.pty.join("")).toContain("\x1b[?1;2c")
+  })
+
+  test("a lost viewer is a failure, keeps the ConPTY, and is never an exit", async () => {
+    const { backend, workspace } = harness()
+    await workspace.ensure(CONTRACT_A, { ...CONTRACT_ENSURE, cwd: "C:\\work" })
+    const { events, emit } = recorder()
+    await workspace.attachExisting(CONTRACT_A, "v1", emit)
+    backend.failViewers("terminal viewer output queue exceeds 1048576 live bytes")
+
+    await tick()
+    expect(events.at(-1)).toEqual({
+      type: "failure",
+      code: "backend-unavailable",
+      recoverable: true,
+      message: "terminal viewer output queue exceeds 1048576 live bytes",
+    })
+    expect(events.some(event => event.type === "exit")).toBe(false)
+    expect(await workspace.exists(CONTRACT_A)).toBe(true)
+  })
+
+  test("a target whose process is gone is replaced by ensure, never attached to", async () => {
+    const { backend, workspace } = harness()
+    await workspace.ensure(CONTRACT_A, { ...CONTRACT_ENSURE, cwd: "C:\\work" })
+    const first = backend.find(CONTRACT_A)!
+    await backend.endProcess(CONTRACT_A, 1)
+
+    const error = await workspace.attachExisting(CONTRACT_A, "v1", recorder().emit)
+      .then(() => null, (e: unknown) => e)
+    expect(isWorkspaceTerminalError(error, "target-not-found")).toBe(true)
+
+    await workspace.ensure(CONTRACT_A, { ...CONTRACT_ENSURE, cwd: "C:\\work" })
+    expect(backend.creates).toBe(2)
+    expect(backend.find(CONTRACT_A)!.id).not.toBe(first.id)
+  })
+
+  test("the newest focus claim owns the size, and the previous owner is told", async () => {
+    const { backend, workspace } = harness()
+    await workspace.ensure(CONTRACT_A, { ...CONTRACT_ENSURE, cwd: "C:\\work" })
+    const first = recorder()
+    const second = recorder()
+    const one = await workspace.attachExisting(CONTRACT_A, "v1", first.emit)
+    const two = await workspace.attachExisting(CONTRACT_A, "v2", second.emit)
+
+    await one.focus(true, 100, 40)
+    await two.focus(true, 120, 50)
+    expect(first.events.at(-1)).toEqual({ type: "owner", enabled: false })
+    expect(backend.find(CONTRACT_A)!.cols).toBe(120)
+
+    // The newer claim leaving hands the size back to the one under it.
+    await two.detach()
+    expect(first.events.at(-1)).toEqual({ type: "owner", enabled: true })
+    await one.resize(64, 20)
+    expect(backend.find(CONTRACT_A)!.cols).toBe(64)
   })
 })
