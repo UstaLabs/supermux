@@ -820,8 +820,9 @@ README). Bundling fails with `Can't resolve './terminal-loader.mjs'` otherwise.
 Most hosts do not drive this package directly: they take
 **`dev.supermux.terminal:terminal-compose`**, the one Compose Multiplatform composable that draws a
 `TerminalSession` on a plain canvas, and get `terminal-core` with it (`api`). The two are versioned
-and published as a PAIR — `-Pterminal.version=` moves both and `:terminal-compose:verifyPairedVersion`
-fails a publish where they have drifted.
+and published as a PAIR — `-Pterminal.version=` moves both, `:terminal-compose:verifyPairedVersion`
+fails a publish where the two versions have drifted, and `:terminal-compose:verifyPairedCoreArtifacts`
+fails one where this package was never published at all.
 
 - Package docs with initialization, error, reset, effects and lifecycle examples:
   [`../../terminal-compose/README.md`](../../terminal-compose/README.md).

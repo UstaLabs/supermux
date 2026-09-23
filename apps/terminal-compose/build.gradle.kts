@@ -146,6 +146,11 @@ publishing {
     }
 }
 
+// A Mac is the only host that publishes the Apple targets; both the gate below and the Apple
+// publication guard at the end of this file turn on it.
+val macHost = System.getProperty("os.name").orEmpty().lowercase()
+    .let { it.startsWith("mac") || it.startsWith("darwin") }
+
 /**
  * The publication gate.
  *
@@ -165,7 +170,8 @@ val corePublishGate = if (Regex("-(dev|snapshot)", RegexOption.IGNORE_CASE).cont
 }
 val verifyPairedVersion = tasks.register("verifyPairedVersion") {
     group = "verification"
-    description = "Fail unless :terminal-core is being published at the same version as this module."
+    description = "Fail unless :terminal-core is CONFIGURED at the same version as this module. " +
+        "Whether it was actually published is verifyPairedCoreArtifacts' job."
     val own = version.toString()
     val core = project(":terminal-core").version.toString()
     doLast {
@@ -178,10 +184,77 @@ val verifyPairedVersion = tasks.register("verifyPairedVersion") {
         logger.lifecycle("terminal-compose: publishing as a pair with terminal-core $core")
     }
 }
+
+/**
+ * The other half of the pair rule: terminal-core must actually BE in the repository this publish
+ * writes to, at this exact version.
+ *
+ * [verifyPairedVersion] compares two version strings inside one Gradle invocation, which says
+ * nothing about what is on disk — publishing this module alone passed it happily and produced a POM
+ * naming `dev.supermux.terminal:terminal-core:<version>` that nothing in the repository answers.
+ * The consumer-smoke build then fails to RESOLVE, several steps away from the cause, and a real
+ * consumer would fail the same way.
+ *
+ * So the artifacts are checked: the root coordinate's POM and module metadata, and every
+ * per-target module the root metadata redirects to — following the same `available-at` links a
+ * consumer's dependency resolution follows, so the check adapts to whatever targets that publish
+ * contained instead of hard-coding a list. The Apple redirects are exempt off a Mac, which is the
+ * documented shape of a Linux publish (terminal-core/VERIFICATION.md §4) and not a drift.
+ *
+ * It is wired to the `localTest` publish tasks only, because a directory is the only repository
+ * this build has; `-PterminalCoreRepo=<dir>` points it elsewhere, exactly as it does for
+ * consumer-smoke (and is how the failure mode itself is exercised — see terminal-compose/README.md).
+ */
+val coreRepositoryDir = providers.gradleProperty("terminalCoreRepo").orNull
+    ?.let { file(it) }
+    ?: project(":terminal-core").layout.projectDirectory.dir("build/test-repository").asFile
+val verifyPairedCoreArtifacts = tasks.register("verifyPairedCoreArtifacts") {
+    group = "verification"
+    description = "Fail unless terminal-core's artifacts for this version are already in the local test repository."
+    val coreVersion = project(":terminal-core").version.toString()
+    val repository = coreRepositoryDir
+    val appleHost = macHost
+    doLast {
+        val moduleDir = repository.resolve("dev/supermux/terminal/terminal-core/$coreVersion")
+        val root = moduleDir.resolve("terminal-core-$coreVersion.module")
+        val pom = moduleDir.resolve("terminal-core-$coreVersion.pom")
+        val missing = mutableListOf<String>()
+        for (required in listOf(pom, root)) {
+            if (!required.isFile || required.length() == 0L) missing += required.path
+        }
+        if (missing.isEmpty()) {
+            // Every `available-at` redirect in the root metadata is a file a consumer will ask for.
+            val redirects = Regex("\"url\"\\s*:\\s*\"([^\"]+\\.module)\"")
+                .findAll(root.readText())
+                .map { it.groupValues[1] }
+                .toSet()
+            for (redirect in redirects) {
+                val target = root.parentFile.resolve(redirect).normalize()
+                if (target.isFile) continue
+                // A publish made on Linux carries no Apple publications, by design.
+                if (!appleHost && Regex("terminal-core-ios", RegexOption.IGNORE_CASE).containsMatchIn(redirect)) continue
+                missing += target.path
+            }
+        }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "terminal-core $coreVersion is not published in ${repository.path}: " +
+                    missing.joinToString(", ") + ". terminal-compose's POM would name a coordinate " +
+                    "nothing can resolve. Publish the pair, core first:\n" +
+                    "  ./gradlew :terminal-core:publishAllPublicationsToLocalTestRepository\n" +
+                    "  ./gradlew :terminal-compose:publishAllPublicationsToLocalTestRepository",
+            )
+        }
+        logger.lifecycle("terminal-compose: terminal-core $coreVersion is in ${repository.path}")
+    }
+}
+
 tasks.withType<AbstractPublishToMaven>().configureEach {
     dependsOn(corePublishGate)
     dependsOn(verifyPairedVersion)
 }
+tasks.withType<PublishToMavenRepository>().matching { it.name.endsWith("ToLocalTestRepository") }
+    .configureEach { dependsOn(verifyPairedCoreArtifacts) }
 tasks.withType<GenerateModuleMetadata>().configureEach {
     dependsOn(corePublishGate)
     dependsOn(verifyPairedVersion)
@@ -199,8 +272,6 @@ tasks.withType<GenerateModuleMetadata>().configureEach {
 // explicit. The effect is the same and it is the documented one: a publish made on Linux contains
 // NO Apple publications at all, and the Apple artifacts come from a Mac-made publish
 // (terminal-core/VERIFICATION.md §4).
-val macHost = System.getProperty("os.name").orEmpty().lowercase()
-    .let { it.startsWith("mac") || it.startsWith("darwin") }
 if (!macHost) {
     tasks.matching { task ->
         listOf("IosArm64Publication", "IosSimulatorArm64Publication").any { task.name.contains(it) }

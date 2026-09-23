@@ -279,10 +279,24 @@ cd apps
 
 Nothing is uploaded anywhere: the one repository declared is a git-ignored directory inside
 `build/`. The two packages are versioned and released as a **pair** — this module's POM carries a
-dependency on `terminal-core:<the same version>`, `-Pterminal.version=` moves both, and
-`verifyPairedVersion` fails the publish if they have drifted. Every publish task first runs
-`terminal-core`'s own native gate, because a surface whose engine cannot start is a surface that
-draws nothing.
+dependency on `terminal-core:<the same version>` and `-Pterminal.version=` moves both. Two gates
+enforce that, and the order above is not a suggestion:
+
+- **`verifyPairedVersion`** fails the publish when the two modules are *configured* at different
+  versions. It compares two strings in one Gradle invocation, and that is all it can do.
+- **`verifyPairedCoreArtifacts`** fails the publish when `terminal-core` is not actually **in** the
+  local test repository at that version — the failure the version check cannot see, and the one you
+  get by publishing this module alone. It checks the root coordinate's POM and module metadata and
+  then follows every `available-at` redirect in that metadata, which is what a consumer's resolution
+  follows, so it adapts to whichever targets the core publish contained (the Apple redirects are
+  exempt off a Mac). To see it work, point it at a repository that has no core in it:
+
+  ```sh
+  ./gradlew :terminal-compose:publishAllPublicationsToLocalTestRepository -PterminalCoreRepo=/tmp/empty
+  ```
+
+Every publish task also runs `terminal-core`'s own native gate first, because a surface whose engine
+cannot start is a surface that draws nothing.
 
 A publish made on Linux contains **no Apple publications** (their Kotlin targets are disabled
 there); the Apple artifacts come from a Mac-made publish, exactly as for `terminal-core`
