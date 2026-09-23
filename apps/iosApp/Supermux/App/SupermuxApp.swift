@@ -87,4 +87,3 @@ struct SupermuxApp: App {
         .handlesExternalEvents(matching: [])
     }
 }
-

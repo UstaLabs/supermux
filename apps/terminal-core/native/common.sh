@@ -132,4 +132,3 @@ ensure_upstream() {
   git -C "$UPSTREAM_DIR" checkout -q --detach FETCH_HEAD
   [[ "$(git -C "$UPSTREAM_DIR" rev-parse HEAD)" == "$GHOSTTY_SHA" ]] || die "fetched commit mismatch"
 }
-
