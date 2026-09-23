@@ -3,13 +3,17 @@
 # Lets anyone spin up the broker on their laptop with a single
 # `docker compose up`.
 #
-# Two stages, for one reason only: the web client is a Kotlin/Wasm Compose app,
-# so BUILDING it needs a JDK + the Gradle/Kotlin toolchain (hundreds of MB that
-# the broker never executes at runtime). Stage 1 (`webbuild`, eclipse-temurin)
-# compiles the bundle; stage 2 (oven/bun) is the runtime image and only COPYs
-# the staged output across. The runtime stage is otherwise deliberately plain —
-# full source, full node_modules, no tree-shaking — so it stays easy to follow
-# and debug.
+# Three stages, each for one reason: two build toolchains the runtime image must
+# not carry, and the runtime image itself.
+#   0.  `webbuild` (eclipse-temurin) — the web client is a Kotlin/Wasm Compose
+#       app, so BUILDING it needs a JDK + the Gradle/Kotlin toolchain (hundreds
+#       of MB the broker never executes).
+#   0b. `zmxbuild` (debian + pinned Zig) — the workspace-terminal daemon and its
+#       broker helper, compiled from the vendored pin. A Zig toolchain and a
+#       Ghostty checkout are likewise nothing the runtime needs.
+#   1.  oven/bun — the runtime image, which only COPYs the two stages' outputs
+#       across. It is otherwise deliberately plain — full source, full
+#       node_modules, no tree-shaking — so it stays easy to follow and debug.
 #
 # Prerequisites on the HOST (brought in by the user, NOT baked in):
 #   • An Anthropic account — run `docker compose exec broker claude login`
@@ -43,18 +47,71 @@ COPY apps ./apps
 COPY src/channels/web/static-serve.ts ./src/channels/web/static-serve.ts
 RUN cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain
 
+# ── 0b. Workspace-terminal backend build stage ───────────────────────────────
+# The image ships the PINNED, PATCHED zmx and its framed broker helper, built here
+# from vendor/zmx/upstream.lock.json. It never installs "a zmx" — not at build time
+# and emphatically not at container startup:
+#
+#   * the broker verifies both binaries against the manifest built beside them
+#     before it execs either (src/core/terminal/zmx/helper.ts), so an arbitrary
+#     upstream build would simply be refused;
+#   * the patch this repo carries (an explicit restore boundary, broker-chosen
+#     size ownership) is not in any released zmx;
+#   * and a container that fetched its own terminal backend on boot would give
+#     two identically-tagged images two different terminals.
+#
+# --platform=$BUILDPLATFORM: this stage runs on the BUILDER's architecture and
+# cross-compiles with Zig's own target support. The multi-arch release build does
+# linux/amd64 + linux/arm64, and compiling Ghostty under QEMU emulation is hours
+# per arch — the cross build is minutes.
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS zmxbuild
+ARG TARGETARCH
+# python3-cryptography is not optional: the Zig installer verifies the pinned
+# tarball's minisign signature and FAILS CLOSED without it (the sha256 pin alone
+# is only accepted behind an explicit override, which a release image must not use).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git python3 python3-cryptography xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+# Only what the build reads: the pin + patch, the helper sources, the two scripts,
+# and terminal-core's Zig provisioner (the ONE place a Zig toolchain comes from).
+COPY vendor/zmx ./vendor/zmx
+COPY src/core/terminal/zmx/helper ./src/core/terminal/zmx/helper
+COPY scripts/build-zmx.sh scripts/check-zmx-bundle.sh ./scripts/
+COPY apps/terminal-core/native/common.sh apps/terminal-core/native/upstream.lock.json ./apps/terminal-core/native/
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      amd64) zmx_target=linux-x64 ;; \
+      arm64) zmx_target=linux-arm64 ;; \
+      *) echo "no pinned zmx target for TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    MUX_ZIG_JOBS=4 bash scripts/build-zmx.sh --target "$zmx_target" --no-test --out /opt/supermux/zmx; \
+    bash scripts/check-zmx-bundle.sh /opt/supermux/zmx "$zmx_target"
+
 # ── 1. Base image ─────────────────────────────────────────────────────────────
 # oven/bun:1 is the official Bun image based on Debian Bookworm.
 FROM oven/bun:1
 
 # ── 2. System dependencies ────────────────────────────────────────────────────
-# • tmux   — required by the broker (every agent session runs inside tmux)
+# • tmux   — AGENT sessions only. Workspace terminals moved to zmx (stage 0b) and
+#            no longer touch tmux at all, but every agent session still runs inside
+#            one, and the Claude native-terminal retirement that would remove it
+#            from the product has not landed. Removing tmux here would break agents.
+# • bash, ncurses-term — what a workspace terminal actually needs to be usable: a
+#            login shell to run, and the terminfo entry for the TERM the broker
+#            hands the child. The daemon forces TERM=xterm-256color
+#            (src/core/terminal/zmx/backend.ts); without ncurses-term that is an
+#            unknown terminal, and every curses program in the container — vim,
+#            top, less — either refuses to start or draws nothing.
 # • git    — useful inside spawned sessions; some agent CLIs call it at startup
 # • ca-certificates, curl — baseline TLS + downloads
 # • nodejs, npm — needed to run the `claude` CLI (it's a Node.js binary)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       tmux \
+      bash \
+      ncurses-term \
       git \
       ca-certificates \
       curl \
@@ -109,6 +166,14 @@ COPY . .
 # comes from the JDK stage above. Nothing but this COPY puts a web UI in the
 # image; without it the broker boots and serves 404 for the shell.
 COPY --from=webbuild /src/src/channels/web/static ./src/channels/web/static
+
+# ── 5b. Workspace-terminal backend ────────────────────────────────────────────
+# The verified bundle from stage 0b, at a fixed path the broker is TOLD about
+# rather than one it searches for: MUX_ZMX_BIN_DIR names the directory, so a
+# `zmx` a user later installs into the container can never become what their
+# workspace terminals run. Nothing is fetched or installed at startup.
+COPY --from=zmxbuild /opt/supermux/zmx /opt/supermux/zmx
+ENV MUX_ZMX_BIN_DIR=/opt/supermux/zmx
 
 # ── 6. Runtime defaults ───────────────────────────────────────────────────────
 # MUX_WEB_PORT is the port the broker's HTTP server listens on inside the container.

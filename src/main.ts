@@ -102,7 +102,7 @@ import { randomBytes, randomUUID } from "crypto"
 import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
 import { spawnCommand } from "./core/process/launcher"
-import { checkPreflight, hasBinary } from "./shared/preflight"
+import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/preflight"
 import { detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
 import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
@@ -203,7 +203,14 @@ if (IS_TEST_BROKER) {
 process.env.PATH = withAgentBinDirs(process.env.PATH, homedir())
 
 // Fail fast before any filesystem side-effects (state dirs, pid file, db).
-const preflight = checkPreflight(hasBinary)
+// The workspace-terminal probe is a packaging question (is the verified zmx
+// bundle this build ships actually here?), so it is asked once at boot and
+// logged either way: "workspace terminals are unavailable" is exactly the kind
+// of thing a user should learn from the log, not from a terminal that will not
+// open half an hour later.
+const workspaceTerminals = workspaceTerminalReadiness()
+const preflight = checkPreflight(hasBinary, process.platform, workspaceTerminals)
+if (workspaceTerminals.ok) log.info("preflight", { workspaceTerminals: workspaceTerminals.detail })
 for (const w of preflight.warnings) log.warn("preflight", { warning: w })
 if (preflight.fatal.length) {
   for (const f of preflight.fatal) log.error("preflight", { error: f })
