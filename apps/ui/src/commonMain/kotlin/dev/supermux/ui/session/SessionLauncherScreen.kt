@@ -95,6 +95,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
@@ -354,6 +356,9 @@ fun SessionLauncherScreen(
     var modelMenu by remember { mutableStateOf(false) }
     var reasoningMenu by remember { mutableStateOf(false) }
     var projectMenu by remember { mutableStateOf(false) }
+    /** The project heading's width — the picker centres its dropdown under it. */
+    var projectHeadingWidth by remember { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
 
     // ── Persistent projects (Task 10) ──
     // A workspace tab is locked to its directory and never consults projects: it gets an empty
@@ -852,7 +857,9 @@ fun SessionLauncherScreen(
                         // renders as a dropdown that must hang off this heading.
                         // A workspace tab is locked to its directory: the folder caption under the
                         // composer names it, so there is no project dropdown here.
-                        if (workspaceWorkdir == null) Box {
+                        if (workspaceWorkdir == null) Box(
+                            Modifier.onSizeChanged { projectHeadingWidth = with(density) { it.width.toDp() } },
+                        ) {
                             Row(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(Space.sm))
@@ -908,6 +915,7 @@ fun SessionLauncherScreen(
                                 },
                                 onDismiss = { projectMenu = false; pendingLocationProject = null; catalogLocationsFor = null },
                                 activity = pickerActivity,
+                                anchorWidth = projectHeadingWidth,
                                 // One picker: the catalog's projects when the host has one — except
                                 // while a location-less project waits for a folder, which is path entry.
                                 catalog = if (useCatalog && pendingLocationProject == null) catalog else emptyList(),
