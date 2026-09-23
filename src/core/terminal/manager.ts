@@ -85,6 +85,8 @@ export interface TerminalInstance {
   onExit: (code: number, detail?: TerminalExitDetail) => void
   onFailure: (reason: string) => void
   onReset?: () => void
+  /** Revision 2: the ONE ordered lane. See `TerminalAttachOptions.onEvent`. */
+  onEvent?: (event: WorkspaceTerminalEvent) => void | Promise<void>
 }
 
 /** What the backend knew about an exit, for a wire that can carry more than a
@@ -112,12 +114,27 @@ export interface TerminalAttachOptions {
   onFailure?: (reason: string) => void
   /** The backing target re-synchronised: everything drawn so far is void. */
   onReset?: () => void
+  /**
+   * REVISION 2: every backend event, in backend order, through ONE callback.
+   *
+   * The four callbacks above are revision 1's shape, and their problem is not
+   * that they drop the replay boundary — it is that a channel holding four of
+   * them cannot promise the socket sees them in the order the backend produced
+   * them. Await this one and the caller's ordering lane IS the backpressure;
+   * when it is set, none of the four above are called.
+   */
+  onEvent?: (event: WorkspaceTerminalEvent) => void | Promise<void>
   kind?: "scratch" | "agent"
   agentTarget?: string
   intent?: TerminalAttachIntent
 }
 
-export type TerminalAttachResult = { ok: true } | { ok: false; error: string }
+export type TerminalAttachResult =
+  | { ok: true }
+  /** `code`/`recoverable` survive from a `WorkspaceTerminalError` so a caller
+   * can tell "no such terminal, close the tab" from "the helper is down, try
+   * again" instead of re-parsing an English message. */
+  | { ok: false; error: string; code?: string; recoverable?: boolean }
 
 /**
  * Manages persistent web terminals.
@@ -360,6 +377,7 @@ export class TerminalManager {
       onExit: opts.onExit,
       onFailure: opts.onFailure ?? (() => {}),
       onReset: opts.onReset,
+      onEvent: opts.onEvent,
     }
 
     const ensure = () => this.workspace.ensure(workspaceKey, {
@@ -403,20 +421,44 @@ export class TerminalManager {
       if (this.pendingAttaches.get(key)?.token === token) this.pendingAttaches.delete(key)
       const message = error instanceof Error ? error.message : String(error)
       log.error("terminal_attach_failed", { key, err: message })
+      if (isWorkspaceTerminalError(error)) {
+        return { ok: false, error: message, code: error.code, recoverable: error.recoverable }
+      }
       return { ok: false, error: message }
     }
   }
 
   /**
-   * The contract's events, on today's wire.
+   * The contract's events, handed on.
    *
-   * `reset` becomes the `{type:"reset"}` frame clients already understand, so
-   * a mid-stream re-sync clears the screen instead of drawing over it. The
-   * replay boundary and `owner` have no frame yet (Plan 4 Task 1 adds them);
-   * they are the backend's business until then, and dropping them here is
-   * correct rather than lossy — nothing downstream can act on them.
+   * A revision-2 viewer gets ALL of them through its single `onEvent` lane, in
+   * the order the backend produced them, and this function awaits it — so a
+   * congested socket is backpressure on the target rather than a queue here.
+   *
+   * A revision-1 viewer has no frame for the replay boundary or for `owner`,
+   * so it gets the four callbacks it understands and those two events are
+   * dropped: nothing downstream can act on them. That path exists only until
+   * the last revision-1 client is deleted (Plan 4 Tasks 3-5).
    */
   private async onWorkspaceEvent(inst: TerminalInstance, event: WorkspaceTerminalEvent): Promise<void> {
+    // A terminal event retires the instance whichever revision is watching:
+    // there is nothing left to attach a later event to.
+    if (event.type === "exit" || event.type === "failure") {
+      if (this.terminals.get(inst.key) === inst) this.terminals.delete(inst.key)
+      if (inst.intentional) return
+      inst.intentional = true
+      if (event.type === "exit") {
+        log.info("terminal_exited", { key: inst.key, code: event.code, known: event.known })
+      } else {
+        log.warn("terminal_viewer_failed", { key: inst.key, code: event.code, reason: event.message })
+      }
+    }
+
+    if (inst.onEvent) {
+      try { await inst.onEvent(event) } catch {}
+      return
+    }
+
     switch (event.type) {
       case "output":
         await inst.onData(event.bytes)
@@ -425,27 +467,18 @@ export class TerminalManager {
         try { inst.onReset?.() } catch {}
         return
       case "exit": {
-        if (this.terminals.get(inst.key) === inst) this.terminals.delete(inst.key)
-        if (inst.intentional) return
-        inst.intentional = true
-        log.info("terminal_exited", { key: inst.key, code: event.code, known: event.known })
-        // The frame carries a number, so an unreaped exit reports 0 and says
-        // so in `detail` — a client that looks only at `code` closes the tab
-        // either way, which is the right outcome for both.
+        // The revision-1 frame carries a number, so an unreaped exit reports 0
+        // and says so in `detail` — a client that looks only at `code` closes
+        // the tab either way, which is the right outcome for both.
         const code = event.code ?? (event.signal !== null ? 128 + event.signal : 0)
         try { inst.onExit(code, { known: event.known, code: event.code, signal: event.signal }) } catch {}
         return
       }
-      case "failure": {
-        if (this.terminals.get(inst.key) === inst) this.terminals.delete(inst.key)
-        if (inst.intentional) return
-        inst.intentional = true
-        log.warn("terminal_viewer_failed", { key: inst.key, code: event.code, reason: event.message })
+      case "failure":
         try { inst.onFailure(event.message) } catch {}
         return
-      }
       default:
-        // replay-start / replay-end / owner: no wire frame yet.
+        // replay-start / replay-end / owner: revision 1 has no frame for them.
         return
     }
   }

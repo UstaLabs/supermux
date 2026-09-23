@@ -200,7 +200,15 @@ describe("TerminalManager (workspace terminals)", () => {
     const result = await mgr.attach({
       deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "attach",
     })
-    expect(result).toEqual({ ok: false, error: "no workspace terminal w:one/t1" })
+    // The CODE survives the refusal: "no such terminal" closes a tab, while a
+    // helper that is merely down is worth retrying, and a caller must not have
+    // to read English to tell them apart.
+    expect(result).toEqual({
+      ok: false,
+      error: "no workspace terminal w:one/t1",
+      code: "target-not-found",
+      recoverable: false,
+    })
     expect(backend.creates).toBe(1)
     expect(mgr.has("d", "w:one", "t1")).toBe(false)
   })
@@ -316,6 +324,37 @@ describe("TerminalManager (workspace terminals)", () => {
     await viewer.emit({ type: "replay-end", epoch: "1" })
     await viewer.emit({ type: "reset", epoch: "2" })
     expect(resets).toHaveLength(2)
+  })
+
+  it("onEvent gets every backend event in order, and replaces the four callbacks", async () => {
+    const { mgr, backend } = makeMgr()
+    const seen: string[] = []
+    const legacy: string[] = []
+    await mgr.attach({
+      deviceName: "d", sessionName: "w:one", terminalId: "t1", ...baseAttach, intent: "create",
+      onEvent: (event) => {
+        seen.push(event.type === "output" ? `output:${utf8(event.bytes)}` : event.type)
+      },
+      onData: () => { legacy.push("onData") },
+      onReset: () => { legacy.push("onReset") },
+      onExit: () => { legacy.push("onExit") },
+      onFailure: () => { legacy.push("onFailure") },
+    })
+    const viewer = backend.viewerFor("w:one", "t1")
+    await viewer.emit({ type: "reset", epoch: "1" })
+    await viewer.emit({ type: "replay-start", epoch: "1" })
+    await viewer.emit({ type: "output", bytes: new TextEncoder().encode("history") })
+    await viewer.emit({ type: "replay-end", epoch: "1" })
+    await viewer.emit({ type: "owner", enabled: true })
+    await viewer.emit({ type: "exit", known: true, code: 3, signal: null })
+    // The replay boundary and the owner lease survive the trip; revision 1
+    // dropped both because it had no frame to put them in.
+    expect(seen).toEqual([
+      "reset", "replay-start", "output:history", "replay-end", "owner", "exit",
+    ])
+    // ...and nothing is delivered twice, down two different paths.
+    expect(legacy).toEqual([])
+    expect(mgr.has("d", "w:one", "t1")).toBe(false)
   })
 
   it("relays backend output to onData, and onData's promise is the backpressure path", async () => {

@@ -193,6 +193,189 @@ test("terminal reset precedes replay and viewer failure reconnects without a tar
   expect(frames).not.toContainEqual(expect.objectContaining({ type: "exit" }))
 })
 
+// ── revision 2 ─────────────────────────────────────────────────────────────
+
+function collectTermFrames(ws: WebSocket, into: Array<any>) {
+  ws.binaryType = "arraybuffer"
+  ws.onmessage = event => {
+    if (event.data instanceof ArrayBuffer) into.push(new TextDecoder().decode(event.data))
+    else into.push(JSON.parse(String(event.data)))
+  }
+}
+
+test("revision 2: the only reset is the backend's, and it arrives after ready", async () => {
+  let drive: ((o: any) => Promise<void>) | undefined
+  await ch.stop()
+  ch = new WebChannel({
+    port: PORT,
+    devicesFile: DEV_PATH,
+    publicUrl: "http://127.0.0.1:" + PORT,
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getSessionWorkdir: () => "/w",
+    terminalManager: {
+      attach: async (o: any) => {
+        drive = async (opts: any) => {
+          await opts.onEvent({ type: "reset", epoch: "e1" })
+          await opts.onEvent({ type: "replay-start", epoch: "e1" })
+          await opts.onEvent({ type: "output", bytes: new TextEncoder().encode("history") })
+          await opts.onEvent({ type: "replay-end", epoch: "e1" })
+          await opts.onEvent({ type: "owner", enabled: true })
+          await opts.onEvent({ type: "output", bytes: new TextEncoder().encode("live") })
+        }
+        await drive(o)
+        return { ok: true }
+      },
+      detach: () => {},
+      resize: () => true,
+      focus: () => true,
+    } as any,
+  })
+  await ch.start()
+  const frames: any[] = []
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch&terminalProtocol=2`,
+    { headers: { Cookie: `cmux_token=${token}` } },
+  )
+  collectTermFrames(ws, frames)
+  await new Promise<void>((resolve, reject) => { ws.onopen = () => resolve(); ws.onerror = reject })
+  await new Promise((r) => setTimeout(r, 200))
+  expect(frames[0]).toEqual({ type: "ready", version: 2, epoch: expect.any(String), replyOwner: false, ownerGeneration: 0 })
+  expect(frames.slice(1)).toEqual([
+    { type: "reset", epoch: "e1" },
+    { type: "replay-start", epoch: "e1" },
+    "history",
+    { type: "replay-end", epoch: "e1" },
+    { type: "owner", epoch: "e1", enabled: true, ownerGeneration: 1 },
+    "live",
+  ])
+  expect(drive).toBeDefined()
+  ws.close()
+})
+
+test("revision 2: a lost helper is a failure frame, never a fabricated exit", async () => {
+  await ch.stop()
+  ch = new WebChannel({
+    port: PORT,
+    devicesFile: DEV_PATH,
+    publicUrl: "http://127.0.0.1:" + PORT,
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getSessionWorkdir: () => "/w",
+    terminalManager: {
+      attach: async () => ({ ok: false, error: "zmx helper exited before the attach completed", code: "backend-unavailable", recoverable: true }),
+      detach: () => {},
+    } as any,
+  })
+  await ch.start()
+  const frames: any[] = []
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch&terminalProtocol=2`,
+    { headers: { Cookie: `cmux_token=${token}` } },
+  )
+  collectTermFrames(ws, frames)
+  await new Promise<number>(resolve => { ws.onclose = event => resolve(event.code) })
+  expect(frames[0].type).toBe("ready")
+  expect(frames[1]).toEqual({
+    type: "failure",
+    code: "backend-unavailable",
+    recoverable: true,
+    message: "zmx helper exited before the attach completed",
+  })
+  expect(frames.some((f: any) => f?.type === "exit")).toBe(false)
+})
+
+test("an unsupported protocol revision is refused by name and closed", async () => {
+  await ch.stop()
+  // No terminalManager at all: the refusal happens before anything is attached.
+  ch = new WebChannel({
+    port: PORT,
+    devicesFile: DEV_PATH,
+    publicUrl: "http://127.0.0.1:" + PORT,
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getSessionWorkdir: () => "/w",
+  })
+  await ch.start()
+  const frames: any[] = []
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch&terminalProtocol=7`,
+    { headers: { Cookie: `cmux_token=${token}` } },
+  )
+  collectTermFrames(ws, frames)
+  await new Promise<number>(resolve => { ws.onclose = event => resolve(event.code) })
+  expect(frames).toEqual([{
+    type: "failure",
+    code: "protocol-unsupported",
+    recoverable: false,
+    message: `terminal protocol "7" is not supported; this broker speaks revision 2`,
+  }])
+})
+
+test("revision 2: a reply reaches the pty only while owning, past replay-end, on the live epoch", async () => {
+  const replies: Uint8Array[] = []
+  const writes: Uint8Array[] = []
+  let events: ((e: any) => Promise<void>) | undefined
+  await ch.stop()
+  ch = new WebChannel({
+    port: PORT,
+    devicesFile: DEV_PATH,
+    publicUrl: "http://127.0.0.1:" + PORT,
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getSessionWorkdir: () => "/w",
+    terminalManager: {
+      attach: async (o: any) => {
+        events = o.onEvent
+        await o.onEvent({ type: "reset", epoch: "e1" })
+        await o.onEvent({ type: "replay-start", epoch: "e1" })
+        return { ok: true }
+      },
+      detach: () => {},
+      write: (_d: string, _s: string, _t: string, data: Uint8Array) => { writes.push(data); return true },
+      reply: (_d: string, _s: string, _t: string, data: Uint8Array) => { replies.push(data); return true },
+    } as any,
+  })
+  await ch.start()
+  const frames: any[] = []
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch&terminalProtocol=2`,
+    { headers: { Cookie: `cmux_token=${token}` } },
+  )
+  collectTermFrames(ws, frames)
+  await new Promise<void>((resolve, reject) => { ws.onopen = () => resolve(); ws.onerror = reject })
+  await new Promise((r) => setTimeout(r, 150))
+
+  const answer = { type: "reply", epoch: "e1", ownerGeneration: 1, data: "G1syNDsxUg==" }
+  // Still inside the replay, and not the owner: an answer to history.
+  ws.send(JSON.stringify(answer))
+  await new Promise((r) => setTimeout(r, 50))
+  expect(replies).toEqual([])
+
+  await events!({ type: "replay-end", epoch: "e1" })
+  await events!({ type: "owner", enabled: true })
+  ws.send(JSON.stringify({ ...answer, epoch: "e-gone" }))   // stale epoch
+  ws.send(JSON.stringify({ ...answer, ownerGeneration: 0 })) // stale lease
+  await new Promise((r) => setTimeout(r, 50))
+  expect(replies).toEqual([])
+
+  ws.send(JSON.stringify(answer))
+  // Typing is a binary frame and takes the other path entirely.
+  ws.send(new TextEncoder().encode("ls\r"))
+  await new Promise((r) => setTimeout(r, 100))
+  expect(replies.map(r => new TextDecoder().decode(r))).toEqual(["\u001b[24;1R"])
+  expect(writes.map(w => new TextDecoder().decode(w))).toEqual(["ls\r"])
+  ws.close()
+})
+
 test("ws send frame triggers onSendFromWeb callback", async () => {
   const received: any[] = []
   await ch.stop()

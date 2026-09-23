@@ -34,6 +34,12 @@ import { detectUpdateMode } from "../../core/update/mode"
 import { resolveAndApply, restartService } from "../../core/update/apply"
 import { BUILD_COMMIT, BUILD_VERSION } from "../../shared/build-info"
 import { workspaceScope, parseScope } from "../../core/workspace/scope"
+import {
+  TerminalFrameLane,
+  decodeClientControl,
+  decodeReplyPayload,
+  parseTerminalRevision,
+} from "./terminal-protocol"
 import { ProjectConflictError, ProjectNotFoundError } from "../../core/project/service"
 import { PROJECT_IMAGE_MAX_BYTES } from "../../core/project/images"
 
@@ -143,13 +149,20 @@ const MUTATING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"])
 // that won't trip on burst repaints. Tune via the perf measurement.
 const TERMINAL_BP_HIGH_WATER = 256 * 1024
 
+/** A websocket binary payload as bytes, without copying a Buffer. */
+function toBytes(msg: Buffer | ArrayBuffer): Uint8Array {
+  return msg instanceof ArrayBuffer
+    ? new Uint8Array(msg)
+    : new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength)
+}
+
 function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void
   const promise = new Promise<void>((r) => { resolve = r })
   return { promise, resolve }
 }
 
-type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
+type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
 
 export interface SessionSnapshot {
   id?: string
@@ -696,6 +709,13 @@ export class WebChannel implements Channel {
       const intent = createParam === null
         ? undefined
         : (createParam === "1" || createParam === "true" ? "create" as const : "attach" as const)
+      // WHICH WIRE. `?terminalProtocol=2` is the ordered revision-2 stream;
+      // omitting it is the legacy framing, which lives only until Plan 4
+      // Tasks 3-5 delete the last client that speaks it. A revision we do not
+      // speak is refused BY NAME over the socket (below) rather than dropped,
+      // because "your client is too old" is actionable and a closed socket
+      // looks exactly like a network fault.
+      const revisionChoice = parseTerminalRevision(url.searchParams.get("terminalProtocol"))
       const auth = this.authenticate(req)
       if (!auth.ok) return this.authFailureResponse(auth)
       const dev = auth.device
@@ -724,8 +744,22 @@ export class WebChannel implements Channel {
         agentTarget = await this.opts.getSessionTmuxTarget?.(sessionName)
         if (!agentTarget) return new Response("agent terminal unsupported", { status: 404 })
       }
+      // An agent pane is a window inside the agent's own tmux: it has no
+      // replay boundary and no size lease, so it cannot honour revision 2's
+      // contract. Saying so is better than serving a stream that silently
+      // never closes a replay.
+      const revisionError = !revisionChoice.ok
+        ? revisionChoice.message
+        : (revisionChoice.revision === 2 && kind === "agent"
+          ? "terminal protocol 2 is for workspace terminals; an agent pane has no replay boundary"
+          : undefined)
       const upgraded = server.upgrade(req, {
-        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind, terminalSession: scopeKey, terminalId, terminalAgentTarget: agentTarget, terminalIntent: intent } as WSData,
+        data: {
+          deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind,
+          terminalSession: scopeKey, terminalId, terminalAgentTarget: agentTarget, terminalIntent: intent,
+          terminalRevision: revisionChoice.ok ? revisionChoice.revision : 2,
+          terminalRevisionError: revisionError,
+        } as WSData,
       })
       if (upgraded) return undefined
       return new Response("upgrade failed", { status: 500 })
@@ -792,7 +826,84 @@ export class WebChannel implements Channel {
     this.opts.viewingTracker?.clear(ws.data.deviceName)
   }
 
+  /** Bytes out, plus the drain promise that turns a congested socket into
+   * backpressure on the target instead of a queue in the broker. */
+  private sendTerminalBytes(ws: import("bun").ServerWebSocket<WSData>, data: Uint8Array): Promise<void> | void {
+    try { ws.sendBinary(data) } catch { return }
+    if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
+      const d = ws.data._termDrain ?? makeDeferred()
+      ws.data._termDrain = d
+      return d.promise
+    }
+  }
+
+  /**
+   * REVISION 2. One lane owns the socket, and the backend's events are the
+   * only thing that writes to it — no reset invented here at open time, no
+   * second callback that could overtake the bytes it invalidates.
+   */
+  private async onTerminalWsOpenV2(ws: import("bun").ServerWebSocket<WSData>): Promise<void> {
+    const lane = new TerminalFrameLane({
+      text: (payload) => { try { ws.send(payload) } catch {} },
+      binary: (bytes) => this.sendTerminalBytes(ws, bytes),
+      close: (code, reason) => { try { ws.close(code, reason.slice(0, 120)) } catch {} },
+    }, `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`)
+    ws.data._termLane = lane
+
+    const refuse = (code: string, recoverable: boolean, message: string) => lane.failure(code, recoverable, message)
+    if (ws.data.terminalRevisionError) {
+      await refuse("protocol-unsupported", false, ws.data.terminalRevisionError)
+      return
+    }
+    const tm = this.opts.terminalManager
+    if (!tm) { await refuse("backend-unavailable", false, "terminal not configured"); return }
+    const sessionName = ws.data.terminalSession!
+    const terminalId = ws.data.terminalId!
+    const scope = parseScope(sessionName)
+    const workdir = scope.kind === "workspace"
+      ? this.opts.getWorkspaceWorkdir?.(scope.id)
+      : this.opts.getSessionWorkdir?.(scope.id)
+    if (!workdir) { await refuse("target-not-found", false, "session not found"); return }
+
+    await lane.ready()
+    let result: Awaited<ReturnType<typeof tm.attach>>
+    try {
+      result = await tm.attach({
+        deviceName: ws.data.deviceName,
+        sessionName,
+        terminalId,
+        workdir,
+        cols: 80,
+        rows: 24,
+        kind: "scratch",
+        intent: ws.data.terminalIntent,
+        // The single ordered lane. Every frame this connection will ever send
+        // after `ready` is produced here, from a backend event.
+        onEvent: (event) => lane.event(event),
+        // Unused on this path (onEvent takes precedence) but the manager's
+        // interface still requires them.
+        onData: () => {},
+        onExit: () => {},
+      })
+    } catch (error) {
+      // A helper we could not reach is a FAILURE, not a shell that exited:
+      // one reconnects, the other closes the tab.
+      const message = error instanceof Error ? error.message : String(error)
+      const code = (error as { code?: string })?.code
+      const recoverable = (error as { recoverable?: boolean })?.recoverable
+      await refuse(typeof code === "string" ? code : "backend-unavailable", recoverable === true, message)
+      return
+    }
+    if (!result.ok) {
+      await refuse(result.code ?? "backend-unavailable", result.recoverable === true, result.error)
+    }
+  }
+
   private async onTerminalWsOpen(ws: import("bun").ServerWebSocket<WSData>): Promise<void> {
+    if (ws.data.terminalRevision === 2 || ws.data.terminalRevisionError) {
+      await this.onTerminalWsOpenV2(ws)
+      return
+    }
     const tm = this.opts.terminalManager
     if (!tm) { ws.close(1011, "terminal not configured"); return }
     const sessionName = ws.data.terminalSession!
@@ -802,6 +913,12 @@ export class WebChannel implements Channel {
       ? this.opts.getWorkspaceWorkdir?.(scope.id)
       : this.opts.getSessionWorkdir?.(scope.id)
     if (!workdir) { ws.close(1011, "session not found"); return }
+    // REVISION 1 ONLY. This reset is the channel's own invention, sent outside
+    // the backend's ordering and carrying no epoch — which is exactly why
+    // revision 2 has none: there, every frame comes from a backend event
+    // through the lane. It stays here because a revision-1 client has no other
+    // way to learn that the screen it is about to be handed is a fresh one,
+    // and it goes when the last such client does (Plan 4 Tasks 3-5).
     try {
       ws.send(JSON.stringify({ type: "reset" }))
     } catch {
@@ -824,18 +941,7 @@ export class WebChannel implements Channel {
         // drawn so far is void. Same frame the open above sends, so no client
         // needs to learn anything new to stop drawing over a stale screen.
         onReset: () => { try { ws.send(JSON.stringify({ type: "reset" })) } catch {} },
-        onData: (data) => {
-          try { ws.sendBinary(data) } catch {}
-          // Past the high-water mark: return a promise that resolves on the
-          // socket's `drain`. The backend awaits it before handing us more, so
-          // a congested client becomes backpressure on the target rather than
-          // an unbounded queue in the broker.
-          if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
-            const d = ws.data._termDrain ?? makeDeferred()
-            ws.data._termDrain = d
-            return d.promise
-          }
-        },
+        onData: (data) => this.sendTerminalBytes(ws, data),
         onExit: (code) => { try { ws.send(JSON.stringify({ type: "exit", code })); ws.close() } catch {} },
         onFailure: (reason) => { try { ws.close(1011, reason.slice(0, 120)) } catch {} },
       })
@@ -856,6 +962,50 @@ export class WebChannel implements Channel {
     if (!tm) return
     const sessionName = ws.data.terminalSession!
     const terminalId = ws.data.terminalId!
+    const lane = ws.data._termLane
+    if (lane) {
+      // Revision 2. Binary is user input — typing is typing, it reaches the
+      // pty from any viewer and never moves size ownership.
+      if (typeof msg !== "string") {
+        tm.write(ws.data.deviceName, sessionName, terminalId, toBytes(msg))
+        return
+      }
+      const decoded = decodeClientControl(msg)
+      if (!decoded.ok) {
+        log.debug("terminal_frame_refused", { device: ws.data.deviceName, reason: decoded.reason })
+        return
+      }
+      const frame = decoded.frame
+      switch (frame.type) {
+        case "resize":
+          tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows)
+          return
+        case "focus":
+          tm.focus(ws.data.deviceName, sessionName, terminalId, frame.focused,
+            frame.cols || undefined, frame.rows || undefined)
+          return
+        case "reply": {
+          // A REPLY, not typing. It is owner-only and epoch-bound, and the
+          // lane is what remembers both — a stale one is dropped here rather
+          // than typed into the shell. Nothing is sent back: the viewer was
+          // told it did not own the answer before it produced one, so a drop
+          // is not news and certainly not a retry signal.
+          if (!lane.acceptsReply(frame)) {
+            log.debug("terminal_reply_dropped", { device: ws.data.deviceName, epoch: frame.epoch })
+            return
+          }
+          const bytes = decodeReplyPayload(frame.data)
+          if (!bytes) return
+          tm.reply(ws.data.deviceName, sessionName, terminalId, bytes)
+          return
+        }
+        case "close":
+          void tm.close(sessionName, terminalId)
+          try { ws.close() } catch {}
+          return
+      }
+      return
+    }
     if (typeof msg === "string") {
       try {
         const frame = JSON.parse(msg)
@@ -878,8 +1028,7 @@ export class WebChannel implements Channel {
       } catch {}
       return
     }
-    const data = msg instanceof ArrayBuffer ? new Uint8Array(msg) : new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength)
-    tm.write(ws.data.deviceName, sessionName, terminalId, data)
+    tm.write(ws.data.deviceName, sessionName, terminalId, toBytes(msg))
   }
 
   private onTerminalWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
