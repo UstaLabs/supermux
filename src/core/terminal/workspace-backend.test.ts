@@ -8,12 +8,19 @@ import {
   type WorkspaceTerminalSummary,
   type WorkspaceTerminalViewer,
 } from "./workspace-backend"
+import {
+  CONTRACT_A,
+  CONTRACT_ENSURE,
+  recorder,
+  runWorkspaceBackendContract,
+  type Gate,
+  type WorkspaceBackendWorld,
+} from "./workspace-backend.contract"
 
 // A RECORDING backend: an in-memory WorkspaceTerminalBackend used ONLY here, to
 // pin the invariants every real backend (zmx on POSIX, sessiond on Windows) has
-// to honour. It records every call so a test can assert not just the end state
-// but WHICH operations got there — "a reconnect never calls ensure" is a
-// property of the call log, not of the target map.
+// to honour. It is the reference the shared contract suite was written against;
+// zmx and sessiond run the same suite against themselves.
 //
 // The target map lives in a `World` that OUTLIVES the backend instance, exactly
 // as zmx targets outlive the broker process. Constructing a second backend over
@@ -25,6 +32,9 @@ type Target = {
   cols: number
   rows: number
   scrollback: Uint8Array
+  /** Everything that reached the pty, in order. Input and replies are kept in
+   * separate lists as well, because the SPLIT is part of the contract. */
+  pty: string[]
   input: Uint8Array[]
   replies: Uint8Array[]
   owner?: string
@@ -99,12 +109,17 @@ class RecordingViewer implements WorkspaceTerminalViewer {
   write(bytes: Uint8Array): boolean {
     if (!this.live()) return false
     this.target.input.push(bytes)
+    this.target.pty.push(new TextDecoder().decode(bytes))
     return true
   }
 
   reply(bytes: Uint8Array): boolean {
     if (!this.live()) return false
+    // OWNER-ONLY, and it says so: a non-owner's reply is discarded, and
+    // returning true would report a delivery that never happened.
+    if (this.target.owner !== this.id) return false
     this.target.replies.push(bytes)
+    this.target.pty.push(new TextDecoder().decode(bytes))
     return true
   }
 
@@ -166,6 +181,7 @@ class RecordingBackend implements WorkspaceTerminalBackend {
         cols: options.cols,
         rows: options.rows,
         scrollback: new TextEncoder().encode(`${options.cwd}$ `),
+        pty: [],
         input: [],
         replies: [],
         viewers: new Map(),
@@ -201,7 +217,7 @@ class RecordingBackend implements WorkspaceTerminalBackend {
     await viewer.deliver({ type: "replay-start", epoch })
     if (target.scrollback.length > 0) await viewer.deliver({ type: "output", bytes: target.scrollback })
     await viewer.deliver({ type: "replay-end", epoch })
-    await viewer.deliver({ type: "owner", enabled: target.owner === viewerId })
+    if (target.owner === viewerId) await viewer.deliver({ type: "owner", enabled: true })
     return viewer
   }
 
@@ -241,226 +257,57 @@ class RecordingBackend implements WorkspaceTerminalBackend {
   }
 }
 
-const ENSURE = { cwd: "/w", shell: "/bin/bash", env: {}, cols: 80, rows: 24 }
-const A: WorkspaceTerminalKey = { scope: "w:alpha", terminalId: "main" }
-const B: WorkspaceTerminalKey = { scope: "w:alpha", terminalId: "second" }
-
-function recorder() {
-  const events: WorkspaceTerminalEvent[] = []
-  return { events, emit: async (e: WorkspaceTerminalEvent) => { events.push(e) } }
+/** The recording backend as a contract world. */
+function recordingWorld(): WorkspaceBackendWorld {
+  const world = makeWorld()
+  const gate = (hook: "beforeCreate" | "beforeAttach"): Gate => {
+    let resolve!: () => void
+    const promise = new Promise<void>(r => { resolve = r })
+    world.hooks[hook] = () => promise
+    return { release: () => { world.hooks[hook] = undefined; resolve() } }
+  }
+  return {
+    backend: new RecordingBackend(world),
+    restart: () => new RecordingBackend(world),
+    creates: () => world.creates,
+    pty: key => (world.targets.get(keyOf(key))?.pty ?? []).join(""),
+    size: key => {
+      const target = world.targets.get(keyOf(key))
+      return { cols: target?.cols ?? 0, rows: target?.rows ?? 0 }
+    },
+    exit: (key, status) => world.exit(key, status),
+    gateCreate: () => gate("beforeCreate"),
+    gateAttach: () => gate("beforeAttach"),
+    dispose: async () => {},
+  }
 }
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void
-  const promise = new Promise<void>(r => { resolve = r })
-  return { promise, resolve }
-}
+runWorkspaceBackendContract("recording", async () => recordingWorld())
 
-describe("workspace terminal backend contract", () => {
-  test("ensure creates once; a repeat ensure is a no-op", async () => {
+describe("workspace terminal backend (recording specifics)", () => {
+  test("input and terminal replies are kept apart on the way to the pty", async () => {
     const world = makeWorld()
     const backend = new RecordingBackend(world)
-    await backend.ensure(A, ENSURE)
-    await backend.ensure(A, ENSURE)
-    expect(world.creates).toBe(1)
-    expect(await backend.exists(A)).toBe(true)
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    const viewer = await backend.attachExisting(CONTRACT_A, "v1", recorder().emit)
+    await viewer.focus(true, 80, 24)
+    expect(viewer.write(new TextEncoder().encode("ls\r"))).toBe(true)
+    expect(viewer.reply(new TextEncoder().encode("\x1b[?62;c"))).toBe(true)
+    const target = world.targets.get(keyOf(CONTRACT_A))!
+    expect(target.input).toHaveLength(1)
+    expect(target.replies).toHaveLength(1)
   })
 
-  test("two simultaneous first creates yield one target", async () => {
+  test("a reconnect never calls ensure, in the call log as well as the count", async () => {
     const world = makeWorld()
     const backend = new RecordingBackend(world)
-    const gate = deferred()
-    world.hooks.beforeCreate = () => gate.promise
-    const both = Promise.all([backend.ensure(A, ENSURE), backend.ensure(A, ENSURE)])
-    gate.resolve()
-    await both
-    expect(world.creates).toBe(1)
-    expect(await backend.list("w:alpha")).toHaveLength(1)
-  })
-
-  test("attach opens ONE epoch and marks the replay boundary", async () => {
-    const world = makeWorld()
-    const backend = new RecordingBackend(world)
-    await backend.ensure(A, ENSURE)
-    const { events, emit } = recorder()
-    await backend.attachExisting(A, "v1", emit)
-    expect(events.map(e => e.type)).toEqual([
-      "reset", "replay-start", "output", "replay-end", "owner",
-    ])
-    const epochs = events.filter(e => "epoch" in e).map(e => (e as { epoch: string }).epoch)
-    expect(new Set(epochs).size).toBe(1)
-    // The replayed bytes are INSIDE the boundary, never before `reset`.
-    expect(events.findIndex(e => e.type === "output"))
-      .toBeGreaterThan(events.findIndex(e => e.type === "replay-start"))
-  })
-
-  test("a reconnect attaches only — it never calls ensure", async () => {
-    const world = makeWorld()
-    const backend = new RecordingBackend(world)
-    await backend.ensure(A, ENSURE)
-    const first = await backend.attachExisting(A, "v1", recorder().emit)
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    const first = await backend.attachExisting(CONTRACT_A, "v1", recorder().emit)
     await first.detach()
 
     world.calls.length = 0
-    const again = await backend.attachExisting(A, "v1", recorder().emit)
-    expect(again.write(new Uint8Array([0x6c]))).toBe(true)
-    expect(world.calls.some(c => c.startsWith("ensure"))).toBe(false)
-  })
-
-  test("attach to a missing target rejects with target-not-found", async () => {
-    const backend = new RecordingBackend(makeWorld())
-    const error = await backend.attachExisting(A, "v1", recorder().emit).then(
-      () => null,
-      (e: unknown) => e,
-    )
-    expect(isWorkspaceTerminalError(error, "target-not-found")).toBe(true)
-  })
-
-  test("a target that EXITED is reported and never resurrected by attach", async () => {
-    const world = makeWorld()
-    const backend = new RecordingBackend(world)
-    await backend.ensure(A, ENSURE)
-    const { events, emit } = recorder()
-    await backend.attachExisting(A, "v1", emit)
-
-    await world.exit(A, { known: true, code: 0, signal: null })
-    expect(events.at(-1)).toEqual({ type: "exit", known: true, code: 0, signal: null })
-    expect(await backend.exists(A)).toBe(false)
-
-    // `tmux new-session -A` would hand back a brand-new shell here. We must not.
-    const error = await backend.attachExisting(A, "v2", recorder().emit).then(() => null, (e: unknown) => e)
-    expect(isWorkspaceTerminalError(error, "target-not-found")).toBe(true)
-    expect(world.creates).toBe(1)
-  })
-
-  test("detach preserves the target", async () => {
-    const world = makeWorld()
-    const backend = new RecordingBackend(world)
-    await backend.ensure(A, ENSURE)
-    const viewer = await backend.attachExisting(A, "v1", recorder().emit)
-    await viewer.detach()
-
-    expect(viewer.write(new Uint8Array([1]))).toBe(false)
-    expect(await backend.exists(A)).toBe(true)
-    expect(await backend.list("w:alpha")).toEqual([
-      { scope: "w:alpha", terminalId: "main", createdAt: 1000 },
-    ])
-    await viewer.detach() // idempotent
-  })
-
-  test("close deletes the target and its viewers", async () => {
-    const world = makeWorld()
-    const backend = new RecordingBackend(world)
-    await backend.ensure(A, ENSURE)
-    const viewer = await backend.attachExisting(A, "v1", recorder().emit)
-
-    await backend.close(A)
-    expect(await backend.exists(A)).toBe(false)
-    expect(await backend.list("w:alpha")).toEqual([])
-    expect(viewer.write(new Uint8Array([1]))).toBe(false)
-    expect(viewer.reply(new Uint8Array([1]))).toBe(false)
-    await backend.close(A) // idempotent
-  })
-
-  test("close during an IN-FLIGHT attach rejects and leaves no viewer behind", async () => {
-    const world = makeWorld()
-    const backend = new RecordingBackend(world)
-    await backend.ensure(A, ENSURE)
-    const target = world.targets.get(keyOf(A))!
-
-    const gate = deferred()
-    world.hooks.beforeAttach = () => gate.promise
-    const attaching = backend.attachExisting(A, "v1", recorder().emit)
-    await backend.close(A)
-    gate.resolve()
-
-    const error = await attaching.then(() => null, (e: unknown) => e)
-    expect(isWorkspaceTerminalError(error, "target-not-found")).toBe(true)
-    expect(target.viewers.size).toBe(0)
-    expect(await backend.exists(A)).toBe(false)
-  })
-
-  test("shutdownViewers closes viewers ONLY — targets keep running", async () => {
-    const world = makeWorld()
-    const backend = new RecordingBackend(world)
-    await backend.ensure(A, ENSURE)
-    await backend.ensure(B, ENSURE)
-    const one = await backend.attachExisting(A, "v1", recorder().emit)
-    const two = await backend.attachExisting(B, "v2", recorder().emit)
-
-    await backend.shutdownViewers()
-    expect(one.write(new Uint8Array([1]))).toBe(false)
-    expect(two.write(new Uint8Array([1]))).toBe(false)
-    expect(await backend.exists(A)).toBe(true)
-    expect(await backend.exists(B)).toBe(true)
-  })
-
-  test("list survives a reconstructed manager", async () => {
-    const world = makeWorld()
-    const before = new RecordingBackend(world)
-    await before.ensure(A, ENSURE)
-    await before.ensure(B, ENSURE)
-    await before.attachExisting(A, "v1", recorder().emit)
-    await before.shutdownViewers()
-
-    // Broker restart: brand-new backend object, same running targets.
-    const after = new RecordingBackend(world)
-    expect(await after.list("w:alpha")).toEqual([
-      { scope: "w:alpha", terminalId: "main", createdAt: 1000 },
-      { scope: "w:alpha", terminalId: "second", createdAt: 1001 },
-    ])
-    // And a reconnect after that restart still only ATTACHES.
-    world.calls.length = 0
-    await after.attachExisting(A, "v1", recorder().emit)
-    expect(world.calls.some(c => c.startsWith("ensure"))).toBe(false)
-  })
-
-  test("closeScope touches exactly its own scope, not a neighbouring one", async () => {
-    const world = makeWorld()
-    const backend = new RecordingBackend(world)
-    const neighbour: WorkspaceTerminalKey = { scope: "w:alphabet", terminalId: "main" }
-    await backend.ensure(A, ENSURE)
-    await backend.ensure(B, ENSURE)
-    await backend.ensure(neighbour, ENSURE)
-
-    await backend.closeScope("w:alpha")
-    expect(await backend.list("w:alpha")).toEqual([])
-    expect(await backend.list("w:alphabet")).toHaveLength(1)
-  })
-
-  test("size ownership follows the newest focus claim", async () => {
-    const world = makeWorld()
-    const backend = new RecordingBackend(world)
-    await backend.ensure(A, ENSURE)
-    const first = recorder()
-    const second = recorder()
-    const one = await backend.attachExisting(A, "v1", first.emit)
-    const two = await backend.attachExisting(A, "v2", second.emit)
-
-    await one.focus(true, 100, 40)
-    expect(first.events.at(-1)).toEqual({ type: "owner", enabled: true })
-    expect(world.targets.get(keyOf(A))!.cols).toBe(100)
-
-    await two.focus(true, 120, 50)
-    expect(first.events.at(-1)).toEqual({ type: "owner", enabled: false })
-    expect(second.events.at(-1)).toEqual({ type: "owner", enabled: true })
-    expect(world.targets.get(keyOf(A))!.cols).toBe(120)
-
-    // A background viewer may keep reporting layout; it must NOT resize the pty.
-    await one.resize(10, 10)
-    expect(world.targets.get(keyOf(A))!.cols).toBe(120)
-  })
-
-  test("input and terminal replies are kept apart", async () => {
-    const world = makeWorld()
-    const backend = new RecordingBackend(world)
-    await backend.ensure(A, ENSURE)
-    const viewer = await backend.attachExisting(A, "v1", recorder().emit)
-    expect(viewer.write(new TextEncoder().encode("ls\r"))).toBe(true)
-    expect(viewer.reply(new TextEncoder().encode("\x1b[?62;c"))).toBe(true)
-    const target = world.targets.get(keyOf(A))!
-    expect(target.input).toHaveLength(1)
-    expect(target.replies).toHaveLength(1)
+    await backend.attachExisting(CONTRACT_A, "v1", recorder().emit)
+    expect(world.calls.some(call => call.startsWith("ensure"))).toBe(false)
   })
 
   test("a failure error converts to the failure event verbatim", () => {

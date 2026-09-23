@@ -40,8 +40,19 @@
 // A background tab must therefore never be expected to satisfy a query. Both
 // calls return false when the byte could not be accepted (viewer gone, queue
 // full) so the caller can apply backpressure rather than silently losing
-// bytes; `reply` returning true means "handed to the backend", which for a
-// non-owner still ends in the drop described above.
+// bytes.
+//
+// `reply` RETURNS FALSE WHEN IT DROPS. A non-owner's reply is discarded, and
+// saying "true" there would report a delivery that never happened — the same
+// lie the daemon's lease handling used to tell a superseded viewer, which
+// believed it still owned the size until a resize vanished. `false` here means
+// "not delivered, and do not expect it to be": it is not a retry signal.
+//
+// The same applies INSIDE a replay. A replay hands a re-attaching viewer the
+// program's own earlier bytes, queries among them, and every viewer's emulator
+// answers what it is shown. An answer to a query that scrolled past minutes
+// ago is not an answer, it is keystrokes; a backend drops those too, and says
+// so, until the replay boundary has closed.
 
 /** A workspace terminal's identity. `scope` is TerminalManager's namespace —
  * "w:<workspaceId>" for a workspace terminal (see core/workspace/scope.ts), or
