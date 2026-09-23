@@ -5,9 +5,13 @@ records the one run where the patched daemon, the Zig helper, the TypeScript
 backend, a real shell and the client's own terminal engine were all the real
 thing at once: `tests/integration/zmx-workspace.test.ts`.
 
-Three of the findings below are **defects, not test artefacts**. They are listed
-under §5 and §6 with the measurement that found them, and each is pinned by an
-assertion so the fix shows up as a change to this suite.
+Three of the findings below were **defects, not test artefacts** — the
+scrollback the restore erased (§6), the backpressure that was not one (§5), and
+the reason a mid-restore drop could not state (§5). All three have since been
+addressed, each with the measurement that found it kept beside what it now
+reads; a fourth, found while re-running the suite and older than this branch, is
+still open (§6). Every one is pinned by an assertion, so a regression shows up
+as a change to this suite.
 
 ---
 
@@ -19,10 +23,10 @@ assertion so the fix shows up as a change to this suite.
 | date | 2026-09-23 |
 | bun | 1.3.14 |
 | zig | 0.16.0 |
-| zmx | `8bab1f0173b07e79835ea372d749af3dbf0d0842` + `patches/0001-supermux-session-contract.patch` (`6160737b…`) |
-| helper | ABI 1, `fcae0efd…` |
+| zmx | `8bab1f0173b07e79835ea372d749af3dbf0d0842` + `patches/0001-supermux-session-contract.patch` (`6160737b…`, now `705fd022…` — §6) |
+| helper | ABI 1, `fcae0efd…` (rebuilt `19117342…` against the re-pinned patch) |
 | optimize | **ReleaseSafe** (see §1) |
-| suite | `bun test tests/integration/zmx-workspace.test.ts` → **12 pass, 0 fail, 114 expect(), 23.04 s** |
+| suite | first run **12 pass, 0 fail, 114 expect(), 23.04 s**; after the fixes below **12 pass, 0 fail, 121 expect(), 33.19 s** |
 | typecheck | `bun run typecheck` → clean except one pre-existing, unrelated error in `src/channels/web/project-routes.test.ts:258` |
 
 macOS and Windows were **not** run: this host has neither. The suite gates
@@ -80,8 +84,9 @@ Fixed in this change: `scripts/build-zmx.sh` passes `-Doptimize=$ZIG_OPTIMIZE`
 (default `ReleaseSafe`, override `MUX_ZIG_OPTIMIZE`) for **both** binaries, and
 the manifest now records `"optimize"` — two binaries differing only in optimize
 mode are otherwise indistinguishable to everything downstream. The zig **test**
-steps stay in Debug, which is where a Zig test suite belongs; the 145/145 result
-in `README.md` §4 is unaffected (no zmx source changed).
+steps stay in Debug, which is where a Zig test suite belongs; the zig test
+result in `README.md` §4 was unaffected by THAT change (no zmx source changed —
+it has since moved to 146/146 for the §6 scrollback fix).
 
 The 12 MiB flood in §5 completes in **1.692 s** on the ReleaseSafe build.
 
