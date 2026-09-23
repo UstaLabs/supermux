@@ -47,7 +47,7 @@
 // `encodeName(key)` and fails rather than handing two workspaces one shell.
 // `assertTargetMatches` is that comparison.
 import { createHash } from "crypto"
-import { chmodSync, lstatSync, mkdirSync } from "fs"
+import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { isAbsolute, join } from "path"
 import { STATE_DIR } from "../../../shared/paths"
 import { WorkspaceTerminalError, type WorkspaceTerminalKey } from "../workspace-backend"
@@ -188,6 +188,76 @@ export function ensureSocketDir(dir: string): string {
     throw new WorkspaceTerminalError(
       "socket-dir-unsafe",
       `zmx socket dir ${dir} is group/world accessible (mode ${(stat.mode & 0o777).toString(8)})`,
+    )
+  }
+  return dir
+}
+
+/** Owner marker inside the socket directory. A plain file, not a socket: `zmx
+ * list` enumerates this directory and connects to what it finds, and a regular
+ * file is skipped rather than probed. */
+export const SOCKET_DIR_OWNER_FILE = ".broker-owner"
+
+function isProcessAlive(pid: number): boolean {
+  if (pid <= 0) return false
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+/**
+ * True when `pid` looks like a supermux broker rather than whatever inherited
+ * a recycled pid. Best effort, and deliberately biased: when we cannot tell
+ * (no procfs — macOS), we say NO and take the directory over. Locking a user
+ * out of their terminals because a pid was reused is a worse failure than the
+ * one this check exists to catch, which is already the rare one.
+ */
+function looksLikeBroker(pid: number): boolean {
+  try {
+    const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8")
+    return cmdline.includes("bun") || cmdline.includes("mux")
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Claim this socket directory for THIS broker process, and refuse it if
+ * another live one holds it.
+ *
+ * WHY THIS EXISTS. `ZmxWorkspaceBackend` derives `owner:false` — a viewer
+ * losing the size lease — from a `BrokerLease` landing on one of ITS OWN
+ * viewers, because the daemon only messages the winner. That deduction is
+ * sound only while every broker viewer of a target belongs to one process. The
+ * private 0700 directory makes a stranger's broker unlikely; it does not make
+ * a SECOND OF OURS impossible, and an old broker still draining during a
+ * restart is exactly that. Two of them would each see leases move for reasons
+ * they cannot observe, and a viewer would keep believing it owned the size.
+ *
+ * So it is enforced, not assumed. The marker is a pid file rather than a lock
+ * the kernel holds, because it also has to be readable: "who has this
+ * directory" is the first question when a broker refuses to start.
+ */
+export function claimSocketDir(dir: string): string {
+  const path = join(dir, SOCKET_DIR_OWNER_FILE)
+  let owner: number | undefined
+  try {
+    owner = Number(readFileSync(path, "utf8").trim())
+  } catch {
+    owner = undefined // no marker, or unreadable: ours to take
+  }
+  if (owner !== undefined && Number.isInteger(owner) && owner > 0
+    && owner !== process.pid && isProcessAlive(owner) && looksLikeBroker(owner)) {
+    throw new WorkspaceTerminalError(
+      "socket-dir-unsafe",
+      `zmx socket dir ${dir} belongs to another broker (pid ${owner}); ` +
+      "two brokers on one socket directory cannot each tell who owns a terminal's size",
+    )
+  }
+  try {
+    writeFileSync(path, `${process.pid}\n`, { mode: 0o600 })
+  } catch (error) {
+    throw new WorkspaceTerminalError(
+      "socket-dir-unsafe",
+      `cannot claim zmx socket dir ${dir}: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
   return dir

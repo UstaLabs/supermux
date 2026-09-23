@@ -226,10 +226,14 @@ suite("zmx workspace backend, against real processes", () => {
     }
   }
 
-  async function waitFor(predicate: () => boolean, ms: number, describe: () => string): Promise<void> {
+  async function waitFor(
+    predicate: () => boolean | Promise<boolean>,
+    ms: number,
+    describe: () => string,
+  ): Promise<void> {
     const deadline = Date.now() + ms
     while (Date.now() < deadline) {
-      if (predicate()) return
+      if (await predicate()) return
       await Bun.sleep(50)
     }
     throw new Error(`timed out after ${ms}ms: ${describe()}`)
@@ -943,9 +947,17 @@ suite("zmx workspace backend, against real processes", () => {
       "dd if=/dev/zero bs=1024 count=1536 2>/dev/null | tr '\\0' 'B' | fold -w 200\r"))).toBe(true)
     await waitFor(() => draining.outputBytes > 64 * 1024, 120_000, () => "the flood never started")
     await backend.closeScope(doomedScope)
-    await Bun.sleep(800)
+    // BOUNDED WAIT, NOT A FIXED SLEEP. `close` resolves when the helper has
+    // DELIVERED the kill (`cmdKill` sends `.Kill` and answers), not when the
+    // daemon has finished dying and unlinked its socket — and a daemon that is
+    // still draining a megabyte can take a moment over it. A fixed 800 ms was
+    // enough about nine times in ten on a loaded box; this asserts the same
+    // thing without the tenth being a false failure.
+    let doomedRows = await backend.list(doomedScope)
+    await waitFor(async () => (doomedRows = await backend.list(doomedScope)).length === 0, 15_000,
+      () => `the closed scope still lists ${JSON.stringify(doomedRows.map(row => row.terminalId))}`)
 
-    expect(await backend.list(doomedScope)).toEqual([])
+    expect(doomedRows).toEqual([])
     expect(await backend.exists(doomed)).toBe(false)
     expect(await backend.exists(alsoDoomed)).toBe(false)
     // A close we asked for is not a failure a client should see.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, mkdirSync, statSync, writeFileSync, chmodSync } from "fs"
+import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, chmodSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { randomUUID } from "crypto"
@@ -8,6 +8,8 @@ import {
   TARGET_NAME_MAX,
   assertNameFits,
   belongsToScope,
+  claimSocketDir,
+  SOCKET_DIR_OWNER_FILE,
   decodeName,
   encodeName,
   ensureSocketDir,
@@ -254,6 +256,53 @@ describe("zmx socket directory", () => {
     ensureSocketDir(dir)
     expect(statSync(dir).mode & 0o777).toBe(0o700)
   })
+
+  test("claiming the socket dir records this broker and takes over a dead one", () => {
+    const dir = mkdtempSync(join(tmpdir(), "zmx-claim-"))
+    const marker = join(dir, SOCKET_DIR_OWNER_FILE)
+
+    expect(claimSocketDir(dir)).toBe(dir)
+    expect(readFileSync(marker, "utf8").trim()).toBe(String(process.pid))
+    // Idempotent for the process that already holds it: a second backend over
+    // the same directory is a restart in a test, not a second broker.
+    expect(claimSocketDir(dir)).toBe(dir)
+
+    // A pid nothing is running under is a broker that died without cleaning up.
+    writeFileSync(marker, "2147483646\n")
+    expect(claimSocketDir(dir)).toBe(dir)
+    expect(readFileSync(marker, "utf8").trim()).toBe(String(process.pid))
+
+    // ...and so is an unreadable or nonsense marker: it says nothing about a
+    // live owner, and refusing on it would lock the user out for a typo.
+    writeFileSync(marker, "not-a-pid\n")
+    expect(claimSocketDir(dir)).toBe(dir)
+  })
+
+  // procfs only: `looksLikeBroker` cannot tell a broker from a recycled pid
+  // without it, and deliberately takes the directory over rather than locking
+  // the user out. So this asserts the Linux behaviour, where the check exists.
+  test.skipIf(process.platform !== "linux")(
+    "a socket dir held by ANOTHER live broker is refused, not shared", async () => {
+      // The `owner:false` deduction in backend.ts is only sound while ONE
+      // process owns every broker viewer of a target; two brokers on one
+      // directory would each miss the other's leases. A live, bun-shaped
+      // process is what a lingering old broker looks like during a restart.
+      const dir = mkdtempSync(join(tmpdir(), "zmx-claim-"))
+      const stand_in = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30_000)"], {
+        stdin: "ignore", stdout: "ignore", stderr: "ignore",
+      })
+      try {
+        // /proc/<pid>/cmdline is empty until the child has finished exec'ing.
+        for (let attempt = 0; attempt < 200; attempt++) {
+          if (readFileSync(`/proc/${stand_in.pid}/cmdline`, "utf8").length > 0) break
+          await Bun.sleep(5)
+        }
+        writeFileSync(join(dir, SOCKET_DIR_OWNER_FILE), `${stand_in.pid}\n`)
+        expect(throwsCode(() => claimSocketDir(dir), "socket-dir-unsafe")).toBe(true)
+      } finally {
+        stand_in.kill()
+      }
+    })
 
   test("refuses a path that is not a directory we can own", () => {
     const root = mkdtempSync(join(tmpdir(), "zmx-dir-"))

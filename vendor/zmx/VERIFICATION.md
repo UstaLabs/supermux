@@ -313,6 +313,31 @@ drawing a few bytes it then discards on the real epoch.
 | `close()` racing an in-flight `attachExisting` | `target-not-found` | the neighbouring target in the same scope |
 | `closeScope()` while 695,449 bytes were draining | **no** `failure` and no `exit` — a close we asked for is not a loss | the other scope's target, exactly, and it still ran commands |
 
+### OPEN DEFECT: `closeScope` can leave a FLOODING target running
+
+Found while re-running this suite, present in the original recorded run's code
+as well (bisected: the same failure reproduces at `7c80b7d2`, 2 runs in 8, and
+it is nothing the fixes above touch).
+
+`close()` resolves when the helper has DELIVERED the kill — `cmdKill` connects,
+verifies `mux.target`, `ipc.send(.Kill)` and answers `ok`; it does not wait for
+the daemon to die. About one run in six of *"deleting a workspace while output
+drains"*, the daemon of the target that is mid-flood is **still listed 15
+seconds later**, with its shell alive, while its quiet neighbour in the same
+scope dies as asked. It is always the flooded one.
+
+Not investigated to a root cause here (it is outside this change's scope and in
+the daemon's client loop, not the broker's). What is known:
+
+* the kill is not refused — `close()` returns, and the backend logs
+  `zmx_target_closed`;
+* the neighbour in the same `closeScope` call dies;
+* 15 s is not a timing margin problem — the target never goes.
+
+The suite now waits for the scope to empty with a bounded 15 s budget instead
+of a fixed 800 ms sleep, and names what survived when it does not, so this
+shows up as the defect it is rather than as a flaky sleep.
+
 `zmx list` reports the **session** pid, which is the shell. The daemon is its
 parent. Killing what `list` reports is the third row, not the second — a
 distinction the first version of this suite got wrong, and the reason

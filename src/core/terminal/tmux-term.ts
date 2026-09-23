@@ -84,6 +84,16 @@ function makeRunner(socket: string, confPath: string): TmuxRunner {
     })
 }
 
+/**
+ * DEAD CODE, ON PURPOSE, UNTIL PLAN 4 TASK 5.
+ *
+ * Nothing calls this any more: workspace terminals are `WorkspaceTerminalBackend`
+ * (zmx on POSIX, sessiond on Windows) and the manager no longer has a tmux
+ * path. It is left here rather than deleted piecemeal because Task 5 removes
+ * `tmux-term.ts` whole, together with its tests and the portable-tmux build --
+ * one deletion with one migration story beats a half-removed module in the
+ * meantime.
+ */
 export function createTermTmux(opts: { socket?: string; confPath: string; run?: TmuxRunner }) {
   const socket = opts.socket ?? MUXTERM_SOCKET
   const run = opts.run ?? makeRunner(socket, opts.confPath)

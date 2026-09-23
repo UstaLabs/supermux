@@ -253,6 +253,18 @@ export class SessiondTerm {
   }
 }
 
+/**
+ * A sessiond target as a process-shaped object, for the manager's agent panes.
+ *
+ * THE `scratch` BRANCH BELOW IS DEAD CODE, ON PURPOSE, UNTIL PLAN 4 TASK 5.
+ * `kind: "agent"` is the only value any caller passes now (`manager.ts`'s
+ * `attachAgentWindows`): a Windows WORKSPACE terminal goes through
+ * `SessiondWorkspaceBackend` further down this file, which owns its own
+ * create/attach/replay path. The branch is left in place because Task 5 is
+ * where the old terminal path is removed as a whole -- deleting half of it now
+ * would leave `SessiondTerminalKind` with one variant and a type nobody has
+ * finished narrowing.
+ */
 export async function createSessiondTerm(options: SessiondTermOptions): Promise<{
   proc: SessiondTerm
   targetId: string

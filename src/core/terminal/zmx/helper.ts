@@ -369,14 +369,24 @@ export class ZmxHelper {
   async close(): Promise<void> {
     if (this.#done || this.#closing) return
     this.#closing = true
+    // The fallback timer is unref'd and cleared: a detach that answers
+    // immediately must not leave a 2-second timer holding the event loop open
+    // (a broker shutting down closes every viewer at once), and a timer nobody
+    // is waiting on any more must not keep the process alive by itself.
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
       await Promise.race([
         this.send({ op: "detach" }),
-        new Promise(resolve => setTimeout(resolve, CLOSE_TIMEOUT_MS)),
+        new Promise(resolve => {
+          timer = setTimeout(resolve, CLOSE_TIMEOUT_MS)
+          ;(timer as unknown as { unref?: () => void }).unref?.()
+        }),
       ])
     } catch {
       // A helper that cannot answer a detach is one we kill; the target is
       // unaffected either way.
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
     }
     this.kill()
   }

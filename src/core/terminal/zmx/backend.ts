@@ -19,9 +19,13 @@
 //     always the wire's own `lease` or the absence of one.
 //
 //     The one case this cannot see is a lease granted to a viewer in another
-//     broker process. There is none: a target's socket lives in our private
-//     0700 directory, and a stock `zmx attach` cannot take a held lease
-//     (`setLeader` refuses).
+//     BROKER process — and that is now enforced rather than assumed. The socket
+//     directory carries an owner pid (`claimSocketDir`), and a second broker
+//     that finds a live one refuses with `socket-dir-unsafe` instead of quietly
+//     sharing the directory; an old broker lingering through a restart is the
+//     realistic case, and it is exactly the one the private 0700 directory did
+//     not cover. A stock `zmx attach` is a different matter and needs no lock:
+//     it cannot take a held lease at all (`setLeader` refuses).
 //
 //  2. THE REPLAY EPOCH. The daemon opens a restore boundary with
 //     `BrokerReplayStart(epoch)`; the contract also wants a `reset` in front of
@@ -52,6 +56,7 @@ import {
 import { ZmxHelper, type HelperBinaries, type HelperHandlers } from "./helper"
 import {
   assertNameFits,
+  claimSocketDir,
   decodeName,
   encodeName,
   ensureSocketDir,
@@ -117,6 +122,18 @@ export const WORKSPACE_ENV_ALLOWLIST: readonly string[] = [
   "XDG_STATE_HOME", "XDG_CONFIG_DIRS", "XDG_DATA_DIRS",
   // Sockets an interactive developer shell is expected to find.
   "SSH_AUTH_SOCK", "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS",
+  // HOW TO REACH THE NETWORK. Behind a corporate proxy these are the
+  // difference between a working shell and one where `git`, `curl` and `npm`
+  // all hang or fail with something unhelpful. The tmux path inherited them by
+  // accident; leaving them out here would have been a silent regression for
+  // exactly the users who cannot work around it. Both cases are carried
+  // because the ecosystem is split: curl and most CLIs read the lowercase
+  // names, .NET and some Windows-ish tooling the uppercase ones.
+  "http_proxy", "https_proxy", "ftp_proxy", "all_proxy", "no_proxy",
+  "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "ALL_PROXY", "NO_PROXY",
+  // How git asks for a credential when it cannot use a tty. Without it a clone
+  // over https in a workspace terminal prompts into nowhere and hangs.
+  "GIT_ASKPASS", "SSH_ASKPASS",
 ]
 
 /**
@@ -232,6 +249,11 @@ export interface ZmxBackendOptions {
 
 const keyOf = (key: WorkspaceTerminalKey) => `${encodeName(key)}`
 
+/** Socket directories this PROCESS has claimed. A second `ZmxWorkspaceBackend`
+ * over the same directory is a broker restart in a test, not a second broker;
+ * the pid in the marker is what tells those apart. */
+const claimedDirs = new Set<string>()
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -287,8 +309,17 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
   /** The socket directory, re-validated on every use: a directory that became
    * group-writable between two calls is not one we hand a shell through. */
   #dir(): string {
-    if (this.#options.socketDir) return ensureSocketDir(this.#options.socketDir)
-    return ensureSocketDir(zmxSocketDir(this.#hostEnv as NodeJS.ProcessEnv, this.#options.stateDir ?? STATE_DIR))
+    const dir = this.#options.socketDir
+      ?? zmxSocketDir(this.#hostEnv as NodeJS.ProcessEnv, this.#options.stateDir ?? STATE_DIR)
+    ensureSocketDir(dir)
+    // Claimed once per directory per PROCESS, not per call: the marker is this
+    // process's, so re-writing it on every operation would be noise. A second
+    // broker claims on its own first use and is refused there.
+    if (!claimedDirs.has(dir)) {
+      claimSocketDir(dir)
+      claimedDirs.add(dir)
+    }
+    return dir
   }
 
   /** Run one control command on a helper that never attaches, then stop it.

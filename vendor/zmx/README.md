@@ -444,8 +444,18 @@ clean pin + verified patch (pass), an unrelated edit in the upstream cache
   always the wire's own `lease`. A non-owner's `resize()` is not sent at all
   and its `reply()` returns false, so nothing pretends a dropped message
   landed. The one case this cannot see is a lease granted to a viewer in
-  ANOTHER broker process; there is none, because the socket lives in our
-  private 0700 directory and `setLeader` refuses to move a held lease.
+  ANOTHER BROKER process — which is now **enforced rather than assumed**: the
+  socket directory carries an owner pid (`names.ts:claimSocketDir`), and a
+  broker that finds a live one there refuses with `socket-dir-unsafe` instead
+  of quietly sharing it. The 0700 directory was never the argument it was
+  written as — it keeps strangers out, not a SECOND BROKER OF OURS, and an old
+  broker still draining during a restart is exactly that. A stock `zmx attach`
+  needs no lock: it cannot take a held lease at all (`setLeader` refuses).
+  (The marker is a pid file, not a kernel lock: it has to be readable, because
+  "who has this directory" is the first question when a broker refuses to
+  start. A pid that is alive but is not a broker — procfs says so — is taken
+  over rather than deferred to; locking a user out of their terminals over a
+  recycled pid is the worse failure.)
 
 * **`kill` is identity-checked now** (Task 5). It was the one path that could
   destroy a session without reading its `mux.target` label — the TS command
