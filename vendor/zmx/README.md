@@ -12,8 +12,12 @@ installed or replaced.**
 | upstream | `neurosnap/zmx@8bab1f0173b07e79835ea372d749af3dbf0d0842` (v0.8.1, MIT) |
 | ghostty (zmx's own pin) | `8af6897c0afc63037a8a3efee4162a380e3a4572` |
 | zig | 0.16.0 (reuses `~/.local/zig/0.16.0`, provisioned by `apps/terminal-core/native/build.sh`) |
+| optimize | `ReleaseSafe` (`MUX_ZIG_OPTIMIZE` overrides). **Not optional** — see `VERIFICATION.md` §1 |
 | patch | `patches/0001-supermux-session-contract.patch` |
 | touches | `src/ipc.zig`, `src/loop.zig`, `src/util.zig` — and nothing else |
+
+`VERIFICATION.md` records the one run where all of this was exercised against
+real daemons and real shells, and the four defects it found.
 
 ```sh
 scripts/build-zmx.sh --check-patches   # verify the pin + patch (CI gate)
@@ -405,8 +409,11 @@ clean pin + verified patch (pass), an unrelated edit in the upstream cache
   it, and every answer after the first is read by the shell as typed input —
   and `src/core/terminal/workspace-backend.ts` now says so. The helper drops a
   non-owner's reply on its own side too, so nothing pretends it landed.
-* **`--check-patches` does not run in CI yet.** Nothing wires it into the test
-  job; that is a Task 5/6 item.
+* ~~**`--check-patches` does not run in CI yet.**~~ **Wired up in Task 6.** The
+  `zmx` job in `.github/workflows/ci.yml` runs it before it builds anything,
+  then builds both binaries and the reference wasm engine and runs
+  `tests/integration/zmx-workspace.test.ts` with `MUX_ZMX_INTEGRATION=1`, which
+  turns a missing artifact from a skip into a failure.
 * **The helper reads this patch now.** `src/core/terminal/zmx/helper` is built
   by `scripts/build-zmx.sh` against this tree's own `src/ipc.zig`, and
   `src/core/terminal/zmx/helper/helper_smoke.py` drives it against a real
@@ -439,8 +446,27 @@ clean pin + verified patch (pass), an unrelated edit in the upstream cache
   `posix.zig:1248` when the task's foreground process is probed. It is in
   `src/main.zig`, which this patch does not touch; see §4 for the
   stock-vs-patched comparison.
-* **Not exercised end to end**: the queue-overflow detach and the exit path are
-  unit-tested against the daemon's own state, not against a real slow reader or
-  a real dying shell. Worth an integration test once the helper exists.
+* ~~**Not exercised end to end**: the queue-overflow detach and the exit path.~~
+  **Done in Task 6** — `tests/integration/zmx-workspace.test.ts`, written up in
+  `VERIFICATION.md`. It found four things worth knowing before this ships:
+
+  1. **The build was Debug** (`b.standardOptimizeOption` defaults to it and the
+     script never passed `-Doptimize`), which ran the pty at ~43 KiB/s against a
+     plain pty's ~28 MiB/s. Fixed: `ReleaseSafe`, 113× faster end to end, and the
+     mode is now recorded in the manifest. §1.
+  2. **A slow `emit` is not backpressure.** Bun drains a subprocess pipe eagerly,
+     so the daemon's 1 MiB cap never fires for a viewer whose callback is slow —
+     12 MiB piled up inside the broker instead. §5.
+  3. **The restore ships scrollback and then erases it.** `ESC[2J` after the
+     scrollback phase wipes it in place rather than scrolling it off, so the
+     client keeps `sent - rows + 1` lines and a terminal with less than one
+     screen of scrollback keeps none. §6.
+  4. **A viewer dropped during its restore is not told why** — the
+     `BrokerDetach` is queued on the socket it stopped reading, and it sees a
+     closed connection instead. §5.
+
+  Two smaller things were fixed on the way: `cmdAttach` now answers
+  `target-not-found` (not a recoverable `backend-unavailable`) when nothing is
+  listening at the socket path, and `ZmxHelper` exposes its `pid`.
 * **`test/*.bats`** is upstream's integration suite; `bats` is not installed on
   this host, so it was not run. It exercises the stock CLI only.
