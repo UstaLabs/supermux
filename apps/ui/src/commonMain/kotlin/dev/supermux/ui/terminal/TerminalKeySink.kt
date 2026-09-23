@@ -36,8 +36,9 @@ sealed interface TerminalKey {
  * own subtree, which is what a shared bar pinned above the IME needs — always types into the pane
  * it was handed, and a background pane's armed Ctrl cannot leak into the foreground one.
  *
- * Behaviour is Android's `TermlibTerminalView.onKeyboardInput` verbatim (itself the web `TerminalPane.vue`
- * rule): a modifier press cycles off → once → locked; any other key is encoded with the modifiers
+ * Behaviour is the rule the retired Android renderer's `onKeyboardInput` had (itself the web
+ * `TerminalPane.vue` rule), lifted here unchanged when it stopped being Android's alone:
+ * a modifier press cycles off → once → locked; any other key is encoded with the modifiers
  * currently held (`appCursor = false` — no client exposes DECCKM) and sent, after which a `once`
  * modifier is consumed and a `locked` one stays armed.
  *
@@ -155,8 +156,9 @@ class TerminalKeySink(
 /**
  * A single printable ASCII char (0x20–0x7e) from a keystroke's bytes, or null.
  *
- * Was private to Android's termlib view; lifted here in H5 when iOS needed the identical rule, so
- * the two hosts cannot drift on which keystrokes an armed bar modifier may transform.
+ * Was private to Android's own terminal view; lifted here in H5 when iOS needed the identical
+ * rule, so no two hosts can drift on which keystrokes an armed bar modifier may transform. Both
+ * of those views are gone — there is one renderer now — and the rule stayed.
  */
 fun singlePrintableChar(data: ByteArray): Char? {
     if (data.size != 1) return null

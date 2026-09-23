@@ -7,7 +7,7 @@
 // why this composable renders nothing without a pointer.
 //
 // The AWT interop shield stays a desktop concern: on desktop Compose cannot paint over a
-// heavyweight child (JediTerm/JCEF), so the popover announces itself through [ModalHost] and
+// heavyweight child (the JCEF editor), so the popover announces itself through [ModalHost] and
 // `DesktopTheme`'s host does the retain/release that `ModalOpen()` used to do here directly.
 package dev.supermux.ui.usage
 

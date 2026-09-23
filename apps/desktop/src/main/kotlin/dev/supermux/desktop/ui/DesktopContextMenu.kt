@@ -48,7 +48,7 @@ import dev.supermux.ui.widgets.MenuStyle
  * the entire reason to do this rather than hand-styling one popup.
  *
  * [ModalOpen] matters here as much as it does for the dropdowns: a right-click
- * inside a text field that sits over JediTerm or JCEF would otherwise open a menu
+ * inside a text field that sits over the JCEF editor would otherwise open a menu
  * nobody can see (ModalPresence.kt has the measurements).
  */
 class SupermuxContextMenuRepresentation : ContextMenuRepresentation {

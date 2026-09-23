@@ -21,10 +21,12 @@ import androidx.compose.ui.unit.dp
  *
  * Ahmet: "most modals etc. stays under when there is terminal view".
  *
- * Compose cannot paint over a heavyweight AWT child. The two in this app are
- * JediTerm (JediTermTerminalView) and JCEF (the shared EditorSurface), and everything
+ * Compose cannot paint over a heavyweight AWT child. There were two in this app when this was
+ * written — the Swing terminal widget and JCEF (the shared EditorSurface) — and everything
  * Compose draws in its own layer — all 22 AlertDialogs, both raw Dialogs, all 24
- * DropdownMenus — is simply invisible while one of them is on screen.
+ * DropdownMenus — is simply invisible while one of them is on screen. Plan 4 made the terminal
+ * pure Compose, so JCEF is the last one; the quotation above is what a terminal pane USED to do,
+ * and the mechanism is unchanged for the child that is left.
  *
  * Measured, rather than assumed, with a probe under Xvfb (InteropZOrderProbe):
  *
@@ -37,12 +39,12 @@ import androidx.compose.ui.unit.dp
  * DialogWindow works but only solves dialogs: a dropdown cannot sensibly become
  * its own OS window, and it would mean converting 49 call sites. So this takes
  * the approach the codebase already proves everywhere else — swap, don't overlay
- * (DropZones.kt:26, EditorPanel.kt:563, JediTermTerminalView.kt:170). While
- * anything modal is open the heavyweight child is laid out at 0×0, which is the
- * only kind of hiding it respects, and Compose then draws normally.
+ * (DropZones.kt:26, EditorPanel.kt:563). While anything modal is open the
+ * heavyweight child is laid out at 0×0, which is the only kind of hiding it
+ * respects, and Compose then draws normally.
  *
  * The count is a COUNT, not a flag: menus nest (a dialog containing a dropdown),
- * and two overlapping opens must not have the first close re-show the terminal
+ * and two overlapping opens must not have the first close re-show the child
  * underneath the second.
  */
 @Stable
@@ -99,7 +101,7 @@ val ModalPresenceHost: @Composable (@Composable () -> Unit) -> Unit = { modal ->
 }
 
 /**
- * Wrap a heavyweight AWT child (JediTerm, JCEF) so it steps aside while anything
+ * Wrap a heavyweight AWT child (the JCEF editor) so it steps aside while anything
  * modal is open.
  *
  * The outer box KEEPS its full size; only the inner slot collapses to 0×0. That
@@ -107,7 +109,7 @@ val ModalPresenceHost: @Composable (@Composable () -> Unit) -> Unit = { modal ->
  * right for a background tab nobody can see, but here the pane is still on
  * screen behind the dialog — collapsing it outright makes every sibling reflow
  * and the layout visibly jump the moment a menu opens. Reserving the space
- * leaves whatever the parent paints (the terminal's own background) showing
+ * leaves whatever the parent paints (the pane's own background) showing
  * through, so the pane just goes quiet instead of vanishing.
  *
  * Hiding is by LAYOUT because that is the only kind a heavyweight AWT child
@@ -149,8 +151,8 @@ fun HeavyweightModalShield(
  * Measured on Ahmet's Mac with the real GPU (`renderApi=METAL`,
  * `useInteropBlending=true` read off the live SkiaLayer, not assumed):
  *
- *   Compose over JediTerm, a SWING child ........ paints correctly, terminal stays live
- *   Compose over JCEF, a native Chromium NSView . sheared off at the page's top edge
+ *   Compose over a SWING child (the old terminal) .. paints correctly, the child stays live
+ *   Compose over JCEF, a native Chromium NSView .... sheared off at the page's top edge
  *
  * That is the whole reason [HeavyweightModalShield] still exists: "Compose cannot
  * paint over a heavyweight AWT child" is really two different problems, and

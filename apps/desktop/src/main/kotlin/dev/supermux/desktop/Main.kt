@@ -302,25 +302,26 @@ private val desktopBindTts: (
 //                                  2×2 PNG fixture. Overlay only; no broker traffic. Off by default.
 //                                  [main]
 fun main() {
-    // Let Compose paint over the Swing interop children (the JediTerm terminals).
-    // Must be set before the first Compose window: the flag is read through a
-    // memoizing `lazy`, so setting it later is silently ignored.
+    // Let Compose paint over the Swing interop children. Must be set before the
+    // first Compose window: the flag is read through a memoizing `lazy`, so
+    // setting it later is silently ignored.
     //
-    // ⚠ This is NOT currently sufficient to stop the terminal hiding behind a
-    // modal, and the reason is worth keeping: blending composites, it does not
-    // re-route INPUT. On Metal a dialog does paint correctly over a live
-    // terminal — verified with `renderApi=METAL` read off the live SkiaLayer —
-    // but the AWT child remains topmost for hit-testing, so every click still
-    // lands on JediTerm and the dialog's buttons are dead. Ahmet: "it renders
-    // correctly on top of the terminal. But if I try to click on any button, it
-    // doesn't work." So HeavyweightModalShield still hides the terminal, and
-    // this flag is currently inert for modals.
+    // ⚠ It has never been sufficient on its own, and the reason is worth
+    // keeping: blending composites, it does not re-route INPUT. On Metal a
+    // dialog did paint correctly over the app's Swing terminal — verified with
+    // `renderApi=METAL` read off the live SkiaLayer — but the AWT child stayed
+    // topmost for hit-testing, so every click still landed on the terminal and
+    // the dialog's buttons were dead. Ahmet: "it renders correctly on top of
+    // the terminal. But if I try to click on any button, it doesn't work." So
+    // HeavyweightModalShield hides the child instead, and this flag is inert
+    // for modals.
     //
-    // It stays because it is the half of the problem that IS solved, at no cost
-    // measured on Metal, and because the remaining half is about input routing
-    // rather than painting. The moment input is sorted, the terminal can stop
-    // hiding by flipping one argument in JediTermTerminalView — read the note
-    // there first.
+    // SINCE PLAN 4 THE TERMINAL IS NOT A SWING CHILD AT ALL — it is pure
+    // Compose, on every host — so the one case that motivated this flag is
+    // gone. JCEF, the child that IS left, was never rescued by it (see below).
+    // It stays because it costs nothing measured on Metal and because a future
+    // Swing interop child would be back in exactly the old situation; nothing
+    // in the app depends on it being on.
     //
     // Compose 1.11.1 gates blending on the render API — Direct3D and Metal only,
     // never OpenGL — so it is a no-op on Linux by construction. It also does not
@@ -683,9 +684,9 @@ fun main() {
 
             // Appearance lives on [ui] so the sidebar toggle, theme, and ui-state.json share one source.
             // One presence for the whole window: a dialog opened anywhere must hide
-            // EVERY heavyweight AWT child (JediTerm, JCEF), not just the one in the
+            // EVERY heavyweight AWT child (the JCEF editor), not just the one in the
             // pane that owns it — Compose cannot paint over any of them, and a split
-            // can show a terminal next to the pane the dialog came from.
+            // can show a second editor next to the pane the dialog came from.
             val modalPresence = remember { ModalPresence() }
             CompositionLocalProvider(LocalModalPresence provides modalPresence) {
             ProvideDesktopAdaptiveLocals {
@@ -798,7 +799,7 @@ fun main() {
                     // resolves the named session after the first snapshot, opens/ensures its SCRATCH
                     // terminal (kind="scratch", terminal "main" — via app.connectTerminal, which
                     // CANNOT produce a kind=agent client), and writes <text> as pty bytes so the full
-                    // JediTerm→WS→tmux→WS→JediTerm round-trip can be proven under Xvfb without a
+                    // grid→WS→shell→WS→grid round-trip can be proven under Xvfb without a
                     // keyboard. Backslash escapes \n \r \t in <text> are unescaped to their control
                     // bytes (so a trailing "\n" submits the command). Scratch-ONLY by construction:
                     // there is no code path here to reach the agent PTY, so it can never type into a

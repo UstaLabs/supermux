@@ -38,7 +38,7 @@ import javax.swing.JTextArea
  * Throwaway probe: can a Compose dialog or dropdown paint ABOVE a SwingPanel?
  *
  * Ahmet: "most modals etc. stays under when there is terminal view". The app's
- * two heavyweight AWT children (JediTerm, JCEF) are documented as unbeatable by
+ * the heavyweight AWT children of the time (the Swing terminal, JCEF) are documented as unbeatable by
  * Compose siblings — this measures whether a JVM property changes that on
  * Compose 1.11.1, instead of taking either candidate on faith.
  *
@@ -65,7 +65,7 @@ fun main() {
                 Box(Modifier.fillMaxSize().background(Color(0xFF101418))) {
                     Column(Modifier.fillMaxSize()) {
                         Text("above the swing panel", color = Color.White, modifier = Modifier.padding(8.dp))
-                        // Stand-in for JediTerm: a heavyweight Swing child, same interop path.
+                        // Stand-in for a real pane: a heavyweight Swing child, same interop path.
                         HeavyweightModalShield(Modifier.fillMaxWidth().height(420.dp)) {
                         SwingPanel(
                             background = Color(0xFF7B1FA2),

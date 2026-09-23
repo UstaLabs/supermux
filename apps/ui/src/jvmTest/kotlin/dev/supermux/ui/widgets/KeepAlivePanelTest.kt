@@ -27,8 +27,8 @@ import kotlin.test.assertEquals
  * SwingPanel-bearing panes. What can be asserted headlessly is the CONTRACT the strategy rests
  * on: (1) hidden = laid out at 0×0 (the only hiding a heavyweight AWT child respects — SwingPanel
  * mirrors its Compose bounds onto the AWT component), and (2) the content composable is NEVER
- * disposed/remounted across a hide/show cycle, so remembered holders (TerminalClient +
- * JediTermWidget) survive.
+ * disposed/remounted across a hide/show cycle, so remembered holders (a TerminalClient, an
+ * engine session, a browser) survive.
  *
  * The actual Swing side (AWT child stops painting at 0×0, same widget re-shows, client stays
  * CONNECTED) cannot run under runComposeUiTest — its scene isn't a real AWT window, so a
@@ -68,7 +68,7 @@ class KeepAlivePanelTest {
         waitForIdle()
 
         // One mount, zero disposals: the content slot never left the composition, so a remembered
-        // TerminalClient/JediTermWidget holder inside it would have survived the cycle.
+        // TerminalClient or engine-session holder inside it would have survived the cycle.
         assertEquals(1, probe.mounts, "content remounted across hide/show")
         assertEquals(0, probe.disposals, "content was disposed on hide")
     }

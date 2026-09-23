@@ -69,7 +69,7 @@ fun main() {
                     Column(Modifier.fillMaxSize()) {
                         Text("above the swing panel", color = Color.White,
                              modifier = Modifier.padding(8.dp))
-                        // Stand-in for JediTerm: a heavyweight Swing child, same interop path.
+                        // Stand-in for a real pane: a heavyweight Swing child, same interop path.
                         SwingPanel(
                             background = Color(0xFF7B1FA2),
                             modifier = Modifier.fillMaxWidth().height(420.dp),

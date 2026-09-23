@@ -465,8 +465,8 @@ fun PhoneWorkspacePanes(
                     key(id) {
                         // KeepAlivePanel (the expect/actual container), NOT the alpha modifier: a
                         // retained pane can hold a platform view the host's compositor draws
-                        // OUTSIDE the Compose layer — a `UIKitView`'s SwiftTerm grid on iOS, a
-                        // heavyweight SwingPanel on desktop — and neither is hidden by alpha. The
+                        // OUTSIDE the Compose layer — a `UIKitView`'s child on iOS, a heavyweight
+                        // SwingPanel (the JCEF editor) on desktop — and neither is hidden by alpha. The
                         // Android actual is still exactly the alpha hide this used to be.
                         KeepAlivePanel(visible = id == tabs.selectedId) {
                             WorkspacePaneContent(

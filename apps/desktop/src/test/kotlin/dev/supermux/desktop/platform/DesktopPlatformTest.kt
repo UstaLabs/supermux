@@ -43,7 +43,7 @@ class DesktopPlatformTest {
                 appearanceControls = true,
                 dynamicColor = false,
                 appUpdate = true,
-                // G1: JediTerm is bound; no hardware H.264 decoder (displays are VNC here).
+                // G1: the shared Compose terminal is bound; no hardware H.264 decoder (VNC displays).
                 terminal = true,
                 scrcpy = false,
             ),

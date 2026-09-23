@@ -16,28 +16,25 @@ import androidx.compose.ui.zIndex
  * `UIKitView` is "an ORDINARY Compose-positioned interop view". It is not. A `UIKitView` mounts a
  * real `UIView` into a UIKit container that Compose positions but does NOT paint: the view is
  * composited by UIKit, above the Compose canvas. `Modifier.alpha(0f)` sets the alpha of the COMPOSE
- * layer, which the interop child is not part of — so an alpha-hidden pane would keep its SwiftTerm
- * grid (and its `WKWebView`) fully visible on top of whatever replaced it, and still take touches.
+ * layer, which the interop child is not part of — so an alpha-hidden pane would keep its
+ * `WKWebView` fully visible on top of whatever replaced it, and still take touches.
  * That is the same class of problem the desktop actual was written for; only the toolkit differs
  * (heavyweight AWT there, UIKit compositing here), so the same fix applies.
  *
  * STRATEGY, therefore, exactly as JVM's: [content] stays in the SAME composition slot whether
- * visible or not — every `remember` inside it (the `TerminalClient`, the Swift-vended terminal
- * handle, the editor engine) survives a hide/show cycle — but when hidden the wrapping Box is laid
+ * visible or not — every `remember` inside it (the `TerminalClient`, the terminal's engine
+ * session, the editor engine) survives a hide/show cycle — but when hidden the wrapping Box is laid
  * out at **0×0** (`Modifier.size(0.dp)` + clip). Compose propagates those bounds to the interop
  * view's container, so the `UIView` is clipped away and cannot be touched.
  *
- * Two consequences the surfaces must handle, both verified against SwiftTerm 1.20's source:
- *
- *  • `AppleTerminalView.processSizeChange` early-returns ONLY when width AND height are both zero
- *    (`if newSize.width == 0 && newSize.height == 0`). A fully degenerate 0×0 hide is therefore
- *    inert inside SwiftTerm — but a HALF-degenerate size (0×H during a transitional layout pass)
- *    computes `cols = 0` and reports it. Every iOS surface guards `cols > 0 && rows > 0` before
- *    `TerminalClient.resize`, the same guard `JediTermTerminalView` carries, so a hidden pane can
- *    never shrink the remote pty.
- *  • On re-show the pane is laid out at full size again and SwiftTerm's `layoutSubviews` reports
- *    the real grid, so the pty is restored to the foreground pane's geometry without any explicit
- *    re-send.
+ * The consequence every hidden pane must handle is the DEGENERATE SIZE this produces. It was
+ * originally written against the Swift terminal view's own source (a 0×0 hide was inert inside it,
+ * but a HALF-degenerate 0×H layout pass computed `cols = 0` and reported it); Plan 4 replaced that
+ * view with the shared Compose renderer and the hazard is unchanged, because it comes from the
+ * LAYOUT, not the widget. The shared surface guards `cols > 0 && rows > 0` before
+ * `TerminalClient.resize`, so a hidden pane can never shrink the remote pty, and on re-show the
+ * full-size layout pass reports the real grid — the pty is restored to the foreground pane's
+ * geometry with no explicit re-send.
  */
 @Composable
 actual fun KeepAlivePanel(

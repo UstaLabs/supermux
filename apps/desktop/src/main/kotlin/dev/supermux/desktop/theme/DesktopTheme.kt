@@ -27,7 +27,7 @@ import dev.supermux.ui.widgets.LocalModalHost
  *
  * The second: the shared dialogs and menus (`ui/widgets`) announce themselves through
  * `LocalModalHost`, and desktop's host is the AWT interop shield — `ModalOpen()` counts the surface
- * on `LocalModalPresence` so the heavyweight children (JediTerm, JCEF) lay themselves out at 0×0
+ * on `LocalModalPresence` so the heavyweight child (JCEF) lays itself out at 0×0
  * and the modal is actually visible. See `ui/ModalPresence.kt`.
  *
  * The shared editor surface's JCEF host asks `LocalHeavyweightShield` to make the browser step

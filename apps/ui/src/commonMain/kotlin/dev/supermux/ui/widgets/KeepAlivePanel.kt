@@ -43,7 +43,7 @@ fun Modifier.keepAlivePanel(visible: Boolean): Modifier = this
  * HOW it hides is the one thing the platforms disagree about, hence expect/actual:
  *
  *  • JVM/desktop lays the wrapper out at **0×0**. A pane here may embed a heavyweight AWT child
- *    (JediTerm's Swing panel, JCEF) which ignores Compose drawing modifiers entirely and would
+ *    (the JCEF editor) which ignores Compose drawing modifiers entirely and would
  *    keep painting over every Compose sibling; the interop wrapper propagates Compose layout
  *    bounds to its AWT child, so 0×0 bounds are the only kind of hiding it respects.
  *  • iOS does the same, for the same reason in a different toolkit: a `UIKitView`'s child is
