@@ -49,6 +49,18 @@ function walk(rel: string, pred: (path: string) => boolean): string[] {
  * matching cannot tell them apart, and a gate that cannot tell them apart is one that either
  * passes forever or has to be suppressed.
  */
+/**
+ * Does this source actually name tmux?
+ *
+ * `includes("tmux")` also matches `agentmux` — the project's own former name, which still appears
+ * in the two migration scripts that exist to get users off it. Both were being reported as
+ * surviving tmux consumers, and both were copied into the runbook's remainder table as such.
+ * Neither mentions tmux at all.
+ */
+function mentionsTmux(source: string): boolean {
+  return source.replace(/agentmux/gi, "").includes("tmux")
+}
+
 function code(source: string): string {
   return source
     .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -191,29 +203,76 @@ describe("workspace terminal cutover: what still uses tmux, and why", () => {
     const consumers = [
       ...walk("src", p => p.endsWith(".ts") && !p.endsWith(".test.ts")),
       ...walk("scripts", p => p.endsWith(".ts") || p.endsWith(".sh")),
-    ].filter(rel => code(read(rel)).includes("tmux"))
+    ].filter(rel => mentionsTmux(code(read(rel))))
 
-    // Every known home for a surviving tmux consumer, and NO default branch. A trailing
-    // "everything else goes here" made the assertion below tautological: a genuinely new
-    // consumer — the thing this check exists to catch — landed in the catch-all group and the
-    // group set was unchanged. An unrecognised path now names itself, so the expectation fails
-    // and says which file.
-    const KNOWN_GROUPS: ReadonlyArray<readonly [string, (rel: string) => boolean]> = [
-      ["agent session backend", rel => rel.startsWith("src/core/session-manager/") || rel.startsWith("src/core/runtime/")],
-      ["agent terminal viewer", rel => rel.startsWith("src/core/terminal/")],
+    // NAMED FILES, NOT PREFIXES. Directory prefixes made two of these groups catch-alls —
+    // `src/core/terminal/` and `scripts/` swallowed anything under them — so the assertion below
+    // could not distinguish "the remainder we know about" from "a new consumer in a familiar
+    // directory". A workspace tmux module re-introduced beside `agent-tmux.ts` would have been
+    // filed under "agent terminal viewer" and reported as expected; a script that shells out to
+    // tmux would have been filed under "portable binary staging" whatever it actually did.
+    //
+    // So the remainder is enumerated. Adding a tmux consumer now means adding its path here, in a
+    // diff a reviewer reads, with a group name that has to be true of it. That is the whole point:
+    // the list is the decision, and the gate only checks that nothing bypassed it.
+    const KNOWN_CONSUMERS: ReadonlyArray<readonly [string, readonly string[]]> = [
+      ["agent session backend", [
+        "src/core/runtime/index.ts",
+        "src/core/runtime/tmux-backend.ts",
+        "src/core/session-manager/manager.ts",
+        "src/core/session-manager/registry.ts",
+        "src/core/session-manager/session-store.ts",
+        "src/core/session-manager/spawn-helper.ts",
+        "src/core/session-manager/spawn-registration.ts",
+        "src/core/session-manager/supervisor.ts",
+        "src/core/session-manager/tmux.ts",
+        "src/core/session-manager/types.ts",
+        "src/core/session-manager/window-id.ts",
+      ]],
+      // EXACTLY TWO FILES, and the "no workspace-side module executes tmux" gate above says the
+      // same thing from the other direction. Both, on purpose: that one catches a new module in
+      // this directory, this one catches `agent-tmux.ts` growing a workspace caller.
+      ["agent terminal viewer", [
+        "src/core/terminal/agent-tmux.ts",
+        "src/core/terminal/manager.ts",
+      ]],
       // Claude's window naming: an agent worker is a window in the agent's own tmux session.
-      ["agent orchestration", rel => rel.startsWith("src/core/agents/")],
+      ["agent orchestration", ["src/core/agents/claude/session.ts"]],
       // The `tmux_target` / `tmux_window_id` columns on the session record, and the migration
       // that added them. Historical schema, not a live dependency of the workspace path.
-      ["agent session records", rel => rel.startsWith("src/core/storage/") || rel.startsWith("src/channels/")],
-      ["portable binary staging", rel => rel.startsWith("scripts/")],
+      ["agent session records", ["src/core/storage/migrations/index.ts"]],
       // main.ts's preflight and the spawn path: the broker telling a user tmux is missing.
-      ["broker wiring", rel => rel === "src/main.ts" || rel === "src/cli-setup.ts" || rel.startsWith("src/shared/")],
+      ["broker wiring", ["src/main.ts", "src/shared/preflight.ts"]],
+      ["portable binary staging", [
+        "scripts/build-portable-tmux.sh",
+        "scripts/stage-desktop-binaries.sh",
+      ]],
+      // Development and test scaffolding — a stubbed `tmux` on a fixture PATH, a seeded
+      // `tmux_target` column, a comment about not sharing the live broker's panes. These used to
+      // be filed under "portable binary staging" because they live in `scripts/`, which is not
+      // what any of them are.
+      ["dev and test scaffolding", [
+        "scripts/shadow-broker.sh",
+        "scripts/test-broker-seed.ts",
+        "scripts/test-broker.sh",
+      ]],
     ]
-    const group = (rel: string) => KNOWN_GROUPS.find(([, matches]) => matches(rel))?.[0] ?? `UNRECOGNISED tmux consumer: ${rel}`
+    const groupOf = new Map<string, string>()
+    for (const [name, files] of KNOWN_CONSUMERS) for (const rel of files) groupOf.set(rel, name)
+    const group = (rel: string) => groupOf.get(rel) ?? `UNRECOGNISED tmux consumer: ${rel}`
 
     const byGroup = new Map<string, string[]>()
     for (const rel of consumers) byGroup.set(group(rel), [...(byGroup.get(group(rel)) ?? []), rel])
+
+    // A listed file that no longer mentions tmux is PROGRESS, not a failure — that is what the
+    // agent retirement will look like, file by file. It is still drift, so it is reported.
+    const retired = [...groupOf.keys()].filter(rel => !consumers.includes(rel)).sort()
+    if (retired.length > 0) {
+      console.log(
+        `NOTE: ${retired.length} file(s) in KNOWN_CONSUMERS no longer mention tmux — remove them ` +
+        `from the list and regenerate the runbook table:\n${retired.map(f => `    ${f}`).join("\n")}`,
+      )
+    }
 
     const sorted = [...byGroup.entries()].sort(([a], [b]) => a.localeCompare(b))
     const lines = sorted
@@ -242,7 +301,7 @@ describe("workspace terminal cutover: what still uses tmux, and why", () => {
     // knew about. A file outside every known group carries its own path as its group name, so
     // this fails with the offender in the diff rather than silently absorbing it.
     expect([...byGroup.keys()].sort()).toEqual(
-      KNOWN_GROUPS.map(([name]) => name)
+      KNOWN_CONSUMERS.map(([name]) => name)
         .sort()
         .filter(g => byGroup.has(g)),
     )
