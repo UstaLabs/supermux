@@ -308,6 +308,21 @@ export type HelperEvent =
   /** First frame the helper ever writes: who it is and what it was built from. */
   | { v: number; ev: "hello"; abi: number; zmx: string; patch: string; helper: string }
   | { v: number; ev: "ok"; id: number; result?: unknown }
+  /**
+   * A PARTIAL result for `id`, ahead of that request's `ok`.
+   *
+   * Only `list` produces these. The listing used to be built as one control
+   * frame, and a frame over `MAX_PAYLOAD` is refused by the helper's own
+   * framer — logged and dropped, so the `ok` never came, the broker waited out
+   * its send timeout and killed the helper. During a close, where `list` is
+   * what decides whether a shell is gone.
+   *
+   * The rows are concatenated in arrival order and handed to the waiter with
+   * the `ok`'s own rows appended last. A request that fails part way through
+   * gets an `error` and no `ok`, so a partial listing can never be resolved as
+   * a complete one.
+   */
+  | { v: number; ev: "chunk"; id: number; result: unknown[] }
   | { v: number; ev: "error"; id: number | null; code: string; message: string }
   /** The patched daemon accepted our BrokerHello. */
   | { v: number; ev: "welcome"; version: number; leaseGen: string; pendingMax: number; snapshotMax: number }

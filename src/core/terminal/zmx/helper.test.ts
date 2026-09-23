@@ -274,6 +274,53 @@ process.stdin.on("data", () => {
     helper.kill()
   })
 
+  test("a chunked answer is reassembled whole, and a chunk alone never resolves the command", async () => {
+    // The helper splits a `list` across frames when it will not fit one (see
+    // `cmdList`). Half a listing resolved as a whole one is the failure this
+    // guards: `#waitUnlisted` reads absence from the listing as proof a target
+    // is gone, so a caller handed rows 1-2 of 5 would decide three shells had
+    // died and log a successful close over them.
+    const bins = fakeHelper(`${FAKE_PRELUDE}
+hello()
+process.stdin.on("data", () => {
+  control({ v: 1, ev: "chunk", id: 1, result: [{ name: "a" }, { name: "b" }] })
+  control({ v: 1, ev: "chunk", id: 1, result: [{ name: "c" }] })
+  control({ v: 1, ev: "ok", id: 1, result: [{ name: "d" }] })
+})
+`)
+    const { collected, handlers } = collector()
+    const helper = await ZmxHelper.launch(handlers, { binaries: bins })
+    await waitFor(() => helper.hello !== null)
+    // In arrival order, with the `ok`'s own rows last.
+    expect(await helper.send<Array<{ name: string }>>({ op: "list", dir: "/d" }))
+      .toEqual([{ name: "a" }, { name: "b" }, { name: "c" }, { name: "d" }])
+    // The chunks are events like any other: the broker sees them go by.
+    expect(collected.events.filter(event => event.ev === "chunk")).toHaveLength(2)
+    helper.kill()
+  })
+
+  test("a request that fails after its chunks is rejected, never resolved with the part that arrived", async () => {
+    // The listing stopped part way — a directory that could not be iterated,
+    // or a frame that could not be written. The helper answers `error` and
+    // never `ok`, and the partial rows must go with the rejection.
+    const bins = fakeHelper(`${FAKE_PRELUDE}
+hello()
+process.stdin.on("data", () => {
+  control({ v: 1, ev: "chunk", id: 1, result: [{ name: "a" }] })
+  control({ v: 1, ev: "error", id: 1, code: "backend-unavailable", message: "AccessDenied" })
+})
+`)
+    const { collected, handlers } = collector()
+    const helper = await ZmxHelper.launch(handlers, { binaries: bins })
+    await waitFor(() => helper.hello !== null)
+    const error = await helper.send({ op: "list", dir: "/d" }).then(() => null, (e: unknown) => e)
+    expect(isWorkspaceTerminalError(error, "backend-unavailable")).toBe(true)
+    expect((error as Error).message).toBe("AccessDenied")
+    // One command failing is not a viewer failure.
+    expect(collected.failures.length).toBe(0)
+    helper.kill()
+  })
+
   test("closing detaches the viewer and stops the process", async () => {
     const bins = fakeHelper(`${FAKE_PRELUDE}
 hello()

@@ -209,6 +209,9 @@ export type HelperHandlers = {
 type Pending = {
   resolve: (result: unknown) => void
   reject: (error: WorkspaceTerminalError) => void
+  /** Rows delivered by `chunk` events ahead of this request's `ok`. Present
+   * only once the first one arrives, so a single-frame answer is untouched. */
+  chunks?: unknown[]
 }
 
 /**
@@ -258,6 +261,13 @@ export class ZmxHelper {
     signal?: AbortSignal
     /** Per-command ack budget. Exposed for tests; see SEND_TIMEOUT_MS. */
     sendTimeoutMs?: number
+    /**
+     * Lower the helper's `list` chunk size. TESTS ONLY, and only downwards:
+     * a listing that spans frames at the real budget is hundreds of live
+     * shells, which is not a thing a test can stand up. Nothing in the broker
+     * passes it.
+     */
+    listChunkBytes?: number
   } = {}): Promise<ZmxHelper> {
     // Checked BEFORE the spawn, not only subscribed to after it: an already
     // aborted signal would otherwise leave a helper process running with
@@ -273,7 +283,10 @@ export class ZmxHelper {
       proc = Bun.spawn({
         // Structured argv: no shell, no string interpolation, nothing a path
         // with a space in it can re-parse.
-        cmd: [binaries.helper, "--zmx", binaries.zmx],
+        cmd: [
+          binaries.helper, "--zmx", binaries.zmx,
+          ...(options.listChunkBytes ? [`--list-chunk-bytes=${options.listChunkBytes}`] : []),
+        ],
         stdin: "pipe",
         stdout: "pipe",
         stderr: "pipe",
@@ -498,11 +511,26 @@ export class ZmxHelper {
         }
         break
       }
+      case "chunk": {
+        // A partial answer. Held on the pending entry rather than resolved:
+        // the request is not over, and a caller that saw half a listing would
+        // read the missing half as "those targets are gone".
+        const pending = this.#pending.get(event.id)
+        if (pending && Array.isArray(event.result)) {
+          pending.chunks = [...(pending.chunks ?? []), ...event.result]
+        }
+        break
+      }
       case "ok": {
         const pending = this.#pending.get(event.id)
         if (pending) {
           this.#pending.delete(event.id)
-          pending.resolve(event.result)
+          // The `ok` carries the LAST batch, so a listing that fit one frame
+          // resolves exactly as it always did and nothing has to know whether
+          // it was chunked.
+          pending.resolve(pending.chunks
+            ? [...pending.chunks, ...(Array.isArray(event.result) ? event.result : [])]
+            : event.result)
         }
         break
       }

@@ -38,7 +38,7 @@ import {
 } from "../../src/core/terminal/workspace-backend"
 import { VIEWER_PENDING_MAX, ZmxWorkspaceBackend, type ZmxHelperLaunch } from "../../src/core/terminal/zmx/backend"
 import { ZmxHelper, type HelperBinaries } from "../../src/core/terminal/zmx/helper"
-import { encodeName, socketBasename } from "../../src/core/terminal/zmx/names"
+import { decodeName, encodeName, socketBasename } from "../../src/core/terminal/zmx/names"
 import {
   CELL_BOLD,
   REQUIRED,
@@ -976,6 +976,59 @@ suite("zmx workspace backend, against real processes", () => {
     })
     await keeper.viewer.detach()
   }, 300_000)
+
+  test("a listing too big for one frame comes back WHOLE, not silently short", async () => {
+    // WHAT A SHORT LISTING COSTS. `#confirmClosed`/`#waitUnlisted` decide a
+    // target is gone because its row is absent, and `closeScope` closes exactly
+    // the rows it is handed — so a listing that is short is not a smaller
+    // truth, it is a false one, and it ends with `close()` logging success over
+    // a shell that is still running.
+    //
+    // The listing was built as ONE control frame. `OutBuf.frame` refuses a
+    // payload over MAX_PAYLOAD, and the refusal was a line on stderr and a
+    // dropped frame: the request never got its `ok`, the broker waited out its
+    // 20-second send timeout and killed the helper — during a close, where
+    // `list` is what decides whether the shell is gone.
+    //
+    // The budget is lowered rather than the listing raised: spanning frames at
+    // the real 63 KiB takes hundreds of live shells, which is not a thing a
+    // test stands up. What is under test is the chunking, and 64 bytes makes
+    // every one of these rows its own chunk.
+    const scope = "w:scope-0011"
+    const made: string[] = []
+    for (const id of ["alpha", "bravo", "charlie", "delta", "echo"]) {
+      await create(scope, id)
+      made.push(id)
+    }
+
+    const seen: string[] = []
+    const chunked = await ZmxHelper.launch(
+      { onOutput: () => {}, onEvent: event => { seen.push(event.ev) }, onFailure: () => {} },
+      { binaries, listChunkBytes: 64 },
+    )
+    try {
+      const rows = await chunked.send<Array<{ name: string }>>({ op: "list", dir: socketDir })
+      // The test is only a test if the listing ACTUALLY spanned frames. Five
+      // rows at a 64-byte budget is four `chunk` events and the `ok`; before
+      // this existed there was one frame and no `chunk` at all.
+      expect(seen.filter(ev => ev === "chunk").length).toBeGreaterThan(0)
+      expect(seen.filter(ev => ev === "ok").length).toBe(1)
+      // Every target, exactly once, reassembled in order across the frames.
+      const ours = rows
+        .map(row => decodeName(row.name))
+        .filter((key): key is NonNullable<typeof key> => key !== null && key.scope === scope)
+        .map(key => key.terminalId)
+        .sort()
+      expect(ours).toEqual([...made].sort())
+    } finally {
+      chunked.kill()
+    }
+
+    // ...and the same listing through the ordinary single-frame path agrees,
+    // so chunking is not producing a different answer.
+    expect((await backend.list(scope)).map(entry => entry.terminalId).sort()).toEqual([...made].sort())
+    await backend.closeScope(scope)
+  }, 180_000)
 })
 
 function concat(chunks: Uint8Array[]): Uint8Array {

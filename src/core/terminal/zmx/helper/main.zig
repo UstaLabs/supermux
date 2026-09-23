@@ -118,6 +118,11 @@ const State = struct {
     owner: bool = false,
     cols: u16 = 80,
     rows: u16 = 24,
+    /// How much of a control frame one `list` chunk may fill. `LIST_CHUNK_BUDGET`
+    /// unless `--list-chunk-bytes` lowered it, which only a test does — a
+    /// listing big enough to span frames at the real budget is hundreds of live
+    /// shells, and that is not a thing a test can stand up.
+    list_chunk_budget: usize = LIST_CHUNK_BUDGET,
     /// Set once the daemon has told us the target process ended. Nothing else
     /// may produce an exit event.
     exit_reported: bool = false,
@@ -125,9 +130,17 @@ const State = struct {
     status: u8 = 0,
 
     fn event(self: *State, json: []const u8) void {
-        self.out.frame(.control, json) catch |err| {
+        self.eventChecked(json) catch |err| {
             diag("dropping event, out of memory: {s}", .{@errorName(err)});
         };
+    }
+
+    /// The same, for a caller that must not let a dropped frame pass for a
+    /// delivered one. `event` swallows `PayloadTooLong` with a line on stderr,
+    /// which for a REPLY to a request means the broker waits out its send
+    /// timeout and kills this process — see `cmdList`.
+    fn eventChecked(self: *State, json: []const u8) !void {
+        try self.out.frame(.control, json);
     }
 
     fn begin(self: *State, kind: []const u8, key: []const u8) !std.ArrayList(u8) {
@@ -183,6 +196,7 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
 
     var zmx_path: []const u8 = "zmx";
+    var list_chunk_budget: usize = LIST_CHUNK_BUDGET;
     var args = init.minimal.args.iterate();
     defer args.deinit();
     _ = args.next(); // argv[0]
@@ -197,6 +211,17 @@ pub fn main(init: std.process.Init) !void {
             };
         } else if (std.mem.startsWith(u8, arg, "--zmx=")) {
             zmx_path = arg["--zmx=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--list-chunk-bytes=")) {
+            // TEST SEAM. Lowering the budget is the only way to exercise a
+            // multi-frame listing without standing up hundreds of shells; it
+            // can only make frames SMALLER, so it cannot be used to produce one
+            // the framer would refuse.
+            const raw = arg["--list-chunk-bytes=".len..];
+            const value = std.fmt.parseInt(usize, raw, 10) catch {
+                diag("--list-chunk-bytes needs a number, got {s}", .{raw});
+                std.process.exit(2);
+            };
+            list_chunk_budget = @max(LIST_CHUNK_MIN, @min(value, LIST_CHUNK_BUDGET));
         } else {
             diag("unknown argument: {s}", .{arg});
             std.process.exit(2);
@@ -218,6 +243,7 @@ pub fn main(init: std.process.Init) !void {
         .io = init.io,
         .zmx_path = zmx_path,
         .out = .{ .gpa = gpa },
+        .list_chunk_budget = list_chunk_budget,
     };
     defer state.out.deinit();
     defer state.sock_out.deinit(gpa);
@@ -747,32 +773,69 @@ fn verifyTarget(gpa: std.mem.Allocator, fd: i32, name: []const u8, budget_ms: i3
     return error.Timeout;
 }
 
+/// How much of a frame one `list` chunk may fill before it is flushed.
+///
+/// A listing used to be built as ONE control frame, and `OutBuf.frame` refuses
+/// a payload over `MAX_PAYLOAD`: the refusal was logged to stderr and the frame
+/// dropped, so the broker's request never got its `ok`, waited out its 20-second
+/// send timeout, and killed the helper — in the middle of a close, which is
+/// where `list` is used most. The listing is chunked instead. The margin below
+/// MAX_PAYLOAD leaves room for the `{"v":1,"ev":…,"id":…,"result":[` envelope
+/// and the closing `]}`, so a chunk that fits this bound fits a frame.
+const LIST_CHUNK_BUDGET: usize = proto.MAX_PAYLOAD - 1024;
+
+/// The floor `--list-chunk-bytes` may lower the budget to. One row of a real
+/// listing is under a kilobyte, so this still admits a single row per chunk.
+const LIST_CHUNK_MIN: usize = 64;
+
 /// Enumerate our socket directory and read each session's `mux.target`.
 ///
 /// This — not a file the broker keeps — is how `list` survives a broker
 /// restart: the labels live in the running daemons.
+///
+/// ABSENCE FROM THIS LISTING IS PROOF OF DEATH, upstream. `backend.ts`'s
+/// `#confirmClosed`/`#waitUnlisted` decide a target is gone because its row is
+/// not here, and `closeScope` closes exactly the rows it is handed. So a
+/// listing that is short is not a smaller truth — it is a false one, and it
+/// ends with `close()` logging success over a shell that is still running.
+/// Every path that can shorten it therefore FAILS the command instead:
+///
+///   * the directory iterator's error was `catch null`, which ends the loop
+///     exactly like the end of the directory;
+///   * every `catch continue` on an allocation could drop a row, and the ones
+///     after `{` was written would have emitted MALFORMED JSON besides;
+///   * an oversized listing was dropped whole, silently (see the budget above).
+///
+/// A probe that fails is the one thing still skipped, and it is not the same
+/// thing: a socket that does not answer the session protocol is a stale file or
+/// a stranger's, never a live target of ours.
 fn cmdList(state: *State, obj: std.json.ObjectMap, id: ?i64) void {
     const gpa = state.gpa;
     const dir_path = strField(obj, "dir") orelse return state.fail(id, "protocol", "list needs dir");
-
-    var list = state.begin("ok", "ev") catch return;
-    defer list.deinit(gpa);
-    proto.appendJsonKey(gpa, &list, "id") catch return;
-    proto.appendJsonNum(gpa, &list, id orelse 0) catch return;
-    proto.appendJsonKey(gpa, &list, "result") catch return;
-    list.append(gpa, '[') catch return;
 
     var dir = std.Io.Dir.openDirAbsolute(state.io, dir_path, .{ .iterate = true }) catch |err| {
         return state.fail(id, "backend-unavailable", @errorName(err));
     };
     defer dir.close(state.io);
     var iter = dir.iterate();
-    var first = true;
 
-    while (iter.next(state.io) catch null) |entry| {
-        const is_socket = entry.kind == .unix_domain_socket;
-        if (!is_socket) continue;
-        const socket_path = std.fmt.allocPrint(gpa, "{s}/{s}", .{ dir_path, entry.name }) catch continue;
+    // One row at a time, so a row that cannot be built is never half-written
+    // into the chunk it would have corrupted.
+    var row: std.ArrayList(u8) = .empty;
+    defer row.deinit(gpa);
+    var chunk = ListChunk.begin(state, id);
+    defer chunk.deinit(gpa);
+
+    while (true) {
+        const next = iter.next(state.io) catch |err| {
+            // A truncated listing read as a complete one is how a close reports
+            // success over a live shell. Say so instead.
+            return state.fail(id, "backend-unavailable", @errorName(err));
+        };
+        const entry = next orelse break;
+        if (entry.kind != .unix_domain_socket) continue;
+        const socket_path = std.fmt.allocPrint(gpa, "{s}/{s}", .{ dir_path, entry.name }) catch
+            return state.fail(id, "backend-unavailable", "OutOfMemory");
         defer gpa.free(socket_path);
         const probe = ipc.probeSession(gpa, socket_path) catch continue;
         defer probe.deinit();
@@ -782,25 +845,93 @@ fn cmdList(state: *State, obj: std.json.ObjectMap, id: ?i64) void {
         };
         if (target == null) continue; // not ours; never guessed at
 
-        if (!first) list.append(gpa, ',') catch continue;
-        first = false;
-        list.append(gpa, '{') catch continue;
-        proto.appendJsonKey(gpa, &list, "socket") catch continue;
-        proto.appendJsonString(gpa, &list, entry.name) catch continue;
-        proto.appendJsonKey(gpa, &list, "name") catch continue;
-        proto.appendJsonString(gpa, &list, target.?) catch continue;
-        proto.appendJsonKey(gpa, &list, "pid") catch continue;
-        proto.appendJsonNum(gpa, &list, probe.info.pid) catch continue;
-        proto.appendJsonKey(gpa, &list, "createdAt") catch continue;
-        proto.appendJsonNum(gpa, &list, probe.info.created_at) catch continue;
-        proto.appendJsonKey(gpa, &list, "clients") catch continue;
-        proto.appendJsonNum(gpa, &list, probe.info.clients_len) catch continue;
-        list.append(gpa, '}') catch continue;
+        row.clearRetainingCapacity();
+        appendListRow(gpa, &row, entry.name, target.?, probe.info) catch
+            return state.fail(id, "backend-unavailable", "OutOfMemory");
+        chunk.push(gpa, row.items) catch |err|
+            return state.fail(id, "backend-unavailable", @errorName(err));
     }
 
-    list.appendSlice(gpa, "]}") catch return;
-    state.event(list.items);
+    chunk.finish(gpa) catch |err|
+        return state.fail(id, "backend-unavailable", @errorName(err));
 }
+
+fn appendListRow(
+    gpa: std.mem.Allocator,
+    row: *std.ArrayList(u8),
+    socket_name: []const u8,
+    target: []const u8,
+    info: anytype,
+) !void {
+    try row.append(gpa, '{');
+    try proto.appendJsonKey(gpa, row, "socket");
+    try proto.appendJsonString(gpa, row, socket_name);
+    try proto.appendJsonKey(gpa, row, "name");
+    try proto.appendJsonString(gpa, row, target);
+    try proto.appendJsonKey(gpa, row, "pid");
+    try proto.appendJsonNum(gpa, row, info.pid);
+    try proto.appendJsonKey(gpa, row, "createdAt");
+    try proto.appendJsonNum(gpa, row, info.created_at);
+    try proto.appendJsonKey(gpa, row, "clients");
+    try proto.appendJsonNum(gpa, row, info.clients_len);
+    try row.append(gpa, '}');
+}
+
+/// The listing, emitted as however many frames it takes.
+///
+/// Rows accumulate until one more would not fit, then go out as a `chunk`
+/// event carrying the request id; the LAST batch rides the `ok` that ends the
+/// request, so a listing that fits one frame is on the wire exactly as it was
+/// before this existed. The broker concatenates chunks in arrival order —
+/// `helper.ts` keeps them on the pending entry — and a request that fails part
+/// way through never gets its `ok`, so a partial listing is never resolved as
+/// a whole one.
+const ListChunk = struct {
+    state: *State,
+    id: ?i64,
+    rows: std.ArrayList(u8) = .empty,
+    count: usize = 0,
+
+    fn begin(state: *State, id: ?i64) ListChunk {
+        return .{ .state = state, .id = id };
+    }
+
+    fn deinit(self: *ListChunk, gpa: std.mem.Allocator) void {
+        self.rows.deinit(gpa);
+    }
+
+    fn push(self: *ListChunk, gpa: std.mem.Allocator, row: []const u8) !void {
+        // `+ 1` for the comma this row would need. Flush BEFORE appending, so
+        // the frame that goes out is one that was known to fit.
+        if (self.count > 0 and self.rows.items.len + row.len + 1 > self.state.list_chunk_budget) {
+            try self.flush(gpa, "chunk");
+        }
+        if (self.count > 0) try self.rows.append(gpa, ',');
+        try self.rows.appendSlice(gpa, row);
+        self.count += 1;
+    }
+
+    fn finish(self: *ListChunk, gpa: std.mem.Allocator) !void {
+        try self.flush(gpa, "ok");
+    }
+
+    fn flush(self: *ListChunk, gpa: std.mem.Allocator, kind: []const u8) !void {
+        var out = try self.state.begin(kind, "ev");
+        defer out.deinit(gpa);
+        try proto.appendJsonKey(gpa, &out, "id");
+        try proto.appendJsonNum(gpa, &out, self.id orelse 0);
+        try proto.appendJsonKey(gpa, &out, "result");
+        try out.append(gpa, '[');
+        try out.appendSlice(gpa, self.rows.items);
+        try out.appendSlice(gpa, "]}");
+        // Checked: a chunk this process could not put on the wire must not be
+        // mistaken for one the broker received, and the `ok` that would have
+        // ended the request must not follow it.
+        try self.state.eventChecked(out.items);
+        self.rows.clearRetainingCapacity();
+        self.count = 0;
+    }
+};
 
 /// Claim or release the focus lease. A claim is ALWAYS explicit: nothing else
 /// in this helper can acquire it as a side effect.
