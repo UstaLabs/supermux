@@ -247,7 +247,7 @@ The reader kept every byte, the shell answered `echo` immediately afterwards,
 and a fresh attach re-synced through a normal replay boundary. Pinned by
 *"a slow EMIT is bounded by the BROKER: the viewer is dropped, not buffered"*.
 
-### DEFECT: a viewer dropped during its restore is not told why
+### PARTLY FIXED: a viewer dropped during its restore is not told why
 
 A viewer that attaches into a running flood and stops reading before its replay
 boundary closes **is** dropped, recoverably — but what reaches the broker is
@@ -256,12 +256,36 @@ boundary closes **is** dropped, recoverably — but what reaches the broker is
 failure(backend-unavailable, recoverable=true) "daemon closed the connection"
 ```
 
-not `resync_required`. The daemon logs the detach and queues `BrokerDetach` on
-that viewer's socket, and by the time the viewer reads again the connection is
-closed, so the stated reason does not survive the case it exists for. Both
-outcomes are recoverable by re-attaching, so nothing is broken for a user today;
-what is lost is the distinction the protocol went to some trouble to make. The
-assertion accepts either string and records which one happened.
+not `resync_required`. The daemon's `abortBrokerViewer` does everything it can
+here: it drops the viewer's queue, puts ONLY the `BrokerDetach` in the write
+buffer and sets `close_after_flush`, so the socket stays open until the reason
+has actually been written — which is why the viewer stalled *outside* a restore
+does get `resync_required` (measured above). Stalled *inside* one it does not,
+in every run measured; the reason does not survive the case it exists for.
+
+**What was not done, and why.** Making the daemon deliver it would mean finding
+and changing whatever closes that connection first — a patch re-pin, a rebuild
+and a re-run of the zig suite, for a distinction that changes nothing a user or
+a client does: both outcomes are `recoverable: true` and both are recovered by
+re-attaching. Out-of-band signalling is not available either; AF_UNIX stream
+sockets have no OOB channel, and a second connection to tell a viewer something
+it cannot read is a viewer we cannot reach by definition.
+
+**What was done.** The broker cannot recover the daemon's reason — inventing
+one would be worse than losing it — but it knows WHEN the connection was lost,
+and now says so:
+
+```
+"daemon closed the connection (while this viewer's restore was still
+ streaming; the daemon states its reason on the socket a stalled viewer is not
+ reading, so it does not survive this case — re-attach for a fresh epoch)"
+```
+
+which is the difference between "the backend died" and "I was too slow to be
+given my snapshot". Pinned at the unit level in
+`src/core/terminal/zmx/backend.test.ts` and asserted here: the message is
+either `resync_required` or the annotated lost-socket one, never a bare
+"connection closed".
 
 ### Observed, benign: output can arrive before the first boundary
 

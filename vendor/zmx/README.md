@@ -483,7 +483,14 @@ clean pin + verified patch (pass), an unrelated edit in the upstream cache
      0 lost. §6.
   4. **A viewer dropped during its restore is not told why** — the
      `BrokerDetach` is queued on the socket it stopped reading, and it sees a
-     closed connection instead. §5.
+     closed connection instead. **Left in the daemon** (`abortBrokerViewer`
+     already drops the queue, queues only the detach and holds the socket open
+     until it is written, which is enough for a viewer stalled OUTSIDE a
+     restore; inside one it is not, and chasing it means another patch re-pin
+     for a distinction both ends already treat as `recoverable: true`).
+     The broker now annotates the failure with the one thing it does know —
+     that the restore was still streaming — so the two cases are told apart in
+     a log. §5.
 
   Two smaller things were fixed on the way: `cmdAttach` now answers
   `target-not-found` (not a recoverable `backend-unavailable`) when nothing is

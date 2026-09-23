@@ -669,14 +669,21 @@ suite("zmx workspace backend, against real processes", () => {
     const replayDetach = await c.waitForEvent(event => event.type === "failure", 120_000)
     expect(replayDetach).toMatchObject({ type: "failure", code: "backend-unavailable", recoverable: true })
     // NOT `resync_required` — and that is the finding, not a loose assertion.
-    // The daemon logs the detach with that reason and queues the BrokerDetach
-    // on the viewer's own socket, which is the socket the viewer had stopped
-    // reading; by the time it reads again the daemon has closed the connection,
-    // so what arrives is a LOST SOCKET. Recoverable either way (both re-attach),
-    // but the stated reason does not survive the case it exists for. Recorded
-    // below and written up in vendor/zmx/VERIFICATION.md §5.
-    expect((replayDetach as { message: string }).message).toMatch(
-      /resync_required|daemon closed the connection/)
+    // The daemon queues the BrokerDetach carrying that reason on the viewer's
+    // own socket, which is the socket the viewer had stopped reading; by the
+    // time it reads again the connection is closed, so what arrives is a LOST
+    // SOCKET. Recoverable either way (both re-attach), but the stated reason
+    // does not survive the case it exists for.
+    //
+    // What the broker CAN say, and now does, is WHEN it happened: a viewer
+    // dropped with its restore still streaming is told so, which is the
+    // difference between "the backend died" and "I was too slow to be given
+    // my snapshot". See vendor/zmx/VERIFICATION.md §5.
+    const replayMessage = (replayDetach as { message: string }).message
+    expect(replayMessage).toMatch(/resync_required|daemon closed the connection/)
+    if (!replayMessage.includes("resync_required")) {
+      expect(replayMessage).toContain("restore was still streaming")
+    }
     expect(c.events.some(event => event.type === "exit")).toBe(false)
     // The viewer it was staged for is gone; the target and its driver are not.
     await run(driver, "echo DRIVER-ALIVE", "DRIVER-DONE")
@@ -696,7 +703,7 @@ suite("zmx workspace backend, against real processes", () => {
       stalledDuringFlood,
       stalledViewerBytes: a.outputBytes, readerBytes: b.outputBytes,
       detach: (detach as { message: string }).message,
-      replayDetach: (replayDetach as { message: string }).message,
+      replayDetach: replayMessage,
       resumedHistoryRows: resumed.historyRows,
       exit: traceOf(exit),
       traceStalled: a.trace, traceReader: b.trace, traceStalledInReplay: c.trace,

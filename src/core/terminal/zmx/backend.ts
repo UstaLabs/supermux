@@ -794,12 +794,24 @@ class ZmxViewer implements WorkspaceTerminalViewer {
     // A helper that dies while we are deliberately dropping it is not a
     // failure; neither is one that dies after the target's exit was reported.
     if (this.#discarding || this.#dead) return
+    const insideReplay = this.#insideReplay
     this.#dead = true
     this.backend.noteDetached(this.target, this)
     const helper = this.#helper
     this.#helper = undefined
     try { helper?.kill() } catch {}
-    await this.#deliver(error.toEvent())
+    const event = error.toEvent()
+    // A VIEWER DROPPED DURING ITS OWN RESTORE CANNOT BE TOLD WHY BY THE
+    // DAEMON: the `BrokerDetach` carrying the reason is queued on the socket
+    // this viewer had stopped reading, and what arrives instead is a closed
+    // connection. We cannot recover the daemon's reason — inventing one would
+    // be worse than losing it — but we do know WHEN it happened, and saying
+    // so is the difference between "the backend died" and "I was too slow to
+    // be given my snapshot". Both are recoverable by re-attaching.
+    if (insideReplay) {
+      event.message = `${event.message} (while this viewer's restore was still streaming; the daemon states its reason on the socket a stalled viewer is not reading, so it does not survive this case — re-attach for a fresh epoch)`
+    }
+    await this.#deliver(event)
   }
 
   async #send(command: HelperCommandBody): Promise<void> {

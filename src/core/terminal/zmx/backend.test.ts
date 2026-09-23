@@ -110,6 +110,13 @@ class FakeHelper implements ZmxHelperFacade {
     void this.handlers.onOutput(bytes)
   }
 
+  /** The daemon connection is gone. The real `ZmxHelper` turns a `lost` frame
+   * (and a socket EOF) into exactly this, ON TOP of the event. */
+  lose(message: string): void {
+    this.#dead = true
+    this.handlers.onFailure(new WorkspaceTerminalError("backend-unavailable", message, true))
+  }
+
   async send<T = unknown>(command: HelperCommandBody): Promise<T> {
     this.world.commands.push(command)
     if (this.#dead) throw new WorkspaceTerminalError("backend-unavailable", "zmx helper is gone", true)
@@ -493,6 +500,27 @@ describe("ZmxWorkspaceBackend", () => {
     // The helper's own failure path is what the backend reports; a lost socket
     // says nothing about whether the shell is still running.
     helper.kill()
+    expect(events.some(event => event.type === "exit")).toBe(false)
+  })
+
+  test("a viewer lost DURING its restore is told that much, since the daemon cannot tell it why", async () => {
+    const { fake, backend } = harness()
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    const { events, emit } = recorder()
+    await backend.attachExisting(CONTRACT_A, "v1", emit)
+
+    const helper = fake.launched.at(-1)!
+    await helper.deliver({ v: 1, ev: "replay-start", epoch: "9", bytes: 4096 })
+    // The daemon queued its `BrokerDetach{resync_required}` on the socket this
+    // viewer had stopped reading, so what the helper sees is a closed
+    // connection. The reason is gone; the moment is not.
+    helper.lose("daemon closed the connection")
+    await Bun.sleep(1)
+
+    const failure = events.find(event => event.type === "failure")!
+    expect(failure).toMatchObject({ type: "failure", code: "backend-unavailable", recoverable: true })
+    expect((failure as { message: string }).message).toContain("daemon closed the connection")
+    expect((failure as { message: string }).message).toContain("restore was still streaming")
     expect(events.some(event => event.type === "exit")).toBe(false)
   })
 
