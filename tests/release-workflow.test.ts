@@ -7,7 +7,10 @@ const workflow = readFileSync(
   "utf8",
 )
 const windowsStart = workflow.indexOf("  build-desktop-windows:")
-const windowsEnd = workflow.indexOf("\n  release:", windowsStart)
+// The NEXT job, not the far-away `release:` job: anchoring on `release:` swept the macOS and
+// iOS lanes into "the Windows job", so any assertion that something is ABSENT from Windows
+// was really asking whether it was absent from three jobs at once.
+const windowsEnd = workflow.indexOf("\n  build-compose-desktop-macos:", windowsStart)
 const windowsJob = workflow.slice(windowsStart, windowsEnd)
 
 const androidStart = workflow.indexOf("  build-android:")
@@ -16,6 +19,21 @@ const androidJob = workflow.slice(androidStart, androidEnd)
 
 const publishStart = workflow.indexOf("  publish-website:")
 const publishJob = workflow.slice(publishStart)
+
+const ci = readFileSync(resolve(import.meta.dir, "..", ".github", "workflows", "ci.yml"), "utf8")
+
+/** One job's text, by the two anchors that bound it in the file. */
+function jobBetween(source: string, start: string, end: string): string {
+  const from = source.indexOf(start)
+  expect(from, `missing job: ${start.trim()}`).toBeGreaterThanOrEqual(0)
+  const to = end ? source.indexOf(end, from) : -1
+  return source.slice(from, to > from ? to : undefined)
+}
+
+const binariesJob = jobBetween(workflow, "  build-binaries:", "\n  update-flow:")
+const linuxDesktopJob = jobBetween(workflow, "  build-desktop-linux:", "\n  build-terminal-jni-windows:")
+const releaseTerminalPackagesJob = jobBetween(workflow, "  terminal-packages:", "\n  build-android:")
+const ciTerminalPackagesJob = jobBetween(ci, "  terminal-packages:", "\n  ui:")
 
 function position(needle: string): number {
   const index = windowsJob.indexOf(needle)
@@ -140,4 +158,81 @@ test("publish-website includes compose-desktop-macos sha for versions.json", () 
   expect(publishJob).toMatch(
     /"\$SHA_ANDROID" "\$SHA_DESKTOP_LINUX" "\$SHA_DESKTOP_WINDOWS" \\\n\s*"\$SHA_COMPOSE_DESKTOP_MACOS" > site\/versions\.json/,
   )
+})
+
+// ── Plan 4 Task 6: what a release artifact must now CONTAIN ─────────────────
+//
+// Every assertion below stands for one way a release used to be able to ship
+// something that installs, boots, and cannot open a terminal.
+
+test("the compiled binary's lane builds the pinned zmx and proves it materializes", () => {
+  // The pin is checked BEFORE anything is compiled from it…
+  const checkPatches = binariesJob.indexOf("scripts/build-zmx.sh --check-patches")
+  const build = binariesJob.indexOf("scripts/build-binary.sh")
+  expect(checkPatches).toBeGreaterThanOrEqual(0)
+  expect(checkPatches).toBeLessThan(build)
+  // …and the asset probe runs AFTER the build, which is what proves the embedded
+  // bundle can be copied out of $bunfs and exec'd (Plan 3 shipped a binary where
+  // nothing did, and every other check in this lane passed).
+  expect(binariesJob.indexOf("scripts/asset-probe.ts")).toBeGreaterThan(build)
+  expect(binariesJob).toContain("~/.local/zig")
+})
+
+test("the smoke test gates the workspace-terminal backend, not just the PWA", () => {
+  const smoke = readFileSync(resolve(import.meta.dir, "..", "scripts", "smoke-binary.sh"), "utf8")
+  // Reads the broker's OWN boot-time readiness line rather than re-deciding it.
+  expect(smoke).toContain('"workspaceTerminals"')
+  expect(smoke).toContain("SUPERMUX_SMOKE_ALLOW_NO_ZMX")
+})
+
+test("each desktop distribution carries its client terminal engine", () => {
+  // The JNI library the APP draws with — nothing to do with which host backend it
+  // talks to. :terminal-core only warns when it is missing, so the packaging job
+  // has to build it and then read it back out of the packaged jar.
+  expect(linuxDesktopJob).toContain("native/build.sh linux-x64")
+  expect(linuxDesktopJob).toContain("dev/supermux/terminal/native/linux-x64/libsupermux_terminal_jni.so")
+  expect(composeMacJob).toContain("native/build.sh macos-arm64")
+  expect(composeMacJob).toContain("dev/supermux/terminal/native/macos-arm64/libsupermux_terminal_jni.dylib")
+  // Windows has no pinned Zig host, so its engine is cross-built on Linux and handed over.
+  expect(workflow).toContain("build-terminal-jni-windows:")
+  expect(windowsJob).toContain("needs: build-terminal-jni-windows")
+  expect(windowsJob).toContain("dev/supermux/terminal/native/windows-x64/supermux_terminal_jni.dll")
+  // And the licence files travel with it, on all three.
+  for (const job of [linuxDesktopJob, composeMacJob, windowsJob]) {
+    expect(job).toContain("META-INF/dev.supermux.terminal/LICENSE")
+  }
+})
+
+test("POSIX desktop packages carry the verified zmx bundle; Windows keeps sessiond", () => {
+  for (const job of [linuxDesktopJob, composeMacJob]) {
+    expect(job).toContain("check-zmx-bundle.sh")
+    expect(job).toContain("zmx-manifest.json")
+  }
+  // The Windows lane must NOT stage a second workspace-terminal backend.
+  expect(windowsJob).not.toContain("check-zmx-bundle.sh")
+  expect(windowsJob).toContain("mux-sessiond.exe")
+})
+
+test("the packages are consumed as a stranger would, and never published publicly", () => {
+  for (const job of [releaseTerminalPackagesJob, ciTerminalPackagesJob]) {
+    // SHA/ABI of every native artifact, against the manifest its own build wrote.
+    expect(job).toContain(":terminal-core:verifyNativeArtifactsForHost")
+    // The wasm engine is BUILT here, not assumed present.
+    expect(job).toContain("apps/terminal-core/wasm/build.sh")
+    // Published to a directory on the runner. Nothing else.
+    expect(job).toContain("publishAllPublicationsToLocalTestRepository")
+    expect(job).not.toContain("publishAllPublicationsToMavenCentral")
+    expect(job).not.toContain("sonatype")
+    // The separate builds that share no project or classpath with supermux.
+    expect(job).toContain("-p terminal-core/consumer-smoke jvmTest")
+    expect(job).toContain("-p terminal-core/consumer-smoke wasmJsBrowserTest")
+    expect(job).toContain("-p terminal-compose/consumer-smoke jvmTest")
+    // Licences inside the artifacts, not merely in the repo.
+    expect(job).toContain("META-INF/dev.supermux.terminal/THIRD-PARTY-NOTICES.md")
+  }
+})
+
+test("CI verifies the zmx pin automatically", () => {
+  // scripts/build-zmx.sh --check-patches existed from Plan 3 and nothing ran it.
+  expect(ci).toContain("scripts/build-zmx.sh --check-patches")
 })

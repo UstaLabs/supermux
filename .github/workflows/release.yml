@@ -55,16 +55,41 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      # ── the workspace-terminal backend, which the binary now EMBEDS ──────────
+      # build-binary.sh compiles the pinned zmx + its framed helper and embeds
+      # them, so this lane carries a Zig toolchain and a Ghostty checkout. Both
+      # are cached on the PINS (a lockfile or patch change is the only thing that
+      # can invalidate a compiled upstream), exactly like the ci.yml zmx lane.
+      - name: Cache the zig toolchain and the zmx build tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            build/zmx
+          key: zmx-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/zmx/upstream.lock.json', 'vendor/zmx/patches/*.patch') }}
+          restore-keys: zmx-release-${{ runner.os }}-${{ runner.arch }}-
+      # The pin and the patch BEFORE anything is compiled from them: a release
+      # must never embed a zmx that is not the one this repo reviewed.
+      - name: Verify the zmx pin and patch
+        run: bash scripts/build-zmx.sh --check-patches
+
       - name: Build binary
+        env:
+          MUX_ZIG_JOBS: "4"
         run: scripts/build-binary.sh "dist/supermux-${{ matrix.os }}-${{ matrix.arch }}" "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Smoke test
         run: scripts/smoke-binary.sh "dist/supermux-${{ matrix.os }}-${{ matrix.arch }}" 18791 "${{ steps.ver.outputs.version }}"
       - name: Compiled asset probe
         # Proves the COMPILED binary can materialize embedded runtime-assets out
-        # of $bunfs (pty-helper + prompt files) for spawned children — the exact
-        # class of the env.md ENAMETOOLONG landmine. Build a tiny probe binary,
-        # run it, then rm it BEFORE the checksum/upload steps so the probe never
-        # ships in the release artifacts (upload grabs dist/*).
+        # of $bunfs (pty-helper + prompt files + the zmx bundle) for spawned
+        # children — the exact class of the env.md ENAMETOOLONG landmine, and now
+        # also of the Plan 3 gap where nothing materialized zmx at all and every
+        # workspace terminal failed `backend-unavailable` in a binary that
+        # otherwise smoked clean. The probe re-runs the broker's own manifest
+        # verification and EXECs the materialized helper. Build a tiny probe
+        # binary, run it, then rm it BEFORE the checksum/upload steps so the probe
+        # never ships in the release artifacts (upload grabs dist/*).
         run: |
           bun build --compile scripts/asset-probe.ts --outfile dist/asset-probe
           ./dist/asset-probe
@@ -143,6 +168,94 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  terminal-packages:
+    # The two published KMP packages, verified the way a STRANGER consumes them, on every
+    # tag and every dry run. Nothing here is published anywhere public: the only repository
+    # is <module>/build/test-repository on this runner. Plan 4 Task 6 is explicit that
+    # verification must not upload Maven artifacts, and no credentials exist in this job.
+    #
+    # WHAT THIS DOES NOT CLAIM. `verifyNativeArtifactsForHost` is the gate for the targets
+    # THIS runner can build (linux-x64 + the Android ABIs + wasm32). The all-targets release
+    # gate (`verifyNativeArtifacts`) needs a tree assembled from a Linux build plus Mac-built
+    # macos-*/ios-* artifacts — see apps/terminal-core/VERIFICATION.md §4 — which is a
+    # deliberate two-host procedure, not something one job silently approximates. What the
+    # artifacts contain is therefore stated by the ABI manifest printed below, which names
+    # exactly which targets are inside, and by the publish guard that refuses release
+    # coordinates for an incomplete tree.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
+      - name: Cache the zig toolchain and the terminal native tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-native-${{ runner.os }}-
+      - name: Build the terminal engine (desktop + the shipped Android ABIs)
+        env:
+          ST_ZIG_JOBS: "4"
+        run: |
+          python3 - <<'PY' > /tmp/abis.txt
+          import re
+          text = open("apps/gradle.properties").read()
+          spec = re.search(r"^supermux\.terminal\.androidAbis=(.*)$", text, re.M).group(1)
+          print("\n".join(e.split("=", 1)[1].strip() for e in spec.split(",")))
+          PY
+          sdkmanager "ndk;$(python3 -c "import json,sys; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
+          for target in linux-x64 $(cat /tmp/abis.txt); do
+            echo "::group::native/build.sh $target"
+            bash apps/terminal-core/native/build.sh "$target"
+            echo "::endgroup::"
+          done
+      - name: Build the WASM engine with the app
+        run: bash apps/terminal-core/wasm/build.sh
+      - name: Verify native artifact SHA/ABI and record what is inside
+        working-directory: apps
+        run: |
+          ./gradlew :terminal-core:verifyNativeArtifactsForHost :terminal-core:generateAbiManifest --console=plain
+          manifest=terminal-core/build/gradle/generated/packageMetadata/dev/supermux/terminal/abi-manifest.json
+          {
+            echo '### terminal-core ABI manifest'
+            echo '```json'
+            cat "$manifest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish both packages to the LOCAL test repository
+        working-directory: apps
+        run: |
+          ./gradlew :terminal-core:publishAllPublicationsToLocalTestRepository --console=plain
+          ./gradlew :terminal-compose:publishAllPublicationsToLocalTestRepository --console=plain
+      - name: Licences are inside the published artifacts
+        run: |
+          set -eu
+          jar="$(find apps/terminal-core/build/test-repository -name 'terminal-core-jvm-*.jar' ! -name '*-sources.jar' | head -1)"
+          aar="$(find apps/terminal-core/build/test-repository -name 'terminal-core-android-*.aar' | head -1)"
+          for f in "$jar" "$aar"; do
+            [ -n "$f" ] || { echo "published artifact missing" >&2; exit 1; }
+            for want in META-INF/dev.supermux.terminal/LICENSE META-INF/dev.supermux.terminal/THIRD-PARTY-NOTICES.md; do
+              unzip -l "$f" | grep -q "$want" || { echo "$f does not carry $want" >&2; exit 1; }
+            done
+          done
+      - name: Independent consumer check (JVM + browser + Compose surface)
+        working-directory: apps
+        run: |
+          command -v google-chrome >/dev/null 2>&1 || bunx playwright install --with-deps chromium
+          ./gradlew -p terminal-core/consumer-smoke jvmTest --console=plain
+          ./gradlew -p terminal-core/consumer-smoke wasmJsBrowserTest --console=plain
+          ./gradlew -p terminal-compose/consumer-smoke jvmTest --console=plain
 
   build-android:
     # Signed release APK for the native Android app (apps/android). Runs on tag
@@ -306,15 +419,66 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Stage host helper binaries (broker + frpc + tmux)
-        # Plan 3 Task 5: build the Bun broker + fetch frpc into apps/desktop/resources/linux-x64/
-        # so jpackage bundles them into the .deb. The script self-locates the repo root, so the
-        # `apps` working-directory default is fine via the relative path. tmux has no static
-        # upstream release; supply one via SUPERMUX_TMUX to bundle it, else the slot stays empty
-        # and the host falls back to a system tmux on $PATH.
+      # ── native artifacts: the client engine AND the host backend ────────────
+      # Two DIFFERENT native things, and a .deb needs both:
+      #   * the CLIENT Ghostty JNI library, which the desktop app itself loads to draw a
+      #     terminal. It rides inside the terminal-core jar, and :terminal-core only WARNS
+      #     when a target's library is absent — so without this step jpackage produces an
+      #     installer whose terminal cannot open, and nothing says a word. That is true
+      #     whatever the host backend is: a desktop that connects to a REMOTE broker still
+      #     draws with this library.
+      #   * the HOST zmx bundle (staged below), which only matters when this desktop is
+      #     also the host.
+      - name: Cache the zig toolchain and the native build trees
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+            build/zmx
+          key: desktop-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json', 'vendor/zmx/upstream.lock.json', 'vendor/zmx/patches/*.patch') }}
+          restore-keys: desktop-native-${{ runner.os }}-
+      - name: Verify the zmx pin and patch
+        working-directory: .
+        run: bash scripts/build-zmx.sh --check-patches
+      - name: Build the client terminal engine (linux-x64)
+        working-directory: .
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/native/build.sh linux-x64
+
+      - name: Stage host helper binaries (broker + frpc + tmux + zmx)
+        # Plan 3 Task 5 + Plan 4 Task 6: build the Bun broker, fetch frpc, and build the pinned
+        # zmx bundle into apps/desktop/resources/linux-x64/ so jpackage bundles them into the
+        # .deb. The script self-locates the repo root, so the `apps` working-directory default is
+        # fine via the relative path. tmux has no static upstream release; supply one via
+        # SUPERMUX_TMUX to bundle it, else the slot stays empty and the host falls back to a
+        # system tmux on $PATH (agent sessions only — workspace terminals use the zmx bundle).
+        env:
+          MUX_ZIG_JOBS: "4"
         run: ../scripts/stage-desktop-binaries.sh linux-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
+      - name: Assert the staged host backend
+        working-directory: .
+        run: |
+          bash scripts/check-zmx-bundle.sh build/zmx/out-linux-x64 linux-x64
+          for f in zmx mux-zmx-helper zmx-manifest.json; do
+            [ -s "apps/desktop/resources/linux-x64/$f" ] || { echo "missing staged host helper: $f" >&2; exit 1; }
+          done
+
       - name: Build .deb
         run: ./gradlew :desktop:packageDeb --console=plain --no-daemon
+      - name: Assert the packaged client engine
+        # The library has to be INSIDE the artifact a user installs, not merely on the build
+        # machine. Read it back out of the jar in the jpackage image.
+        working-directory: .
+        run: |
+          jar="$(find apps/desktop/build/compose/binaries/main/app -name 'terminal-core*.jar' | head -1)"
+          [ -n "$jar" ] || { echo "no terminal-core jar in the application image" >&2; exit 1; }
+          unzip -l "$jar" | grep -q 'dev/supermux/terminal/native/linux-x64/libsupermux_terminal_jni.so' \
+            || { echo "packaged terminal-core jar carries NO linux-x64 JNI library: $jar" >&2; unzip -l "$jar" | head -40; exit 1; }
+          unzip -l "$jar" | grep -q 'META-INF/dev.supermux.terminal/LICENSE' \
+            || { echo "packaged terminal-core jar carries no licence files" >&2; exit 1; }
+          echo "client engine + licences present in $jar"
       - name: Stage .deb + checksum
         run: |
           mkdir -p ../dist
@@ -327,6 +491,43 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  build-terminal-jni-windows:
+    # The Windows CLIENT terminal engine, cross-built ON LINUX.
+    #
+    # It cannot be built on the Windows runner: apps/terminal-core/native/upstream.lock.json pins
+    # a Zig tarball per BUILD HOST and has no x86_64-windows entry, so the provisioner refuses
+    # there rather than fetching an unpinned toolchain. Zig cross-compiles to x86_64-windows-gnu
+    # from Linux perfectly well (this is how the committed windows-x64 tree was made), so the
+    # honest arrangement is: build it where the pin exists, hand the artifact to the packaging
+    # job. Same shape as the Mac-built dylibs copied into a Linux tree (VERIFICATION.md).
+    #
+    # NOT runtime-tested: nothing here runs a Windows binary. The manifest it emits says so
+    # (`runtime_tested: false`), and so does this comment.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Cache the zig toolchain and the terminal native tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-native-${{ runner.os }}-
+      - name: Build the client terminal engine (windows-x64)
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/native/build.sh windows-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terminal-native-windows-x64
+          path: apps/terminal-core/build/native/windows-x64
+          if-no-files-found: error
+
   build-desktop-windows:
     # Windows .msi installer and native host. jpackage's MSI backend needs the
     # WiX Toolset, which is preinstalled on windows-latest — jpackage CANNOT cross-build
@@ -334,6 +535,7 @@ jobs:
     # Unsigned v1 (SmartScreen "unknown publisher" warning accepted). Stable asset name:
     # supermux-windows.msi.
     runs-on: windows-latest
+    needs: build-terminal-jni-windows
     defaults:
       run:
         working-directory: apps
@@ -343,6 +545,13 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # The client terminal engine, built by the Linux job above (no pinned Zig exists for a
+      # Windows host). It lands exactly where :terminal-core:stageJvmNativeResources looks, so
+      # the packaging below picks it up with no build-script change.
+      - uses: actions/download-artifact@v4
+        with:
+          name: terminal-native-windows-x64
+          path: apps/terminal-core/build/native/windows-x64
       # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
       # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
       - uses: gradle/actions/setup-gradle@v4
@@ -409,6 +618,27 @@ jobs:
             if ($matches[0].Length -le 0) { throw "empty packaged host helper: $name" }
             Write-Host "$name $($matches[0].Length) $($matches[0].FullName)"
           }
+      - name: Assert the packaged client engine
+        # Windows keeps sessiond as its HOST backend and ships no zmx — but the desktop app is
+        # also a CLIENT, and a client draws terminals with the Ghostty JNI library whatever the
+        # host is. :terminal-core only warns when a target's library is missing, so without this
+        # the MSI installs and its terminal silently cannot open.
+        shell: pwsh
+        run: |
+          $jar = Get-ChildItem desktop/build/compose/binaries/main/app -Recurse -File -Filter 'terminal-core*.jar' | Select-Object -First 1
+          if (-not $jar) { throw "no terminal-core jar in the application image" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($jar.FullName)
+          try {
+            $names = $zip.Entries | ForEach-Object { $_.FullName }
+          } finally { $zip.Dispose() }
+          foreach ($want in @(
+            'dev/supermux/terminal/native/windows-x64/supermux_terminal_jni.dll',
+            'META-INF/dev.supermux.terminal/LICENSE')) {
+            if ($names -notcontains $want) { throw "packaged terminal-core jar is missing $want ($($jar.FullName))" }
+          }
+          Write-Host "client engine + licences present in $($jar.FullName)"
+
       - name: Stage .msi + checksum
         shell: bash
         run: |
@@ -460,6 +690,28 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      # ── native artifacts: the client engine AND the host backend ────────────
+      # macOS is the one target that must be built ON a Mac: zig 0.16's Mach-O linker ignores
+      # -Wl,-exported_symbols_list, so a Linux-cross dylib exports all 587 internal Ghostty
+      # symbols instead of the st_* surface (see terminal-core/VERIFICATION.md).
+      - name: Cache the zig toolchain and the native build trees
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+            build/zmx
+          key: desktop-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json', 'vendor/zmx/upstream.lock.json', 'vendor/zmx/patches/*.patch') }}
+          restore-keys: desktop-native-${{ runner.os }}-${{ runner.arch }}-
+      - name: Verify the zmx pin and patch
+        working-directory: .
+        run: bash scripts/build-zmx.sh --check-patches
+      - name: Build the client terminal engine (macos-arm64)
+        working-directory: .
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/native/build.sh macos-arm64
+
       - name: Build portable tmux
         working-directory: .
         run: scripts/build-portable-tmux.sh "$RUNNER_TEMP/tmux"
@@ -467,7 +719,15 @@ jobs:
         working-directory: .
         env:
           SUPERMUX_TMUX: ${{ runner.temp }}/tmux
+          MUX_ZIG_JOBS: "4"
         run: scripts/stage-desktop-binaries.sh macos-arm64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
+      - name: Assert the staged host backend
+        working-directory: .
+        run: |
+          bash scripts/check-zmx-bundle.sh build/zmx/out-macos-arm64 macos-arm64
+          for f in zmx mux-zmx-helper zmx-manifest.json; do
+            [ -s "apps/desktop/resources/macos-arm64/$f" ] || { echo "missing staged host helper: $f" >&2; exit 1; }
+          done
       - name: Check release credentials
         id: signing
         working-directory: .
@@ -513,6 +773,19 @@ jobs:
       - name: Build unsigned Compose DMG
         if: steps.signing.outputs.have != '1'
         run: ./gradlew :desktop:packageDmg --console=plain --no-daemon
+      - name: Assert the packaged client engine
+        # The DMG has to carry the Ghostty JNI dylib the app loads to draw a terminal, whether or
+        # not this Mac is also the host. Signing does not put it there; the build above does.
+        working-directory: .
+        run: |
+          jar="$(find apps/desktop/build/compose/binaries/main/app -name 'terminal-core*.jar' | head -1)"
+          [ -n "$jar" ] || { echo "no terminal-core jar in the application image" >&2; exit 1; }
+          unzip -l "$jar" | grep -q 'dev/supermux/terminal/native/macos-arm64/libsupermux_terminal_jni.dylib' \
+            || { echo "packaged terminal-core jar carries NO macos-arm64 JNI library: $jar" >&2; unzip -l "$jar" | head -40; exit 1; }
+          unzip -l "$jar" | grep -q 'META-INF/dev.supermux.terminal/LICENSE' \
+            || { echo "packaged terminal-core jar carries no licence files" >&2; exit 1; }
+          echo "client engine + licences present in $jar"
+
       - name: Stage DMG
         working-directory: .
         run: |

@@ -58,6 +58,7 @@ jobs:
       web: ${{ steps.f.outputs.web }}
       wire: ${{ steps.f.outputs.wire }}
       zmx: ${{ steps.f.outputs.zmx }}
+      terminal: ${{ steps.f.outputs.terminal }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -105,9 +106,16 @@ jobs:
             zmx:
               - 'vendor/zmx/**'
               - 'scripts/build-zmx.sh'
+              - 'scripts/check-zmx-bundle.sh'
               - 'src/core/terminal/**'
               - 'tests/integration/zmx-workspace*'
               - 'apps/terminal-core/native/**'
+            # The two published KMP packages: the engine, the shared Compose surface,
+            # their native/wasm build inputs and the independent consumer builds.
+            terminal:
+              - 'apps/terminal-core/**'
+              - 'apps/terminal-compose/**'
+              - 'apps/gradle/**'
             # The protocol seam. Any touch here runs every lane — see rule 1.
             wire:
               - 'src/shared/**'
@@ -211,6 +219,128 @@ jobs:
           # The suite cleans up after itself; this is the belt. Only sockets in
           # the private per-run directories the suite mints are touched.
           rm -rf "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/supermux/zmx-it-* || true
+
+  # ── The published terminal packages, consumed as a STRANGER would ──────────
+  # `kotlin` compiles them as project dependencies, which is exactly the thing that
+  # cannot catch a packaging bug: a project dependency has the native library on the
+  # filesystem next to it whether or not the PUBLICATION carries one. Plan 1 shipped
+  # the separate consumer builds for this reason and nothing ran them automatically.
+  #
+  # What this lane proves, in order:
+  #   1. every native artifact THIS host can build matches its own manifest (sha256 +
+  #      ABI), and the wasm module does too — the gate that stands between a stale
+  #      build/native tree and a published jar;
+  #   2. the packages publish to a LOCAL repository (never a public one: no
+  #      credentials exist here and none are wanted — Plan 4 Task 6 says verification
+  #      must not publish);
+  #   3. a build that shares no project, source or classpath with supermux resolves
+  #      them by coordinates and RUNS the engine — on the JVM out of the jar, and in
+  #      a real browser out of the klib;
+  #   4. the artifacts carry their licences.
+  terminal-packages:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.terminal == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      # Only for the browser fallback below (bunx playwright), never for the packages
+      # themselves — these two modules depend on nothing in the bun workspace.
+      - uses: oven-sh/setup-bun@v2
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
+      - name: Cache the zig toolchain and the terminal native tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-native-${{ runner.os }}-
+
+      # The engine, for every target this runner can produce. The Android ABIs come
+      # from apps/gradle.properties — the same one line :android's abiFilters reads —
+      # so the AAR claims an ABI if and only if the engine for it is inside.
+      - name: Build the terminal engine
+        env:
+          ST_ZIG_JOBS: "4"
+        run: |
+          python3 - <<'PY' > /tmp/abis.txt
+          import re
+          text = open("apps/gradle.properties").read()
+          spec = re.search(r"^supermux\.terminal\.androidAbis=(.*)$", text, re.M).group(1)
+          print("\n".join(e.split("=", 1)[1].strip() for e in spec.split(",")))
+          PY
+          sdkmanager "ndk;$(python3 -c "import json,sys; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
+          for target in linux-x64 $(cat /tmp/abis.txt); do
+            echo "::group::native/build.sh $target"
+            bash apps/terminal-core/native/build.sh "$target"
+            echo "::endgroup::"
+          done
+      # The browser engine, built WITH the app rather than assumed present: the wasm
+      # consumer check decodes with the very module the web client loads.
+      - name: Build the reference terminal engine (wasm)
+        run: bash apps/terminal-core/wasm/build.sh
+
+      # sha256 + ABI of every artifact, against the manifest each build wrote.
+      - name: Verify native artifact SHA/ABI
+        working-directory: apps
+        run: ./gradlew :terminal-core:verifyNativeArtifactsForHost --console=plain
+
+      # LOCAL repositories only. `publishAllPublicationsToLocalTestRepository` writes to
+      # <module>/build/test-repository and has no network target at all.
+      - name: Publish both packages to the local test repository
+        working-directory: apps
+        run: |
+          ./gradlew :terminal-core:publishAllPublicationsToLocalTestRepository --console=plain
+          ./gradlew :terminal-compose:publishAllPublicationsToLocalTestRepository --console=plain
+
+      - name: Licences are inside the published artifacts
+        run: |
+          set -eu
+          jar="$(find apps/terminal-core/build/test-repository -name 'terminal-core-jvm-*.jar' ! -name '*-sources.jar' | head -1)"
+          aar="$(find apps/terminal-core/build/test-repository -name 'terminal-core-android-*.aar' | head -1)"
+          for f in "$jar" "$aar"; do
+            [ -n "$f" ] || { echo "published artifact missing" >&2; exit 1; }
+            for want in META-INF/dev.supermux.terminal/LICENSE META-INF/dev.supermux.terminal/THIRD-PARTY-NOTICES.md; do
+              unzip -l "$f" | grep -q "$want" || { echo "$f does not carry $want" >&2; exit 1; }
+            done
+            echo "licences present in $f"
+          done
+
+      # A stranger's build: its own settings.gradle.kts, no project dependency, and
+      # `dev.supermux.terminal` served ONLY by the local repository.
+      - name: Consumer check — JVM (engine runs out of the published jar)
+        working-directory: apps
+        run: ./gradlew -p terminal-core/consumer-smoke jvmTest --console=plain
+      - name: Ensure a WasmGC browser is available
+        run: |
+          command -v google-chrome >/dev/null 2>&1 || bunx playwright install --with-deps chromium
+      - name: Consumer check — browser (engine runs out of the published klib)
+        working-directory: apps
+        run: ./gradlew -p terminal-core/consumer-smoke wasmJsBrowserTest --console=plain
+      - name: Consumer check — the Compose surface, with the engine transitively
+        working-directory: apps
+        run: ./gradlew -p terminal-compose/consumer-smoke jvmTest --console=plain
+
+      - name: Upload consumer reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-consumer-reports
+          path: |
+            apps/terminal-core/consumer-smoke/build/reports/**
+            apps/terminal-compose/consumer-smoke/build/reports/**
+          retention-days: 7
 
   # ── Browser journey: real browser + broker + shim, all on throwaway state ──
   # NOT a cheap lane: `bun run test:ui` → scripts/test-broker.sh → Gradle
