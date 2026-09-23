@@ -19,7 +19,9 @@
 import { createHash } from "crypto"
 import { existsSync, readFileSync, statSync } from "fs"
 import { join, resolve as resolvePath } from "path"
+import { IS_COMPILED } from "../../../shared/build-info"
 import { STATE_DIR } from "../../../shared/paths"
+import { zmxBundleDir } from "../../runtime-assets"
 import { WorkspaceTerminalError } from "../workspace-backend"
 import {
   DETACH_REASONS,
@@ -78,11 +80,20 @@ export type HelperBinaries = {
 /**
  * Where the built helper and its patched zmx live.
  *
- *  1. `MUX_ZMX_BIN_DIR` — explicit override (tests, odd deployments).
+ *  1. `MUX_ZMX_BIN_DIR` — explicit override. This is how a DESKTOP package says
+ *     "use the bundle I own": the app materializes its own copy out of the app
+ *     image and names the directory, rather than leaving the broker to guess
+ *     (see HostBinaries.kt). Tests and odd deployments use it too.
  *  2. the repo's gitignored build cache, in source mode.
- *  3. `<stateDir>/runtime-assets/zmx` when compiled — materialising them there
- *     is a packaging step (they are native binaries a child process must be
- *     able to exec, and $bunfs paths are not that).
+ *  3. `<stateDir>/runtime-assets/<version>/zmx` when compiled — the embedded
+ *     bundle, copied out on first use. Materialising it is a packaging step, not
+ *     an optimization: these are native binaries a child process must be able to
+ *     exec, and a $bunfs path is not something the kernel can exec.
+ *
+ * A compiled binary that was built without the bundle (SUPERMUX_SKIP_ZMX=1)
+ * materializes the committed placeholder, whose manifest says so — which is why
+ * `verifyHelperManifest` answers "this build ships no zmx bundle" instead of a
+ * hash mismatch nobody can act on.
  */
 export function zmxBinDir(env: NodeJS.ProcessEnv = process.env, stateDir: string = STATE_DIR): string {
   const override = env.MUX_ZMX_BIN_DIR?.trim()
@@ -90,6 +101,7 @@ export function zmxBinDir(env: NodeJS.ProcessEnv = process.env, stateDir: string
   // src/core/terminal/zmx/helper.ts -> repo root is four levels up.
   const repoBuild = resolvePath(import.meta.dirname, "..", "..", "..", "..", "build", "zmx", "out")
   if (existsSync(join(repoBuild, "bin", "mux-zmx-helper"))) return repoBuild
+  if (IS_COMPILED) return zmxBundleDir(stateDir)
   return join(stateDir, "runtime-assets", "zmx")
 }
 
@@ -138,6 +150,16 @@ export function verifyHelperManifest(binaries: HelperBinaries = helperBinaries()
     manifest = JSON.parse(readFileSync(binaries.manifest, "utf8")) as HelperManifest
   } catch (error) {
     return fail(`zmx helper manifest is unreadable: ${errorText(error)}`)
+  }
+  // The committed slot, materialized verbatim. Saying "schema 0" here would be
+  // true and useless: the actionable fact is that this BUILD carries no bundle,
+  // and no amount of rebuilding zmx on the host will change that.
+  if ((manifest as { placeholder?: boolean }).placeholder) {
+    return fail(
+      `this build ships no zmx bundle (${binaries.manifest} is the placeholder slot) — ` +
+        "it was compiled with SUPERMUX_SKIP_ZMX=1, so POSIX workspace terminals have no backend. " +
+        "Point MUX_ZMX_BIN_DIR at a bundle from scripts/build-zmx.sh, or use a release build.",
+    )
   }
   if (manifest.schema !== 1) return fail(`zmx helper manifest schema ${manifest.schema}, expected 1`)
   if (manifest.abi !== HELPER_ABI) {

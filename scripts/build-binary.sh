@@ -16,6 +16,15 @@
 #      embedding it raw would break on arm64 — recompile so the right arch is
 #      embedded by bun build --compile); Windows uses sessiond and skips it
 #   4. fetch + verify the native frpc used by the built-in connectivity relay
+#   4b. stage the pinned zmx bundle (POSIX): the patched daemon, the framed
+#      broker helper and their manifest, verified against vendor/zmx/upstream.lock.json
+#      and copied into the committed slots under src/core/terminal/zmx/embedded/
+#      so `bun build --compile` embeds them. Without this a compiled release has
+#      no workspace-terminal backend at all: every attach fails the manifest
+#      check with a typed `backend-unavailable`. Overrides:
+#        SUPERMUX_ZMX_DIR=<dir>  use this prebuilt bundle (bin/ + manifest.json)
+#        SUPERMUX_SKIP_ZMX=1     ship the placeholder (wiring tests only — the
+#                                resulting binary says so when asked for a terminal)
 #   5. generate the static manifest (turns the committed empty stub into one
 #      `with { type: "file" }` import per staged file so the whole web client is
 #      embedded)
@@ -55,10 +64,16 @@ esac
 # frpc uses an explicit backup so this also preserves an uncommitted local stub.
 FRPC_BACKUP="$(mktemp)"
 cp src/core/relay/frpc-embedded "$FRPC_BACKUP"
+# The zmx slots the same way: an 18 MB daemon+helper pair goes in, and the
+# committed placeholders have to come back — including an uncommitted local one,
+# which `git checkout --` would silently discard.
+ZMX_SLOT_BACKUP="$(mktemp -d)"
+cp -a src/core/terminal/zmx/embedded/. "$ZMX_SLOT_BACKUP/"
 cleanup() {
   git checkout -- src/channels/web/static-manifest.generated.ts src/core/terminal/pty-helper 2>/dev/null || true
   cp "$FRPC_BACKUP" src/core/relay/frpc-embedded 2>/dev/null || true
-  rm -f "$FRPC_BACKUP"
+  cp -a "$ZMX_SLOT_BACKUP/." src/core/terminal/zmx/embedded/ 2>/dev/null || true
+  rm -rf "$FRPC_BACKUP" "$ZMX_SLOT_BACKUP"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -94,6 +109,33 @@ fi
 # frpc: fetch the native-arch helper and embed it beside the pty helper. The
 # release binary's own checksum therefore covers the relay executable too.
 scripts/fetch-frpc.sh "$TARGET" src/core/relay/frpc-embedded
+
+# zmx: the POSIX workspace-terminal backend, embedded whole. Windows has no zmx
+# (persistent terminals there are sessiond's job), so the slots keep their
+# placeholders and the compiled binary never claims otherwise.
+if [ "$TARGET" != "windows-x64" ]; then
+  if [ "${SUPERMUX_SKIP_ZMX:-}" = "1" ]; then
+    echo "build-binary.sh: WARNING zmx bundle SKIPPED (SUPERMUX_SKIP_ZMX=1) — this binary has no workspace-terminal backend" >&2
+  else
+    if [ -n "${SUPERMUX_ZMX_DIR:-}" ]; then
+      ZMX_DIR="$SUPERMUX_ZMX_DIR"
+      echo "build-binary.sh: zmx bundle from SUPERMUX_ZMX_DIR=$ZMX_DIR"
+    else
+      # Its own output directory per target: build/zmx/out is the bundle a
+      # source-mode broker and the integration suite EXEC, and a cross-built
+      # aarch64 zmx dropped there would break both without failing anything.
+      ZMX_DIR="build/zmx/out-$TARGET"
+      echo "build-binary.sh: building the pinned zmx for $TARGET (scripts/build-zmx.sh)"
+      scripts/build-zmx.sh --target "$TARGET" --no-test --out "$ROOT/$ZMX_DIR"
+    fi
+    # The bundle is the pinned one, and its manifest is the truth about it.
+    scripts/check-zmx-bundle.sh "$ZMX_DIR" "$TARGET"
+    cp "$ZMX_DIR/bin/zmx" src/core/terminal/zmx/embedded/zmx
+    cp "$ZMX_DIR/bin/mux-zmx-helper" src/core/terminal/zmx/embedded/mux-zmx-helper
+    cp "$ZMX_DIR/manifest.json" src/core/terminal/zmx/embedded/manifest.json
+    chmod +x src/core/terminal/zmx/embedded/zmx src/core/terminal/zmx/embedded/mux-zmx-helper
+  fi
+fi
 
 # Embed the freshly-staged web client: rewrites the committed stub with per-file imports.
 bun scripts/generate-static-manifest.ts

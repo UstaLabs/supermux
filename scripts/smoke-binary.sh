@@ -18,6 +18,12 @@
 #      fetch the PWA shell authenticated (→ 200, body has <html/<!doctype) AND
 #      one hashed /assets/*.js parsed out of that shell (→ 200). This is the part
 #      that only passes if the whole PWA is genuinely embedded in the binary.
+#   4. Workspace-terminal backend (POSIX): the broker's own boot-time readiness
+#      line says the embedded zmx bundle materialized out of $bunfs and verified
+#      against its manifest. Plan 3 shipped a broker that compiled, booted, served
+#      the PWA and could not open a single workspace terminal — every check above
+#      passed for it. Set SUPERMUX_SMOKE_ALLOW_NO_ZMX=1 for a deliberate
+#      SUPERMUX_SKIP_ZMX=1 build.
 #
 # Isolation: a mktemp MUX_HOME/MUX_STATE_DIR and a high port (default 18791) so a
 # live broker on :9898 with real state in ~/.mux is never touched. A trap kills
@@ -81,18 +87,17 @@ if [ -n "$EXPECTED_VERSION" ]; then
     dev*) fail "version starts with 'dev' — binary built without --define version/commit" ;;
   esac
 fi
-echo "PASS 1/3: version"
+echo "PASS 1/4: version"
 
 # ── Check 2: broker boots on isolated state, /me → 401 ──────────────────────
 # Both MUX_WEB_PORT and MUX_WEB_PUBLIC_URL are required for the web channel; the
 # isolated MUX_HOME/MUX_STATE_DIR guarantee we never read/write real state.
 #
-# The broker's preflight FATALS unless BOTH (a) at least one agent CLI (claude/
-# codex/cursor-agent) AND (b) tmux are on PATH. ubuntu runners ship tmux; macOS
-# runners do NOT — and this smoke never spawns a session — so satisfy both
-# presence checks with inert stubs on a PATH SUFFIX. Real binaries (tmux on
-# Linux, the real CLIs locally) are found first; the stubs are no-op shadows
-# only where nothing else exists.
+# The broker's preflight FATALS only on (a): no agent CLI at all. Missing tmux is
+# a warning (it costs Claude agent sessions, not workspace terminals). We still
+# stub both on a PATH SUFFIX so a macOS runner's boot log is not full of noise
+# this smoke cannot act on. Real binaries (tmux on Linux, the real CLIs locally)
+# are found first; the stubs are no-op shadows only where nothing else exists.
 mkdir -p "$TMP/stubbin"
 printf '#!/bin/sh\nexit 0\n' > "$TMP/stubbin/claude"
 printf '#!/bin/sh\ncase "$1" in -V) echo "tmux 3.4";; esac\nexit 0\n' > "$TMP/stubbin/tmux"
@@ -122,7 +127,7 @@ done
 if [ "$ME_CODE" != "401" ]; then
   fail "broker /me did not return 401 within ~30s (last code: ${ME_CODE:-none})"
 fi
-echo "PASS 2/3: broker boots, /me -> 401"
+echo "PASS 2/4: broker boots, /me -> 401"
 
 # ── Check 3: embedded PWA serving with auth ─────────────────────────────────
 # Pair a device. pair.ts reads MUX_WEB_PUBLIC_URL from the env (it only falls
@@ -167,6 +172,29 @@ ASSET_PATH="$(grep -oE 'assets/[^"'"'"']*\.js' "$SHELL_FILE" | head -1)"
 ASSET_CODE="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" "$BASE/$ASSET_PATH" 2>/dev/null || echo 000)"
 [ "$ASSET_CODE" = "200" ] || fail "GET /$ASSET_PATH (hashed asset) expected 200, got $ASSET_CODE"
 echo "SMOKE: served shell + asset /$ASSET_PATH"
-echo "PASS 3/3: embedded PWA + auth"
+echo "PASS 3/4: embedded PWA + auth"
+
+# ── Check 4: the workspace-terminal backend materialized ────────────────────
+# The broker logs its readiness once at boot, BEFORE any client asks for a
+# terminal: `preflight {"workspaceTerminals":"zmx <commit> helper ABI …"}` when
+# the embedded bundle verified, and a warning naming the reason when it did not.
+# Reading the log is the point — this asserts what the REAL broker concluded
+# about its own package, not what a re-implementation of the check concludes.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*|Windows_NT)
+    echo "SKIP 4/4: workspace terminals use sessiond on Windows"
+    ;;
+  *)
+    if grep -q '"workspaceTerminals"' "$BOOT_LOG"; then
+      echo "SMOKE: $(grep -o '"workspaceTerminals":"[^"]*"' "$BOOT_LOG" | head -1)"
+      echo "PASS 4/4: workspace terminal backend verified at boot"
+    elif [ "${SUPERMUX_SMOKE_ALLOW_NO_ZMX:-}" = "1" ]; then
+      echo "SKIP 4/4: no zmx bundle, allowed by SUPERMUX_SMOKE_ALLOW_NO_ZMX=1"
+      grep -i "Workspace terminals are unavailable" "$BOOT_LOG" || true
+    else
+      fail "broker never reported a working workspace-terminal backend (the embedded zmx bundle did not verify)"
+    fi
+    ;;
+esac
 
 echo "SMOKE PASS: $BIN (all checks passed)"

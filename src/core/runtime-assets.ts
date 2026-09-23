@@ -16,6 +16,9 @@ import curatorPromptEmbedded from "../../prompts/knowledge-curator.md" with { ty
 import environmentMdEmbedded from "../../prompts/environment.md" with { type: "file" }
 import replyFallbackEmbedded from "../../prompts/reply-fallback.md" with { type: "file" }
 import frpcEmbedded from "./relay/frpc-embedded" with { type: "file" }
+import zmxEmbedded from "./terminal/zmx/embedded/zmx" with { type: "file" }
+import zmxHelperEmbedded from "./terminal/zmx/embedded/mux-zmx-helper" with { type: "file" }
+import zmxManifestEmbedded from "./terminal/zmx/embedded/manifest.json" with { type: "file" }
 
 export function materializeAsset(opts: { stateDir: string; name: string; sourcePath: string; executable?: boolean }): string {
   const dest = join(opts.stateDir, "runtime-assets", BUILD_VERSION, opts.name)
@@ -58,6 +61,36 @@ const REPLY_FALLBACK_SOURCE_PATH = resolvePath(REPO_PROMPTS_DIR, "reply-fallback
 export function ptyHelperPath(stateDir: string): string {
   if (!IS_COMPILED) return PTY_HELPER_SOURCE_PATH
   return materializeAsset({ stateDir, name: "pty-helper", sourcePath: ptyHelperEmbedded, executable: true })
+}
+
+/**
+ * The zmx bundle: the patched daemon, the framed broker helper, and the manifest
+ * that says what they were built from.
+ *
+ * This is the one runtime asset that is a DIRECTORY rather than a file, because
+ * the manifest has to sit beside the binaries it describes — `verifyHelperManifest`
+ * reads all three as a unit and refuses to exec a helper whose bytes disagree with
+ * the manifest next to it. Materializing them separately, or into separate version
+ * dirs, would let a fresh binary's manifest end up beside a previous build's zmx.
+ *
+ * Version-keyed like every other runtime asset, so a broker update materializes a
+ * fresh bundle rather than serving the previous version's daemon. The DAEMONS
+ * already running under the old copy are unaffected: a zmx daemon is a process
+ * that outlives us, holding a socket, and nothing here touches it.
+ *
+ * Returns the directory the helper module expects (`<dir>/bin/{zmx,mux-zmx-helper}`
+ * + `<dir>/manifest.json`). In source mode there is nothing to materialize — the
+ * caller uses the repo's own build output — so this is compiled-mode only.
+ */
+export function zmxBundleDir(stateDir: string): string {
+  const dir = join(stateDir, "runtime-assets", BUILD_VERSION, "zmx")
+  // The manifest LAST: it is the file `verifyHelperManifest` looks for first, so
+  // a crash midway through leaves a bundle that reads as missing rather than as
+  // present-and-lying.
+  materializeAsset({ stateDir, name: "zmx/bin/zmx", sourcePath: zmxEmbedded, executable: true })
+  materializeAsset({ stateDir, name: "zmx/bin/mux-zmx-helper", sourcePath: zmxHelperEmbedded, executable: true })
+  materializeAsset({ stateDir, name: "zmx/manifest.json", sourcePath: zmxManifestEmbedded })
+  return dir
 }
 
 /** Resolve the relay helper. Desktop packages provide frpc on PATH; standalone

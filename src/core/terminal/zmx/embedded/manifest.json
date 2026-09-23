@@ -1,0 +1,5 @@
+{
+  "schema": 0,
+  "placeholder": true,
+  "why": "Committed slot, not a build output. scripts/build-binary.sh overwrites these three files with a verified bundle from scripts/build-zmx.sh before `bun build --compile` embeds them, then restores this stub. A compiled binary whose manifest still says placeholder:true was built with SUPERMUX_SKIP_ZMX=1 and has no POSIX workspace terminal backend."
+}

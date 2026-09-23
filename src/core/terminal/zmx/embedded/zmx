@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "the pinned zmx daemon is embedded only in compiled Supermux releases" >&2
+exit 127
