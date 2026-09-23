@@ -72,6 +72,8 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.net.ForgeConnection
@@ -193,6 +195,8 @@ fun ProjectPicker(
      * [DropdownMenu]. Ignored under Compact, where the container is a sheet.
      */
     useDropdownMenu: Boolean = true,
+    /** Width of the heading the dropdown hangs off, so the menu can centre under it (0 = start-aligned). */
+    anchorWidth: Dp = 0.dp,
 ) {
     val cs = MaterialTheme.colorScheme
     /** No mouse/touchpad → the sheet. Never the width class: see the container note above. */
@@ -979,6 +983,8 @@ fun ProjectPicker(
     } else if (useDropdownMenu) {
         DropdownMenu(
             expanded = expanded,
+            // Centred under the heading, not hung off its left edge.
+            offset = DpOffset((anchorWidth - Size.omniboxWidth) / 2, 0.dp),
             onDismissRequest = {
                 // Escape/outside click while overlay is up only hides progress — host keeps going.
                 if (resolving) hideResolveProgress()
