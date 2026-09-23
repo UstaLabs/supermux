@@ -44,7 +44,7 @@ test("opencode ask mode writes per-tool ask permissions", async () => {
   await host.close({ agents: "shutdown" })
 })
 
-test("opencode default mode writes no permission block", async () => {
+test("opencode always writes the all-ask permission block (the live policy decides)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "oc-host-"))
   dirs.push(dir)
   const host = createOpenCodeCoreHost({
@@ -57,7 +57,7 @@ test("opencode default mode writes no permission block", async () => {
   const handle = host.register({ id: "id2", env: {}, extra })
   await handle.start({ cwd: dir })
   const cfg = JSON.parse(readFileSync(join(dir, "config", "opencode", "opencode.json"), "utf8")) as { permission?: unknown }
-  expect(cfg.permission).toBeUndefined()
+  expect(cfg.permission).toEqual({ edit: "ask", bash: "ask", webfetch: "ask" })
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })

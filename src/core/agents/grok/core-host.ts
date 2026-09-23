@@ -30,7 +30,7 @@ export type GrokPrepareExtra = {
   permissionMode?: string
 }
 
-function grokOpts(stateDirectory: string, env: Record<string, string>, alwaysApprove: boolean): GrokOptions {
+function grokOpts(stateDirectory: string, env: Record<string, string>, permissions: GrokOptions["permissions"]): GrokOptions {
   return {
     id: "grok",
     command: "grok",
@@ -39,7 +39,7 @@ function grokOpts(stateDirectory: string, env: Record<string, string>, alwaysApp
     inheritEnv: true,
     mcpServers: [],
     noLeader: false,
-    alwaysApprove,
+    permissions,
     setupTimeoutMs: 30_000,
     shutdownTimeoutMs: 2_000,
     maxFrameBytes: 16 * 1024 * 1024,
@@ -88,8 +88,8 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
     agent: "grok",
     driver: (registration, ctx) => {
       const settings = driverSettingsFor("grok", extraPermissionMode(registration.extra, "grok"))
-      if (settings.agent !== "grok") throw new Error("grok driver settings mismatch")
-      const opts = grokOpts(stateDirectory, registration.env, settings.alwaysApprove)
+      if (settings.initial.kind !== "acp") throw new Error("grok driver settings mismatch")
+      const opts = grokOpts(stateDirectory, registration.env, settings.initial)
       const overrides: SessionConfiguration = ctx.configuration ? { ...ctx.configuration } : {}
       return factory ? factory(opts, overrides) : grok(opts)
     },

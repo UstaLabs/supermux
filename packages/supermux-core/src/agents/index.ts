@@ -3,7 +3,7 @@ import { acp, type AcpActivityHint, type AcpOptions } from '../acp/index.js'
 import { createAcpNormalizer } from '../acp/normalize.js'
 import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
-import type { ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, CloseOptions, DriverContext, SessionConfiguration } from '../types.js'
+import type { ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, CloseOptions, DriverContext, SessionConfiguration, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
 
 const EFFORTS = new Set(['low', 'medium', 'high'])
@@ -17,8 +17,8 @@ export type GrokOptions = Omit<AcpOptions, 'id' | 'command' | 'args' | 'captureS
   model?: string
   reasoningEffort?: 'low' | 'medium' | 'high'
   authPath?: string
-  alwaysApprove: boolean
   noLeader: boolean
+  permissions: Extract<PermissionsSpec, { kind: 'acp' }>
 }
 
 function requireEffort(value: string): 'low' | 'medium' | 'high' {
@@ -46,7 +46,6 @@ function grokArgs(options: GrokOptions, overrides: SessionConfiguration): string
   const effort = overrides.reasoningEffort ?? options.reasoningEffort
   const args = ['agent']
   if (options.noLeader) args.push('--no-leader')
-  if (options.alwaysApprove) args.push('--always-approve')
   if (model) args.push('--model', model)
   if (effort) args.push('--reasoning-effort', effort)
   args.push('stdio')
@@ -149,6 +148,7 @@ function grokAcp(options: GrokOptions, overrides: SessionConfiguration) {
     cancelRetryTimeoutMs: options.cancelRetryTimeoutMs,
     classifyActivity: createGrokClassifyActivity(),
     vendor: "grok",
+    permissions: options.permissions,
   })
 }
 
@@ -159,13 +159,12 @@ type GrokChildFactory = (options: GrokOptions, overrides: SessionConfiguration) 
  */
 export function grok(options: GrokOptions, childFactory: GrokChildFactory = grokAcp): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('Grok options are required')
-  for (const field of ['id', 'command', 'commandArgs', 'alwaysApprove', 'noLeader', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs'] as const) {
+  for (const field of ['id', 'command', 'commandArgs', 'permissions', 'noLeader', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs'] as const) {
     if (options[field] === undefined) throw new TypeError(`Grok ${field} is required`)
   }
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('Grok id is required')
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('Grok command is required')
   if (!Array.isArray(options.commandArgs) || options.commandArgs.some(value => typeof value !== 'string')) throw new TypeError('Grok commandArgs is required')
-  if (typeof options.alwaysApprove !== 'boolean') throw new TypeError('Grok alwaysApprove is required')
   if (typeof options.noLeader !== 'boolean') throw new TypeError('Grok noLeader is required')
   if (typeof options.inheritEnv !== 'boolean') throw new TypeError('Grok inheritEnv is required')
   if (!Array.isArray(options.mcpServers)) throw new TypeError('Grok mcpServers is required')
@@ -190,7 +189,7 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
       let turn = false
       let configuring: Promise<void> | undefined
       let candidateFailure: Error | undefined
-      let liveCapabilities = { resume: false, steer: false, fork: false, detach: false, configure: false, history: false }
+      let liveCapabilities = { resume: false, steer: false, fork: false, detach: false, configure: false, history: false, permissions: false }
       const nativeOutstanding = new Map<string, ActivityNotice>()
       const lifetime = new AbortController()
       const childSignal = () => AbortSignal.any([context.signal, lifetime.signal])
@@ -267,7 +266,7 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
         inner = runtime
         pending = undefined
         acceptedSessionId = runtime.agentSessionId
-        liveCapabilities = { resume: runtime.capabilities.resume, steer: false, fork: false, detach: runtime.capabilities.detach === true, configure: true, history: false }
+        liveCapabilities = { resume: runtime.capabilities.resume, steer: false, fork: false, detach: runtime.capabilities.detach === true, configure: true, history: false, permissions: true }
         published = true
         for (const notice of buffered.values()) {
           if (gen !== generation || closed) break
@@ -296,6 +295,10 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
         async interrupt() {
           if (!inner) throw closedError()
           await inner.interrupt()
+        },
+        async setPermissions(spec) {
+          if (!inner?.setPermissions) throw new UnsupportedOperation('permissions', id)
+          return inner.setPermissions(spec)
         },
         configuration() { return { ...overrides } },
         async configure(configuration) {
@@ -351,7 +354,7 @@ export type OpenCodeOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'captu
 /** Uses OpenCode's ACP entrypoint. No library HTTP listener or broker globals. */
 export function opencode(options: OpenCodeOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('OpenCode options are required')
-  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs'] as const) {
+  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'permissions'] as const) {
     if (options[field] === undefined) throw new TypeError(`OpenCode ${field} is required`)
   }
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('OpenCode id is required')
@@ -362,7 +365,6 @@ export function opencode(options: OpenCodeOptions): AgentDriver {
   return acp({ ...rest, args: ['acp', '--print-logs', '--log-level', 'ERROR'], captureStderr: true, ...(model ? { sessionConfig: { model } } : {}) })
 }
 
-const CURSOR_PERMISSIONS = new Set(['force', 'auto-review', 'ask'])
 const CURSOR_MODES = new Set(['agent', 'plan', 'ask'])
 
 export type CursorOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'captureStderr'> & {
@@ -370,13 +372,6 @@ export type CursorOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'capture
   commandArgs: string[]
   model?: string
   mode?: 'agent' | 'plan' | 'ask'
-  permissions: 'force' | 'auto-review' | 'ask'
-}
-
-function cursorPermissionFlags(permissions: CursorOptions['permissions']): string[] {
-  if (permissions === 'force') return ['--force']
-  if (permissions === 'auto-review') return ['--auto-review']
-  return []
 }
 
 function cursorSessionConfig(options: CursorOptions): Record<string, string> | undefined {
@@ -386,7 +381,7 @@ function cursorSessionConfig(options: CursorOptions): Record<string, string> | u
   return Object.keys(sessionConfig).length ? sessionConfig : undefined
 }
 
-/** Uses Cursor's ACP entrypoint (`cursor-agent [flags] acp`). Global flags go before `acp`. */
+/** Uses Cursor's ACP entrypoint (`cursor-agent acp`). Mode is ACP session/set_mode or config option. */
 export function cursor(options: CursorOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('Cursor options are required')
   for (const field of ['id', 'command', 'commandArgs', 'permissions', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs'] as const) {
@@ -395,14 +390,13 @@ export function cursor(options: CursorOptions): AgentDriver {
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('Cursor id is required')
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('Cursor command is required')
   if (!Array.isArray(options.commandArgs) || options.commandArgs.some(value => typeof value !== 'string')) throw new TypeError('Cursor commandArgs is required')
-  if (!CURSOR_PERMISSIONS.has(options.permissions)) throw new TypeError('Cursor permissions must be force, auto-review, or ask')
   if (options.model !== undefined && (typeof options.model !== 'string' || !options.model)) throw new TypeError('Cursor model must be a nonempty string')
   if (options.mode !== undefined && !CURSOR_MODES.has(options.mode)) throw new TypeError('Cursor mode must be agent, plan, or ask')
-  const { model: _model, mode: _mode, permissions, commandArgs, ...rest } = options
+  const { model: _model, mode: _mode, commandArgs, ...rest } = options
   const sessionConfig = cursorSessionConfig(options)
   return acp({
     ...rest,
-    args: [...commandArgs, ...cursorPermissionFlags(permissions), 'acp'],
+    args: [...commandArgs, 'acp'],
     captureStderr: true,
     ...(sessionConfig ? { sessionConfig } : {}),
   })

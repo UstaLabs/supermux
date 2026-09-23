@@ -41,7 +41,7 @@ function required(extra: Partial<CursorOptions> = {}): CursorOptions {
     id: 'cursor',
     command: process.execPath,
     commandArgs: [fixture],
-    permissions: 'force',
+    permissions: { kind: 'acp', policy: 'auto-approve', nativeMode: 'agent' },
     inheritEnv: true,
     mcpServers: [],
     setupTimeoutMs: 5000,
@@ -77,7 +77,7 @@ async function traced(env: Record<string, string> = {}, extra: Partial<CursorOpt
 
 test('cursor() TypeError names each missing required field', () => {
   const full: Record<string, unknown> = {
-    id: 'cursor', command: 'cursor-agent', commandArgs: [], permissions: 'force', inheritEnv: true, mcpServers: [],
+    id: 'cursor', command: 'cursor-agent', commandArgs: [], permissions: { kind: 'acp', policy: 'auto-approve', nativeMode: 'agent' }, inheritEnv: true, mcpServers: [],
     setupTimeoutMs: 1, shutdownTimeoutMs: 1, maxFrameBytes: 1, maxOutstandingActivity: 1,
     cancelRetryIntervalMs: 1, cancelRetryTimeoutMs: 1,
     keeper: { stateDirectory: '/tmp', limits: { parkedDeadlineMs: 1, journalMaxBytes: 1, connectTimeoutMs: 1 } },
@@ -90,19 +90,13 @@ test('cursor() TypeError names each missing required field', () => {
   }
 })
 
-test('--force is placed before acp', async () => {
-  const { r, lines } = await traced({}, { permissions: 'force' })
-  try {
-    const argv = (await lines()).find(l => Array.isArray(l.argv))?.argv as string[]
-    expect(argv).toEqual(['--force', 'acp'])
-  } finally { await r.close({ mode: 'shutdown' }) }
-})
-
-test('ask permissions omit global flags so request_permission fires', async () => {
-  const { r, lines } = await traced({}, { permissions: 'ask' })
+test('cursor argv is acp with no force/auto-review flags', async () => {
+  const { r, lines } = await traced({})
   try {
     const argv = (await lines()).find(l => Array.isArray(l.argv))?.argv as string[]
     expect(argv).toEqual(['acp'])
+    expect(argv).not.toContain('--force')
+    expect(argv).not.toContain('--auto-review')
   } finally { await r.close({ mode: 'shutdown' }) }
 })
 
@@ -138,7 +132,7 @@ test('sessionConfig model+mode is sent after session/load', async () => {
 })
 
 test('permission request round trip', async () => {
-  const { r } = await traced({}, { permissions: 'ask' }, {
+  const { r } = await traced({}, { permissions: { kind: 'acp', policy: 'ask', nativeMode: 'agent' } }, {
     requestPermission: async () => ({ outcome: { outcome: 'selected', optionId: 'allow' } }),
   })
   try {
@@ -203,7 +197,7 @@ test('parked permission is delivered to the reattached cursor host', async () =>
   })
   expect(alive(info.keeperPid)).toBe(true)
   let asked = false
-  const r = await driver({ TRACE: trace }, { keeper: keeper(stateDirectory), permissions: 'ask' }).open(ctx({
+  const r = await driver({ TRACE: trace }, { keeper: keeper(stateDirectory), permissions: { kind: 'acp', policy: 'ask', nativeMode: 'agent' } }).open(ctx({
     sessionId: 'k1',
     resumeId: info.agentSessionId,
     requestPermission: async () => {

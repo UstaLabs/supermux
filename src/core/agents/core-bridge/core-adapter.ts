@@ -8,6 +8,7 @@ import type { CodexUsage } from "../../usage/index"
 import { codexUsageFromRateLimits } from "../../usage/local"
 import { createNormalizedBridge } from "./normalized-bridge"
 import { createNormalizedActivity } from "./normalized-activity"
+import { permissionsFor } from "../permission-modes"
 import { detachCodexRuntimeAdapter } from "../codex/core-host"
 import type {
   Completion,
@@ -28,8 +29,8 @@ export type CoreAdapterProfile = {
   kind: AgentKind
   /** How a model/effort change is applied. */
   configuration: { model: "configure" | "restart" | "unsupported"; effort: "configure" | "restart" | "unsupported" }
-  /** Whether permission mode can be switched (`restart` re-opens with the same native id). */
-  permissionMode: "restart" | "unsupported"
+  /** Whether permission mode can be switched live (`live` uses Session.setPermissions). */
+  permissionMode: "live" | "unsupported"
   /** Attachment rendering. */
   attachments: "image-block" | "path-in-prompt"
   /** Idle-send vs mid-turn: queue through Core, or steer when the session is already running. */
@@ -41,7 +42,7 @@ export type CoreAdapterProfile = {
 export const GROK_CORE_PROFILE: CoreAdapterProfile = {
   kind: "grok",
   configuration: { model: "configure", effort: "configure" },
-  permissionMode: "restart",
+  permissionMode: "live",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
   startConfiguration: "desired",
@@ -50,7 +51,7 @@ export const GROK_CORE_PROFILE: CoreAdapterProfile = {
 export const CODEX_CORE_PROFILE: CoreAdapterProfile = {
   kind: "codex",
   configuration: { model: "configure", effort: "configure" },
-  permissionMode: "restart",
+  permissionMode: "live",
   attachments: "image-block",
   sendWhenBusy: "steer",
   startConfiguration: "desired",
@@ -59,7 +60,7 @@ export const CODEX_CORE_PROFILE: CoreAdapterProfile = {
 export const OPENCODE_CORE_PROFILE: CoreAdapterProfile = {
   kind: "opencode",
   configuration: { model: "restart", effort: "unsupported" },
-  permissionMode: "restart",
+  permissionMode: "live",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
   startConfiguration: "empty",
@@ -68,7 +69,7 @@ export const OPENCODE_CORE_PROFILE: CoreAdapterProfile = {
 export const CURSOR_CORE_PROFILE: CoreAdapterProfile = {
   kind: "cursor",
   configuration: { model: "restart", effort: "unsupported" },
-  permissionMode: "restart",
+  permissionMode: "live",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
   startConfiguration: "empty",
@@ -77,7 +78,7 @@ export const CURSOR_CORE_PROFILE: CoreAdapterProfile = {
 export const CLAUDE_CORE_PROFILE: CoreAdapterProfile = {
   kind: "claude",
   configuration: { model: "restart", effort: "restart" },
-  permissionMode: "restart",
+  permissionMode: "live",
   attachments: "image-block",
   sendWhenBusy: "queue",
   startConfiguration: "empty",
@@ -265,16 +266,16 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
-  async setPermissionMode(id: string): Promise<void> {
+  async setPermissionMode(id: string): Promise<{ applied: "now" | "next-turn" }> {
     if (this.profile.permissionMode === "unsupported") {
       throw new CoreError("unsupported_operation", `${this.kind} sessions cannot set permission mode`)
     }
     const session = this.requireSession()
-    if (id === this._permissionMode) return
-    if (session.snapshot().state === "running") {
-      throw new CoreError("session_busy", `${this.kind} session is busy`)
-    }
-    await this.restartNative({ permissionMode: id })
+    if (id === this._permissionMode) return { applied: "now" }
+    const spec = permissionsFor(this.kind, id)
+    const result = await session.setPermissions(spec)
+    this._permissionMode = id
+    return result
   }
 
   async setConfiguration(patch: { model?: string; effort?: string }): Promise<void> {

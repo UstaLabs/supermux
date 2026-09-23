@@ -13,7 +13,7 @@ const keeperDirs:string[]=[]
 const driver=(env={},extra:any={})=>{
  const stateDirectory=require('node:fs').mkdtempSync(join(tmpdir(),'codex-keeper-'))
  keeperDirs.push(stateDirectory)
- return codex({id:'codex',command:process.execPath,args:[fixture],env,inheritEnv:true,sandbox:'read-only',approvalPolicy:'never',permissionPrompts:'none',setupTimeoutMs:5000,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:16*1024*1024,keeper:{stateDirectory,limits:{parkedDeadlineMs:5000,journalMaxBytes:1_000_000,connectTimeoutMs:4000}},...extra})
+ return codex({id:'codex',command:process.execPath,args:[fixture],env,inheritEnv:true,sandbox:'read-only',approvalPolicy:'never',permissionPrompts:'none',permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'},setupTimeoutMs:5000,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:16*1024*1024,keeper:{stateDirectory,limits:{parkedDeadlineMs:5000,journalMaxBytes:1_000_000,connectTimeoutMs:4000}},...extra})
 }
 afterEach(async()=>{
  for(const dir of keeperDirs.splice(0)){
@@ -23,7 +23,7 @@ afterEach(async()=>{
 const input=(text:string)=>[{type:'text' as const,text}]
 test('native lifecycle, early completion, filtered updates, and failure',async()=>{
  const updates:any[]=[];const r=await driver().open(ctx({onUpdate:u=>updates.push(u)}))
- try{expect(r.agentSessionId).toBe('native-1');expect(r.capabilities).toEqual({resume:true,steer:true,fork:true,detach:true,configure:true,history:true})
+ try{expect(r.agentSessionId).toBe('native-1');expect(r.capabilities).toEqual({resume:true,steer:true,fork:true,detach:true,configure:true,history:true,permissions:true})
  for(const text of ['hello','early','permission'])expect(await r.prompt(input(text),signal())).toEqual({stopReason:'end_turn'})
  expect(updates.some(x=>x.protocol==='native'&&x.value.params.delta==='héllo')).toBe(true)
  expect(updates.some(x=>x.value.params.threadId==='other-thread'||x.value.params.turn?.id==='other-turn')).toBe(false)
@@ -235,11 +235,11 @@ test('explicit factory remains restorable after reopen with saved override',asyn
 })
 
 test('sandbox and approvalPolicy are validated before spawn and forwarded on start',async()=>{
- const required={id:'codex',command:'codex',args:['app-server'],inheritEnv:true,setupTimeoutMs:5000,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:4096,keeper:{stateDirectory:'/tmp',limits:{parkedDeadlineMs:1,journalMaxBytes:1,connectTimeoutMs:1}}}
+ const required={id:'codex',command:'codex',args:['app-server'],inheritEnv:true,setupTimeoutMs:5000,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:4096,permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'},keeper:{stateDirectory:'/tmp',limits:{parkedDeadlineMs:1,journalMaxBytes:1,connectTimeoutMs:1}}}
  expect(()=>codex({...required,sandbox:'nope',approvalPolicy:'never',permissionPrompts:'none'})).toThrow('sandbox')
  expect(()=>codex({...required,sandbox:'read-only',approvalPolicy:'always',permissionPrompts:'none'})).toThrow('approvalPolicy')
  expect(()=>codex({...required,sandbox:'read-only',approvalPolicy:'never',permissionPrompts:'maybe'})).toThrow('permissionPrompts')
- const {r,dir,lines}=await traced({EXPECT_SANDBOX:'workspace-write',EXPECT_POLICY:'on-request'},{sandbox:'workspace-write',approvalPolicy:'on-request'})
+ const {r,dir,lines}=await traced({EXPECT_SANDBOX:'workspace-write',EXPECT_POLICY:'on-request'},{sandbox:'workspace-write',approvalPolicy:'on-request',permissions:{kind:'codex',approvalPolicy:'on-request',sandbox:'workspace-write'}})
  try{
   expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
   const start=(await lines()).find(x=>x.method==='thread/start')
@@ -247,12 +247,12 @@ test('sandbox and approvalPolicy are validated before spawn and forwarded on sta
  }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
 })
 
-test('default permissionPrompts none declines without asking host',async()=>{
+test('codex always routes approvals to the host',async()=>{
  let asked=0
- const r=await driver().open(ctx({requestPermission:async()=>{asked++;return {outcome:{outcome:'selected',optionId:'allow_once'}}}}))
+ const r=await driver({EXPECT_DECISION:'accept',EXPECT_POLICY:'on-request',EXPECT_SANDBOX:'workspace-write'},{permissionPrompts:'host',permissions:{kind:'codex',approvalPolicy:'on-request',sandbox:'workspace-write'},sandbox:'workspace-write',approvalPolicy:'on-request'}).open(ctx({requestPermission:async()=>{asked++;return {outcome:{outcome:'selected',optionId:'allow_once'}}}}))
  try{
   expect(await r.prompt(input('permission'),signal())).toEqual({stopReason:'end_turn'})
-  expect(asked).toBe(0)
+  expect(asked).toBe(1)
  }finally{await r.close({ mode: "shutdown" })}
 })
 
@@ -553,7 +553,7 @@ test('host allow_always writes acceptWithExecpolicyAmendment',async()=>{
 test('MCP tool approval (mcpServer/elicitation/request) is a permission request; allow once / for this session / reject',async()=>{
  for(const [optionId,expect_action,persist] of [['allow_once','accept',''],['allow_always','accept','session'],['reject_once','decline','']] as const){
   let seen:{title:string,options:string[]}|undefined
-  const r=await driver({EXPECT_ELICITATION:expect_action,...(persist?{EXPECT_PERSIST:persist}:{})},{permissionPrompts:'host'}).open(ctx({
+  const r=await driver({EXPECT_ELICITATION:expect_action,EXPECT_POLICY:'on-request',...(persist?{EXPECT_PERSIST:persist}:{})},{permissionPrompts:'host',permissions:{kind:'codex',approvalPolicy:'on-request',sandbox:'read-only'}}).open(ctx({
    requestPermission:async req=>{
     seen={title:req.toolCall.title??'',options:req.options.map(o=>o.optionId)}
     return {outcome:{outcome:'selected',optionId}}
@@ -567,8 +567,8 @@ test('MCP tool approval (mcpServer/elicitation/request) is a permission request;
  }
 })
 
-test('without host prompts an MCP tool approval is granted (the mode says never ask)',async()=>{
- const r=await driver({EXPECT_ELICITATION:'accept'},{permissionPrompts:'none'}).open(ctx())
+test('under approvalPolicy never an MCP tool approval is granted (the mode says never ask)',async()=>{
+ const r=await driver({EXPECT_ELICITATION:'accept'},{permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'}}).open(ctx())
  try{expect(await r.prompt(input('ask-mcp'),signal())).toEqual({stopReason:'end_turn'})}
  finally{await r.close({ mode: "shutdown" })}
 })
@@ -588,8 +588,8 @@ test('onRuntimeRequest exposes skills/list and refuses turn/thread methods after
 
 test('codex() TypeError names each missing required field',()=>{
  const keeper={stateDirectory:'/tmp',limits:{parkedDeadlineMs:1,journalMaxBytes:1,connectTimeoutMs:1}}
- const full:any={id:'codex',command:'codex',args:['app-server'],inheritEnv:true,sandbox:'read-only',approvalPolicy:'never',permissionPrompts:'none',setupTimeoutMs:1,requestTimeoutMs:1,shutdownTimeoutMs:1,maxFrameBytes:1,keeper}
- for(const field of ['id','command','args','sandbox','approvalPolicy','setupTimeoutMs','requestTimeoutMs','shutdownTimeoutMs','maxFrameBytes','permissionPrompts','keeper','inheritEnv']){
+ const full:any={id:'codex',command:'codex',args:['app-server'],inheritEnv:true,sandbox:'read-only',approvalPolicy:'never',permissionPrompts:'none',permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'},setupTimeoutMs:1,requestTimeoutMs:1,shutdownTimeoutMs:1,maxFrameBytes:1,keeper}
+ for(const field of ['id','command','args','sandbox','approvalPolicy','setupTimeoutMs','requestTimeoutMs','shutdownTimeoutMs','maxFrameBytes','permissionPrompts','permissions','keeper','inheritEnv']){
   const opts={...full};delete opts[field]
   expect(()=>codex(opts)).toThrow(TypeError)
   expect(()=>codex(opts)).toThrow(new RegExp(`Codex ${field} is required`))

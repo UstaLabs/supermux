@@ -108,7 +108,7 @@ describe("Cursor spawn", () => {
     })
     expect(reg.get(result.session_id)?.permissionMode).toBe("ask")
     expect(child.cursorCalls).toHaveLength(1)
-    expect(child.cursorCalls[0]?.options.permissions).toBe("ask")
+    expect(child.cursorCalls[0]?.options.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: "agent" })
     expect(child.cursorCalls[0]?.options.mode).toBe("agent")
     expect(child.opens).toHaveLength(1)
   })

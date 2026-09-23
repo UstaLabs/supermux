@@ -80,6 +80,9 @@ createInterface({input:process.stdin}).on('line',line=>{
   return
  }
  if(m.method==='turn/start'){
+  // turn/start carries the v2 tagged SandboxPolicy object, not the thread/start string.
+  const tagged={'read-only':'readOnly','workspace-write':'workspaceWrite','danger-full-access':'dangerFullAccess'}
+  if(process.env.EXPECT_TURN_POLICY && (m.params.approvalPolicy!==process.env.EXPECT_TURN_POLICY || m.params.sandboxPolicy?.type!==tagged[process.env.EXPECT_TURN_SANDBOX||expectedSandbox])) process.exit(3)
   const id='turn-'+(++turn), text=m.params.input[0]?.text
   if(text==='disconnect'){process.exit(1)}
   if(text==='eof'){process.stdout.end();return}

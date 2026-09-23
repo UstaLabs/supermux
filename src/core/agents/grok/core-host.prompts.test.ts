@@ -48,7 +48,7 @@ test("grok ask mode sets alwaysApprove false", async () => {
   }
   const handle = host.register({ id: "id1", env: {}, extra })
   await handle.start({ cwd: dir })
-  expect(captured[0]?.alwaysApprove).toBe(false)
+  expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: null })
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })
@@ -73,7 +73,7 @@ test("grok default mode keeps alwaysApprove true", async () => {
   }
   const handle = host.register({ id: "id2", env: {}, extra })
   await handle.start({ cwd: dir })
-  expect(captured[0]?.alwaysApprove).toBe(true)
+  expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "auto-approve", nativeMode: null })
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })

@@ -2,7 +2,6 @@ package dev.supermux.state
 
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
-import dev.supermux.proto.PromptRequest
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -90,6 +89,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 agentState = state.agentState - frame.id,
                 agentErrors = state.agentErrors - frame.id,
                 requests = state.requests - frame.id,
+                closedRequests = state.closedRequests - frame.id,
             )
         }
     }
@@ -159,7 +159,16 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         val pruned = if (frame.entry.direction.startsWith("in")) {
             prev.filterNot { it.id.startsWith("local-") && it.text == frame.entry.text }
         } else prev
-        state.copy(messages = state.messages + (frame.session to (pruned + frame.entry)))
+        // The transcript moved on, so the just-answered receipts have served their purpose;
+        // the "answered: …" line the close wrote is the record that stays.
+        state.copy(
+            messages = state.messages + (frame.session to (pruned + frame.entry)),
+            closedRequests = if (frame.session in state.closedRequests) {
+                state.closedRequests - frame.session
+            } else {
+                state.closedRequests
+            },
+        )
     }
     is ServerFrame.SessionRead -> {
         val next = advanceLastRead(state.lastRead[frame.session], frame.lastReadAt)
@@ -190,7 +199,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         val prev = state.requests[frame.session] ?: emptyList()
         val closing = prev.find { it.requestId == frame.requestId }
         val remaining = prev.filterNot { it.requestId == frame.requestId }
-        val line = requestClosedLine(frame.outcome, closing)
+        val line = requestClosedLine(frame.outcome, frame.answerLabel)
         val entry = LogEntry(
             id = "req-closed-${frame.requestId}",
             ts = state.messages[frame.session]?.lastOrNull()?.ts
@@ -200,10 +209,26 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             text = line,
         )
         val msgs = (state.messages[frame.session] ?: emptyList()) + entry
+        // The broker sends the label, not the option — recover the option by its own label so the
+        // receipt's tick/cross states the real outcome (a reject label may carry " — <note>").
+        val answered = frame.answerLabel?.let { label ->
+            closing?.options?.firstOrNull { it.label == label || label.startsWith("${it.label} — ") }
+        }
+        val receipt = ClosedRequest(
+            requestId = frame.requestId,
+            kind = closing?.kind ?: "permission",
+            title = closing?.title.orEmpty(),
+            outcome = frame.outcome,
+            answerLabel = frame.answerLabel,
+            answerKind = answered?.kind,
+        )
+        val receipts = ((state.closedRequests[frame.session] ?: emptyList()) + receipt)
+            .takeLast(CLOSED_REQUEST_RECEIPTS)
         state.copy(
             requests = if (remaining.isEmpty()) state.requests - frame.session
             else state.requests + (frame.session to remaining),
             messages = state.messages + (frame.session to msgs),
+            closedRequests = state.closedRequests + (frame.session to receipts),
         )
     }
     is ServerFrame.Error -> state.copy(lastError = frame.reason.ifBlank { null })
@@ -258,12 +283,13 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
     else -> state
 }
 
-internal fun requestClosedLine(outcome: String, request: PromptRequest?): String = when (outcome) {
-    "answered" -> {
-        val label = request?.options?.firstOrNull { it.kind?.startsWith("allow") == true }?.label
-            ?: request?.options?.firstOrNull()?.label
-        if (label.isNullOrBlank()) "answered" else "answered: $label"
-    }
+/**
+ * [answerLabel] is what the broker says was actually chosen. It used to be guessed from the
+ * request's first allow option, which reported "answered: Allow once" for a rejection; an old
+ * broker sends no label, and then the line says only "answered" rather than inventing one.
+ */
+internal fun requestClosedLine(outcome: String, answerLabel: String?): String = when (outcome) {
+    "answered" -> if (answerLabel.isNullOrBlank()) "answered" else "answered: $answerLabel"
     "expired" -> "expired"
     "cancelled" -> "cancelled"
     else -> outcome

@@ -176,6 +176,8 @@ data class ChatState(
     val walkthroughUnread: Int = 0,
     val walkthroughUnreadStepId: String? = null,
     val requests: List<PromptRequest> = emptyList(),
+    /** Prompts that closed moments ago; the card leaves a one-line receipt for them. */
+    val closedRequests: List<dev.supermux.state.ClosedRequest> = emptyList(),
     val lastError: String? = null,
     val permissionModes: List<dev.supermux.proto.PermissionModeInfo> = emptyList(),
 )
@@ -249,6 +251,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val commandsResolvedMap by app.commandsResolved.collectAsState()
     val walkthrough = app.walkthroughState<WalkthroughState>(sessionId)
     val requestsMap by app.requests.collectAsState()
+    val closedRequestsMap by app.closedRequests.collectAsState()
     val lastError by app.lastError.collectAsState()
     val permissionModesMap by app.permissionModes.collectAsState()
     val sessions by app.sessions.collectAsState()
@@ -264,6 +267,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         walkthroughUnread = walkthrough.unreadReplies,
         walkthroughUnreadStepId = walkthrough.unreadStepId,
         requests = requestsMap[sessionId].orEmpty(),
+        closedRequests = closedRequestsMap[sessionId].orEmpty(),
         lastError = lastError,
         permissionModes = sessionAgent?.let { permissionModesMap[it] }.orEmpty(),
     )
@@ -809,6 +813,7 @@ fun ChatPanel(
                         ) {
                             RequestCards(
                                 requests = state.requests,
+                                closed = state.closedRequests,
                                 disabledIds = pendingRespondIds,
                                 onRespond = { requestId, answer ->
                                     pendingRespondIds = pendingRespondIds + requestId

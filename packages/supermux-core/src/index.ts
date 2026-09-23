@@ -15,6 +15,7 @@ export type {
   SessionRecord, SessionState, ForkOptions, ForkSource,
   SessionConfiguration, HistoryOptions, HistoryPage,
   CloseMode, CloseOptions, CoreCloseOptions,
+  PermissionsSpec, PermissionsApplied, ToolKind,
 } from "./types.js"
 export { requireCloseMode, requireAgentsCloseMode } from "./types.js"
 export { createHost } from "./host/index.js"

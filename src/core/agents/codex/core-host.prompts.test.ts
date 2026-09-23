@@ -50,7 +50,7 @@ test("codex ask mode uses untrusted/workspace-write/host", async () => {
   await host.close({ agents: "shutdown" })
 })
 
-test("codex default mode uses never/full-access/none", async () => {
+test("codex default mode uses never/full-access with host-routed prompts", async () => {
   const captured: CodexOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "codex-host-"))
   dirs.push(dir)
@@ -68,7 +68,7 @@ test("codex default mode uses never/full-access/none", async () => {
   await handle.start({ cwd: dir })
   expect(captured[0]?.approvalPolicy).toBe("never")
   expect(captured[0]?.sandbox).toBe("danger-full-access")
-  expect(captured[0]?.permissionPrompts).toBe("none")
+  expect(captured[0]?.permissionPrompts).toBe("host")
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })

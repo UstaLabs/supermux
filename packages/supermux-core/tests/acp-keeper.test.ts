@@ -60,6 +60,7 @@ function libraryAcp(extra: Record<string, unknown> = {}) {
     cancelRetryTimeoutMs: 10_000,
     captureStderr: false,
     classifyActivity,
+    permissions: { kind: 'acp', policy: 'ask', nativeMode: null },
     ...extra,
   } as Parameters<typeof acp>[0])
 }
@@ -248,7 +249,7 @@ test('Grok configure restart through the keeper keeps the native id', async () =
     id: 'grok',
     command: process.execPath,
     commandArgs: [grokFixture],
-    alwaysApprove: false,
+    permissions: { kind: 'acp', policy: 'ask', nativeMode: null },
     noLeader: true,
     inheritEnv: true,
     mcpServers: [],

@@ -68,7 +68,8 @@ class ContractTest {
                 is ServerFrame.WalkthroughUpdated -> {}
                 is ServerFrame.ReviewCommentFrame -> {}
                 is ServerFrame.RequestOpen -> {}
-                is ServerFrame.RequestClosed -> {}
+                // The chosen answer has to survive the wire — the transcript line quotes it.
+                is ServerFrame.RequestClosed -> assertEquals("Allow always", frame.answerLabel)
                 is ServerFrame.Error -> {}
             }
         }

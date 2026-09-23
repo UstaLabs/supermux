@@ -215,7 +215,7 @@ export interface WebChannelOpts {
   // resolves the levels an agent+model offers before spawn. Codex's are per-model.
   getReasoningLevels?: (agent: AgentKind, model?: string) => { agent: string; levels: { id: string; description?: string }[]; visible: boolean }
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
-  switchPermissionMode?: (id: string, mode: string) => Promise<{ ok: true; status: "applied" } | { ok: false; error: string }>
+  switchPermissionMode?: (id: string, mode: string) => Promise<{ ok: true; status: "applied"; applied?: "now" | "next-turn" } | { ok: false; error: string }>
   getSessionRequests?: (id: string) => unknown[]
   respondRequest?: (sessionId: string, requestId: string, answer: unknown) => Promise<{ ok: true } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
@@ -1136,6 +1136,9 @@ export class WebChannel implements Channel {
       }
       const result = await this.opts.switchPermissionMode(frame.session, frame.mode)
       if (!result.ok) ws.send(JSON.stringify({ type: "error", reason: result.error }))
+      else if (result.applied === "next-turn") {
+        ws.send(JSON.stringify({ type: "error", reason: "Applies from the next turn" }))
+      }
       return
     }
     if (frame.type === "request_respond" && frame.session && frame.requestId) {

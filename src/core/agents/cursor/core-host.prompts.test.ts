@@ -43,7 +43,7 @@ test("cursor default mode is force/agent", async () => {
   const extra = { sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir }
   const handle = host.register({ id: "id1", env: {}, extra })
   await handle.start({ cwd: dir })
-  expect(captured[0]?.permissions).toBe("force")
+  expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "auto-approve", nativeMode: "agent" })
   expect(captured[0]?.mode).toBe("agent")
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
@@ -65,7 +65,7 @@ test("cursor ask mode is ask/agent", async () => {
   const extra = { sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: dir, cwd: dir, permissionMode: "ask" }
   const handle = host.register({ id: "id2", env: {}, extra })
   await handle.start({ cwd: dir })
-  expect(captured[0]?.permissions).toBe("ask")
+  expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: "agent" })
   expect(captured[0]?.mode).toBe("agent")
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })

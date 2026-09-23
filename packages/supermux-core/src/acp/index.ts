@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto'
 import { CLIENT_METHODS, ClientSideConnection, ndJsonStream, PROTOCOL_METHODS, PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
 import type { AnyMessage, AuthMethod, McpServer, RequestPermissionResponse } from '@agentclientprotocol/sdk'
-import type { AgentDriver, AgentUpdate, AuthContext, CloseOptions, DriverContext } from '../types.js'
+import type { AgentDriver, AgentUpdate, AuthContext, CloseOptions, DriverContext, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
 import { ACTIVITY_OVERFLOW } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
+import { acpPermissionDecision, appliedFor, validatePermissionsSpec } from '../permissions.js'
 import { connectAcpProcess, type AcpKeeperLimits } from './process.js'
 import { createAcpNormalizer } from './normalize.js'
 import type { KeeperFrameEvent } from '../keeper/client.js'
@@ -49,6 +50,7 @@ export type AcpOptions = {
   classifyActivity?: AcpActivityClassifier
   /** When `'grok'`, handle vendor `_x.ai/ask_user_question` agent→client requests. */
   vendor?: "grok"
+  permissions: Extract<PermissionsSpec, { kind: "acp" }>
 }
 
 function abortError() { return new CoreError('aborted', 'ACP operation aborted') }
@@ -100,9 +102,11 @@ function resolveConfigValue(configOptions: ConfigOption[], configId: string, val
 
 export function acp(options: AcpOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('ACP options are required')
-  for (const field of ['id', 'command', 'args', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'captureStderr'] as const) {
+  for (const field of ['id', 'command', 'args', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'captureStderr', 'permissions'] as const) {
     if (options[field] === undefined) throw new TypeError(`ACP ${field} is required`)
   }
+  const factoryPermissions = validatePermissionsSpec(options.permissions)
+  if (factoryPermissions.kind !== 'acp') throw new TypeError('ACP permissions kind must be acp')
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('ACP id is required')
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('ACP command is required')
   if (!Array.isArray(options.args) || options.args.some(value => typeof value !== 'string')) throw new TypeError('ACP args is required')
@@ -167,6 +171,11 @@ export function acp(options: AcpOptions): AgentDriver {
     let runtimeReady = false
     let agentSessionId = ''
     let configOptions: ConfigOption[] = []
+    let livePermissions: Extract<PermissionsSpec, { kind: 'acp' }> = factoryPermissions.kind === 'acp'
+      ? factoryPermissions
+      : { kind: 'acp', policy: 'ask', nativeMode: null }
+    let advertisedModes = false
+    let hasModeConfig = false
     const nativePermission = new Map<string, AbortController>()
     let latestNativeId: string | undefined
     let ownedUsedNative = false
@@ -303,6 +312,35 @@ export function acp(options: AcpOptions): AgentDriver {
     const connection = new ClientSideConnection(() => ({
       async requestPermission(request) {
         io.ackConsumed()
+        const rawOptions = Array.isArray(request.options) ? request.options : []
+        const optionList = rawOptions.map(o => ({ optionId: o.optionId, kind: String(o.kind) }))
+        const toolKind = request.toolCall && typeof request.toolCall === 'object' && 'kind' in request.toolCall
+          ? String((request.toolCall as { kind?: unknown }).kind)
+          : undefined
+        const auto = acpPermissionDecision(livePermissions, toolKind, optionList)
+        if (auto.auto) {
+          const toolCall = request.toolCall && typeof request.toolCall === 'object'
+            ? request.toolCall as { toolCallId?: string; title?: string; kind?: string; rawInput?: unknown }
+            : {}
+          if (session && !closed) {
+            session.onUpdate({
+              protocol: 'native',
+              value: {
+                method: 'permission-auto',
+                params: {
+                  toolCall: {
+                    callId: typeof toolCall.toolCallId === 'string' ? toolCall.toolCallId : '',
+                    tool: typeof toolCall.kind === 'string' ? toolCall.kind : '',
+                    title: typeof toolCall.title === 'string' ? toolCall.title : '',
+                    input: toolCall.rawInput,
+                  },
+                  optionId: auto.optionId,
+                },
+              },
+            })
+          }
+          return { outcome: { outcome: 'selected', optionId: auto.optionId } }
+        }
         const signals: AbortSignal[] = [lifetime.signal]
         // SDK permission has no native generation id. Any two outstanding
         // native activities (including cancelled-but-not-ended) are ambiguous.
@@ -457,6 +495,31 @@ export function acp(options: AcpOptions): AgentDriver {
     let timer: ReturnType<typeof setTimeout>
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new CoreError('setup_timeout', 'ACP setup timed out')), setupTimeout) })
     const setup = <T>(promise: Promise<T>) => Promise.race([ioWait(promise), aborted, timeout])
+    async function applyNativeMode(spec: Extract<PermissionsSpec, { kind: 'acp' }>, required: boolean) {
+      if (spec.nativeMode == null) return
+      if (!required && typeof options.sessionConfig?.mode === 'string') return
+      if (advertisedModes) {
+        await connection.setSessionMode({ sessionId: agentSessionId, modeId: spec.nativeMode })
+        return
+      }
+      if (hasModeConfig || configOptions.some(o => o.id === 'mode')) {
+        hasModeConfig = true
+        await connection.setSessionConfigOption({ sessionId: agentSessionId, configId: 'mode', value: spec.nativeMode })
+        return
+      }
+      if (required) throw new UnsupportedOperation('permissions', options.id)
+    }
+    async function setPermissions(spec: PermissionsSpec) {
+      if (closed) throw new CoreError('runtime_closed', 'ACP runtime closed')
+      const next = validatePermissionsSpec(spec)
+      if (next.kind !== 'acp') throw new TypeError('ACP permissions kind must be acp')
+      if (JSON.stringify(livePermissions) !== JSON.stringify(next)) {
+        await applyNativeMode(next, true)
+      }
+      livePermissions = next
+      try { io.setMeta({ permissions: next }) } catch { /* */ }
+      return { applied: appliedFor(next) }
+    }
     try {
       const reattach = io.welcome.agentRunning === true && typeof io.welcome.meta.agentSessionId === 'string'
       let canResume = false
@@ -492,6 +555,12 @@ export function acp(options: AcpOptions): AgentDriver {
           await setup(connection.setSessionConfigOption({ sessionId: agentSessionId, configId, value }))
         }
         if (changed.length) io.setMeta({ sessionConfig: { ...applied, ...Object.fromEntries(changed) } })
+        const seeded = io.welcome.meta.permissions
+        if (seeded && typeof seeded === 'object') {
+          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'acp' }> } catch { /* keep factory spec */ }
+        }
+        advertisedModes = io.welcome.meta.advertisedModes === true
+        hasModeConfig = io.welcome.meta.hasModeConfig === true
         runtimeReady = true
       } else {
       const initialized = await setup(connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {}, clientInfo: { name: 'supermux-core', version: '0.0.0' } }))
@@ -509,6 +578,8 @@ export function acp(options: AcpOptions): AgentDriver {
       const capabilities = initialized.agentCapabilities
       canResume = capabilities?.sessionCapabilities?.resume != null
       canLoad = capabilities?.loadSession === true
+      const modes = (capabilities?.sessionCapabilities as { modes?: unknown } | undefined)?.modes
+      advertisedModes = modes != null
       const params = { cwd: session.cwd, mcpServers: options.mcpServers }
       if (session.resumeId) {
         agentSessionId = session.resumeId
@@ -535,15 +606,18 @@ export function acp(options: AcpOptions): AgentDriver {
         await setup(connection.setSessionConfigOption({ sessionId: agentSessionId, configId, value: resolved }))
         appliedConfig[configId] = resolved
       }
-      io.setMeta({ agentSessionId, ...(options.sessionConfig ? { sessionConfig: appliedConfig } : {}), ...(configOptions.length ? { configOptions } : {}) })
+      hasModeConfig = configOptions.some(o => o.id === 'mode')
+      if (livePermissions.nativeMode != null) await setup(applyNativeMode(livePermissions, false))
+      io.setMeta({ agentSessionId, permissions: livePermissions, advertisedModes, hasModeConfig, ...(options.sessionConfig ? { sessionConfig: appliedConfig } : {}), ...(configOptions.length ? { configOptions } : {}) })
       finishSetup()
       runtimeReady = true
       const normalizer = createAcpNormalizer()
       return { runtime: {
         agentSessionId,
-        capabilities: { resume: canResume || canLoad, steer: false, fork: false, detach: true },
+        capabilities: { resume: canResume || canLoad, steer: false, fork: false, detach: true, permissions: true },
         normalize: normalizer,
         flush: () => normalizer.flush(),
+        setPermissions,
         async prompt(content: Parameters<import('../types.js').AgentRuntime['prompt']>[0], signal: AbortSignal) {
           if (closed) throw new CoreError('runtime_closed', 'ACP runtime closed')
           signal.throwIfAborted()
@@ -588,9 +662,10 @@ export function acp(options: AcpOptions): AgentDriver {
       const fallbackNormalizer = createAcpNormalizer()
       return { runtime: {
         agentSessionId,
-        capabilities: { resume: true, steer: false, fork: false, detach: true },
+        capabilities: { resume: true, steer: false, fork: false, detach: true, permissions: true },
         normalize: fallbackNormalizer,
         flush: () => fallbackNormalizer.flush(),
+        setPermissions,
         async prompt(content: Parameters<import('../types.js').AgentRuntime['prompt']>[0], signal: AbortSignal) {
           if (closed) throw new CoreError('runtime_closed', 'ACP runtime closed')
           signal.throwIfAborted()

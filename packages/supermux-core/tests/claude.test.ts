@@ -7,7 +7,7 @@ import {join} from 'node:path'
 import {claude} from '../src/claude/index.js'
 import { createCore } from '../src/core.js'
 import type {CoreEvent, DriverContext} from '../src/types.js'
-import { TEST_LIMITS, nextId } from './helpers.js'
+import { TEST_LIMITS, TEST_CLAUDE_PERMISSIONS, nextId } from './helpers.js'
 
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL('./fixtures/claude-agent.mjs', import.meta.url))
@@ -31,7 +31,7 @@ const ctx = (extra: Partial<DriverContext> = {}): DriverContext => ({
   requestPermission: async () => ({outcome: {outcome: 'cancelled'}}), requestAnswers: async () => ({outcome: 'cancelled' as const}), ...extra,
 })
 const driver = (env: Record<string, string> = {}, extra: Record<string, unknown> = {}) => claude({
-  id: 'claude', command: process.execPath, args: [fixture], env, inheritEnv: true, tools: [], permissionPrompts: 'none', partialMessages: false,
+  id: 'claude', command: process.execPath, args: [fixture], env, inheritEnv: true, tools: [], permissionPrompts: 'none', permissions: TEST_CLAUDE_PERMISSIONS, partialMessages: false,
   setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 30, maxFrameBytes: 16 * 1024 * 1024,
   keeper: keeperOf(), ...extra,
 })
@@ -46,7 +46,7 @@ test('native create, streaming result, filtered updates, permission deny, and fa
   }))
   try {
     expect(r.agentSessionId).toMatch(/^[a-f0-9-]{36}$/)
-    expect(r.capabilities).toEqual({resume: true, steer: false, fork: false, detach: true})
+    expect(r.capabilities).toEqual({resume: true, steer: false, fork: false, detach: true, permissions: true})
     expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
     expect(updates.some(x => x.protocol === 'native' && x.value.message?.content?.[0]?.text === 'héllo')).toBe(true)
     expect(updates.some(x => x.value.session_id === 'other-session')).toBe(false)
@@ -396,8 +396,8 @@ test('host reject_once deny message is forwarded', async () => {
 
 test('claude() TypeError names each missing required field', () => {
   const keeper = { stateDirectory: '/tmp', limits: { parkedDeadlineMs: 1, journalMaxBytes: 1, connectTimeoutMs: 1 } }
-  const full: any = { id: 'claude', command: 'claude', args: [], inheritEnv: true, tools: [], permissionPrompts: 'none', partialMessages: false, setupTimeoutMs: 1, requestTimeoutMs: 1, shutdownTimeoutMs: 1, maxFrameBytes: 1, keeper }
-  for (const field of ['id', 'command', 'args', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'permissionPrompts', 'tools', 'keeper', 'inheritEnv', 'partialMessages']) {
+  const full: any = { id: 'claude', command: 'claude', args: [], inheritEnv: true, tools: [], permissionPrompts: 'none', permissions: TEST_CLAUDE_PERMISSIONS, partialMessages: false, setupTimeoutMs: 1, requestTimeoutMs: 1, shutdownTimeoutMs: 1, maxFrameBytes: 1, keeper }
+  for (const field of ['id', 'command', 'args', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'permissionPrompts', 'tools', 'keeper', 'inheritEnv', 'partialMessages', 'permissions']) {
     const opts = { ...full }; delete opts[field]
     expect(() => claude(opts)).toThrow(TypeError)
     expect(() => claude(opts)).toThrow(new RegExp(`Claude ${field} is required`))

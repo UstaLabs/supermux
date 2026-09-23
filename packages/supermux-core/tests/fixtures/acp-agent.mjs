@@ -30,7 +30,11 @@ new AgentSideConnection(client => ({
   record(params);
   if (mode === 'exit') process.exit(17);
   if (mode === 'hang') return new Promise(() => {});
-  return { protocolVersion: mode === 'version' ? 999 : 1, agentCapabilities: { loadSession: true, ...(mode === 'resume' ? { sessionCapabilities: { resume: {} } } : {}) }, authMethods: [{id:'token',name:'Token'}, {id:'terminal',name:'Terminal',type:'terminal'}] };
+  const sessionCapabilities = {
+    ...(mode === 'resume' ? { resume: {} } : {}),
+    ...(process.env.ACP_MODES === '1' ? { modes: { availableModes: [{ id: 'agent' }, { id: 'plan' }, { id: 'ask' }], currentModeId: 'agent' } } : {}),
+  }
+  return { protocolVersion: mode === 'version' ? 999 : 1, agentCapabilities: { loadSession: true, ...(Object.keys(sessionCapabilities).length ? { sessionCapabilities } : {}) }, authMethods: [{id:'token',name:'Token'}, {id:'terminal',name:'Terminal',type:'terminal'}] };
  },
  async authenticate({methodId}) { record({methodId, token:process.env.TOKEN}); if (process.env.TOKEN !== 'ok') throw new Error('authentication rejected'); return {}; },
  async newSession() {
@@ -39,9 +43,10 @@ new AgentSideConnection(client => ({
   if (process.env.AUTONOMOUS_ON_OPEN === '1') {
     queueMicrotask(() => { void emitNativeTurn(client, sessionId, { id: process.env.TURN_ID || 'auto-1', complete: process.env.AUTONOMOUS_HOLD !== '1' }) })
   }
-  return {sessionId};
+  return {sessionId, ...(process.env.ACP_MODE_OPTION === '1' ? { configOptions: [{ id: 'mode', type: 'select', options: [{ value: 'agent' }, { value: 'plan' }, { value: 'ask' }] }] } : {})};
  },
- async setSessionConfigOption(params) { record({ setConfig: { configId: params.configId, value: params.value } }); return { configOptions: [] }; },
+ async setSessionConfigOption(params) { record({ setConfig: { configId: params.configId, value: params.value } }); return { configOptions: process.env.ACP_MODE_OPTION === '1' ? [{ id: 'mode', type: 'select', options: [{ value: 'agent' }, { value: 'plan' }, { value: 'ask' }] }] : [] }; },
+ async setSessionMode(params) { record({ setMode: { modeId: params.modeId } }); return {}; },
  async resumeSession(params) { record('resume'); return {}; },
  async loadSession(params) {
   record('load');
@@ -75,7 +80,21 @@ new AgentSideConnection(client => ({
     record({prompt:text,state:'active'});
     return new Promise(resolve => { finish = (value) => { promptActive = false; resolve(value); }; });
   }
-  if(text === 'permission') { promptActive = true; const response = await client.requestPermission({ sessionId:params.sessionId,toolCall:{toolCallId:'call-1',title:'Read'},options:[{optionId:'allow',name:'Allow',kind:'allow_once'}] }); record(response); promptActive = false; return {stopReason:response.outcome.outcome === 'cancelled' ? 'cancelled':'end_turn'}; }
+  if(text === 'permission') { promptActive = true; const response = await client.requestPermission({ sessionId:params.sessionId,toolCall:{toolCallId:'call-1',title:'Read',kind:'read'},options:[{optionId:'allow',name:'Allow',kind:'allow_once'}] }); record(response); promptActive = false; return {stopReason:response.outcome.outcome === 'cancelled' ? 'cancelled':'end_turn'}; }
+  if(text === 'permission-execute') {
+    promptActive = true
+    const response = await client.requestPermission({ sessionId:params.sessionId,toolCall:{toolCallId:'call-x',title:'Run',kind:'execute'},options:[{optionId:'allow',name:'Allow',kind:'allow_once'},{optionId:'reject',name:'Reject',kind:'reject_once'}] })
+    record(response)
+    promptActive = false
+    return { stopReason: 'end_turn' }
+  }
+  if(text === 'permission-read') {
+    promptActive = true
+    const response = await client.requestPermission({ sessionId:params.sessionId,toolCall:{toolCallId:'call-r',title:'Read',kind:'read'},options:[{optionId:'allow',name:'Allow',kind:'allow_once'},{optionId:'reject',name:'Reject',kind:'reject_once'}] })
+    record(response)
+    promptActive = false
+    return { stopReason: 'end_turn' }
+  }
   if(text === 'permission-kinds') {
     promptActive = true
     const response = await client.requestPermission({

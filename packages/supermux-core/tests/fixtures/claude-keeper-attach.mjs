@@ -24,6 +24,7 @@ const r = await claude({
   inheritEnv: true,
   tools: [],
   permissionPrompts: process.env.PERMISSION_PROMPTS === 'host' ? 'host' : 'none',
+  permissions: { kind: 'claude', permissionMode: 'dontAsk' },
   partialMessages: false,
   setupTimeoutMs: 5000,
   requestTimeoutMs: 8000,

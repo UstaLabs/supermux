@@ -553,6 +553,8 @@ sealed interface ServerFrame {
         val session: String,
         val requestId: String,
         val outcome: String,
+        /** What was actually chosen ("Allow always", "Reject — too risky"); absent on an older broker. */
+        val answerLabel: String? = null,
     ) : ServerFrame
 
     /** Broker `{type:"error", reason}` — switch/respond failures surface here. */

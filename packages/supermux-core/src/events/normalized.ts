@@ -122,9 +122,31 @@ export type NormalizedBody =
       }[]
       detail?: { command?: string; cwd?: string; blockedPath?: string }
     }
-  | { kind: "request-resolved"; requestId: string; outcome: "answered" | "expired" | "cancelled" }
+  | {
+      kind: "request-resolved"
+      requestId: string
+      outcome: "answered" | "expired" | "cancelled"
+      /**
+       * What the user actually chose. Present only for `outcome: "answered"` — an expired or
+       * cancelled request was never answered, so there is nothing truthful to put here.
+       * Question answers are the OPTION LABELS (or the free text), the same values handed to
+       * the agent; a permission answer keeps the option id, which only the request's own
+       * option list can turn into a label. Shaped like `RequestAnswer` in ../types.ts, spelled
+       * out here so the event vocabulary does not depend on the API surface.
+       */
+      answer?:
+        | { optionId: string; message?: string }
+        | { answers: Record<string, string | string[]> }
+        | { decline: true }
+    }
   | { kind: "commands-update"; commands: { name: string; description?: string }[] }
   | { kind: "mode-update"; modeId?: string; model?: string }
+  | { kind: "permissions-update"; spec: import("../types.js").PermissionsSpec; applied: "now" | "next-turn" }
+  | {
+      kind: "permission-auto"
+      toolCall: { callId: string; tool: string; title: string; input?: unknown; category?: ToolCategory }
+      optionId: string
+    }
   | { kind: "session-info"; title?: string | null; cwd?: string; model?: string }
   | {
       kind: "usage"

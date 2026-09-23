@@ -47,7 +47,29 @@ export type Capabilities = {
   detach: boolean
   configure?: boolean
   history?: boolean
+  permissions?: boolean
 }
+
+export type ToolKind = "read" | "edit" | "delete" | "move" | "search" | "execute" | "fetch" | "other"
+
+export type PermissionsSpec =
+  | {
+      kind: "claude"
+      permissionMode: "bypassPermissions" | "acceptEdits" | "default" | "plan" | "auto" | "dontAsk"
+    }
+  | {
+      kind: "codex"
+      approvalPolicy: "never" | "on-request" | "untrusted"
+      sandbox: "read-only" | "workspace-write" | "danger-full-access"
+    }
+  | {
+      kind: "acp"
+      policy: "auto-approve" | "ask" | "read-only"
+      nativeMode: string | null
+      askKinds?: ToolKind[]
+    }
+
+export type PermissionsApplied = "now" | "next-turn"
 
 export type SessionConfiguration = {
   model?: string
@@ -85,6 +107,7 @@ export type SessionRecord = {
   authProfile?: string
   lineage?: { parentSessionId: string; nativeTurnId?: string }
   configuration?: SessionConfiguration
+  permissions?: PermissionsSpec
 }
 
 export type Completion =
@@ -161,6 +184,7 @@ export type DriverContext = {
   resumeId?: string
   forkFrom?: ForkSource
   configuration?: SessionConfiguration
+  permissions?: PermissionsSpec
   onUpdate(update: AgentUpdate): void
   onExit(error: Error): void
   requestPermission: PermissionHandler
@@ -204,6 +228,7 @@ export type AgentRuntime = {
   normalize?(update: AgentUpdate): NormalizedBody[]
   /** Flush buffered assistant/reasoning deltas as final messages. */
   flush?(): NormalizedBody[]
+  setPermissions?(spec: PermissionsSpec): Promise<{ applied: PermissionsApplied }>
 }
 
 export type AuthContext = {
@@ -234,7 +259,7 @@ export type CoreOptions = {
   limits: CoreLimits
 }
 
-export type CreateOptions = { agent: string; cwd: string; id: string; authProfile?: string; configuration?: SessionConfiguration }
+export type CreateOptions = { agent: string; cwd: string; id: string; authProfile?: string; configuration?: SessionConfiguration; permissions?: PermissionsSpec }
 
 /** Optional resume overrides. `configuration: undefined` is omitted (no-options resume). `{}` is an explicit no-op patch. */
 export type ResumeOptions = { configuration?: SessionConfiguration }

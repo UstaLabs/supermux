@@ -36,12 +36,13 @@ function fakeChildFactory(options: { nativeId?: string; unloadableIds?: string[]
           agentSessionId: ctx.resumeId ?? options.nativeId ?? `native-${opens.length}`,
           capabilities: {
             resume: true, steer: false, fork: false, detach: false,
-            configure: false, history: false,
+            configure: false, history: false, permissions: true,
           },
           async prompt() { return { stopReason: "end_turn" } },
           async interrupt() {},
           async close() {},
           async configure() {},
+          async setPermissions() { return { applied: "now" as const } },
           configuration: () => ({}),
         }
         return runtime
@@ -166,7 +167,7 @@ describe("cursor core spawn/resume dialect", () => {
     expect(adapter!.model).toBe("gpt-5")
   })
 
-  test("default uses force; setPermissionMode(ask) reopens with ask", async () => {
+  test("default uses auto-approve; setPermissionMode(ask) is live", async () => {
     const child = fakeChildFactory({ nativeId: "native-prompts" })
     const host = await makeHost(child.factory)
     const reg = registry()
@@ -185,10 +186,9 @@ describe("cursor core spawn/resume dialect", () => {
       agent: AgentKind.Cursor,
       id: "broker-id-prompts",
     })
-    expect(child.ocCalls[0]?.options.permissions).toBe("force")
+    expect(child.ocCalls[0]?.options.permissions).toEqual({ kind: "acp", policy: "auto-approve", nativeMode: "agent" })
     await adapter!.setPermissionMode("ask")
-    expect(child.ocCalls.at(-1)?.options.permissions).toBe("ask")
-    expect(child.opens[1]?.resumeId).toBe("native-prompts")
+    expect(child.opens).toHaveLength(1)
   })
 
   // A per-turn-era chat id is not an ACP session: the agent answers "Invalid

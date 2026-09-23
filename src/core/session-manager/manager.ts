@@ -866,16 +866,18 @@ export class SessionManager {
   async switchPermissionMode(
     sessionId: string,
     mode: string,
-  ): Promise<{ ok: true; status: "applied" } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; status: "applied"; applied: "now" | "next-turn" } | { ok: false; error: string }> {
     const session = this.registry.get(sessionId)
     if (!session) return { ok: false, error: `no such session: ${sessionId}` }
     if (!isPermissionMode(session.agent, mode)) return { ok: false, error: "unknown mode" }
     const adapter = this.runtimes.get(session.id)?.adapter as
-      | { setPermissionMode?: (id: string) => Promise<void> }
+      | { setPermissionMode?: (id: string) => Promise<{ applied: "now" | "next-turn" } | void> }
       | undefined
+    let applied: "now" | "next-turn" = "now"
     if (adapter?.setPermissionMode) {
       try {
-        await adapter.setPermissionMode(mode)
+        const result = await adapter.setPermissionMode(mode)
+        if (result && result.applied) applied = result.applied
       } catch (err) {
         const code = typeof err === "object" && err !== null && "code" in err ? String((err as { code: unknown }).code) : ""
         if (code === "session_busy") return { ok: false, error: "session_busy" }
@@ -883,8 +885,13 @@ export class SessionManager {
       }
     }
     this.registry.setPermissionMode(sessionId, mode)
-    this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: session.id, permissionMode: mode })
-    return { ok: true, status: "applied" }
+    this.ports.getWebChannel()?.broadcastToAll({
+      type: "session_state",
+      session: session.id,
+      permissionMode: mode,
+      applied,
+    })
+    return { ok: true, status: "applied", applied }
   }
 
   private async switchModel(

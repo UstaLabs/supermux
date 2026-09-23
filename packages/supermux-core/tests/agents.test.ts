@@ -33,7 +33,7 @@ function grokRequired(extra: Partial<GrokOptions> = {}): GrokOptions {
     id: 'grok',
     command: 'grok',
     commandArgs: [],
-    alwaysApprove: false,
+    permissions: { kind: 'acp', policy: 'ask', nativeMode: null },
     noLeader: true,
     inheritEnv: true,
     mcpServers: [],
@@ -84,7 +84,7 @@ test('defaults never auto-approve and keep library noLeader', async () => {
   expect(() => grok({ ...grokRequired(), commandArgs: 'fixture' as unknown as string[] })).toThrow('commandArgs')
   const { r, dir, lines } = await traced()
   try {
-    expect(r.capabilities).toEqual({ resume: true, steer: false, fork: false, detach: true, configure: true, history: false })
+    expect(r.capabilities).toEqual({ resume: true, steer: false, fork: false, detach: true, configure: true, history: false, permissions: true })
     expect(r.configuration()).toEqual({})
     const argv = argvs(await lines())[0]!
     expect(argv).toContain('--no-leader')
@@ -103,12 +103,12 @@ test('explicit commandArgs prefix is the fixture; command is the exact executabl
   } finally { await r.close({ mode: "shutdown" }); await rm(dir, { recursive: true, force: true }) }
 })
 
-test('explicit broker flags disable noLeader and enable alwaysApprove', async () => {
-  const { r, dir, lines } = await traced({}, { noLeader: false, alwaysApprove: true, model: 'grok-4', reasoningEffort: 'high' })
+test('explicit broker flags disable noLeader', async () => {
+  const { r, dir, lines } = await traced({}, { noLeader: false, model: 'grok-4', reasoningEffort: 'high' })
   try {
     const argv = argvs(await lines())[0]!
     expect(argv).not.toContain('--no-leader')
-    expect(argv).toContain('--always-approve')
+    expect(argv).not.toContain('--always-approve')
     expect(argv).toEqual(expect.arrayContaining(['--model', 'grok-4', '--reasoning-effort', 'high']))
   } finally { await r.close({ mode: "shutdown" }); await rm(dir, { recursive: true, force: true }) }
 })
@@ -648,7 +648,7 @@ test('grok wrapper rejects configure during known native activity', async () => 
 
 test('grok() TypeError names each missing required field', () => {
   const full: any = grokRequired()
-  for (const field of ['id', 'command', 'commandArgs', 'alwaysApprove', 'noLeader', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs']) {
+  for (const field of ['id', 'command', 'commandArgs', 'permissions', 'noLeader', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs']) {
     const opts = { ...full }; delete opts[field]
     expect(() => grok(opts)).toThrow(TypeError)
     expect(() => grok(opts)).toThrow(new RegExp(`Grok ${field} is required`))
@@ -661,8 +661,9 @@ test('opencode() TypeError names each missing required field', () => {
     setupTimeoutMs: 1, shutdownTimeoutMs: 1, maxFrameBytes: 1, maxOutstandingActivity: 1,
     cancelRetryIntervalMs: 1, cancelRetryTimeoutMs: 1,
     keeper: { stateDirectory: '/tmp', limits: { parkedDeadlineMs: 1, journalMaxBytes: 1, connectTimeoutMs: 1 } },
+    permissions: { kind: 'acp', policy: 'ask', nativeMode: null },
   }
-  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs']) {
+  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'permissions']) {
     const opts = { ...full }; delete opts[field]
     expect(() => opencode(opts)).toThrow(TypeError)
     expect(() => opencode(opts)).toThrow(new RegExp(`OpenCode ${field} is required`))

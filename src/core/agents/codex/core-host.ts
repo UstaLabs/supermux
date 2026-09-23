@@ -44,10 +44,11 @@ export function detachCodexRuntimeAdapter(id: string): void {
   runtimeAdapters.delete(id)
 }
 
-const BROKER_CODEX_OPTIONS: Pick<CodexOptions, "approvalPolicy" | "sandbox" | "permissionPrompts" | "inheritEnv" | "setupTimeoutMs" | "requestTimeoutMs" | "shutdownTimeoutMs" | "maxFrameBytes"> = {
+const BROKER_CODEX_OPTIONS: Pick<CodexOptions, "approvalPolicy" | "sandbox" | "permissionPrompts" | "inheritEnv" | "setupTimeoutMs" | "requestTimeoutMs" | "shutdownTimeoutMs" | "maxFrameBytes" | "permissions"> = {
   approvalPolicy: "never",
   sandbox: "danger-full-access",
-  permissionPrompts: "none",
+  permissionPrompts: "host",
+  permissions: { kind: "codex", approvalPolicy: "never", sandbox: "danger-full-access" },
   inheritEnv: true,
   setupTimeoutMs: 30_000,
   requestTimeoutMs: 30_000,
@@ -90,12 +91,13 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
     agent: "codex",
     driver: (registration, ctx) => {
       const settings = driverSettingsFor("codex", extraPermissionMode(registration.extra, "codex"))
-      if (settings.agent !== "codex") throw new Error("codex driver settings mismatch")
+      if (settings.initial.kind !== "codex") throw new Error("codex driver settings mismatch")
       const opts: CodexOptions = {
         ...BROKER_CODEX_OPTIONS,
-        approvalPolicy: settings.approvalPolicy,
-        sandbox: settings.sandbox,
+        approvalPolicy: settings.initial.approvalPolicy,
+        sandbox: settings.initial.sandbox,
         permissionPrompts: settings.permissionPrompts,
+        permissions: settings.initial,
         id: "codex",
         command: registration.command ?? "codex",
         args: registration.args ? [...registration.args] : ["app-server"],

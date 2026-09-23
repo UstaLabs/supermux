@@ -20,7 +20,7 @@ export type CommandCtx = {
   listModels?: (agent: AgentKind) => { id: string; displayName: string }[]
   switchModel?: (sessionId: string, model: string) => Promise<{ ok: true } | { ok: false; error: string }>
   switchReasoningLevel?: (sessionId: string, level: string) => Promise<{ ok: true } | { ok: false; error: string }>
-  switchPermissionMode?: (sessionId: string, mode: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  switchPermissionMode?: (sessionId: string, mode: string) => Promise<{ ok: true; applied?: "now" | "next-turn" } | { ok: false; error: string }>
   listReasoningLevels?: (agent: AgentKind, model?: string) => { id: string; description?: string }[]
   resolveReasoningLevel?: (sessionId: string) => string | undefined
   proxyBaseDomain?: string
@@ -459,7 +459,8 @@ async function applyPermissionMode(
   if (ctx.switchPermissionMode) {
     const result = await ctx.switchPermissionMode(sessionId, mode)
     if (!result.ok) return { text: `permissions switch failed: ${result.error}` }
-    return { text: `${name}: permissions ${mode}` }
+    const when = result.applied === "next-turn" ? " (applies from the next turn)" : ""
+    return { text: `${name}: permissions ${mode}${when}` }
   }
   ctx.registry.setPermissionMode(sessionId, mode)
   return { text: `${name}: permissions ${mode}` }

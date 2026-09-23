@@ -72,7 +72,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
         agentSessionId: ctx.resumeId ?? options.nativeId ?? `native-${opens.length}`,
         capabilities: {
           resume: true, steer: options.steer === true || kind === "codex", fork: false, detach: false,
-          configure: options.configure !== false, history: false,
+          configure: options.configure !== false, history: false, permissions: true,
         },
         async prompt(content, signal) {
           prompts.push(content)
@@ -109,6 +109,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
           applied.push({ ...configuration })
         },
         configuration: () => ({ ...liveConfig }),
+        async setPermissions() { return { applied: kind === "codex" ? "next-turn" : "now" } },
       }
       return attachNormalizer(kind, runtime)
     },
@@ -1112,15 +1113,15 @@ acrossGrok("replays real grok-turn.ndjson through Core normalizer into broker ev
   expect(assistantAt).toBeLessThan(completeAt)
 })
 
-test("cursor: setPermissionMode restarts the same native id", async () => {
+test("cursor: setPermissionMode does not restart", async () => {
   const kind = "cursor" as const
   const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
   const { host, workdir } = await harness(kind, fake)
   const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
   await adapter.start()
-  await adapter.setPermissionMode("ask")
-  expect(fake.opens).toHaveLength(2)
-  expect(fake.opens[1]?.resumeId).toBe("native-keep")
+  const applied = await adapter.setPermissionMode("ask")
+  expect(applied).toEqual({ applied: "now" })
+  expect(fake.opens).toHaveLength(1)
 })
 
 // The shim socket drops while the native process is replaced; the broker must
@@ -1151,7 +1152,7 @@ test("setPermissionMode is a no-op for the same id", async () => {
   expect(fake.opens).toHaveLength(1)
 })
 
-test("setPermissionMode throws session_busy while running", async () => {
+test("setPermissionMode with a running turn succeeds", async () => {
   const kind = "grok" as const
   const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
   const { host, workdir } = await harness(kind, fake)
@@ -1160,7 +1161,7 @@ test("setPermissionMode throws session_busy while running", async () => {
   fake.holdNextPrompt()
   const sent = adapter.send("busy")
   await waitUntil(() => fake.promptTexts.length === 1)
-  await expect(adapter.setPermissionMode("ask")).rejects.toMatchObject({ code: "session_busy" })
+  await expect(adapter.setPermissionMode("ask")).resolves.toEqual({ applied: "now" })
   fake.completePrompt()
   await sent
 })

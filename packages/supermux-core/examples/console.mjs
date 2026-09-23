@@ -25,11 +25,11 @@ let showDeltas = args.deltas === true
 const keeper = { stateDirectory: `${stateDirectory}/keepers`, limits: { parkedDeadlineMs: 600_000, journalMaxBytes: 64_000_000, connectTimeoutMs: 15_000 } }
 const timeouts = { setupTimeoutMs: 30_000, shutdownTimeoutMs: 5_000, maxFrameBytes: 16 * 1024 * 1024 }
 const drivers = {
-  codex: () => codex({ id: "codex", command: "codex", args: ["app-server"], inheritEnv: true, sandbox: "workspace-write", approvalPolicy: "on-request", permissionPrompts: "host", requestTimeoutMs: 120_000, ...timeouts, keeper, ...(model ? { model } : {}) }),
-  claude: () => claude({ id: "claude", command: "claude", args: [], inheritEnv: true, tools: "default", permissionPrompts: "host", partialMessages: true, requestTimeoutMs: 120_000, ...timeouts, keeper, ...(model ? { model } : {}) }),
-  grok: () => grok({ id: "grok", command: "grok", commandArgs: [], alwaysApprove: false, noLeader: true, inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
-  opencode: () => opencode({ id: "opencode", command: "opencode", inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
-  cursor: () => cursor({ id: "cursor", command: "cursor-agent", commandArgs: [], permissions: "force", inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
+  codex: () => codex({ id: "codex", command: "codex", args: ["app-server"], inheritEnv: true, sandbox: "workspace-write", approvalPolicy: "on-request", permissionPrompts: "host", permissions: { kind: "codex", approvalPolicy: "on-request", sandbox: "workspace-write" }, requestTimeoutMs: 120_000, ...timeouts, keeper, ...(model ? { model } : {}) }),
+  claude: () => claude({ id: "claude", command: "claude", args: [], inheritEnv: true, tools: "default", permissionPrompts: "host", permissions: { kind: "claude", permissionMode: "bypassPermissions" }, partialMessages: true, requestTimeoutMs: 120_000, ...timeouts, keeper, ...(model ? { model } : {}) }),
+  grok: () => grok({ id: "grok", command: "grok", commandArgs: [], permissions: { kind: "acp", policy: "ask", nativeMode: null }, noLeader: true, inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
+  opencode: () => opencode({ id: "opencode", command: "opencode", inheritEnv: true, mcpServers: [], permissions: { kind: "acp", policy: "ask", nativeMode: null }, cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
+  cursor: () => cursor({ id: "cursor", command: "cursor-agent", commandArgs: [], permissions: { kind: "acp", policy: "auto-approve", nativeMode: "agent" }, inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
 }
 if (!drivers[agentName]) { console.error(`unknown agent ${agentName}`); process.exit(2) }
 
@@ -85,6 +85,16 @@ async function run(line) {
     case "/reject": { const id = idOf(rest[0]); const req = session.requests.list().find(p => p.requestId === id); const opt = req.body.options.find(o => o.kind === "reject_once") ?? req.body.options.find(o => o.kind.startsWith("reject")); return session.requests.respond(id, { optionId: opt.id, ...(rest.slice(1).length ? { message: rest.slice(1).join(" ") } : {}) }) }
     case "/answer": { const id = idOf(rest[0]); const req = session.requests.list().find(p => p.requestId === id); const q = req.body.questions[0]; const value = rest.slice(1).join(" "); return session.requests.respond(id, { answers: { [q.id]: value } }) }
     case "/decline": return session.requests.respond(idOf(rest[0]), { decline: true })
+    case "/permissions": {
+      const mode = rest.join(" ")
+      const spec = agentName === "claude"
+        ? { kind: "claude", permissionMode: mode || "default" }
+        : agentName === "codex"
+          ? { kind: "codex", approvalPolicy: mode === "never" ? "never" : mode === "untrusted" ? "untrusted" : "on-request", sandbox: mode === "read-only" ? "read-only" : mode === "full" ? "danger-full-access" : "workspace-write" }
+          : { kind: "acp", policy: mode === "auto-approve" || mode === "allow" ? "auto-approve" : mode === "read-only" ? "read-only" : "ask", nativeMode: null }
+      const result = await session.setPermissions(spec)
+      return say(dim(`permissions applied ${result.applied}`))
+    }
     case "/status": return say(JSON.stringify(session.snapshot()))
     case "/deltas": showDeltas = !showDeltas; return say(dim(`deltas ${showDeltas ? "on" : "off"}`))
     case "/detach": await session.close({ mode: "detach" }); await core.close({ agents: "detach" }); say(dim("detached; the agent keeps running. Re-run with the same --state and --session to re-attach.")); process.exit(0)

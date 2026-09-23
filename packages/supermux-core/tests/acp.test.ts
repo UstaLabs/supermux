@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { acp, type AcpActivityHint } from '../src/acp/index.js'
 import { createCore } from '../src/core.js'
 import type { AgentUpdate, DriverContext } from '../src/types.js'
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, TEST_ACP_PERMISSIONS, nextId } from "./helpers.js"
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -34,12 +34,12 @@ function classifyActivity(update: AgentUpdate): AcpActivityHint | undefined {
 }
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL('./fixtures/acp-agent.mjs', import.meta.url))
-const driver = (env = {}, extra = {}) => acp({id:'fixture',command:process.execPath,args:[fixture],env,inheritEnv:true,mcpServers:[],setupTimeoutMs:3000,shutdownTimeoutMs:40,maxFrameBytes:16*1024*1024,maxOutstandingActivity:256,cancelRetryIntervalMs:250,cancelRetryTimeoutMs:10_000,keeper:testKeeper(), captureStderr: false,classifyActivity,...extra})
+const driver = (env = {}, extra = {}) => acp({id:'fixture',command:process.execPath,args:[fixture],env,inheritEnv:true,mcpServers:[],setupTimeoutMs:3000,shutdownTimeoutMs:40,maxFrameBytes:16*1024*1024,maxOutstandingActivity:256,cancelRetryIntervalMs:250,cancelRetryTimeoutMs:10_000,keeper:testKeeper(), captureStderr: false,classifyActivity,permissions: TEST_ACP_PERMISSIONS,...extra})
 function context(extra: Partial<DriverContext> = {}): DriverContext { return {sessionId:'core-1',cwd:process.cwd(),signal:new AbortController().signal,onUpdate(){},onExit(){},requestPermission:async()=>({outcome:{outcome:'cancelled'}}),requestAnswers:async()=>({outcome:'cancelled' as const}),...extra} }
 test('create, prompt, preserve updates, and close process', async()=>{
  const dir=await mkdtemp(join(tmpdir(),'acp-')); const pidFile=join(dir,'pid'); const updates:any[]=[];
  const runtime=await driver({PID_FILE:pidFile}).open(context({onUpdate:u=>updates.push(u)}));
- expect(runtime.agentSessionId).toBe('agent-1'); expect(runtime.capabilities).toEqual({resume:true,steer:false,fork:false,detach:true});
+ expect(runtime.agentSessionId).toBe('agent-1'); expect(runtime.capabilities).toEqual({resume:true,steer:false,fork:false,detach:true,permissions:true});
  expect(await runtime.prompt([{type:'text',text:'hello'}],new AbortController().signal)).toEqual({stopReason:'end_turn'});
  expect(updates.find(u=>u.protocol==='native'&&u.value?.method==='initialize')).toBeTruthy();
  expect(updates.find(u=>u.protocol==='acp')!.value.content.text).toBe('answer');

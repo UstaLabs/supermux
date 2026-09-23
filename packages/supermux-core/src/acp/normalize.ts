@@ -290,6 +290,21 @@ export function createAcpNormalizer(options: { vendor?: "grok" } = {}): ((update
       // Drivers answer these via context.requestPermission / requestAnswers; Session emits the event.
       return []
     }
+    if (method === "permission-auto") {
+      const recParams = rec(params)
+      const tool = rec(recParams?.toolCall)
+      const optionId = typeof recParams?.optionId === "string" ? recParams.optionId : ""
+      return [{
+        kind: "permission-auto",
+        toolCall: {
+          callId: typeof tool?.callId === "string" ? tool.callId : "",
+          tool: typeof tool?.tool === "string" ? tool.tool : "",
+          title: typeof tool?.title === "string" ? tool.title : "",
+          ...(tool?.input !== undefined ? { input: tool.input } : {}),
+        },
+        optionId,
+      }]
+    }
     return []
   }
 

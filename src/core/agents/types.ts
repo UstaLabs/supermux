@@ -61,7 +61,8 @@ export type RequestClosedEvent = {
   kind: "request-closed"
   requestId: string
   outcome: "answered" | "expired" | "cancelled"
-  answer?: string
+  /** What was chosen, already human-readable ("Allow always", "Reject — too risky"). */
+  answerLabel?: string
 }
 
 export type RequestAnswerInput =

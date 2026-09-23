@@ -6,6 +6,7 @@ import {
   isPermissionMode,
   modesFor,
   permissionCatalog,
+  permissionsFor,
   resolvePermissionMode,
 } from "./permission-modes"
 
@@ -29,7 +30,7 @@ test("driverSettingsFor covers every catalog id", () => {
   for (const agent of AGENT_KINDS) {
     for (const m of modesFor(agent)) {
       const settings = driverSettingsFor(agent, m.id)
-      expect(settings.agent).toBe(agent)
+      expect(settings.initial.kind === "claude" || settings.initial.kind === "codex" || settings.initial.kind === "acp").toBe(true)
     }
   }
 })
@@ -41,12 +42,19 @@ test("unknown id throws; missing id resolves to default", () => {
   expect(isPermissionMode("claude", "full-access")).toBe(false)
 })
 
-test("claude ask leaves permissionMode undefined; bypass uses bypassPermissions", () => {
+test("claude ask uses default; bypass uses bypassPermissions", () => {
   const ask = driverSettingsFor("claude", "ask")
-  if (ask.agent !== "claude") throw new Error("expected claude")
-  expect(ask.permissionMode).toBeUndefined()
+  expect(ask.initial).toEqual({ kind: "claude", permissionMode: "default" })
   expect(ask.permissionPrompts).toBe("host")
   const bypass = driverSettingsFor("claude", "bypass")
-  if (bypass.agent !== "claude") throw new Error("expected claude")
-  expect(bypass.permissionMode).toBe("bypassPermissions")
+  expect(bypass.initial).toEqual({ kind: "claude", permissionMode: "bypassPermissions" })
+})
+
+test("permissionsFor maps every catalog id including grok/opencode/cursor ACP policies", () => {
+  expect(permissionsFor("grok", "always-approve")).toEqual({ kind: "acp", policy: "auto-approve", nativeMode: null })
+  expect(permissionsFor("opencode", "ask-bash")).toMatchObject({ kind: "acp", policy: "ask", askKinds: ["execute"] })
+  expect(permissionsFor("opencode", "read-only")).toEqual({ kind: "acp", policy: "read-only", nativeMode: "plan" })
+  expect(permissionsFor("cursor", "force")).toEqual({ kind: "acp", policy: "auto-approve", nativeMode: "agent" })
+  expect(permissionsFor("cursor", "auto-review")).toEqual({ kind: "acp", policy: "auto-approve", nativeMode: null })
+  expect(permissionsFor("codex", "full-access")).toEqual({ kind: "codex", approvalPolicy: "never", sandbox: "danger-full-access" })
 })

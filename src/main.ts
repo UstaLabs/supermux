@@ -1082,15 +1082,21 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       })
     }
   })
-  adapter.on("request-closed", (ev: { requestId: string; outcome: "answered" | "expired" | "cancelled"; answer?: string }) => {
-    webChannel?.broadcastToAll({ type: "request_closed", session: sessionId, requestId: ev.requestId, outcome: ev.outcome })
+  adapter.on("request-closed", (ev: { requestId: string; outcome: "answered" | "expired" | "cancelled"; answerLabel?: string }) => {
+    webChannel?.broadcastToAll({
+      type: "request_closed",
+      session: sessionId,
+      requestId: ev.requestId,
+      outcome: ev.outcome,
+      ...(ev.answerLabel ? { answerLabel: ev.answerLabel } : {}),
+    })
     const destination = resolveReplyTarget(sessionId)
     const addressed = parseAddress(destination)
     if (addressed?.channel === "telegram" && telegram) {
       void telegram.send({
         op: "reply",
         chat_id: addressed.chatId,
-        text: `answered: ${ev.answer ?? ev.outcome}`,
+        text: `answered: ${ev.answerLabel ?? ev.outcome}`,
         disable_notification: true,
       })
     }

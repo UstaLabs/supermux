@@ -210,6 +210,8 @@ class HostStore(
         _state.map { it.activity }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val requests: StateFlow<Map<String, List<dev.supermux.proto.PromptRequest>>> =
         _state.map { it.requests }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    val closedRequests: StateFlow<Map<String, List<ClosedRequest>>> =
+        _state.map { it.closedRequests }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val lastError: StateFlow<String?> =
         _state.map { it.lastError }.stateIn(projectionScope, SharingStarted.Eagerly, null)
     val permissionModes: StateFlow<Map<String, List<dev.supermux.proto.PermissionModeInfo>>> =

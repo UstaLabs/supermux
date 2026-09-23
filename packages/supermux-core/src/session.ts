@@ -8,8 +8,9 @@ import type {
   Receipt, SendOptions, SessionRecord, SessionState, ForkOptions,
   HistoryOptions, HistoryPage, SessionConfiguration, CloseOptions,
   PendingRequest, PermissionOptionKind, PermissionRequest, PermissionResponse, RequestAnswer,
-  QuestionRequest, QuestionResponse,
+  QuestionRequest, QuestionResponse, PermissionsSpec, PermissionsApplied,
 } from "./types.js"
+import { validatePermissionsSpec } from "./permissions.js"
 import type { EventEnvelope, NormalizedBody, ToolCategory, TurnCompleteReason } from "./events/normalized.js"
 
 type ActivitySlot = {
@@ -140,21 +141,24 @@ export class Session {
           }
           const allowed = slot.request.body.options.some(option => option.id === answer.optionId)
           if (!allowed) throw new CoreError("invalid_input", "optionId is not among the request options")
+          const message = "message" in answer && answer.message !== undefined ? { message: answer.message } : {}
           this.finishRequest(requestId, {
             outcome: { outcome: "selected", optionId: answer.optionId },
-            ...("message" in answer && answer.message !== undefined ? { message: answer.message } : {}),
-          }, "answered")
+            ...message,
+          }, "answered", { optionId: answer.optionId, ...message })
           return Promise.resolve()
         }
         if (answer && "decline" in answer && answer.decline === true) {
-          this.finishRequest(requestId, { outcome: "declined" }, "answered")
+          this.finishRequest(requestId, { outcome: "declined" }, "answered", { decline: true })
           return Promise.resolve()
         }
         if (!answer || !("answers" in answer) || !answer.answers || typeof answer.answers !== "object" || Array.isArray(answer.answers)) {
           throw new CoreError("invalid_input", "answers are required for a question request")
         }
         const mapped = mapQuestionAnswers(slot.request.body, answer.answers)
-        this.finishRequest(requestId, { outcome: "answered", answers: mapped }, "answered")
+        // `mapped` already carries the option LABELS the agent receives, so it is the human-
+        // readable form too — no second lookup needed downstream.
+        this.finishRequest(requestId, { outcome: "answered", answers: mapped }, "answered", { answers: mapped })
         return Promise.resolve()
       } catch (error) {
         return Promise.reject(error)
@@ -307,6 +311,20 @@ export class Session {
     if (this.activity.size > 1) throw new CoreError("session_busy", "Native work is ambiguous")
     if (!this.active && this.activity.size !== 1) throw new CoreError("session_not_running", "No active work to steer")
     await this.runtime.steer(structuredClone(input.content))
+  }
+
+  async setPermissions(spec: PermissionsSpec): Promise<{ applied: PermissionsApplied }> {
+    this.assertReady()
+    if (!this.runtime.capabilities.permissions || !this.runtime.setPermissions) {
+      throw new UnsupportedOperation("permissions", this.record.agent)
+    }
+    const next = validatePermissionsSpec(spec)
+    const result = await this.runtime.setPermissions(structuredClone(next))
+    const saved: SessionRecord = { ...this.record, permissions: structuredClone(next) }
+    await this.persistRecord(saved)
+    this.record.permissions = structuredClone(next)
+    this.emitNormalized({ kind: "permissions-update", spec: structuredClone(next), applied: result.applied }, undefined, false)
+    return result
   }
 
   /** Requested persisted configuration. An empty object means driver/factory defaults, not a live native snapshot. */
@@ -542,13 +560,27 @@ export class Session {
     this.emit({ type: "session.event", sessionId: this.id, event: envelope })
   }
 
-  private finishRequest(requestId: string, response: PermissionResponse | QuestionResponse, outcome: "answered" | "expired" | "cancelled"): void {
+  /**
+   * [answer] is recorded here, at respond() time, because it is the only place that knows what
+   * the user picked: the response handed back to the agent is in the agent's own vocabulary and
+   * a subscriber watching the event stream cannot recover the choice from it.
+   */
+  private finishRequest(
+    requestId: string,
+    response: PermissionResponse | QuestionResponse,
+    outcome: "answered" | "expired" | "cancelled",
+    answer?: RequestAnswer,
+  ): void {
     const slot = this.pendingRequests.get(requestId)
     if (!slot) return
     this.pendingRequests.delete(requestId)
     slot.signal.removeEventListener("abort", slot.onAbort)
     slot.resolve(response)
-    this.emitNormalized({ kind: "request-resolved", requestId, outcome }, undefined, false)
+    this.emitNormalized(
+      { kind: "request-resolved", requestId, outcome, ...(answer ? { answer } : {}) },
+      undefined,
+      false,
+    )
   }
 
   private cancelPendingRequests(): void {

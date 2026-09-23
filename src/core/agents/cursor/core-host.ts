@@ -48,7 +48,7 @@ function cursorOpts(
   permissionMode: string,
 ): CursorOptions {
   const settings = driverSettingsFor("cursor", permissionMode)
-  if (settings.agent !== "cursor") throw new Error("cursor driver settings mismatch")
+  if (settings.initial.kind !== "acp") throw new Error("cursor driver settings mismatch")
   return {
     id: "cursor",
     command: "cursor-agent",
@@ -56,8 +56,10 @@ function cursorOpts(
     env,
     inheritEnv: true,
     mcpServers: [],
-    permissions: settings.permissions,
-    mode: settings.mode,
+    permissions: settings.initial,
+    mode: settings.initial.nativeMode === "plan" || settings.initial.nativeMode === "ask" || settings.initial.nativeMode === "agent"
+      ? settings.initial.nativeMode
+      : undefined,
     setupTimeoutMs: 120_000,
     shutdownTimeoutMs: 5_000,
     maxFrameBytes: 16 * 1024 * 1024,

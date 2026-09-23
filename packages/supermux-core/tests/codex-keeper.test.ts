@@ -41,6 +41,7 @@ function libraryCodex(extra: Record<string, unknown> = {}) {
     sandbox: 'read-only' as const,
     approvalPolicy: 'never' as const,
     permissionPrompts: 'none' as const,
+    permissions: { kind: 'codex', approvalPolicy: 'never', sandbox: 'read-only' },
     maxFrameBytes: 16 * 1024 * 1024,
     ...extra,
   } as Parameters<typeof codex>[0]
@@ -370,7 +371,7 @@ test('detach never interrupts the running turn; resume re-attaches to it', async
   const { createCore } = await import('../src/index.js')
   const mk = () => createCore({ stateDirectory: join(stateDirectory, 'core'), limits: { interruptTimeoutMs: 5000, maxPending: 8, outstandingActivity: 64 }, agents: [codex({
     id: 'codex', command: process.execPath, args: [fixture], inheritEnv: false, env: { MODE: 'overlap-turns', TRACE: trace },
-    sandbox: 'read-only', approvalPolicy: 'never', permissionPrompts: 'none', setupTimeoutMs: 5000, requestTimeoutMs: 8000, shutdownTimeoutMs: 500, maxFrameBytes: 4096,
+    sandbox: 'read-only', approvalPolicy: 'never', permissionPrompts: 'none', permissions: { kind: 'codex', approvalPolicy: 'never', sandbox: 'read-only' }, setupTimeoutMs: 5000, requestTimeoutMs: 8000, shutdownTimeoutMs: 500, maxFrameBytes: 4096,
     keeper: { stateDirectory, limits: keeperLimits() },
   })] })
   const core1 = mk()

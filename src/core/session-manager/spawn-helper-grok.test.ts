@@ -146,7 +146,7 @@ describe("Grok spawn", () => {
 
     expect(reg.get(result.session_id)?.permissionMode).toBe("ask")
     expect(child.grokCalls).toHaveLength(1)
-    expect(child.grokCalls[0]?.options.alwaysApprove).toBe(false)
+    expect(child.grokCalls[0]?.options.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: null })
     expect(child.opens).toHaveLength(1)
   })
 })

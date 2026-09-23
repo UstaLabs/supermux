@@ -31,6 +31,7 @@ const r = await acp({
   cancelRetryIntervalMs: 250,
   cancelRetryTimeoutMs: 10_000,
   captureStderr: false,
+  permissions: { kind: 'acp', policy: 'ask', nativeMode: null },
   keeper: {
     stateDirectory,
     limits: { parkedDeadlineMs: 15_000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 },

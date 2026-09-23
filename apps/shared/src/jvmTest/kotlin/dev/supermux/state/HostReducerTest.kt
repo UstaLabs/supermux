@@ -256,9 +256,36 @@ class HostReducerTest {
 
     @Test fun requestClosedRemovesAndRecordsAnsweredLine() {
         val open = reduceHostFrame(HostState(), ServerFrame.RequestOpen("s1", prompt()))
-        val closed = reduceHostFrame(open, ServerFrame.RequestClosed("s1", "r1", "answered"))
+        val closed = reduceHostFrame(open, ServerFrame.RequestClosed("s1", "r1", "answered", "Allow always"))
         assertEquals(null, closed.requests["s1"])
-        assertEquals("answered: Allow once", closed.messages["s1"]?.last()?.text)
+        assertEquals("answered: Allow always", closed.messages["s1"]?.last()?.text)
+        assertEquals("Allow always", closed.closedRequests["s1"]?.single()?.answerLabel)
+    }
+
+    /** The bug this replaced: the line was guessed from the first allow option, so a
+     *  rejection still read "answered: Allow once". */
+    @Test fun requestClosedLineStatesTheRejection() {
+        val open = reduceHostFrame(HostState(), ServerFrame.RequestOpen("s1", prompt()))
+        val closed = reduceHostFrame(open, ServerFrame.RequestClosed("s1", "r1", "answered", "Reject once"))
+        assertEquals("answered: Reject once", closed.messages["s1"]?.last()?.text)
+    }
+
+    /** An old broker sends no label: say "answered", never a guess. */
+    @Test fun requestClosedWithoutLabelSaysOnlyAnswered() {
+        val open = reduceHostFrame(HostState(), ServerFrame.RequestOpen("s1", prompt()))
+        val closed = reduceHostFrame(open, ServerFrame.RequestClosed("s1", "r1", "answered"))
+        assertEquals("answered", closed.messages["s1"]?.last()?.text)
+    }
+
+    @Test fun closedRequestReceiptDropsWhenTheTranscriptMovesOn() {
+        val open = reduceHostFrame(HostState(), ServerFrame.RequestOpen("s1", prompt()))
+        val closed = reduceHostFrame(open, ServerFrame.RequestClosed("s1", "r1", "answered", "Allow once"))
+        assertEquals(1, closed.closedRequests["s1"]?.size)
+        val moved = reduceHostFrame(
+            closed,
+            ServerFrame.MessageAppend("s1", LogEntry(id = "m9", ts = "2024-01-01T00:00:00Z", direction = "outbound", text = "ok")),
+        )
+        assertEquals(null, moved.closedRequests["s1"])
     }
 
     @Test fun requestClosedExpiredAndCancelledLines() {

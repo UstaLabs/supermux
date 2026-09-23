@@ -98,6 +98,11 @@ test("permission-request event, respond allow_once, message, errors, interrupt, 
   expect(session.requests.list()).toHaveLength(0)
   expect(session.snapshot().pendingRequests).toBe(0)
   expect(events.some(e => e.type === "session.event" && e.event.kind === "request-resolved" && e.event.outcome === "answered")).toBe(true)
+  // The resolution carries WHAT was chosen — a subscriber cannot recover it from the driver's
+  // response, and the UI would otherwise have to guess.
+  expect(events.find(e => e.type === "session.event" && e.event.kind === "request-resolved")).toMatchObject({
+    event: { answer: { optionId: "allow_once", message: "ok" } },
+  })
 
   const fake2 = permissionDriver()
   const core2 = await setup(fake2.driver)
@@ -226,6 +231,10 @@ test("user-question event, respond answers, decline, invalid_input, interrupt", 
     answers: { color: "Blue", pets: ["Cat", "Dog"], other: "freehand" },
   })
   expect(events.some(e => e.type === "session.event" && e.event.kind === "request-resolved" && e.event.outcome === "answered")).toBe(true)
+  // Question answers ride the event as the LABELS the agent got, so they read as-is.
+  expect(events.find(e => e.type === "session.event" && e.event.kind === "request-resolved")).toMatchObject({
+    event: { answer: { answers: { color: "Blue", pets: ["Cat", "Dog"], other: "freehand" } } },
+  })
 
   const fakeD = questionDriver()
   const coreD = await setup(fakeD.driver)

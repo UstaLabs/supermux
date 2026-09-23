@@ -121,7 +121,7 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
       const extraEffort = asEffort(registration.extra?.effort)
       const settings = driverSettingsFor("claude", extraPermissionMode(registration.extra, "claude"))
-      if (settings.agent !== "claude") throw new Error("claude driver settings mismatch")
+      if (settings.initial.kind !== "claude") throw new Error("claude driver settings mismatch")
       const opts: ClaudeOptions = {
         id: "claude",
         command: "claude",
@@ -131,7 +131,8 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         model: extraModel,
         effort: extraEffort,
         tools: "default",
-        permissionMode: settings.permissionMode,
+        permissionMode: settings.initial.permissionMode === "default" ? undefined : settings.initial.permissionMode,
+        permissions: settings.initial,
         permissionPrompts: settings.permissionPrompts,
         partialMessages: true,
         setupTimeoutMs: 60_000,

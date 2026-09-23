@@ -91,6 +91,30 @@ function firstQuestionId(request: BrokerRequest): string | undefined {
   }
 }
 
+/** The `answer` the library puts on `request-resolved` — same shape as the core `RequestAnswer`. */
+export type ResolvedAnswer = NonNullable<Extract<NormalizedBody, { kind: "request-resolved" }>["answer"]>
+
+/**
+ * One human line for what was chosen, for the transcript and the Telegram echo.
+ *
+ * The open [request] is needed because a permission answer is only an option ID; a question
+ * answer already arrives as labels (session.ts maps them before handing them to the agent),
+ * so it is joined as-is and free text passes through untouched.
+ */
+export function answerLabel(request: BrokerRequest, answer: ResolvedAnswer | undefined): string | undefined {
+  if (!answer) return undefined
+  if ("decline" in answer && answer.decline) return "Declined"
+  if ("answers" in answer && answer.answers) {
+    const parts = Object.values(answer.answers).flatMap((value) => (Array.isArray(value) ? value : [value]))
+    const text = parts.filter((part) => typeof part === "string" && part).join(", ")
+    return text || undefined
+  }
+  if (!("optionId" in answer)) return undefined
+  const label = request.options.find((o) => o.id === answer.optionId)?.label ?? answer.optionId
+  // A reject that carries a note: the note IS the answer as far as the reader is concerned.
+  return answer.message ? `${label} — ${answer.message}` : label
+}
+
 export function toCoreAnswer(answer: RequestAnswerInput): RequestAnswer {
   if ("decline" in answer && answer.decline) return { decline: true }
   if ("answers" in answer && answer.answers) return { answers: answer.answers }

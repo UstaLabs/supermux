@@ -52,7 +52,7 @@ RUN cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain
 FROM oven/bun:1
 
 # ── 2. System dependencies ────────────────────────────────────────────────────
-# • tmux   — required by the broker (every agent session runs inside tmux)
+# • tmux   — required for the in-app terminal feature only (agent sessions run on Core)
 # • git    — useful inside spawned sessions; some agent CLIs call it at startup
 # • ca-certificates, curl — baseline TLS + downloads
 # • nodejs, npm — needed to run the `claude` CLI (it's a Node.js binary)

@@ -73,6 +73,10 @@ if (process.env.MODE === 'setup-hang') {
       return
     }
     if (!initialized) fail(20, 'not initialized')
+    if (m.type === 'control_request' && m.request?.subtype === 'set_permission_mode') {
+      send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response: {mode: m.request.mode}}})
+      return
+    }
     if (m.type === 'control_request' && m.request?.subtype === 'interrupt') {
       if (process.env.MODE === 'interrupt-hang') return
       if (process.env.MODE === 'interrupt-fail') {

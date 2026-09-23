@@ -64,7 +64,7 @@ Your subscriptions. Your repositories. Your hardware. No supermux account requir
 
 ### Host on a Mac or Linux computer
 
-1. Install and sign in to at least one supported agent CLI: `claude`, `codex`, `cursor-agent`, or `opencode`. Claude Code also needs `tmux` available on the host.
+1. Install and sign in to at least one supported agent CLI: `claude`, `codex`, `cursor-agent`, or `opencode`. `tmux` is only required for the terminal feature, not agent sessions.
 2. Install the [macOS app](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-desktop-macos.dmg) or [Linux desktop app](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-linux.deb).
 3. Follow the first-run host wizard. It starts the local broker, offers to keep it available after sign-in, and shows a pairing QR.
 4. Install Supermux on [iPhone or iPad](https://apps.apple.com/app/supermux/id6782643917) or [Android](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-android.apk), then scan the QR.

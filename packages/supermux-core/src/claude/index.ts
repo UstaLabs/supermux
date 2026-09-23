@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentDriver, CloseOptions, ContentBlock, PermissionHandler } from '../types.js'
+import type { AgentDriver, CloseOptions, ContentBlock, PermissionHandler, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
+import { appliedFor, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 import { createClaudeNormalizer } from './normalize.js'
@@ -17,6 +18,7 @@ export type ClaudeOptions = {
   allowedTools?: string[]
   disallowedTools?: string[]
   permissionMode?: 'acceptEdits' | 'auto' | 'bypassPermissions' | 'manual' | 'dontAsk' | 'plan'
+  permissions: Extract<PermissionsSpec, { kind: 'claude' }>
   permissionPrompts: 'host' | 'none'
   partialMessages: boolean
   setupTimeoutMs: number
@@ -75,7 +77,9 @@ function argv(options: ClaudeOptions, sessionId: string, resume: boolean) {
   // Real CLI (verified on 2.1.278): "host" alone makes Claude deny by itself (system/permission_denied)
   // and never sends can_use_tool. The stdio prompt tool is what routes the request to this host.
   if (options.permissionPrompts === 'host') flags.push('--permission-prompt-tool', 'stdio')
-  if (options.permissionMode) flags.push('--permission-mode', options.permissionMode)
+  const mode = options.permissions.permissionMode === 'default' ? undefined : options.permissions.permissionMode
+  if (mode) flags.push('--permission-mode', mode)
+  else if (options.permissionMode) flags.push('--permission-mode', options.permissionMode)
   if (options.allowedTools?.length) flags.push('--allowedTools', options.allowedTools.join(','))
   if (options.disallowedTools?.length) flags.push('--disallowedTools', options.disallowedTools.join(','))
   if (options.model) flags.push('--model', options.model)
@@ -99,9 +103,11 @@ function requireKeeper(keeper: ClaudeOptions['keeper']): ClaudeOptions['keeper']
 
 export function claude(options: ClaudeOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('Claude options are required')
-  for (const field of ['id', 'command', 'args', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'permissionPrompts', 'tools', 'keeper', 'inheritEnv', 'partialMessages'] as const) {
+  for (const field of ['id', 'command', 'args', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'permissionPrompts', 'tools', 'keeper', 'inheritEnv', 'partialMessages', 'permissions'] as const) {
     if (options[field] === undefined) throw new TypeError(`Claude ${field} is required`)
   }
+  const initialPermissions = validatePermissionsSpec(options.permissions)
+  if (initialPermissions.kind !== 'claude') throw new TypeError('Claude permissions kind must be claude')
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('Claude id is required')
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('Claude command is required')
   if (!Array.isArray(options.args) || options.args.some(value => typeof value !== 'string')) throw new TypeError('Claude args is required')
@@ -125,6 +131,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
     type Active = { uuid: string; completion: ReturnType<typeof deferred<{stopReason: string}>>; interrupted: boolean }
     type PendingPermission = { controller: AbortController; turnUuid: string; input: unknown; fingerprint: string; suggestions: unknown }
     type AnsweredPermission = { allow: boolean; input: unknown; turnUuid: string; fingerprint: string }
+    let livePermissions: Extract<PermissionsSpec, { kind: 'claude' }> = initialPermissions
     let active: Active | undefined
     const failure = deferred<never>()
     const pendingPermissions = new Map<string, PendingPermission>()
@@ -404,6 +411,10 @@ export function claude(options: ClaudeOptions): AgentDriver {
           active = a
           try { context.onActivity?.({ id: uuid, phase: 'started' }) } catch { /* */ }
         }
+        const seeded = rpc.welcome.meta.permissions
+        if (seeded && typeof seeded === 'object') {
+          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'claude' }> } catch { /* keep factory spec */ }
+        }
         if (fatal) throw fatal
         ready = true
       } else {
@@ -411,7 +422,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
         // Native system/init is not part of open(): CLI 2.1.261 acks initialize
         // without a session id, and emits system/init only on the first user prompt.
         // A created but never-prompted session may have no durable history.
-        rpc.setMeta({ agentSessionId })
+        rpc.setMeta({ agentSessionId, permissions: livePermissions })
         if (fatal) throw fatal
         ready = true
       }
@@ -425,7 +436,18 @@ export function claude(options: ClaudeOptions): AgentDriver {
     }
     const normalizer = createClaudeNormalizer()
     return {
-      agentSessionId: agentSessionId!, capabilities: { resume: true, steer: false, fork: false, detach: true }, close, interrupt,
+      agentSessionId: agentSessionId!, capabilities: { resume: true, steer: false, fork: false, detach: true, permissions: true }, close, interrupt,
+      async setPermissions(spec) {
+        if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')
+        const next = validatePermissionsSpec(spec)
+        if (next.kind !== 'claude') throw new TypeError('Claude permissions kind must be claude')
+        if (JSON.stringify(livePermissions) !== JSON.stringify(next)) {
+          await rpc.request({ subtype: 'set_permission_mode', mode: next.permissionMode })
+        }
+        livePermissions = next
+        try { rpc.setMeta({ permissions: next }) } catch { /* */ }
+        return { applied: appliedFor(next) }
+      },
       normalize: normalizer,
       flush: () => normalizer.flush(),
       async prompt(content, signal) {

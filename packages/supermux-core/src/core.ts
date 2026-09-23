@@ -9,7 +9,7 @@ import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
 import type {
   ActivityNotice, AgentDriver, AgentRuntime, AuthProfile, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
-  SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions,
+  SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec,
 } from "./types.js"
 
 export function createCore(options: CoreOptions): Core { return new Core(options) }
@@ -300,6 +300,7 @@ export class Core {
       runtime = await driver.open({
         sessionId: input.id, cwd: input.cwd, profile, resumeId, forkFrom, signal: this.lifetime.signal,
         ...(nonemptyConfiguration(input.configuration) ? { configuration: structuredClone(input.configuration) } : {}),
+        ...(input.permissions ? { permissions: structuredClone(input.permissions) } : originalRecord?.permissions ? { permissions: structuredClone(originalRecord.permissions) } : {}),
         onUpdate: update => {
           if (session) session.update(update)
           else this.events.emit({ type: "session.update", sessionId: input.id, update })
@@ -346,6 +347,7 @@ export class Core {
         ...(input.authProfile ? { authProfile: input.authProfile } : {}),
         ...(input.lineage ? { lineage: {...input.lineage} } : {}),
         ...(nonemptyConfiguration(input.configuration) ? { configuration: structuredClone(input.configuration) } : {}),
+        ...(input.permissions ? { permissions: structuredClone(input.permissions) } : originalRecord?.permissions ? { permissions: structuredClone(originalRecord.permissions) } : {}),
       }
       persistenceAttempted = true
       await this.store.put(record)
@@ -362,6 +364,7 @@ export class Core {
           id, createdAt: new Date().toISOString(),
           lineage: { parentSessionId: record.id, ...(options.at ? {nativeTurnId: options.at.nativeTurnId} : {}) },
           ...(record.configuration ? { configuration: structuredClone(record.configuration) } : {}),
+          ...(record.permissions ? { permissions: structuredClone(record.permissions) } : {}),
         }, undefined, { agentSessionId: record.agentSessionId, ...(options.at ? { at: options.at } : {}) }))
       }), recordToSave => this.store.put(recordToSave))
       this.live.set(record.id, session)

@@ -38,6 +38,7 @@ function libraryClaude(extra: Record<string, unknown> = {}) {
     inheritEnv: true,
     tools: [],
     permissionPrompts: 'none',
+    permissions: { kind: 'claude', permissionMode: 'dontAsk' },
     partialMessages: false,
     setupTimeoutMs: 5000,
     requestTimeoutMs: 5000,

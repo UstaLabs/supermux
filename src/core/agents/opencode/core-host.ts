@@ -31,13 +31,14 @@ export type OpenCodePrepareExtra = {
   permissionMode?: string
 }
 
-function opencodeOpts(stateDirectory: string, env: Record<string, string>, model: string | undefined): OpenCodeOptions {
+function opencodeOpts(stateDirectory: string, env: Record<string, string>, model: string | undefined, permissions: OpenCodeOptions["permissions"]): OpenCodeOptions {
   return {
     id: "opencode",
     command: "opencode",
     env,
     inheritEnv: true,
     mcpServers: [],
+    permissions,
     // A fresh session config dir makes OpenCode install its `plugin` entries
     // before it answers `initialize` (measured ~55 s on this box); the old
     // `opencode serve` path paid the same cost behind its readiness wait.
@@ -92,7 +93,9 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
     agent: "opencode",
     driver: (registration, ctx) => {
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
-      const opts = opencodeOpts(stateDirectory, registration.env, extraModel ?? ctx.configuration?.model)
+      const settings = driverSettingsFor("opencode", extraPermissionMode(registration.extra, "opencode"))
+      if (settings.initial.kind !== "acp") throw new Error("opencode driver settings mismatch")
+      const opts = opencodeOpts(stateDirectory, registration.env, extraModel ?? ctx.configuration?.model, settings.initial)
       const overrides: SessionConfiguration = ctx.configuration ? { ...ctx.configuration } : {}
       return factory ? factory(opts, overrides) : opencode(opts)
     },
@@ -108,8 +111,7 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
         pluginPaths,
         permissions: (() => {
           const settings = driverSettingsFor("opencode", extra.permissionMode ?? extraPermissionMode(registration.extra, "opencode"))
-          if (settings.agent !== "opencode") throw new Error("opencode driver settings mismatch")
-          return settings.permissions
+          return settings.environmentPermissions ?? { edit: "ask", bash: "ask", webfetch: "ask" }
         })(),
         provider: readGlobalProviderConfig() ?? null,
         instructions: openCodeInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),

@@ -22,6 +22,8 @@ const core = createCore({
     maxOutstandingActivity: 256,
     cancelRetryIntervalMs: 250,
     cancelRetryTimeoutMs: 10_000,
+    captureStderr: false,
+    permissions: { kind: "acp", policy: "ask", nativeMode: null },
     keeper: {
       stateDirectory,
       limits: { parkedDeadlineMs: 600_000, journalMaxBytes: 64_000_000, connectTimeoutMs: 4_000 },

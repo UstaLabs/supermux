@@ -211,7 +211,7 @@ describe("grok core spawn/resume dialect", () => {
     })
     const sessionHome = reg.get(result.session_id)!.agent_home!
     expect(child.grokCalls[0]?.options.env?.HOME).toBe(sessionHome)
-    expect(child.grokCalls[0]?.options.alwaysApprove).toBe(true)
+    expect(child.grokCalls[0]?.options.permissions).toEqual({ kind: "acp", policy: "auto-approve", nativeMode: null })
     expect(child.grokCalls[0]?.options.command).toBe("grok")
     expect(child.grokCalls[0]?.options.noLeader).toBe(false)
     const toml = readFileSync(join(sessionHome, ".grok", "config.toml"), "utf8")

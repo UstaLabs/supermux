@@ -1,5 +1,6 @@
-import type { AgentDriver, ContentBlock, HistoryOptions, PermissionHandler, SessionConfiguration, CloseOptions } from '../types.js'
+import type { AgentDriver, ContentBlock, HistoryOptions, PermissionHandler, SessionConfiguration, CloseOptions, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
+import { appliedFor, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse, ToolKind } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 import { createCodexNormalizer } from './normalize.js'
@@ -36,6 +37,7 @@ export type CodexOptions = {
   sandbox: CodexSandbox
   approvalPolicy: CodexApprovalPolicy
   permissionPrompts: CodexPermissionPrompts
+  permissions: Extract<PermissionsSpec, { kind: 'codex' }>
   setupTimeoutMs: number
   requestTimeoutMs: number
   shutdownTimeoutMs: number
@@ -96,9 +98,11 @@ function requireKeeper(keeper: CodexOptions['keeper']): CodexOptions['keeper'] {
 
 export function codex(options: CodexOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('Codex options are required')
-  for (const field of ['id', 'command', 'args', 'sandbox', 'approvalPolicy', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'permissionPrompts', 'keeper', 'inheritEnv'] as const) {
+  for (const field of ['id', 'command', 'args', 'sandbox', 'approvalPolicy', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'permissionPrompts', 'keeper', 'inheritEnv', 'permissions'] as const) {
     if (options[field] === undefined) throw new TypeError(`Codex ${field} is required`)
   }
+  const initialPermissions = validatePermissionsSpec(options.permissions)
+  if (initialPermissions.kind !== 'codex') throw new TypeError('Codex permissions kind must be codex')
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('Codex id is required')
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('Codex command is required')
   if (!Array.isArray(options.args) || options.args.some(value => typeof value !== 'string')) throw new TypeError('Codex args is required')
@@ -115,9 +119,9 @@ export function codex(options: CodexOptions): AgentDriver {
   if (!PERMISSION_PROMPTS.has(options.permissionPrompts)) throw new TypeError('Codex permissionPrompts must be none or host')
   if (options.onRuntimeRequest !== undefined && typeof options.onRuntimeRequest !== 'function') throw new TypeError('Codex onRuntimeRequest must be a function')
   const keeper = requireKeeper(options.keeper)
-  const sandbox = options.sandbox
-  const approvalPolicy = options.approvalPolicy
-  const hostPermissions = options.permissionPrompts === 'host'
+  const sandbox = initialPermissions.sandbox
+  const approvalPolicy = initialPermissions.approvalPolicy
+  const hostPermissions = true
   return { id: options.id, async open(context) {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId, ready = false, closed = false
@@ -144,6 +148,7 @@ export function codex(options: CodexOptions): AgentDriver {
     let generation = 0
     const pendingSetup: { method?: string; params?: any }[] = []
     const failure = deferred<never>()
+    let livePermissions: Extract<PermissionsSpec, { kind: 'codex' }> = initialPermissions
     let overrides = sessionOverrides(context.configuration)
     const requestedBaseline = { model: overrides.model !== undefined, effort: overrides.reasoningEffort !== undefined }
     const nativeInitial: { model?: string; effort?: CodexReasoningEffort } = {}
@@ -271,8 +276,18 @@ export function codex(options: CodexOptions): AgentDriver {
     function canRestoreEffort() { return options.reasoningEffort != null || nativeInitial.effort != null }
     function resolvedModel() { return overrides.model ?? options.model ?? nativeInitial.model }
     function resolvedEffort() { return overrides.reasoningEffort ?? options.reasoningEffort ?? nativeInitial.effort }
+    // thread/start takes the sandbox as a string (`sandbox`), turn/start as the
+    // internally tagged `sandboxPolicy` object (app-server v2 SandboxPolicy).
+    function sandboxPolicyObject(sandbox: CodexSandbox): Record<string, unknown> {
+      if (sandbox === 'danger-full-access') return { type: 'dangerFullAccess' }
+      if (sandbox === 'read-only') return { type: 'readOnly' }
+      return { type: 'workspaceWrite' }
+    }
     function turnOverrides() {
-      const params: { model?: string; effort?: string } = {}
+      const params: { model?: string; effort?: string; approvalPolicy: string; sandboxPolicy: Record<string, unknown> } = {
+        approvalPolicy: livePermissions.approvalPolicy,
+        sandboxPolicy: sandboxPolicyObject(livePermissions.sandbox),
+      }
       const model = resolvedModel()
       const effort = resolvedEffort()
       if (model) params.model = model
@@ -421,12 +436,13 @@ export function codex(options: CodexOptions): AgentDriver {
         writeResult(message.id, sameTurn && answered.fingerprint === fingerprint ? answered.result : denyResult)
         return
       }
-      if (!matching) {
-        // Without host prompts the mode says "never ask": an MCP tool approval is
-        // granted for this call instead of failing the tool behind the user's back.
-        writeResult(message.id, isMcpApproval && !hostPermissions ? { action: 'accept', content: {} } : denyResult)
+      // Under approvalPolicy "never" the mode says "never ask": an MCP tool approval
+      // is granted for this call instead of failing the tool behind the user's back.
+      if (isMcpApproval && livePermissions.approvalPolicy === 'never') {
+        writeResult(message.id, { action: 'accept', content: {} })
         return
       }
+      if (!matching) { writeResult(message.id, denyResult); return }
       if (pendingPermissions.has(key)) return
       if (pendingPermissions.size >= MAX_PENDING_PERMISSIONS) { writeResult(message.id, denyResult); return }
       if (isPermissions) {
@@ -608,17 +624,21 @@ export function codex(options: CodexOptions): AgentDriver {
         }
         const buffered = pendingSetup.splice(0)
         for (const notice of buffered) dispatchNotify(notice)
+        const seeded = rpc.welcome.meta.permissions
+        if (seeded && typeof seeded === 'object') {
+          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'codex' }> } catch { /* keep factory spec */ }
+        }
         if (fatal) throw fatal
         ready = true
       } else {
       await Promise.race([rpc.request('initialize', { clientInfo: { name: 'supermux-core', version: '0.0.0' }, capabilities: { experimentalApi: true } }), failure.promise])
       rpc.write({ method: 'initialized', params: {} })
       const model = resolvedModel()
-      const result = await Promise.race([rpc.request(context.forkFrom ? 'thread/fork' : context.resumeId ? 'thread/resume' : 'thread/start', { ...(context.forkFrom ? {threadId: context.forkFrom.agentSessionId, ...(context.forkFrom.at ? {lastTurnId: context.forkFrom.at.nativeTurnId} : {})} : context.resumeId ? { threadId: context.resumeId } : {}), cwd: context.cwd, approvalPolicy, sandbox, ...(model ? { model } : {}) }), failure.promise])
+      const result = await Promise.race([rpc.request(context.forkFrom ? 'thread/fork' : context.resumeId ? 'thread/resume' : 'thread/start', { ...(context.forkFrom ? {threadId: context.forkFrom.agentSessionId, ...(context.forkFrom.at ? {lastTurnId: context.forkFrom.at.nativeTurnId} : {})} : context.resumeId ? { threadId: context.resumeId } : {}), cwd: context.cwd, approvalPolicy: livePermissions.approvalPolicy, sandbox: livePermissions.sandbox, ...(model ? { model } : {}) }), failure.promise])
       if (typeof result?.thread?.id !== 'string' || !result.thread.id || (context.resumeId && result.thread.id !== context.resumeId)) throw new Error('Codex thread identity mismatch')
       captureNativeInitial(result)
       agentSessionId = result.thread.id
-      rpc.setMeta({ agentSessionId: result.thread.id })
+      rpc.setMeta({ agentSessionId: result.thread.id, permissions: livePermissions })
       hookRuntimeRequest(result.thread.id)
       const buffered = pendingSetup.splice(0)
       for (const notice of buffered) dispatchNotify(notice)
@@ -644,7 +664,15 @@ export function codex(options: CodexOptions): AgentDriver {
     }
     const normalizer = createCodexNormalizer()
     return {
-      agentSessionId: agentSessionId!, capabilities: { resume: true, steer: true, fork: true, detach: true, configure: true, history: true }, close, interrupt,
+      agentSessionId: agentSessionId!, capabilities: { resume: true, steer: true, fork: true, detach: true, configure: true, history: true, permissions: true }, close, interrupt,
+      async setPermissions(spec) {
+        if (fatal || closed) throw fatal ?? new Error('Codex runtime closed')
+        const next = validatePermissionsSpec(spec)
+        if (next.kind !== 'codex') throw new TypeError('Codex permissions kind must be codex')
+        livePermissions = next
+        try { rpc.setMeta({ permissions: next }) } catch { /* */ }
+        return { applied: appliedFor(next) }
+      },
       normalize: normalizer,
       flush: () => normalizer.flush(),
       configuration() { return { ...overrides } },

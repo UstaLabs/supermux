@@ -42,6 +42,7 @@ function driverFor(name) {
       inheritEnv: true,
       tools: [],
       permissionPrompts: "none",
+      permissions: { kind: "claude", permissionMode: "dontAsk" },
       setupTimeoutMs: 30_000,
       requestTimeoutMs: 30_000,
       shutdownTimeoutMs: 2_000,
@@ -58,6 +59,7 @@ function driverFor(name) {
       sandbox: "read-only",
       approvalPolicy: "never",
       permissionPrompts: "none",
+      permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" },
       setupTimeoutMs: 30_000,
       requestTimeoutMs: 30_000,
       shutdownTimeoutMs: 2_000,
@@ -70,7 +72,7 @@ function driverFor(name) {
       id: "grok",
       command: "grok",
       commandArgs: [],
-      alwaysApprove: false,
+      permissions: { kind: "acp", policy: "ask", nativeMode: null },
       noLeader: true,
       ...acpShared,
     })
@@ -86,7 +88,7 @@ function driverFor(name) {
     id: "cursor",
     command: "cursor-agent",
     commandArgs: [],
-    permissions: "force",
+    permissions: { kind: "acp", policy: "auto-approve", nativeMode: "agent" },
     ...acpShared,
   })
 }

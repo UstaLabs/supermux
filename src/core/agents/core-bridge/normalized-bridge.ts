@@ -1,6 +1,6 @@
-import type { AgentEvent, ToolCallEvent } from "../types"
+import type { AgentEvent, BrokerRequest, ToolCallEvent } from "../types"
 import type { EventEnvelope, NormalizedBody } from "../../../../packages/supermux-core/src/events/normalized.js"
-import { mapPermissionRequest, mapUserQuestion } from "./request-map"
+import { answerLabel, mapPermissionRequest, mapUserQuestion } from "./request-map"
 import {
   createCodexNativeItemState,
   handleCodexItemCompleted,
@@ -46,6 +46,10 @@ export function extractGrokNativeTool(payload: unknown): unknown {
 
 export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
   const nativeItems = createCodexNativeItemState()
+  // A permission answer names an option ID; only the request that offered it knows the label,
+  // and by the time it resolves the library has already dropped the request. Keep the mapped
+  // requests here, from open to resolve, so `request-closed` can state what was chosen.
+  const openRequests = new Map<string, BrokerRequest>()
   let pendingAssistant = ""
   let lastAssistant = ""
 
@@ -101,8 +105,24 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
       opts.emit({ kind: "error", error: new Error(event.message) })
       return
     }
+    if (kind === "permission-auto") {
+      const tool = event.toolCall.tool || event.toolCall.title || "tool"
+      opts.emit({
+        kind: "activity",
+        events: [{
+          ts: event.ts,
+          kind: "tool",
+          tool,
+          title: `auto-approved: ${tool}`,
+          phase: "completed",
+          callId: event.toolCall.callId,
+        }],
+      })
+      return
+    }
     if (kind === "permission-request") {
       const mapped = mapPermissionRequest(event)
+      openRequests.set(mapped.requestId, mapped)
       opts.emit({
         kind: "request-open",
         requestId: mapped.requestId,
@@ -117,6 +137,7 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
     }
     if (kind === "user-question") {
       const mapped = mapUserQuestion(event)
+      openRequests.set(mapped.requestId, mapped)
       opts.emit({
         kind: "request-open",
         requestId: mapped.requestId,
@@ -130,10 +151,14 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
       return
     }
     if (kind === "request-resolved") {
+      const request = openRequests.get(event.requestId)
+      openRequests.delete(event.requestId)
+      const label = request ? answerLabel(request, event.answer) : undefined
       opts.emit({
         kind: "request-closed",
         requestId: event.requestId,
         outcome: event.outcome,
+        ...(label ? { answerLabel: label } : {}),
       })
       return
     }
