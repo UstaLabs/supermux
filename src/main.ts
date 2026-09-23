@@ -97,7 +97,7 @@ import {
   MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, unlinkSync, watch as fsWatch } from "fs"
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, statSync, unlinkSync, watch as fsWatch } from "fs"
 import { randomBytes, randomUUID } from "crypto"
 import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
@@ -217,8 +217,22 @@ if (preflight.fatal.length) {
   process.exit(1)
 }
 
-mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-if (usesFilesystemEndpoint()) mkdirSync(SOCKETS_DIR, { recursive: true, mode: 0o700 })
+// `mode` is applied by mkdir only when it CREATES the directory, and is masked
+// by umask even then — so a STATE_DIR that already exists keeps whatever mode it
+// has. An upgrade from a build that made it 0755, a restore from an archive, a
+// `mkdir ~/.mux/state` by hand: all leave a world-readable directory holding the
+// device tokens, the session database and the sockets. Tightened explicitly, and
+// only when it is wrong, so the common path does no syscall it does not need.
+const tighten = (dir: string): void => {
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    if ((statSync(dir).mode & 0o077) !== 0) chmodSync(dir, 0o700)
+  } catch (error) {
+    log.warn("state_dir_mode", { dir, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+tighten(STATE_DIR)
+if (usesFilesystemEndpoint()) tighten(SOCKETS_DIR)
 
 // load .env
 try {
