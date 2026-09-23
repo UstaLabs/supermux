@@ -19,6 +19,8 @@ import dev.supermux.net.ForgeAccount
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.RemoteRepo
+import dev.supermux.proto.ProjectDto
+import dev.supermux.proto.ProjectLocationDto
 import dev.supermux.session.ProjectActivity
 import dev.supermux.ui.session.LauncherActions
 import dev.supermux.ui.session.ProjectPicker
@@ -49,6 +51,12 @@ class PickerShots {
         "5-new-name" to "new-thing", "6-remote-term" to "term", "7-no-match" to "zzzq",
     )
 
+    private fun catalogOf(projects: List<String>): List<ProjectDto> = projects.take(8).mapIndexed { i, path ->
+        val name = path.substringAfterLast('/').replaceFirstChar { it.uppercase() }
+        val extra = if (i == 2) listOf(ProjectLocationDto("p$i-l1", "$home/projects/gm-admin")) else emptyList()
+        ProjectDto(id = "p$i", name = name, sortOrder = i, locations = listOf(ProjectLocationDto("p$i-l0", path)) + extra)
+    }
+
     @Test fun shots() {
         val dir = System.getenv("PICKER_SHOTS_DIR")?.let(::File) ?: return
         dir.mkdirs()
@@ -72,7 +80,12 @@ class PickerShots {
                 )
             },
         )
-        for ((name, query) in states) {
+        val catalog = catalogOf(projects)
+        // Plain folders first, then the same host with a catalog ("c-"), then a project's locations.
+        val runs = states.map { Triple(it.first, it.second, false) } +
+            listOf("c1-empty" to "", "c2-fuzzy-grm" to "grm", "c3-path" to "~/pro").map { Triple(it.first, it.second, true) } +
+            listOf(Triple("c4-locations", "", true))
+        for ((name, query, withCatalog) in runs) {
             runDesktopComposeUiTest(width = 520, height = 900) {
                 setContent {
                     DesktopTheme(appearance = theme) {
@@ -92,6 +105,9 @@ class PickerShots {
                                     onPick = {},
                                     onDismiss = {},
                                     activity = activity,
+                                    catalog = if (withCatalog) catalog else emptyList(),
+                                    catalogHostKey = "h",
+                                    catalogLocationsFor = if (name == "c4-locations") catalog[2] else null,
                                     useDropdownMenu = false,
                                 )
                             }

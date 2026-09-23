@@ -3,8 +3,20 @@ package dev.supermux.session
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.RemoteRepo
 
-/** A known local project fed into the picker omnibox (absolute [path] + display [label]). */
-data class ProjectOption(val path: String, val label: String)
+/**
+ * A known local project fed into the picker omnibox (absolute [path] + display [label]).
+ *
+ * A catalog project also carries its [projectId], its own [name] (matched instead of the folder
+ * name) and every one of its [locations] (a path query matches any of them). Its [path] is then
+ * only the option's key.
+ */
+data class ProjectOption(
+    val path: String,
+    val label: String,
+    val name: String? = null,
+    val projectId: String? = null,
+    val locations: List<String> = emptyList(),
+)
 
 /**
  * One option in the project picker omnibox. Mirrors the retired Vue PWA's forge omnibox
@@ -21,6 +33,9 @@ sealed interface OmniOption {
         override val label: String,
         val path: String,
         val nameHits: List<Int> = emptyList(),
+        /** A catalog project's name and id; null for a plain folder. */
+        val name: String? = null,
+        val projectId: String? = null,
     ) : OmniOption
     data class Cloud(override val label: String, val connectionId: String, val repo: RemoteRepo) : OmniOption
     /** [createTarget] is "local" for a local `git init`, otherwise a forge connection id. */
@@ -56,28 +71,29 @@ fun buildOmniboxOptions(
     val q = query.trim()
     val ql = q.lowercase()
 
+    fun ProjectOption.option(hits: List<Int> = emptyList()) = OmniOption.Local(label, path, hits, name, projectId)
     val local = if (q.isEmpty()) {
-        localProjects.map { OmniOption.Local(it.label, it.path) }
+        localProjects.map { it.option() }
     } else if (looksLikePath(q)) {
         // A path query lists the known projects under it ("~/pro" → everything in ~/projects),
         // in recency order; "~" expands to [home].
-        val prefix = if (q.startsWith("~") && home.isNotEmpty()) home + q.drop(1) else q
+        val prefix = (if (q.startsWith("~") && home.isNotEmpty()) home + q.drop(1) else q).lowercase()
         localProjects
-            .filter { it.path.startsWith(prefix) || it.path.lowercase().startsWith(prefix.lowercase()) }
-            .map { OmniOption.Local(it.label, it.path) }
+            .filter { p -> p.locations.ifEmpty { listOf(p.path) }.any { it.lowercase().startsWith(prefix) } }
+            .map { it.option() }
     } else {
         localProjects.mapNotNull { p ->
-            val name = projectFolderName(p.path)
+            val name = p.name ?: projectFolderName(p.path)
             val nameHit = fuzzyMatch(q, name)
             // The label ("…/parent/name") and path count only as contiguous substrings: letters
             // scattered across "projects/…" would otherwise match nearly every project.
             val score = when {
                 nameHit != null -> nameHit.score
                 p.label.lowercase().contains(ql) -> 20
-                p.path.lowercase().contains(ql) -> 1
+                p.locations.ifEmpty { listOf(p.path) }.any { it.lowercase().contains(ql) } -> 1
                 else -> return@mapNotNull null
             }
-            score to OmniOption.Local(p.label, p.path, nameHit?.indices.orEmpty())
+            score to p.option(nameHit?.indices.orEmpty())
         }
             // sortedByDescending is stable, so equal scores keep the recency order.
             .sortedByDescending { it.first }
@@ -87,7 +103,7 @@ fun buildOmniboxOptions(
     val cloud = cloudRepos.map { OmniOption.Cloud(it.fullName, it.connectionId, it) }
 
     val exact = q.isNotEmpty() && (
-        local.any { it.label.lowercase() == ql || projectFolderName(it.path).lowercase() == ql } ||
+        local.any { (it.name ?: projectFolderName(it.path)).lowercase() == ql || it.label.lowercase() == ql } ||
             cloud.any { it.repo.name.lowercase() == ql || it.repo.fullName.lowercase() == ql }
         )
 

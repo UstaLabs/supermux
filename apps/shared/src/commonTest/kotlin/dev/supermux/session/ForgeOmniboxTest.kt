@@ -124,4 +124,17 @@ class ForgeOmniboxTest {
         // The parent folder still matches as a word.
         assertEquals(1, buildOmniboxOptions("projects", labelled, emptyList(), conns).filterIsInstance<OmniOption.Local>().size)
     }
+
+    @Test fun catalog_projects_match_by_their_own_name_and_any_location() {
+        val catalog = listOf(
+            ProjectOption("catalog:g", "~/work/greenmate", name = "Greenmate", projectId = "g",
+                locations = listOf("/home/u/work/greenmate", "/home/u/projects/gm-admin")),
+        )
+        val byName = buildOmniboxOptions("grm", catalog, emptyList(), conns).filterIsInstance<OmniOption.Local>()
+        assertEquals("g", byName.single().projectId)
+        assertEquals("Greenmate", byName.single().name)
+        val byPath = buildOmniboxOptions("~/projects/gm", catalog, emptyList(), conns, home = "/home/u")
+        assertEquals(listOf("g"), byPath.filterIsInstance<OmniOption.Local>().map { it.projectId })
+        assertTrue(buildOmniboxOptions("greenmate", catalog, emptyList(), conns).none { it is OmniOption.Create })
+    }
 }

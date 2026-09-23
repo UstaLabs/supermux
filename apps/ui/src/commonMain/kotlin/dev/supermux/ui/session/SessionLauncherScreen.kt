@@ -367,7 +367,6 @@ fun SessionLauncherScreen(
     // Catalog known AND non-empty → project picker; otherwise today's path omnibox.
     val useCatalog = workspaceWorkdir == null && catalog.isNotEmpty()
     val projectHostKey = selectedHost.orEmpty()
-    var catalogMenu by remember { mutableStateOf(false) }
     var catalogLocationsFor by remember { mutableStateOf<String?>(null) }
     // A location-less project waiting for the omnibox to name a folder to register.
     var pendingLocationProject by remember { mutableStateOf<ProjectDto?>(null) }
@@ -608,7 +607,7 @@ fun SessionLauncherScreen(
         projectError = null
         projectConflict = null
         pendingLocationProject = null
-        catalogMenu = false
+        projectMenu = false
         catalogLocationsFor = null
         projectLocations = projectLocations + (projectLocationKey(projectHostKey, project.id) to path)
         onPrefsChange(currentPrefs())
@@ -621,12 +620,11 @@ fun SessionLauncherScreen(
             is LaunchLocation.Chosen -> pickProjectLocation(project, loc.path)
             is LaunchLocation.Choose -> {
                 catalogLocationsFor = project.id
-                catalogMenu = true
+                projectMenu = true
             }
             LaunchLocation.NeedsLocation -> {
                 // The existing path entry (typed path → validatePath, known folders, clone/create)
                 // names the folder; registration happens when it picks.
-                catalogMenu = false
                 catalogLocationsFor = null
                 pendingLocationProject = project
                 projectMenu = true
@@ -863,13 +861,9 @@ fun SessionLauncherScreen(
                                     // clobbered by the restore effect settling — ignore taps until
                                     // restore lands.
                                     .clickable(enabled = !launcherRestoring) {
-                                        if (useCatalog) {
-                                            catalogLocationsFor = null
-                                            catalogMenu = true
-                                        } else {
-                                            pendingLocationProject = null
-                                            projectMenu = true
-                                        }
+                                        catalogLocationsFor = null
+                                        pendingLocationProject = null
+                                        projectMenu = true
                                     }
                                     .padding(horizontal = Space.sm, vertical = Space.xs)
                                     .testTag("launcher_project_field"),
@@ -912,30 +906,18 @@ fun SessionLauncherScreen(
                                         workdir = path; workdirTouched = true; error = null; projectError = null; projectConflict = null
                                     }
                                 },
-                                onDismiss = { projectMenu = false; pendingLocationProject = null },
+                                onDismiss = { projectMenu = false; pendingLocationProject = null; catalogLocationsFor = null },
                                 activity = pickerActivity,
+                                // One picker: the catalog's projects when the host has one — except
+                                // while a location-less project waits for a folder, which is path entry.
+                                catalog = if (useCatalog && pendingLocationProject == null) catalog else emptyList(),
+                                catalogHostKey = projectHostKey,
+                                loadCatalogImage = loadCatalogImage,
+                                catalogLocationsFor = catalogLocationsFor?.let { id -> catalog.firstOrNull { it.id == id } },
+                                onCatalogProject = { applyProject(it) },
+                                onCatalogLocation = { p, path -> pickProjectLocation(p, path) },
+                                onCatalogLocationsBack = { catalogLocationsFor = null },
                             )
-                            if (useCatalog) {
-                                CatalogProjectPicker(
-                                    expanded = catalogMenu,
-                                    projects = catalog,
-                                    hostId = projectHostKey,
-                                    current = workdir,
-                                    home = home,
-                                    locationsFor = catalogLocationsFor,
-                                    loadImage = loadCatalogImage,
-                                    onProject = { applyProject(it) },
-                                    onShowLocations = { catalogLocationsFor = it },
-                                    onLocation = { p, path -> pickProjectLocation(p, path) },
-                                    onOther = {
-                                        catalogMenu = false
-                                        catalogLocationsFor = null
-                                        pendingLocationProject = null
-                                        projectMenu = true
-                                    },
-                                    onDismiss = { catalogMenu = false; catalogLocationsFor = null },
-                                )
-                            }
                         }
                         pendingLocationProject?.let { p ->
                             Text(
