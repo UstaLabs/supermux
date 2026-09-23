@@ -383,6 +383,28 @@ top retained row            HIST-001 RED-ÜNÏÇØDE-日本語-🎉
 Pinned as an equality (`historyRows === historySent`) plus the identity of the
 oldest line, so a regression cannot pass by shipping a different number.
 
+**What that measurement does NOT cover.** Both terminals in it are 100×30: the
+client's emulator is the same height as the daemon's pty. The fix is sized to
+the daemon — `pages.rows` linefeeds — and it can only be sized to the daemon,
+because the snapshot is built at `BrokerHello` and `BrokerHello` carries no
+geometry (the broker attaches at a placeholder 80×24; the viewer's real size
+arrives afterwards, on `BrokerFocus`). So, with `C` the attaching client's
+viewport height and `D` the daemon's:
+
+| | what the client keeps |
+|---|---|
+| `C == D` (the measurement above, and every focused viewer) | all of it |
+| `C > D` — a **background** viewer whose window is taller than the focused device's | loses the oldest `C - D` lines: the linefeeds scroll `D` rows off, the rest are still in the viewport when `ED 2` fires |
+| `C < D` | loses nothing; `D - C` blank rows land in the client's scrollback behind the real history |
+
+The `C > D` case is the original defect in miniature — bounded by the size
+difference instead of by a whole screen — and it is **open**, not fixed. Making
+phase 2 geometry-independent means drawing the viewport rather than
+erasing-and-redrawing it, and phase 2 is ghostty's pinned `TerminalFormatter`;
+the daemon has no way to learn `C` at the moment it takes the snapshot. A
+viewer that takes focus resizes the pty to its own size, so its next attachment
+is the exact case again. `README.md` §3 carries the same table.
+
 ---
 
 ## 7. What was not tested, and why

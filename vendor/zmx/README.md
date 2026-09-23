@@ -317,10 +317,37 @@ drawn and that was still on screen was wiped instead of becoming the client's
 history, so a client kept `sent - rows + 1` lines and a terminal with less than
 one screenful of scrollback kept **none**. The linefeeds push exactly those rows
 out of the viewport and into the scrollback, which is where they belong, and
-leave the same blank viewport phase 2 needs. The erase stays behind them: a
-no-op at equal geometry, and still the thing that clears residue on a client
-taller than the daemon. Measured end to end in `VERIFICATION.md` §6 — 99 lines
-sent, 99 retained — and pinned in `src/util.zig`'s own tests.
+leave the same blank viewport phase 2 needs. Measured end to end in
+`VERIFICATION.md` §6 — 99 lines sent, 99 retained — and pinned in
+`src/util.zig`'s own tests.
+
+**`rows` is the DAEMON's geometry, and that is the limit of the guarantee.**
+The count comes from `pages.rows` — the pty's height, which is the *focus
+owner's* size — because the snapshot is built at `BrokerHello` and
+`BrokerHello` carries no geometry (the broker attaches at a placeholder 80×24
+and the viewer's real size arrives later, on `BrokerFocus`). The daemon
+therefore cannot know how tall the window receiving these bytes is, and the
+two sizes only have to agree for the *focused* viewer. Writing `C` for the
+attaching client's viewport height and `D` for the daemon's:
+
+* `C == D` — exact. Every phase-1 line becomes history; the `ED 2` behind the
+  linefeeds is a no-op.
+* `C > D` (a **background** viewer with a taller window) — the linefeeds push
+  only `D` rows off, so the oldest `C - D` lines of phase 1 are still inside
+  the viewport when the erase fires and are **lost**. The original bug, smaller
+  and bounded by the size difference rather than by a whole screen.
+* `C < D` — nothing is lost, but `D - C` of the blank rows the linefeeds
+  created are pushed into the client's scrollback, so the restored history ends
+  with that many blank lines.
+
+Both are cosmetic-to-lossy at the margin and neither is fixed here. A
+geometry-independent phase 2 would have to *draw* every cell of the viewport
+instead of erasing and redrawing, and phase 2 is ghostty's own pinned
+`TerminalFormatter` — not ours to change without unpinning it. The erase stays
+because on a taller client it is still what clears the residue phase 2 would
+otherwise leave below its own output. A viewer that takes focus resizes the pty
+to its own size, so its next attachment (a fresh epoch) is the exact case
+again.
 
 One upstream behaviour changed, deliberately: the synchronized-output
 (DECSET 2026) save/restore is now a `defer`. Upstream skips the restore on its
