@@ -392,6 +392,35 @@ data class ClaudeExtraUsage(
     val currency: String = "",
 )
 
+/** One banked usage-limit reset grant (Claude Code's `/limit-reset`). [endsAtIso] is the use-by date. */
+@Serializable
+data class ClaudeResetGrant(
+    val id: String = "",
+    val label: String = "",
+    val resetsTotal: Int = 0,
+    val resetsLeft: Int = 0,
+    val startsAtIso: String? = null,
+    val endsAtIso: String? = null,
+    /** Limit windows one use refills (five_hour, seven_day, …). */
+    val clears: List<String> = emptyList(),
+    val paused: Boolean = false,
+    val usableNow: Boolean = false,
+    /** true = only usable while at a limit; false = usable any time. */
+    val useRequiresLimit: Boolean = true,
+)
+
+@Serializable
+data class ClaudeResets(
+    val eligible: Boolean = false,
+    val ineligibleReason: String? = null,
+    val atLimit: Boolean = false,
+    val grants: List<ClaudeResetGrant> = emptyList(),
+    /** The grant a redeem spends next; null when none is usable right now. */
+    val nextGrantId: String? = null,
+    val resetsLeft: Int = 0,
+    val cooldownUntilIso: String? = null,
+)
+
 @Serializable
 data class ClaudeUsage(
     val fiveHour: ClaudeWindow = ClaudeWindow(),
@@ -400,6 +429,8 @@ data class ClaudeUsage(
     val sevenDaySonnet: ClaudeWindow? = null,
     val sevenDayFable: ClaudeWindow? = null,
     val extraUsage: ClaudeExtraUsage? = null,
+    /** Banked limit resets; null on an account without the program or an older broker. */
+    val resets: ClaudeResets? = null,
 )
 
 @Serializable
@@ -512,6 +543,18 @@ data class CodexResetResult(
     val code: String = "",
     val windowsReset: Int = 0,
     val codex: CodexUsage? = null,
+)
+
+// Result of redeeming a banked Claude limit reset (POST /usage/claude/reset).
+// `result` ∈ reset | already_used | not_limited | cooldown | ineligible | unavailable |
+// no_reset (broker: nothing usable to spend); `claude` is the refreshed usage.
+@Serializable
+data class ClaudeResetResult(
+    val result: String = "",
+    val reason: String? = null,
+    val resetsLeft: Int? = null,
+    val cleared: List<String> = emptyList(),
+    val claude: ClaudeUsage? = null,
 )
 
 // ─── Git status + finish (chat header) ───────────────────────────────────────
@@ -2049,6 +2092,10 @@ class BrokerApi(
     /** POST /usage/codex/reset → redeem one banked Codex rate-limit reset. */
     suspend fun redeemCodexReset(): CodexResetResult =
         postReturningJson("$httpBase/usage/codex/reset", EmptyBody())
+
+    /** POST /usage/claude/reset → spend one banked Claude limit reset. */
+    suspend fun redeemClaudeReset(): ClaudeResetResult =
+        postReturningJson("$httpBase/usage/claude/reset", EmptyBody())
 
     /** GET /devices */
     suspend fun devices(): List<DeviceDto> =

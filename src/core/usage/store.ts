@@ -299,9 +299,15 @@ export class UsageStore extends EventEmitter {
 
   private setProviderData(provider: UsageProvider, data: unknown): void {
     switch (provider) {
-      case "claude":
-        this.claude = data as ClaudeUsage
+      case "claude": {
+        // Local seeds and agent pushes carry no banked-reset block; keep the
+        // one the last live fetch found instead of blanking the resets row.
+        const next = data as ClaudeUsage | null
+        this.claude = next && next.resets === undefined && this.claude?.resets !== undefined
+          ? { ...next, resets: this.claude.resets }
+          : next
         break
+      }
       case "codex":
         this.codex = data as CodexUsage
         break

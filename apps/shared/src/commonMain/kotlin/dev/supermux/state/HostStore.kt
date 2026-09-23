@@ -51,6 +51,7 @@ import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.ClaudeResetResult
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
@@ -1575,6 +1576,11 @@ class HostStore(
      *  Codex usage so the card can update in place. Null on any failure. */
     suspend fun redeemCodexReset(): CodexResetResult? =
         runApi("redeemCodexReset") { api.redeemCodexReset() }
+
+    /** POST /usage/claude/reset — spend one banked Claude limit reset; returns the refreshed
+     *  Claude usage so the card can update in place. Null on any failure. */
+    suspend fun redeemClaudeReset(): ClaudeResetResult? =
+        runApi("redeemClaudeReset") { api.redeemClaudeReset() }
 
     suspend fun personalAssistants(): List<PADto> =
         runApi("personalAssistants") { api.listPAs() } ?: emptyList()

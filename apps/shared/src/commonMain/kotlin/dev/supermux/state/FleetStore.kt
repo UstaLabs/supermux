@@ -31,6 +31,7 @@ import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ChunkSource
+import dev.supermux.net.ClaudeResetResult
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.CuratorSettingsResponse
@@ -1420,6 +1421,7 @@ class FleetStore(
         return activeApp()?.refreshUsage()?.also { publishUsage(target, it) }
     }
     suspend fun redeemCodexReset(): CodexResetResult? = activeApp()?.redeemCodexReset()
+    suspend fun redeemClaudeReset(): ClaudeResetResult? = activeApp()?.redeemClaudeReset()
     /** Replace the active host's held snapshot (the Codex redeem updates one provider in place). */
     fun applyUsage(usage: UsageResponse) {
         val target = synchronized(lock) { activeRecordId() }

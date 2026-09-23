@@ -13,6 +13,9 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.ClaudeExtraUsage
+import dev.supermux.net.ClaudeResetGrant
+import dev.supermux.net.ClaudeResetResult
+import dev.supermux.net.ClaudeResets
 import dev.supermux.net.ClaudeUsage
 import dev.supermux.net.ClaudeWindow
 import dev.supermux.net.CodexCredits
@@ -465,6 +468,104 @@ class UsageScreenTest {
         assertEquals("No banked resets left", codexResetNote(CodexResetResult(code = "no_credit")))
         assertEquals("That reset was already redeemed", codexResetNote(CodexResetResult(code = "already_redeemed")))
         assertEquals("Reset request completed", codexResetNote(CodexResetResult(code = "something_else")))
+    }
+
+    // ── (5b) the Claude banked limit resets ─────────────────────────────────────────────────────────
+
+    private fun claudeResets(
+        nextGrantId: String? = "opus55",
+        useRequiresLimit: Boolean = false,
+        atLimit: Boolean = false,
+    ) = ClaudeResets(
+        eligible = true,
+        atLimit = atLimit,
+        grants = listOf(
+            ClaudeResetGrant(
+                id = "opus55",
+                label = "Opus 5.5 launch",
+                resetsTotal = 1,
+                resetsLeft = 1,
+                endsAtIso = "2026-10-22T12:00:00Z",
+                clears = listOf("five_hour", "seven_day", "seven_day_overage_included"),
+                usableNow = nextGrantId != null,
+                useRequiresLimit = useRequiresLimit,
+            ),
+        ),
+        nextGrantId = nextGrantId,
+        resetsLeft = 1,
+    )
+
+    private fun usageWithClaudeResets(resets: ClaudeResets?) =
+        fixtureUsage().let { it.copy(claude = it.claude!!.copy(resets = resets)) }
+
+    @Test fun claude_card_hides_the_resets_row_without_a_banked_reset() = runComposeUiTest {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(usage = usageWithClaudeResets(null), loading = false, onBack = {}, onRedeem = { null }, onRedeemClaude = { null })
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("claude_redeem_button").assertDoesNotExist()
+    }
+
+    @Test fun claude_reset_confirms_then_redeems_and_shows_the_note() = runComposeUiTest {
+        var redeemCalled = false
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(
+                    usage = usageWithClaudeResets(claudeResets()),
+                    loading = false,
+                    onBack = {},
+                    onRedeem = { null },
+                    onRedeemClaude = { redeemCalled = true; ClaudeResetResult(result = "reset", resetsLeft = 0) },
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithText("1 · use by Oct 22").assertIsDisplayed()
+        onNodeWithTag("claude_redeem_button").performClick()
+        waitForIdle()
+        onNodeWithText("Refills your 5-hour and 7-day limits now. Spends 1 of 1; your weekly reset day stays the same.")
+            .assertIsDisplayed()
+        assertFalse(redeemCalled)
+        onNodeWithTag("claude_redeem_confirm").performClick()
+        waitForIdle()
+        assertTrue(redeemCalled)
+        onNodeWithText("✓ Limits reset · 0 left").assertIsDisplayed()
+    }
+
+    @Test fun claude_reset_that_needs_a_limit_shows_a_hint_instead_of_the_button() = runComposeUiTest {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(
+                    usage = usageWithClaudeResets(claudeResets(nextGrantId = null, useRequiresLimit = true)),
+                    loading = false,
+                    onBack = {},
+                    onRedeem = { null },
+                    onRedeemClaude = { null },
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("claude_redeem_button").assertDoesNotExist()
+        onNodeWithText("Usable once you hit a limit").assertIsDisplayed()
+    }
+
+    @Test fun claude_reset_note_covers_every_result() {
+        assertEquals("Reset failed", claudeResetNote(null))
+        assertEquals("✓ Limits reset · 2 left", claudeResetNote(ClaudeResetResult(result = "reset", resetsLeft = 2)))
+        assertEquals("✓ Limits reset", claudeResetNote(ClaudeResetResult(result = "reset")))
+        assertEquals("Your limits were already clear — nothing was used", claudeResetNote(ClaudeResetResult(result = "not_limited")))
+        assertEquals("That reset was already used", claudeResetNote(ClaudeResetResult(result = "already_used")))
+        assertEquals("No reset available to use", claudeResetNote(ClaudeResetResult(result = "no_reset")))
+        assertEquals("Reset request completed", claudeResetNote(ClaudeResetResult(result = "future_code")))
+    }
+
+    @Test fun claude_reset_clears_names_the_known_windows() {
+        assertEquals("5-hour and 7-day limits", claudeResetClears(listOf("five_hour", "seven_day", "seven_day_overage_included")))
+        assertEquals("5-hour, 7-day and 7-day Sonnet limits", claudeResetClears(listOf("five_hour", "seven_day", "seven_day_sonnet")))
+        assertEquals("7-day limit", claudeResetClears(listOf("seven_day")))
+        assertEquals("usage limits", claudeResetClears(emptyList()))
     }
 
     // ── (6) NEW: the Compact / standalone chrome Android contributed ────────────────────────────

@@ -3199,6 +3199,26 @@ export class WebChannel implements Channel {
       }
     }
 
+    if (method === "POST" && path === "/usage/claude/reset") {
+      const { redeemClaudeReset, fetchClaudeUsage } = await import("../../core/usage/index")
+      const { getUsageStore } = await import("../../core/usage/store")
+      try {
+        // Spend the grant the server offers next — re-read it rather than trust
+        // a client's possibly stale snapshot.
+        const before = await fetchClaudeUsage()
+        const grantId = before?.resets?.nextGrantId
+        if (!grantId) {
+          return this.json({ result: "no_reset", reason: before?.resets?.ineligibleReason ?? null, resetsLeft: before?.resets?.resetsLeft ?? 0, cleared: [], claude: before })
+        }
+        const result = await redeemClaudeReset(grantId)
+        const claude = await fetchClaudeUsage().catch(() => null) // best-effort refresh
+        if (claude) getUsageStore().apply("claude", claude, "live")
+        return this.json({ ...result, claude })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 502)
+      }
+    }
+
     if (method === "GET" && path === "/proxies") {
       const proxies = this.opts.listProxies?.() ?? []
       return this.json(proxies)

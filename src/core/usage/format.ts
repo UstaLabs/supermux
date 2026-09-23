@@ -74,6 +74,12 @@ function fmtClaude(c: ClaudeUsage): string {
     lines.push(`  Extra: ${used} / ${limit}`)
   }
 
+  if (c.resets && c.resets.resetsLeft > 0) {
+    const ends = c.resets.grants.find((g) => g.id === c.resets!.nextGrantId)?.endsAtIso
+    const by = ends ? dateReset(new Date(ends).getTime()) : ""
+    lines.push(`  Resets banked: ${c.resets.resetsLeft}${by ? ` · use by ${by}` : ""}`)
+  }
+
   return lines.join("\n")
 }
 
