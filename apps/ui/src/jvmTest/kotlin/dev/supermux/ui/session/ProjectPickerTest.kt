@@ -221,7 +221,12 @@ class ProjectPickerTest {
             }
         }
         onNodeWithTag("launcher_use_path").assertDoesNotExist()
+        // A bare word is a search, not a path.
         onNodeWithTag("launcher_project_search").performTextInput("misc")
+        waitForIdle()
+        onNodeWithTag("launcher_use_path").assertDoesNotExist()
+        onNodeWithTag("launcher_project_search").performTextClearance()
+        onNodeWithTag("launcher_project_search").performTextInput("~/misc")
         waitForIdle()
         onNodeWithTag("launcher_use_path").assertIsDisplayed()
         onNodeWithText("Use this path").assertIsDisplayed()
@@ -748,8 +753,8 @@ class ProjectPickerTest {
 
         onNodeWithTag("launcher_project_search").performTextInput("widget")
         waitForIdle()
-        // The free-path row leads, the forge search lands behind it, and the locals drop out.
-        onNodeWithTag("launcher_use_path").assertIsDisplayed()
+        // A bare word is not offered as a path; the forge search lands and the locals drop out.
+        onNodeWithTag("launcher_use_path").assertDoesNotExist()
         onNodeWithTag("project_row_/home/u/alpha").assertDoesNotExist()
         waitFor { onNodeWithTag("forge_clone_alice/widget").assertIsDisplayed() }
         onNodeWithTag("forge_group_c1").assertIsDisplayed()

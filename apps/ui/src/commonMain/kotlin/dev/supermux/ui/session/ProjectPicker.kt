@@ -12,6 +12,11 @@
 package dev.supermux.ui.session
 
 import androidx.compose.foundation.background
+import kotlin.time.Clock
+import dev.supermux.session.ProjectActivity
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,7 +46,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -69,12 +73,17 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.RemoteRepo
 import dev.supermux.session.OmniOption
 import dev.supermux.session.ProjectOption
 import dev.supermux.session.buildOmniboxOptions
 import dev.supermux.session.formatWorkdir
+import androidx.compose.material.icons.filled.Lock
+import dev.supermux.session.looksLikePath
+import dev.supermux.session.fuzzyMatch
+import dev.supermux.session.projectFolderName
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Size
@@ -161,6 +170,8 @@ fun ProjectPicker(
     actions: LauncherActions,
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
+    /** Sessions per project and when one last spoke, keyed by project path — the tiles' "● 2m". */
+    activity: Map<String, ProjectActivity> = emptyMap(),
     /**
      * Production leaves this true (heading dropdown on a pointer host). UI tests that need real
      * [FocusRequester] semantics set false — headless skiko often does not report IsFocused inside
@@ -193,11 +204,14 @@ fun ProjectPicker(
     /** Path completed after Hide — discoverable one-click use (not silent disk materialisation). */
     var readyPath by remember(expanded) { mutableStateOf<String?>(null) }
     var searchAutofocused by remember(expanded) { mutableStateOf(false) }
+    /** "2m ago" is relative to when the picker opened — no ticking clock inside a menu. */
+    val nowMs = remember(expanded) { Clock.System.now().toEpochMilliseconds() }
     var highlight by remember(expanded) { mutableStateOf(0) }
 
     val query = search.trim()
     // Offer a free-path pick when the typed query isn't already an exact known project path.
-    val showTypedPath = query.isNotEmpty() && projects.none { it == query }
+    // …and only when it reads as a path: a bare word is a project to find or a repo to create.
+    val showTypedPath = looksLikePath(query) && projects.none { it == query }
     val projectOptions = remember(projects, home) {
         projects.map { ProjectOption(it, formatWorkdir(it, home)) }
     }
@@ -259,8 +273,8 @@ fun ProjectPicker(
     val pagedCloud = remember(cloudRepos, cloudVisible) {
         cloudRepos.take(cloudVisible)
     }
-    val options = remember(query, projectOptions, pagedCloud, connections) {
-        buildOmniboxOptions(query, projectOptions, pagedCloud, connections)
+    val options = remember(query, projectOptions, pagedCloud, connections, home) {
+        buildOmniboxOptions(query, projectOptions, pagedCloud, connections, home)
     }
     val locals = options.filterIsInstance<OmniOption.Local>()
     val clouds = options.filterIsInstance<OmniOption.Cloud>()
@@ -423,7 +437,8 @@ fun ProjectPicker(
         ) {
             Column(Modifier.padding(bottom = if (touch) Space.xl else Space.sm)) {
             // ── Single search field ──
-            Column(Modifier.padding(horizontal = Space.md, vertical = Space.xs)) {
+            // 5a's field inset: 8dp from the menu edge and top.
+            Column(Modifier.padding(horizontal = Space.sm, vertical = Space.sm)) {
                 // Android's sheet named itself; a dropdown anchored under the heading does not.
                 if (touch) {
                     Text(
@@ -436,7 +451,8 @@ fun ProjectPicker(
                             .testTag("project_picker_title"),
                     )
                 }
-                OutlinedTextField(
+                // Compact rounded field (the picker lab's 5a), not a full-height outlined one.
+                BasicTextField(
                     value = search,
                     onValueChange = {
                         search = it
@@ -445,37 +461,57 @@ fun ProjectPicker(
                         validationError = null
                         highlight = 0
                     },
-                    placeholder = {
-                        Text(
-                            "Search projects, repos, or type a path",
-                            color = cs.onSurfaceVariant,
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(
-                            Icons.Filled.Search,
-                            contentDescription = null,
-                            tint = cs.onSurfaceVariant,
-                            modifier = Modifier.size(Space.lg + Space.xs),
-                        )
-                    },
-                    trailingIcon = if (validating) {
-                        {
-                            CircularProgressIndicator(
-                                Modifier.size(Space.lg),
-                                strokeWidth = Stroke.thin,
-                                color = cs.primary,
-                            )
-                        }
-                    } else null,
                     singleLine = true,
                     enabled = !resolving,
+                    cursorBrush = SolidColor(cs.primary),
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = cs.onSurface, fontSize = 14.sp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(searchFocus)
                         .onFocusChanged { if (it.isFocused) searchAutofocused = true }
                         .testTag("launcher_project_search")
                         .onPreviewKeyEvent { onOmniboxKey(it) },
+                    decorationBox = { field ->
+                        val shape = RoundedCornerShape(Radii.sm)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                            modifier = Modifier
+                                .clip(shape)
+                                .background(cs.surfaceContainerLowest)
+                                .border(
+                                    Stroke.hairline,
+                                    cs.outlineVariant,
+                                    shape,
+                                )
+                                .padding(horizontal = Space.md, vertical = Space.sm),
+                        ) {
+                            Icon(
+                                Icons.Filled.Search,
+                                contentDescription = null,
+                                tint = cs.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Box(Modifier.weight(1f)) {
+                                if (search.isEmpty()) {
+                                    Text(
+                                        "Search projects, repos, or type a path",
+                                        color = cs.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                                        maxLines = 1,
+                                    )
+                                }
+                                field()
+                            }
+                            if (validating) {
+                                CircularProgressIndicator(
+                                    Modifier.size(Space.lg),
+                                    strokeWidth = Stroke.thin,
+                                    color = cs.primary,
+                                )
+                            }
+                        }
+                    },
                 )
                 // Ready only after the search field actually receives focus (onFocusChanged).
                 if (searchAutofocused) {
@@ -563,23 +599,10 @@ fun ProjectPicker(
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier
-                        .padding(horizontal = Space.xl - Space.xs, vertical = Space.sm)
+                        .padding(horizontal = Space.md, vertical = Space.sm)
                         .testTag("launcher_project_empty"),
                 )
             }
-            if (searchEmpty && !searching && query.length >= 2 && connections.isNotEmpty() &&
-                cloudGroups.isEmpty()
-            ) {
-                Text(
-                    "No repos match \"${query}\".",
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier
-                        .padding(horizontal = Space.xl - Space.xs, vertical = Space.sm)
-                        .testTag("launcher_forge_empty"),
-                )
-            }
-
             if (nothing && !nothingLocalMatch) {
                 Text(
                     "Type a path or search your projects.",
@@ -597,192 +620,116 @@ fun ProjectPicker(
             // and a forge search can be hundreds of repos under a thumb); the desktop menu keeps
             // its plain scrolling Column so `performScrollTo` and the dropdown sizing are unchanged.
             val rows = buildList<Pair<String, @Composable () -> Unit>> {
-                // "Use this path" — first row when the query is a free path.
+                // "Use this path" — first row, and only when the query reads as a path.
                 if (showTypedPath) {
                     add("typed" to {
-                    val hi = highlight == 0 && navTargets.firstOrNull() is OmniNav.TypedPath
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(
-                                    "Use this path",
-                                    color = if (hi) cs.primary else cs.onSurface,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                )
-                                Text(
-                                    query,
-                                    color = cs.onSurfaceVariant,
-                                    fontFamily = FontFamily.Monospace,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    maxLines = 1,
-                                )
-                            }
-                        },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Filled.ChevronRight,
-                                contentDescription = null,
-                                tint = cs.onSurfaceVariant,
-                                modifier = Modifier.size(Space.lg + Space.xs),
+                        PickerRow(
+                            onClick = { confirmTypedPath() },
+                            highlighted = highlight == 0 && navTargets.firstOrNull() is OmniNav.TypedPath,
+                            enabled = !resolving && !validating,
+                            modifier = Modifier.testTag("launcher_use_path"),
+                        ) {
+                            Icon(Icons.Filled.FolderOpen, null, tint = cs.primary, modifier = Modifier.size(Space.lg))
+                            Text("Use this path", color = cs.onSurface, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                            StartEllipsizedText(
+                                query,
+                                style = MaterialTheme.typography.labelSmall.copy(color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace),
+                                modifier = Modifier.weight(1f),
                             )
-                        },
-                        enabled = !resolving && !validating,
-                        modifier = Modifier
-                            .testTag("launcher_use_path")
-                            .then(
-                                if (hi) Modifier.background(cs.primary.copy(alpha = 0.08f))
-                                else Modifier,
-                            ),
-                        onClick = { confirmTypedPath() },
-                    )
+                        }
                     })
                 }
 
                 if (locals.isNotEmpty()) {
-                    add("h_projects" to {
-                    Text(
-                        "Projects",
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(
-                            horizontal = Space.xl - Space.xs,
-                            vertical = Space.xs,
-                        ),
-                    )
-                    })
-                    locals.forEach { o ->
-                        add("l_${o.path}" to {
-                        val selected = o.path == current
-                        val navIndex = navTargets.indexOfFirst {
-                            it is OmniNav.Local && it.path == o.path
-                        }
-                        val hi = navIndex == highlight
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(
-                                        o.path.trimEnd('/').substringAfterLast('/').ifEmpty { o.path },
-                                        color = when {
-                                            hi -> cs.primary
-                                            selected -> cs.primary
-                                            else -> cs.onSurface
-                                        },
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 1,
-                                    )
-                                    Text(
-                                        o.label,
-                                        color = cs.onSurfaceVariant,
-                                        fontFamily = FontFamily.Monospace,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        maxLines = 1,
-                                    )
-                                }
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Filled.FolderOpen,
-                                    contentDescription = null,
-                                    tint = cs.onSurfaceVariant,
-                                    modifier = Modifier.size(Space.lg + Space.xs),
+                    // Empty search → the most recent projects as tiles (arrow keys walk them in
+                    // order, they are the first nav targets), the rest as rows below.
+                    val tiles = if (query.isEmpty()) locals.take(PROJECT_TILE_COUNT) else emptyList()
+                    val listed = locals.drop(tiles.size)
+                    if (tiles.isNotEmpty()) {
+                        add("h_recent" to { PickerSectionLabel("Jump back in") })
+                        tiles.chunked(PROJECT_TILE_COLUMNS).forEachIndexed { i, row ->
+                            add("tiles_$i" to {
+                                ProjectTileRow(
+                                    row = row,
+                                    current = current,
+                                    home = home,
+                                    activity = activity,
+                                    nowMs = nowMs,
+                                    highlighted = { path ->
+                                        navTargets.indexOfFirst { it is OmniNav.Local && it.path == path } == highlight
+                                    },
+                                    enabled = !resolving,
+                                    onPick = { pick(it) },
                                 )
-                            },
-                            trailingIcon = {
-                                if (selected) {
-                                    Icon(Icons.Filled.Check, null, Modifier.size(Space.lg), tint = cs.primary)
-                                }
-                            },
-                            enabled = !resolving,
-                            modifier = Modifier
-                                .testTag("project_row_${o.path}")
-                                .then(
-                                    if (hi) Modifier.background(cs.primary.copy(alpha = 0.08f))
-                                    else Modifier,
-                                ),
-                            onClick = { pick(o.path) },
-                        )
+                            })
+                        }
+                    }
+                    if (listed.isNotEmpty()) {
+                        add("h_projects" to { PickerSectionLabel(if (tiles.isEmpty()) "Projects" else "Everything else") })
+                    }
+                    listed.forEach { o ->
+                        add("l_${o.path}" to {
+                            val selected = o.path == current
+                            // Name, the full location (trimmed from the start), then activity.
+                            PickerRow(
+                                onClick = { pick(o.path) },
+                                highlighted = navTargets.indexOfFirst { it is OmniNav.Local && it.path == o.path } == highlight,
+                                enabled = !resolving,
+                                modifier = Modifier.testTag("project_row_${o.path}"),
+                            ) {
+                                Text(
+                                    highlightHits(projectFolderName(o.path), o.nameHits, cs.primary),
+                                    color = if (selected) cs.primary else cs.onSurface,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                )
+                                StartEllipsizedText(
+                                    homeRelativePath(o.path, home),
+                                    style = MaterialTheme.typography.labelSmall.copy(color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace),
+                                    modifier = Modifier.weight(1f),
+                                )
+                                activity[o.path]?.let { ActivityLine(it, nowMs) }
+                                if (selected) Icon(Icons.Filled.Check, "Current project", Modifier.size(Space.lg), tint = cs.primary)
+                            }
                         })
                     }
                 }
 
                 cloudGroups.forEach { (conn, repos) ->
                     add("h_${conn.id}" to {
-                    Text(
-                        "${conn.host} · @${conn.account.login}",
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier
-                            .padding(horizontal = Space.xl - Space.xs, vertical = Space.xs)
-                            .testTag("forge_group_${conn.id}"),
-                    )
+                        PickerSectionLabel(
+                            "Clone from ${conn.host} · ${conn.account.login}",
+                            modifier = Modifier.testTag("forge_group_${conn.id}"),
+                        )
                     })
                     repos.forEach { repo ->
                         add("c_${conn.id}_${repo.fullName}" to {
-                        val navIndex = navTargets.indexOfFirst {
-                            it is OmniNav.Clone && it.repo.fullName == repo.fullName &&
-                                it.repo.connectionId == repo.connectionId
-                        }
-                        val hi = navIndex == highlight
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(
-                                        repo.name,
-                                        color = if (hi) cs.primary else cs.onSurface,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 1,
-                                    )
-                                    Text(
-                                        repo.fullName,
-                                        color = cs.onSurfaceVariant,
-                                        fontFamily = FontFamily.Monospace,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        maxLines = 1,
-                                    )
-                                }
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Filled.FolderOpen,
-                                    contentDescription = null,
-                                    tint = cs.onSurfaceVariant,
-                                    modifier = Modifier.size(Space.lg + Space.xs),
+                            PickerRow(
+                                onClick = {
+                                    resolve("clone ${repo.fullName}") {
+                                        actions.cloneForge(repo.connectionId, repo.owner, repo.name)
+                                    }
+                                },
+                                highlighted = navTargets.indexOfFirst {
+                                    it is OmniNav.Clone && it.repo.fullName == repo.fullName &&
+                                        it.repo.connectionId == repo.connectionId
+                                } == highlight,
+                                enabled = !resolving,
+                                modifier = Modifier.testTag("forge_clone_${repo.fullName}"),
+                            ) {
+                                Icon(Icons.Filled.Download, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(Space.lg))
+                                Text(
+                                    highlightHits(repo.fullName, fuzzyMatch(query, repo.fullName)?.indices.orEmpty(), cs.primary),
+                                    color = cs.onSurface,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    modifier = Modifier.weight(1f),
                                 )
-                            },
-                            trailingIcon = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(Space.xs),
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Download,
-                                        contentDescription = "Clone",
-                                        tint = cs.onSurfaceVariant,
-                                        modifier = Modifier.size(Space.md + Space.xs),
-                                    )
-                                    Text(
-                                        "Clone",
-                                        color = cs.onSurfaceVariant,
-                                        style = MaterialTheme.typography.labelMedium,
-                                    )
+                                if (repo.private) {
+                                    Icon(Icons.Filled.Lock, "Private", tint = cs.onSurfaceVariant, modifier = Modifier.size(Space.md))
                                 }
-                            },
-                            enabled = !resolving,
-                            modifier = Modifier
-                                .testTag("forge_clone_${repo.fullName}")
-                                .then(
-                                    if (hi) Modifier.background(cs.primary.copy(alpha = 0.08f))
-                                    else Modifier,
-                                ),
-                            onClick = {
-                                resolve("clone ${repo.fullName}") {
-                                    actions.cloneForge(repo.connectionId, repo.owner, repo.name)
-                                }
-                            },
-                        )
+                                Text("Clone", color = cs.primary, style = MaterialTheme.typography.labelMedium)
+                            }
                         })
                     }
                 }
@@ -832,61 +779,31 @@ fun ProjectPicker(
                 }
 
                 if (creates.isNotEmpty()) {
-                    add("h_create" to {
-                    Text(
-                        "Create",
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(
-                            horizontal = Space.xl - Space.xs,
-                            vertical = Space.xs,
-                        ),
-                    )
-                    })
+                    add("h_create" to { PickerSectionLabel("Create new") })
                     creates.forEach { c ->
                         add("cr_${c.createTarget}" to {
-                        val navIndex = navTargets.indexOfFirst {
-                            it is OmniNav.Create && it.target == c.createTarget
-                        }
-                        val hi = navIndex == highlight
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    c.label,
-                                    color = if (hi) cs.primary else cs.onSurface,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Filled.Add,
-                                    contentDescription = null,
-                                    tint = cs.onSurfaceVariant,
-                                    modifier = Modifier.size(Space.lg + Space.xs),
-                                )
-                            },
-                            enabled = !resolving,
-                            modifier = Modifier
-                                .testTag("forge_create_${c.createTarget}")
-                                .then(
-                                    if (hi) Modifier.background(cs.primary.copy(alpha = 0.08f))
-                                    else Modifier,
-                                ),
-                            onClick = {
-                                resolve("create $query") {
-                                    if (c.createTarget == "local") actions.createLocalRepo(query)
-                                    else actions.createForge(c.createTarget, query)
-                                }
-                            },
-                        )
+                            PickerRow(
+                                onClick = {
+                                    resolve("create $query") {
+                                        if (c.createTarget == "local") actions.createLocalRepo(query)
+                                        else actions.createForge(c.createTarget, query)
+                                    }
+                                },
+                                highlighted = navTargets.indexOfFirst {
+                                    it is OmniNav.Create && it.target == c.createTarget
+                                } == highlight,
+                                enabled = !resolving,
+                                modifier = Modifier.testTag("forge_create_${c.createTarget}"),
+                            ) {
+                                Icon(Icons.Filled.Add, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(Space.lg))
+                                Text(c.label, color = cs.onSurface, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                            }
                         })
                     }
                 }
             }
 
-            val listMax = if (touch) Size.omniboxSheetListMax else Size.omniboxListMax
+            val listMax = if (touch) Size.omniboxSheetListMax else Size.omniboxTilesListMax
             if (touch) {
                 LazyColumn(
                     Modifier
@@ -907,6 +824,20 @@ fun ProjectPicker(
                 }
             } // list
             } // else: has rows to show
+            // Under the list, never above real results — and only when no project matched either.
+            if (searchEmpty && !searching && query.length >= 2 && connections.isNotEmpty() &&
+                cloudGroups.isEmpty() && locals.isEmpty() && !showTypedPath
+            ) {
+                Text(
+                    "No repos match \"${query}\".",
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .padding(horizontal = Space.md, vertical = Space.sm)
+                        .testTag("launcher_forge_empty"),
+                )
+            }
+
             } // content Column (fields + list); resolving overlay is a Box sibling
 
             if (resolving) {
