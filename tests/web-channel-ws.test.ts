@@ -117,8 +117,53 @@ test("agent terminal: rejects non-claude, accepts claude and attaches with targe
   expect(attachCalls[0].agentTarget).toBe("mux:claudeSess")
   ws.send(JSON.stringify({ type: "focus", focused: true, cols: 57, rows: 29 }))
   await new Promise((r) => setTimeout(r, 25))
-  expect(focusCalls).toEqual([["test", "claudeSess", "agent", true, 57, 29]])
+  // The trailing argument is THIS SOCKET's viewer id — the same one the attach
+  // registered, so a focus can only ever move its own connection's claim.
+  expect(focusCalls.length).toBe(1)
+  expect(focusCalls[0].slice(0, 6)).toEqual(["test", "claudeSess", "agent", true, 57, 29])
+  expect(focusCalls[0][6]).toBe(attachCalls[0].viewerId)
+  expect(typeof attachCalls[0].viewerId).toBe("string")
   ws.close()
+})
+
+// Two tabs of ONE browser on ONE terminal used to share a viewer slot in
+// TerminalManager, so the second tab's attach detached the first tab's backend
+// viewer behind its back and the first tab's eventual close took the second
+// tab's live viewer with it. Each socket now carries its own viewer identity.
+test("two terminal sockets on one terminal get distinct viewer ids, and each detaches only itself", async () => {
+  const attachCalls: any[] = []
+  const detachCalls: any[] = []
+  await ch.stop()
+  ch = new WebChannel({
+    port: PORT,
+    devicesFile: DEV_PATH,
+    publicUrl: "http://127.0.0.1:" + PORT,
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getSessionWorkdir: () => "/w",
+    terminalManager: {
+      attach: (o: any) => { attachCalls.push(o); return { ok: true } },
+      detach: (...args: any[]) => { detachCalls.push(args) },
+    } as any,
+  })
+  await ch.start()
+
+  const first = await connectTerm("ana", "scratch")
+  const second = await connectTerm("ana", "scratch")
+  await new Promise((r) => setTimeout(r, 100))
+
+  expect(attachCalls.length).toBe(2)
+  expect(attachCalls[0].terminalId).toBe(attachCalls[1].terminalId)
+  expect(attachCalls[0].deviceName).toBe(attachCalls[1].deviceName)
+  expect(attachCalls[0].viewerId).not.toBe(attachCalls[1].viewerId)
+
+  first.close()
+  await new Promise((r) => setTimeout(r, 100))
+  expect(detachCalls.length).toBe(1)
+  expect(detachCalls[0][3]).toBe(attachCalls[0].viewerId)
+  second.close()
 })
 
 test("terminal attach rejection reports an error and closes with 1011", async () => {

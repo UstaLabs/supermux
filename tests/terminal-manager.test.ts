@@ -913,3 +913,115 @@ describe("TerminalManager (Windows sessiond)", () => {
     expect(backend.kills).toEqual(["win-1"])
   })
 })
+
+// ---------------------------------------------------------------------------
+//  Two surfaces on ONE terminal, from ONE device
+// ---------------------------------------------------------------------------
+//
+// Keying viewers by `device:session:terminal` made two tabs of one browser the
+// same entry, and the damage ran both ways: the second tab's attach silently
+// detached the first tab's backend viewer without telling its socket, and that
+// orphaned socket's later `detach()` — which fires on every reload, navigation
+// and network blip — tore down the SECOND tab's live viewer. The renderer has
+// supported two views of one session since Plan 2; the manager is what could
+// not name them apart.
+describe("TerminalManager (one terminal, two connections from one device)", () => {
+  const two = async () => {
+    const { mgr, backend } = makeMgr()
+    expect((await mgr.attach({
+      deviceName: "d", viewerId: "c1", sessionName: "w:one", terminalId: "t", ...baseAttach, intent: "create",
+    })).ok).toBe(true)
+    expect((await mgr.attach({
+      deviceName: "d", viewerId: "c2", sessionName: "w:one", terminalId: "t", ...baseAttach,
+    })).ok).toBe(true)
+    return { mgr, backend }
+  }
+
+  it("each connection gets its own backend viewer and neither attach detaches the other", async () => {
+    const { mgr, backend } = await two()
+    expect(backend.live.size).toBe(2)
+    expect(backend.calls.filter(c => c.startsWith("detach "))).toEqual([])
+    expect(mgr.has("d", "w:one", "t", "c1")).toBe(true)
+    expect(mgr.has("d", "w:one", "t", "c2")).toBe(true)
+    expect(mgr.count()).toBe(2)
+  })
+
+  it("input, replies, resize and focus reach only the connection that sent them", async () => {
+    const { mgr, backend } = await two()
+    const first = backend.viewerFor("w:one", "t", "d")
+    const second = [...backend.live].find(v => v !== first)!
+
+    expect(mgr.write("d", "w:one", "t", new TextEncoder().encode("ls\n"), "c1")).toBe(true)
+    expect(mgr.reply("d", "w:one", "t", new TextEncoder().encode("\x1b[?62c"), "c2")).toBe(true)
+    expect(mgr.resize("d", "w:one", "t", 120, 40, "c2")).toBe(true)
+    expect(mgr.focus("d", "w:one", "t", true, 120, 40, "c2")).toBe(true)
+
+    expect(first.writes).toEqual(["ls\n"])
+    expect(second.writes).toEqual([])
+    expect(second.replies).toEqual(["\x1b[?62c"])
+    expect(first.replies).toEqual([])
+    expect(second.resizes).toEqual([[120, 40]])
+    expect(first.resizes).toEqual([])
+    expect(second.focuses).toEqual([[true, 120, 40]])
+    expect(first.focuses).toEqual([])
+  })
+
+  it("the first tab's close drops only its own viewer; the second keeps its terminal", async () => {
+    const { mgr, backend } = await two()
+    const first = backend.viewerFor("w:one", "t", "d")
+    const second = [...backend.live].find(v => v !== first)!
+
+    mgr.detach("d", "w:one", "t", "c1")
+    await flush()
+
+    expect(first.detached).toBe(true)
+    expect(second.detached).toBe(false)
+    expect(mgr.has("d", "w:one", "t", "c1")).toBe(false)
+    expect(mgr.has("d", "w:one", "t", "c2")).toBe(true)
+    // The target is untouched: a detach is not a close.
+    expect(backend.calls.filter(c => c.startsWith("close "))).toEqual([])
+    expect(mgr.write("d", "w:one", "t", new TextEncoder().encode("still here\n"), "c2")).toBe(true)
+    expect(second.writes).toEqual(["still here\n"])
+  })
+
+  it("a detach naming no connection cannot reach a named one", async () => {
+    const { mgr, backend } = await two()
+    mgr.detach("d", "w:one", "t")
+    await flush()
+    expect(backend.live.size).toBe(2)
+    expect(mgr.count()).toBe(2)
+  })
+
+  it("closing the terminal drops every connection's viewer and the target", async () => {
+    const { mgr, backend } = await two()
+    await mgr.close("w:one", "t")
+    await flush()
+    expect(backend.live.size).toBe(0)
+    expect(mgr.count()).toBe(0)
+    expect(await backend.exists({ scope: "w:one", terminalId: "t" })).toBe(false)
+  })
+
+  it("a device disconnect detaches all of that device's connections", async () => {
+    const { mgr, backend } = await two()
+    expect((await mgr.attach({
+      deviceName: "other", viewerId: "c3", sessionName: "w:one", terminalId: "t", ...baseAttach,
+    })).ok).toBe(true)
+    mgr.detachAllForDevice("d")
+    await flush()
+    expect(backend.live.size).toBe(1)
+    expect(mgr.has("other", "w:one", "t", "c3")).toBe(true)
+  })
+
+  it("naming no connection keeps the old one-viewer-per-device slot", async () => {
+    const { mgr, backend } = makeMgr()
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t", ...baseAttach, intent: "create" })
+    const first = backend.viewerFor("w:one", "t")
+    await mgr.attach({ deviceName: "d", sessionName: "w:one", terminalId: "t", ...baseAttach })
+    await flush()
+    // Re-attaching the SAME slot still replaces: that is what a reconnect on a
+    // client with no connection identity has always meant.
+    expect(first.detached).toBe(true)
+    expect(backend.live.size).toBe(1)
+    expect(mgr.count()).toBe(1)
+  })
+})

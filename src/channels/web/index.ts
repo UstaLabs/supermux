@@ -162,7 +162,21 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve }
 }
 
-type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
+/**
+ * One terminal SOCKET's viewer identity, and its protocol epoch.
+ *
+ * A device is not a viewer: one browser can hold two tabs on the same terminal,
+ * and until each connection carried its own id they shared a slot in
+ * `TerminalManager` — the second attach detached the first tab's backend viewer
+ * behind its back, and the first tab's eventual close then took the second
+ * tab's live viewer down with it. One id per connection, and neither tab can
+ * reach the other's viewer.
+ */
+function newTerminalViewerId(): string {
+  return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+}
+
+type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
 
 export interface SessionSnapshot {
   id?: string
@@ -757,6 +771,10 @@ export class WebChannel implements Channel {
         data: {
           deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind,
           terminalSession: scopeKey, terminalId, terminalAgentTarget: agentTarget, terminalIntent: intent,
+          // This CONNECTION's viewer identity. Two tabs of one browser may show
+          // one terminal; without it they share a viewer slot in
+          // TerminalManager and each one's close tears down the other's.
+          terminalViewerId: newTerminalViewerId(),
           terminalRevision: revisionChoice.ok ? revisionChoice.revision : 2,
           terminalRevisionError: revisionError,
         } as WSData,
@@ -847,7 +865,7 @@ export class WebChannel implements Channel {
       text: (payload) => { try { ws.send(payload) } catch {} },
       binary: (bytes) => this.sendTerminalBytes(ws, bytes),
       close: (code, reason) => { try { ws.close(code, reason.slice(0, 120)) } catch {} },
-    }, `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`)
+    }, ws.data.terminalViewerId ?? newTerminalViewerId())
     ws.data._termLane = lane
 
     const refuse = (code: string, recoverable: boolean, message: string) => lane.failure(code, recoverable, message)
@@ -870,6 +888,7 @@ export class WebChannel implements Channel {
     try {
       result = await tm.attach({
         deviceName: ws.data.deviceName,
+        viewerId: ws.data.terminalViewerId,
         sessionName,
         terminalId,
         workdir,
@@ -929,6 +948,7 @@ export class WebChannel implements Channel {
     try {
       result = await tm.attach({
         deviceName: ws.data.deviceName,
+        viewerId: ws.data.terminalViewerId,
         sessionName,
         terminalId,
         workdir,
@@ -962,12 +982,13 @@ export class WebChannel implements Channel {
     if (!tm) return
     const sessionName = ws.data.terminalSession!
     const terminalId = ws.data.terminalId!
+    const viewerId = ws.data.terminalViewerId
     const lane = ws.data._termLane
     if (lane) {
       // Revision 2. Binary is user input — typing is typing, it reaches the
       // pty from any viewer and never moves size ownership.
       if (typeof msg !== "string") {
-        tm.write(ws.data.deviceName, sessionName, terminalId, toBytes(msg))
+        tm.write(ws.data.deviceName, sessionName, terminalId, toBytes(msg), viewerId)
         return
       }
       const decoded = decodeClientControl(msg)
@@ -978,11 +999,11 @@ export class WebChannel implements Channel {
       const frame = decoded.frame
       switch (frame.type) {
         case "resize":
-          tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows)
+          tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows, viewerId)
           return
         case "focus":
           tm.focus(ws.data.deviceName, sessionName, terminalId, frame.focused,
-            frame.cols || undefined, frame.rows || undefined)
+            frame.cols || undefined, frame.rows || undefined, viewerId)
           return
         case "reply": {
           // A REPLY, not typing. It is owner-only and epoch-bound, and the
@@ -996,7 +1017,7 @@ export class WebChannel implements Channel {
           }
           const bytes = decodeReplyPayload(frame.data)
           if (!bytes) return
-          tm.reply(ws.data.deviceName, sessionName, terminalId, bytes)
+          tm.reply(ws.data.deviceName, sessionName, terminalId, bytes, viewerId)
           return
         }
         case "close":
@@ -1010,7 +1031,7 @@ export class WebChannel implements Channel {
       try {
         const frame = JSON.parse(msg)
         if (frame.type === "resize" && typeof frame.cols === "number" && typeof frame.rows === "number") {
-          tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows)
+          tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows, viewerId)
         } else if (frame.type === "focus" && typeof frame.focused === "boolean") {
           tm.focus(
             ws.data.deviceName,
@@ -1019,6 +1040,7 @@ export class WebChannel implements Channel {
             frame.focused,
             typeof frame.cols === "number" ? frame.cols : undefined,
             typeof frame.rows === "number" ? frame.rows : undefined,
+            viewerId,
           )
         } else if (frame.type === "close") {
           // Explicit close: destroy the backing target, then drop the socket.
@@ -1028,7 +1050,7 @@ export class WebChannel implements Channel {
       } catch {}
       return
     }
-    tm.write(ws.data.deviceName, sessionName, terminalId, toBytes(msg))
+    tm.write(ws.data.deviceName, sessionName, terminalId, toBytes(msg), viewerId)
   }
 
   private onTerminalWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
@@ -1037,7 +1059,8 @@ export class WebChannel implements Channel {
     const d = ws.data._termDrain
     if (d) { ws.data._termDrain = undefined; d.resolve() }
     // Socket dropped (reload / nav / network): DETACH — the backing target lives on.
-    this.opts.terminalManager?.detach(ws.data.deviceName, ws.data.terminalSession!, ws.data.terminalId!)
+    this.opts.terminalManager?.detach(ws.data.deviceName, ws.data.terminalSession!, ws.data.terminalId!,
+      ws.data.terminalViewerId)
   }
 
   private onDisplayWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {

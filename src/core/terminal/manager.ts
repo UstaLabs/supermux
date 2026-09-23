@@ -68,6 +68,9 @@ export type TerminalAttachIntent = "create" | "attach" | "create-if-absent"
 export interface TerminalInstance {
   key: string
   deviceName: string
+  /** The CONNECTION this viewer belongs to, when the caller named one. See
+   * `TerminalAttachOptions.viewerId`. */
+  viewerId?: string
   sessionName: string
   terminalId: string
   kind: "scratch" | "agent"
@@ -104,6 +107,25 @@ interface TerminalFocusClaim {
 
 export interface TerminalAttachOptions {
   deviceName: string
+  /**
+   * Which VIEWER of this terminal, on this device, is attaching.
+   *
+   * A device is not a viewer. Two tabs of one browser can show ONE terminal,
+   * and keying viewers by `device:session:terminal` made them the same entry:
+   * the second attach silently detached the first tab's backend viewer without
+   * telling its socket, and that orphaned socket's later `detach()` — which
+   * fires on every reload, navigation and network blip — then tore down the
+   * NEWER tab's live viewer. Both tabs lost their terminal and neither had
+   * done anything wrong.
+   *
+   * Pass a value unique to the CONNECTION (the web channel uses its terminal
+   * socket's epoch) and the two coexist: each has its own backend viewer, its
+   * own focus claim, and a `detach` that can only ever drop its own.
+   *
+   * Omitted, the device gets one shared viewer slot, which is the old
+   * behaviour and what a single-connection caller wants.
+   */
+  viewerId?: string
   sessionName: string
   terminalId: string
   workdir: string
@@ -208,8 +230,16 @@ export class TerminalManager {
     this.spawnFn = opts?.spawn ?? defaultSpawn
   }
 
-  private static key(device: string, session: string, terminal: string): string {
-    return `${device}:${session}:${terminal}`
+  /**
+   * The viewer's identity. `viewerId` extends the key rather than replacing
+   * the device part: a caller that names no connection keeps exactly the key
+   * it always had, so nothing that holds one viewer per device changes. NUL
+   * separates because it cannot occur in a device name, a scope or a terminal
+   * id, so no viewer key can ever spell a device-only one.
+   */
+  private static key(device: string, session: string, terminal: string, viewerId?: string): string {
+    const base = `${device}:${session}:${terminal}`
+    return viewerId ? `${base}\u0000${viewerId}` : base
   }
 
   private static targetKey(session: string, terminal: string): string {
@@ -351,7 +381,7 @@ export class TerminalManager {
 
   /** A workspace terminal, on whichever backend this platform has. */
   private async attachWorkspace(opts: TerminalAttachOptions): Promise<TerminalAttachResult> {
-    const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId)
+    const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId, opts.viewerId)
     const workspaceKey = TerminalManager.workspaceKey(opts.sessionName, opts.terminalId)
     this.replaceExisting(key)
 
@@ -367,6 +397,7 @@ export class TerminalManager {
     const inst: TerminalInstance = {
       key,
       deviceName: opts.deviceName,
+      viewerId: opts.viewerId,
       sessionName: opts.sessionName,
       terminalId: opts.terminalId,
       kind: "scratch",
@@ -485,7 +516,7 @@ export class TerminalManager {
 
   /** An agent pane on POSIX: a grouped viewer session on the agent tmux server. */
   private attachAgentPosix(opts: TerminalAttachOptions): Promise<TerminalAttachResult> {
-    const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId)
+    const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId, opts.viewerId)
     this.replaceExisting(key)
 
     const ptyHelper = ptyHelperPath(this.stateDir)
@@ -501,6 +532,7 @@ export class TerminalManager {
     const inst: TerminalInstance = {
       key,
       deviceName: opts.deviceName,
+      viewerId: opts.viewerId,
       sessionName: opts.sessionName,
       terminalId: opts.terminalId,
       kind: "agent",
@@ -539,7 +571,7 @@ export class TerminalManager {
 
   /** An agent pane on Windows: a viewer of a sessiond target somebody else owns. */
   private async attachAgentWindows(opts: TerminalAttachOptions): Promise<TerminalAttachResult> {
-    const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId)
+    const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId, opts.viewerId)
     this.replaceExisting(key)
 
     const token = Symbol(key)
@@ -581,6 +613,7 @@ export class TerminalManager {
       const inst: TerminalInstance = {
         key,
         deviceName: opts.deviceName,
+        viewerId: opts.viewerId,
         sessionName: opts.sessionName,
         terminalId: opts.terminalId,
         kind: "agent",
@@ -663,8 +696,9 @@ export class TerminalManager {
 
   // ---- viewer traffic -----------------------------------------------------
 
-  write(deviceName: string, sessionName: string, terminalId: string, data: Uint8Array): boolean {
-    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId))
+  write(deviceName: string, sessionName: string, terminalId: string, data: Uint8Array,
+        viewerId?: string): boolean {
+    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId, viewerId))
     if (!inst) return false
     inst.lastInputAt = Date.now()
     if (inst.viewer) return inst.viewer.write(data)
@@ -681,15 +715,17 @@ export class TerminalManager {
    * size owner's answer may reach the pty; an agent terminal has no such split
    * and the bytes go where typing goes.
    */
-  reply(deviceName: string, sessionName: string, terminalId: string, data: Uint8Array): boolean {
-    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId))
+  reply(deviceName: string, sessionName: string, terminalId: string, data: Uint8Array,
+        viewerId?: string): boolean {
+    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId, viewerId))
     if (!inst) return false
     if (inst.viewer) return inst.viewer.reply(data)
-    return this.write(deviceName, sessionName, terminalId, data)
+    return this.write(deviceName, sessionName, terminalId, data, viewerId)
   }
 
-  resize(deviceName: string, sessionName: string, terminalId: string, cols: number, rows: number): boolean {
-    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId))
+  resize(deviceName: string, sessionName: string, terminalId: string, cols: number, rows: number,
+         viewerId?: string): boolean {
+    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId, viewerId))
     if (!inst) return false
     if (inst.viewer) {
       // Whether this geometry reaches the pty is the BACKEND's decision: it
@@ -721,8 +757,9 @@ export class TerminalManager {
     focused: boolean,
     cols?: number,
     rows?: number,
+    viewerId?: string,
   ): boolean {
-    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId))
+    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId, viewerId))
     if (!inst) return false
     const geometryOk = Number.isInteger(cols) && Number.isInteger(rows) && cols! >= 1 && rows! >= 1
     if (inst.viewer) {
@@ -748,8 +785,8 @@ export class TerminalManager {
   // ---- lifecycle ----------------------------------------------------------
 
   /** Disconnect a viewer WITHOUT killing its persistent target (reload / tab switch). */
-  detach(deviceName: string, sessionName: string, terminalId: string): void {
-    const key = TerminalManager.key(deviceName, sessionName, terminalId)
+  detach(deviceName: string, sessionName: string, terminalId: string, viewerId?: string): void {
+    const key = TerminalManager.key(deviceName, sessionName, terminalId, viewerId)
     this.pendingAttaches.delete(key)
     const inst = this.terminals.get(key)
     if (!inst) return
@@ -854,8 +891,8 @@ export class TerminalManager {
     }
   }
 
-  has(deviceName: string, sessionName: string, terminalId: string): boolean {
-    return this.terminals.has(TerminalManager.key(deviceName, sessionName, terminalId))
+  has(deviceName: string, sessionName: string, terminalId: string, viewerId?: string): boolean {
+    return this.terminals.has(TerminalManager.key(deviceName, sessionName, terminalId, viewerId))
   }
 
   /** Whether the backing target exists (it persists across viewer detach). */
