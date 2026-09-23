@@ -80,7 +80,9 @@ describe("workspace terminal cutover: the manager left tmux", () => {
 
   test("the manager's only tmux import is the agent one, and workspace work goes to the backend", () => {
     const manager = read("src/core/terminal/manager.ts")
-    const imports = [...code(manager).matchAll(/from\s+"(\.[^"]+)"/g)].map(m => m[1])
+    // flatMap, not map: with `noUncheckedIndexedAccess` a capture group is `string | undefined`,
+    // and `imports.filter(spec => spec.includes(...))` does not typecheck against that.
+    const imports = [...code(manager).matchAll(/from\s+"(\.[^"]+)"/g)].flatMap(m => (m[1] ? [m[1]] : []))
     expect(imports.filter(spec => spec.includes("tmux"))).toEqual(["./agent-tmux"])
 
     // The workspace path is the backend's, with no branch that can pick something else: the only
@@ -191,14 +193,24 @@ describe("workspace terminal cutover: what still uses tmux, and why", () => {
       ...walk("scripts", p => p.endsWith(".ts") || p.endsWith(".sh")),
     ].filter(rel => code(read(rel)).includes("tmux"))
 
-    const group = (rel: string) =>
-      rel.startsWith("src/core/session-manager/") || rel.startsWith("src/core/runtime/")
-        ? "agent session backend"
-        : rel.startsWith("src/core/terminal/")
-          ? "agent terminal viewer"
-          : rel.startsWith("scripts/")
-            ? "portable binary staging"
-            : "broker wiring"
+    // Every known home for a surviving tmux consumer, and NO default branch. A trailing
+    // "everything else goes here" made the assertion below tautological: a genuinely new
+    // consumer — the thing this check exists to catch — landed in the catch-all group and the
+    // group set was unchanged. An unrecognised path now names itself, so the expectation fails
+    // and says which file.
+    const KNOWN_GROUPS: ReadonlyArray<readonly [string, (rel: string) => boolean]> = [
+      ["agent session backend", rel => rel.startsWith("src/core/session-manager/") || rel.startsWith("src/core/runtime/")],
+      ["agent terminal viewer", rel => rel.startsWith("src/core/terminal/")],
+      // Claude's window naming: an agent worker is a window in the agent's own tmux session.
+      ["agent orchestration", rel => rel.startsWith("src/core/agents/")],
+      // The `tmux_target` / `tmux_window_id` columns on the session record, and the migration
+      // that added them. Historical schema, not a live dependency of the workspace path.
+      ["agent session records", rel => rel.startsWith("src/core/storage/") || rel.startsWith("src/channels/")],
+      ["portable binary staging", rel => rel.startsWith("scripts/")],
+      // main.ts's preflight and the spawn path: the broker telling a user tmux is missing.
+      ["broker wiring", rel => rel === "src/main.ts" || rel === "src/cli-setup.ts" || rel.startsWith("src/shared/")],
+    ]
+    const group = (rel: string) => KNOWN_GROUPS.find(([, matches]) => matches(rel))?.[0] ?? `UNRECOGNISED tmux consumer: ${rel}`
 
     const byGroup = new Map<string, string[]>()
     for (const rel of consumers) byGroup.set(group(rel), [...(byGroup.get(group(rel)) ?? []), rel])
@@ -211,12 +223,13 @@ describe("workspace terminal cutover: what still uses tmux, and why", () => {
         "  (workspace terminals are zmx/sessiond; the gates above are what enforce that)",
     )
 
-    // The one thing worth asserting here: whatever remains is agent-side. A NEW group would mean
-    // tmux came back somewhere this cutover was supposed to have cleared.
+    // The one thing worth asserting here: whatever remains is agent-side, in a place we already
+    // knew about. A file outside every known group carries its own path as its group name, so
+    // this fails with the offender in the diff rather than silently absorbing it.
     expect([...byGroup.keys()].sort()).toEqual(
-      ["agent session backend", "agent terminal viewer", "broker wiring", "portable binary staging"].filter(g =>
-        byGroup.has(g),
-      ),
+      KNOWN_GROUPS.map(([name]) => name)
+        .sort()
+        .filter(g => byGroup.has(g)),
     )
   })
 })
