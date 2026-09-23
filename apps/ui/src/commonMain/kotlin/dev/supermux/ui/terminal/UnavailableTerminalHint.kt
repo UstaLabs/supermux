@@ -39,10 +39,17 @@ const val TERMINAL_LOAD_FAILED_TAG = "terminal_load_failed"
  * holding a bundle whose wasm URL the new build no longer serves. Nobody notices until the first
  * terminal is opened in that tab, because that is when the engine is first fetched — and it 404s.
  * (A browser that is offline, or an intermediary that ignores the entry points' `no-cache`, gets
- * there the same way.) The engine is fine, the app is fine, and the ONE thing the user can do
- * about it — reload onto the current build — is the one thing "This client has no terminal" does
- * not tell them. So the reason is shown verbatim (the loader's messages name the status, the ABI
- * or the URL) with the action under it.
+ * there the same way.) The engine is fine, the app is fine, and the ONE thing that fixes it —
+ * getting onto the current build — is the one thing "This client has no terminal" does not tell
+ * them. So the reason is shown verbatim (the loader's messages name the status, the ABI or the
+ * URL) with that fact under it.
+ *
+ * PHRASED AS A FACT, NOT A CONTROL. "Reload to pick up the current version" read like a button
+ * and was not one: this is common code with no host reload seam, so on a phone or desktop build
+ * there is nothing behind those words at all (there the engine is packaged, and a failure here
+ * means something else entirely). A line that looks tappable and does nothing is worse than a
+ * line that explains. If a real reload affordance is ever wanted it belongs on the web host,
+ * passed in — not faked here.
  */
 @Composable
 fun TerminalLoadFailedHint(reason: String?, modifier: Modifier = Modifier) {
@@ -68,7 +75,7 @@ fun TerminalLoadFailedHint(reason: String?, modifier: Modifier = Modifier) {
                 )
             }
             Text(
-                "Reload to pick up the current version",
+                "Reloading the app picks up the current build.",
                 color = cs.onSurfaceVariant.copy(alpha = 0.7f),
                 fontSize = 11.sp,
                 textAlign = TextAlign.Center,
