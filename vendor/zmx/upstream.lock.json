@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "zmx": {
+    "repository": "https://github.com/neurosnap/zmx.git",
+    "commit": "8bab1f0173b07e79835ea372d749af3dbf0d0842",
+    "version": "0.8.1",
+    "license": "MIT",
+    "cache_dir": "build/zmx/upstream",
+    "comment": "Pinned to a COMMIT, never a tag or branch: the patch below is line-addressed against this tree and scripts/build-zmx.sh --check-patches refuses any other."
+  },
+  "ghostty": {
+    "comment": "zmx's own build.zig.zon pins this; we do not choose it. It differs on purpose from apps/terminal-core/native/upstream.lock.json (the CLIENT-side libghostty-vt pin) -- daemon-side and client-side VT versions are validated together in a later task, not forced equal here.",
+    "url": "git+https://github.com/ghostty-org/ghostty#8af6897c0afc63037a8a3efee4162a380e3a4572",
+    "commit": "8af6897c0afc63037a8a3efee4162a380e3a4572",
+    "package_hash": "ghostty-1.3.2-dev-5UdBC4FtYAV-PdFOt-gceWieTHLri0H4ztHtd6Tr4dGj",
+    "client_side_pin_for_contrast": "22391ed6491f2924361dcad1f9a9176a390fd20f"
+  },
+  "zig": {
+    "version": "0.16.0",
+    "source": "zmx build.zig.zon minimum_zig_version",
+    "install_dir": "~/.local/zig/0.16.0",
+    "provisioned_by": "apps/terminal-core/native/common.sh (ensure_zig): pinned tarball + sha256 + minisign. This script REUSES that install and never fetches its own."
+  },
+  "patches": [
+    {
+      "file": "patches/0001-supermux-session-contract.patch",
+      "sha256": "2bcf1ffab0194af88db7d212d0161137197e888ba4720239982be908d3c4f9fd",
+      "applies_to": "8bab1f0173b07e79835ea372d749af3dbf0d0842",
+      "touches": ["src/ipc.zig", "src/loop.zig", "src/util.zig"],
+      "does_not_touch": ["src/main.zig", "src/socket.zig", "src/posix.zig", "src/daemonize.zig", "src/cfg.zig", "src/label.zig", "build.zig", "build.zig.zon"]
+    }
+  ],
+  "build": {
+    "test_step": "zig build test",
+    "test_step_source": "build.zig: b.step(\"test\", \"Run unit tests\") over src/test.zig",
+    "exe_step": "zig build --prefix <dir>",
+    "jobs": "-j2 (shared build host; override with MUX_ZIG_JOBS)"
+  },
+  "verified": {
+    "date": "2026-09-23",
+    "host": "x86_64-linux",
+    "stock": "zig build test -> 41/41 steps, 95/95 tests passed",
+    "patched": "zig build test -> 41/41 steps, 143/143 tests passed (95 upstream + 48 added)",
+    "cli_smoke": "zmx run / list / history / kill against the patched binary",
+    "wire_smoke": "vendor/zmx/tools/broker_smoke.py against a live daemon socket: handshake, replay boundary, focus lease, input, stale-generation rejection, unsupported-version refusal"
+  }
+}

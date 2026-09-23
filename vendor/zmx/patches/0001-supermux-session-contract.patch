@@ -1,0 +1,2543 @@
+diff --git a/src/ipc.zig b/src/ipc.zig
+index c81d15a..566aa0f 100644
+--- a/src/ipc.zig
++++ b/src/ipc.zig
+@@ -26,6 +26,23 @@ pub const Tag = enum(u8) {
+     EnvGet = 19,
+     EnvSet = 20,
+     EnvData = 21,
++    // ---- supermux broker attachment (opt-in; see BrokerHello) ----------
++    // These tags are only ever exchanged with a client that completed a
++    // BrokerHello handshake. A stock daemon's `_` arm ignores them, and a
++    // stock client never sends them, so ordinary `zmx` CLI traffic is
++    // byte-for-byte what it was before this patch.
++    BrokerHello = 22,
++    BrokerWelcome = 23,
++    BrokerFocus = 24,
++    BrokerLease = 25,
++    BrokerResize = 26,
++    BrokerInput = 27,
++    BrokerReply = 28,
++    BrokerReplayStart = 29,
++    BrokerReplayEnd = 30,
++    BrokerExit = 31,
++    BrokerFailure = 32,
++    BrokerDetach = 33,
+     // Non-exhaustive: this enum comes off the wire via bytesToValue and
+     // @enumFromInt, so out-of-range values are representable
+     // rather than UB. Switches must handle `_` (unknown tag).
+@@ -344,7 +361,23 @@ test "Tag wire values are frozen" {
+         .{ Tag.Run, 9 },       .{ Tag.Ack, 10 },          .{ Tag.Switch, 11 },
+         .{ Tag.Write, 12 },    .{ Tag.TaskComplete, 13 }, .{ Tag.LabelGet, 14 },
+         .{ Tag.LabelSet, 15 }, .{ Tag.LabelClear, 16 },   .{ Tag.LabelData, 17 },
+-        .{ Tag.Send, 18 },
++        .{ Tag.Send, 18 },     .{ Tag.EnvGet, 19 },       .{ Tag.EnvSet, 20 },
++        .{ Tag.EnvData, 21 },
++    }) |p| try std.testing.expectEqual(@as(u8, p[1]), @intFromEnum(p[0]));
++}
++
++// The supermux tags are frozen on the same terms as the upstream ones: the
++// broker helper and the daemon are separately deployable, so an integer that
++// has shipped never changes meaning. Note that they START at 22 -- the
++// upstream meanings of 0..21 above are untouched by this patch.
++test "supermux broker Tag wire values are frozen" {
++    inline for (.{
++        .{ Tag.BrokerHello, 22 },       .{ Tag.BrokerWelcome, 23 },
++        .{ Tag.BrokerFocus, 24 },       .{ Tag.BrokerLease, 25 },
++        .{ Tag.BrokerResize, 26 },      .{ Tag.BrokerInput, 27 },
++        .{ Tag.BrokerReply, 28 },       .{ Tag.BrokerReplayStart, 29 },
++        .{ Tag.BrokerReplayEnd, 30 },   .{ Tag.BrokerExit, 31 },
++        .{ Tag.BrokerFailure, 32 },     .{ Tag.BrokerDetach, 33 },
+     }) |p| try std.testing.expectEqual(@as(u8, p[1]), @intFromEnum(p[0]));
+ }
+ 
+@@ -413,3 +446,385 @@ test "zeroed Info has no stack garbage in wire bytes" {
+     const last_field_end = @offsetOf(Info, "task_exit_code") + @sizeOf(u8);
+     for (bytes[last_field_end..]) |b| try std.testing.expectEqual(@as(u8, 0), b);
+ }
++
++// ===========================================================================
++//  supermux broker attachment -- wire types
++// ===========================================================================
++//
++//  WHY THIS EXISTS
++//  ---------------
++//  supermux drives a zmx session from a long-lived broker process, not from a
++//  tty. The stock attach protocol cannot express four things it needs:
++//
++//   1. WHO OWNS THE SIZE. Upstream promotes whichever client types first
++//      (`isUserInput` in handleInput). A background browser tab that sends a
++//      keystroke would take the geometry of every other viewer with it.
++//      Here focus is an explicit, daemon-allocated LEASE, and typing never
++//      moves it.
++//   2. WHERE HISTORY ENDS. Upstream appends the restore snapshot as one more
++//      `.Output` message, indistinguishable from the program writing. Here a
++//      replay is bracketed by BrokerReplayStart/BrokerReplayEnd carrying the
++//      same epoch, so a viewer knows exactly which bytes are the past.
++//   3. WHETHER THE SHELL DIED. Upstream closes the socket and says nothing.
++//      A closed socket is also what a crashed daemon, a killed daemon and a
++//      dropped connection look like. BrokerExit is the only statement that
++//      the target process ended, and it carries the status when it is known.
++//   4. BACKPRESSURE. Upstream's per-client write buffer is unbounded; a
++//      viewer that stops reading grows the daemon without limit. A broker
++//      viewer is capped and detached with `resync_required` instead.
++//
++//  OPT-IN
++//  ------
++//  A connection is an ordinary zmx client until it sends BrokerHello. Nothing
++//  in the stock CLI sends it, and no stock code path reads these tags, so
++//  `zmx attach`, `zmx run`, `zmx list` and friends behave exactly as they did
++//  before this patch. See the loop.zig tests named "stock CLI ...".
++//
++//  ENDIANNESS
++//  ----------
++//  Native, like every other zmx struct on this socket: both ends are
++//  processes on one machine talking over AF_UNIX.
++
++pub const BROKER_MAGIC = [4]u8{ 'Z', 'M', 'X', 'B' };
++
++/// Versions this build can speak. A daemon and a broker helper are deployed
++/// separately, so the range is explicit and both ends are checked.
++pub const BROKER_VERSION_MIN: u16 = 1;
++pub const BROKER_VERSION_MAX: u16 = 1;
++
++/// Per-viewer cap on bytes queued for a broker client (1 MiB). Past this the
++/// viewer is detached with `resync_required`: the shell and every other
++/// viewer keep running, and the helper re-attaches to get a fresh snapshot.
++pub const BROKER_PENDING_MAX: u32 = 1024 * 1024;
++
++/// Hard cap on one restore snapshot (4 MiB). A 50k-line scrollback of wide
++/// Unicode can exceed BROKER_PENDING_MAX several times over, so the snapshot
++/// is built outside the write buffer and streamed in; but it is still bounded,
++/// and a snapshot that does not fit aborts THIS viewer rather than being sent
++/// half-interleaved with live output.
++pub const BROKER_SNAPSHOT_MAX: u32 = 4 * 1024 * 1024;
++
++/// Bytes moved from the snapshot into the write buffer per loop iteration.
++pub const BROKER_REPLAY_CHUNK: usize = 64 * 1024;
++
++pub const BrokerSize = extern struct {
++    rows: u16,
++    cols: u16,
++    xpixel: u16 = 0,
++    ypixel: u16 = 0,
++
++    pub fn toResize(self: BrokerSize) Resize {
++        return .{ .rows = self.rows, .cols = self.cols, .xpixel = self.xpixel, .ypixel = self.ypixel };
++    }
++
++    pub fn fromResize(r: Resize) BrokerSize {
++        return .{ .rows = r.rows, .cols = r.cols, .xpixel = r.xpixel, .ypixel = r.ypixel };
++    }
++};
++
++/// Client -> daemon, first message of a broker attachment.
++///
++/// `struct_len` is the sender's `@sizeOf(BrokerHello)`. It is not redundant
++/// with `version`: it is what makes "do not interpret a new payload with an
++/// old struct size" checkable rather than assumed.
++///
++/// An optional target name follows the struct (see `parseBrokerHello`).
++pub const BrokerHello = extern struct {
++    magic: [4]u8 = BROKER_MAGIC,
++    version: u16,
++    struct_len: u16,
++    flags: u32 = 0,
++};
++
++/// Daemon -> client, the accepted handshake.
++///
++/// `lease_gen` is the highest focus generation this daemon has ever handed
++/// out. A broker that restarted learns the watermark here; it does not get to
++/// restart a counter of its own at a value already in flight.
++pub const BrokerWelcome = extern struct {
++    magic: [4]u8 = BROKER_MAGIC,
++    version: u16,
++    struct_len: u16,
++    lease_gen: u64,
++    pending_max: u32 = BROKER_PENDING_MAX,
++    snapshot_max: u32 = BROKER_SNAPSHOT_MAX,
++};
++
++/// Client -> daemon. `active = 1` claims the focus lease, `0` releases it.
++///
++/// A claim is ALWAYS an explicit message. There is deliberately no way to
++/// acquire focus as a side effect of another operation -- in particular, an
++/// empty BrokerInput is an empty write, never a focus op.
++pub const BrokerFocus = extern struct {
++    size: BrokerSize,
++    active: u8,
++    _reserved: [3]u8 = .{ 0, 0, 0 },
++};
++
++/// Daemon -> client. The generation the daemon allocated for this claim and
++/// the geometry it actually applied. Every later BrokerResize/BrokerReply from
++/// this viewer must carry `gen`; one carrying an older generation is a message
++/// from a viewer that has since lost focus, and is dropped.
++pub const BrokerLease = extern struct {
++    gen: u64,
++    size: BrokerSize,
++};
++
++/// Client -> daemon. Geometry, carrying the generation it was produced under.
++pub const BrokerResize = extern struct {
++    gen: u64,
++    size: BrokerSize,
++};
++
++/// Payload prefix of BrokerReply: [u64 gen][reply bytes].
++///
++/// Terminal REPLIES (DA/DSR/kitty query answers the viewer's own emulator
++/// produced) are a separate tag from BrokerInput on purpose. They are not user
++/// keystrokes: they must be attributable to the viewer the query was rendered
++/// on, or two viewers answer one DA1 and the shell reads the answer twice.
++pub const BROKER_REPLY_PREFIX: usize = @sizeOf(u64);
++
++/// Daemon -> client, both ends of a restore. `epoch` is the same on both, and
++/// increases per attach so a viewer can drop a replay it has been superseded
++/// on. `bytes` is the snapshot size: a hint on start, the count actually sent
++/// on end.
++pub const BrokerReplay = extern struct {
++    epoch: u64,
++    bytes: u64,
++};
++
++/// Daemon -> client, at most once per daemon: the TARGET PROCESS ended.
++///
++/// Losing the socket is not this message. A daemon that is killed, crashes or
++/// is disconnected from never sends it, and a helper must not synthesise one
++/// from EOF: "the shell exited" and "I cannot see the shell" are different
++/// facts and lead to different UI.
++pub const BrokerExit = extern struct {
++    /// 1 when `code`/`signaled`/`signal` are real. 0 when the daemon saw the
++    /// PTY close but could not reap a status.
++    known: u8,
++    signaled: u8,
++    signal: u8,
++    code: u8,
++    _reserved: u32 = 0,
++};
++
++pub const BrokerFailureCode = enum(u16) {
++    unsupported_version = 1,
++    protocol = 2,
++    snapshot_overflow = 3,
++    backend_unavailable = 4,
++    _,
++};
++
++pub const BrokerDetachReason = enum(u16) {
++    /// The viewer's 1 MiB queue overflowed. Re-attach for a fresh snapshot.
++    resync_required = 1,
++    daemon_shutdown = 2,
++    snapshot_overflow = 3,
++    _,
++};
++
++/// Payload header of BrokerFailure and BrokerDetach: [u16 code][u16 msg_len]
++/// followed by `msg_len` bytes of human-readable detail (may be empty).
++pub const BrokerStatus = extern struct {
++    code: u16,
++    msg_len: u16,
++};
++
++pub const BrokerHelloError = error{
++    Malformed,
++    UnsupportedVersion,
++    BadStructLen,
++};
++
++pub const ParsedBrokerHello = struct {
++    hello: BrokerHello,
++    /// Optional target name (see loop.zig: stored as the `mux.target` label so
++    /// `list` can recover it from the PROTOCOL, since the socket basename is
++    /// an opaque short id).
++    name: []const u8,
++};
++
++/// Parse a BrokerHello payload.
++///
++/// ORDER IS THE POINT. Magic and version are read from the first six bytes
++/// and nothing else. An unsupported version is rejected there, before any
++/// later field is touched -- so a future, larger payload is never
++/// reinterpreted through today's struct layout. Only once the version is one
++/// we speak do we require and read the rest.
++pub fn parseBrokerHello(payload: []const u8) BrokerHelloError!ParsedBrokerHello {
++    const prefix = @sizeOf([4]u8) + @sizeOf(u16);
++    if (payload.len < prefix) return error.Malformed;
++    if (!std.mem.eql(u8, payload[0..4], &BROKER_MAGIC)) return error.Malformed;
++
++    const version = std.mem.bytesToValue(u16, payload[4..6]);
++    if (version < BROKER_VERSION_MIN or version > BROKER_VERSION_MAX) {
++        return error.UnsupportedVersion;
++    }
++
++    if (payload.len < @sizeOf(BrokerHello)) return error.Malformed;
++    const hello = std.mem.bytesToValue(BrokerHello, payload[0..@sizeOf(BrokerHello)]);
++    // A v1 payload is exactly @sizeOf(BrokerHello) bytes of struct. A sender
++    // that claims v1 with a different struct size is not speaking v1.
++    if (hello.struct_len != @sizeOf(BrokerHello)) return error.BadStructLen;
++
++    return .{ .hello = hello, .name = payload[@sizeOf(BrokerHello)..] };
++}
++
++/// Encode a BrokerHello (+ optional name) the way a helper would send it.
++/// Lives here so both ends agree by construction and the tests exercise the
++/// real encoder.
++pub fn encodeBrokerHello(
++    alloc: std.mem.Allocator,
++    list: *std.ArrayList(u8),
++    version: u16,
++    name: []const u8,
++) !void {
++    const hello = BrokerHello{ .version = version, .struct_len = @sizeOf(BrokerHello) };
++    var payload = try std.ArrayList(u8).initCapacity(alloc, @sizeOf(BrokerHello) + name.len);
++    defer payload.deinit(alloc);
++    payload.appendSliceAssumeCapacity(std.mem.asBytes(&hello));
++    payload.appendSliceAssumeCapacity(name);
++    try appendMessage(alloc, list, .BrokerHello, payload.items);
++}
++
++/// [u16 code][u16 msg_len][msg] for BrokerFailure / BrokerDetach.
++pub fn appendBrokerStatus(
++    alloc: std.mem.Allocator,
++    list: *std.ArrayList(u8),
++    tag: Tag,
++    code: u16,
++    msg: []const u8,
++) !void {
++    const status = BrokerStatus{ .code = code, .msg_len = @intCast(@min(msg.len, 0xffff)) };
++    var payload = try std.ArrayList(u8).initCapacity(alloc, @sizeOf(BrokerStatus) + status.msg_len);
++    defer payload.deinit(alloc);
++    payload.appendSliceAssumeCapacity(std.mem.asBytes(&status));
++    payload.appendSliceAssumeCapacity(msg[0..status.msg_len]);
++    try appendMessage(alloc, list, tag, payload.items);
++}
++
++//  WIRE PROTOCOL FREEZE, same rules as the upstream block above: a size that
++//  has shipped is a size a running daemon expects. New field? New tag.
++test "supermux broker wire sizes are frozen" {
++    try std.testing.expectEqual(@as(usize, 8), @sizeOf(BrokerSize));
++    try std.testing.expectEqual(@as(usize, 12), @sizeOf(BrokerHello));
++    try std.testing.expectEqual(@as(usize, 24), @sizeOf(BrokerWelcome));
++    try std.testing.expectEqual(@as(usize, 12), @sizeOf(BrokerFocus));
++    try std.testing.expectEqual(@as(usize, 16), @sizeOf(BrokerLease));
++    try std.testing.expectEqual(@as(usize, 16), @sizeOf(BrokerResize));
++    try std.testing.expectEqual(@as(usize, 16), @sizeOf(BrokerReplay));
++    try std.testing.expectEqual(@as(usize, 8), @sizeOf(BrokerExit));
++    try std.testing.expectEqual(@as(usize, 4), @sizeOf(BrokerStatus));
++    try std.testing.expectEqual(@as(usize, 8), BROKER_REPLY_PREFIX);
++}
++
++test "parseBrokerHello accepts the version this build speaks" {
++    const alloc = std.testing.allocator;
++    var list = try std.ArrayList(u8).initCapacity(alloc, 64);
++    defer list.deinit(alloc);
++    try encodeBrokerHello(alloc, &list, BROKER_VERSION_MAX, "muxterm_77_6d61696e");
++
++    const hdr = std.mem.bytesToValue(Header, list.items[0..@sizeOf(Header)]);
++    try std.testing.expectEqual(Tag.BrokerHello, hdr.tag);
++
++    const parsed = try parseBrokerHello(list.items[@sizeOf(Header)..]);
++    try std.testing.expectEqual(BROKER_VERSION_MAX, parsed.hello.version);
++    try std.testing.expectEqual(@as(u16, @sizeOf(BrokerHello)), parsed.hello.struct_len);
++    try std.testing.expectEqualStrings("muxterm_77_6d61696e", parsed.name);
++}
++
++test "parseBrokerHello accepts a hello with no name" {
++    const alloc = std.testing.allocator;
++    var list = try std.ArrayList(u8).initCapacity(alloc, 64);
++    defer list.deinit(alloc);
++    try encodeBrokerHello(alloc, &list, 1, "");
++    const parsed = try parseBrokerHello(list.items[@sizeOf(Header)..]);
++    try std.testing.expectEqualStrings("", parsed.name);
++}
++
++test "parseBrokerHello rejects an unknown version before reading the rest" {
++    // A future v2 payload: bigger struct, fields this build cannot place.
++    // The point of the test is that the REJECTION does not depend on the
++    // payload being v1-shaped -- a v2 hello is refused on its version alone.
++    var future: [64]u8 = undefined;
++    @memset(&future, 0xAA);
++    @memcpy(future[0..4], &BROKER_MAGIC);
++    const v2: u16 = BROKER_VERSION_MAX + 1;
++    @memcpy(future[4..6], std.mem.asBytes(&v2));
++
++    try std.testing.expectError(error.UnsupportedVersion, parseBrokerHello(&future));
++    // ...and a truncated one, too short to hold today's struct at all.
++    try std.testing.expectError(error.UnsupportedVersion, parseBrokerHello(future[0..6]));
++}
++
++test "parseBrokerHello rejects version 0 and other unsupported low versions" {
++    var buf: [@sizeOf(BrokerHello)]u8 = undefined;
++    const hello = BrokerHello{ .version = 0, .struct_len = @sizeOf(BrokerHello) };
++    @memcpy(&buf, std.mem.asBytes(&hello));
++    try std.testing.expectError(error.UnsupportedVersion, parseBrokerHello(&buf));
++}
++
++test "parseBrokerHello rejects a supported version carrying a foreign struct size" {
++    var buf: [@sizeOf(BrokerHello)]u8 = undefined;
++    const hello = BrokerHello{ .version = 1, .struct_len = @sizeOf(BrokerHello) + 8 };
++    @memcpy(&buf, std.mem.asBytes(&hello));
++    // This is the "do not interpret a new payload with an old struct size"
++    // case that version alone cannot catch.
++    try std.testing.expectError(error.BadStructLen, parseBrokerHello(&buf));
++}
++
++test "parseBrokerHello rejects a bad magic and a short payload" {
++    try std.testing.expectError(error.Malformed, parseBrokerHello("nope!!"));
++    try std.testing.expectError(error.Malformed, parseBrokerHello("ZMX"));
++    // Right magic, right version, truncated struct.
++    var buf: [@sizeOf(BrokerHello) - 1]u8 = undefined;
++    @memset(&buf, 0);
++    @memcpy(buf[0..4], &BROKER_MAGIC);
++    const v: u16 = 1;
++    @memcpy(buf[4..6], std.mem.asBytes(&v));
++    try std.testing.expectError(error.Malformed, parseBrokerHello(&buf));
++}
++
++test "appendBrokerStatus frames code and message" {
++    const alloc = std.testing.allocator;
++    var list = try std.ArrayList(u8).initCapacity(alloc, 64);
++    defer list.deinit(alloc);
++    try appendBrokerStatus(
++        alloc,
++        &list,
++        .BrokerDetach,
++        @intFromEnum(BrokerDetachReason.resync_required),
++        "pending output over 1 MiB",
++    );
++
++    const hdr = std.mem.bytesToValue(Header, list.items[0..@sizeOf(Header)]);
++    try std.testing.expectEqual(Tag.BrokerDetach, hdr.tag);
++    const payload = list.items[@sizeOf(Header)..];
++    try std.testing.expectEqual(@as(usize, hdr.len), payload.len);
++
++    const status = std.mem.bytesToValue(BrokerStatus, payload[0..@sizeOf(BrokerStatus)]);
++    try std.testing.expectEqual(
++        @intFromEnum(BrokerDetachReason.resync_required),
++        status.code,
++    );
++    try std.testing.expectEqualStrings(
++        "pending output over 1 MiB",
++        payload[@sizeOf(BrokerStatus)..][0..status.msg_len],
++    );
++}
++
++test "broker tags do not collide with upstream tags" {
++    // Guards against a future upstream tag landing on one of ours during a
++    // rebase: every upstream tag stays below the broker range.
++    const first_broker: u8 = @intFromEnum(Tag.BrokerHello);
++    inline for (.{
++        Tag.Input,  Tag.Output,       Tag.Resize,     Tag.Detach,
++        Tag.DetachAll, Tag.Kill,      Tag.Info,       Tag.Init,
++        Tag.History, Tag.Run,         Tag.Ack,        Tag.Switch,
++        Tag.Write,  Tag.TaskComplete, Tag.LabelGet,   Tag.LabelSet,
++        Tag.LabelClear, Tag.LabelData, Tag.Send,      Tag.EnvGet,
++        Tag.EnvSet, Tag.EnvData,
++    }) |t| try std.testing.expect(@intFromEnum(t) < first_broker);
++}
+diff --git a/src/loop.zig b/src/loop.zig
+index 513d3f5..4c6ad4c 100644
+--- a/src/loop.zig
++++ b/src/loop.zig
+@@ -345,6 +345,12 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
+                 if (n == 0) {
+                     // EOF: Shell exited
+                     std.log.info("shell exited pty_fd={d}", .{pty_fd});
++                    // supermux: a closed PTY is the one place we can state
++                    // that the TARGET ended, as opposed to merely losing
++                    // sight of it. Reap the status if it is already there and
++                    // tell broker viewers; the bounded flush in handleKill
++                    // gets it onto the wire.
++                    daemon.reportTargetExit(gpa);
+                     // Let the rest of this poll iteration complete so client
+                     // write buffers are flushed via the normal POLLOUT path.
+                     // On the next iteration, daemon.running will be false.
+@@ -402,14 +408,10 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
+                     const broadcast_data = util.rewritePromptRedraw(gpa, buf[0..n]) orelse buf[0..n];
+                     defer if (broadcast_data.ptr != buf[0..n].ptr) gpa.free(broadcast_data);
+                     for (daemon.clients.items) |client| {
+-                        ipc.appendMessage(gpa, &client.write_buf, .Output, broadcast_data) catch |err| {
+-                            std.log.warn(
+-                                "failed to buffer output for client err={s}",
+-                                .{@errorName(err)},
+-                            );
+-                            continue;
+-                        };
+-                        client.has_pending_output = true;
++                        // supermux: identical to the old append for a stock
++                        // client; adds replay staging and the per-viewer
++                        // queue cap for a broker one.
++                        daemon.queueClientOutput(gpa, client, broadcast_data);
+                     }
+                 }
+             }
+@@ -493,6 +495,22 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
+                         .Run => try daemon.handleRun(gpa, io, client, msg.payload),
+                         .Ack, .TaskComplete, .LabelData, .EnvData => {},
+                         .Write => try daemon.handleWrite(gpa, client, msg.payload),
++                        // ---- supermux broker attachment ----------------
++                        .BrokerHello => try daemon.handleBrokerHello(gpa, client, &term, msg.payload),
++                        .BrokerFocus => try daemon.handleBrokerFocus(gpa, client, pty_fd, &term, msg.payload),
++                        .BrokerResize => try daemon.handleBrokerResize(gpa, client, pty_fd, &term, msg.payload),
++                        .BrokerInput => daemon.handleBrokerInput(gpa, client, msg.payload),
++                        .BrokerReply => daemon.handleBrokerReply(gpa, client, msg.payload),
++                        // Daemon-to-client tags: a client sending one back is
++                        // confused, not dangerous.
++                        .BrokerWelcome,
++                        .BrokerLease,
++                        .BrokerReplayStart,
++                        .BrokerReplayEnd,
++                        .BrokerExit,
++                        .BrokerFailure,
++                        .BrokerDetach,
++                        => {},
+                         _ => std.log.warn(
+                             "ignoring unknown IPC tag={d}",
+                             .{@intFromEnum(msg.header.tag)},
+@@ -517,6 +535,14 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
+ 
+                 if (client.write_buf.items.len == 0) {
+                     client.has_pending_output = false;
++                    // supermux: a viewer we detached with a stated reason is
++                    // hung up on only once that reason has actually been
++                    // written. Everyone else, and the shell, carry on.
++                    if (client.close_after_flush) {
++                        const last = daemon.closeClient(gpa, client, i, false);
++                        if (last) break :daemon_loop;
++                        continue;
++                    }
+                 }
+             }
+ 
+@@ -525,6 +551,14 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
+                 if (last) break :daemon_loop;
+             }
+         }
++
++        // supermux: move in-flight restores forward. After the client pass,
++        // so anything this iteration produced is already staged behind the
++        // snapshot, and gated on each viewer's queue so a slow one applies
++        // backpressure rather than growing the daemon.
++        for (daemon.clients.items) |client| {
++            if (client.replay != null) daemon.pumpBrokerReplay(gpa, client, false);
++        }
+     }
+ }
+ 
+@@ -537,6 +571,54 @@ const ClientResult = struct {
+     cwd: ?[]const u8 = null,
+ };
+ 
++/// An in-flight restore to ONE broker viewer.
++///
++/// Upstream sends the whole snapshot as a single `.Output` message appended
++/// straight into the client's write buffer. That is fine for a tty attaching
++/// to a 24-line screen and untenable for a 50k-line scrollback: the daemon's
++/// memory becomes a function of the largest history any viewer ever
++/// re-attaches to, and there is no point at which it can decline.
++///
++/// So the snapshot is built ONCE, bounded, outside the write buffer, and then
++/// moved in fixed chunks as the socket drains. Live output produced while
++/// that is happening is STAGED here rather than appended, and flushed
++/// verbatim after the replay-end boundary. The viewer therefore observes:
++///
++///     BrokerReplayStart(epoch) -> Output* (the snapshot)
++///       -> BrokerReplayEnd(epoch) -> Output* (what happened during the
++///          replay, in the order it happened) -> Output* (everything after)
++///
++/// which is exactly the ordering the workspace-backend contract requires, and
++/// is impossible to get from upstream's single-message form once the snapshot
++/// stops fitting in one write.
++pub const BrokerReplay = struct {
++    epoch: u64,
++    /// Owned. May be empty: an attach to a session with no history still
++    /// emits the same start/end boundary, because "nothing to restore" and
++    /// "no restore happened" must not look alike to a viewer.
++    snapshot: []u8,
++    sent: usize = 0,
++    /// Already-framed `.Output` messages captured during the replay.
++    staged: std.ArrayList(u8) = .empty,
++
++    pub fn deinit(self: *BrokerReplay, gpa: std.mem.Allocator) void {
++        gpa.free(self.snapshot);
++        self.staged.deinit(gpa);
++    }
++};
++
++/// Label key under which a broker viewer records the FULL supermux terminal
++/// key for this session.
++///
++/// zmx is one-daemon-one-socket and the socket basename is the session name,
++/// so a supermux key ("w:<uuid>" + a terminal id) does not fit in `sun_path`.
++/// The helper therefore mints a short opaque basename and puts the real name
++/// HERE, in the daemon, where `zmx list` already reads it (probeSession asks
++/// every socket for its labels). Discovery after a broker restart is then a
++/// property of the running daemons, not of any file the broker has to keep in
++/// sync with them.
++pub const BROKER_TARGET_LABEL = "mux.target";
++
+ /// Client represents each terminal that has connected to a session.
+ ///
+ /// Multiple Clients can connect to a single session.
+@@ -548,12 +630,25 @@ pub const Client = struct {
+     read_buf: ipc.SocketBuffer,
+     write_buf: std.ArrayList(u8),
+     env_str: ?[]u8 = null,
++    // ---- supermux broker attachment -----------------------------------
++    /// Set by a completed BrokerHello. Everything below is inert until then,
++    /// so a stock `zmx attach`/`run`/`list` client is the same object it was
++    /// before this patch.
++    is_broker: bool = false,
++    broker_version: u16 = 0,
++    /// Close once `write_buf` has drained. Used to deliver a last word (a
++    /// BrokerDetach reason, a BrokerExit) to a viewer we are dropping, rather
++    /// than hanging up and making it guess.
++    close_after_flush: bool = false,
++    /// Non-null while a restore is streaming to this viewer.
++    replay: ?BrokerReplay = null,
+ 
+     pub fn deinit(self: *Client, gpa: std.mem.Allocator) void {
+         lib_posix.close(self.socket_fd);
+         self.read_buf.deinit();
+         self.write_buf.deinit(self.alloc);
+         if (self.env_str) |s| gpa.free(s);
++        if (self.replay) |*r| r.deinit(gpa);
+     }
+ 
+     fn setEnv(self: *Client, gpa: std.mem.Allocator, env_str: []const u8) !void {
+@@ -605,6 +700,23 @@ pub const Daemon = struct {
+     task_ended_at: ?u64 = null, // timestamp when task exited
+     pty_fd: i32 = -1, // set by daemonLoop so handleRun can probe the foreground process
+     shell: []const u8 = "/bin/sh",
++    // ---- supermux broker attachment -----------------------------------
++    /// Highest focus generation ever handed out by THIS daemon. Monotonic and
++    /// never reset: it is what makes a late message from a viewer that has
++    /// since lost focus identifiable, and what a restarting broker asks for
++    /// instead of restarting a counter of its own at a value still in flight.
++    broker_lease_gen: u64 = 0,
++    /// The viewer holding the focus lease, if any, and the generation it holds.
++    broker_owner_fd: ?i32 = null,
++    broker_owner_gen: u64 = 0,
++    /// Increments per broker attach; both ends of one replay carry it.
++    broker_epoch: u64 = 0,
++    /// BrokerExit is sent at most once per daemon.
++    broker_exit_sent: bool = false,
++    /// Last geometry a lease holder asked for. Handed to a successor in its
++    /// BrokerLease so it knows what the shell currently believes, and is
++    /// expected to answer with its own BrokerResize under the new generation.
++    broker_last_size: ipc.BrokerSize = .{ .rows = 24, .cols = 80 },
+ 
+     /// Create a Daemon. Caller is responsible for freeing all variables passed
+     /// into the init fn.
+@@ -669,9 +781,13 @@ pub const Daemon = struct {
+             );
+             self.leader_client_fd = null;
+         }
++        const was_broker_owner = self.broker_owner_fd == client.socket_fd;
+         client.deinit(gpa);
+         gpa.destroy(client);
+         _ = self.clients.orderedRemove(i);
++        // After the removal, so the departing viewer cannot be chosen as its
++        // own successor.
++        if (was_broker_owner) self.releaseBrokerLease(gpa, fd);
+         std.log.info("client disconnected fd={d} remaining={d}", .{ fd, self.clients.items.len });
+         if (shutdown_on_last and self.clients.items.len == 0) {
+             self.shutdown(gpa);
+@@ -846,6 +962,20 @@ pub const Daemon = struct {
+     }
+ 
+     fn setLeader(self: *Daemon, gpa: std.mem.Allocator, client: *Client) !void {
++        // A broker focus lease is authoritative while it is held: nothing
++        // else moves the leader -- not a stock client typing, not a second
++        // `zmx attach` sending Init. Inert for any session without a broker
++        // viewer, which is every session the stock CLI creates, so the
++        // upstream "first typed input wins" policy is unchanged there.
++        if (self.broker_owner_fd) |owner_fd| {
++            if (owner_fd != client.socket_fd) {
++                std.log.debug(
++                    "leader change refused, broker lease held owner_fd={d} asked_fd={d}",
++                    .{ owner_fd, client.socket_fd },
++                );
++                return;
++            }
++        }
+         std.log.info("setting new leader client_fd={d}", .{client.socket_fd});
+         self.leader_client_fd = client.socket_fd;
+         // Send a resize message to the client so it can send us back their window size
+@@ -1061,6 +1191,12 @@ pub const Daemon = struct {
+ 
+     pub fn handleKill(self: *Daemon, gpa: std.mem.Allocator, io: std.Io) void {
+         std.log.info("kill received session={s}", .{self.session_name});
++        // supermux: last chance to say something true. If the shell exited we
++        // have already said so (reportBrokerExit is once-only); otherwise this
++        // is a daemon shutdown, which is a DIFFERENT fact and gets its own
++        // message. Then a bounded flush, because `shutdown` closes the sockets.
++        self.reportBrokerShutdown(gpa);
++        self.flushBrokerClients(gpa, 300);
+         self.shutdown(gpa);
+         // gracefully shutdown shell processes, shells tend to ignore SIGTERM so we send SIGHUP
+         // instead
+@@ -1236,8 +1372,7 @@ pub const Daemon = struct {
+         self.setPwd(term);
+         self.has_pty_output = true;
+         for (self.clients.items) |client| {
+-            try ipc.appendMessage(gpa, &client.write_buf, .Output, payload);
+-            client.has_pending_output = true;
++            self.queueClientOutput(gpa, client, payload);
+         }
+         if (self.clients.items.len > 0) {
+             lib_posix.kill(self.pid, lib_posix.SIG.WINCH) catch |err| {
+@@ -1348,6 +1483,602 @@ pub const Daemon = struct {
+         client.has_pending_output = true;
+     }
+ 
++    // =====================================================================
++    //  supermux broker attachment
++    // =====================================================================
++    //
++    //  Nothing below runs for a client that has not sent BrokerHello, and no
++    //  upstream handler calls into it except through the three hooks marked
++    //  "supermux" in daemonLoop, setLeader and closeClient. The stock CLI
++    //  path is therefore the one this file already had.
++
++    /// True when `client` holds the focus lease AND the generation it quoted
++    /// is the one currently outstanding.
++    ///
++    /// Both halves matter. The fd check alone lets a message that was queued
++    /// before a release-and-reclaim apply under the wrong geometry; the
++    /// generation check alone lets a viewer replay another viewer's captured
++    /// generation. Together, a message takes effect only if it was produced
++    /// under the lease that is live right now.
++    fn brokerOwns(self: *const Daemon, client: *const Client, gen: u64) bool {
++        const owner = self.broker_owner_fd orelse return false;
++        return owner == client.socket_fd and gen == self.broker_owner_gen;
++    }
++
++    fn sendBrokerFailure(
++        gpa: std.mem.Allocator,
++        client: *Client,
++        code: ipc.BrokerFailureCode,
++        msg: []const u8,
++    ) void {
++        ipc.appendBrokerStatus(
++            gpa,
++            &client.write_buf,
++            .BrokerFailure,
++            @intFromEnum(code),
++            msg,
++        ) catch return;
++        client.has_pending_output = true;
++    }
++
++    /// First message of a broker attachment. Until this lands the connection
++    /// is an ordinary zmx client.
++    pub fn handleBrokerHello(
++        self: *Daemon,
++        gpa: std.mem.Allocator,
++        client: *Client,
++        term: *ghostty_vt.Terminal,
++        payload: []const u8,
++    ) !void {
++        const parsed = ipc.parseBrokerHello(payload) catch |err| {
++            const code: ipc.BrokerFailureCode = switch (err) {
++                error.UnsupportedVersion => .unsupported_version,
++                else => .protocol,
++            };
++            // A peer whose version we do not speak is told so and hung up on.
++            // It is NOT downgraded, and its payload is not reinterpreted
++            // through this build's structs.
++            sendBrokerFailure(gpa, client, code, @errorName(err));
++            client.close_after_flush = true;
++            std.log.warn("broker hello rejected err={s}", .{@errorName(err)});
++            return;
++        };
++
++        client.is_broker = true;
++        client.broker_version = parsed.hello.version;
++        // A broker viewer is a real terminal viewer: it counts for DECSET
++        // 1004 focus reporting, and it answers device-attribute queries
++        // itself, so the daemon must stop answering them on its behalf.
++        client.is_terminal = true;
++
++        if (parsed.name.len > 0) self.setBrokerTarget(gpa, parsed.name);
++
++        const welcome = ipc.BrokerWelcome{
++            .version = parsed.hello.version,
++            .struct_len = @sizeOf(ipc.BrokerWelcome),
++            .lease_gen = self.broker_lease_gen,
++        };
++        try ipc.appendMessage(gpa, &client.write_buf, .BrokerWelcome, std.mem.asBytes(&welcome));
++        client.has_pending_output = true;
++        std.log.info(
++            "broker attached fd={d} version={d} lease_gen={d}",
++            .{ client.socket_fd, parsed.hello.version, self.broker_lease_gen },
++        );
++
++        // Every broker attachment opens a restoration boundary, including the
++        // very first one with nothing to restore.
++        self.beginBrokerReplay(gpa, client, term);
++    }
++
++    /// Record the supermux terminal key as a label, so `zmx list` (which
++    /// already probes every socket for labels) can map an opaque socket
++    /// basename back to a workspace + terminal id.
++    fn setBrokerTarget(self: *Daemon, gpa: std.mem.Allocator, name: []const u8) void {
++        label.assertLabel(BROKER_TARGET_LABEL, name) catch |err| {
++            std.log.warn("ignoring broker target name err={s}", .{@errorName(err)});
++            return;
++        };
++        const key = gpa.dupe(u8, BROKER_TARGET_LABEL) catch return;
++        const value = gpa.dupe(u8, name) catch {
++            gpa.free(key);
++            return;
++        };
++        if (self.labels.fetchPut(gpa, key, value)) |maybe_existing| {
++            if (maybe_existing) |existing| {
++                // fetchPut keeps the OLD key pointer, so the new one is spare.
++                gpa.free(key);
++                gpa.free(existing.value);
++            }
++        } else |err| {
++            gpa.free(key);
++            gpa.free(value);
++            std.log.warn("failed to store broker target err={s}", .{@errorName(err)});
++        }
++    }
++
++    /// Allocate a FRESH generation and give the lease to `client`.
++    ///
++    /// Fresh even when `client` already held it: re-claiming is how a viewer
++    /// says "everything I sent before now is void", and reusing the
++    /// generation would leave those messages indistinguishable from new ones.
++    fn grantBrokerLease(
++        self: *Daemon,
++        gpa: std.mem.Allocator,
++        client: *Client,
++        size: ?ipc.BrokerSize,
++    ) !void {
++        self.broker_lease_gen += 1;
++        self.broker_owner_fd = client.socket_fd;
++        self.broker_owner_gen = self.broker_lease_gen;
++        // Upstream's notion of "leader" follows the lease, so a stock client
++        // sharing the session sees a consistent owner.
++        self.leader_client_fd = client.socket_fd;
++        if (size) |sz| {
++            if (sz.rows > 0 and sz.cols > 0) self.broker_last_size = sz;
++        }
++        const lease = ipc.BrokerLease{
++            .gen = self.broker_owner_gen,
++            .size = self.broker_last_size,
++        };
++        try ipc.appendMessage(gpa, &client.write_buf, .BrokerLease, std.mem.asBytes(&lease));
++        client.has_pending_output = true;
++        std.log.info(
++            "broker lease granted fd={d} gen={d}",
++            .{ client.socket_fd, self.broker_owner_gen },
++        );
++    }
++
++    /// Drop the lease held by `owner_fd` and choose a successor.
++    ///
++    /// The successor is the most recently attached broker viewer that is
++    /// still usable. It gets a NEW generation (never the departed one) and a
++    /// BrokerLease carrying the geometry the shell currently believes, and is
++    /// expected to answer with its own BrokerResize. With no successor the
++    /// session is simply unowned: replies are then discarded, the daemon
++    /// answers device-attribute queries itself again, and upstream's
++    /// "first typed input claims leadership" policy resumes.
++    fn releaseBrokerLease(self: *Daemon, gpa: std.mem.Allocator, owner_fd: i32) void {
++        if (self.broker_owner_fd != owner_fd) return;
++        self.broker_owner_fd = null;
++        self.broker_owner_gen = 0;
++        if (self.leader_client_fd == owner_fd) self.leader_client_fd = null;
++
++        var i = self.clients.items.len;
++        while (i > 0) {
++            i -= 1;
++            const candidate = self.clients.items[i];
++            if (candidate.socket_fd == owner_fd) continue;
++            if (!candidate.is_broker or candidate.close_after_flush) continue;
++            self.grantBrokerLease(gpa, candidate, null) catch |err| {
++                std.log.warn("failed to hand over broker lease err={s}", .{@errorName(err)});
++                continue;
++            };
++            return;
++        }
++        std.log.info("broker lease released with no successor", .{});
++    }
++
++    fn applyBrokerSize(
++        self: *Daemon,
++        gpa: std.mem.Allocator,
++        pty_fd: i32,
++        term: *ghostty_vt.Terminal,
++        size: ipc.BrokerSize,
++    ) !void {
++        if (size.rows == 0 or size.cols == 0) return;
++        const resize = size.toResize();
++        if (pty_fd >= 0) {
++            var ws = resize.winsize();
++            _ = cross.c.ioctl(pty_fd, cross.c.TIOCSWINSZ, &ws);
++        }
++        try resizeTerm(gpa, term, resize.cols, resize.rows);
++        self.broker_last_size = size;
++    }
++
++    /// Claim (`active = 1`) or release (`active = 0`) the focus lease.
++    ///
++    /// This is the ONLY way ownership moves on a broker attachment. In
++    /// particular it does not require, and is not implied by, any input:
++    /// focusing a tab that has not been typed in takes the size with it, and
++    /// typing into an unfocused tab does not.
++    pub fn handleBrokerFocus(
++        self: *Daemon,
++        gpa: std.mem.Allocator,
++        client: *Client,
++        pty_fd: i32,
++        term: *ghostty_vt.Terminal,
++        payload: []const u8,
++    ) !void {
++        if (!client.is_broker) return;
++        if (payload.len != @sizeOf(ipc.BrokerFocus)) {
++            sendBrokerFailure(gpa, client, .protocol, "BrokerFocus payload size");
++            return;
++        }
++        const msg = std.mem.bytesToValue(ipc.BrokerFocus, payload[0..@sizeOf(ipc.BrokerFocus)]);
++        if (msg.active == 0) {
++            self.releaseBrokerLease(gpa, client.socket_fd);
++            return;
++        }
++        try self.grantBrokerLease(gpa, client, msg.size);
++        try self.applyBrokerSize(gpa, pty_fd, term, msg.size);
++    }
++
++    /// Geometry from a broker viewer, carrying the generation it was produced
++    /// under.
++    ///
++    /// A message from a non-owner, or from the owner under a superseded
++    /// generation, is DROPPED. It is not an error: it was true when it was
++    /// sent and is not now, and applying it would resize the shell to a tab
++    /// nobody is looking at.
++    pub fn handleBrokerResize(
++        self: *Daemon,
++        gpa: std.mem.Allocator,
++        client: *Client,
++        pty_fd: i32,
++        term: *ghostty_vt.Terminal,
++        payload: []const u8,
++    ) !void {
++        if (!client.is_broker) return;
++        if (payload.len != @sizeOf(ipc.BrokerResize)) {
++            sendBrokerFailure(gpa, client, .protocol, "BrokerResize payload size");
++            return;
++        }
++        const msg = std.mem.bytesToValue(ipc.BrokerResize, payload[0..@sizeOf(ipc.BrokerResize)]);
++        if (!self.brokerOwns(client, msg.gen)) {
++            std.log.debug(
++                "ignoring stale broker resize fd={d} gen={d} owner_gen={d}",
++                .{ client.socket_fd, msg.gen, self.broker_owner_gen },
++            );
++            return;
++        }
++        try self.applyBrokerSize(gpa, pty_fd, term, msg.size);
++    }
++
++    /// User keystrokes from a broker viewer.
++    ///
++    /// They always reach the PTY, owner or not -- a background tab is allowed
++    /// to type; what it may not do is drag the geometry of the focused tab
++    /// along with it. So, unlike `handleInput`, this never promotes anyone.
++    ///
++    /// An empty payload is an empty write: not a focus claim, not a
++    /// keep-alive, not an implicit anything. Claims are BrokerFocus and
++    /// nothing else.
++    pub fn handleBrokerInput(
++        self: *Daemon,
++        gpa: std.mem.Allocator,
++        client: *Client,
++        payload: []const u8,
++    ) void {
++        if (!client.is_broker) return;
++        if (payload.len == 0) return;
++        self.queuePtyInput(gpa, payload);
++    }
++
++    /// A terminal REPLY the viewer's own emulator produced (DA/DSR/kitty
++    /// query answers), as [u64 gen][bytes].
++    ///
++    /// Only the current lease holder's replies reach the PTY. Several viewers
++    /// render the same DA1 query and each answers it; letting them all
++    /// through makes the shell read the answer N times, and every answer
++    /// after the first is parsed as though the user had typed it.
++    pub fn handleBrokerReply(
++        self: *Daemon,
++        gpa: std.mem.Allocator,
++        client: *Client,
++        payload: []const u8,
++    ) void {
++        if (!client.is_broker) return;
++        if (payload.len < ipc.BROKER_REPLY_PREFIX) return;
++        const gen = std.mem.bytesToValue(u64, payload[0..ipc.BROKER_REPLY_PREFIX]);
++        if (!self.brokerOwns(client, gen)) {
++            std.log.debug("discarding non-owner broker reply fd={d}", .{client.socket_fd});
++            return;
++        }
++        const bytes = payload[ipc.BROKER_REPLY_PREFIX..];
++        if (bytes.len == 0) return;
++        self.queuePtyInput(gpa, bytes);
++    }
++
++    /// Open a restoration boundary for one broker viewer.
++    ///
++    /// The snapshot is taken HERE, and here is always an output-sequence
++    /// boundary: daemonLoop reads the PTY, feeds every byte to `term` and
++    /// broadcasts it, and only afterwards processes client messages. So there
++    /// is no half-consumed escape sequence in `term`, and no broadcast byte
++    /// that this viewer has neither in its snapshot nor in its queue.
++    pub fn beginBrokerReplay(
++        self: *Daemon,
++        gpa: std.mem.Allocator,
++        client: *Client,
++        term: *ghostty_vt.Terminal,
++    ) void {
++        self.beginBrokerReplayLimited(gpa, client, term, ipc.BROKER_SNAPSHOT_MAX);
++    }
++
++    /// `beginBrokerReplay` with the snapshot ceiling as a parameter, so the
++    /// overflow path is reachable from a test without a 4 MiB scrollback.
++    pub fn beginBrokerReplayLimited(
++        self: *Daemon,
++        gpa: std.mem.Allocator,
++        client: *Client,
++        term: *ghostty_vt.Terminal,
++        snapshot_max: usize,
++    ) void {
++        if (!client.is_broker or client.close_after_flush) return;
++        if (client.replay) |*existing| {
++            existing.deinit(gpa);
++            client.replay = null;
++        }
++
++        self.broker_epoch += 1;
++        const epoch = self.broker_epoch;
++
++        const snapshot: []u8 = blk: {
++            if (!self.has_pty_output) break :blk &[_]u8{};
++            const maybe = util.serializeTerminalStateBounded(
++                gpa,
++                term,
++                snapshot_max,
++            ) catch |err| {
++                // Aborting THIS viewer is the whole point: a snapshot we
++                // cannot hold must not be sent half-way and then continued
++                // with live output, which would leave the screen restored to
++                // a state that never existed.
++                self.abortBrokerViewer(gpa, client, .snapshot_overflow, @errorName(err));
++                return;
++            };
++            break :blk maybe orelse &[_]u8{};
++        };
++
++        const start = ipc.BrokerReplay{ .epoch = epoch, .bytes = snapshot.len };
++        ipc.appendMessage(gpa, &client.write_buf, .BrokerReplayStart, std.mem.asBytes(&start)) catch {
++            gpa.free(snapshot);
++            self.abortBrokerViewer(gpa, client, .resync_required, "out of memory opening restore");
++            return;
++        };
++        client.replay = .{ .epoch = epoch, .snapshot = snapshot };
++        client.has_pending_output = true;
++        // A later stock `zmx attach` should get its own snapshot, exactly as
++        // it would after a tty had attached.
++        self.has_had_client = true;
++        self.pumpBrokerReplay(gpa, client, false);
++    }
++
++    /// Move the in-flight restore forward.
++    ///
++    /// Bounded by `BROKER_REPLAY_CHUNK` per step and by the viewer's queue:
++    /// a viewer that is not draining applies backpressure instead of growing
++    /// the daemon. `force` ignores the soft ceiling and is used only when the
++    /// daemon is about to exit and this is the last chance to say anything.
++    pub fn pumpBrokerReplay(
++        self: *Daemon,
++        gpa: std.mem.Allocator,
++        client: *Client,
++        force: bool,
++    ) void {
++        if (client.close_after_flush) return;
++        const replay = if (client.replay) |*r| r else return;
++
++        const soft_cap = ipc.BROKER_PENDING_MAX / 2;
++        while (replay.sent < replay.snapshot.len and
++            (force or client.write_buf.items.len < soft_cap))
++        {
++            const n = @min(ipc.BROKER_REPLAY_CHUNK, replay.snapshot.len - replay.sent);
++            ipc.appendMessage(
++                gpa,
++                &client.write_buf,
++                .Output,
++                replay.snapshot[replay.sent..][0..n],
++            ) catch {
++                self.abortBrokerViewer(gpa, client, .resync_required, "out of memory during restore");
++                return;
++            };
++            replay.sent += n;
++        }
++        client.has_pending_output = client.write_buf.items.len > 0;
++        if (replay.sent < replay.snapshot.len) return;
++
++        const end = ipc.BrokerReplay{ .epoch = replay.epoch, .bytes = replay.sent };
++        ipc.appendMessage(gpa, &client.write_buf, .BrokerReplayEnd, std.mem.asBytes(&end)) catch {
++            self.abortBrokerViewer(gpa, client, .resync_required, "out of memory closing restore");
++            return;
++        };
++        // What the program wrote while the restore streamed, in the order it
++        // wrote it. Already framed, so this is a straight splice.
++        if (replay.staged.items.len > 0) {
++            client.write_buf.appendSlice(gpa, replay.staged.items) catch {
++                self.abortBrokerViewer(gpa, client, .resync_required, "out of memory flushing staged output");
++                return;
++            };
++        }
++        client.has_pending_output = true;
++        var done = client.replay.?;
++        client.replay = null;
++        done.deinit(gpa);
++    }
++
++    /// Queue one PTY output burst for one client.
++    ///
++    /// Stock clients take the upstream path verbatim, so `zmx attach` is
++    /// unchanged. A broker viewer gets two extra rules: output produced while
++    /// a restore is streaming is STAGED rather than appended, and the queue is
++    /// capped -- past the cap the viewer is detached with `resync_required`
++    /// while the shell and every other viewer carry on.
++    pub fn queueClientOutput(
++        self: *Daemon,
++        gpa: std.mem.Allocator,
++        client: *Client,
++        data: []const u8,
++    ) void {
++        if (!client.is_broker) {
++            ipc.appendMessage(gpa, &client.write_buf, .Output, data) catch |err| {
++                std.log.warn("failed to buffer output for client err={s}", .{@errorName(err)});
++                return;
++            };
++            client.has_pending_output = true;
++            return;
++        }
++        if (client.close_after_flush) return;
++
++        const framed = @sizeOf(ipc.Header) + data.len;
++        if (client.replay) |*replay| {
++            if (replay.staged.items.len + framed > ipc.BROKER_PENDING_MAX) {
++                self.abortBrokerViewer(gpa, client, .resync_required, "staged output over cap during restore");
++                return;
++            }
++            ipc.appendMessage(gpa, &replay.staged, .Output, data) catch {
++                self.abortBrokerViewer(gpa, client, .resync_required, "out of memory staging output");
++            };
++            return;
++        }
++
++        if (client.write_buf.items.len + framed > ipc.BROKER_PENDING_MAX) {
++            self.abortBrokerViewer(gpa, client, .resync_required, "pending output over cap");
++            return;
++        }
++        ipc.appendMessage(gpa, &client.write_buf, .Output, data) catch {
++            self.abortBrokerViewer(gpa, client, .resync_required, "out of memory queueing output");
++            return;
++        };
++        client.has_pending_output = true;
++    }
++
++    /// Drop ONE broker viewer with a stated reason, keeping the shell and
++    /// every other viewer running.
++    ///
++    /// The queued bytes go with it on purpose: the viewer is about to
++    /// re-attach onto a new epoch, and those are exactly the bytes it must
++    /// not render on top of the new snapshot.
++    fn abortBrokerViewer(
++        self: *Daemon,
++        gpa: std.mem.Allocator,
++        client: *Client,
++        reason: ipc.BrokerDetachReason,
++        msg: []const u8,
++    ) void {
++        if (client.close_after_flush) return;
++        if (client.replay) |*replay| {
++            replay.deinit(gpa);
++            client.replay = null;
++        }
++        client.write_buf.clearRetainingCapacity();
++        ipc.appendBrokerStatus(
++            gpa,
++            &client.write_buf,
++            .BrokerDetach,
++            @intFromEnum(reason),
++            msg,
++        ) catch {};
++        client.has_pending_output = client.write_buf.items.len > 0;
++        client.close_after_flush = true;
++        // Losing a viewer must not leave the shell owned by a corpse.
++        self.releaseBrokerLease(gpa, client.socket_fd);
++        std.log.warn(
++            "broker viewer detached fd={d} reason={d} msg={s}",
++            .{ client.socket_fd, @intFromEnum(reason), msg },
++        );
++    }
++
++    /// Decode a `waitpid` status into the wire form.
++    ///
++    /// A STOPPED child (WIFSTOPPED) is reported as `known = 0`: it is not an
++    /// exit, and claiming an exit code for it would be a lie a viewer acts on.
++    pub fn brokerExitFromStatus(status: u32) ipc.BrokerExit {
++        const low: u8 = @intCast(status & 0x7f);
++        if (low == 0) {
++            return .{
++                .known = 1,
++                .signaled = 0,
++                .signal = 0,
++                .code = @intCast((status >> 8) & 0xff),
++            };
++        }
++        if (low == 0x7f) return .{ .known = 0, .signaled = 0, .signal = 0, .code = 0 };
++        return .{ .known = 1, .signaled = 1, .signal = low, .code = 0 };
++    }
++
++    /// Tell every broker viewer that the TARGET PROCESS ended, at most once.
++    ///
++    /// This is the only statement to that effect in the protocol. Losing the
++    /// socket is not it, and a viewer must never infer one from the other:
++    /// "the shell exited" closes a tab, "I cannot see the shell" retries.
++    pub fn reportBrokerExit(self: *Daemon, gpa: std.mem.Allocator, exit: ipc.BrokerExit) void {
++        if (self.broker_exit_sent) return;
++        self.broker_exit_sent = true;
++        for (self.clients.items) |client| {
++            if (!client.is_broker) continue;
++            // Finish any in-flight restore first, so the viewer never sees an
++            // exit inside a replay it was never given the end of.
++            if (client.replay != null) self.pumpBrokerReplay(gpa, client, true);
++            if (client.close_after_flush) continue;
++            ipc.appendMessage(gpa, &client.write_buf, .BrokerExit, std.mem.asBytes(&exit)) catch continue;
++            client.has_pending_output = true;
++        }
++        std.log.info(
++            "broker exit reported known={d} signaled={d} signal={d} code={d}",
++            .{ exit.known, exit.signaled, exit.signal, exit.code },
++        );
++    }
++
++    /// The daemon is going away for a reason that is NOT the shell exiting.
++    /// Reported separately so a viewer can distinguish "your program ended"
++    /// from "the thing running your program was taken down".
++    pub fn reportBrokerShutdown(self: *Daemon, gpa: std.mem.Allocator) void {
++        if (self.broker_exit_sent) return;
++        for (self.clients.items) |client| {
++            if (!client.is_broker or client.close_after_flush) continue;
++            ipc.appendBrokerStatus(
++                gpa,
++                &client.write_buf,
++                .BrokerDetach,
++                @intFromEnum(ipc.BrokerDetachReason.daemon_shutdown),
++                "daemon shutting down",
++            ) catch continue;
++            client.has_pending_output = true;
++        }
++    }
++
++    /// Reap the shell's status without blocking and report it.
++    /// `WNOHANG` is 1 on every platform zmx builds for (Linux, macOS, *BSD).
++    const WNOHANG: u32 = 1;
++
++    pub fn reportTargetExit(self: *Daemon, gpa: std.mem.Allocator) void {
++        if (self.broker_exit_sent) return;
++        var exit = ipc.BrokerExit{ .known = 0, .signaled = 0, .signal = 0, .code = 0 };
++        if (self.pid > 0) {
++            const res = lib_posix.waitpid(self.pid, WNOHANG);
++            // pid == 0 means "still running": the PTY closed but the process
++            // group has not been reaped yet. We say so rather than invent a
++            // code -- the `run()` teardown waitpid will collect it.
++            if (res.pid == self.pid) exit = brokerExitFromStatus(res.status);
++        }
++        self.reportBrokerExit(gpa, exit);
++    }
++
++    /// Best-effort, bounded flush so a final BrokerExit/BrokerDetach actually
++    /// leaves the process. A viewer that is not reading cannot be helped, and
++    /// the daemon must not hang for it.
++    fn flushBrokerClients(self: *Daemon, gpa: std.mem.Allocator, budget_ms: i32) void {
++        const step_ms: i32 = 20;
++        var remaining = budget_ms;
++        while (remaining > 0) {
++            var pending_fd: ?i32 = null;
++            for (self.clients.items) |client| {
++                if (!client.is_broker or client.write_buf.items.len == 0) continue;
++                const n = lib_posix.write(client.socket_fd, client.write_buf.items) catch |err| {
++                    if (err != error.WouldBlock) client.write_buf.clearRetainingCapacity();
++                    continue;
++                };
++                if (n > 0) client.write_buf.replaceRange(gpa, 0, n, &[_]u8{}) catch unreachable;
++                if (client.write_buf.items.len > 0) pending_fd = client.socket_fd;
++            }
++            const fd = pending_fd orelse return;
++            var fds = [_]lib_posix.pollfd{.{ .fd = fd, .events = lib_posix.POLL.OUT, .revents = 0 }};
++            _ = lib_posix.poll(&fds, step_ms) catch return;
++            remaining -= step_ms;
++        }
++    }
++
+     fn handleLabelClear(self: *Daemon, gpa: std.mem.Allocator, client: *Client) !void {
+         var it = self.labels.iterator();
+         while (it.next()) |entry| {
+@@ -1531,3 +2262,959 @@ test "handleEnvGet returns leader client's environment variables including unset
+     const pay3 = client_req.write_buf.items[@sizeOf(ipc.Header)..];
+     try std.testing.expectEqualStrings("DISPLAY=:99\n", pay3);
+ }
++
++// ===========================================================================
++//  supermux broker attachment -- daemon tests
++// ===========================================================================
++//
++//  These drive the Daemon's message handlers directly, with real pipe fds
++//  standing in for client sockets, so every rule below is asserted on the
++//  state the daemon actually keeps rather than on a log line.
++
++const BrokerFrame = struct { tag: ipc.Tag, payload: []const u8 };
++
++const BrokerFrameIter = struct {
++    bytes: []const u8,
++    off: usize = 0,
++
++    fn next(self: *BrokerFrameIter) ?BrokerFrame {
++        if (self.off + @sizeOf(ipc.Header) > self.bytes.len) return null;
++        const hdr = std.mem.bytesToValue(ipc.Header, self.bytes[self.off..][0..@sizeOf(ipc.Header)]);
++        const start = self.off + @sizeOf(ipc.Header);
++        const end = start + hdr.len;
++        if (end > self.bytes.len) return null;
++        self.off = end;
++        return .{ .tag = hdr.tag, .payload = self.bytes[start..end] };
++    }
++};
++
++fn findFrame(bytes: []const u8, tag: ipc.Tag) ?BrokerFrame {
++    var it = BrokerFrameIter{ .bytes = bytes };
++    while (it.next()) |f| if (f.tag == tag) return f;
++    return null;
++}
++
++fn countFrames(bytes: []const u8, tag: ipc.Tag) usize {
++    var it = BrokerFrameIter{ .bytes = bytes };
++    var n: usize = 0;
++    while (it.next()) |f| {
++        if (f.tag == tag) n += 1;
++    }
++    return n;
++}
++
++/// Concatenated payloads of every frame with `tag`, in order.
++fn joinFrames(alloc: std.mem.Allocator, bytes: []const u8, tag: ipc.Tag) ![]u8 {
++    var out = std.ArrayList(u8).empty;
++    errdefer out.deinit(alloc);
++    var it = BrokerFrameIter{ .bytes = bytes };
++    while (it.next()) |f| {
++        if (f.tag == tag) try out.appendSlice(alloc, f.payload);
++    }
++    return out.toOwnedSlice(alloc);
++}
++
++/// Index of the first frame with `tag`, in frame (not byte) order.
++fn frameIndex(bytes: []const u8, tag: ipc.Tag) ?usize {
++    var it = BrokerFrameIter{ .bytes = bytes };
++    var i: usize = 0;
++    while (it.next()) |f| : (i += 1) {
++        if (f.tag == tag) return i;
++    }
++    return null;
++}
++
++const BrokerFixture = struct {
++    alloc: std.mem.Allocator,
++    cfg: Cfg = .{ .socket_dir = "", .log_dir = "" },
++    daemon: Daemon = undefined,
++    term: ghostty_vt.Terminal = undefined,
++    /// Write ends of the pipes whose read ends are handed out as client
++    /// socket fds. `Client.deinit` closes its own fd; these are ours.
++    spare: std.ArrayList(i32) = .empty,
++
++    fn init(self: *BrokerFixture, alloc: std.mem.Allocator) !void {
++        self.* = .{ .alloc = alloc };
++        self.daemon = Daemon{
++            .cfg = &self.cfg,
++            .session_name = "test",
++            .socket_path = try alloc.dupe(u8, ""),
++            .created_at = 0,
++            .pid = 0,
++        };
++        self.term = try initTerminal(alloc, std.testing.io, .{ .rows = 24, .cols = 80 }, &self.cfg);
++    }
++
++    fn deinit(self: *BrokerFixture) void {
++        while (self.daemon.clients.items.len > 0) {
++            const last = self.daemon.clients.items.len - 1;
++            _ = self.daemon.closeClient(self.alloc, self.daemon.clients.items[last], last, false);
++        }
++        for (self.spare.items) |fd| lib_posix.close(fd);
++        self.spare.deinit(self.alloc);
++        self.term.deinit(self.alloc);
++        self.daemon.deinit(self.alloc);
++    }
++
++    fn addClient(self: *BrokerFixture) !*Client {
++        const fds = try lib_posix.pipe2(.{});
++        try self.spare.append(self.alloc, fds[1]);
++        const c = try self.alloc.create(Client);
++        c.* = .{
++            .alloc = self.alloc,
++            .socket_fd = fds[0],
++            .read_buf = try ipc.SocketBuffer.init(self.alloc),
++            .write_buf = .empty,
++        };
++        try self.daemon.clients.append(self.alloc, c);
++        return c;
++    }
++
++    fn hello(self: *BrokerFixture, client: *Client, version: u16, name: []const u8) !void {
++        var buf = std.ArrayList(u8).empty;
++        defer buf.deinit(self.alloc);
++        try ipc.encodeBrokerHello(self.alloc, &buf, version, name);
++        try self.daemon.handleBrokerHello(
++            self.alloc,
++            client,
++            &self.term,
++            buf.items[@sizeOf(ipc.Header)..],
++        );
++    }
++
++    fn attachBroker(self: *BrokerFixture, name: []const u8) !*Client {
++        const c = try self.addClient();
++        try self.hello(c, ipc.BROKER_VERSION_MAX, name);
++        return c;
++    }
++
++    fn focus(self: *BrokerFixture, client: *Client, cols: u16, rows: u16) !void {
++        const msg = ipc.BrokerFocus{ .active = 1, .size = .{ .rows = rows, .cols = cols } };
++        try self.daemon.handleBrokerFocus(self.alloc, client, -1, &self.term, std.mem.asBytes(&msg));
++    }
++
++    fn blur(self: *BrokerFixture, client: *Client) !void {
++        const msg = ipc.BrokerFocus{ .active = 0, .size = .{ .rows = 0, .cols = 0 } };
++        try self.daemon.handleBrokerFocus(self.alloc, client, -1, &self.term, std.mem.asBytes(&msg));
++    }
++
++    fn resize(self: *BrokerFixture, client: *Client, gen: u64, cols: u16, rows: u16) !void {
++        const msg = ipc.BrokerResize{ .gen = gen, .size = .{ .rows = rows, .cols = cols } };
++        try self.daemon.handleBrokerResize(self.alloc, client, -1, &self.term, std.mem.asBytes(&msg));
++    }
++
++    fn reply(self: *BrokerFixture, client: *Client, gen: u64, bytes: []const u8) !void {
++        var payload = std.ArrayList(u8).empty;
++        defer payload.deinit(self.alloc);
++        try payload.appendSlice(self.alloc, std.mem.asBytes(&gen));
++        try payload.appendSlice(self.alloc, bytes);
++        self.daemon.handleBrokerReply(self.alloc, client, payload.items);
++    }
++
++    /// Close `client` the way the daemon loop would.
++    fn close(self: *BrokerFixture, client: *Client) void {
++        for (self.daemon.clients.items, 0..) |c, i| {
++            if (c == client) {
++                _ = self.daemon.closeClient(self.alloc, c, i, false);
++                return;
++            }
++        }
++        unreachable;
++    }
++
++    fn termCols(self: *const BrokerFixture) usize {
++        return self.term.screens.active.pages.cols;
++    }
++
++    fn termRows(self: *const BrokerFixture) usize {
++        return self.term.screens.active.pages.rows;
++    }
++
++    /// Give the terminal a history worth restoring.
++    fn fillHistory(self: *BrokerFixture, lines: usize, text: []const u8) void {
++        var stream = self.term.vtStream();
++        defer stream.deinit();
++        for (0..lines) |_| {
++            stream.nextSlice(text);
++            stream.nextSlice("\r\n");
++        }
++        self.daemon.has_pty_output = true;
++    }
++};
++
++// --------------------------------------------------------------- focus ----
++
++test "broker focus takes resize ownership with no typed input at all" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const viewer = try fx.attachBroker("muxterm_77_6d61696e");
++    try std.testing.expectEqual(@as(?i32, null), fx.daemon.broker_owner_fd);
++    viewer.write_buf.clearRetainingCapacity();
++
++    try fx.focus(viewer, 100, 30);
++
++    try std.testing.expectEqual(viewer.socket_fd, fx.daemon.broker_owner_fd.?);
++    try std.testing.expectEqual(@as(u64, 1), fx.daemon.broker_owner_gen);
++    try std.testing.expectEqual(viewer.socket_fd, fx.daemon.leader_client_fd.?);
++    // Geometry followed the focus, not a keystroke: nothing was typed.
++    try std.testing.expectEqual(@as(usize, 100), fx.termCols());
++    try std.testing.expectEqual(@as(usize, 30), fx.termRows());
++    try std.testing.expectEqual(@as(usize, 0), fx.daemon.pty_write_buf.items.len);
++
++    const lease = findFrame(viewer.write_buf.items, .BrokerLease) orelse
++        return error.TestExpectedLease;
++    const decoded = std.mem.bytesToValue(ipc.BrokerLease, lease.payload[0..@sizeOf(ipc.BrokerLease)]);
++    try std.testing.expectEqual(@as(u64, 1), decoded.gen);
++    try std.testing.expectEqual(@as(u16, 100), decoded.size.cols);
++}
++
++test "a non-owner's resize is ignored" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const owner = try fx.attachBroker("a");
++    const other = try fx.attachBroker("b");
++    try fx.focus(owner, 100, 30);
++
++    // `other` quotes the generation that is genuinely outstanding -- it just
++    // is not the viewer holding it. Knowing the number is not owning the lease.
++    try fx.resize(other, fx.daemon.broker_owner_gen, 40, 10);
++
++    try std.testing.expectEqual(@as(usize, 100), fx.termCols());
++    try std.testing.expectEqual(@as(usize, 30), fx.termRows());
++    try std.testing.expectEqual(owner.socket_fd, fx.daemon.broker_owner_fd.?);
++}
++
++test "a resize from a stale generation cannot take effect" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const first = try fx.attachBroker("a");
++    const second = try fx.attachBroker("b");
++
++    try fx.focus(first, 100, 30);
++    const stale_gen = fx.daemon.broker_owner_gen;
++    try fx.focus(second, 120, 40);
++    try std.testing.expect(fx.daemon.broker_owner_gen != stale_gen);
++
++    // In flight since before the handover, and arriving now.
++    try fx.resize(first, stale_gen, 40, 10);
++    try std.testing.expectEqual(@as(usize, 120), fx.termCols());
++    try std.testing.expectEqual(@as(usize, 40), fx.termRows());
++
++    // Even the CURRENT owner cannot use an old generation of its own.
++    try fx.resize(second, stale_gen, 40, 10);
++    try std.testing.expectEqual(@as(usize, 120), fx.termCols());
++}
++
++test "re-claiming focus allocates a fresh generation, voiding messages in flight" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const viewer = try fx.attachBroker("a");
++    try fx.focus(viewer, 100, 30);
++    const first_gen = fx.daemon.broker_owner_gen;
++    try fx.focus(viewer, 110, 35);
++    const second_gen = fx.daemon.broker_owner_gen;
++    try std.testing.expectEqual(first_gen + 1, second_gen);
++
++    try fx.resize(viewer, first_gen, 40, 10);
++    try std.testing.expectEqual(@as(usize, 110), fx.termCols());
++}
++
++// --------------------------------------------------------------- input ----
++
++test "a non-owner's user text reaches the PTY without stealing ownership" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const owner = try fx.attachBroker("a");
++    const other = try fx.attachBroker("b");
++    try fx.focus(owner, 100, 30);
++    const gen = fx.daemon.broker_owner_gen;
++
++    fx.daemon.handleBrokerInput(alloc, other, "ls -la\r");
++
++    try std.testing.expectEqualStrings("ls -la\r", fx.daemon.pty_write_buf.items);
++    try std.testing.expectEqual(owner.socket_fd, fx.daemon.broker_owner_fd.?);
++    try std.testing.expectEqual(gen, fx.daemon.broker_owner_gen);
++    try std.testing.expectEqual(owner.socket_fd, fx.daemon.leader_client_fd.?);
++    // The size stayed with the focused viewer.
++    try std.testing.expectEqual(@as(usize, 100), fx.termCols());
++}
++
++test "an empty broker input is an empty write, never a focus operation" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const owner = try fx.attachBroker("a");
++    const other = try fx.attachBroker("b");
++    try fx.focus(owner, 100, 30);
++    const gen = fx.daemon.broker_lease_gen;
++
++    // From a non-owner...
++    fx.daemon.handleBrokerInput(alloc, other, "");
++    try std.testing.expectEqual(owner.socket_fd, fx.daemon.broker_owner_fd.?);
++    try std.testing.expectEqual(gen, fx.daemon.broker_lease_gen);
++
++    // ...and from the owner, which must not renew its own generation either:
++    // a claim is BrokerFocus and nothing else.
++    fx.daemon.handleBrokerInput(alloc, owner, "");
++    try std.testing.expectEqual(gen, fx.daemon.broker_lease_gen);
++
++    // ...and with nobody holding the lease at all.
++    fx.close(other); // no successor left but `owner`
++    try fx.blur(owner);
++    try std.testing.expectEqual(@as(?i32, null), fx.daemon.broker_owner_fd);
++    const after_release = fx.daemon.broker_lease_gen;
++    fx.daemon.handleBrokerInput(alloc, owner, "");
++    try std.testing.expectEqual(@as(?i32, null), fx.daemon.broker_owner_fd);
++    try std.testing.expectEqual(after_release, fx.daemon.broker_lease_gen);
++
++    // Nothing was written to the shell by any of it.
++    try std.testing.expectEqual(@as(usize, 0), fx.daemon.pty_write_buf.items.len);
++}
++
++// --------------------------------------------------------------- reply ----
++
++test "a non-owner's terminal reply is discarded, the owner's is not" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const owner = try fx.attachBroker("a");
++    const other = try fx.attachBroker("b");
++    try fx.focus(owner, 100, 30);
++    const gen = fx.daemon.broker_owner_gen;
++
++    // Both viewers rendered the same DA1 query and both answered it. Only one
++    // answer may reach the shell, or the second is read as typed input.
++    try fx.reply(other, gen, "\x1b[?62;c");
++    try std.testing.expectEqual(@as(usize, 0), fx.daemon.pty_write_buf.items.len);
++
++    try fx.reply(owner, gen, "\x1b[?62;c");
++    try std.testing.expectEqualStrings("\x1b[?62;c", fx.daemon.pty_write_buf.items);
++}
++
++test "a reply under a superseded generation is discarded" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const first = try fx.attachBroker("a");
++    const second = try fx.attachBroker("b");
++    try fx.focus(first, 100, 30);
++    const stale_gen = fx.daemon.broker_owner_gen;
++    try fx.focus(second, 100, 30);
++
++    try fx.reply(first, stale_gen, "\x1b[?62;c");
++    try std.testing.expectEqual(@as(usize, 0), fx.daemon.pty_write_buf.items.len);
++}
++
++test "user keystrokes and terminal replies stay distinct" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const owner = try fx.attachBroker("a");
++    const other = try fx.attachBroker("b");
++    try fx.focus(owner, 100, 30);
++    const gen = fx.daemon.broker_owner_gen;
++
++    // The same bytes, on the two different tags, from the same non-owner
++    // viewer: as input they pass, as a reply they do not. The distinction is
++    // the tag, not a guess about the byte pattern (which is what upstream's
++    // `isUserInput` heuristic has to do).
++    fx.daemon.handleBrokerInput(alloc, other, "\x1b[?62;c");
++    try std.testing.expectEqualStrings("\x1b[?62;c", fx.daemon.pty_write_buf.items);
++    fx.daemon.pty_write_buf.clearRetainingCapacity();
++    try fx.reply(other, gen, "\x1b[?62;c");
++    try std.testing.expectEqual(@as(usize, 0), fx.daemon.pty_write_buf.items.len);
++}
++
++// ------------------------------------------------------------- handover ----
++
++test "the owner's detach hands the lease to a valid successor" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const owner = try fx.attachBroker("a");
++    const successor = try fx.attachBroker("b");
++    try fx.focus(owner, 100, 30);
++    const owner_gen = fx.daemon.broker_owner_gen;
++    successor.write_buf.clearRetainingCapacity();
++
++    fx.close(owner);
++
++    try std.testing.expectEqual(successor.socket_fd, fx.daemon.broker_owner_fd.?);
++    try std.testing.expectEqual(successor.socket_fd, fx.daemon.leader_client_fd.?);
++    // A new generation, never the departed one.
++    try std.testing.expect(fx.daemon.broker_owner_gen > owner_gen);
++
++    const lease = findFrame(successor.write_buf.items, .BrokerLease) orelse
++        return error.TestExpectedLease;
++    const decoded = std.mem.bytesToValue(ipc.BrokerLease, lease.payload[0..@sizeOf(ipc.BrokerLease)]);
++    try std.testing.expectEqual(fx.daemon.broker_owner_gen, decoded.gen);
++    // It carries what the shell currently believes, so the successor knows
++    // what to answer with.
++    try std.testing.expectEqual(@as(u16, 100), decoded.size.cols);
++}
++
++test "the owner's detach with no successor leaves the session unowned" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const owner = try fx.attachBroker("a");
++    try fx.focus(owner, 100, 30);
++    fx.close(owner);
++
++    try std.testing.expectEqual(@as(?i32, null), fx.daemon.broker_owner_fd);
++    try std.testing.expectEqual(@as(?i32, null), fx.daemon.leader_client_fd);
++
++    // Detached query handling: with no owner there is nobody whose replies
++    // are authoritative, so a late reply from anyone is dropped.
++    const straggler = try fx.attachBroker("b");
++    try fx.reply(straggler, 1, "\x1b[?62;c");
++    try std.testing.expectEqual(@as(usize, 0), fx.daemon.pty_write_buf.items.len);
++}
++
++test "releasing focus explicitly hands over the same way a detach does" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const owner = try fx.attachBroker("a");
++    const successor = try fx.attachBroker("b");
++    try fx.focus(owner, 100, 30);
++    try fx.blur(owner);
++
++    try std.testing.expectEqual(successor.socket_fd, fx.daemon.broker_owner_fd.?);
++}
++
++test "a restarted broker claims a new lease through the daemon, never a reused one" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const before = try fx.attachBroker("a");
++    try fx.focus(before, 100, 30);
++    try fx.focus(before, 101, 30);
++    try fx.focus(before, 102, 30);
++    const last_gen = fx.daemon.broker_owner_gen;
++    try std.testing.expectEqual(@as(u64, 3), last_gen);
++    fx.close(before); // the broker process died with its viewers
++
++    // A brand new broker process attaches. It learns the watermark from the
++    // daemon instead of starting a counter of its own at 0/1.
++    const after = try fx.addClient();
++    try fx.hello(after, ipc.BROKER_VERSION_MAX, "a");
++    const welcome = findFrame(after.write_buf.items, .BrokerWelcome) orelse
++        return error.TestExpectedWelcome;
++    const decoded = std.mem.bytesToValue(ipc.BrokerWelcome, welcome.payload[0..@sizeOf(ipc.BrokerWelcome)]);
++    try std.testing.expectEqual(last_gen, decoded.lease_gen);
++
++    try fx.focus(after, 200, 50);
++    try std.testing.expectEqual(last_gen + 1, fx.daemon.broker_owner_gen);
++
++    // And a generation the old process had used is dead, not merely stale.
++    try fx.resize(after, last_gen, 40, 10);
++    try std.testing.expectEqual(@as(usize, 200), fx.termCols());
++}
++
++// ------------------------------------------------------------ handshake ----
++
++test "an unknown broker version is refused without the payload being read" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const client = try fx.addClient();
++    try fx.hello(client, ipc.BROKER_VERSION_MAX + 1, "a");
++
++    try std.testing.expect(!client.is_broker);
++    try std.testing.expect(client.close_after_flush);
++    try std.testing.expectEqual(@as(?BrokerFrame, null), findFrame(client.write_buf.items, .BrokerWelcome));
++
++    const failure = findFrame(client.write_buf.items, .BrokerFailure) orelse
++        return error.TestExpectedFailure;
++    const status = std.mem.bytesToValue(ipc.BrokerStatus, failure.payload[0..@sizeOf(ipc.BrokerStatus)]);
++    try std.testing.expectEqual(
++        @intFromEnum(ipc.BrokerFailureCode.unsupported_version),
++        status.code,
++    );
++    // Nothing the rejected peer says afterwards is acted on.
++    try fx.focus(client, 200, 50);
++    try std.testing.expectEqual(@as(?i32, null), fx.daemon.broker_owner_fd);
++    fx.daemon.handleBrokerInput(alloc, client, "rm -rf /\r");
++    try std.testing.expectEqual(@as(usize, 0), fx.daemon.pty_write_buf.items.len);
++}
++
++test "the target name is carried in the protocol, not in the socket name" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    // The socket basename is short and opaque; the real supermux key rides in
++    // the hello and lands where `zmx list` already looks for it.
++    _ = try fx.attachBroker("muxterm_773a6162_6d61696e");
++    const stored = fx.daemon.labels.get(BROKER_TARGET_LABEL) orelse
++        return error.TestExpectedLabel;
++    try std.testing.expectEqualStrings("muxterm_773a6162_6d61696e", stored);
++
++    const rendered = try label.labelsToU8(alloc, fx.daemon.labels);
++    defer alloc.free(rendered);
++    try std.testing.expect(std.mem.indexOf(u8, rendered, "muxterm_773a6162_6d61696e") != null);
++}
++
++test "a target name zmx could not store as a label is refused, not truncated" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    // '/' is not a legal label character. Storing a mangled name would map two
++    // workspaces onto one shell, so nothing is stored at all.
++    const client = try fx.attachBroker("bad/name");
++    try std.testing.expect(client.is_broker);
++    try std.testing.expectEqual(@as(?[]u8, null), fx.daemon.labels.get(BROKER_TARGET_LABEL));
++}
++
++// --------------------------------------------------------------- replay ----
++
++test "a first attachment with no history still emits an empty restore boundary" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const viewer = try fx.attachBroker("a");
++
++    var it = BrokerFrameIter{ .bytes = viewer.write_buf.items };
++    const welcome = it.next() orelse return error.TestExpectedWelcome;
++    try std.testing.expectEqual(ipc.Tag.BrokerWelcome, welcome.tag);
++    const start = it.next() orelse return error.TestExpectedReplayStart;
++    try std.testing.expectEqual(ipc.Tag.BrokerReplayStart, start.tag);
++    const end = it.next() orelse return error.TestExpectedReplayEnd;
++    try std.testing.expectEqual(ipc.Tag.BrokerReplayEnd, end.tag);
++    try std.testing.expectEqual(@as(?BrokerFrame, null), it.next());
++
++    const s = std.mem.bytesToValue(ipc.BrokerReplay, start.payload[0..@sizeOf(ipc.BrokerReplay)]);
++    const e = std.mem.bytesToValue(ipc.BrokerReplay, end.payload[0..@sizeOf(ipc.BrokerReplay)]);
++    try std.testing.expectEqual(@as(u64, 0), s.bytes);
++    try std.testing.expectEqual(@as(u64, 0), e.bytes);
++    // Both ends of one restore carry the same epoch.
++    try std.testing.expectEqual(s.epoch, e.epoch);
++    try std.testing.expect(s.epoch > 0);
++    try std.testing.expectEqual(@as(?BrokerReplay, null), viewer.replay);
++}
++
++test "a restore is bracketed and its epoch advances per attachment" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    fx.fillHistory(20, "hello \x1b[31mworld\x1b[0m");
++
++    const first = try fx.attachBroker("a");
++    const s1 = std.mem.bytesToValue(
++        ipc.BrokerReplay,
++        (findFrame(first.write_buf.items, .BrokerReplayStart).?).payload[0..@sizeOf(ipc.BrokerReplay)],
++    );
++    try std.testing.expect(s1.bytes > 0);
++
++    const restored = try joinFrames(alloc, first.write_buf.items, .Output);
++    defer alloc.free(restored);
++    try std.testing.expectEqual(@as(usize, s1.bytes), restored.len);
++    // Style, cursor and content are all in there -- this is ghostty's own
++    // formatter, we only bounded and chunked it.
++    try std.testing.expect(std.mem.indexOf(u8, restored, "world") != null);
++
++    const second = try fx.attachBroker("a");
++    const s2 = std.mem.bytesToValue(
++        ipc.BrokerReplay,
++        (findFrame(second.write_buf.items, .BrokerReplayStart).?).payload[0..@sizeOf(ipc.BrokerReplay)],
++    );
++    try std.testing.expect(s2.epoch > s1.epoch);
++}
++
++test "live output during a restore lands after the boundary, in its original order" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    fx.fillHistory(300, "日本語テキスト────ありがとうございます とても長い行です");
++
++    // A viewer whose socket is already backed up: the pump has no room, so
++    // the restore is still in flight when live output arrives -- which is
++    // exactly the situation staging exists for.
++    const viewer = try fx.addClient();
++    viewer.is_broker = true;
++    viewer.is_terminal = true;
++    try viewer.write_buf.appendNTimes(alloc, 0, ipc.BROKER_PENDING_MAX / 2);
++    fx.daemon.beginBrokerReplay(alloc, viewer, &fx.term);
++
++    try std.testing.expect(viewer.replay != null);
++    try std.testing.expect(viewer.replay.?.snapshot.len > 0);
++    try std.testing.expectEqual(@as(usize, 0), viewer.replay.?.sent);
++
++    fx.daemon.queueClientOutput(alloc, viewer, "LIVE-ONE");
++    fx.daemon.queueClientOutput(alloc, viewer, "LIVE-TWO");
++    // Staged, not queued: nothing live may appear before the boundary closes.
++    try std.testing.expect(viewer.replay.?.staged.items.len > 0);
++
++    // Drain the way the daemon loop does, until the replay completes.
++    var guard: usize = 0;
++    while (viewer.replay != null) : (guard += 1) {
++        try std.testing.expect(guard < 1000);
++        viewer.write_buf.clearRetainingCapacity();
++        fx.daemon.pumpBrokerReplay(alloc, viewer, false);
++    }
++
++    const tail = viewer.write_buf.items;
++    const end_at = frameIndex(tail, .BrokerReplayEnd) orelse return error.TestExpectedReplayEnd;
++    var it = BrokerFrameIter{ .bytes = tail };
++    var i: usize = 0;
++    var live = std.ArrayList(u8).empty;
++    defer live.deinit(alloc);
++    while (it.next()) |f| : (i += 1) {
++        if (f.tag != .Output) continue;
++        // Any Output after the boundary is live, and must be in order.
++        if (i > end_at) try live.appendSlice(alloc, f.payload);
++    }
++    try std.testing.expectEqualStrings("LIVE-ONELIVE-TWO", live.items);
++}
++
++test "a snapshot over the cap aborts that viewer alone" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    fx.fillHistory(200, "some history worth restoring");
++
++    const healthy = try fx.attachBroker("a");
++    try fx.focus(healthy, 100, 30);
++    const owner_gen = fx.daemon.broker_owner_gen;
++
++    const doomed = try fx.addClient();
++    doomed.is_broker = true;
++    doomed.is_terminal = true;
++    // A ceiling this small cannot hold even the modes/cursor preamble.
++    fx.daemon.beginBrokerReplayLimited(alloc, doomed, &fx.term, 64);
++
++    try std.testing.expect(doomed.close_after_flush);
++    try std.testing.expectEqual(@as(?BrokerReplay, null), doomed.replay);
++    const detach = findFrame(doomed.write_buf.items, .BrokerDetach) orelse
++        return error.TestExpectedDetach;
++    const status = std.mem.bytesToValue(ipc.BrokerStatus, detach.payload[0..@sizeOf(ipc.BrokerStatus)]);
++    try std.testing.expectEqual(
++        @intFromEnum(ipc.BrokerDetachReason.snapshot_overflow),
++        status.code,
++    );
++    // No Output was emitted for it at all: a partial snapshot is never sent.
++    try std.testing.expectEqual(@as(usize, 0), countFrames(doomed.write_buf.items, .Output));
++
++    // The shell and the other viewer are untouched.
++    try std.testing.expect(fx.daemon.running);
++    try std.testing.expectEqual(healthy.socket_fd, fx.daemon.broker_owner_fd.?);
++    try std.testing.expectEqual(owner_gen, fx.daemon.broker_owner_gen);
++    try std.testing.expect(!healthy.close_after_flush);
++}
++
++// ---------------------------------------------------------- queue limit ----
++
++test "a broker viewer past the queue cap is detached with resync-required" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const owner = try fx.attachBroker("a");
++    const slow = try fx.attachBroker("b");
++    try fx.focus(owner, 100, 30);
++    const owner_gen = fx.daemon.broker_owner_gen;
++    owner.write_buf.clearRetainingCapacity();
++    slow.write_buf.clearRetainingCapacity();
++
++    const chunk = [_]u8{'x'} ** 4096;
++    var written: usize = 0;
++    while (!slow.close_after_flush and written < 4 * ipc.BROKER_PENDING_MAX) : (written += chunk.len) {
++        // The owner drains normally; only `slow` stops reading.
++        fx.daemon.queueClientOutput(alloc, slow, &chunk);
++        fx.daemon.queueClientOutput(alloc, owner, &chunk);
++        owner.write_buf.clearRetainingCapacity();
++    }
++
++    try std.testing.expect(slow.close_after_flush);
++    try std.testing.expect(slow.write_buf.items.len <= ipc.BROKER_PENDING_MAX);
++    const detach = findFrame(slow.write_buf.items, .BrokerDetach) orelse
++        return error.TestExpectedDetach;
++    const status = std.mem.bytesToValue(ipc.BrokerStatus, detach.payload[0..@sizeOf(ipc.BrokerStatus)]);
++    try std.testing.expectEqual(
++        @intFromEnum(ipc.BrokerDetachReason.resync_required),
++        status.code,
++    );
++
++    // The shell keeps running, the other viewer keeps its lease, and the
++    // daemon did not shut down.
++    try std.testing.expect(fx.daemon.running);
++    try std.testing.expect(!owner.close_after_flush);
++    try std.testing.expectEqual(owner.socket_fd, fx.daemon.broker_owner_fd.?);
++    try std.testing.expectEqual(owner_gen, fx.daemon.broker_owner_gen);
++}
++
++test "detaching a viewer that held the lease hands it on rather than orphaning the shell" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const owner = try fx.attachBroker("a");
++    const other = try fx.attachBroker("b");
++    try fx.focus(owner, 100, 30);
++
++    const chunk = [_]u8{'x'} ** 65536;
++    while (!owner.close_after_flush) {
++        fx.daemon.queueClientOutput(alloc, owner, &chunk);
++    }
++
++    try std.testing.expectEqual(other.socket_fd, fx.daemon.broker_owner_fd.?);
++}
++
++test "stock clients keep the upstream unbounded output path" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    // A `zmx attach` client is not capped and is never detached by us: this
++    // patch must not change what the CLI does under load.
++    const stock = try fx.addClient();
++    stock.is_terminal = true;
++    const chunk = [_]u8{'y'} ** 65536;
++    for (0..40) |_| fx.daemon.queueClientOutput(alloc, stock, &chunk);
++
++    try std.testing.expect(stock.write_buf.items.len > ipc.BROKER_PENDING_MAX);
++    try std.testing.expect(!stock.close_after_flush);
++    try std.testing.expectEqual(@as(usize, 0), countFrames(stock.write_buf.items, .BrokerDetach));
++}
++
++// ----------------------------------------------------------- exit/failure ----
++
++test "brokerExitFromStatus decodes exits, signals and stops" {
++    const exited = Daemon.brokerExitFromStatus(7 << 8);
++    try std.testing.expectEqual(@as(u8, 1), exited.known);
++    try std.testing.expectEqual(@as(u8, 0), exited.signaled);
++    try std.testing.expectEqual(@as(u8, 7), exited.code);
++
++    const killed = Daemon.brokerExitFromStatus(9);
++    try std.testing.expectEqual(@as(u8, 1), killed.known);
++    try std.testing.expectEqual(@as(u8, 1), killed.signaled);
++    try std.testing.expectEqual(@as(u8, 9), killed.signal);
++
++    // WIFSTOPPED is not an exit. Reporting a code for it would be a lie a
++    // viewer closes a tab on.
++    const stopped = Daemon.brokerExitFromStatus((19 << 8) | 0x7f);
++    try std.testing.expectEqual(@as(u8, 0), stopped.known);
++}
++
++test "target exit is announced once, with the status" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const viewer = try fx.attachBroker("a");
++    viewer.write_buf.clearRetainingCapacity();
++
++    fx.daemon.reportBrokerExit(alloc, Daemon.brokerExitFromStatus(3 << 8));
++    fx.daemon.reportBrokerExit(alloc, Daemon.brokerExitFromStatus(4 << 8));
++
++    try std.testing.expectEqual(@as(usize, 1), countFrames(viewer.write_buf.items, .BrokerExit));
++    const frame = findFrame(viewer.write_buf.items, .BrokerExit).?;
++    const exit = std.mem.bytesToValue(ipc.BrokerExit, frame.payload[0..@sizeOf(ipc.BrokerExit)]);
++    try std.testing.expectEqual(@as(u8, 1), exit.known);
++    try std.testing.expectEqual(@as(u8, 3), exit.code);
++}
++
++test "a daemon shutdown is reported separately from a target exit" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const viewer = try fx.attachBroker("a");
++    viewer.write_buf.clearRetainingCapacity();
++
++    // Nothing is known about the shell: the daemon is simply going away.
++    fx.daemon.reportBrokerShutdown(alloc);
++    try std.testing.expectEqual(@as(usize, 0), countFrames(viewer.write_buf.items, .BrokerExit));
++    const detach = findFrame(viewer.write_buf.items, .BrokerDetach) orelse
++        return error.TestExpectedDetach;
++    const status = std.mem.bytesToValue(ipc.BrokerStatus, detach.payload[0..@sizeOf(ipc.BrokerStatus)]);
++    try std.testing.expectEqual(
++        @intFromEnum(ipc.BrokerDetachReason.daemon_shutdown),
++        status.code,
++    );
++}
++
++test "a shutdown after a reported exit does not contradict it" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const viewer = try fx.attachBroker("a");
++    viewer.write_buf.clearRetainingCapacity();
++
++    fx.daemon.reportBrokerExit(alloc, Daemon.brokerExitFromStatus(0));
++    fx.daemon.reportBrokerShutdown(alloc);
++
++    try std.testing.expectEqual(@as(usize, 1), countFrames(viewer.write_buf.items, .BrokerExit));
++    try std.testing.expectEqual(@as(usize, 0), countFrames(viewer.write_buf.items, .BrokerDetach));
++}
++
++test "an unreapable child is reported as unknown rather than as exit code 0" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const viewer = try fx.attachBroker("a");
++    viewer.write_buf.clearRetainingCapacity();
++
++    // pid 0: the fixture has no child to reap. Losing the PTY is not by
++    // itself proof of an exit status, so none is invented.
++    fx.daemon.reportTargetExit(alloc);
++    const frame = findFrame(viewer.write_buf.items, .BrokerExit) orelse
++        return error.TestExpectedExit;
++    const exit = std.mem.bytesToValue(ipc.BrokerExit, frame.payload[0..@sizeOf(ipc.BrokerExit)]);
++    try std.testing.expectEqual(@as(u8, 0), exit.known);
++    try std.testing.expectEqual(@as(u8, 0), exit.code);
++}
++
++// ------------------------------------------------------ stock CLI, intact ----
++
++test "stock CLI leadership still follows typed input when no broker is attached" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const first = try fx.addClient();
++    const second = try fx.addClient();
++    const size = ipc.Resize{ .rows = 24, .cols = 80 };
++    try fx.daemon.handleInit(alloc, first, -1, &fx.term, std.mem.asBytes(&size));
++    try std.testing.expectEqual(first.socket_fd, fx.daemon.leader_client_fd.?);
++
++    // Upstream behaviour, unchanged: typing promotes you.
++    try fx.daemon.handleInput(alloc, second, "a");
++    try std.testing.expectEqual(second.socket_fd, fx.daemon.leader_client_fd.?);
++    try std.testing.expectEqualStrings("a", fx.daemon.pty_write_buf.items);
++}
++
++test "stock CLI resize is still leader-only and still promotes an unled session" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const first = try fx.addClient();
++    const second = try fx.addClient();
++    const size = ipc.Resize{ .rows = 30, .cols = 100 };
++
++    // Upstream: with no leader, a resize claims leadership.
++    try fx.daemon.handleResize(alloc, first, -1, &fx.term, std.mem.asBytes(&size));
++    try std.testing.expectEqual(first.socket_fd, fx.daemon.leader_client_fd.?);
++    try std.testing.expectEqual(@as(usize, 100), fx.termCols());
++
++    // ...and a non-leader's resize is ignored, as before.
++    const other = ipc.Resize{ .rows = 10, .cols = 40 };
++    try fx.daemon.handleResize(alloc, second, -1, &fx.term, std.mem.asBytes(&other));
++    try std.testing.expectEqual(@as(usize, 100), fx.termCols());
++}
++
++test "a broker lease is not stolen by a stock client typing, but its text still lands" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const viewer = try fx.attachBroker("a");
++    try fx.focus(viewer, 100, 30);
++
++    const stock = try fx.addClient();
++    try fx.daemon.handleInput(alloc, stock, "echo hi\r");
++
++    try std.testing.expectEqual(viewer.socket_fd, fx.daemon.leader_client_fd.?);
++    try std.testing.expectEqual(viewer.socket_fd, fx.daemon.broker_owner_fd.?);
++    try std.testing.expectEqualStrings("echo hi\r", fx.daemon.pty_write_buf.items);
++    try std.testing.expectEqual(@as(usize, 100), fx.termCols());
++}
++
++test "a stock Init cannot resize a session a broker viewer has focused" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const viewer = try fx.attachBroker("a");
++    try fx.focus(viewer, 100, 30);
++
++    const stock = try fx.addClient();
++    const size = ipc.Resize{ .rows = 10, .cols = 40 };
++    try fx.daemon.handleInit(alloc, stock, -1, &fx.term, std.mem.asBytes(&size));
++
++    try std.testing.expect(stock.is_terminal); // it IS a terminal client
++    try std.testing.expectEqual(viewer.socket_fd, fx.daemon.leader_client_fd.?);
++    try std.testing.expectEqual(@as(usize, 100), fx.termCols());
++}
++
++test "a client that never says hello is untouched by every broker handler" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const stock = try fx.addClient();
++    stock.is_terminal = true;
++
++    try fx.focus(stock, 200, 50);
++    try fx.resize(stock, 1, 200, 50);
++    fx.daemon.handleBrokerInput(alloc, stock, "oops");
++    try fx.reply(stock, 1, "oops");
++    fx.daemon.beginBrokerReplay(alloc, stock, &fx.term);
++
++    try std.testing.expectEqual(@as(?i32, null), fx.daemon.broker_owner_fd);
++    try std.testing.expectEqual(@as(u64, 0), fx.daemon.broker_lease_gen);
++    try std.testing.expectEqual(@as(usize, 0), fx.daemon.pty_write_buf.items.len);
++    try std.testing.expectEqual(@as(usize, 0), stock.write_buf.items.len);
++    try std.testing.expectEqual(@as(?BrokerReplay, null), stock.replay);
++    try std.testing.expectEqual(@as(usize, 80), fx.termCols());
++}
+diff --git a/src/util.zig b/src/util.zig
+index d96f5a1..99e0d72 100644
+--- a/src/util.zig
++++ b/src/util.zig
+@@ -766,9 +766,19 @@ fn writeColorOverrides(writer: *std.Io.Writer, term: *const ghostty_vt.Terminal)
+     writeDynamicColor(writer, .cursor, colors.cursor);
+ }
+ 
+-pub fn serializeTerminalState(alloc: std.mem.Allocator, term: *ghostty_vt.Terminal) ?[]const u8 {
+-    var builder: std.Io.Writer.Allocating = .init(alloc);
+-    defer builder.deinit();
++/// Write the restore snapshot for `term` into `writer`.
++///
++/// Split out of `serializeTerminalState` (whose body this is) so the exact
++/// same formatting can be driven by a BOUNDED writer -- see
++/// `serializeTerminalStateBounded`. A `std.Io.Writer` that refuses more bytes
++/// surfaces as `error.WriteFailed`, which for `std.Io.Writer.fixed` means the
++/// cap was reached.
++///
++/// The synchronized-output save/restore is a `defer` here rather than a
++/// trailing statement: with a bounded writer, "the formatter ran out of room"
++/// is an ORDINARY outcome, and leaving DECSET 2026 cleared on the daemon's own
++/// terminal afterwards would corrupt every later snapshot.
++pub fn writeTerminalState(writer: *std.Io.Writer, term: *ghostty_vt.Terminal) !void {
+ 
+     // Synchronized output (DECSET 2026) is a transient rendering handshake
+     // between a program and its current terminal client. Replaying it to a
+@@ -779,9 +789,10 @@ pub fn serializeTerminalState(alloc: std.mem.Allocator, term: *ghostty_vt.Termin
+     if (had_synchronized_output) {
+         term.modes.set(.synchronized_output, false);
+     }
++    defer if (had_synchronized_output) term.modes.set(.synchronized_output, true);
+ 
+     // If state contains color override, restore it.
+-    writeColorOverrides(&builder.writer, term);
++    writeColorOverrides(writer, term);
+ 
+     const pages = &term.screens.active.pages;
+     const screen_top = pages.getTopLeft(.screen);
+@@ -815,15 +826,13 @@ pub fn serializeTerminalState(alloc: std.mem.Allocator, term: *ghostty_vt.Termin
+                 ),
+             };
+             scroll_fmt.extra = .none; // no modes, cursor, keyboard — just content
+-            scroll_fmt.format(&builder.writer) catch |err| {
+-                std.log.warn("failed to format scrollback err={s}", .{@errorName(err)});
+-            };
++            try scroll_fmt.format(writer);
+         }
+ 
+         // Clear visible screen after scrollback. \x1b[2J clears only the visible
+         // rows (not the scrollback buffer). \x1b[H homes the cursor. \x1b[0m resets
+         // SGR style so phase 1 styles don't bleed into phase 2.
+-        builder.writer.writeAll("\x1b[2J\x1b[H\x1b[0m") catch {};
++        try writer.writeAll("\x1b[2J\x1b[H\x1b[0m");
+     }
+ 
+     // Phase 2: visible screen with full extras (modes, cursor, keyboard, etc.)
+@@ -859,37 +868,107 @@ pub fn serializeTerminalState(alloc: std.mem.Allocator, term: *ghostty_vt.Termin
+         .screen = .all,
+     };
+ 
+-    vis_fmt.format(&builder.writer) catch |err| {
+-        std.log.warn("failed to format terminal state err={s}", .{@errorName(err)});
+-        return null;
+-    };
++    try vis_fmt.format(writer);
+ 
+-    writePwd(&builder.writer, term);
++    writePwd(writer, term);
+ 
+     // The formatter has no title extra and never emits OSC 0/1/2, so the title
+     // has to be replayed separately or an attaching client shows whatever its
+     // terminal defaults to, usually the client process name. OSC 2 does not
+     // move the cursor, so this is safe to append after the content.
+     if (term.getTitle()) |title| {
+-        builder.writer.print("\x1b]2;{s}\x07", .{title}) catch |err| {
+-            std.log.warn("failed to format title err={s}", .{@errorName(err)});
+-        };
++        try writer.print("\x1b]2;{s}\x07", .{title});
+     }
+ 
++}
++
++/// Unchanged public behaviour: the whole snapshot, or null when there is
++/// nothing to say (or it could not be produced). Every existing caller and
++/// test still goes through here.
++pub fn serializeTerminalState(alloc: std.mem.Allocator, term: *ghostty_vt.Terminal) ?[]const u8 {
++    var builder: std.Io.Writer.Allocating = .init(alloc);
++    defer builder.deinit();
++
++    writeTerminalState(&builder.writer, term) catch |err| {
++        std.log.warn("failed to format terminal state err={s}", .{@errorName(err)});
++        return null;
++    };
++
+     const output = builder.writer.buffered();
+     if (output.len == 0) return null;
+ 
+-    // Restore the original synchronized_output mode before returning
+-    if (had_synchronized_output) {
+-        term.modes.set(.synchronized_output, true);
+-    }
+-
+     return alloc.dupe(u8, output) catch |err| {
+         std.log.warn("failed to allocate terminal state err={s}", .{@errorName(err)});
+         return null;
+     };
+ }
+ 
++pub const BoundedSnapshotError = error{
++    /// The snapshot did not fit within `max_bytes`.
++    SnapshotOverflow,
++    OutOfMemory,
++};
++
++/// First attempt size for a bounded snapshot. Most sessions fit here, so the
++/// common case is one allocation and one formatter pass.
++pub const SNAPSHOT_FIRST_TRY: usize = 256 * 1024;
++
++/// Serialize the restore snapshot under a HARD byte cap.
++///
++/// WHY NOT `serializeTerminalState`
++/// --------------------------------
++/// That one formats into an `Allocating` writer: the buffer grows to whatever
++/// the terminal happens to hold. A 50k-line scrollback of wide Unicode is
++/// several MiB, and upstream then appends the result to the client's write
++/// buffer as ONE message -- so a single re-attach can multiply the daemon's
++/// footprint by the scrollback size, with no ceiling and no way to refuse.
++///
++/// Here the snapshot is a BOUNDED SERIALIZATION CURSOR: `std.Io.Writer.fixed`
++/// over a buffer that starts small and doubles, and the formatter's
++/// `error.WriteFailed` IS the cap being hit. Nothing is ever written into a
++/// client's write buffer speculatively, and a terminal whose snapshot exceeds
++/// `max_bytes` yields `error.SnapshotOverflow` -- the caller aborts that one
++/// viewer rather than shipping a partial snapshot that would interleave with
++/// live output and leave the screen half-restored.
++///
++/// The retry re-runs the formatter rather than resuming it: `format` has no
++/// resumable cursor, and re-running a pure read of terminal state is cheap
++/// next to getting restoration wrong. Doubling caps the passes at
++/// log2(max/first) -- 5 for the shipped 256 KiB..4 MiB range.
++///
++/// Returns a caller-owned slice, or null when there is nothing to restore
++/// (which callers must still bracket with replay-start/replay-end: an empty
++/// restore is a boundary, not a missing one).
++pub fn serializeTerminalStateBounded(
++    alloc: std.mem.Allocator,
++    term: *ghostty_vt.Terminal,
++    max_bytes: usize,
++) BoundedSnapshotError!?[]u8 {
++    var cap: usize = @max(1, @min(SNAPSHOT_FIRST_TRY, max_bytes));
++    while (true) {
++        const buf = try alloc.alloc(u8, cap);
++        var writer = std.Io.Writer.fixed(buf);
++        if (writeTerminalState(&writer, term)) |_| {
++            const written = writer.buffered().len;
++            if (written == 0) {
++                alloc.free(buf);
++                return null;
++            }
++            const out = alloc.alloc(u8, written) catch |err| {
++                alloc.free(buf);
++                return err;
++            };
++            @memcpy(out, buf[0..written]);
++            alloc.free(buf);
++            return out;
++        } else |_| {
++            alloc.free(buf);
++            if (cap >= max_bytes) return error.SnapshotOverflow;
++            cap = @min(cap * 2, max_bytes);
++        }
++    }
++}
++
+ pub const HistoryFormat = enum(u8) {
+     plain = 0,
+     vt = 1,
+@@ -2191,3 +2270,110 @@ test "stripAnsi: only escape sequences" {
+     defer alloc.free(result);
+     try testing.expectEqualStrings("", result);
+ }
++
++// ===========================================================================
++//  supermux: bounded restore serialization
++// ===========================================================================
++
++fn testTerminal(alloc: std.mem.Allocator, cols: u16, rows: u16) !ghostty_vt.Terminal {
++    return ghostty_vt.Terminal.init(std.testing.io, alloc, .{
++        .cols = cols,
++        .rows = rows,
++        .max_scrollback_lines = 50_000,
++        .max_scrollback_bytes = null,
++    });
++}
++
++test "serializeTerminalStateBounded matches the unbounded snapshot when it fits" {
++    const alloc = std.testing.allocator;
++    var term = try testTerminal(alloc, 80, 24);
++    defer term.deinit(alloc);
++    var stream = term.vtStream();
++    defer stream.deinit();
++    stream.nextSlice("hello \x1b[31mred\x1b[0m world\r\n");
++
++    const unbounded = serializeTerminalState(alloc, &term) orelse return error.TestUnexpectedNull;
++    defer alloc.free(unbounded);
++    const bounded = (try serializeTerminalStateBounded(alloc, &term, 4 * 1024 * 1024)) orelse
++        return error.TestUnexpectedNull;
++    defer alloc.free(bounded);
++
++    try std.testing.expectEqualSlices(u8, unbounded, bounded);
++}
++
++test "serializeTerminalStateBounded grows past its first try instead of truncating" {
++    const alloc = std.testing.allocator;
++    var term = try testTerminal(alloc, 120, 40);
++    defer term.deinit(alloc);
++    var stream = term.vtStream();
++    defer stream.deinit();
++    // Long Unicode lines: every cell is multi-byte, and a wide glyph makes the
++    // serialized form considerably larger than cols*rows.
++    for (0..4000) |_| stream.nextSlice("日本語テキスト────ありがとうございます 😀 とても長い行\r\n");
++
++    const unbounded = serializeTerminalState(alloc, &term) orelse return error.TestUnexpectedNull;
++    defer alloc.free(unbounded);
++    // The point of the test is only meaningful if it really is bigger than the
++    // first attempt, i.e. the retry path actually ran.
++    try std.testing.expect(unbounded.len > SNAPSHOT_FIRST_TRY);
++
++    const bounded = (try serializeTerminalStateBounded(alloc, &term, 64 * 1024 * 1024)) orelse
++        return error.TestUnexpectedNull;
++    defer alloc.free(bounded);
++    try std.testing.expectEqualSlices(u8, unbounded, bounded);
++}
++
++test "serializeTerminalStateBounded refuses a snapshot over the cap" {
++    const alloc = std.testing.allocator;
++    var term = try testTerminal(alloc, 120, 40);
++    defer term.deinit(alloc);
++    var stream = term.vtStream();
++    defer stream.deinit();
++    for (0..4000) |_| stream.nextSlice("日本語テキスト────ありがとうございます 😀 とても長い行\r\n");
++
++    // A partial snapshot is never an option: overflow is an error, not a
++    // truncated success, so the caller cannot accidentally ship half a screen.
++    try std.testing.expectError(
++        error.SnapshotOverflow,
++        serializeTerminalStateBounded(alloc, &term, 4096),
++    );
++}
++
++test "serializeTerminalStateBounded leaves synchronized output as it found it" {
++    const alloc = std.testing.allocator;
++    var term = try testTerminal(alloc, 40, 10);
++    defer term.deinit(alloc);
++    var stream = term.vtStream();
++    defer stream.deinit();
++    stream.nextSlice("x\r\n");
++    term.modes.set(.synchronized_output, true);
++
++    // Overflow path: the cap is hit, and DECSET 2026 must still be restored,
++    // or the daemon's own terminal state is corrupted for every later attach.
++    try std.testing.expectError(
++        error.SnapshotOverflow,
++        serializeTerminalStateBounded(alloc, &term, 4),
++    );
++    try std.testing.expect(term.modes.get(.synchronized_output));
++
++    const ok = (try serializeTerminalStateBounded(alloc, &term, 1 << 20)) orelse
++        return error.TestUnexpectedNull;
++    defer alloc.free(ok);
++    try std.testing.expect(term.modes.get(.synchronized_output));
++    // ...and the snapshot itself still excludes it (upstream behaviour).
++    try std.testing.expect(std.mem.indexOf(u8, ok, "\x1b[?2026h") == null);
++}
++
++test "serializeTerminalStateBounded reports an empty terminal as null, not an empty slice" {
++    const alloc = std.testing.allocator;
++    var term = try testTerminal(alloc, 40, 10);
++    defer term.deinit(alloc);
++    // A fresh terminal still serializes its modes/cursor, so force the
++    // genuinely-nothing case by comparing against the unbounded function:
++    // whatever it says is nothing, the bounded one must say too.
++    const unbounded = serializeTerminalState(alloc, &term);
++    defer if (unbounded) |u| alloc.free(u);
++    const bounded = try serializeTerminalStateBounded(alloc, &term, 1 << 20);
++    defer if (bounded) |b| alloc.free(b);
++    try std.testing.expectEqual(unbounded == null, bounded == null);
++}
