@@ -9,6 +9,9 @@ import { join } from "path"
 import { randomUUID } from "crypto"
 import { STATE_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
+import { makeLogger } from "../../../shared/log"
+
+const log = makeLogger("agents/cursor/session")
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
 function resolveHost(explicit?: CursorCoreHost): CursorCoreHost {
@@ -170,7 +173,7 @@ export async function resumeCursorSession(
     onCursorSessionId?: (name: string, sid: string) => void
     cursorHost?: CursorCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; freshAfterUnloadable?: boolean },
 ): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.cursorHost)
   const sessionHome = session.agent_home
@@ -222,6 +225,19 @@ export async function resumeCursorSession(
       else await handle.stop({ mode: "shutdown" })
     } catch {
       // Failed stop leaves failed-cleanup on the host; the original error is the one to report.
+    }
+    // Rows from the per-turn driver era carry a chat id that `cursor-agent acp`
+    // cannot load (its ACP sessions are a different store); the agent answers
+    // "Invalid params". Keep the session (name, workdir, home) and start a fresh
+    // conversation rather than leaving the row dead — history stays on disk
+    // under the old chat store but is not replayed.
+    if (initialSessionId && !session.freshAfterUnloadable && /Invalid params|not found/i.test(String((err as Error)?.message ?? err))) {
+      log.warn("cursor_session_unloadable_fresh_start", { name: session.name, previous: initialSessionId })
+      // The Core record was adopted with the unloadable id; a restart would resume it again.
+      try { await host.core.sessions.forget(session.id) } catch (forgetErr) {
+        log.warn("cursor_session_forget_failed", { name: session.name, err: String(forgetErr) })
+      }
+      return resumeCursorSession(deps, { ...session, agent_session_id: undefined, freshAfterUnloadable: true })
     }
     throw err
   }

@@ -22,7 +22,7 @@ const ctx = (adapter?: CoreAdapter): ApplyConfigCtx => ({
 
 const row = { id: "s1", workdir: "/tmp" }
 
-function fakeChildFactory(options: { nativeId?: string } = {}) {
+function fakeChildFactory(options: { nativeId?: string; unloadableIds?: string[] } = {}) {
   const opens: DriverContext[] = []
   const ocCalls: { options: CursorOptions; overrides: SessionConfiguration }[] = []
   const factory = (gopts: CursorOptions, overrides: SessionConfiguration): AgentDriver => {
@@ -30,6 +30,7 @@ function fakeChildFactory(options: { nativeId?: string } = {}) {
     return {
       id: "cursor",
       async open(ctx) {
+        if (ctx.resumeId && options.unloadableIds?.includes(ctx.resumeId)) throw new Error("Invalid params")
         opens.push(ctx)
         const runtime: AgentRuntime = {
           agentSessionId: ctx.resumeId ?? options.nativeId ?? `native-${opens.length}`,
@@ -188,6 +189,29 @@ describe("cursor core spawn/resume dialect", () => {
     await adapter!.setPermissionMode("ask")
     expect(child.ocCalls.at(-1)?.options.permissions).toBe("ask")
     expect(child.opens[1]?.resumeId).toBe("native-prompts")
+  })
+
+  // A per-turn-era chat id is not an ACP session: the agent answers "Invalid
+  // params" on session/load. The row must come back as a fresh conversation
+  // (same name/home), not stay dead.
+  test("an unloadable native id falls back to a fresh session under the same row", async () => {
+    const child = fakeChildFactory({ unloadableIds: ["old-chat-id"] })
+    const host = await makeHost(child.factory)
+    const workdir = mkdtempSync(join(tmpdir(), "mux-cur-wd-"))
+    dirs.push(workdir)
+    const sessionHome = mkdtempSync(join(tmpdir(), "mux-cur-home-"))
+    dirs.push(sessionHome)
+    const persisted: string[] = []
+    const { adapter } = await resumeCursorSession(
+      { cursorHost: host, onCursorSessionId: (_n, sid) => persisted.push(sid) },
+      { id: "legacy-row", name: "cur-legacy", workdir, agent_home: sessionHome, agent_session_id: "old-chat-id", model: "composer-1" },
+    )
+    expect(adapter).toBeInstanceOf(CoreAdapter)
+    const opened = child.opens.filter((o) => o.sessionId === "legacy-row")
+    expect(opened.at(-1)?.resumeId).toBeUndefined()
+    expect(persisted).toHaveLength(1)
+    expect(persisted[0]).not.toBe("old-chat-id")
+    await adapter.stop()
   })
 
   test("resume of an existing native id exact-resumes", async () => {
