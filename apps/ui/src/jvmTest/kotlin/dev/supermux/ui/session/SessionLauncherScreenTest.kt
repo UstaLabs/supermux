@@ -17,7 +17,11 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.swipeDown
+import dev.supermux.net.AgentModels
+import dev.supermux.net.AgentModelsResponse
 import dev.supermux.net.ModelInfo
+import dev.supermux.net.ReasoningLevel
+import dev.supermux.net.ReasoningOptions
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoBranches
 import dev.supermux.net.RepoInfo
@@ -120,6 +124,10 @@ class SessionLauncherScreenTest {
         commands: List<SlashCommand> = emptyList(),
         /** Every workdir the screen asked repo info or slash commands for. */
         asked: MutableList<String>? = null,
+        /** The host's cached model catalog; non-null means no per-call model requests. */
+        agentModels: kotlinx.coroutines.flow.Flow<AgentModelsResponse?> = kotlinx.coroutines.flow.flowOf(null),
+        /** Every per-call agents/models/reasoning request, by name. */
+        modelCalls: MutableList<String>? = null,
         // A restored draft workdir survives an EMPTY project list now — that reset
         // used to fire on "could not enumerate projects" and silently rewrite the
         // workdir to "~". Kept parameterised so a test can still exercise the
@@ -144,8 +152,10 @@ class SessionLauncherScreenTest {
                 actions = LauncherActions(
                     listProjects = { projects },
                     validatePath = { null },
-                    launcherModels = { models(it) },
-                    launcherReasoning = { a, m -> reasoning(a, m) },
+                    agentModels = agentModels,
+                    launcherAgents = { modelCalls?.add("agents"); emptyList() },
+                    launcherModels = { modelCalls?.add("models:$it"); models(it) },
+                    launcherReasoning = { a, m -> modelCalls?.add("reasoning:$a"); reasoning(a, m) },
                     launcherRepoInfo = { w, _ -> asked?.add(w); repoInfoAt?.invoke(w) ?: repoInfo },
                     launcherCommands = { _, w -> asked?.add(w); commands },
                 ),
@@ -374,6 +384,57 @@ class SessionLauncherScreenTest {
         onNodeWithTag("agent_claude").performClick()
         waitForIdle()
         onNodeWithText("Claude X").assertIsDisplayed()
+    }
+
+    // ── the host's cached model catalog ─────────────────────────────────────────────────────────
+
+    @Test fun a_cached_catalog_means_no_model_requests_at_all() = runComposeUiTest {
+        val calls = mutableListOf<String>()
+        val catalog = AgentModelsResponse(
+            agents = listOf(
+                AgentModels(kind = "claude", models = listOf(ModelInfo("claude-x", "Claude X"))),
+                AgentModels(
+                    kind = "codex",
+                    models = listOf(ModelInfo("gpt-5", "GPT-5")),
+                    modelReasoning = mapOf(
+                        "gpt-5" to ReasoningOptions(listOf(ReasoningLevel("low"), ReasoningLevel("high")), visible = true),
+                    ),
+                ),
+            ),
+        )
+        pointerContent {
+            Harness(
+                prefs = LauncherPrefs(agent = "codex", models = mapOf("codex" to "gpt-5")),
+                agentModels = kotlinx.coroutines.flow.flowOf(catalog),
+                modelCalls = calls,
+            )
+        }
+        waitForIdle()
+        onNodeWithText("GPT-5").assertIsDisplayed()
+        onNodeWithTag("launcher_effort_picker").assertIsDisplayed()
+        // Only the installed agents are offered, and switching is a lookup, not a request.
+        onNodeWithTag("launcher_agent_pill").performClick()
+        onNodeWithTag("agent_cursor").assertDoesNotExist()
+        onNodeWithTag("agent_claude").performClick()
+        waitForIdle()
+        onNodeWithText("Default").assertIsDisplayed()
+        assertTrue(calls.isEmpty(), "no per-call model traffic with a cached catalog; got $calls")
+    }
+
+    @Test fun a_catalog_update_replaces_the_list_in_place() = runComposeUiTest {
+        val flow = kotlinx.coroutines.flow.MutableStateFlow<AgentModelsResponse?>(
+            AgentModelsResponse(listOf(AgentModels("claude", listOf(ModelInfo("old", "Old model"))))),
+        )
+        pointerContent { Harness(prefs = LauncherPrefs(models = mapOf("claude" to "old")), agentModels = flow) }
+        waitForIdle()
+        onNodeWithText("Old model").assertIsDisplayed()
+        // agent_models_changed → the host refetched: "old" is gone, so the pick falls back to Default.
+        flow.value = AgentModelsResponse(listOf(AgentModels("claude", listOf(ModelInfo("new", "New model")))))
+        waitForIdle()
+        onNodeWithText("Default").assertIsDisplayed()
+        onNodeWithTag("launcher_model_picker").performClick()
+        waitForIdle()
+        onNodeWithTag("model_new").assertIsDisplayed()
     }
 
     // ── no project is a state, not `~` ──────────────────────────────────────────────────────────

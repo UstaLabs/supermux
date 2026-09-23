@@ -317,6 +317,13 @@ sealed interface ServerFrame {
         val projectMembership: Map<String, String> = emptyMap(),
     ) : ServerFrame
 
+    /**
+     * An installed agent's model list changed, or an agent was installed: the cached
+     * GET /agents/models is stale. No payload — the client refetches the catalog.
+     */
+    @Serializable @SerialName("agent_models_changed")
+    data object AgentModelsChanged : ServerFrame
+
     @Serializable @SerialName("session_added")
     data class SessionAdded(val session: SessionInfo) : ServerFrame
 

@@ -391,10 +391,16 @@ fun SessionLauncherScreen(
         projectImageCache,
     )
 
-    LaunchedEffect(selectedHost, launcherRestoring) {
+    // The host's cached model catalog: agents, models and reasoning come from it with no request.
+    // Null (an older broker, or no answer yet) → the per-call fetches below, as before.
+    val agentModels by actions.agentModels.collectAsState(null)
+
+    LaunchedEffect(selectedHost, launcherRestoring, agentModels) {
         if (launcherRestoring) return@LaunchedEffect
-        agents = listOf("claude", "codex", "cursor", "opencode", "grok")
-        val fetched = actions.launcherAgents()
+        val fetched = agentModels?.agents?.map { it.kind } ?: run {
+            agents = listOf("claude", "codex", "cursor", "opencode", "grok")
+            actions.launcherAgents()
+        }
         if (fetched.isNotEmpty()) {
             agents = fetched
             if (agent !in fetched) agent = fetched.first()
@@ -404,12 +410,13 @@ fun SessionLauncherScreen(
     // Model picker — refetch on agent change; a genuine change brings back THAT agent's remembered
     // model (claude → codex → claude keeps claude's pick), Default when it has none.
     var modelsFor by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(selectedHost, agent, launcherRestoring) {
+    LaunchedEffect(selectedHost, agent, launcherRestoring, agentModels) {
         if (launcherRestoring) return@LaunchedEffect
         val listKey = "${selectedHost.orEmpty()}|$agent"
+        val cached = agentModels?.agent(agent)
         // A refetch for the same host+agent keeps its list up (no raw-id/"Default" flicker).
-        if (modelsFor != listKey) models = emptyList()
-        val loadedModels = actions.launcherModels(agent)
+        if (cached == null && modelsFor != listKey) models = emptyList()
+        val loadedModels = cached?.models ?: actions.launcherModels(agent)
         models = loadedModels
         modelsFor = listKey
         if (shouldResetModelOnAgentChange(lastSeenAgent, agent, launcherRestoring)) model = launcherModels[agent]
@@ -421,12 +428,13 @@ fun SessionLauncherScreen(
     // Thinking-level picker — refetch on agent/model change; hide when there's no real choice.
     var reasoningLevels by remember { mutableStateOf(emptyList<ReasoningLevel>()) }
     var reasoningVisible by remember { mutableStateOf(false) }
-    LaunchedEffect(selectedHost, agent, model, launcherRestoring) {
+    LaunchedEffect(selectedHost, agent, model, launcherRestoring, agentModels) {
         if (launcherRestoring) return@LaunchedEffect
-        val resp = actions.launcherReasoning(agent, model)
-        val levels = resp?.levels ?: emptyList()
+        val cached = agentModels?.agent(agent)?.reasoningFor(model)
+        val resp = if (cached != null) null else actions.launcherReasoning(agent, model)
+        val levels = cached?.levels ?: resp?.levels ?: emptyList()
         reasoningLevels = levels
-        reasoningVisible = resp != null && resp.visible && showReasoningPicker(levels)
+        reasoningVisible = (cached?.visible ?: (resp != null && resp.visible)) && showReasoningPicker(levels)
         reasoningLevel = if (reasoningVisible) resolveReasoningLevel(levels, launcherReasoning[agent]) else null
     }
 

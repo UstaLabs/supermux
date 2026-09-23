@@ -41,6 +41,8 @@ export interface InstallDeps {
   isInstalled: (kind: AgentKind) => boolean
   /** Home dir for resolving node version-manager paths. Defaults to homedir(). */
   home?: string
+  /** Called once an install settles (done OR failed) — the set of installed agents may have moved. */
+  onSettled?: (kind: AgentKind, job: InstallJob) => void
 }
 
 const MAX_LOG = 64 * 1024 // keep the tail bounded; installers can be chatty
@@ -111,8 +113,9 @@ export function createInstallManager(deps: InstallDeps): InstallManager {
     start(kind) {
       const existing = jobs.get(kind)
       if (existing && existing.state === "running") return { job: existing, alreadyRunning: true }
-      const { job } = startInstall(kind, deps)
+      const { job, done } = startInstall(kind, deps)
       jobs.set(kind, job)
+      void done.then(() => deps.onSettled?.(kind, job))
       return { job, alreadyRunning: false }
     },
     get(kind) {

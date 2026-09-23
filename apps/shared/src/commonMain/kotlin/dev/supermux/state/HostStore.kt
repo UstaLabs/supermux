@@ -16,6 +16,7 @@ import dev.supermux.state.StagedUpload
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallJob
+import dev.supermux.net.AgentModelsResponse
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AppConfigDto
@@ -333,6 +334,13 @@ class HostStore(
     // Last GET /usage (or usage_updated) snapshot. The Usage popover renders this immediately
     // on open and updates in place when a usage_updated frame arrives — never waits on the
     // network to draw. Seeded by [usage]/[refreshUsage]; WS [ServerFrame.UsageUpdated] replaces it.
+    // The launcher's model catalog (GET /agents/models), fetched on every snapshot (= connect or
+    // reconnect) and on `agent_models_changed` — never per New Session open. Null until the first
+    // answer, and stays null on a broker older than the endpoint (the launcher then asks per call).
+    private val _agentModels = MutableStateFlow<AgentModelsResponse?>(null)
+    val agentModels: StateFlow<AgentModelsResponse?> = _agentModels
+    private var agentModelsJob: Job? = null
+
     private val _usage = MutableStateFlow<UsageResponse?>(null)
     val usageSnapshot: StateFlow<UsageResponse?> = _usage
 
@@ -413,7 +421,9 @@ class HostStore(
                 _onboarded.value = frame.onboarded
                 lastSentViewing = null
                 sendViewingIfChanged()
+                refreshAgentModels()
             }
+            ServerFrame.AgentModelsChanged -> refreshAgentModels()
             is ServerFrame.SessionRemoved -> {
                 walkthroughs.remove(frame.id)
                 refreshArchived()
@@ -1819,6 +1829,14 @@ class HostStore(
     /** GET /models?agent= → models pickable in the launcher (no session yet). Empty on failure. */
     suspend fun launcherModels(agent: String): List<ModelInfo> =
         runApi("launcherModels") { api.listModels(agent).models } ?: emptyList()
+
+    /** Refetch [agentModels]; a newer request supersedes one still in flight. Failure keeps the last answer. */
+    fun refreshAgentModels() {
+        agentModelsJob?.cancel()
+        agentModelsJob = stateScope.launch {
+            runApi("agentModels") { api.agentModels() }?.let { _agentModels.value = it }
+        }
+    }
 
     /** GET /reasoning-levels?agent=&model= → thinking levels for the launcher. Null on failure. */
     suspend fun launcherReasoning(agent: String, model: String? = null): ReasoningResponse? =

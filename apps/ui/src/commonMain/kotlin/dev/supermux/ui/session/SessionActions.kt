@@ -26,6 +26,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import dev.supermux.net.AgentModelsResponse
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.ModelInfo
@@ -70,6 +71,13 @@ class LauncherActions(
     val projectImage: suspend (project: ProjectDto) -> ByteArray? = { null },
     /** `null` = transport failure; an INVALID path is a non-null `PathValidation(ok=false)`. */
     val validatePath: suspend (path: String) -> PathValidation? = { null },
+    /**
+     * The target host's cached model catalog (GET /agents/models, refreshed on connect and on
+     * `agent_models_changed`). While it is non-null the launcher reads agents, models and
+     * reasoning from it with no request; null (an older broker, or not answered yet) falls back
+     * to [launcherAgents] / [launcherModels] / [launcherReasoning] per call.
+     */
+    val agentModels: Flow<AgentModelsResponse?> = flowOf(null),
     val launcherModels: suspend (agent: String) -> List<ModelInfo> = { emptyList() },
     val launcherReasoning: suspend (agent: String, model: String?) -> ReasoningResponse? = { _, _ -> null },
     /** `fetch=true` refreshes origin's remote-tracking refs (once per repo, on picker open). */
@@ -139,6 +147,7 @@ fun rememberLauncherActions(
             addProjectLocation = { id, path -> app.addProjectLocation(id, path) },
             projectImage = { app.projectImageBytes(it) },
             validatePath = { app.validatePath(it) },
+            agentModels = app.agentModels,
             launcherModels = { app.launcherModels(it) },
             launcherReasoning = { agent, model -> app.launcherReasoning(agent, model) },
             launcherRepoInfo = { workdir, fetch -> app.launcherRepoInfo(workdir, fetch) },
@@ -187,6 +196,7 @@ fun rememberLauncherActions(
             },
             projectImage = { fleet.activeApp()?.projectImageBytes(it) },
             validatePath = { fleet.validatePath(it) },
+            agentModels = fleet.activeAgentModels,
             launcherModels = { fleet.launcherModels(it) },
             launcherReasoning = { agent, model -> fleet.launcherReasoning(agent, model) },
             launcherRepoInfo = { workdir, fetch -> fleet.launcherRepoInfo(workdir, fetch) },

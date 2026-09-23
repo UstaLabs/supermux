@@ -12,6 +12,7 @@ import dev.supermux.host.hostViewsFrom
 import dev.supermux.host.isLegacyHostDisplayName
 import dev.supermux.host.mergeSessions
 import dev.supermux.host.previousHostClearSessionId
+import dev.supermux.net.AgentModelsResponse
 import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
@@ -374,6 +375,18 @@ class FleetStore(
         combine(hostApps, _activeHost) { _, _ -> activeApp() }
             .distinctUntilChanged()
             .flatMapLatest { app -> app?.onboarded ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /**
+     * The ACTIVE host's model catalog for the launcher ([HostStore.agentModels]) — null until that
+     * host answered GET /agents/models (or forever on an older broker). Keyed on the live
+     * [HostStore] exactly like [activeProjectCatalog] below, for the same reasons.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAgentModels: StateFlow<AgentModelsResponse?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.agentModels ?: flowOf(null) }
             .stateIn(fleetScope, SharingStarted.Eagerly, null)
 
     /**

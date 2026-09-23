@@ -11,7 +11,8 @@ export type RefreshModelCacheOptions = {
 }
 
 /**
- * Refresh the model cache from the given per-agent discoverers.
+ * Refresh the model cache from the given per-agent discoverers. Resolves to the agents whose
+ * cached list actually CHANGED, so the caller can announce `agent_models_changed` only then.
  *
  * Each discoverer runs independently. A non-empty result replaces the cached
  * list. An empty result (no models, or the discoverer threw) is reported via
@@ -23,8 +24,9 @@ export async function refreshModelCache(
   cache: ModelCache,
   discoverers: ModelDiscoverers,
   opts?: RefreshModelCacheOptions,
-): Promise<void> {
+): Promise<AgentKind[]> {
   const entries = Object.entries(discoverers) as [AgentKind, ModelDiscoverer][]
+  const changed: AgentKind[] = []
   await Promise.all(
     entries.map(async ([agent, discover]) => {
       let models: ModelInfo[] = []
@@ -34,6 +36,7 @@ export async function refreshModelCache(
         models = []
       }
       if (models.length > 0) {
+        if (JSON.stringify(cache.get(agent)) !== JSON.stringify(models)) changed.push(agent)
         cache.set(agent, models)
         return
       }
@@ -43,4 +46,5 @@ export async function refreshModelCache(
       if (cache.get(agent).length === 0) cache.set(agent, [])
     }),
   )
+  return changed
 }

@@ -172,6 +172,31 @@ data class ReasoningResponse(
     val visible: Boolean = true,
 )
 
+/** Reasoning levels on offer and whether the picker shows (the GET /reasoning-levels rule). */
+@Serializable
+data class ReasoningOptions(val levels: List<ReasoningLevel> = emptyList(), val visible: Boolean = false)
+
+/** One installed agent in GET /agents/models: its models plus reasoning for Default and per model. */
+@Serializable
+data class AgentModels(
+    val kind: String,
+    val models: List<ModelInfo> = emptyList(),
+    val reasoning: ReasoningOptions = ReasoningOptions(),
+    val modelReasoning: Map<String, ReasoningOptions> = emptyMap(),
+) {
+    /** The reasoning for [model] (null = Default), as GET /reasoning-levels would answer it. */
+    fun reasoningFor(model: String?): ReasoningOptions = model?.let { modelReasoning[it] } ?: reasoning
+}
+
+/**
+ * GET /agents/models — the launcher's per-host model catalog, cached by [dev.supermux.state.HostStore]
+ * and refetched only on the broker's `agent_models_changed` frame (or a reconnect).
+ */
+@Serializable
+data class AgentModelsResponse(val agents: List<AgentModels> = emptyList()) {
+    fun agent(kind: String): AgentModels? = agents.firstOrNull { it.kind == kind }
+}
+
 @Serializable
 data class SpawnRequest(
     val workdir: String,
@@ -1498,6 +1523,9 @@ class BrokerApi(
     /** GET /models?agent= — models for the launcher (no session). */
     suspend fun listModels(agent: String): LauncherModels =
         getJson("$httpBase/models?agent=${urlEncode(agent)}")
+
+    /** GET /agents/models — every installed agent's models + reasoning (404 on older brokers). */
+    suspend fun agentModels(): AgentModelsResponse = getJson("$httpBase/agents/models")
 
     /** GET /reasoning-levels?agent=&model= — reasoning levels for the launcher (no session). */
     suspend fun getReasoningLevels(agent: String, model: String? = null): ReasoningResponse =

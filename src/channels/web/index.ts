@@ -226,6 +226,8 @@ export interface WebChannelOpts {
   // Session-less reasoning levels for the New Session launcher (no session id yet):
   // resolves the levels an agent+model offers before spawn. Codex's are per-model.
   getReasoningLevels?: (agent: AgentKind, model?: string) => { agent: string; levels: { id: string; description?: string }[]; visible: boolean }
+  /** GET /agents/models — every installed agent's models + reasoning in one answer (see core/models/agent-models). */
+  getAgentModels?: () => { agents: import("../../core/models/agent-models").AgentModelsEntry[] }
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
@@ -2159,6 +2161,12 @@ export class WebChannel implements Channel {
       const serverId = decodeURIComponent(path.split("/")[5]!)
       const result = this.opts.removeCustomEditorLspServer(serverId)
       return this.json(result, result.ok ? 200 : 400)
+    }
+
+    if (method === "GET" && path === "/agents/models") {
+      const catalog = this.opts.getAgentModels?.()
+      if (!catalog) return this.json({ error: "agent models unavailable" }, 503)
+      return this.json(catalog)
     }
 
     if (method === "GET" && path === "/agents/status") {
