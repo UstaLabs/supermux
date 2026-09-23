@@ -215,6 +215,12 @@ export class Registry {
     this.sessions.setPrompts(id, prompts)
   }
 
+  setPermissionMode(id: string, mode: string | null): void {
+    const s = this.sessions.getById(id)
+    if (!s) throw new Error(`no such session: ${id}`)
+    this.sessions.setPermissionMode(id, mode)
+  }
+
   listPAs(): Session[] {
     return this.sessions.list().filter(s => s.role === "personal_assistant" && s.status !== "archived")
   }

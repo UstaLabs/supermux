@@ -165,7 +165,7 @@ describe("cursor core spawn/resume dialect", () => {
     expect(adapter!.model).toBe("gpt-5")
   })
 
-  test("prompts off uses force; setPrompts(true) reopens with ask", async () => {
+  test("default uses force; setPermissionMode(ask) reopens with ask", async () => {
     const child = fakeChildFactory({ nativeId: "native-prompts" })
     const host = await makeHost(child.factory)
     const reg = registry()
@@ -185,7 +185,7 @@ describe("cursor core spawn/resume dialect", () => {
       id: "broker-id-prompts",
     })
     expect(child.ocCalls[0]?.options.permissions).toBe("force")
-    await adapter!.setPrompts(true)
+    await adapter!.setPermissionMode("ask")
     expect(child.ocCalls.at(-1)?.options.permissions).toBe("ask")
     expect(child.opens[1]?.resumeId).toBe("native-prompts")
   })

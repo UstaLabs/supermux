@@ -27,7 +27,7 @@ function fakeDriver(): AgentDriver {
   }
 }
 
-test("grok alwaysApprove follows extra.prompts", async () => {
+test("grok ask mode sets alwaysApprove false", async () => {
   const captured: GrokOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "grok-host-"))
   dirs.push(dir)
@@ -44,7 +44,7 @@ test("grok alwaysApprove follows extra.prompts", async () => {
     sessionId: "id1",
     workdir: dir,
     cwd: dir,
-    prompts: true,
+    permissionMode: "ask",
   }
   const handle = host.register({ id: "id1", env: {}, extra })
   await handle.start({ cwd: dir })
@@ -53,7 +53,7 @@ test("grok alwaysApprove follows extra.prompts", async () => {
   await host.close({ agents: "shutdown" })
 })
 
-test("grok prompts false keeps alwaysApprove true", async () => {
+test("grok default mode keeps alwaysApprove true", async () => {
   const captured: GrokOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "grok-host-"))
   dirs.push(dir)

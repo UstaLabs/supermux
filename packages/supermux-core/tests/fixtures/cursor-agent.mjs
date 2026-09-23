@@ -40,7 +40,12 @@ new AgentSideConnection(client => ({
   if (process.env.AUTONOMOUS_ON_OPEN === '1') {
     queueMicrotask(() => { void emitNativeTurn(client, sessionId, { id: process.env.TURN_ID || 'auto-1', complete: process.env.AUTONOMOUS_HOLD !== '1' }) })
   }
-  return {sessionId};
+  // Like the real cursor-agent: session/new advertises the select options with
+  // parameterised wire values; session/load does not.
+  return {sessionId, configOptions: [
+    { id: 'model', type: 'select', currentValue: 'default[]', options: [{ value: 'default[]', name: 'Auto' }, { value: 'composer-1[fast=true]', name: 'composer-1' }] },
+    { id: 'mode', type: 'select', currentValue: 'agent', options: [{ value: 'agent', name: 'Agent' }, { value: 'plan', name: 'Plan' }, { value: 'ask', name: 'Ask' }] },
+  ]};
  },
  async setSessionConfigOption(params) { record({ setConfig: { configId: params.configId, value: params.value } }); return { configOptions: [] }; },
  async resumeSession(params) { record('resume'); return {}; },

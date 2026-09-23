@@ -121,7 +121,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
             model: pa.model,
             effort: opts.resolveEffort?.(pa),
             agent_session_id: pa.agent_session_id,
-            prompts: pa.prompts,
+            permissionMode: pa.permissionMode ?? undefined,
             pa: true,
           },
         )

@@ -7,6 +7,7 @@ import { codexInstructions } from "./preamble-writer"
 import { codexPrepareSessionHome } from "../../plugins"
 import { muxShimServer } from "../mux-shim-server"
 import { HOME } from "../../session-manager/spawn-helper"
+import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 
 export type CodexDriverFactory = (options: CodexOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -26,7 +27,7 @@ export type CodexPrepareExtra = {
   workdir: string
   cwd: string
   nativeSessionId?: string
-  prompts?: boolean
+  permissionMode?: string
 }
 
 type RuntimeAttachable = {
@@ -75,7 +76,7 @@ function asPrepareExtra(registration: HostRegistration): CodexPrepareExtra {
     workdir,
     cwd,
     nativeSessionId: typeof native === "string" ? native : undefined,
-    prompts: extra.prompts === true,
+    permissionMode: extraPermissionMode(extra, "codex"),
   }
 }
 
@@ -88,11 +89,13 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "codex",
     driver: (registration, ctx) => {
-      const prompts = registration.extra?.prompts === true
+      const settings = driverSettingsFor("codex", extraPermissionMode(registration.extra, "codex"))
+      if (settings.agent !== "codex") throw new Error("codex driver settings mismatch")
       const opts: CodexOptions = {
         ...BROKER_CODEX_OPTIONS,
-        approvalPolicy: prompts ? "on-request" : "never",
-        permissionPrompts: prompts ? "host" : "none",
+        approvalPolicy: settings.approvalPolicy,
+        sandbox: settings.sandbox,
+        permissionPrompts: settings.permissionPrompts,
         id: "codex",
         command: registration.command ?? "codex",
         args: registration.args ? [...registration.args] : ["app-server"],

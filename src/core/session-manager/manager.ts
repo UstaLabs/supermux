@@ -18,6 +18,7 @@ import { randomBytes } from "crypto"
 import { resumedSessionPid } from "./resume-pid"
 import type { SessionBackend } from "../runtime/session-backend"
 import { AgentKind, isAgentKind } from "../../shared/agents"
+import { isPermissionMode } from "../agents/permission-modes"
 
 import { isDraftSession } from "./supervisor"
 import { isWorktreeReclaimable } from "../worktree/gc"
@@ -862,26 +863,27 @@ export class SessionManager {
     return { ok: true, status: "applied" }
   }
 
-  async switchPrompts(
+  async switchPermissionMode(
     sessionId: string,
-    enabled: boolean,
+    mode: string,
   ): Promise<{ ok: true; status: "applied" } | { ok: false; error: string }> {
     const session = this.registry.get(sessionId)
     if (!session) return { ok: false, error: `no such session: ${sessionId}` }
+    if (!isPermissionMode(session.agent, mode)) return { ok: false, error: "unknown mode" }
     const adapter = this.runtimes.get(session.id)?.adapter as
-      | { setPrompts?: (enabled: boolean) => Promise<void> }
+      | { setPermissionMode?: (id: string) => Promise<void> }
       | undefined
-    if (adapter?.setPrompts) {
+    if (adapter?.setPermissionMode) {
       try {
-        await adapter.setPrompts(enabled)
+        await adapter.setPermissionMode(mode)
       } catch (err) {
         const code = typeof err === "object" && err !== null && "code" in err ? String((err as { code: unknown }).code) : ""
         if (code === "session_busy") return { ok: false, error: "session_busy" }
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
     }
-    this.registry.setPrompts(sessionId, enabled)
-    this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: session.id, prompts: enabled })
+    this.registry.setPermissionMode(sessionId, mode)
+    this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: session.id, permissionMode: mode })
     return { ok: true, status: "applied" }
   }
 

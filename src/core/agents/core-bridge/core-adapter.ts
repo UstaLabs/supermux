@@ -28,8 +28,8 @@ export type CoreAdapterProfile = {
   kind: AgentKind
   /** How a model/effort change is applied. */
   configuration: { model: "configure" | "restart" | "unsupported"; effort: "configure" | "restart" | "unsupported" }
-  /** Whether prompts can be switched on (`restart` re-opens with the same native id). */
-  prompts: "restart" | "unsupported"
+  /** Whether permission mode can be switched (`restart` re-opens with the same native id). */
+  permissionMode: "restart" | "unsupported"
   /** Attachment rendering. */
   attachments: "image-block" | "path-in-prompt"
   /** Idle-send vs mid-turn: queue through Core, or steer when the session is already running. */
@@ -41,7 +41,7 @@ export type CoreAdapterProfile = {
 export const GROK_CORE_PROFILE: CoreAdapterProfile = {
   kind: "grok",
   configuration: { model: "configure", effort: "configure" },
-  prompts: "restart",
+  permissionMode: "restart",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
   startConfiguration: "desired",
@@ -50,7 +50,7 @@ export const GROK_CORE_PROFILE: CoreAdapterProfile = {
 export const CODEX_CORE_PROFILE: CoreAdapterProfile = {
   kind: "codex",
   configuration: { model: "configure", effort: "configure" },
-  prompts: "restart",
+  permissionMode: "restart",
   attachments: "image-block",
   sendWhenBusy: "steer",
   startConfiguration: "desired",
@@ -59,7 +59,7 @@ export const CODEX_CORE_PROFILE: CoreAdapterProfile = {
 export const OPENCODE_CORE_PROFILE: CoreAdapterProfile = {
   kind: "opencode",
   configuration: { model: "restart", effort: "unsupported" },
-  prompts: "restart",
+  permissionMode: "restart",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
   startConfiguration: "empty",
@@ -68,7 +68,7 @@ export const OPENCODE_CORE_PROFILE: CoreAdapterProfile = {
 export const CURSOR_CORE_PROFILE: CoreAdapterProfile = {
   kind: "cursor",
   configuration: { model: "restart", effort: "unsupported" },
-  prompts: "restart",
+  permissionMode: "restart",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
   startConfiguration: "empty",
@@ -77,7 +77,7 @@ export const CURSOR_CORE_PROFILE: CoreAdapterProfile = {
 export const CLAUDE_CORE_PROFILE: CoreAdapterProfile = {
   kind: "claude",
   configuration: { model: "restart", effort: "restart" },
-  prompts: "restart",
+  permissionMode: "restart",
   attachments: "image-block",
   sendWhenBusy: "queue",
   startConfiguration: "empty",
@@ -93,7 +93,7 @@ export const CORE_ADAPTER_PROFILES = {
 
 export type CoreAdapterOpts = {
   handle: HostHandle
-  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
+  reregister: (fields: { model?: string; permissionMode?: string }) => HostHandle
   core: Core
   id: string
   sessionName: string
@@ -102,7 +102,7 @@ export type CoreAdapterOpts = {
   persistSessionId: (nativeId: string) => Promise<void>
   model?: string
   effort?: string
-  prompts?: boolean
+  permissionMode?: string
   resolveAttachment?: (file_id: string) => Promise<string>
   stallTimeoutMs?: number
   onUsageUpdate?: (data: CodexUsage) => void
@@ -165,7 +165,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
 
   private _model?: string
   private _effort?: string
-  private _prompts: boolean
+  private _permissionMode?: string
   private session?: Session
   private unsubscribe?: () => void
   private startEpoch = 0
@@ -198,7 +198,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.nativeSessionId = opts.initialSessionId
     this._model = opts.model
     this._effort = opts.effort
-    this._prompts = opts.prompts === true
+    this._permissionMode = opts.permissionMode
     this.resolveAttachment = opts.resolveAttachment
     this.stallTimeoutMs = opts.stallTimeoutMs ?? DEFAULT_STALL_MS
     this.onUsageUpdate = opts.onUsageUpdate
@@ -223,7 +223,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
 
   get model(): string | undefined { return this._model }
   get effort(): string | undefined { return this._effort }
-  get prompts(): boolean { return this._prompts }
+  get permissionMode(): string | undefined { return this._permissionMode }
 
   sessionSnapshotState(): SessionState | undefined {
     return this.session?.snapshot().state
@@ -257,19 +257,16 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
-  async setPrompts(enabled: boolean): Promise<void> {
-    if (this.profile.prompts === "unsupported") {
-      if (enabled) {
-        throw new CoreError("unsupported_operation", `${this.kind} sessions cannot prompt`)
-      }
-      return
+  async setPermissionMode(id: string): Promise<void> {
+    if (this.profile.permissionMode === "unsupported") {
+      throw new CoreError("unsupported_operation", `${this.kind} sessions cannot set permission mode`)
     }
     const session = this.requireSession()
-    if (enabled === this._prompts) return
+    if (id === this._permissionMode) return
     if (session.snapshot().state === "running") {
       throw new CoreError("session_busy", `${this.kind} session is busy`)
     }
-    await this.restartNative({ prompts: enabled })
+    await this.restartNative({ permissionMode: id })
   }
 
   async setConfiguration(patch: { model?: string; effort?: string }): Promise<void> {
@@ -489,13 +486,13 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.bridge.flush()
   }
 
-  private async restartNative(next: { model?: string; effort?: string; prompts?: boolean }): Promise<void> {
-    const previous = { model: this._model, effort: this._effort, prompts: this._prompts }
+  private async restartNative(next: { model?: string; effort?: string; permissionMode?: string }): Promise<void> {
+    const previous = { model: this._model, effort: this._effort, permissionMode: this._permissionMode }
     const generation = this.startEpoch
     const nativeSessionId = this.requireSession().snapshot().agentSessionId
     if ("model" in next) this._model = next.model
     if ("effort" in next) this._effort = next.effort
-    if ("prompts" in next) this._prompts = next.prompts === true
+    if ("permissionMode" in next) this._permissionMode = next.permissionMode
     this.nativeSessionId = nativeSessionId
     this.restarting = (async () => {
       try {
@@ -503,14 +500,14 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.session = undefined
         this.unsubscribe?.()
         this.unsubscribe = undefined
-        this.handle = this.reregister({ model: this._model, prompts: this._prompts })
+        this.handle = this.reregister({ model: this._model, permissionMode: this._permissionMode })
         if (this.stopped || generation !== this.startEpoch) return
         await this.start()
       } catch (err) {
         if (!this.stopped && generation === this.startEpoch) {
           this._model = previous.model
           this._effort = previous.effort
-          this._prompts = previous.prompts
+          this._permissionMode = previous.permissionMode
         }
         throw asError(err)
       }

@@ -5,6 +5,8 @@ export type {
   EnvironmentSpec,
   GrokEnvironmentSpec,
   OpenCodeEnvironmentSpec,
+  OpenCodeToolAction,
+  OpenCodeToolPermissions,
   McpServerSpec,
   PreparedEnvironment,
 } from "./types.js"

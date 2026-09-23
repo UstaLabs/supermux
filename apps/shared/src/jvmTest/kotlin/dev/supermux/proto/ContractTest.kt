@@ -75,10 +75,10 @@ class ContractTest {
     }
 
     @Test fun client_prompt_frames_round_trip() {
-        val set = json.decodeFromString<ClientFrame>(load("set_prompts"))
-        assertTrue(set is ClientFrame.SetPrompts)
-        assertEquals("s1", (set as ClientFrame.SetPrompts).session)
-        assertTrue(set.enabled)
+        val set = json.decodeFromString<ClientFrame>(load("set_permission_mode"))
+        assertTrue(set is ClientFrame.SetPermissionMode)
+        assertEquals("s1", (set as ClientFrame.SetPermissionMode).session)
+        assertEquals("ask", set.mode)
         val respond = json.decodeFromString<ClientFrame>(load("request_respond"))
         assertTrue(respond is ClientFrame.RequestRespond)
         assertEquals("r1", (respond as ClientFrame.RequestRespond).requestId)

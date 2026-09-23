@@ -111,8 +111,9 @@ test('sessionConfig model+mode is sent after session/new', async () => {
   try {
     const rec = await lines()
     const sets = rec.filter(l => l.setConfig) as Array<{ setConfig: { configId: string; value: string } }>
+    // The picker-style name resolves to the option's parameterised wire value.
     expect(sets.map(s => s.setConfig)).toEqual([
-      { configId: 'model', value: 'composer-1' },
+      { configId: 'model', value: 'composer-1[fast=true]' },
       { configId: 'mode', value: 'plan' },
     ])
     expect(rec.findIndex(l => l === 'new')).toBeLessThan(rec.findIndex(l => l.setConfig))
@@ -124,10 +125,12 @@ test('sessionConfig model+mode is sent after session/load', async () => {
   try {
     const rec = await lines()
     expect(rec).toContain('load')
-    expect(rec).not.toContain('new')
+    // session/load carries no option lists: one turn-less session/new reads them
+    // (never persisted by the agent) so the picker-style name still resolves.
+    expect(rec.indexOf('new')).toBeGreaterThan(rec.indexOf('load'))
     const sets = rec.filter(l => l.setConfig) as Array<{ setConfig: { configId: string; value: string } }>
     expect(sets.map(s => s.setConfig)).toEqual([
-      { configId: 'model', value: 'composer-1' },
+      { configId: 'model', value: 'composer-1[fast=true]' },
       { configId: 'mode', value: 'ask' },
     ])
     expect(rec.findIndex(l => l === 'load')).toBeLessThan(rec.findIndex(l => l.setConfig))

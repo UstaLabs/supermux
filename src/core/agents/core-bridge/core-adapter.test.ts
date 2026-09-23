@@ -169,6 +169,7 @@ function makeAdapter(kind: Kind, host: Host, opts: {
   effort?: string
   resolveAttachment?: (file_id: string) => Promise<string>
   stallTimeoutMs?: number
+  permissionMode?: string
   onUsageUpdate?: CoreAdapter["onUsageUpdate"]
   getPrevUsage?: CoreAdapter["getPrevUsage"]
 }): CoreAdapter {
@@ -178,6 +179,7 @@ function makeAdapter(kind: Kind, host: Host, opts: {
     sessionHome: opts.workdir,
     sessionName: opts.sessionName,
     sessionId: opts.id,
+    permissionMode: opts.permissionMode,
   }
   if (opts.initialSessionId) extra.nativeSessionId = opts.initialSessionId
   const handle = host.register({ id: opts.id, env: {}, extra })
@@ -186,7 +188,7 @@ function makeAdapter(kind: Kind, host: Host, opts: {
     reregister: (fields) => host.register({
       id: opts.id,
       env: {},
-      extra: { ...extra, prompts: fields.prompts === true },
+      extra: { ...extra, permissionMode: fields.permissionMode },
     }),
     core: host.core,
     ...opts,
@@ -1110,15 +1112,39 @@ acrossGrok("replays real grok-turn.ndjson through Core normalizer into broker ev
   expect(assistantAt).toBeLessThan(completeAt)
 })
 
-test("cursor: setPrompts(true) restarts the same native id", async () => {
+test("cursor: setPermissionMode restarts the same native id", async () => {
   const kind = "cursor" as const
   const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
   const { host, workdir } = await harness(kind, fake)
   const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
   await adapter.start()
-  await adapter.setPrompts(true)
+  await adapter.setPermissionMode("ask")
   expect(fake.opens).toHaveLength(2)
   expect(fake.opens[1]?.resumeId).toBe("native-keep")
+})
+
+test("setPermissionMode is a no-op for the same id", async () => {
+  const kind = "grok" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, permissionMode: "ask" })
+  await adapter.start()
+  await adapter.setPermissionMode("ask")
+  expect(fake.opens).toHaveLength(1)
+})
+
+test("setPermissionMode throws session_busy while running", async () => {
+  const kind = "grok" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await adapter.start()
+  fake.holdNextPrompt()
+  const sent = adapter.send("busy")
+  await waitUntil(() => fake.promptTexts.length === 1)
+  await expect(adapter.setPermissionMode("ask")).rejects.toMatchObject({ code: "session_busy" })
+  fake.completePrompt()
+  await sent
 })
 
 test("opencode: setConfiguration({ model }) restarts the same native id", async () => {

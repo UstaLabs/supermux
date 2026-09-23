@@ -80,7 +80,7 @@ function spec(over: Partial<OpenCodeEnvironmentSpec> & Pick<OpenCodeEnvironmentS
     mcpServers: [MUX],
     skillsPaths: ["/plugins/extra/skills"],
     pluginPaths: ["/plugins/superpowers"],
-    permissions: "allow",
+    permissions: { edit: "allow", bash: "allow", webfetch: "allow" },
     provider: { "alibaba-token-plan": { models: { "qwen3.8-max-preview": { name: "Qwen3.8 Max Preview" } } } },
     instructions: "preamble body\n",
     ...over,
@@ -115,7 +115,7 @@ test("omits instructions, plugin, skills, and provider when empty/null", async (
     configHome,
     instructions: null,
     pluginPaths: [],
-    permissions: "allow",
+    permissions: { edit: "allow", bash: "allow", webfetch: "allow" },
     skillsPaths: [],
     provider: null,
   }))
@@ -136,7 +136,7 @@ test("registers mux MCP with session id as MUX_SESSION_ID", async () => {
     configHome,
     instructions: null,
     pluginPaths: [],
-    permissions: "allow",
+    permissions: { edit: "allow", bash: "allow", webfetch: "allow" },
     skillsPaths: [],
     provider: null,
   }))
@@ -183,18 +183,21 @@ test("requireSpec TypeError names each missing field including provider", async 
   }
 })
 
-test("permissions ask writes OpenCode's per-tool ask policy; allow writes nothing", async () => {
+test("permissions object writes OpenCode policy only when a tool is not allow", async () => {
   const { mkdtempSync, readFileSync, rmSync } = await import("fs")
   const { tmpdir } = await import("os")
   const { join } = await import("path")
   const dir = mkdtempSync(join(tmpdir(), "oc-perm-"))
   try {
     const base = { home: join(dir, "home"), workdir: join(dir, "wd"), mcpServers: [], skillsPaths: [], instructions: null, configHome: join(dir, "cfg"), provider: null, pluginPaths: [] }
-    await prepareOpenCodeEnvironment({ ...base, permissions: "ask" })
+    await prepareOpenCodeEnvironment({ ...base, permissions: { edit: "ask", bash: "ask", webfetch: "ask" } })
     const asked = JSON.parse(readFileSync(join(dir, "cfg", "opencode", "opencode.json"), "utf8"))
     expect(asked.permission).toEqual({ edit: "ask", bash: "ask", webfetch: "ask" })
-    await prepareOpenCodeEnvironment({ ...base, permissions: "allow" })
+    await prepareOpenCodeEnvironment({ ...base, permissions: { edit: "allow", bash: "allow", webfetch: "allow" } })
     const allowed = JSON.parse(readFileSync(join(dir, "cfg", "opencode", "opencode.json"), "utf8"))
     expect(allowed.permission).toBeUndefined()
+    await prepareOpenCodeEnvironment({ ...base, permissions: { edit: "deny", bash: "deny", webfetch: "allow" } })
+    const denied = JSON.parse(readFileSync(join(dir, "cfg", "opencode", "opencode.json"), "utf8"))
+    expect(denied.permission).toEqual({ edit: "deny", bash: "deny", webfetch: "allow" })
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

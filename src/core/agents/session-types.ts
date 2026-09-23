@@ -46,6 +46,7 @@ export type ResumeRow = {
   agent?: string
   reasoningLevel?: string
   prompts?: boolean
+  permissionMode?: string | null
   role?: string
 }
 

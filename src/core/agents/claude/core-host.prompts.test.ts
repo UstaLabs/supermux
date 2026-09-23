@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
-import type { CodexOptions } from "../../../../packages/supermux-core/src/codex/index.js"
-import { createCodexCoreHost } from "./core-host"
+import type { ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
+import { createClaudeCoreHost } from "./core-host"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -13,11 +13,11 @@ afterEach(() => {
 
 function fakeDriver(): AgentDriver {
   return {
-    id: "codex",
+    id: "claude",
     async open() {
       const runtime: AgentRuntime = {
         agentSessionId: "n1",
-        capabilities: { resume: true, steer: true, fork: true, detach: true, configure: true },
+        capabilities: { resume: true, steer: false, fork: false, detach: true },
         async prompt() { return { stopReason: "end_turn" } },
         async interrupt() {},
         async close() {},
@@ -27,48 +27,42 @@ function fakeDriver(): AgentDriver {
   }
 }
 
-test("codex ask-family mode uses on-request/workspace-write/host", async () => {
-  const captured: CodexOptions[] = []
-  const dir = mkdtempSync(join(tmpdir(), "codex-host-"))
+test("claude default mode is bypassPermissions", async () => {
+  const captured: ClaudeOptions[] = []
+  const dir = mkdtempSync(join(tmpdir(), "claude-host-"))
   dirs.push(dir)
-  const host = createCodexCoreHost({
+  const host = createClaudeCoreHost({
     stateDirectory: dir,
     driverFactory: (options) => {
       captured.push(options)
       return fakeDriver()
     },
   })
-  const extra = {
-    sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir, permissionMode: "on-request+workspace-write",
-  }
+  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir }
   const handle = host.register({ id: "id1", env: {}, extra })
   await handle.start({ cwd: dir })
-  expect(captured[0]?.approvalPolicy).toBe("on-request")
-  expect(captured[0]?.sandbox).toBe("workspace-write")
+  expect(captured[0]?.permissionMode).toBe("bypassPermissions")
   expect(captured[0]?.permissionPrompts).toBe("host")
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })
 
-test("codex default mode uses never/full-access/none", async () => {
-  const captured: CodexOptions[] = []
-  const dir = mkdtempSync(join(tmpdir(), "codex-host-"))
+test("claude ask mode leaves permissionMode undefined", async () => {
+  const captured: ClaudeOptions[] = []
+  const dir = mkdtempSync(join(tmpdir(), "claude-host-"))
   dirs.push(dir)
-  const host = createCodexCoreHost({
+  const host = createClaudeCoreHost({
     stateDirectory: dir,
     driverFactory: (options) => {
       captured.push(options)
       return fakeDriver()
     },
   })
-  const extra = {
-    sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: dir, cwd: dir,
-  }
+  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: dir, cwd: dir, permissionMode: "ask" }
   const handle = host.register({ id: "id2", env: {}, extra })
   await handle.start({ cwd: dir })
-  expect(captured[0]?.approvalPolicy).toBe("never")
-  expect(captured[0]?.sandbox).toBe("danger-full-access")
-  expect(captured[0]?.permissionPrompts).toBe("none")
+  expect(captured[0]?.permissionMode).toBeUndefined()
+  expect(captured[0]?.permissionPrompts).toBe("host")
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })

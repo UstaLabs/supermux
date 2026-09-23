@@ -10,6 +10,7 @@ import { claudeSpawnArgs } from "../../plugins"
 import { environmentMdPath, promptsDir, replyFallbackPath } from "../../runtime-assets"
 import { SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
 import { makeLogger } from "../../../shared/log"
+import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 
 const log = makeLogger("agents/claude/core-host")
 const CORE_PLUGIN_NAME = "mux-core"
@@ -33,7 +34,7 @@ export type ClaudePrepareExtra = {
   nativeSessionId?: string
   model?: string
   effort?: string
-  prompts?: boolean
+  permissionMode?: string
   pa?: boolean
   rpcMcpConfig?: string
 }
@@ -102,7 +103,7 @@ function asPrepareExtra(registration: HostRegistration): ClaudePrepareExtra {
     nativeSessionId: typeof native === "string" ? native : undefined,
     model: typeof model === "string" ? model : undefined,
     effort: typeof effort === "string" ? effort : undefined,
-    prompts: extra.prompts === true,
+    permissionMode: extraPermissionMode(extra, "claude"),
     pa: extra.pa === true,
     rpcMcpConfig: typeof rpc === "string" ? rpc : undefined,
   }
@@ -117,9 +118,10 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "claude",
     driver: (registration, ctx) => {
-      const prompts = registration.extra?.prompts === true
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
       const extraEffort = asEffort(registration.extra?.effort)
+      const settings = driverSettingsFor("claude", extraPermissionMode(registration.extra, "claude"))
+      if (settings.agent !== "claude") throw new Error("claude driver settings mismatch")
       const opts: ClaudeOptions = {
         id: "claude",
         command: "claude",
@@ -129,13 +131,8 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         model: extraModel,
         effort: extraEffort,
         tools: "default",
-        // Prompts always route to the host: headless Claude removes
-        // AskUserQuestion when nobody can answer it (verified on the real CLI),
-        // and agent questions must work regardless of the permission policy.
-        // The opt-in only decides whether tool calls need approval: with
-        // bypassPermissions Claude skips them and never asks the host.
-        permissionMode: prompts ? undefined : "bypassPermissions",
-        permissionPrompts: "host",
+        permissionMode: settings.permissionMode,
+        permissionPrompts: settings.permissionPrompts,
         partialMessages: true,
         setupTimeoutMs: 60_000,
         requestTimeoutMs: 30_000,

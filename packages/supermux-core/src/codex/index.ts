@@ -6,12 +6,12 @@ import { createCodexNormalizer } from './normalize.js'
 
 export type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type CodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access'
-export type CodexApprovalPolicy = 'never' | 'on-request' | 'untrusted'
+export type CodexApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted'
 export type CodexPermissionPrompts = 'none' | 'host'
 
 const REASONING_EFFORTS = new Set<string>(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 const SANDBOXES = new Set<string>(['read-only', 'workspace-write', 'danger-full-access'])
-const APPROVAL_POLICIES = new Set<string>(['never', 'on-request', 'untrusted'])
+const APPROVAL_POLICIES = new Set<string>(['never', 'on-request', 'on-failure', 'untrusted'])
 const PERMISSION_PROMPTS = new Set<string>(['none', 'host'])
 const MAX_PENDING_PERMISSIONS = 128
 const MAX_ANSWERED_PERMISSIONS = 128
@@ -111,7 +111,7 @@ export function codex(options: CodexOptions): AgentDriver {
   if (options.model !== undefined && (typeof options.model !== 'string' || !options.model)) throw new TypeError('Codex model must be a nonempty string')
   if (options.reasoningEffort !== undefined) requireEffort(options.reasoningEffort)
   if (!SANDBOXES.has(options.sandbox)) throw new TypeError('Codex sandbox must be read-only, workspace-write, or danger-full-access')
-  if (!APPROVAL_POLICIES.has(options.approvalPolicy)) throw new TypeError('Codex approvalPolicy must be never, on-request, or untrusted')
+  if (!APPROVAL_POLICIES.has(options.approvalPolicy)) throw new TypeError('Codex approvalPolicy must be never, on-request, on-failure, or untrusted')
   if (!PERMISSION_PROMPTS.has(options.permissionPrompts)) throw new TypeError('Codex permissionPrompts must be none or host')
   if (options.onRuntimeRequest !== undefined && typeof options.onRuntimeRequest !== 'function') throw new TypeError('Codex onRuntimeRequest must be a function')
   const keeper = requireKeeper(options.keeper)

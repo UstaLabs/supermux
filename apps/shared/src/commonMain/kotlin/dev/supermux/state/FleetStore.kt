@@ -1166,8 +1166,8 @@ class FleetStore(
         appFor(id)?.switchModel(id, model) == true
     suspend fun switchReasoning(id: String, level: String): Boolean =
         appFor(id)?.switchReasoning(id, level) == true
-    fun setPrompts(id: String, enabled: Boolean) {
-        appFor(id)?.setPrompts(id, enabled)
+    fun setPermissionMode(id: String, mode: String) {
+        appFor(id)?.setPermissionMode(id, mode)
     }
     fun respondRequest(sessionId: String, requestId: String, answer: kotlinx.serialization.json.JsonObject) {
         appFor(sessionId)?.respondRequest(sessionId, requestId, answer)

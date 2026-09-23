@@ -26,7 +26,10 @@ function renderOpenCodeConfig(spec: OpenCodeEnvironmentSpec, instructionsPath: s
   if (instructionsPath) config.instructions = [instructionsPath]
   if (spec.pluginPaths.length) config.plugin = spec.pluginPaths
   if (spec.skillsPaths.length) config.skills = { paths: spec.skillsPaths }
-  if (spec.permissions === "ask") config.permission = { edit: "ask", bash: "ask", webfetch: "ask" }
+  const p = spec.permissions
+  if (p.edit !== "allow" || p.bash !== "allow" || p.webfetch !== "allow") {
+    config.permission = { edit: p.edit, bash: p.bash, webfetch: p.webfetch }
+  }
   return JSON.stringify(config, null, 2) + "\n"
 }
 

@@ -32,12 +32,13 @@ function persistNativeId(
 
 function createBoundAdapter(opts: {
   handle: HostHandle
-  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
+  reregister: (fields: { model?: string; permissionMode?: string }) => HostHandle
   core: Core
   id: string
   sessionName: string
   workdir: string
   model?: string
+  permissionMode?: string
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
@@ -50,6 +51,7 @@ function createBoundAdapter(opts: {
     sessionName: opts.sessionName,
     workdir: opts.workdir,
     model: opts.model,
+    permissionMode: opts.permissionMode,
     initialSessionId: opts.initialSessionId,
     persistSessionId: opts.persistSessionId,
     resolveAttachment: opts.resolveAttachment,
@@ -63,7 +65,7 @@ function prepareExtra(opts: {
   workdir: string
   nativeSessionId?: string
   model?: string
-  prompts?: boolean
+  permissionMode?: string
 }): CursorPrepareExtra {
   return {
     sessionHome: opts.sessionHome,
@@ -73,7 +75,7 @@ function prepareExtra(opts: {
     cwd: opts.workdir,
     nativeSessionId: opts.nativeSessionId,
     model: opts.model,
-    prompts: opts.prompts,
+    permissionMode: opts.permissionMode,
   }
 }
 
@@ -102,7 +104,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
       reregister: (fields) => host.register({
         id,
         env: {},
-        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: fields.model, prompts: fields.prompts }),
+        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: fields.model, permissionMode: fields.permissionMode }),
       }),
       core: host.core,
       id,
@@ -199,7 +201,7 @@ export async function resumeCursorSession(
           workdir: session.workdir,
           nativeSessionId: initialSessionId,
           model: fields.model,
-          prompts: fields.prompts,
+          permissionMode: fields.permissionMode,
         }),
       }),
       core: host.core,

@@ -28,6 +28,7 @@ import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from
 import { listBranches, switchBranch } from "../../core/git/branches"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
+import { permissionCatalog } from "../../core/agents/permission-modes"
 import type { SlashCommand } from "../../core/slash-commands/types"
 import type { UpdateChecker } from "../../core/update/checker"
 import { detectUpdateMode } from "../../core/update/mode"
@@ -165,7 +166,7 @@ export interface SessionSnapshot {
   role?: "personal_assistant" | "worker"
   isDefault?: boolean
   model?: string
-  prompts?: boolean
+  permissionMode?: string
   session_branch?: string
   repo_root?: string
   git?: import("../../core/worktree/lite-status").GitLiteStatus
@@ -214,7 +215,7 @@ export interface WebChannelOpts {
   // resolves the levels an agent+model offers before spawn. Codex's are per-model.
   getReasoningLevels?: (agent: AgentKind, model?: string) => { agent: string; levels: { id: string; description?: string }[]; visible: boolean }
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
-  switchPrompts?: (id: string, enabled: boolean) => Promise<{ ok: true; status: "applied" } | { ok: false; error: string }>
+  switchPermissionMode?: (id: string, mode: string) => Promise<{ ok: true; status: "applied" } | { ok: false; error: string }>
   getSessionRequests?: (id: string) => unknown[]
   respondRequest?: (sessionId: string, requestId: string, answer: unknown) => Promise<{ ok: true } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
@@ -1022,7 +1023,8 @@ export class WebChannel implements Channel {
         const sessionKey = s.id ?? s.name
         requests[sessionKey] = this.opts.getSessionRequests?.(sessionKey) ?? []
       }
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests }))
+      const permissionModes = permissionCatalog()
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests, permissionModes }))
       return
     }
     if (frame.type === "ping") {
@@ -1127,12 +1129,12 @@ export class WebChannel implements Channel {
       this.broadcastToOthers({ type: "draft_clear", session: frame.session }, ws)
       return
     }
-    if (frame.type === "set_prompts" && frame.session && typeof frame.enabled === "boolean") {
-      if (!this.opts.switchPrompts) {
-        ws.send(JSON.stringify({ type: "error", reason: "prompts not available" }))
+    if (frame.type === "set_permission_mode" && frame.session && typeof frame.mode === "string") {
+      if (!this.opts.switchPermissionMode) {
+        ws.send(JSON.stringify({ type: "error", reason: "permission mode not available" }))
         return
       }
-      const result = await this.opts.switchPrompts(frame.session, frame.enabled)
+      const result = await this.opts.switchPermissionMode(frame.session, frame.mode)
       if (!result.ok) ws.send(JSON.stringify({ type: "error", reason: result.error }))
       return
     }

@@ -48,13 +48,13 @@ function persistNativeId(
 
 function createBoundAdapter(opts: {
   handle: HostHandle
-  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
+  reregister: (fields: { model?: string; permissionMode?: string }) => HostHandle
   core: Core
   id: string
   sessionName: string
   workdir: string
   model?: string
-  prompts?: boolean
+  permissionMode?: string
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
@@ -62,7 +62,7 @@ function createBoundAdapter(opts: {
   return new CoreAdapter(OPENCODE_CORE_PROFILE, {
     handle: opts.handle,
     reregister: opts.reregister,
-    prompts: opts.prompts,
+    permissionMode: opts.permissionMode,
     core: opts.core,
     id: opts.id,
     sessionName: opts.sessionName,
@@ -81,7 +81,7 @@ function prepareExtra(opts: {
   workdir: string
   nativeSessionId?: string
   model?: string
-  prompts?: boolean
+  permissionMode?: string
 }): OpenCodePrepareExtra {
   return {
     sessionHome: opts.sessionHome,
@@ -91,7 +91,7 @@ function prepareExtra(opts: {
     cwd: opts.workdir,
     nativeSessionId: opts.nativeSessionId,
     model: opts.model,
-    prompts: opts.prompts === true,
+    permissionMode: opts.permissionMode,
   }
 }
 
@@ -120,7 +120,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
       reregister: (fields) => host.register({
         id,
         env: {},
-        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: fields.model, prompts: fields.prompts }),
+        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: fields.model, permissionMode: fields.permissionMode }),
       }),
       core: host.core,
       id,
@@ -186,7 +186,7 @@ export async function resumeOpenCodeSession(
     onOpenCodeSessionId?: (name: string, sid: string) => void
     opencodeHost?: OpenCodeCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; prompts?: boolean },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; permissionMode?: string },
 ): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.opencodeHost)
   const sessionHome = session.agent_home
@@ -201,7 +201,7 @@ export async function resumeOpenCodeSession(
       workdir: session.workdir,
       nativeSessionId: initialSessionId,
       model: session.model,
-      prompts: session.prompts,
+      permissionMode: session.permissionMode ?? undefined,
     }),
   })
   let adapter: CoreAdapter | undefined
@@ -218,7 +218,7 @@ export async function resumeOpenCodeSession(
           workdir: session.workdir,
           nativeSessionId: initialSessionId,
           model: fields.model,
-          prompts: fields.prompts,
+          permissionMode: fields.permissionMode,
         }),
       }),
       core: host.core,
@@ -226,7 +226,7 @@ export async function resumeOpenCodeSession(
       sessionName: session.name,
       workdir: session.workdir,
       model: session.model,
-      prompts: session.prompts,
+      permissionMode: session.permissionMode ?? undefined,
       initialSessionId,
       persistSessionId: persistNativeId(deps.onOpenCodeSessionId, session.name),
       resolveAttachment: deps.resolveAttachment,
@@ -280,6 +280,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onOpenCodeSessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       opencodeHost: ctx.opencodeHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, prompts: session.prompts },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, permissionMode: session.permissionMode ?? undefined },
   )
 }

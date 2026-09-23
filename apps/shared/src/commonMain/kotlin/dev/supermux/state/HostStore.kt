@@ -212,6 +212,8 @@ class HostStore(
         _state.map { it.requests }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val lastError: StateFlow<String?> =
         _state.map { it.lastError }.stateIn(projectionScope, SharingStarted.Eagerly, null)
+    val permissionModes: StateFlow<Map<String, List<dev.supermux.proto.PermissionModeInfo>>> =
+        _state.map { it.permissionModes }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val agentState: StateFlow<Map<String, AgentStatus>> =
         _state.map { it.agentState }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> =
@@ -1870,10 +1872,10 @@ class HostStore(
         return ok
     }
 
-    fun setPrompts(id: String, enabled: Boolean) {
-        patchSession(id) { it.copy(prompts = enabled) }
+    fun setPermissionMode(id: String, mode: String) {
+        patchSession(id) { it.copy(permissionMode = mode) }
         stateScope.launch {
-            runApi("setPrompts") { sendFrame(ClientFrame.SetPrompts(id, enabled)) }
+            runApi("setPermissionMode") { sendFrame(ClientFrame.SetPermissionMode(id, mode)) }
         }
     }
 

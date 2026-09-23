@@ -272,7 +272,7 @@ class HostReducerTest {
 
     @Test fun sessionStatePatchesPrompts() {
         val s = HostState(sessions = listOf(sessionFixture("s1")))
-        val out = reduceHostFrame(s, ServerFrame.SessionState(session = "s1", prompts = true))
-        assertEquals(true, out.sessions.single().prompts)
+        val out = reduceHostFrame(s, ServerFrame.SessionState(session = "s1", permissionMode = "ask"))
+        assertEquals("ask", out.sessions.single().permissionMode)
     }
 }

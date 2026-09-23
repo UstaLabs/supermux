@@ -47,8 +47,10 @@ export type SessionRecord = {
   session_branch?: string
   finish_job?: FinishJob
   self_renamed?: boolean
-  /** Opt-in permission prompts (default false = auto-approve). */
+  /** Opt-in permission prompts (legacy; unused after 033). */
   prompts: boolean
+  /** Catalog id from permission-modes.ts; undefined/null = agent default. */
+  permissionMode?: string | null
   /** 1 = Core-backed worker (no tmux/hooks/tailer). */
   core: boolean
   user_status: UserStatus
@@ -88,6 +90,7 @@ export type SessionRow = {
   finish_job: string | null
   self_renamed: number
   prompts: number
+  permission_mode: string | null
   core: number
   user_status?: string
   sort_order?: number
@@ -133,6 +136,7 @@ export function rowToRecord(row: SessionRow): SessionRecord {
     finish_job: row.finish_job ? JSON.parse(row.finish_job) : undefined,
     self_renamed: row.self_renamed === 1,
     prompts: row.prompts === 1,
+    permissionMode: row.permission_mode ?? undefined,
     core: row.core === 1,
     user_status: (row.user_status as UserStatus) ?? "in_progress",
     sort_order: row.sort_order ?? 0,

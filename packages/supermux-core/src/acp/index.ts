@@ -80,6 +80,24 @@ function sameRpcId(a: unknown, b: unknown) {
   return a === b || (a != null && b != null && String(a) === String(b))
 }
 
+/** A `session/new|load|resume` result may describe select options (OpenCode/Cursor `model`, Cursor `mode`). */
+type ConfigOption = { id: string; type?: string; options?: { value: string; name?: string }[] }
+function readConfigOptions(result: unknown): ConfigOption[] {
+  const raw = (result as { configOptions?: unknown } | null)?.configOptions
+  if (!Array.isArray(raw)) return []
+  return raw.filter((o): o is ConfigOption => !!o && typeof o === 'object' && typeof (o as ConfigOption).id === 'string')
+}
+/** Callers name models the way pickers list them (`claude-opus-5-5`, `auto`); a select option's wire VALUE
+ * may carry parameters (`claude-opus-5-5[context=300k,…]`, `default[]` for Auto). Match by value first, then
+ * by the option's display name (case-insensitive); anything else is sent as given so the agent reports it. */
+function resolveConfigValue(configOptions: ConfigOption[], configId: string, value: string): string {
+  const option = configOptions.find(o => o.id === configId)
+  if (!option?.options?.length) return value
+  if (option.options.some(o => o.value === value)) return value
+  const byName = option.options.find(o => typeof o.name === 'string' && o.name.toLowerCase() === value.toLowerCase())
+  return byName ? byName.value : value
+}
+
 export function acp(options: AcpOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('ACP options are required')
   for (const field of ['id', 'command', 'args', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'captureStderr'] as const) {
@@ -148,6 +166,7 @@ export function acp(options: AcpOptions): AgentDriver {
     let closed = false
     let runtimeReady = false
     let agentSessionId = ''
+    let configOptions: ConfigOption[] = []
     const nativePermission = new Map<string, AbortController>()
     let latestNativeId: string | undefined
     let ownedUsedNative = false
@@ -463,7 +482,8 @@ export function acp(options: AcpOptions): AgentDriver {
         // from configure.
         const metaCfg = io.welcome.meta.sessionConfig
         const applied: Record<string, unknown> = metaCfg && typeof metaCfg === 'object' && !Array.isArray(metaCfg) ? metaCfg as Record<string, unknown> : {}
-        const wanted = options.sessionConfig ?? {}
+        const rememberedOptions = Array.isArray(io.welcome.meta.configOptions) ? io.welcome.meta.configOptions as ConfigOption[] : []
+        const wanted = Object.fromEntries(Object.entries(options.sessionConfig ?? {}).map(([k, v]) => [k, resolveConfigValue(rememberedOptions, k, v)]))
         const changed = Object.entries(wanted).filter(([k, v]) => applied[k] !== v)
         if (changed.length && (io.welcome.meta.liveActivity as unknown[] | undefined)?.length) {
           throw new CoreError('session_busy', 'Cannot change session config while the re-attached agent has live work')
@@ -492,16 +512,30 @@ export function acp(options: AcpOptions): AgentDriver {
       const params = { cwd: session.cwd, mcpServers: options.mcpServers }
       if (session.resumeId) {
         agentSessionId = session.resumeId
-        if (canResume) await setup(connection.resumeSession({ ...params, sessionId: agentSessionId }))
+        if (canResume) configOptions = readConfigOptions(await setup(connection.resumeSession({ ...params, sessionId: agentSessionId })))
         else if (canLoad) {
           replay = true
-          try { await setup(connection.loadSession({ ...params, sessionId: agentSessionId })) } finally { replay = false }
+          try { configOptions = readConfigOptions(await setup(connection.loadSession({ ...params, sessionId: agentSessionId }))) } finally { replay = false }
         } else throw new UnsupportedOperation('resume', options.id)
-      } else agentSessionId = (await setup(connection.newSession(params))).sessionId
-      for (const [configId, value] of Object.entries(options.sessionConfig ?? {})) {
-        await setup(connection.setSessionConfigOption({ sessionId: agentSessionId, configId, value }))
+      } else {
+        const created = await setup(connection.newSession(params))
+        agentSessionId = created.sessionId
+        configOptions = readConfigOptions(created)
       }
-      io.setMeta({ agentSessionId, ...(options.sessionConfig ? { sessionConfig: { ...options.sessionConfig } } : {}) })
+      // load/resume results carry no option lists (Cursor), so a caller's picker-style
+      // value could not be resolved on a resumed session. A turn-less session/new is
+      // cheap and never persisted by these agents: use it only to read the lists.
+      // A fresh session/new that advertised nothing means the agent has no lists.
+      if (session.resumeId && configOptions.length === 0 && Object.keys(options.sessionConfig ?? {}).length > 0) {
+        configOptions = readConfigOptions(await setup(connection.newSession(params)))
+      }
+      const appliedConfig: Record<string, string> = {}
+      for (const [configId, value] of Object.entries(options.sessionConfig ?? {})) {
+        const resolved = resolveConfigValue(configOptions, configId, value)
+        await setup(connection.setSessionConfigOption({ sessionId: agentSessionId, configId, value: resolved }))
+        appliedConfig[configId] = resolved
+      }
+      io.setMeta({ agentSessionId, ...(options.sessionConfig ? { sessionConfig: appliedConfig } : {}), ...(configOptions.length ? { configOptions } : {}) })
       finishSetup()
       runtimeReady = true
       const normalizer = createAcpNormalizer()

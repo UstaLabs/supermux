@@ -62,6 +62,7 @@ import { getUsageStore, isUsageProvider } from "./core/usage/store"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
+import { resolvePermissionMode } from "./core/agents/permission-modes"
 import { writeRpcWorkerMcpConfig } from "./core/session-manager/trust"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
@@ -1451,7 +1452,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         isDefault: s.is_default,
         model: s.model,
         reasoningLevel: s.reasoningLevel,
-        prompts: !!s.prompts,
+        permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
@@ -1546,10 +1547,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (!s) return { ok: false, error: "session not found" }
       return switchSessionReasoningLevel(s.id, reasoningLevel, { applyNow })
     },
-    switchPrompts: async (id, enabled) => {
+    switchPermissionMode: async (id, mode) => {
       const s = registry.get(id)
       if (!s) return { ok: false, error: "session not found" }
-      return sessionManager.switchPrompts(s.id, enabled)
+      return sessionManager.switchPermissionMode(s.id, mode)
     },
     getSessionRequests: (id) => {
       const s = registry.get(id)
@@ -2692,7 +2693,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       listModels: (agent: AgentKind) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
       switchModel: switchSessionModel,
       switchReasoningLevel: switchSessionReasoningLevel,
-      switchPrompts: (id: string, enabled: boolean) => sessionManager.switchPrompts(id, enabled),
+      switchPermissionMode: (id: string, mode: string) => sessionManager.switchPermissionMode(id, mode),
       listReasoningLevels: (agent: AgentKind, model?: string) =>
         supportedReasoningLevels(agent, lookupModels(agent), model),
       resolveReasoningLevel: (sessionName: string) => {

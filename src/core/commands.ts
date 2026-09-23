@@ -6,6 +6,7 @@ import { fetchAllUsage, type UsageResponse } from "./usage/index"
 import { formatUsageTelegram } from "./usage/format"
 import { getUsageStore } from "./usage/store"
 import { AGENT_KINDS, AgentKind, isAgentKind, spawnCommandForAgent } from "../shared/agents"
+import { formatModesList, isPermissionMode, resolvePermissionMode } from "./agents/permission-modes"
 import { buildProxyPublicUrl } from "../channels/web/proxy"
 
 export type CommandCtx = {
@@ -19,7 +20,7 @@ export type CommandCtx = {
   listModels?: (agent: AgentKind) => { id: string; displayName: string }[]
   switchModel?: (sessionId: string, model: string) => Promise<{ ok: true } | { ok: false; error: string }>
   switchReasoningLevel?: (sessionId: string, level: string) => Promise<{ ok: true } | { ok: false; error: string }>
-  switchPrompts?: (sessionId: string, enabled: boolean) => Promise<{ ok: true } | { ok: false; error: string }>
+  switchPermissionMode?: (sessionId: string, mode: string) => Promise<{ ok: true } | { ok: false; error: string }>
   listReasoningLevels?: (agent: AgentKind, model?: string) => { id: string; description?: string }[]
   resolveReasoningLevel?: (sessionId: string) => string | undefined
   proxyBaseDomain?: string
@@ -63,7 +64,7 @@ export async function handleSlash(input: SlashInput, ctx: CommandCtx): Promise<S
     case "grant_orchestrate": return cmdGrantOrch(input.rest, ctx)
     case "model":             return cmdModel(input.rest, ctx)
     case "effort":            return cmdEffort(input.rest, ctx)
-    case "prompts":           return cmdPrompts(input.rest, ctx)
+    case "permissions":       return cmdPermissions(input.rest, ctx)
     case "usage":            return cmdUsage(ctx)
     case "proxy":             return cmdProxy(input.rest, ctx)
     case "unproxy":           return cmdUnproxy(input.rest, ctx)
@@ -397,70 +398,61 @@ async function cmdEffort(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   return { text: `${session.name}: effort set to ${level}` }
 }
 
-async function cmdPrompts(rest: string, ctx: CommandCtx): Promise<SlashReply> {
+async function cmdPermissions(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   const parts = rest.trim().split(/\s+/).filter(Boolean)
+
+  const listFor = (session: { name: string; agent: typeof session extends never ? never : import("../shared/agents").AgentKind; permissionMode?: string | null }) => {
+    const current = resolvePermissionMode(session.agent, session.permissionMode)
+    return { text: `${session.name}\n${formatModesList(session.agent, current)}` }
+  }
 
   if (parts.length === 0) {
     const activeId = ctx.registry.getActive(ctx.chat_id)
     if (!activeId) return { text: "no active session" }
     const session = ctx.registry.get(activeId)
     if (!session) return { text: "no active session" }
-    const state = session.prompts ? "on" : "off"
-    return { text: `${session.name} [${session.agent}]: prompts ${state}\nUse /prompts on|off to switch.` }
-  }
-
-  const parseFlag = (raw: string): boolean | undefined => {
-    const v = raw.toLowerCase()
-    if (v === "on" || v === "true" || v === "1") return true
-    if (v === "off" || v === "false" || v === "0") return false
-    return undefined
+    return listFor(session)
   }
 
   if (parts.length === 2) {
-    const flagFirst = parseFlag(parts[0]!)
-    const flagSecond = parseFlag(parts[1]!)
     const sessionFromSecond = ctx.registry.get(parts[1]!) ?? ctx.registry.resolveName(parts[1]!)
     const sessionFromFirst = ctx.registry.get(parts[0]!) ?? ctx.registry.resolveName(parts[0]!)
-    if (flagFirst !== undefined && sessionFromSecond) {
-      return applyPrompts(sessionFromSecond.id, sessionFromSecond.name, sessionFromSecond.agent, flagFirst, ctx)
-    }
-    if (flagSecond !== undefined && sessionFromFirst) {
-      return applyPrompts(sessionFromFirst.id, sessionFromFirst.name, sessionFromFirst.agent, flagSecond, ctx)
-    }
-    return { text: "usage: /prompts on|off [session]" }
+    if (sessionFromSecond) return applyPermissionMode(sessionFromSecond.id, sessionFromSecond.name, sessionFromSecond.agent, parts[0]!, ctx)
+    if (sessionFromFirst) return applyPermissionMode(sessionFromFirst.id, sessionFromFirst.name, sessionFromFirst.agent, parts[1]!, ctx)
+    return { text: "usage: /permissions <id> [session]" }
   }
 
   const sessionByName = ctx.registry.get(parts[0]!) ?? ctx.registry.resolveName(parts[0]!)
-  const enabled = parseFlag(parts[0]!)
-  if (enabled === undefined) {
-    if (sessionByName) {
-      const state = sessionByName.prompts ? "on" : "off"
-      return { text: `${sessionByName.name} [${sessionByName.agent}]: prompts ${state}\nUse /prompts on|off to switch.` }
-    }
-    return { text: "usage: /prompts on|off [session]" }
+  if (sessionByName && !isPermissionMode(sessionByName.agent, parts[0]!)) {
+    return listFor(sessionByName)
   }
 
   const activeId = ctx.registry.getActive(ctx.chat_id)
   if (!activeId) return { text: "no active session" }
   const session = ctx.registry.get(activeId)
   if (!session) return { text: "no active session" }
-  return applyPrompts(activeId, session.name, session.agent, enabled, ctx)
+  return applyPermissionMode(activeId, session.name, session.agent, parts[0]!, ctx)
 }
 
-async function applyPrompts(
+async function applyPermissionMode(
   sessionId: string,
   name: string,
-  agent: string,
-  enabled: boolean,
+  agent: import("../shared/agents").AgentKind,
+  mode: string,
   ctx: CommandCtx,
 ): Promise<SlashReply> {
-  if (ctx.switchPrompts) {
-    const result = await ctx.switchPrompts(sessionId, enabled)
-    if (!result.ok) return { text: `prompts switch failed: ${result.error}` }
-    return { text: `${name}: prompts ${enabled ? "on" : "off"}` }
+  if (!isPermissionMode(agent, mode)) {
+    const session = ctx.registry.get(sessionId)
+    const current = resolvePermissionMode(agent, session?.permissionMode)
+    return { text: `unknown mode ${mode}\n${formatModesList(agent, current)}` }
   }
-  ctx.registry.setPrompts(sessionId, enabled)
-  return { text: `${name}: prompts ${enabled ? "on" : "off"}` }
+  if (ctx.switchPermissionMode) {
+    const result = await ctx.switchPermissionMode(sessionId, mode)
+    if (!result.ok) return { text: `permissions switch failed: ${result.error}` }
+    return { text: `${name}: permissions ${mode}` }
+  }
+  ctx.registry.setPermissionMode(sessionId, mode)
+  return { text: `${name}: permissions ${mode}` }
 }
 
 function cmdShow(rest: string, ctx: CommandCtx): SlashReply {

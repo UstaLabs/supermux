@@ -36,7 +36,7 @@ function prepareExtra(opts: {
   nativeSessionId?: string
   model?: string
   effort?: string
-  prompts?: boolean
+  permissionMode?: string
   pa?: boolean
   rpcMcpConfig?: string
 }): ClaudePrepareExtra {
@@ -49,7 +49,7 @@ function prepareExtra(opts: {
     nativeSessionId: opts.nativeSessionId,
     model: opts.model,
     effort: opts.effort,
-    prompts: opts.prompts === true,
+    permissionMode: opts.permissionMode,
     pa: opts.pa === true,
     rpcMcpConfig: opts.rpcMcpConfig,
   }
@@ -57,14 +57,14 @@ function prepareExtra(opts: {
 
 function createBoundAdapter(opts: {
   handle: HostHandle
-  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
+  reregister: (fields: { model?: string; permissionMode?: string }) => HostHandle
   core: Core
   id: string
   sessionName: string
   workdir: string
   model?: string
   effort?: string
-  prompts?: boolean
+  permissionMode?: string
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
@@ -78,7 +78,7 @@ function createBoundAdapter(opts: {
     workdir: opts.workdir,
     model: opts.model,
     effort: opts.effort,
-    prompts: opts.prompts,
+    permissionMode: opts.permissionMode,
     initialSessionId: opts.initialSessionId,
     persistSessionId: opts.persistSessionId,
     resolveAttachment: opts.resolveAttachment,
@@ -95,7 +95,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   const sessionHome = claudeSessionHome(name)
   const extra = prepareExtra({
     id, sessionName: name, sessionHome, workdir: args.workdir,
-    model: args.model, effort: args.effort, prompts: false,
+    model: args.model, effort: args.effort,
     pa: !!args.pa, rpcMcpConfig: args.rpcMcpConfig,
   })
   const handle = host.register({
@@ -113,7 +113,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         env: {},
         extra: prepareExtra({
           id, sessionName: name, sessionHome, workdir: args.workdir,
-          model: fields.model ?? args.model, effort: args.effort, prompts: fields.prompts,
+          model: fields.model ?? args.model, effort: args.effort, permissionMode: fields.permissionMode,
           pa: !!args.pa, rpcMcpConfig: args.rpcMcpConfig,
         }),
       }),
@@ -182,7 +182,7 @@ export async function resumeClaudeSession(
     model?: string
     effort?: string
     agent_session_id?: string
-    prompts?: boolean
+    permissionMode?: string
     pa?: boolean
     rpcMcpConfig?: string
   },
@@ -198,7 +198,7 @@ export async function resumeClaudeSession(
     nativeSessionId: initialSessionId,
     model: session.model,
     effort: session.effort,
-    prompts: session.prompts,
+    permissionMode: session.permissionMode,
     pa: session.pa,
     rpcMcpConfig: session.rpcMcpConfig,
   })
@@ -218,7 +218,7 @@ export async function resumeClaudeSession(
           nativeSessionId: initialSessionId,
           model: fields.model ?? session.model,
           effort: session.effort,
-          prompts: fields.prompts,
+          permissionMode: fields.permissionMode,
           pa: session.pa,
           rpcMcpConfig: session.rpcMcpConfig,
         }),
@@ -229,7 +229,7 @@ export async function resumeClaudeSession(
       workdir: session.workdir,
       model: session.model,
       effort: session.effort,
-      prompts: session.prompts,
+      permissionMode: session.permissionMode ?? undefined,
       initialSessionId,
       persistSessionId: persistNativeId(deps.onClaudeSessionId, session.name),
       resolveAttachment: deps.resolveAttachment,
@@ -289,7 +289,7 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       model: session.model,
       effort: ctx.sessionEffort(session),
       agent_session_id: session.agent_session_id,
-      prompts: session.prompts,
+      permissionMode: session.permissionMode ?? undefined,
       pa: session.role === "personal_assistant",
     },
   )

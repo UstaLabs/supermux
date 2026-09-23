@@ -7,6 +7,7 @@ import { grokInstructions } from "./preamble-writer"
 import { grokConfigEntries } from "../../plugins"
 import { muxShimServer } from "../mux-shim-server"
 import { HOME } from "../../session-manager/spawn-helper"
+import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 
 export type GrokDriverFactory = (options: GrokOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -26,10 +27,10 @@ export type GrokPrepareExtra = {
   workdir: string
   cwd: string
   nativeSessionId?: string
-  prompts?: boolean
+  permissionMode?: string
 }
 
-function grokOpts(stateDirectory: string, env: Record<string, string>, prompts: boolean): GrokOptions {
+function grokOpts(stateDirectory: string, env: Record<string, string>, alwaysApprove: boolean): GrokOptions {
   return {
     id: "grok",
     command: "grok",
@@ -38,7 +39,7 @@ function grokOpts(stateDirectory: string, env: Record<string, string>, prompts: 
     inheritEnv: true,
     mcpServers: [],
     noLeader: false,
-    alwaysApprove: !prompts,
+    alwaysApprove,
     setupTimeoutMs: 30_000,
     shutdownTimeoutMs: 2_000,
     maxFrameBytes: 16 * 1024 * 1024,
@@ -73,7 +74,7 @@ function asPrepareExtra(registration: HostRegistration): GrokPrepareExtra {
     workdir,
     cwd,
     nativeSessionId: typeof native === "string" ? native : undefined,
-    prompts: extra.prompts === true,
+    permissionMode: extraPermissionMode(extra, "grok"),
   }
 }
 
@@ -86,8 +87,9 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "grok",
     driver: (registration, ctx) => {
-      const prompts = registration.extra?.prompts === true
-      const opts = grokOpts(stateDirectory, registration.env, prompts)
+      const settings = driverSettingsFor("grok", extraPermissionMode(registration.extra, "grok"))
+      if (settings.agent !== "grok") throw new Error("grok driver settings mismatch")
+      const opts = grokOpts(stateDirectory, registration.env, settings.alwaysApprove)
       const overrides: SessionConfiguration = ctx.configuration ? { ...ctx.configuration } : {}
       return factory ? factory(opts, overrides) : grok(opts)
     },

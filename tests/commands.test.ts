@@ -348,28 +348,29 @@ describe("proxy commands", () => {
   })
 })
 
-test("/prompts with no args shows current for active session", async () => {
+test("/permissions with no args lists modes for active session", async () => {
   r.setActive("chat-1", anaId)
-  const result = await handleSlash({ command: "prompts", rest: "" }, ctx)
-  expect(result.text).toContain("prompts off")
+  const result = await handleSlash({ command: "permissions", rest: "" }, ctx)
+  expect(result.text).toContain("bypass")
+  expect(result.text).toContain("ask")
 })
 
-test("/prompts on switches active session", async () => {
+test("/permissions ask switches active session", async () => {
   r.setActive("chat-1", anaId)
-  const result = await handleSlash({ command: "prompts", rest: "on" }, ctx)
-  expect(result.text).toContain("prompts on")
-  expect(r.get(anaId)?.prompts).toBe(true)
+  const result = await handleSlash({ command: "permissions", rest: "ask" }, ctx)
+  expect(result.text).toContain("permissions ask")
+  expect(r.get(anaId)?.permissionMode).toBe("ask")
 })
 
-test("/prompts on session name", async () => {
-  const result = await handleSlash({ command: "prompts", rest: "on zoom" }, ctx)
-  expect(r.get(zoomId)?.prompts).toBe(true)
+test("/permissions id session name", async () => {
+  const result = await handleSlash({ command: "permissions", rest: "ask zoom" }, ctx)
+  expect(r.get(zoomId)?.permissionMode).toBe("ask")
   expect(result.text).toContain("zoom")
 })
 
-test("/prompts on cursor session succeeds", async () => {
-  const cur = r.register({ name: "curs", workdir: "/c", pid: 9, agent: "cursor" })
-  const result = await handleSlash({ command: "prompts", rest: `on ${cur.name}` }, ctx)
-  expect(result.text).toContain("prompts on")
-  expect(r.get(cur.id)?.prompts).toBe(true)
+test("/permissions unknown id lists modes", async () => {
+  r.setActive("chat-1", anaId)
+  const result = await handleSlash({ command: "permissions", rest: "nope" }, ctx)
+  expect(result.text).toContain("unknown mode")
+  expect(result.text).toContain("bypass")
 })

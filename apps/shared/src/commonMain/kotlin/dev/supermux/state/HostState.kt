@@ -39,8 +39,10 @@ data class HostState(
     val projectCatalogKnown: Boolean = false,
     /** Open permission / question prompts keyed by session id. */
     val requests: Map<String, List<PromptRequest>> = emptyMap(),
-    /** Last `{type:"error", reason}` from the broker (prompts toggle, request respond, …). */
+    /** Last `{type:"error", reason}` from the broker (permission mode, request respond, …). */
     val lastError: String? = null,
+    /** Catalog of permission modes per agent (from the snapshot). */
+    val permissionModes: Map<String, List<dev.supermux.proto.PermissionModeInfo>> = emptyMap(),
 )
 
 /** Outcome of adding a location to a persistent project. */

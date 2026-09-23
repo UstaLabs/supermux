@@ -9,6 +9,7 @@ import { muxShimServer } from "../mux-shim-server"
 import { smokeCursorAgent } from "./smoke"
 import { HOME } from "../../session-manager/spawn-helper"
 import { STATE_DIR } from "../../../shared/paths"
+import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 
 export type CursorDriverFactory = (options: CursorOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -36,7 +37,7 @@ export type CursorPrepareExtra = {
   cwd: string
   nativeSessionId?: string
   model?: string
-  prompts?: boolean
+  permissionMode?: string
 }
 
 function cursorOpts(
@@ -44,8 +45,10 @@ function cursorOpts(
   env: Record<string, string>,
   pluginArgs: string[],
   model: string | undefined,
-  prompts: boolean,
+  permissionMode: string,
 ): CursorOptions {
+  const settings = driverSettingsFor("cursor", permissionMode)
+  if (settings.agent !== "cursor") throw new Error("cursor driver settings mismatch")
   return {
     id: "cursor",
     command: "cursor-agent",
@@ -53,7 +56,8 @@ function cursorOpts(
     env,
     inheritEnv: true,
     mcpServers: [],
-    permissions: prompts ? "ask" : "force",
+    permissions: settings.permissions,
+    mode: settings.mode,
     setupTimeoutMs: 120_000,
     shutdownTimeoutMs: 5_000,
     maxFrameBytes: 16 * 1024 * 1024,
@@ -91,7 +95,7 @@ function asPrepareExtra(registration: HostRegistration): CursorPrepareExtra {
     cwd,
     nativeSessionId: typeof native === "string" ? native : undefined,
     model: typeof model === "string" ? model : undefined,
-    prompts: extra.prompts === true,
+    permissionMode: extraPermissionMode(extra, "cursor"),
   }
 }
 
@@ -115,8 +119,7 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
       const extra = asPrepareExtra(registration)
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
       const pluginArgs = cursorSpawnArgs({ sessionName: extra.sessionName }).args
-      const prompts = registration.extra?.prompts === true
-      const opts = cursorOpts(stateDirectory, registration.env, pluginArgs, extraModel ?? ctx.configuration?.model, prompts)
+      const opts = cursorOpts(stateDirectory, registration.env, pluginArgs, extraModel ?? ctx.configuration?.model, extra.permissionMode ?? extraPermissionMode(registration.extra, "cursor"))
       const overrides: SessionConfiguration = ctx.configuration ? { ...ctx.configuration } : {}
       return factory ? factory(opts, overrides) : cursor(opts)
     },

@@ -26,8 +26,8 @@ data class SessionInfo(
     val model: String? = null,
     /** Thinking/effort level (claude/codex); carried on the snapshot + session_state. */
     val reasoningLevel: String? = null,
-    /** Opt-in permission prompts (default false = auto-approve). */
-    val prompts: Boolean = false,
+    /** Catalog permission mode id for this session (resolved; never null on a current broker). */
+    val permissionMode: String? = null,
     val repo_root: String? = null,
     val role: String? = null,
     /** Worktree session's pinned branch (present only for worktree-backed sessions). */
@@ -275,6 +275,14 @@ data class ProjectDto(
 )
 
 @Serializable
+data class PermissionModeInfo(
+    val id: String,
+    val label: String,
+    val description: String,
+    val default: Boolean = false,
+)
+
+@Serializable
 sealed interface ServerFrame {
     @Serializable @SerialName("snapshot")
     data class Snapshot(
@@ -307,6 +315,8 @@ sealed interface ServerFrame {
         /** workspaceId → projectId for active AND archived workspaces. Empty on older brokers. */
         val projectMembership: Map<String, String> = emptyMap(),
         val requests: Map<String, List<PromptRequest>> = emptyMap(),
+        /** Catalog of permission modes per agent so clients do not hardcode labels. */
+        val permissionModes: Map<String, List<PermissionModeInfo>> = emptyMap(),
     ) : ServerFrame
 
     /**
@@ -384,7 +394,7 @@ sealed interface ServerFrame {
         val connected: Boolean? = null,
         val model: String? = null,
         val reasoningLevel: String? = null,
-        val prompts: Boolean? = null,
+        val permissionMode: String? = null,
     ) : ServerFrame
 
     @Serializable @SerialName("agent_state")
@@ -622,8 +632,8 @@ sealed interface ClientFrame {
         val sessions: List<String>? = null,
     ) : ClientFrame
 
-    @Serializable @SerialName("set_prompts")
-    data class SetPrompts(val session: String, val enabled: Boolean) : ClientFrame
+    @Serializable @SerialName("set_permission_mode")
+    data class SetPermissionMode(val session: String, val mode: String) : ClientFrame
 
     @Serializable @SerialName("request_respond")
     data class RequestRespond(

@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
-import type { CodexOptions } from "../../../../packages/supermux-core/src/codex/index.js"
-import { createCodexCoreHost } from "./core-host"
+import type { CursorOptions } from "../../../../packages/supermux-core/src/agents/index.js"
+import { createCursorCoreHost } from "./core-host"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -13,11 +13,11 @@ afterEach(() => {
 
 function fakeDriver(): AgentDriver {
   return {
-    id: "codex",
+    id: "cursor",
     async open() {
       const runtime: AgentRuntime = {
         agentSessionId: "n1",
-        capabilities: { resume: true, steer: true, fork: true, detach: true, configure: true },
+        capabilities: { resume: true, steer: false, fork: false, detach: true },
         async prompt() { return { stopReason: "end_turn" } },
         async interrupt() {},
         async close() {},
@@ -27,48 +27,46 @@ function fakeDriver(): AgentDriver {
   }
 }
 
-test("codex ask-family mode uses on-request/workspace-write/host", async () => {
-  const captured: CodexOptions[] = []
-  const dir = mkdtempSync(join(tmpdir(), "codex-host-"))
+test("cursor default mode is force/agent", async () => {
+  const captured: CursorOptions[] = []
+  const dir = mkdtempSync(join(tmpdir(), "cur-host-"))
   dirs.push(dir)
-  const host = createCodexCoreHost({
+  const host = createCursorCoreHost({
     stateDirectory: dir,
     driverFactory: (options) => {
       captured.push(options)
       return fakeDriver()
     },
+    smoke: async () => {},
+    sharedRuntime: null,
   })
-  const extra = {
-    sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir, permissionMode: "on-request+workspace-write",
-  }
+  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir }
   const handle = host.register({ id: "id1", env: {}, extra })
   await handle.start({ cwd: dir })
-  expect(captured[0]?.approvalPolicy).toBe("on-request")
-  expect(captured[0]?.sandbox).toBe("workspace-write")
-  expect(captured[0]?.permissionPrompts).toBe("host")
+  expect(captured[0]?.permissions).toBe("force")
+  expect(captured[0]?.mode).toBe("agent")
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })
 
-test("codex default mode uses never/full-access/none", async () => {
-  const captured: CodexOptions[] = []
-  const dir = mkdtempSync(join(tmpdir(), "codex-host-"))
+test("cursor ask mode is ask/agent", async () => {
+  const captured: CursorOptions[] = []
+  const dir = mkdtempSync(join(tmpdir(), "cur-host-"))
   dirs.push(dir)
-  const host = createCodexCoreHost({
+  const host = createCursorCoreHost({
     stateDirectory: dir,
     driverFactory: (options) => {
       captured.push(options)
       return fakeDriver()
     },
+    smoke: async () => {},
+    sharedRuntime: null,
   })
-  const extra = {
-    sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: dir, cwd: dir,
-  }
+  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: dir, cwd: dir, permissionMode: "ask" }
   const handle = host.register({ id: "id2", env: {}, extra })
   await handle.start({ cwd: dir })
-  expect(captured[0]?.approvalPolicy).toBe("never")
-  expect(captured[0]?.sandbox).toBe("danger-full-access")
-  expect(captured[0]?.permissionPrompts).toBe("none")
+  expect(captured[0]?.permissions).toBe("ask")
+  expect(captured[0]?.mode).toBe("agent")
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })

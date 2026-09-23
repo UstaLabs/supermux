@@ -7,6 +7,7 @@ import { openCodeInstructions } from "./preamble-writer"
 import { opencodeConfigEntries } from "../../plugins"
 import { muxShimServer } from "../mux-shim-server"
 import { readGlobalProviderConfig } from "./provider-config"
+import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 
 export type OpenCodeDriverFactory = (options: OpenCodeOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -27,7 +28,7 @@ export type OpenCodePrepareExtra = {
   cwd: string
   nativeSessionId?: string
   model?: string
-  prompts?: boolean
+  permissionMode?: string
 }
 
 function opencodeOpts(stateDirectory: string, env: Record<string, string>, model: string | undefined): OpenCodeOptions {
@@ -77,7 +78,7 @@ function asPrepareExtra(registration: HostRegistration): OpenCodePrepareExtra {
     cwd,
     nativeSessionId: typeof native === "string" ? native : undefined,
     model: typeof model === "string" ? model : undefined,
-    prompts: extra.prompts === true,
+    permissionMode: extraPermissionMode(extra, "opencode"),
   }
 }
 
@@ -105,7 +106,11 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
         mcpServers: [muxShimServer("opencode", extra.sessionId, extra.sessionName)],
         skillsPaths,
         pluginPaths,
-        permissions: extra.prompts ? "ask" : "allow",
+        permissions: (() => {
+          const settings = driverSettingsFor("opencode", extra.permissionMode ?? extraPermissionMode(registration.extra, "opencode"))
+          if (settings.agent !== "opencode") throw new Error("opencode driver settings mismatch")
+          return settings.permissions
+        })(),
         provider: readGlobalProviderConfig() ?? null,
         instructions: openCodeInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
         configHome,

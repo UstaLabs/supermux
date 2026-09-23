@@ -37,6 +37,7 @@ import m029 from "./029_walkthroughs.sql" with { type: "text" }
 import m030 from "./030_projects.sql" with { type: "text" }
 import m031 from "./031_prompts.sql" with { type: "text" }
 import m032 from "./032_core.sql" with { type: "text" }
+import m033 from "./033_permission_mode.sql" with { type: "text" }
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "001_init", sql: m001 },
@@ -70,4 +71,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 30, name: "030_projects", sql: m030 },
   { version: 31, name: "031_prompts", sql: m031 },
   { version: 32, name: "032_core", sql: m032 },
+  { version: 33, name: "033_permission_mode", sql: m033 },
 ].sort((a, b) => a.version - b.version)

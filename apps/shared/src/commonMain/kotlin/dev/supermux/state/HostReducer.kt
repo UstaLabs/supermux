@@ -42,6 +42,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 .mapNotNull { s -> s.finish_job?.let { s.id to it } }
                 .toMap(),
             requests = frame.requests,
+            permissionModes = frame.permissionModes,
         )
     }
     is ServerFrame.ProjectsChanged -> state.copy(
@@ -173,7 +174,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 connected = frame.connected ?: s.connected,
                 model = frame.model ?: s.model,
                 reasoningLevel = frame.reasoningLevel ?: s.reasoningLevel,
-                prompts = frame.prompts ?: s.prompts,
+                permissionMode = frame.permissionMode ?: s.permissionMode,
             )
         },
     )

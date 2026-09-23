@@ -94,6 +94,7 @@ export class SessionStore {
       session_branch: input.session_branch,
       self_renamed: false,
       prompts: false,
+      permissionMode: undefined,
       core: input.core ?? false,
       user_status,
       sort_order,
@@ -238,6 +239,13 @@ export class SessionStore {
     if (!session) return
     this.db.run("UPDATE sessions SET prompts = ? WHERE id = ?", [prompts ? 1 : 0, id])
     session.prompts = prompts
+  }
+
+  setPermissionMode(id: string, mode: string | null): void {
+    const session = this.cache.get(id)
+    if (!session) return
+    this.db.run("UPDATE sessions SET permission_mode = ? WHERE id = ?", [mode, id])
+    session.permissionMode = mode ?? undefined
   }
 
   setAgentSessionId(id: string, agentSessionId: string): void {

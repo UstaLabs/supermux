@@ -82,7 +82,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
+
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -129,6 +129,7 @@ import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.effortSpeedometerParams
 import dev.supermux.net.sortEffortLevelsLowToHigh
+import dev.supermux.proto.PermissionModeInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.ui.TestIds
 import dev.supermux.ui.adaptive.LocalPointerAvailable
@@ -564,8 +565,9 @@ fun Composer(
      */
     sessionReasoning: String? = null,
     sessionAgent: String? = null,
-    sessionPrompts: Boolean = false,
-    onSetPrompts: (Boolean) -> Unit = {},
+    permissionModes: List<PermissionModeInfo> = emptyList(),
+    sessionPermissionMode: String? = null,
+    onSetPermissionMode: (String) -> Unit = {},
     onPickModel: (String) -> Unit = {},
     onPickReasoning: (String) -> Unit = {},
     /**
@@ -897,6 +899,7 @@ fun Composer(
     // ── pickers ─────────────────────────────────────────────────────────────────────────
     var modelMenu by remember { mutableStateOf(false) }
     var reasoningMenu by remember { mutableStateOf(false) }
+    var permissionMenu by remember { mutableStateOf(false) }
     LaunchedEffect(openModelPickerNonce) { if (openModelPickerNonce > 0L) modelMenu = true }
     // LIVE session state first, catalog second: `session.model` is kept fresh by session_state
     // frames and by the optimistic write after a pick, while `models.current` is a snapshot of the
@@ -1336,20 +1339,59 @@ fun Composer(
                                     )
                                 }
                             }
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.testTag("prompts-toggle").padding(start = 6.dp),
-                            ) {
-                                Text(
-                                    "Ask before tool calls",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = cs.onSurfaceVariant,
-                                    modifier = Modifier.padding(end = 4.dp),
-                                )
-                                Switch(
-                                    checked = sessionPrompts,
-                                    onCheckedChange = onSetPrompts,
-                                )
+                            if (permissionModes.isNotEmpty()) {
+                                val current = permissionModes.find { it.id == sessionPermissionMode }
+                                    ?: permissionModes.find { it.default }
+                                    ?: permissionModes.first()
+                                Box(Modifier.testTag("permissions-picker").padding(start = 6.dp)) {
+                                    ComposerPill(
+                                        label = "Permissions: ${current.label}",
+                                        testTag = "permissions-pill",
+                                        onClick = { permissionMenu = true },
+                                    )
+                                    if (pointer) {
+                                        DropdownMenu(expanded = permissionMenu, onDismissRequest = { permissionMenu = false }) {
+                                            permissionModes.forEach { mode ->
+                                                DropdownMenuItem(
+                                                    text = {
+                                                        Column {
+                                                            Text(mode.label)
+                                                            Text(
+                                                                mode.description,
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = cs.onSurfaceVariant,
+                                                            )
+                                                        }
+                                                    },
+                                                    trailingIcon = {
+                                                        if (mode.id == current.id) {
+                                                            Icon(
+                                                                Icons.Filled.Check,
+                                                                null,
+                                                                Modifier.size(16.dp),
+                                                                tint = cs.primary,
+                                                            )
+                                                        }
+                                                    },
+                                                    modifier = Modifier.testTag("permissions-${mode.id}"),
+                                                    onClick = {
+                                                        permissionMenu = false
+                                                        onSetPermissionMode(mode.id)
+                                                    },
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                if (!pointer && permissionMenu) {
+                                    PickerSheet(
+                                        title = "Permissions",
+                                        options = permissionModes.map { it.id to "${it.label} — ${it.description}" },
+                                        current = current.id,
+                                        onPick = { onSetPermissionMode(it) },
+                                        onDismiss = { permissionMenu = false },
+                                    )
+                                }
                             }
                         }
 

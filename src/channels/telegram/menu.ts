@@ -39,7 +39,7 @@ const BASE: MenuEntry[] = [
   { command: "grant_orchestrate", description: "Allow a session to orchestrate others" },
   { command: "model",             description: "List or switch model: /model [name]" },
   { command: "effort",            description: "List or switch reasoning effort: /effort [level]" },
-  { command: "prompts",           description: "Opt in to permission prompts: /prompts on|off" },
+  { command: "permissions",       description: "Set permission mode: /permissions [id] [session]" },
   { command: "usage",             description: "Show usage across Claude, Codex, Cursor" },
   { command: "archive",           description: "List archived (killed) sessions" },
   { command: "resume",            description: "Resume an archived session: /resume <name>" },

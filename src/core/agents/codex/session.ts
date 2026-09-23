@@ -62,14 +62,14 @@ function persistNativeId(
 
 function createBoundAdapter(opts: {
   handle: HostHandle
-  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
+  reregister: (fields: { model?: string; permissionMode?: string }) => HostHandle
   core: Core
   id: string
   sessionName: string
   workdir: string
   model?: string
   effort?: string
-  prompts?: boolean
+  permissionMode?: string
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
@@ -83,7 +83,7 @@ function createBoundAdapter(opts: {
     workdir: opts.workdir,
     model: opts.model,
     effort: opts.effort,
-    prompts: opts.prompts,
+    permissionMode: opts.permissionMode,
     initialSessionId: opts.initialSessionId,
     persistSessionId: opts.persistSessionId,
     resolveAttachment: opts.resolveAttachment,
@@ -98,7 +98,7 @@ function prepareExtra(opts: {
   sessionHome: string
   workdir: string
   nativeSessionId?: string
-  prompts?: boolean
+  permissionMode?: string
 }): CodexPrepareExtra {
   return {
     sessionHome: opts.sessionHome,
@@ -107,7 +107,7 @@ function prepareExtra(opts: {
     workdir: opts.workdir,
     cwd: opts.workdir,
     nativeSessionId: opts.nativeSessionId,
-    prompts: opts.prompts === true,
+    permissionMode: opts.permissionMode,
   }
 }
 
@@ -140,7 +140,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         env: {},
         command: resolveCodexCommand({}),
         args: brokerCodexArgs(name),
-        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, prompts: fields.prompts }),
+        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, permissionMode: fields.permissionMode }),
       }),
       core: host.core,
       id,
@@ -214,7 +214,7 @@ export async function resumeCodexSession(
     onThreadId?: (name: string, sid: string) => void
     codexHost?: CodexCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string; prompts?: boolean },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string; permissionMode?: string },
 ): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.codexHost)
   const sessionHome = session.agent_home
@@ -230,7 +230,7 @@ export async function resumeCodexSession(
       sessionHome,
       workdir: session.workdir,
       nativeSessionId: initialSessionId,
-      prompts: session.prompts,
+      permissionMode: session.permissionMode ?? undefined,
     }),
   })
   let adapter: CoreAdapter | undefined
@@ -248,7 +248,7 @@ export async function resumeCodexSession(
           sessionHome,
           workdir: session.workdir,
           nativeSessionId: initialSessionId,
-          prompts: fields.prompts,
+          permissionMode: fields.permissionMode,
         }),
       }),
       core: host.core,
@@ -257,7 +257,7 @@ export async function resumeCodexSession(
       workdir: session.workdir,
       model: session.model,
       effort: session.effort,
-      prompts: session.prompts,
+      permissionMode: session.permissionMode ?? undefined,
       initialSessionId,
       persistSessionId: persistNativeId(deps.onThreadId, session.name),
       resolveAttachment: deps.resolveAttachment,
@@ -307,6 +307,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onThreadId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       codexHost: ctx.codexHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), agent_session_id: session.agent_session_id, prompts: session.prompts },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), agent_session_id: session.agent_session_id, permissionMode: session.permissionMode ?? undefined },
   )
 }

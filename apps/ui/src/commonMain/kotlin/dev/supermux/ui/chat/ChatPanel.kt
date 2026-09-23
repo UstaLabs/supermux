@@ -177,6 +177,7 @@ data class ChatState(
     val walkthroughUnreadStepId: String? = null,
     val requests: List<PromptRequest> = emptyList(),
     val lastError: String? = null,
+    val permissionModes: List<dev.supermux.proto.PermissionModeInfo> = emptyList(),
 )
 
 /**
@@ -202,7 +203,7 @@ class ChatActions(
     /** Session proxies for the header's links slot. */
     val loadProxies: suspend () -> List<ProxyDto> = { emptyList() },
     val respondRequest: (requestId: String, answer: JsonObject) -> Unit = { _, _ -> },
-    val setPrompts: (Boolean) -> Unit = {},
+    val setPermissionMode: (String) -> Unit = {},
 )
 
 /** [ChatActions] wired to a [HostStore] for one session — desktop's ergonomics, kept. */
@@ -231,7 +232,7 @@ fun rememberChatActions(
             ensureMessagesLoaded = { app.ensureMessagesLoaded(session.id) },
             loadProxies = loadProxies ?: { app.proxies() },
             respondRequest = { requestId, answer -> app.respondRequest(session.id, requestId, answer) },
-            setPrompts = { enabled -> app.setPrompts(session.id, enabled) },
+            setPermissionMode = { mode -> app.setPermissionMode(session.id, mode) },
         )
     }
 }
@@ -249,6 +250,9 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val walkthrough = app.walkthroughState<WalkthroughState>(sessionId)
     val requestsMap by app.requests.collectAsState()
     val lastError by app.lastError.collectAsState()
+    val permissionModesMap by app.permissionModes.collectAsState()
+    val sessions by app.sessions.collectAsState()
+    val sessionAgent = sessions.find { it.id == sessionId }?.agent
     return ChatState(
         messages = messagesMap[sessionId].orEmpty(),
         activity = activityMap[sessionId].orEmpty(),
@@ -261,6 +265,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         walkthroughUnreadStepId = walkthrough.unreadStepId,
         requests = requestsMap[sessionId].orEmpty(),
         lastError = lastError,
+        permissionModes = sessionAgent?.let { permissionModesMap[it] }.orEmpty(),
     )
 }
 
@@ -656,8 +661,9 @@ fun ChatPanel(
                 sessionModel = session.model,
                 sessionReasoning = session.reasoningLevel,
                 sessionAgent = session.agent,
-                sessionPrompts = session.prompts,
-                onSetPrompts = actions.setPrompts,
+                permissionModes = state.permissionModes,
+                sessionPermissionMode = session.permissionMode,
+                onSetPermissionMode = actions.setPermissionMode,
                 onPickModel = { model ->
                     scope.launch {
                         if (actions.pickModel(model)) {
