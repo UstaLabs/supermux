@@ -40,9 +40,26 @@ sealed interface TerminalKey {
  * rule): a modifier press cycles off → once → locked; any other key is encoded with the modifiers
  * currently held (`appCursor = false` — no client exposes DECCKM) and sent, after which a `once`
  * modifier is consumed and a `locked` one stays armed.
+ *
+ * WHO ENCODES. [semantic] is the difference between a host whose emulator takes BYTES and one whose
+ * emulator takes KEYS. The shared Ghostty renderer is the second kind: it owns application-cursor
+ * mode, the kitty keyboard protocol, `modifyOtherKeys` and the backarrow mode, and re-deriving any
+ * of that here would be a second implementation of a protocol it already negotiated — and, worse,
+ * a SECOND transformation on top of its own, which is how an armed Ctrl arrived as a control code
+ * the emulator then treated as a fresh keystroke. When [semantic] is set this sink stops encoding
+ * entirely and hands the press over whole; the bar's tri-state stays exactly as it was, because a
+ * sticky Ctrl is a supermux affordance and not something any emulator models.
  */
 @Stable
-class TerminalKeySink(private val send: (ByteArray) -> Unit) {
+class TerminalKeySink(
+    // `semantic` comes FIRST so that `send` stays the trailing parameter: every byte-sink call
+    // site in the tree is `TerminalKeySink { bytes -> … }`, and a trailing lambda binds to the
+    // LAST parameter. Putting the new one at the end would have silently rebound all of them to
+    // it — the compiler catches the shape mismatch, but only because the two lambdas happen to
+    // differ; an optional parameter of the same shape would have compiled and done nothing.
+    private val semantic: ((TerminalKey, Mods) -> Unit)? = null,
+    private val send: (ByteArray) -> Unit,
+) {
     var ctrl: TerminalModState by mutableStateOf(TerminalModState.OFF)
         private set
 
@@ -66,11 +83,23 @@ class TerminalKeySink(private val send: (ByteArray) -> Unit) {
                 if (key.key == TerminalModKey.CTRL) ctrl = next(ctrl) else alt = next(alt)
                 return
             }
-            is TerminalKey.Special -> {
-                val seq = specialKeySequence(key.key, mods, appCursor = false)
-                if (seq.isNotEmpty()) send(seq.encodeToByteArray())
+            else -> {
+                val route = semantic
+                if (route != null) {
+                    // The emulator encodes it, ONCE. Nothing here touches the bytes.
+                    route(key, mods)
+                    consumeOnce()
+                    return
+                }
+                when (key) {
+                    is TerminalKey.Special -> {
+                        val seq = specialKeySequence(key.key, mods, appCursor = false)
+                        if (seq.isNotEmpty()) send(seq.encodeToByteArray())
+                    }
+                    is TerminalKey.Printable -> send(printableSequence(key.ch, mods).encodeToByteArray())
+                    is TerminalKey.Mod -> return // unreachable: handled above
+                }
             }
-            is TerminalKey.Printable -> send(printableSequence(key.ch, mods).encodeToByteArray())
         }
         consumeOnce()
     }
@@ -82,6 +111,19 @@ class TerminalKeySink(private val send: (ByteArray) -> Unit) {
     fun consumeOnce() {
         if (ctrl == TerminalModState.ONCE) ctrl = TerminalModState.OFF
         if (alt == TerminalModState.ONCE) alt = TerminalModState.OFF
+    }
+
+    /**
+     * Disarm everything, `locked` included — the pane stopped being the one the user is typing at.
+     *
+     * [consumeOnce] is "a keystroke used it up"; this is "there is no next keystroke here". A
+     * background tab that kept a locked Ctrl would fire it into whatever the user came back to,
+     * and a lock the user can no longer SEE (the bar is only drawn for the active pane) is a
+     * modifier they have no way to turn off.
+     */
+    fun clearArmed() {
+        ctrl = TerminalModState.OFF
+        alt = TerminalModState.OFF
     }
 
     /**
@@ -133,4 +175,16 @@ fun singlePrintableChar(data: ByteArray): Char? {
 fun rememberTerminalKeySink(send: (ByteArray) -> Unit): TerminalKeySink {
     val current by rememberUpdatedState(send)
     return remember { TerminalKeySink { bytes -> current(bytes) } }
+}
+
+/**
+ * A sink whose presses are handed to [press] as KEYS, not bytes — for a host whose emulator does
+ * its own encoding. Same non-keying rule as [rememberTerminalKeySink], for the same reason.
+ */
+@Composable
+fun rememberSemanticTerminalKeySink(press: (TerminalKey, Mods) -> Unit): TerminalKeySink {
+    val current by rememberUpdatedState(press)
+    return remember {
+        TerminalKeySink(send = { }, semantic = { key, mods -> current(key, mods) })
+    }
 }

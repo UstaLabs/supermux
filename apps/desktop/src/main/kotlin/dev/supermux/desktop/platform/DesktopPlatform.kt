@@ -3,7 +3,6 @@ package dev.supermux.desktop.platform
 import dev.supermux.desktop.editor.DesktopEditorEngineFactory
 import dev.supermux.desktop.notify.DesktopNotifications
 import dev.supermux.desktop.shell.DesktopWindowHostController
-import dev.supermux.desktop.terminal.JediTermTerminalViewFactory
 import dev.supermux.desktop.update.DesktopAppUpdater
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.ui.editor.engine.EditorEngineFactory
@@ -20,6 +19,7 @@ import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.platform.PushRegistrar
 import dev.supermux.ui.platform.WindowHostController
 import dev.supermux.ui.display.VideoSurfaceFactory
+import dev.supermux.ui.terminal.SharedTerminal
 import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
@@ -67,14 +67,15 @@ class DesktopPlatform : Platform {
         dynamicColor = false,
         // The app updates ITSELF here as well (Route.AppUpdate → the shared `ui/update/AppUpdate.kt`).
         appUpdate = true,
-        // JediTerm is bound (`terminalView()` never returns the unavailable factory here).
+        // The shared Ghostty renderer is bound (`terminalView()` never returns the
+        // unavailable factory here).
         terminal = true,
         // No hardware H.264 decoder: desktop displays are VNC, so `videoDecoder()` is null.
         scrcpy = false,
     )
 
     /** JediTerm in a `SwingPanel` — the engine every desktop terminal pane has always used. */
-    override fun terminalView(): TerminalViewFactory = JediTermTerminalViewFactory
+    override fun terminalView(): TerminalViewFactory = SharedTerminal
 
     /** No MediaCodec here; every display falls back to its VNC framebuffer. */
     override fun videoDecoder(): VideoSurfaceFactory? = null

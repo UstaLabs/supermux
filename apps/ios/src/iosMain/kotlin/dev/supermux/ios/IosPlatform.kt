@@ -21,8 +21,8 @@ import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.platform.PushRegistrar
 import dev.supermux.ui.platform.TtsEngine
 import dev.supermux.ui.platform.WindowHostController
+import dev.supermux.ui.terminal.SharedTerminal
 import dev.supermux.ui.terminal.TerminalViewFactory
-import dev.supermux.ui.terminal.UnavailableTerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
@@ -83,14 +83,12 @@ class IosPlatform(
         IosAppState.pendingPairLink.filterNotNull().onEach { IosAppState.consumePendingPairLink() }
 
     /**
-     * SwiftTerm, hosted by `UIKitView` (cluster H5).
+     * The shared Compose terminal (Plan 4 Task 3).
      *
-     * Null vendor — [NoopIosBridge], and any host that has not wired the Swift side — still gets
-     * the shared "this client has no terminal" hint rather than a factory that says it is
-     * available and then cannot build a view.
+     * There is no Swift vendor to be missing any more: the engine is a static archive linked into
+     * the same framework as this file, so the terminal is either there or the app did not build.
      */
-    override fun terminalView(): TerminalViewFactory =
-        bridge.terminalVendor()?.let { IosTerminalViewFactory(it) } ?: UnavailableTerminalViewFactory
+    override fun terminalView(): TerminalViewFactory = SharedTerminal
 
     /**
      * No hardware decoder, so every display renders through `VncFramebuffer` — whose iOS actual is
@@ -245,9 +243,9 @@ val IOS_CAPS: Caps = Caps(
     // offered at all rather than shown as an inert switch.
     dynamicColor = false,
     appUpdate = false,
-    // H5: `Platform.terminalView()` builds a SwiftTerm surface. NB nothing in `:ui` reads this cap
-    // to gate the terminal — the only degrade path is `UnavailableTerminalViewFactory` — so it is
-    // the FACTORY that must be right; this flag is the honest description beside it.
+    // `Platform.terminalView()` builds the shared Compose terminal. NB nothing in `:ui` reads this
+    // cap to gate the terminal — so it is the FACTORY that must be right; this flag is the honest
+    // description beside it.
     terminal = true,
     scrcpy = false,
 )

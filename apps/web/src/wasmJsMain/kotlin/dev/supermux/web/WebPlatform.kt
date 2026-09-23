@@ -17,6 +17,7 @@ import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.platform.PushRegistrar
 import dev.supermux.ui.platform.TtsEngine
 import dev.supermux.ui.platform.WindowHostController
+import dev.supermux.ui.terminal.SharedTerminal
 import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
@@ -26,7 +27,6 @@ import dev.supermux.web.seams.WebFiles
 import dev.supermux.web.seams.WebMic
 import dev.supermux.web.seams.WebTts
 import dev.supermux.web.seams.pickFilesViaInput
-import dev.supermux.web.terminal.XtermTerminalViewFactory
 import kotlinx.browser.window
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
@@ -94,7 +94,7 @@ class WebPlatform(
     override val notices: FlowNotices = FlowNotices()
 
     /** xterm.js behind the shared seam — one instance, like every other host's factory object. */
-    override fun terminalView(): TerminalViewFactory = XtermTerminalViewFactory
+    override fun terminalView(): TerminalViewFactory = SharedTerminal
     override fun videoDecoder(): VideoSurfaceFactory? = null
     override val updates: AppUpdater = NoAppUpdater
     override val notifications: NotificationManager = NoopNotificationManager

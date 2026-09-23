@@ -33,7 +33,6 @@ import dev.supermux.android.chat.createVideoUri
 import dev.supermux.android.display.AndroidVideoSurfaceFactory
 import dev.supermux.android.editor.AndroidEditorEngineFactory
 import dev.supermux.android.push.AndroidPushRegistrar
-import dev.supermux.android.terminal.TermlibTerminalViewFactory
 import dev.supermux.android.windows.AndroidWindowHostController
 import dev.supermux.android.update.AndroidAppUpdater
 import dev.supermux.ui.editor.engine.EditorEngineFactory
@@ -54,6 +53,7 @@ import dev.supermux.ui.platform.NotificationManager
 import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.platform.PushRegistrar
 import dev.supermux.ui.platform.WindowHostController
+import dev.supermux.ui.terminal.SharedTerminal
 import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import kotlinx.coroutines.CompletableDeferred
@@ -89,7 +89,7 @@ class AndroidPlatform(
     override val caps: Caps get() = ANDROID_CAPS
 
     /** ConnectBot termlib in an `AndroidView` — the engine every Android terminal pane has used. */
-    override fun terminalView(): TerminalViewFactory = TermlibTerminalViewFactory
+    override fun terminalView(): TerminalViewFactory = SharedTerminal
 
     /** MediaCodec H.264, so a scrcpy display decodes in hardware here (desktop returns null). */
     override fun videoDecoder(): VideoSurfaceFactory = AndroidVideoSurfaceFactory
@@ -276,7 +276,8 @@ val ANDROID_CAPS = Caps(
     // itself has been a colour no-op since the brand palette became the only palette.
     dynamicColor = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S,
     appUpdate = true,
-    // termlib is bound (`terminalView()` never returns the unavailable factory here).
+    // The shared Ghostty renderer is bound (`terminalView()` never returns the
+    // unavailable factory here).
     terminal = true,
     // MediaCodec decodes an h264 display transport; without this the panel falls back to VNC.
     scrcpy = true,
