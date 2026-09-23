@@ -31,6 +31,8 @@
 // [shouldResetBaseBranchOnWorkdirChange].
 package dev.supermux.ui.session
 
+import dev.supermux.chat.parseChatTs
+import dev.supermux.session.projectActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.LocalIndication
@@ -547,6 +549,10 @@ fun SessionLauncherScreen(
     val recentProjectPaths = remember(sessions, lastBySession) {
         recentWorkdirs(sessionsByRecency(sessions, lastTs))
     }
+    // The picker tiles' "● 2m": sessions per project and when one last spoke.
+    val pickerActivity = remember(sessions, lastBySession) {
+        projectActivity(sessions) { parseChatTs(lastBySession[it.id]?.ts) }
+    }
     // Picker list: recently-active projects first (web orderProjectsByRecency parity).
     val projects = remember(knownProjects, recentProjectPaths) {
         orderProjectsByRecency(recentProjectPaths, knownProjects)
@@ -907,6 +913,7 @@ fun SessionLauncherScreen(
                                     }
                                 },
                                 onDismiss = { projectMenu = false; pendingLocationProject = null },
+                                activity = pickerActivity,
                             )
                             if (useCatalog) {
                                 CatalogProjectPicker(

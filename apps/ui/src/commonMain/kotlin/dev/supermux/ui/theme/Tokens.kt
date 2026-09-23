@@ -59,6 +59,8 @@ object Size {
     val omniboxWidth = 384.dp
     /** Max height of the scrollable omnibox option list. */
     val omniboxListMax = 360.dp
+    /** The project picker opens on two rows of tiles; this leaves room for a few list rows under them. */
+    val omniboxTilesListMax = 480.dp
     /** Same list inside the Compact bottom sheet — a phone has the height to spare. */
     val omniboxSheetListMax = 420.dp
 }
