@@ -288,14 +288,39 @@ export function looksLikeBroker(pid: number, executableOf: ExecutableProbe = pro
  * So it is enforced, not assumed. The marker is a pid file rather than a lock
  * the kernel holds, because it also has to be readable: "who has this
  * directory" is the first question when a broker refuses to start.
+ *
+ * THE CREATE IS EXCLUSIVE, AND THAT IS THE WHOLE LOCK. Reading the marker,
+ * deciding, and then writing is two brokers both seeing "no owner" and both
+ * winning — the exact scenario this exists to prevent. Nothing in JavaScript's
+ * run-to-completion saves it either: the read is I/O, and the other broker is
+ * another PROCESS regardless. So the first move is always `O_CREAT | O_EXCL`
+ * (`flag: "wx"`), which the kernel serialises; only its `EEXIST` drops into
+ * the read-then-decide path, where a marker demonstrably already exists and
+ * the question is whether its owner is alive.
  */
 export function claimSocketDir(dir: string): string {
   const path = join(dir, SOCKET_DIR_OWNER_FILE)
+  const mine = `${process.pid}\n`
+  try {
+    // Wins outright, or tells us somebody got here first. There is no third
+    // outcome, and no window between the two.
+    writeFileSync(path, mine, { flag: "wx", mode: 0o600 })
+    return dir
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") {
+      throw new WorkspaceTerminalError(
+        "socket-dir-unsafe",
+        `cannot claim zmx socket dir ${dir}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  // A marker exists. Whose?
   let owner: number | undefined
   try {
     owner = Number(readFileSync(path, "utf8").trim())
   } catch {
-    owner = undefined // no marker, or unreadable: ours to take
+    owner = undefined // unreadable: it says nothing about a live owner
   }
   if (owner !== undefined && Number.isInteger(owner) && owner > 0
     && owner !== process.pid && isProcessAlive(owner) && looksLikeBroker(owner)) {
@@ -305,8 +330,10 @@ export function claimSocketDir(dir: string): string {
       "two brokers on one socket directory cannot each tell who owns a terminal's size",
     )
   }
+  // Ours already, or a dead/nonsense owner: take it over. Not exclusive, on
+  // purpose — the file we are replacing is the one we just judged.
   try {
-    writeFileSync(path, `${process.pid}\n`, { mode: 0o600 })
+    writeFileSync(path, mine, { mode: 0o600 })
   } catch (error) {
     throw new WorkspaceTerminalError(
       "socket-dir-unsafe",

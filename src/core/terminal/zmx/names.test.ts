@@ -333,6 +333,62 @@ describe("zmx socket directory", () => {
     expect(claimSocketDir(dir)).toBe(dir)
   })
 
+  test("the marker is created exclusively, and 0600", () => {
+    const dir = mkdtempSync(join(tmpdir(), "zmx-claim-"))
+    claimSocketDir(dir)
+    expect(statSync(join(dir, SOCKET_DIR_OWNER_FILE)).mode & 0o777).toBe(0o600)
+  })
+
+  // procfs only, like the refusal it asserts: off Linux `looksLikeBroker` says
+  // "not a broker" by design, so the loser would take the directory over.
+  test.skipIf(process.platform !== "linux")(
+    "two brokers claiming at the same instant: exactly ONE wins", async () => {
+      // THE RACE, RUN FOR REAL. Reading the marker, deciding and then writing
+      // it left a window in which two brokers starting together both saw "no
+      // owner" and both won — the two-broker state the lock exists to prevent,
+      // and one that JS run-to-completion does NOT rule out: the read is I/O,
+      // and the peer is another process anyway. Two real processes, released
+      // by a wall-clock barrier, are the only honest way to assert it.
+      const dir = mkdtempSync(join(tmpdir(), "zmx-race-"))
+      const namesModule = join(import.meta.dir, "names.ts")
+      const script = join(dir, "claimer.ts")
+      writeFileSync(script, `
+import { readdirSync, writeFileSync } from "fs"
+import { join } from "path"
+import { claimSocketDir } from ${JSON.stringify(namesModule)}
+const dir = process.env.RACE_DIR!
+const startAt = Number(process.env.RACE_START)
+while (Date.now() < startAt) { /* barrier: both processes claim in the same instant */ }
+let result = "lost"
+try { claimSocketDir(dir); result = "won" } catch (error) { result = \`lost:\${(error as { code?: string }).code}\` }
+writeFileSync(join(dir, \`result-\${process.pid}\`), result)
+// Stay alive until BOTH have answered: a loser must find a LIVE owner in the
+// marker, exactly as a second broker would during a restart.
+const deadline = Date.now() + 10_000
+while (Date.now() < deadline &&
+  readdirSync(dir).filter(name => name.startsWith("result-")).length < 2) { /* spin */ }
+console.log(result)
+`)
+      const startAt = Date.now() + 1500
+      const claimers = [0, 1].map(() => Bun.spawn([process.execPath, script], {
+        env: { ...process.env, RACE_DIR: dir, RACE_START: String(startAt) },
+        stdout: "pipe", stderr: "pipe",
+      }))
+      const outcomes = await Promise.all(claimers.map(async child => {
+        const [out, err] = await Promise.all([
+          new Response(child.stdout).text(), new Response(child.stderr).text(),
+        ])
+        await child.exited
+        return out.trim() || `no answer: ${err}`
+      }))
+
+      expect(outcomes.filter(outcome => outcome === "won")).toHaveLength(1)
+      expect(outcomes.filter(outcome => outcome.startsWith("lost:socket-dir-unsafe"))).toHaveLength(1)
+      // ...and the directory belongs to the winner, not to whoever wrote last.
+      const owner = Number(readFileSync(join(dir, SOCKET_DIR_OWNER_FILE), "utf8").trim())
+      expect(claimers.map(child => child.pid)).toContain(owner)
+    }, 30_000)
+
   // procfs only: `looksLikeBroker` cannot tell a broker from a recycled pid
   // without it, and deliberately takes the directory over rather than locking
   // the user out. So this asserts the Linux behaviour, where the check exists.
