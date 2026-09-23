@@ -100,8 +100,18 @@ class PackagedJvmEngineTest {
 
         val props = Properties().apply { TerminalEngine::class.java.getResourceAsStream(resource)!!.use { load(it) } }
         assertEquals(platformKey, props.getProperty("target"))
-        assertEquals("1", props.getProperty("abi"))
         assertEquals(version, props.getProperty("version"))
+        // The ABI is checked against the package's OWN abi-manifest.json, not against a number
+        // written here. A literal rotted exactly as you would expect: the engine moved to ABI 2
+        // and this file still said 1, and nothing noticed because nothing ran this build. What
+        // matters to a consumer is that the two things the artifact says about itself agree.
+        val abiManifest = TerminalEngine::class.java
+            .getResourceAsStream("/dev/supermux/terminal/abi-manifest.json")
+            ?.use { String(it.readBytes()) }
+            ?: error("dev/supermux/terminal/abi-manifest.json is not packaged")
+        val declaredAbi = Regex("\"abi_version\"\\s*:\\s*(\\d+)").find(abiManifest)?.groupValues?.get(1)
+            ?: error("abi-manifest.json has no abi_version: $abiManifest")
+        assertEquals(declaredAbi, props.getProperty("abi"), "native.properties and abi-manifest.json disagree about the ABI")
         val libraryName = props.getProperty("library")!!
         val libraryBytes = TerminalEngine::class.java
             .getResourceAsStream("/dev/supermux/terminal/native/$platformKey/$libraryName")!!
