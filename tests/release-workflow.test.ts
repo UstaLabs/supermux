@@ -236,3 +236,46 @@ test("CI verifies the zmx pin automatically", () => {
   // scripts/build-zmx.sh --check-patches existed from Plan 3 and nothing ran it.
   expect(ci).toContain("scripts/build-zmx.sh --check-patches")
 })
+
+test("every verification lane GATES the release instead of running beside it", () => {
+  // `terminal-packages` — the lane built to verify the packages a stranger
+  // consumes — ran on every tag, went red on a mismatch, and the GitHub Release
+  // was created and its assets uploaded anyway, because it was not in `needs`.
+  // A check that cannot stop a release is a check nobody is obliged to read.
+  //
+  // This asserts the RULE rather than a copy of the list: every job in the
+  // workflow gates the release except the ones named below, each with the
+  // reason it is exempt. A new lane is therefore gating by default, and making
+  // it an exception means saying so here.
+  // From `jobs:` onward only — above it, `on:` has two-space keys of its own
+  // (`push:`, `workflow_dispatch:`) that are not jobs.
+  const jobsSection = workflow.slice(workflow.indexOf("\njobs:\n"))
+  expect(jobsSection.length, "the workflow has no jobs: block").toBeGreaterThan(0)
+  const jobs = [...jobsSection.matchAll(/^ {2}([a-z][a-z0-9-]*):$/gm)].map(match => match[1]!)
+  expect(jobs).toContain("terminal-packages")
+  expect(jobs).not.toContain("push")
+
+  const exempt = new Map([
+    ["release", "is the job being gated"],
+    ["publish-website", "runs AFTER the release, and needs it"],
+    ["build-terminal-jni-windows", "gates transitively, through build-desktop-windows"],
+    // Deliberate: this lane WARNS rather than fails when the signing secrets are
+    // absent, so that binary and docker releases keep shipping without them.
+    // Requiring it would invert that decision.
+    ["build-ios-testflight", "a separate channel that is allowed to be unconfigured"],
+    ["assign-testflight", "same channel, and it is conditional on an upload happening"],
+  ])
+
+  const needs = jobBetween(workflow, "  release:", "\n  publish-website:")
+  for (const job of jobs) {
+    if (exempt.has(job)) continue
+    expect(needs, `${job} does not gate the release`).toContain(`\n      - ${job}\n`)
+  }
+
+  // A SKIPPED prerequisite skips its dependents, so a gate that can be skipped
+  // is a gate that can quietly cancel the release. None of these carry an `if:`.
+  for (const job of ["terminal-packages", "update-flow"]) {
+    const text = jobBetween(workflow, `  ${job}:`, "\n  ")
+    expect(text, `${job} is conditional and cannot be a prerequisite`).not.toMatch(/^ {4}if:/m)
+  }
+})

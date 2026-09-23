@@ -1027,7 +1027,28 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [build-binaries, docker, build-android, build-desktop-linux, build-desktop-windows, build-compose-desktop-macos]
+    # EVERY LANE THAT CAN SAY "THESE ARTIFACTS ARE WRONG" IS IN HERE. A verification job
+    # that runs beside the release instead of before it verifies nothing: it goes red
+    # while the assets upload anyway, and the only thing standing between a bad artifact
+    # and a user is somebody noticing a tick. `terminal-packages` (the published KMP
+    # packages as a stranger consumes them: native sha/ABI, the wasm built with the app,
+    # licences inside the jar/AAR, all three consumer builds) and `update-flow` (the
+    # update→swap→rollback e2e on the real compiled binaries this job is about to upload)
+    # were both orphaned; they gate now. Neither carries an `if:`, so neither can be
+    # SKIPPED into blocking a release — a skipped `needs` would take this job with it.
+    #
+    # `build-ios-testflight` is deliberately NOT here: it is a separate channel and it
+    # warns rather than fails when the signing secrets are absent, so that binary and
+    # docker releases keep shipping. Making it a prerequisite would invert that.
+    needs:
+      - build-binaries
+      - update-flow
+      - docker
+      - terminal-packages
+      - build-android
+      - build-desktop-linux
+      - build-desktop-windows
+      - build-compose-desktop-macos
     runs-on: ubuntu-latest
     permissions:
       contents: write
