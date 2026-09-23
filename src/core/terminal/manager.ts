@@ -2,8 +2,7 @@ import { makeLogger } from "../../shared/log"
 import { existsSync } from "fs"
 import { STATE_DIR } from "../../shared/paths"
 import { ptyHelperPath } from "../runtime-assets"
-import type { TerminalSummary, TmuxRunner } from "./tmux-term"
-import { createAgentTmux, attachArgv as agentAttachArgv } from "./agent-tmux"
+import { createAgentTmux, attachArgv as agentAttachArgv, type TmuxRunner } from "./agent-tmux"
 import { getSessionBackend } from "../runtime"
 import type { SessionBackend } from "../runtime/session-backend"
 import {
@@ -23,6 +22,18 @@ import {
 } from "./workspace-backend"
 
 const log = makeLogger("terminal")
+
+/**
+ * One persisted workspace terminal, as the web channel lists them.
+ *
+ * It used to live in `tmux-term.ts`, which was the only thing that could produce one. Plan 4
+ * deleted that module: the rows come from `WorkspaceTerminalBackend.list` now (zmx on POSIX,
+ * sessiond on Windows), so the shape belongs to the manager that maps them.
+ */
+export interface TerminalSummary {
+  id: string
+  createdAt: number
+}
 
 /** Minimal subprocess surface the manager needs (real impl: Bun.spawn). Kept
  * narrow so tests can inject a fake and never spawn real tmux/shell processes.

@@ -135,8 +135,9 @@ export function assertNameFits(key: WorkspaceTerminalKey): string {
 /**
  * Where our private zmx sockets live.
  *
- *  1. `MUX_TERM_ZMX_DIR` — explicit override, matching MUX_TERM_TMUX_SOCKET /
- *     MUX_SOCKETS_DIR; tests and odd deployments need one.
+ *  1. `MUX_TERM_ZMX_DIR` — explicit override, matching MUX_SOCKETS_DIR; tests and odd
+ *     deployments need one. (It also matches `MUX_TERM_TMUX_SOCKET`, the workspace-tmux override
+ *     this replaced — that variable is gone, and nothing reads it any more.)
  *  2. `$XDG_RUNTIME_DIR/supermux/zmx` — per-user, 0700 by construction, on
  *     tmpfs (where sockets belong), and SHORT: `/run/user/1000` is 14
  *     characters, which is what keeps us inside the sun_path budget. It is
@@ -337,6 +338,18 @@ export function brokerEntry(): string | null {
  * Arguments are compared as the kernel recorded them, resolved against the
  * pid's own `cwd` (a unit file may well have exec'd `bun src/main.ts`), with a
  * basename comparison as the fallback when the cwd is unreadable.
+ *
+ * ASSUMPTION, WRITTEN DOWN: every broker on this machine is launched THE SAME
+ * WAY. The executable test is a basename comparison against `process.execPath`,
+ * so it only recognises a peer that runs under the same kind of binary we do —
+ * all interpreted (`bun`), or all compiled with the same output name. A
+ * compiled `supermux` binary looking at an interpreted `bun src/main.ts`
+ * broker, or the reverse, does not recognise it and takes the directory over:
+ * the two-broker state this exists to prevent. That is fine as deployed — the
+ * systemd unit is the one launcher, and a developer running from a checkout
+ * has stopped the service — but it is an assumption about the FLEET, not
+ * something the code can check, and a mixed rollout (compiled binary replacing
+ * an interpreted service, both briefly live) is exactly where it would bite.
  *
  * DELIBERATELY BIASED, STILL. A marker with no recorded entry (one written by
  * an older broker) falls back to the executable alone, because refusing to

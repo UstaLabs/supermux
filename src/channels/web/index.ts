@@ -3447,8 +3447,9 @@ export class WebChannel implements Channel {
     }
 
     // ── Web terminals ────────────────────────────────────────────────────────
-    // List a session's persisted terminals (source of truth: the muxterm tmux
-    // server) so the PWA can rebuild its tab strip across reloads.
+    // List a session's persisted terminals (source of truth: the workspace terminal backend —
+    // zmx on POSIX, sessiond/ConPTY on Windows) so the PWA can rebuild its tab strip across
+    // reloads.
     if (method === "GET" && path === "/api/term/list") {
       const session = url.searchParams.get("session") ?? ""
       const workspace = url.searchParams.get("workspace") ?? ""
@@ -3464,7 +3465,7 @@ export class WebChannel implements Channel {
       const terminals = (await this.opts.terminalManager?.listForSession(scopeKey)) ?? []
       return this.json({ terminals })
     }
-    // Explicitly destroy one terminal (its tmux session + any viewers).
+    // Explicitly destroy one terminal (its backend shell + any viewers).
     if (method === "POST" && path === "/api/term/close") {
       const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
       const session = typeof body.session === "string" ? body.session : ""
