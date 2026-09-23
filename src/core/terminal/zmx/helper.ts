@@ -114,14 +114,30 @@ export function helperBinaries(dir: string = zmxBinDir()): HelperBinaries {
   }
 }
 
-// Digesting ~100 MB of binaries on every attach would be absurd; digesting
-// them never would make the manifest decoration. Cache per path+size+mtime,
-// which changes on any rebuild or replacement.
+// Digesting ~100 MB of binaries on every attach would be absurd; digesting them
+// never would make the manifest decoration.
+//
+// WHAT THE KEY HAS TO SURVIVE. `path:size:mtimeMs` is a fingerprint an attacker
+// who can write the file can reproduce exactly: same length, and `utimes` to
+// put the old mtime back. It is also one a BUILD can reproduce by accident —
+// mtime is whole seconds on some filesystems and `mtimeMs` inherits that
+// granularity, so two writes in the same second with the same length collide.
+// Either way the cache answers with the digest of bytes that are gone, and the
+// manifest check passes for a binary nobody verified.
+//
+// So the identity of the FILE goes in too: device and inode change on every
+// atomic replace (the rename-over that every installer and every build does),
+// and `ctime` changes on any metadata write including the `utimes` that would
+// be used to forge the mtime — it cannot be set backwards by a non-root user
+// at all. A caller that overwrites the same inode in place, in the same
+// second, without changing the length is the one remaining case; that is a
+// build writing over a running system's binary, which the manifest exists to
+// catch and which no cache key can survive.
 const digestCache = new Map<string, string>()
 
 function fileDigest(path: string): string {
   const stat = statSync(path)
-  const key = `${path}:${stat.size}:${stat.mtimeMs}`
+  const key = `${path}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`
   const cached = digestCache.get(key)
   if (cached) return cached
   const digest = createHash("sha256").update(readFileSync(path)).digest("hex")

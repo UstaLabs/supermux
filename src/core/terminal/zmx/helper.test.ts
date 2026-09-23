@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "crypto"
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import {
@@ -127,6 +127,35 @@ describe("helper binary resolution and manifest", () => {
       expect(isWorkspaceTerminalError(error, "backend-unavailable")).toBe(true)
       expect((error as Error).message).toContain("manifest says")
     }
+  })
+
+  test("a same-size replacement at the same mtime is still caught", () => {
+    // The digest cache keyed on `path:size:mtimeMs`, which is a fingerprint the
+    // writer of the file controls: same length, then `utimes` to put the old
+    // mtime back, and the cache answers with the digest of bytes that are gone.
+    // The manifest check then passes for a binary nobody verified. (It is also
+    // reachable by ACCIDENT: mtime granularity is whole seconds on some
+    // filesystems, so two writes of the same length in one second collide.)
+    const bins = fakeHelper("")
+    // A timestamp with no sub-millisecond part, so putting it back is exact —
+    // which is the whole premise of the forgery, and what an attacker gets for
+    // free from a filesystem with second-granularity mtimes.
+    const pinned = new Date(1_700_000_000_000)
+    utimesSync(bins.helper, pinned, pinned)
+    verifyHelperManifest(bins)   // populates the cache
+    const before = statSync(bins.helper)
+
+    const original = readFileSync(bins.helper)
+    const replacement = Buffer.from(original)
+    replacement[replacement.length - 1] = replacement[replacement.length - 1]! ^ 0x20
+    expect(replacement.length).toBe(original.length)
+    writeFileSync(bins.helper, replacement)
+    utimesSync(bins.helper, pinned, pinned)
+    // The two fields the old key used are back to exactly what they were.
+    const after = statSync(bins.helper)
+    expect([after.size, after.mtimeMs]).toEqual([before.size, before.mtimeMs])
+
+    expect(() => verifyHelperManifest(bins)).toThrow(/manifest says/)
   })
 
   test("a manifest for another ABI is refused before the process starts", () => {
