@@ -60,18 +60,31 @@ extern "c" fn open(path: [*:0]const u8, flags: c_int, ...) c_int;
 extern "c" fn close(fd: c_int) c_int;
 extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
 extern "c" fn usleep(usec: c_uint) c_int;
+extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
 extern "c" fn _exit(code: c_int) noreturn;
 
 const O_RDWR: c_int = 2;
 const F_GETFL: c_int = 3;
 const F_SETFL: c_int = 4;
 const WNOHANG: c_int = 1;
+const F_OK: c_int = 0;
 
 fn setNonBlocking(fd: i32) void {
     const flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return;
     const nonblock: c_int = @intCast(@as(usize, 1) << @bitOffsetOf(std.posix.O, "NONBLOCK"));
     _ = fcntl(fd, F_SETFL, flags | nonblock);
+}
+
+/// Is there still a socket at this path? Used only to tell "no such target"
+/// apart from "I could not reach one", which connect()'s errno cannot on its
+/// own once upstream has folded it into `error.Unexpected`.
+fn socketPresent(path: []const u8) bool {
+    var buf: [4096]u8 = undefined;
+    if (path.len >= buf.len) return false;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    return access(@ptrCast(&buf), F_OK) == 0;
 }
 
 fn diag(comptime fmt: []const u8, args: anytype) void {
@@ -638,10 +651,20 @@ fn cmdAttach(state: *State, obj: std.json.ObjectMap, id: ?i64) void {
     state.rows = u16Field(obj, "rows", state.rows);
 
     const fd = ipc.connectSession(socket_path) catch |err| {
-        return state.fail(id, switch (err) {
-            error.ConnectionRefused => "target-not-found",
-            else => "backend-unavailable",
-        }, @errorName(err));
+        // THE SOCKET NOT BEING THERE IS "NO SUCH TARGET", and it has to be said
+        // in those words. `ipc.connectSession` collapses every connect failure
+        // except ECONNREFUSED into `error.Unexpected` (upstream, ipc.zig), so a
+        // target that was closed a moment ago — the exact case the contract
+        // calls out, "closed while the attach was in flight" — arrived at the
+        // broker as a RECOVERABLE `backend-unavailable`, and a client told to
+        // retry a terminal that no longer exists retries for ever.
+        //
+        // So the errno is not the whole answer: if nothing is listening at that
+        // path any more, the target is gone whatever connect() called it. A
+        // socket that IS there and refuses is equally gone — the daemon died
+        // without unlinking it.
+        const gone = err == error.ConnectionRefused or !socketPresent(socket_path);
+        return state.fail(id, if (gone) "target-not-found" else "backend-unavailable", @errorName(err));
     };
 
     // IDENTITY BEFORE ANYTHING ELSE. Until this passes we have not said who we
