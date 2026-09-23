@@ -23,7 +23,9 @@
 #   * the helper's ABI is the one the helper sources declare (and therefore the
 #     one the TypeScript speaks),
 #   * the binaries on disk hash to what the manifest says,
-#   * and, when an expected target is given, the bundle was built FOR that target.
+#   * and, when an expected target is given, the bundle was built FOR that target
+#     AND — for a linux target — against static musl rather than the build
+#     runner's glibc, which the target name alone could not distinguish.
 #
 # Anything staged into a release artifact — the compiled broker's embedded copy,
 # the desktop app image, the Docker image — goes through here first, which is
@@ -91,13 +93,36 @@ if m.get("optimize") not in ("ReleaseSafe", "ReleaseFast", "ReleaseSmall"):
 if expected_target and m.get("target") not in (expected_target, "native"):
     problems.append("target: bundle is for %r, staging %r" % (m.get("target"), expected_target))
 
+# WHAT IT IS LINKED AGAINST, not just what it is called.
+#
+# `--target linux-x64` used to skip the explicit -Dtarget when the host already
+# matched, so the same name covered a static musl binary (built anywhere else)
+# and one dynamically linked against the BUILD RUNNER's glibc. The manifest said
+# `linux-x64` either way, this script compared the names, and the glibc one
+# shipped. It fails on any distro older than the runner, at the first terminal,
+# with a loader error and nothing in the release that explains it.
+#
+# Only enforced when a target is being STAGED: a local `native` build is for the
+# machine that made it and has nothing to be portable across.
+if expected_target:
+    libc = m.get("libc")
+    if libc is None:
+        problems.append(
+            "libc: this bundle predates the libc field, so what it links against is unknown "
+            "(rebuild with scripts/build-zmx.sh --target %s)" % expected_target)
+    elif expected_target.startswith("linux-") and libc != "musl":
+        problems.append(
+            "libc: a staged linux bundle must be static musl, this one is %r "
+            "(built %r) -- it will not load on an older distro"
+            % (libc, m.get("zigTarget")))
+
 if problems:
     print("[zmx-bundle] %s is NOT shippable:" % bundle_dir, file=sys.stderr)
     for p in problems:
         print("  * " + p, file=sys.stderr)
     raise SystemExit(1)
 
-print("[zmx-bundle] OK %s: zmx %s (patch %s…), helper ABI %s, %s/%s" % (
+print("[zmx-bundle] OK %s: zmx %s (patch %s…), helper ABI %s, %s/%s, libc %s" % (
     bundle_dir, lock["zmx"]["commit"][:12], lock["patches"][0]["sha256"][:12],
-    m["abi"], m.get("target"), m.get("optimize")))
+    m["abi"], m.get("target"), m.get("optimize"), m.get("libc", "unrecorded")))
 PY

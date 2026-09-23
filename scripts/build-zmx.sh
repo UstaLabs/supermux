@@ -102,27 +102,48 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# Target mapping. A CROSS build gets an explicit -Dtarget; the host target is
-# deliberately left unspecified, because naming it (even identically) resolves
-# a libc of its own and can silently recompile ghostty from scratch -- half an
-# hour on a shared machine, for the binary that was already in the cache.
+# Target mapping.
+#
+# A NAMED TARGET ALWAYS GETS AN EXPLICIT -Dtarget, host or not. It used to skip
+# it when the host already matched, on the reasoning that naming the host target
+# resolves a libc of its own and can silently recompile ghostty from scratch --
+# half an hour on a shared machine, for a binary that was already in the cache.
+# True, and the wrong trade for a release: on a linux-x86_64 runner
+# `--target linux-x64` produced a binary dynamically linked against THAT
+# runner's glibc, while a build of the same name anywhere else produced a
+# static musl one -- and the manifest recorded `"target": "linux-x64"` either
+# way, so `check-zmx-bundle.sh` could not tell them apart. A glibc-2.36-pinned
+# `supermux-linux-x64` fails on any older distro, at the first terminal, with a
+# loader error and nothing in the release to explain it.
+#
+# `--target native` (the DEFAULT, and what a developer runs) is still left
+# unspecified, so the fast local path is unchanged. The cost falls exactly where
+# it belongs: on the release build that names what it is producing.
 HOST_ARCH="$(uname -m)"
 HOST_OS="$(uname -s)"
 ZIG_TARGET=""
 case "$TARGET_NAME" in
   native) ;;
-  linux-x64)
-    [[ "$HOST_OS" == Linux && "$HOST_ARCH" == x86_64 ]] || ZIG_TARGET="x86_64-linux-musl" ;;
-  linux-arm64)
-    [[ "$HOST_OS" == Linux && "$HOST_ARCH" == aarch64 ]] || ZIG_TARGET="aarch64-linux-musl" ;;
-  macos-x64)
-    [[ "$HOST_OS" == Darwin && "$HOST_ARCH" == x86_64 ]] || ZIG_TARGET="x86_64-macos" ;;
-  macos-arm64)
-    [[ "$HOST_OS" == Darwin && "$HOST_ARCH" == arm64 ]] || ZIG_TARGET="aarch64-macos" ;;
+  linux-x64)   ZIG_TARGET="x86_64-linux-musl" ;;
+  linux-arm64) ZIG_TARGET="aarch64-linux-musl" ;;
+  macos-x64)   ZIG_TARGET="x86_64-macos" ;;
+  macos-arm64) ZIG_TARGET="aarch64-macos" ;;
   *) die "unknown --target: $TARGET_NAME (linux-x64|linux-arm64|macos-x64|macos-arm64|native)" ;;
 esac
 TARGET_ARGS=()
 [[ -n "$ZIG_TARGET" ]] && TARGET_ARGS=("-Dtarget=$ZIG_TARGET")
+
+# What the binaries will actually be linked against, recorded in the manifest so
+# a stager can gate on it instead of inferring it from a target NAME that two
+# different builds can share. `native` is whatever this host's Zig picks --
+# glibc on an ordinary Linux -- and is honest about not knowing more than that.
+case "$ZIG_TARGET" in
+  *-linux-musl) LIBC_NAME="musl" ;;
+  *-linux-gnu*) LIBC_NAME="glibc" ;;
+  *-macos*)     LIBC_NAME="system" ;;
+  "")           LIBC_NAME="native-$(printf '%s' "$HOST_OS" | tr 'A-Z' 'a-z')" ;;
+  *)            LIBC_NAME="unknown" ;;
+esac
 
 # ------------------------------------------------------------------ zig ----
 ZIG="${MUX_ZIG_HOME:-$HOME/.local/zig/$ZIG_VERSION}/zig"
@@ -271,12 +292,19 @@ if int(got["abi"]) != want:
   fi
   python3 -c '
 import json, sys, datetime
-out, abi, target, optimize, commit, patch, helper_sha, zmx_sha = sys.argv[1:9]
+out, abi, target, optimize, commit, patch, helper_sha, zmx_sha, libc, zig_target = sys.argv[1:11]
 with open(out, "w") as fh:
     json.dump({
         "schema": 1,
         "abi": int(abi),
         "target": target,
+        # WHAT THIS IS LINKED AGAINST. `target` is a name two different builds
+        # can share: `linux-x64` used to mean "static musl" from a cross build
+        # and "the glibc on whatever runner built it" from a native one, and
+        # nothing downstream could tell. Recorded so check-zmx-bundle.sh can
+        # refuse the second.
+        "libc": libc,
+        "zigTarget": zig_target or "native",
         # Recorded, not decoration: a Debug zmx runs the pty at ~43 KiB/s and is
         # indistinguishable from a release one by sha alone.
         "optimize": optimize,
@@ -287,7 +315,7 @@ with open(out, "w") as fh:
     }, fh, indent=2)
     fh.write("\n")
 ' "$OUT_DIR/manifest.json" "$abi" "$TARGET_NAME" "$ZIG_OPTIMIZE" "$ZMX_SHA" "$PATCH_SHA" \
-    "$(sha256_of "$helper_bin")" "$(sha256_of "$zmx_bin")"
+    "$(sha256_of "$helper_bin")" "$(sha256_of "$zmx_bin")" "$LIBC_NAME" "$ZIG_TARGET"
   log "manifest: $OUT_DIR/manifest.json"
 }
 
