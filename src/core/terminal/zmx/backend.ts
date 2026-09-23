@@ -217,6 +217,18 @@ export interface ZmxProcessControl {
    * without procfs — there the shell pid is all we have.
    */
   daemonPidOf(sessionPid: number): number | null
+  /**
+   * Can this host answer `daemonPidOf` AT ALL?
+   *
+   * The two nulls `daemonPidOf` returns mean opposite things. On a host with
+   * procfs, null is "that pid has no readable parent" — it has exited, or been
+   * reparented to init — which is EVIDENCE, and the strongest kind: the
+   * process we were told about is gone, so anything still answering to its pid
+   * is a stranger. Off procfs, null is the absence of evidence; nothing is
+   * knowable and the shell pid is all we have. `#confirmClosed` has to tell
+   * them apart before it decides whether to SIGKILL a pid.
+   */
+  canReadParentage(): boolean
   isAlive(pid: number): boolean
   /** SIGKILL. There is no softer signal worth trying: the polite request was
    * the `.Kill` message, and this runs only because it was not acted on. */
@@ -233,6 +245,16 @@ const defaultProcessControl: ZmxProcessControl = {
       return Number.isInteger(parent) && parent > 1 ? parent : null
     } catch {
       return null
+    }
+  },
+  // Asked of OUR OWN pid, which always has a readable status where procfs
+  // exists — so this is a question about the host, not about any target.
+  canReadParentage: () => {
+    try {
+      readFileSync(`/proc/${process.pid}/status`, "utf8")
+      return true
+    } catch {
+      return false
     }
   },
   isAlive: isProcessAlive,
@@ -662,7 +684,24 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
     // Asked BEFORE anything is signalled: killing the daemon reparents its
     // shell to init within the instant, so afterwards this can no longer tell
     // "our shell" from "a pid that was recycled in between".
-    const sessionIsOurs = session !== null && (daemon === null || this.#processes.daemonPidOf(session) === daemon)
+    //
+    // PARENTAGE IS THE ONLY EVIDENCE, AND ITS ABSENCE IS NOT NEUTRAL. Where
+    // the host can answer it, a session pid with no readable parent is a pid
+    // whose process has ALREADY GONE — which is the highest-risk pid-reuse
+    // case there is, not the safest. Defaulting to "ours" there meant the one
+    // situation where we know least ended in a SIGKILL at a pid that, by the
+    // time we looked, might belong to anyone. It is flipped: no parentage, no
+    // signal. The daemon is signalled regardless, and killing the daemon
+    // closes the pty, which is what a SIGHUP-respecting shell dies of anyway.
+    //
+    // Where the host cannot answer parentage at all (no procfs — macOS), there
+    // is no evidence to be had and the shell pid is all we have, so it is
+    // still signalled. That asymmetry is deliberate: a deleted workspace
+    // leaving a live shell is the failure this whole escalation exists for,
+    // and refusing to act on a platform where nothing is ever knowable would
+    // turn the escalation off entirely rather than make it safer.
+    const sessionIsOurs = session !== null
+      && (daemon !== null || !this.#processes.canReadParentage())
     log.warn("zmx_close_escalating", {
       scope: key.scope, terminalId: key.terminalId, daemon, session, afterMs: this.#confirmMs,
     })

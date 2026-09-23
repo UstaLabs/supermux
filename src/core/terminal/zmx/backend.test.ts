@@ -448,8 +448,14 @@ describe("ZmxWorkspaceBackend", () => {
       return daemon
     }
 
+    /** Whether this stand-in host has procfs. True by default: a fake without
+     * it could not tell "that pid is gone" from "nothing here is knowable",
+     * which is the distinction the escalation turns on. */
+    parentageReadable = true
+
     readonly control = {
       daemonPidOf: (sessionPid: number) => this.parents.get(sessionPid) ?? null,
+      canReadParentage: () => this.parentageReadable,
       isAlive: (pid: number) => !this.dead.has(pid),
       kill: (pid: number) => {
         this.killed.push(pid)
@@ -483,6 +489,45 @@ describe("ZmxWorkspaceBackend", () => {
     expect(await backend.exists(CONTRACT_A)).toBe(false)
     // A killed daemon runs no teardown, so the socket it bound is ours to clear.
     expect(existsSync(target.socket)).toBe(false)
+  })
+
+  test("a session pid with no readable parent is NOT signalled", async () => {
+    // THE PID-REUSE CASE, AND THE ONE THE OLD CHECK TRUSTED MOST. `list`
+    // reports the shell; its parent is the daemon. A shell whose parent cannot
+    // be read on a host that CAN read parents is a shell that has already
+    // exited — so whatever answers to that pid now is either nothing or
+    // somebody else's process, and it is the one pid we must not SIGKILL.
+    // `sessionIsOurs` used to read that same absence as "ours".
+    const processes = new FakeProcesses()
+    const { fake, backend } = harness({ processes: processes.control, closeConfirmMs: 100 })
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    const target = fake.target(CONTRACT_A)!
+    // Deliberately NOT `processes.daemonOf(target.pid)`: no parent is recorded,
+    // which is what an exited shell looks like through procfs.
+    fake.ignoreKill = true
+
+    await backend.close(CONTRACT_A).catch(() => {})
+
+    expect(processes.killed).not.toContain(target.pid)
+    expect(processes.killed).toEqual([])
+  })
+
+  test("where parentage cannot be read AT ALL, the shell pid is still signalled", async () => {
+    // macOS has no procfs, so `daemonPidOf` is null for every pid and the
+    // shell is all we have. Refusing to act there would turn the escalation
+    // off on that platform rather than make it safer — a deleted workspace
+    // leaving a live shell is the failure it exists for.
+    const processes = new FakeProcesses()
+    processes.parentageReadable = false
+    const { fake, backend } = harness({ processes: processes.control, closeConfirmMs: 100 })
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    const target = fake.target(CONTRACT_A)!
+    fake.ignoreKill = true
+    processes.onKill = pid => { if (pid === target.pid) fake.targets.delete(target.socket) }
+
+    await backend.close(CONTRACT_A)
+
+    expect(processes.killed).toEqual([target.pid])
   })
 
   test("a target that will not die is a typed failure, never a quiet success", async () => {
