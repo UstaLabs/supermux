@@ -23,6 +23,7 @@ function harness() {
     archiveSession: async () => {},
     resumeSession: async () => {},
     closeTerminal: async () => {},
+    closeTerminalScope: async () => {},
     stopDisplay: async () => {},
   }, db)
   const broadcast = (f: object) => { frames.push(f) }
@@ -63,6 +64,7 @@ test("closeView runs the side effect then broadcasts view_removed", async () => 
     archiveSession: async (id) => { archived.push(id) },
     resumeSession: async () => {},
     closeTerminal: async () => {},
+    closeTerminalScope: async () => {},
     stopDisplay: async () => {},
   }, db)
   const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/w" })

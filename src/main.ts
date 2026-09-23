@@ -1154,6 +1154,14 @@ const workspaceService = new WorkspaceService(
     closeTerminal: async (scope, terminalId) => {
       await terminalManager.close(scope, terminalId)
     },
+    // `killAllForSession` is named for the caller it was written for, but what
+    // it takes is a SCOPE and what it does is exactly this: drop every viewer
+    // under it, then `closeScope` the backing targets. A workspace scope is
+    // one of those, and its terminals are `kind: "scratch"`, so the agent
+    // branch inside it is not reached.
+    closeTerminalScope: async (scope) => {
+      await terminalManager.killAllForSession(scope)
+    },
     stopDisplay: async (id) => {
       await displayManager.stop(id)
     },
