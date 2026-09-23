@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, mkdirSync, readFileSync, rmdirSync, statSync, writeFileSync, chmodSync, existsSync, utimesSync } from "fs"
+import { mkdtempSync, mkdirSync, readFileSync, rmdirSync, statSync, symlinkSync, writeFileSync, chmodSync, existsSync, utimesSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { randomUUID } from "crypto"
@@ -652,6 +652,36 @@ console.log(result)
         stranger.kill()
       }
     })
+
+  test("a symlinked socket dir is refused WITHOUT chmodding whatever it points at", () => {
+    // `chmod` follows symlinks, and the chmod ran BEFORE the lstat. So a path
+    // replaced by a link to somebody else's directory had that directory set to
+    // 0700 — a write to a path we were about to refuse, by a process that had
+    // not yet established it owned anything. The checks come first now.
+    const root = mkdtempSync(join(tmpdir(), "zmx-link-"))
+    const elsewhere = join(root, "elsewhere")
+    mkdirSync(elsewhere, { mode: 0o755 })
+    chmodSync(elsewhere, 0o755) // mkdir's mode is masked by umask; be explicit
+    const link = join(root, "zmx")
+    symlinkSync(elsewhere, link)
+
+    expect(throwsCode(() => ensureSocketDir(link), "socket-dir-unsafe")).toBe(true)
+    // Untouched. Before the reorder this was 0700.
+    expect(statSync(elsewhere).mode & 0o777).toBe(0o755)
+  })
+
+  test("an existing directory is still tightened to 0700 once it has passed the checks", () => {
+    // The chmod is not redundant and must not be lost in the reorder: mkdir's
+    // mode is masked by umask and IGNORED for a directory that already exists,
+    // so an inherited 0755 stays 0755 without it — and the mode check below
+    // would then refuse the directory the broker just made.
+    const root = mkdtempSync(join(tmpdir(), "zmx-tighten-"))
+    const dir = join(root, "zmx")
+    mkdirSync(dir, { mode: 0o755 })
+    chmodSync(dir, 0o755)
+    expect(ensureSocketDir(dir)).toBe(dir)
+    expect(statSync(dir).mode & 0o777).toBe(0o700)
+  })
 
   test("refuses a path that is not a directory we can own", () => {
     const root = mkdtempSync(join(tmpdir(), "zmx-dir-"))

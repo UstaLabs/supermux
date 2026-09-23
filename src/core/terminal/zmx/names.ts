@@ -163,28 +163,53 @@ export function zmxSocketDir(
 
 /**
  * Create the directory 0700 if needed and REFUSE to use it unless it is a real
- * directory we own with no group/world bits. mkdir's mode is masked by umask
- * and ignored for an existing directory, so the chmod is not redundant.
+ * directory we own with no group/world bits.
+ *
+ * THE ORDER IS THE POINT. `chmod` follows symlinks and `mkdir`'s mode is both
+ * masked by umask and ignored outright for a path that already exists — so the
+ * tightening chmod is necessary AND cannot come first. It used to: if this
+ * path had been replaced by a link to somebody else's directory, we set THEIR
+ * directory to 0700 and only then looked at what we were holding. A write to a
+ * path we had not yet decided we would accept.
+ *
+ * So: create, then `lstat` and establish that it is a real directory WE own,
+ * and only then tighten the mode — on a path already proven to be ours, where
+ * a chmod cannot reach anyone else. The mode is re-read afterwards rather than
+ * assumed, because the value that matters is the one on disk.
  */
 export function ensureSocketDir(dir: string): string {
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
-    chmodSync(dir, 0o700)
   } catch (error) {
     throw new WorkspaceTerminalError(
       "socket-dir-unsafe",
       `cannot prepare zmx socket dir ${dir}: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
-  // lstat, not stat: a symlink here could be repointed at someone else's dir.
-  const stat = lstatSync(dir)
+  // lstat, not stat: a symlink here could be repointed at someone else's dir,
+  // and `stat` would answer about the target instead of the link.
   const uid = process.getuid?.()
-  if (!stat.isDirectory()) {
+  const owned = lstatSync(dir)
+  if (!owned.isDirectory()) {
     throw new WorkspaceTerminalError("socket-dir-unsafe", `zmx socket dir ${dir} is not a directory`)
   }
-  if (uid !== undefined && stat.uid !== uid) {
-    throw new WorkspaceTerminalError("socket-dir-unsafe", `zmx socket dir ${dir} is owned by uid ${stat.uid}, not ${uid}`)
+  if (uid !== undefined && owned.uid !== uid) {
+    throw new WorkspaceTerminalError("socket-dir-unsafe", `zmx socket dir ${dir} is owned by uid ${owned.uid}, not ${uid}`)
   }
+
+  // Ours, and a real directory. Tightening it now cannot touch anything else.
+  if ((owned.mode & 0o077) !== 0) {
+    try {
+      chmodSync(dir, 0o700)
+    } catch (error) {
+      throw new WorkspaceTerminalError(
+        "socket-dir-unsafe",
+        `cannot secure zmx socket dir ${dir}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  const stat = lstatSync(dir)
   if ((stat.mode & 0o077) !== 0) {
     throw new WorkspaceTerminalError(
       "socket-dir-unsafe",

@@ -94,18 +94,47 @@ internal fun termWsUrl(
     // http(s) pair URL. Normalize exactly like BrokerClient before opening the socket.
     val wsBase = wsBaseUrl(baseUrl)
     if (workspaceId != null) {
-        val base = StringBuilder("$wsBase/ws/term?workspace=$workspaceId")
-        if (terminalId != null) base.append("&terminal=$terminalId")
+        val base = StringBuilder("$wsBase/ws/term?workspace=${urlParam(workspaceId)}")
+        if (terminalId != null) base.append("&terminal=${urlParam(terminalId)}")
         base.append("&terminalProtocol=$TERMINAL_PROTOCOL_VERSION")
         if (create != null) base.append("&create=").append(if (create) "1" else "0")
         return base.toString()
     }
-    val base = "$wsBase/ws/term?session=$sessionId"
+    val base = "$wsBase/ws/term?session=${urlParam(sessionId)}"
     return when {
         kind == "agent" -> "$base&kind=agent"
-        terminalId != null -> "$base&terminal=$terminalId"
+        terminalId != null -> "$base&terminal=${urlParam(terminalId)}"
         else -> base
     }
+}
+
+private const val URL_HEX = "0123456789ABCDEF"
+
+/**
+ * RFC 3986 percent-encoding over UTF-8, so the broker recovers the value with
+ * `URLSearchParams`. Keeps the unreserved set `A-Z a-z 0-9 - _ . ~`.
+ *
+ * These ids were interpolated RAW. Session names are free-form — "fix: the
+ * thing" is a real one — so a name containing `&` or `#` did not merely produce
+ * a wrong URL: `?session=a&kind=agent` from a value of `a&kind=agent` is a
+ * parameter the client never meant to send, and `#` truncated the query
+ * entirely. A space or a non-ASCII character makes the handshake line
+ * malformed. Nothing about the fix is specific to a hostile id; an ordinary
+ * Turkish session title is enough.
+ */
+private fun urlParam(value: String): String {
+    val unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+    val out = StringBuilder(value.length)
+    for (byte in value.encodeToByteArray()) {
+        val c = byte.toInt() and 0xFF
+        if (c < 0x80 && c.toChar() in unreserved) out.append(c.toChar())
+        else {
+            out.append('%')
+            out.append(URL_HEX[c shr 4])
+            out.append(URL_HEX[c and 0x0F])
+        }
+    }
+    return out.toString()
 }
 
 internal fun terminalResizeFrame(cols: Int, rows: Int): String =

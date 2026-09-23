@@ -1,6 +1,7 @@
 import { test, expect, beforeEach, afterEach } from "bun:test"
 import { existsSync, unlinkSync } from "fs"
 import { WebChannel, __resetAuthFailures } from "../src/channels/web"
+import { TerminalFrameLane } from "../src/channels/web/terminal-protocol"
 import { DeviceStore } from "../src/channels/web/device-store"
 
 const DEV_PATH = `/tmp/devices-ws-${process.pid}.json`
@@ -543,4 +544,67 @@ test("/ws/term is Origin-checked: the app's own origin connects, another site do
 
   // Only the three accepted sockets ever reached the manager.
   expect(attachCalls.length).toBe(3)
+})
+
+// A client whose revision we cannot speak is refused with one `failure` frame
+// and the socket closes. Its `{"type":"close"}` still reached `tm.close`, which
+// DESTROYS the target — so a client too old to be served could kill a shell two
+// other viewers were watching, on its way out of a conversation it was never
+// admitted to. The same window opens after a normal `exit`: `finished` is set
+// and `ws.close()` is queued behind it, and a frame already in the socket's
+// buffer is dispatched in between.
+//
+// Driven through the message handler directly. From outside, the refusal's
+// close lands before a client's frame can be delivered often enough that an
+// end-to-end test asserts the right thing without ever exercising the race —
+// it passed with the guard removed. This does not.
+test("a lane that has already ended accepts nothing, least of all a close", async () => {
+  const closed: string[][] = []
+  const wrote: string[] = []
+  await ch.stop()
+  ch = new WebChannel({
+    port: PORT,
+    devicesFile: DEV_PATH,
+    publicUrl: "http://127.0.0.1:" + PORT,
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getSessionWorkdir: () => "/w",
+    terminalManager: {
+      attach: () => ({ ok: true }),
+      detach: () => {},
+      close: async (s: string, t: string) => { closed.push([s, t]) },
+      write: (_d: string, _s: string, _t: string, data: Uint8Array) => { wrote.push(new TextDecoder().decode(data)); return true },
+    } as any,
+  })
+  await ch.start()
+
+  const lane = new TerminalFrameLane(
+    { text: () => {}, binary: () => {}, close: () => {} },
+    "e1",
+  )
+  // The refusal a client with an unsupported revision is sent. Nothing is ever
+  // attached; the lane is simply over.
+  await lane.failure("protocol-unsupported", false, "this broker speaks revision 2")
+  expect(lane.finished).toBe(true)
+
+  const fakeWs = {
+    data: {
+      deviceName: "test", terminal: true, terminalSession: "ana", terminalId: "main",
+      terminalViewerId: "v1", _termLane: lane,
+    },
+    send: () => {},
+    close: () => {},
+  }
+  const handle = (msg: string | Uint8Array) =>
+    (ch as any).onTerminalWsMessage(fakeWs, msg)
+
+  handle(JSON.stringify({ type: "close" }))
+  handle(JSON.stringify({ type: "resize", cols: 80, rows: 24 }))
+  handle(new TextEncoder().encode("rm -rf /\r"))
+  await new Promise(r => setTimeout(r, 50))
+
+  expect(closed).toEqual([])
+  expect(wrote).toEqual([])
 })

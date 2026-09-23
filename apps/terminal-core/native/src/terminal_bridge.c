@@ -1340,6 +1340,13 @@ st_status st_paste(st_handle handle, const uint8_t *text, uint32_t len, uint32_t
   bool written = false;
   GhosttyResult r = ghostty_terminal_paste(e->term, &p, &written);
   st_status s = st_map_result(r);
+  /* The engine accepted the paste and the QUEUE refused it: a full effect
+   * queue rolls the record back (st_queue_mark), and this returned the
+   * engine's ST_OK anyway. The caller then believed a paste had been sent that
+   * the embedder will never be handed. Report the worse of the two, which is
+   * what st_key and st_feed do — and read call_status BEFORE the st_begin_call
+   * below, because that call resets it. */
+  if (s == ST_OK) s = e->call_status;
   st_begin_call(e, ST_ORIGIN_LIVE, ST_SINK_RESPONSE);
   return s;
 }

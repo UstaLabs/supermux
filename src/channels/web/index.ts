@@ -1018,6 +1018,17 @@ export class WebChannel implements Channel {
     const viewerId = ws.data.terminalViewerId
     const lane = ws.data._termLane
     if (lane) {
+      // A LANE THAT IS OVER TAKES NOTHING. `lane.finished` is set by the
+      // `failure`/`exit` that ended this connection — including the
+      // `protocol-unsupported` refusal sent to a client whose revision we do
+      // not speak, before it was ever attached to anything. That client was
+      // told "no" and its socket is closing, and `{"type":"close"}` from it
+      // still reached `tm.close`, which DESTROYS the target: a client too old
+      // to be served could still kill a shell two other viewers were watching.
+      if (lane.finished) {
+        log.debug("terminal_frame_after_end", { device: ws.data.deviceName })
+        return
+      }
       // Revision 2. Binary is user input — typing is typing, it reaches the
       // pty from any viewer and never moves size ownership.
       if (typeof msg !== "string") {

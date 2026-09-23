@@ -228,6 +228,22 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    // THE ZMX PATH MUST BE ABSOLUTE, and this is the only place that can say so.
+    //
+    // `cmdCreate` forks, `chdir`s into a CALLER-CHOSEN cwd — a workspace
+    // directory, whose contents are whatever the user's repository contains —
+    // and then `execve`s this path. `execve` does not search PATH: a relative
+    // path is resolved against the directory it just moved into. So the
+    // default `"zmx"`, or any relative `--zmx`, means a file named `zmx` in a
+    // checked-out repository is what a "create a terminal here" request runs.
+    //
+    // Checked after the whole argv rather than at the flag, because the
+    // DEFAULT is the dangerous value and no flag ever appears for it.
+    if (zmx_path.len == 0 or zmx_path[0] != '/') {
+        diag("--zmx must be an absolute path, got: {s}", .{zmx_path});
+        std.process.exit(2);
+    }
+
     // A peer that disappears between poll and write must give us EPIPE, not a
     // signal: the broker's stdout, the daemon socket and the child's pipes are
     // all things that can vanish mid-write.
