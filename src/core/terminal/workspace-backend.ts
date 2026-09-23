@@ -159,7 +159,12 @@ export interface WorkspaceTerminalBackend {
  * - `name-too-long` — the key does not fit the socket-path limit. Raised
  *   BEFORE creation; names are never truncated (that would collide).
  * - `socket-dir-unsafe` — our private socket directory is missing, not a
- *   directory, not ours, or group/world accessible.
+ *   directory, not ours, or group/world accessible. RECOVERABLE OR NOT,
+ *   depending on which of those it is, so a client must read `recoverable`
+ *   rather than the code: the permission and ownership refusals need a human,
+ *   but CONTENTION — the marker still held by a broker that is on its way out,
+ *   or another broker's claim holding the lock — clears by itself within
+ *   seconds of a restart and is raised recoverable. See `claimSocketDir`.
  * - `backend-unavailable` — the helper/daemon could not be reached. Recoverable.
  * - `protocol` — the target spoke something we could not decode.
  */

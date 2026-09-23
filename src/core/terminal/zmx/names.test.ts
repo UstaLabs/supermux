@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, chmodSync, existsSync, utimesSync } from "fs"
+import { mkdtempSync, mkdirSync, readFileSync, rmdirSync, statSync, writeFileSync, chmodSync, existsSync, utimesSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { randomUUID } from "crypto"
@@ -27,7 +27,7 @@ import {
   targetSocketPath,
   zmxSocketDir,
 } from "./names"
-import { isWorkspaceTerminalError } from "../workspace-backend"
+import { isWorkspaceTerminalError, WorkspaceTerminalError } from "../workspace-backend"
 import { workspaceScope } from "../../workspace/scope"
 
 /** The pid line of an owner marker. The rest of the file is the entry module
@@ -54,6 +54,18 @@ const throwsCode = (fn: () => unknown, code: "name-too-long" | "socket-dir-unsaf
     return isWorkspaceTerminalError(error, code)
   }
   return false
+}
+
+/** The thrown error itself, for assertions about `recoverable` — which is the
+ * half of a refusal the code alone does not carry. */
+const refusalFrom = (fn: () => unknown): WorkspaceTerminalError => {
+  try {
+    fn()
+  } catch (error) {
+    if (error instanceof WorkspaceTerminalError) return error
+    throw error
+  }
+  throw new Error("expected a WorkspaceTerminalError, got a return")
 }
 
 describe("zmx name encoding", () => {
@@ -565,11 +577,49 @@ console.log(result)
       try {
         await waitForCmdline(stand_in.pid)
         writeFileSync(join(dir, SOCKET_DIR_OWNER_FILE), `${stand_in.pid}\n${entry}\n`)
-        expect(throwsCode(() => claimSocketDir(dir), "socket-dir-unsafe")).toBe(true)
+        const refusal = refusalFrom(() => claimSocketDir(dir))
+        expect(refusal.code).toBe("socket-dir-unsafe")
+
+        // ...AND THE CLIENT IS TOLD TO COME BACK. This is the one refusal
+        // under this code that clears itself: the overlap it names is what a
+        // broker restart looks like from the new process, so the OLD broker is
+        // seconds from exiting and the next claim wins. Marked unrecoverable,
+        // the failure frame ends the terminal on the client
+        // (`TerminalClient.kt`: `if (!event.recoverable) finish(Failed)`) and
+        // the user's terminals stay dead across a restart they did not notice.
+        expect(refusal.recoverable).toBe(true)
+        expect(refusal.toEvent()).toMatchObject({ type: "failure", code: "socket-dir-unsafe", recoverable: true })
       } finally {
         stand_in.kill()
       }
     })
+
+  test("a directory locked by another claim is refused RECOVERABLY, not for good", () => {
+    // The other half of contention: a peer inside its critical section. The
+    // lock is young, so it is not broken as stale, and the wait runs out —
+    // a wait measured in seconds against a hold measured in microseconds, so
+    // whatever is holding it is either about to release it or about to be
+    // broken as stale. Neither is a reason to stop reconnecting.
+    const dir = mkdtempSync(join(tmpdir(), "zmx-locked-"))
+    mkdirSync(join(dir, SOCKET_DIR_CLAIM_LOCK))
+    try {
+      const refusal = refusalFrom(() => claimSocketDir(dir))
+      expect(refusal.code).toBe("socket-dir-unsafe")
+      expect(refusal.recoverable).toBe(true)
+    } finally {
+      try { rmdirSync(join(dir, SOCKET_DIR_CLAIM_LOCK)) } catch {}
+    }
+  }, 15_000)
+
+  test("a socket dir we cannot own is refused PERMANENTLY — a human has to act", () => {
+    // The contrast that keeps `recoverable` meaningful. Ownership and mode are
+    // facts about the filesystem; retrying changes nothing, and a client that
+    // reconnected forever over one would hide it.
+    const root = mkdtempSync(join(tmpdir(), "zmx-perm-"))
+    const file = join(root, "zmx")
+    writeFileSync(file, "")
+    expect(refusalFrom(() => ensureSocketDir(file)).recoverable).toBe(false)
+  })
 
   // procfs only: without it `looksLikeBroker` already answers "not a broker"
   // for everything, so there is no tightening left to demonstrate.

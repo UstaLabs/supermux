@@ -446,6 +446,17 @@ export function claimSocketDir(dir: string): string {
         "socket-dir-unsafe",
         `zmx socket dir ${dir} belongs to another broker (pid ${owner.pid}); ` +
         "two brokers on one socket directory cannot each tell who owns a terminal's size",
+        // RECOVERABLE, and this is the only condition under this code that is.
+        // The overlap it names is the ORDINARY SHAPE OF A RESTART: the new
+        // broker binds and serves before the old one has finished exiting, so
+        // for a second or two the marker names a pid that is still alive and
+        // still running our entry. A client told "not recoverable" stops
+        // reconnecting there and the user's terminals stay dead until they
+        // reload the app — for a condition that cleared itself while the
+        // message was in flight. Two brokers that really are meant to run
+        // forever on one directory keep failing this check, so a retrying
+        // client learns the same thing, just without the false permanence.
+        true,
       )
     }
     // Free, ours already, or a dead/nonsense owner. Always an exclusive create,
@@ -534,6 +545,11 @@ function withClaimLock<T>(dir: string, claim: () => T): T {
           "socket-dir-unsafe",
           `zmx socket dir ${dir} is locked by another claim after ${CLAIM_LOCK_WAIT_MS} ms ` +
           `(remove ${SOCKET_DIR_CLAIM_LOCK} if no broker is starting)`,
+          // Recoverable for the same reason as the marker refusal above: the
+          // holder is another broker inside a microsecond-long critical
+          // section, and a lock nobody is holding is broken as stale on the
+          // next attempt. Nothing here needs a human.
+          true,
         )
       }
       sleepSync(CLAIM_LOCK_POLL_MS)

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, rmdirSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { basename, join } from "path"
 import {
@@ -25,7 +25,7 @@ import {
   type ZmxProbe,
 } from "./backend"
 import type { HelperHandlers } from "./helper"
-import { encodeName, socketBasename } from "./names"
+import { encodeName, socketBasename, SOCKET_DIR_CLAIM_LOCK } from "./names"
 import type { HelperCommandBody, HelperEvent } from "./protocol"
 
 // A FAKE ZMX. Not a mock of our own backend — a stand-in for the patched DAEMON
@@ -384,6 +384,30 @@ describe("ZmxWorkspaceBackend", () => {
     expect((error as WorkspaceTerminalError).code).toBe("name-too-long")
     expect(fake.creates).toBe(0)
   })
+
+  test("a CONTENDED socket directory fails the client RECOVERABLY, so it reconnects", async () => {
+    // Runbook step 6.6 — restart the broker — seen from inside. The new broker
+    // claims the socket directory while the old one is still exiting, finds it
+    // contended and refuses. That refusal is the FIRST thing every attaching
+    // client sees, and its `recoverable` flag is the whole difference between
+    // "the app retries and the terminal comes back" and
+    // `TerminalClient.finish(Failed)`, which ends the terminal for good.
+    //
+    // Contention through the claim lock, not the owner marker: the marker path
+    // needs procfs and a live stand-in broker (asserted in names.test.ts),
+    // while the lock reaches the same refusal on every platform.
+    const { backend, socketDir } = harness()
+    mkdirSync(join(socketDir, SOCKET_DIR_CLAIM_LOCK))
+    try {
+      const error = await backend.ensure(CONTRACT_A, CONTRACT_ENSURE).then(() => null, (e: unknown) => e)
+      expect(error).toBeInstanceOf(WorkspaceTerminalError)
+      // The shape that goes on the wire, not just the internal flag.
+      expect((error as WorkspaceTerminalError).toEvent())
+        .toMatchObject({ type: "failure", code: "socket-dir-unsafe", recoverable: true })
+    } finally {
+      rmdirSync(join(socketDir, SOCKET_DIR_CLAIM_LOCK))
+    }
+  }, 15_000)
 
   test("the startup environment is the allowlist, not the broker's environ", async () => {
     const { fake, backend } = harness()
