@@ -193,6 +193,8 @@ class TerminalClient(
     @Volatile private var stopped = false
     @Volatile private var ownerGeneration = 0L
     @Volatile private var attemptedOnce = false
+    /** The socket this connection is parked on, so [stop] can unblock it. */
+    @Volatile private var liveSocket: TerminalSocket? = null
 
     // Pty input and control frames, drained FIFO by a single per-connection
     // sender so nothing reorders and a reply cannot overtake the typing in
@@ -243,6 +245,16 @@ class TerminalClient(
 
     /** One connection, start to finish. Returns when the socket is done. */
     private suspend fun runConnection(socket: TerminalSocket): Unit = coroutineScope {
+        liveSocket = socket
+        // A stop() that landed between `transport.open` and here read a null
+        // socket and closed nothing, so close it ourselves. Both sides write
+        // their own field before reading the other's, which is what makes the
+        // window empty rather than merely small.
+        if (stopped) {
+            liveSocket = null
+            socket.close()
+            return@coroutineScope
+        }
         // Whatever the previous connection did not manage to send belongs to a
         // screen that no longer exists.
         clearQueue(dropControl = true)
@@ -260,6 +272,7 @@ class TerminalClient(
             }
             receiveLoop(socket)
         } finally {
+            liveSocket = null
             // Unblocks a sender parked on the queue or mid-write; coroutineScope
             // then joins it, so no connection leaves a coroutine behind.
             sender.cancel()
@@ -534,11 +547,26 @@ class TerminalClient(
     fun requestClose(): TerminalSendResult =
         enqueue(Outbound.Control(encodeTerminalCommand(TerminalCommand.Close)))
 
-    /** Stop for good. Idempotent: unblocks the sender and ends [run]'s loop. */
+    /**
+     * Stop for good, from any thread. Idempotent.
+     *
+     * This CLOSES THE SOCKET, and it has to: the client spends almost all of
+     * its life suspended in `socket.receive()`, and a stop that only flipped a
+     * flag left `run()` parked there until the peer happened to say something
+     * — on a quiet shell, indefinitely. The doc here used to claim the loop
+     * ended; callers who believed it leaked a coroutine per closed tab, and
+     * the ones who did not believe it had to cancel the job as well, which
+     * turns an ordinary close into a cancellation the client cannot tell from
+     * its caller going away.
+     *
+     * After this returns, a suspended [receive] ends in null, the connection
+     * unwinds normally, and [run] returns without throwing.
+     */
     fun stop() {
         stopped = true
         updateInputEnabled()
         outbound.close()
         clearQueue(dropControl = true)
+        liveSocket?.close()
     }
 }

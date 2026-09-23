@@ -39,6 +39,13 @@ private class FakeSocket : TerminalSocket {
         texts += text
     }
 
+    /** What a real socket does: a parked receive ends in null, promptly. */
+    override fun close() {
+        closedByClient++
+        inbound.cancel()
+    }
+    var closedByClient = 0
+
     fun push(text: String) { inbound.trySend(TerminalWireFrame.Text(text)) }
     fun pushBytes(bytes: ByteArray) { inbound.trySend(TerminalWireFrame.Binary(bytes)) }
     /** The peer went away. */
@@ -287,8 +294,9 @@ class TerminalClientLifecycleTest {
         terminal.sendInput("b".encodeToByteArray())
         advanceUntilIdle()
 
+        // NOTE: nothing drops the peer here. stop() alone has to be enough —
+        // that is the whole point of it closing the socket.
         terminal.stop()
-        transport.sockets[0].drop()
         advanceUntilIdle()
         assertTrue(job.isCompleted, "run() returns once the client is stopped")
         assertEquals(1, transport.released)
@@ -298,5 +306,49 @@ class TerminalClientLifecycleTest {
         advanceUntilIdle()
         assertEquals(1, transport.released)
         assertEquals(TerminalSendResult.DISCONNECTED, terminal.sendInput("c".encodeToByteArray()))
+    }
+
+    /**
+     * The claim `stop()`'s doc used to make and not keep.
+     *
+     * A terminal spends nearly all of its life suspended in `socket.receive()`
+     * on a socket that is perfectly healthy and simply quiet — an idle shell.
+     * A stop that only flipped a flag left `run()` parked there until the peer
+     * said something, so every closed tab leaked a coroutine unless the caller
+     * ALSO cancelled the job, which no doc told them to do.
+     */
+    @Test fun stop_alone_ends_a_run_parked_on_a_quiet_socket() = runTest {
+        val transport = FakeTransport()
+        val terminal = client(transport)
+        val job = launch { terminal.run() }
+        advanceUntilIdle()
+        transport.sockets[0].restore()
+        advanceUntilIdle()
+        // Connected, nothing in flight, nobody talking: the steady state.
+        assertEquals(TerminalStatus.CONNECTED, terminal.status.value)
+        assertTrue(!job.isCompleted, "the client is parked on a quiet socket")
+
+        terminal.stop()
+        advanceUntilIdle()
+
+        assertTrue(job.isCompleted, "stop() on its own unblocks the receive and ends run()")
+        assertTrue(!job.isCancelled, "and it ends NORMALLY — a close is not a cancellation")
+        assertEquals(1, transport.sockets[0].closedByClient)
+        assertEquals(1, transport.released)
+        assertEquals(TerminalStatus.DISCONNECTED, terminal.status.value)
+        // No reconnect: the retry loop sees `stopped` and breaks.
+        assertEquals(1, transport.sockets.size)
+    }
+
+    /** stop() racing the socket it is meant to close: the connection must not
+     * come up behind it and sit there. */
+    @Test fun stop_before_the_socket_is_handed_over_still_ends_run() = runTest {
+        val transport = FakeTransport()
+        val terminal = client(transport)
+        terminal.stop()
+        val job = launch { terminal.run() }
+        advanceUntilIdle()
+        assertTrue(job.isCompleted, "a client stopped before it ever ran does not park")
+        assertEquals(TerminalStatus.DISCONNECTED, terminal.status.value)
     }
 }
