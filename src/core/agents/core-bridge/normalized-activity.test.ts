@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url"
 import { createNormalizedActivity } from "./normalized-activity"
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
-import { createCursorNormalizer } from "../../../../packages/supermux-core/src/cursor/normalize.js"
+
 import type { AgentUpdate } from "../../../../packages/supermux-core/src/types.js"
 import type { NormalizedEvent } from "../../../../packages/supermux-core/src/events/normalized.js"
 import type { ActivityEvent } from "../claude/activity-event"
@@ -352,12 +352,17 @@ test("plan and task become activity cards", () => {
 
 test("parity: real cursor-turn.ndjson tool cards", () => {
   const frames = loadNdjson("cursor-turn.ndjson")
-  const n = createCursorNormalizer()
+  const n = createAcpNormalizer({})
   const act = createNormalizedActivity({ workdir: WD })
   const next: ActivityEvent[] = []
   let seq = 0
   for (const frame of frames) {
-    const bodies = n({ protocol: "native", value: frame })
+    const method = rec(frame)?.method
+    const params = rec(rec(frame)?.params)
+    const update = (method === "session/update"
+      ? { protocol: "acp" as const, value: params?.update }
+      : { protocol: "native" as const, value: { method, params: rec(frame)?.params } }) as AgentUpdate
+    const bodies = n(update)
     for (const body of bodies) {
       next.push(...act.handle(envelope("cursor", body, seq++, frame), NOW))
     }

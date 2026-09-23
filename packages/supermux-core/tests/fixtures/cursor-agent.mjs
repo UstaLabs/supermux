@@ -1,92 +1,214 @@
-import { appendFileSync, writeFileSync } from 'node:fs'
-
-const argv = process.argv.slice(2)
-if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid))
-if (process.env.MODE === 'stubborn') process.on('SIGTERM', () => {})
-if (process.env.TRACE) appendFileSync(process.env.TRACE, JSON.stringify({ argv, envKeys: Object.keys(process.env).sort() }) + '\n')
-
-const CREATE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-const flag = (name) => {
-  const eq = argv.find(a => a.startsWith(name + '='))
-  if (eq) return eq.slice(name.length + 1)
-  const i = argv.indexOf(name)
-  if (i < 0) return undefined
-  const next = argv[i + 1]
-  if (next === undefined || next.startsWith('-')) return true
-  return next
+import { AgentSideConnection, ndJsonStream } from '@agentclientprotocol/sdk';
+import { Readable, Writable } from 'node:stream';
+import { appendFileSync, writeFileSync } from 'node:fs';
+const mode = process.env.FIXTURE_MODE;
+if (process.env.TRACE) appendFileSync(process.env.TRACE, JSON.stringify({ argv: process.argv.slice(2) }) + '\n');
+if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid));
+if (mode === 'stubborn') process.on('SIGTERM', () => {});
+let finish;
+let promptActive = false;
+let nativeTurn = false;
+const record = (value) => { if (process.env.TRACE) appendFileSync(process.env.TRACE, JSON.stringify(value) + '\n'); };
+async function emitNativeTurn(client, sessionId, { id, starts = 1, complete = true, delayCompleteMs = 0 } = {}) {
+  const update = (sessionUpdate, extra = {}) => ({ sessionUpdate, ...(id ? { prompt_id: id } : {}), ...extra })
+  for (let i = 0; i < starts; i++) {
+    await client.extNotification('_x.ai/session/update', { sessionId, update: update('user_message_chunk', { content: { type: 'text', text: 'user' } }) })
+  }
+  const arm = () => { nativeTurn = true }
+  if (process.env.NATIVE_SLOW === '1') setTimeout(arm, 80)
+  else arm()
+  if (!complete) return
+  const done = async () => {
+    await client.extNotification('_x.ai/session_notification', { sessionId, update: update('turn_completed') })
+    nativeTurn = false
+    finish?.({ stopReason: 'cancelled' })
+  }
+  if (delayCompleteMs) setTimeout(() => { void done() }, delayCompleteMs)
+  else await done()
 }
-
-function fail(code, message) {
-  process.stderr.write(message + '\n')
-  process.exit(code)
-}
-
-const send = o => process.stdout.write(JSON.stringify(o) + '\n')
-
-if (argv.includes('create-chat')) {
-  if (process.env.MODE === 'setup-hang') {
-    setInterval(() => {}, 1 << 30)
-  } else if (process.env.MODE === 'create-linger') {
-    // Real cursor-agent in a fresh HOME: id first, exit much later.
-    process.stdout.write(CREATE_ID + '\n')
-    setInterval(() => {}, 1 << 30)
-  } else if (process.env.MODE === 'create-crlf') {
-    process.stdout.write(CREATE_ID + '\r\n')
-    setInterval(() => {}, 1 << 30)
-  } else if (process.env.MODE === 'create-noise') {
-    process.stdout.write('noise\n' + CREATE_ID + '\n')
-    process.exit(0)
-  } else if (process.env.MODE === 'create-invalid') {
-    process.stdout.write('not-a-uuid\n')
-    process.exit(0)
-  } else {
-    process.stdout.write(CREATE_ID + '\n')
-    process.exit(0)
+new AgentSideConnection(client => ({
+ async initialize(params) {
+  record(params);
+  if (mode === 'exit') process.exit(17);
+  if (mode === 'hang') return new Promise(() => {});
+  return { protocolVersion: mode === 'version' ? 999 : 1, agentCapabilities: { loadSession: true, ...(mode === 'resume' ? { sessionCapabilities: { resume: {} } } : {}) }, authMethods: [{id:'token',name:'Token'}, {id:'terminal',name:'Terminal',type:'terminal'}] };
+ },
+ async authenticate({methodId}) { record({methodId, token:process.env.TOKEN}); if (process.env.TOKEN !== 'ok') throw new Error('authentication rejected'); return {}; },
+ async newSession() {
+  record('new');
+  const sessionId = 'agent-1'
+  if (process.env.AUTONOMOUS_ON_OPEN === '1') {
+    queueMicrotask(() => { void emitNativeTurn(client, sessionId, { id: process.env.TURN_ID || 'auto-1', complete: process.env.AUTONOMOUS_HOLD !== '1' }) })
   }
-} else {
-  if (!argv.includes('-p') && !flag('-p')) fail(10, 'missing -p')
-  if (flag('--output-format') !== 'stream-json') fail(11, 'missing stream-json')
-  if (!argv.includes('--stream-partial-output')) fail(12, 'missing --stream-partial-output')
-  if (!argv.includes('--trust')) fail(13, 'missing --trust')
-  if (flag('--mode') !== 'ask') fail(14, 'mode must default to ask')
-  if (flag('--sandbox') !== 'enabled') fail(15, 'sandbox must default to enabled')
-  if (argv.includes('--force') || argv.includes('--yolo') || argv.includes('--approve-mcps')) fail(16, 'must not default force or approve-mcps')
-  const resume = flag('--resume')
-  if (!resume) fail(17, 'missing --resume')
-  const session = resume
-  const text = flag('-p') ?? ''
-
-  if (process.env.MODE === 'wrong-id') {
-    send({ type: 'system', subtype: 'init', session_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', cwd: process.cwd(), model: 'fixture', permissionMode: 'default' })
-    process.exit(0)
+  return {sessionId};
+ },
+ async setSessionConfigOption(params) { record({ setConfig: { configId: params.configId, value: params.value } }); return { configOptions: [] }; },
+ async resumeSession(params) { record('resume'); return {}; },
+ async loadSession(params) {
+  record('load');
+  if(params.sessionId === 'missing') throw new Error('missing session');
+  await client.sessionUpdate({sessionId:params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'history'}}});
+  await client.extNotification('_x.ai/session/update', { sessionId: params.sessionId, update: { sessionUpdate: 'user_message_chunk', prompt_id: 'hist-1', content: { type: 'text', text: 'old' } } });
+  await client.extNotification('_x.ai/session/update', { sessionId: params.sessionId, update: { sessionUpdate: 'turn_completed', prompt_id: 'hist-1' } });
+  await client.extNotification('_x.ai/session_notification', { turn_completed: true, extra: { keep: true } });
+  await client.notify('_x.ai/session/update', { unsolicitedturns: [{ id: 'u1' }] });
+  if (process.env.LIVE_AFTER_LOAD === '1') {
+    setTimeout(() => { void emitNativeTurn(client, params.sessionId, { id: 'live-1', starts: Number(process.env.START_CHUNKS || 1) }) }, 15)
   }
-  if (text !== 'no-init') {
-    send({ type: 'system', subtype: 'init', session_id: session, cwd: process.cwd(), model: flag('--model') ?? 'fixture', permissionMode: 'default' })
+  return {};
+ },
+ async prompt(params) {
+  const text = params.prompt[0].text;
+  if(text === 'disconnect') { process.exit(19); return new Promise(()=>{}); }
+  if(text === 'error') throw new Error('prompt rejected');
+  if(text === 'hang') { promptActive = true; return new Promise(resolve => finish=resolve); }
+  if(text === 'live-hang') {
+    promptActive = true
+    await emitNativeTurn(client, params.sessionId, { id: process.env.TURN_ID || 'live-turn', complete: false })
+    const delay = Number(process.env.FINISH_AFTER_MS || 0)
+    if (delay > 0) setTimeout(() => { promptActive = false; finish?.({ stopReason: 'end_turn' }) }, delay)
+    return new Promise(resolve => { finish = (value) => { promptActive = false; nativeTurn = false; resolve(value) } })
   }
-  if (text === 'eof') { process.stdout.end(() => process.exit(0)); }
-  else if (text === 'malformed') { process.stdout.write('{bad}\n') }
-  else if (text === 'oversize') { process.stdout.write('x'.repeat(5000) + '\n') }
-  else if (text === 'disconnect') { process.exit(1) }
-  else if (text === 'empty-exit') { process.exit(0) }
-  else if (text === 'hang') { setInterval(() => {}, 1 << 30) }
-  else if (text === 'no-init') {
-    send({ type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: session })
-    process.exit(0)
-  } else if (text === 'result-no-id') {
-    send({ type: 'result', subtype: 'success', is_error: false, result: 'ok' })
-    process.exit(0)
-  } else if (text === 'result-exit17') {
-    send({ type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: session, duration_ms: 1 })
-    process.exit(17)
-  } else if (text === 'result-hang') {
-    send({ type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: session, duration_ms: 1 })
-    setInterval(() => {}, 1 << 30)
-  } else if (text === 'fail') {
-    send({ type: 'result', subtype: 'success', is_error: true, result: 'turn failed', session_id: session })
-    process.exit(1)
-  } else if (!['eof', 'malformed', 'oversize', 'disconnect', 'empty-exit'].includes(text)) {
-    send({ type: 'assistant', session_id: session, message: { role: 'assistant', content: [{ type: 'text', text: 'héllo' }] } })
-    send({ type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: session, duration_ms: 1 })
-    process.exit(0)
+  if(text === 'slow-start' || text === 'very-slow-start') {
+    record({prompt:text,state:'queued'});
+    await new Promise(resolve => setTimeout(resolve, text === 'very-slow-start' ? 750 : 80));
+    promptActive = true;
+    record({prompt:text,state:'active'});
+    return new Promise(resolve => { finish = (value) => { promptActive = false; resolve(value); }; });
   }
-}
+  if(text === 'permission') { promptActive = true; const response = await client.requestPermission({ sessionId:params.sessionId,toolCall:{toolCallId:'call-1',title:'Read'},options:[{optionId:'allow',name:'Allow',kind:'allow_once'}] }); record(response); promptActive = false; return {stopReason:response.outcome.outcome === 'cancelled' ? 'cancelled':'end_turn'}; }
+  if(text === 'permission-kinds') {
+    promptActive = true
+    const response = await client.requestPermission({
+      sessionId: params.sessionId,
+      toolCall: { toolCallId: 'call-k', title: 'Read' },
+      options: [
+        { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'allow_always', name: 'Always', kind: 'allow_always' },
+        { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+        { optionId: 'reject_always', name: 'Never', kind: 'reject_always' },
+      ],
+    })
+    record(response)
+    promptActive = false
+    return { stopReason: 'end_turn' }
+  }
+  if(text === 'auto-perm-late') {
+    queueMicrotask(async () => {
+      await emitNativeTurn(client, params.sessionId, { id: 'auto-B', complete: false })
+      const pending = client.requestPermission({ sessionId: params.sessionId, toolCall: { toolCallId: 'late-perm', title: 'Late' }, options: [{ optionId: 'allow_once', name: 'Allow', kind: 'allow_once' }] })
+      await client.extNotification('_x.ai/session_notification', { sessionId: params.sessionId, update: { sessionUpdate: 'turn_completed', prompt_id: 'auto-B' } })
+      nativeTurn = false
+      record({ permissionResponse: await pending, tool: 'late-perm' })
+    })
+    return { stopReason: 'end_turn' }
+  }
+  if(text === 'auto-perm-hold') {
+    queueMicrotask(() => { void emitNativeTurn(client, params.sessionId, { id: 'auto-B', complete: false }) })
+    return { stopReason: 'end_turn' }
+  }
+  if(text === 'delayed-perm') {
+    promptActive = true
+    return new Promise(resolve => { finish = (value) => { promptActive = false; resolve(value) } })
+  }
+  if(text === 'cancel-overlap-perm') {
+    queueMicrotask(async () => {
+      await emitNativeTurn(client, params.sessionId, { id: 'own-A', complete: false })
+      const pendingA = client.requestPermission({ sessionId: params.sessionId, toolCall: { toolCallId: 'a-perm', title: 'A' }, options: [{ optionId: 'allow_once', name: 'Allow', kind: 'allow_once' }] })
+      await new Promise(resolve => setTimeout(resolve, 80))
+      await emitNativeTurn(client, params.sessionId, { id: 'own-B', complete: false })
+      const pendingLate = client.requestPermission({ sessionId: params.sessionId, toolCall: { toolCallId: 'late-A', title: 'LateA' }, options: [{ optionId: 'allow_once', name: 'Allow', kind: 'allow_once' }] })
+      record({ permissionResponse: await pendingA, tool: 'a-perm' })
+      record({ permissionResponse: await pendingLate, tool: 'late-A' })
+      await client.extNotification('_x.ai/session_notification', { sessionId: params.sessionId, update: { sessionUpdate: 'turn_completed', prompt_id: 'own-A' } })
+      const pendingB = client.requestPermission({ sessionId: params.sessionId, toolCall: { toolCallId: 'b-perm', title: 'B' }, options: [{ optionId: 'allow_once', name: 'Allow', kind: 'allow_once' }] })
+      record({ permissionResponse: await pendingB, tool: 'b-perm' })
+      await client.extNotification('_x.ai/session_notification', { sessionId: params.sessionId, update: { sessionUpdate: 'turn_completed', prompt_id: 'own-B' } })
+      nativeTurn = false
+    })
+    return { stopReason: 'end_turn' }
+  }
+  if(text === 'overflow-activity') {
+    for (let i = 0; i < 257; i++) {
+      await emitNativeTurn(client, params.sessionId, { id: `ov-${i}`, complete: false })
+    }
+    return { stopReason: 'end_turn' }
+  }
+  if(text === 'overlap-perm') {
+    queueMicrotask(async () => {
+      await emitNativeTurn(client, params.sessionId, { id: 'own-A', complete: false })
+      const pending = client.requestPermission({ sessionId: params.sessionId, toolCall: { toolCallId: 'a-perm', title: 'A' }, options: [{ optionId: 'allow_once', name: 'Allow', kind: 'allow_once' }] })
+      await emitNativeTurn(client, params.sessionId, { id: 'own-B', complete: false })
+      await client.extNotification('_x.ai/session_notification', { sessionId: params.sessionId, update: { sessionUpdate: 'turn_completed', prompt_id: 'own-A' } })
+      record({ permissionResponse: await pending, tool: 'a-perm' })
+      await client.extNotification('_x.ai/session_notification', { sessionId: params.sessionId, update: { sessionUpdate: 'turn_completed', prompt_id: 'own-B' } })
+      nativeTurn = false
+    })
+    return { stopReason: 'end_turn' }
+  }
+  if(text === 'post-complete-perm') {
+    promptActive = true
+    await emitNativeTurn(client, params.sessionId, { id: 'owned-1', complete: true })
+    const response = await client.requestPermission({ sessionId: params.sessionId, toolCall: { toolCallId: 'stale-perm', title: 'Stale' }, options: [{ optionId: 'allow_once', name: 'Allow', kind: 'allow_once' }] })
+    record({ permissionResponse: response, tool: 'stale-perm' })
+    promptActive = false
+    return { stopReason: response.outcome.outcome === 'cancelled' ? 'cancelled' : 'end_turn' }
+  }
+  if(text === 'native-hold') {
+    promptActive = true
+    await emitNativeTurn(client, params.sessionId, { id: 'owned-1', complete: false })
+    return new Promise(resolve => { finish = (value) => { promptActive = false; nativeTurn = false; resolve(value) } })
+  }
+  if(text === 'handoff') {
+    promptActive = true
+    await emitNativeTurn(client, params.sessionId, { id: 'owned-1', complete: true })
+    queueMicrotask(() => { void emitNativeTurn(client, params.sessionId, { id: 'auto-2', complete: process.env.HANDOFF_HOLD === '1' ? false : true }) })
+    return { stopReason: 'end_turn' }
+  }
+  if(text === 'handoff-delay') {
+    promptActive = true
+    await emitNativeTurn(client, params.sessionId, { id: 'owned-1', complete: true })
+    void emitNativeTurn(client, params.sessionId, { id: 'auto-2', complete: true, delayCompleteMs: 300 })
+    await new Promise(resolve => setTimeout(resolve, 40))
+    promptActive = false
+    return { stopReason: 'end_turn' }
+  }
+  if(text === 'stale-complete') {
+    await client.extNotification('_x.ai/session/update', { sessionId: params.sessionId, update: { sessionUpdate: 'user_message_chunk', prompt_id: 'live-a', content: { type: 'text', text: 'u' } } })
+    await client.extNotification('_x.ai/session_notification', { sessionId: params.sessionId, update: { sessionUpdate: 'turn_completed', prompt_id: 'never-seen' } })
+    await client.extNotification('_x.ai/session_notification', { sessionId: params.sessionId, update: { sessionUpdate: 'turn_completed', prompt_id: 'live-a' } })
+    await client.extNotification('_x.ai/session_notification', { sessionId: params.sessionId, update: { sessionUpdate: 'turn_completed', prompt_id: 'live-a' } })
+    return { stopReason: 'end_turn' }
+  }
+  if(text === 'repeat-start') {
+    await emitNativeTurn(client, params.sessionId, { id: 'rep-1', starts: 3, complete: true })
+    return { stopReason: 'end_turn' }
+  }
+  await client.sessionUpdate({sessionId:params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'answer'}}});
+  await client.extNotification('_x.ai/session_notification', { turn_completed: true, extra: { keep: true } });
+  await client.notify('_x.ai/session/update', { unsolicitedturns: [{ id: 'u1' }] });
+  return {stopReason:'end_turn'};
+ },
+ async cancel() {
+  record({cancel:true,promptActive,nativeTurn});
+  if (process.env.PERM_AFTER_CANCEL === '1' && nativeTurn) {
+    const response = await client.requestPermission({ sessionId: 'agent-1', toolCall: { toolCallId: 'auto-perm', title: 'Auto' }, options: [{ optionId: 'allow_once', name: 'Allow', kind: 'allow_once' }] })
+    record({ permissionResponse: response, tool: 'auto-perm' })
+    return
+  }
+  if (process.env.DELAYED_PERM === '1' && promptActive) {
+    await emitNativeTurn(client, 'agent-1', { id: 'delayed-A', complete: false })
+    const response = await client.requestPermission({ sessionId: 'agent-1', toolCall: { toolCallId: 'delayed', title: 'Delayed' }, options: [{ optionId: 'allow_once', name: 'Allow', kind: 'allow_once' }] })
+    record({ permissionResponse: response, tool: 'delayed' })
+    finish?.({ stopReason: 'cancelled' })
+    return
+  }
+  if (!promptActive && !nativeTurn) return;
+  if (nativeTurn && !promptActive) {
+    nativeTurn = false
+    await client.extNotification('_x.ai/session_notification', { sessionId: 'agent-1', update: { sessionUpdate: 'turn_completed', prompt_id: process.env.TURN_ID || 'auto-1' } })
+    return
+  }
+  finish?.({stopReason:'cancelled'});
+ }
+}), ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)));

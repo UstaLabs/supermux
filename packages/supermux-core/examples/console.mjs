@@ -14,8 +14,7 @@ import { resolve } from "node:path"
 import { createCore } from "supermux-core"
 import { codex } from "supermux-core/codex"
 import { claude } from "supermux-core/claude"
-import { cursor } from "supermux-core/cursor"
-import { grok, opencode } from "supermux-core/agents"
+import { grok, opencode, cursor } from "supermux-core/agents"
 
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith("--") ? [a.slice(2), all[i + 1]?.startsWith("--") || all[i + 1] === undefined ? true : all[i + 1]] : []).filter(Boolean))
 const need = (k) => { if (args[k] === undefined || args[k] === true) { console.error(`--${k} is required`); process.exit(2) } return String(args[k]) }
@@ -30,7 +29,7 @@ const drivers = {
   claude: () => claude({ id: "claude", command: "claude", args: [], inheritEnv: true, tools: "default", permissionPrompts: "host", partialMessages: true, requestTimeoutMs: 120_000, ...timeouts, keeper, ...(model ? { model } : {}) }),
   grok: () => grok({ id: "grok", command: "grok", commandArgs: [], alwaysApprove: false, noLeader: true, inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
   opencode: () => opencode({ id: "opencode", command: "opencode", inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
-  cursor: () => cursor({ id: "cursor", command: "cursor-agent", args: [], inheritEnv: true, sandbox: "enabled", trust: true, force: true, approveMcps: true, ...timeouts, ...(model ? { model } : {}) }),
+  cursor: () => cursor({ id: "cursor", command: "cursor-agent", commandArgs: [], permissions: "force", inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
 }
 if (!drivers[agentName]) { console.error(`unknown agent ${agentName}`); process.exit(2) }
 

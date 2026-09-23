@@ -6,7 +6,7 @@ import type { AgentDriver, AgentRuntime, ContentBlock, DriverContext, Host, Sess
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
-import { createCursorNormalizer } from "../../../../packages/supermux-core/src/cursor/normalize.js"
+
 import { CoreAdapter, CORE_ADAPTER_PROFILES } from "./core-adapter"
 import { createGrokCoreHost } from "../grok/core-host"
 import { createCodexCoreHost } from "../codex/core-host"
@@ -26,14 +26,7 @@ function attachNormalizer(kind: Kind, runtime: AgentRuntime): AgentRuntime {
     runtime.flush = () => normalizer.flush()
     return runtime
   }
-  if (kind === "cursor") {
-    const normalizer = createCursorNormalizer()
-    runtime.normalize = (update) => normalizer(update)
-    runtime.flush = () => normalizer.flush()
-    return runtime
-  }
-  const vendor = (kind === "opencode" ? "opencode" : kind === "claude" ? "claude" : "grok") as "grok"
-  const normalizer = createAcpNormalizer({ vendor })
+  const normalizer = kind === "grok" ? createAcpNormalizer({ vendor: "grok" }) : createAcpNormalizer({})
   runtime.normalize = (update) => normalizer(update)
   runtime.flush = () => normalizer.flush()
   return runtime
@@ -1117,13 +1110,15 @@ acrossGrok("replays real grok-turn.ndjson through Core normalizer into broker ev
   expect(assistantAt).toBeLessThan(completeAt)
 })
 
-test("cursor: setPrompts(true) throws unsupported_operation", async () => {
+test("cursor: setPrompts(true) restarts the same native id", async () => {
   const kind = "cursor" as const
-  const fake = fakeAgentDriver(kind)
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
   const { host, workdir } = await harness(kind, fake)
   const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
   await adapter.start()
-  await expect(adapter.setPrompts(true)).rejects.toMatchObject({ code: "unsupported_operation" })
+  await adapter.setPrompts(true)
+  expect(fake.opens).toHaveLength(2)
+  expect(fake.opens[1]?.resumeId).toBe("native-keep")
 })
 
 test("opencode: setConfiguration({ model }) restarts the same native id", async () => {

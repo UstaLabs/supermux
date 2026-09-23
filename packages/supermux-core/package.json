@@ -31,8 +31,8 @@
       "import": "./dist/claude/index.js"
     },
     "./cursor": {
-      "types": "./dist/cursor/index.d.ts",
-      "import": "./dist/cursor/index.js"
+      "types": "./dist/agents/index.d.ts",
+      "import": "./dist/agents/index.js"
     },
     "./environment": {
       "types": "./dist/environment/index.d.ts",

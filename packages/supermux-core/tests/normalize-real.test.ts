@@ -6,7 +6,6 @@ import { existsSync } from "node:fs"
 import { createAcpNormalizer } from "../src/acp/normalize.js"
 import { createClaudeNormalizer } from "../src/claude/normalize.js"
 import { createCodexNormalizer } from "../src/codex/normalize.js"
-import { createCursorNormalizer } from "../src/cursor/normalize.js"
 import type { AgentUpdate } from "../src/types.js"
 import type { NormalizedBody } from "../src/events/normalized.js"
 
@@ -158,19 +157,18 @@ describe("real wire captures", () => {
     })
   }
 
-  const cursorPath = join(dir, "fixtures/real/cursor-turn.ndjson")
-  if (existsSync(cursorPath)) {
-    test("cursor-turn.ndjson", () => {
-      const n = createCursorNormalizer()
-      const bodies = replay(n, fixture("cursor-turn.ndjson").map(wrapNative))
-      assertRealTurn(bodies)
-      const kinds = bodies.map((b: any) => b.kind)
-      // Real cursor-agent streams thinking; it must surface as reasoning, finalized before what follows it.
-      expect(kinds).toContain("reasoning-delta")
-      expect(kinds).toContain("reasoning")
-      expect(kinds.indexOf("reasoning")).toBeLessThan(kinds.lastIndexOf("assistant-message"))
-      // Text before and after the tool call are two separate messages.
-      expect(bodies.filter((b: any) => b.kind === "assistant-message").length).toBe(2)
-    })
-  }
+  test("cursor-turn.ndjson", () => {
+    const n = createAcpNormalizer({})
+    const events = replay(n, fixture("cursor-turn.ndjson").map(wrapAcp))
+    const kinds = events.map(e => (e.kind === "tool-call" ? `tool-call:${e.phase}` : e.kind))
+    const toolStarted = kinds.indexOf("tool-call:started")
+    const toolDone = kinds.findIndex((k, i) => i > toolStarted && (k === "tool-call:completed" || k === "tool-call:updated"))
+    expect(toolStarted).toBeGreaterThanOrEqual(0)
+    expect(toolDone).toBeGreaterThan(toolStarted)
+    expect(events.some(e => e.kind === "reasoning")).toBe(true)
+    const assistant = events.filter(e => e.kind === "assistant-message")
+    expect(assistant.length).toBeGreaterThanOrEqual(1)
+    expect(assistant.some(a => a.kind === "assistant-message" && a.text.includes("42"))).toBe(true)
+    expect(kinds.indexOf("assistant-message")).toBeGreaterThan(toolDone)
+  })
 })

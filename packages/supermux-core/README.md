@@ -14,7 +14,7 @@ import { acp } from "supermux-core/acp"
 import { claude } from "supermux-core/claude"
 import { codex } from "supermux-core/codex"
 import { cursor } from "supermux-core/cursor"
-import { grok, opencode } from "supermux-core/agents"
+import { grok, opencode, cursor } from "supermux-core/agents"
 import { copiedCredentials, withAuth } from "supermux-core/auth"
 ```
 
@@ -22,7 +22,7 @@ Root also exports types including `ActivityNotice`, `ActivityPhase`, `CreateOpti
 
 ## TypeScript consumers
 
-Node 22 ESM with `module` / `moduleResolution` `NodeNext`. Public `.d.ts` uses the `NodeJS` namespace (`cursorConfigRoot` / `cursorHistoryStorePath`). A consumer that typechecks this package should:
+Node 22 ESM with `module` / `moduleResolution` `NodeNext`. A consumer that typechecks this package should:
 
 - add `@types/node` **22** as a **devDependency**
 - set `"types": ["node"]` in `compilerOptions` (or pass `--types node`)
@@ -128,7 +128,7 @@ Grok: `noLeader` and `alwaysApprove` are **required**. A broker that wants unatt
 | OpenCode | via ACP | no | no | no | no | `opencode acp` |
 | Claude | yes | no | no | no | no | `tools` required (`[]` or `'default'`) |
 | Codex | yes | yes | yes | yes | yes | `sandbox` / `approvalPolicy` required |
-| Cursor | cwd-hashed `store.db` | no | no | no | no | durable native resume is **unverified** on a live `create-chat` |
+| Cursor | `session/load` | no | no | no | no | ACP; configure via config options after open, not `runtime.configure` |
 
 Detach is always unsupported at the session layer. Steer/fork/configure/history fail `unsupported_operation` unless the opened runtime advertises them.
 

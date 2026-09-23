@@ -454,9 +454,6 @@ async function applyPrompts(
   enabled: boolean,
   ctx: CommandCtx,
 ): Promise<SlashReply> {
-  if (agent === "cursor" && enabled) {
-    return { text: "cursor sessions cannot prompt" }
-  }
   if (ctx.switchPrompts) {
     const result = await ctx.switchPrompts(sessionId, enabled)
     if (!result.ok) return { text: `prompts switch failed: ${result.error}` }

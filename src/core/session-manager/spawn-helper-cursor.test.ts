@@ -8,7 +8,7 @@ import { Registry } from "./registry"
 import { spawnSession } from "./spawn-helper"
 import { createCursorCoreHost, type CursorCoreHost } from "../agents/cursor/core-host"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../packages/supermux-core/src/index.js"
-import type { CursorOptions } from "../../../packages/supermux-core/src/cursor/index.js"
+import type { CursorOptions } from "../../../packages/supermux-core/src/agents/index.js"
 
 function fakeChildFactory(nativeId = "cur-sess-1") {
   const opens: DriverContext[] = []

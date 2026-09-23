@@ -1,6 +1,6 @@
 import { join } from "path"
 import { createHost, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
-import { cursor, type CursorOptions } from "../../../../packages/supermux-core/src/cursor/index.js"
+import { cursor, type CursorOptions } from "../../../../packages/supermux-core/src/agents/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareCursorEnvironment, sharedCursorDir } from "../../../../packages/supermux-core/src/environment/index.js"
 import { cursorInstructions } from "./preamble-writer"
@@ -36,22 +36,34 @@ export type CursorPrepareExtra = {
   cwd: string
   nativeSessionId?: string
   model?: string
+  prompts?: boolean
 }
 
-function cursorOpts(env: Record<string, string>, pluginArgs: string[], model: string | undefined): CursorOptions {
+function cursorOpts(
+  stateDirectory: string,
+  env: Record<string, string>,
+  pluginArgs: string[],
+  model: string | undefined,
+  prompts: boolean,
+): CursorOptions {
   return {
     id: "cursor",
     command: "cursor-agent",
-    args: pluginArgs,
+    commandArgs: pluginArgs,
     env,
     inheritEnv: true,
-    sandbox: "enabled",
-    trust: true,
-    force: true,
-    approveMcps: true,
-    setupTimeoutMs: 60_000,
+    mcpServers: [],
+    permissions: prompts ? "ask" : "force",
+    setupTimeoutMs: 120_000,
     shutdownTimeoutMs: 5_000,
     maxFrameBytes: 16 * 1024 * 1024,
+    maxOutstandingActivity: 256,
+    cancelRetryIntervalMs: 250,
+    cancelRetryTimeoutMs: 10_000,
+    keeper: {
+      stateDirectory,
+      limits: { parkedDeadlineMs: 120_000, journalMaxBytes: 64 * 1024 * 1024, connectTimeoutMs: 10_000 },
+    },
     ...(model ? { model } : {}),
   }
 }
@@ -79,6 +91,7 @@ function asPrepareExtra(registration: HostRegistration): CursorPrepareExtra {
     cwd,
     nativeSessionId: typeof native === "string" ? native : undefined,
     model: typeof model === "string" ? model : undefined,
+    prompts: extra.prompts === true,
   }
 }
 
@@ -91,17 +104,19 @@ function userConfigDir(): string {
 
 export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCoreHost {
   if (!options.stateDirectory) throw new Error("stateDirectory is required")
+  const stateDirectory = options.stateDirectory
   const factory = options.driverFactory
   const smoke = options.smoke ?? smokeCursorAgent
   return createHost({
-    stateDirectory: options.stateDirectory,
+    stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "cursor",
     driver: (registration, ctx) => {
       const extra = asPrepareExtra(registration)
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
       const pluginArgs = cursorSpawnArgs({ sessionName: extra.sessionName }).args
-      const opts = cursorOpts(registration.env, pluginArgs, extraModel ?? ctx.configuration?.model)
+      const prompts = registration.extra?.prompts === true
+      const opts = cursorOpts(stateDirectory, registration.env, pluginArgs, extraModel ?? ctx.configuration?.model, prompts)
       const overrides: SessionConfiguration = ctx.configuration ? { ...ctx.configuration } : {}
       return factory ? factory(opts, overrides) : cursor(opts)
     },

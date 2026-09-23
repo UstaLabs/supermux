@@ -868,9 +868,6 @@ export class SessionManager {
   ): Promise<{ ok: true; status: "applied" } | { ok: false; error: string }> {
     const session = this.registry.get(sessionId)
     if (!session) return { ok: false, error: `no such session: ${sessionId}` }
-    if (session.agent === AgentKind.Cursor && enabled) {
-      return { ok: false, error: "cursor sessions cannot prompt" }
-    }
     const adapter = this.runtimes.get(session.id)?.adapter as
       | { setPrompts?: (enabled: boolean) => Promise<void> }
       | undefined

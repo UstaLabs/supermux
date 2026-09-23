@@ -63,6 +63,7 @@ function prepareExtra(opts: {
   workdir: string
   nativeSessionId?: string
   model?: string
+  prompts?: boolean
 }): CursorPrepareExtra {
   return {
     sessionHome: opts.sessionHome,
@@ -72,6 +73,7 @@ function prepareExtra(opts: {
     cwd: opts.workdir,
     nativeSessionId: opts.nativeSessionId,
     model: opts.model,
+    prompts: opts.prompts,
   }
 }
 
@@ -100,7 +102,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
       reregister: (fields) => host.register({
         id,
         env: {},
-        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: fields.model }),
+        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: fields.model, prompts: fields.prompts }),
       }),
       core: host.core,
       id,
@@ -197,6 +199,7 @@ export async function resumeCursorSession(
           workdir: session.workdir,
           nativeSessionId: initialSessionId,
           model: fields.model,
+          prompts: fields.prompts,
         }),
       }),
       core: host.core,

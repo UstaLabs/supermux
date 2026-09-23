@@ -6,7 +6,7 @@ This document describes **exported source contracts**. The in-tree broker is not
 
 ### TypeScript (NodeNext)
 
-Use `module` / `moduleResolution` `NodeNext`. Helpers such as `cursorConfigRoot` / `cursorHistoryStorePath` are typed with `NodeJS.ProcessEnv`. Add `@types/node` **22** as a **devDependency** and set `"types": ["node"]` (or `--types node`). Do **not** enable blanket `skipLibCheck` for this package. With TypeScript 6.x and those Node types, `skipLibCheck: false` typechecks the public surface. No source API change is required.
+Use `module` / `moduleResolution` `NodeNext`. Add `@types/node` **22** as a **devDependency** and set `"types": ["node"]` (or `--types node`). Do **not** enable blanket `skipLibCheck` for this package. With TypeScript 6.x and those Node types, `skipLibCheck: false` typechecks the public surface. No source API change is required.
 
 ## Package exports
 
@@ -16,8 +16,8 @@ Use `module` / `moduleResolution` `NodeNext`. Helpers such as `cursorConfigRoot`
 | `supermux-core/acp` | `acp` |
 | `supermux-core/claude` | `claude` |
 | `supermux-core/codex` | `codex` |
-| `supermux-core/cursor` | `cursor`, `cursorConfigRoot`, `cursorHistoryStorePath` |
-| `supermux-core/agents` | `grok`, `opencode` |
+| `supermux-core/cursor` | `cursor` (re-export of `supermux-core/agents`) |
+| `supermux-core/agents` | `grok`, `opencode`, `cursor` |
 | `supermux-core/auth` | `copiedCredentials`, `withAuth` |
 | `supermux-core/environment` | `prepareGrokEnvironment`, `prepareCodexEnvironment`, `prepareOpenCodeEnvironment`, `prepareCursorEnvironment`, credential helpers |
 
@@ -129,7 +129,7 @@ Auth-helper-only codes (`auth_home_locked`, `auth_source_locked`, `auth_missing`
 
 **Codex** `codex({ id, command, args, keeper, sandbox, approvalPolicy, permissionPrompts, inheritEnv, setupTimeoutMs, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, env?, model?, reasoningEffort?, onRuntimeRequest? })`. **There are no defaults** for those required fields; `codex()` throws `TypeError` naming a missing field. Optional (absent = not sent): `model`, `reasoningEffort`, `env`, `onRuntimeRequest`. `keeper` is `{ stateDirectory, limits: { parkedDeadlineMs, journalMaxBytes, connectTimeoutMs } }`. The driver talks to `codex app-server` only through that keeper: a process that dies can re-open the same session id, replay from `ackedSeq`, and skip a second handshake. Supports resume, steer, fork, configure, history, and `close({ mode: "detach" })`. Unknown native reset can reject. `onRuntimeRequest` is invoked once the thread id is known with a `request(method, params)` that refuses `turn/` and `thread/` methods and rejects after close so hosts can run read-only RPC such as `skills/list` without owning turns.
 
-**Cursor** `cursor({ id, command, args, inheritEnv, sandbox, trust, force, approveMcps, setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, env?, model?, mode? })`. Required fields have **no defaults**; `cursor()` throws `TypeError` naming a missing field. Optional (absent = not sent): `mode`, `model`, `env`. Resume is intended to use a cwd-hashed `store.db`. Steer/fork/configure/history unsupported. **Durable native resume has not been verified** on a live `create-chat` path; do not assume it works.
+**Cursor** `cursor({ id, command, commandArgs, permissions, inheritEnv, mcpServers, keeper, setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, maxOutstandingActivity, cancelRetryIntervalMs, cancelRetryTimeoutMs, env?, model?, mode? })` → `cursor-agent [--force|--auto-review] acp`. Required fields have **no defaults**; `cursor()` throws `TypeError` naming a missing field. `permissions`: `force` → `--force` before `acp`, `auto-review` → `--auto-review`, `ask` → no global flag (the agent raises `request_permission`). Optional (absent = not sent): `model`, `mode` (`agent` \| `plan` \| `ask`) as ACP `session/set_config_option` after session/new or session/load. Resume via `session/load`. Steer/fork/configure/history unsupported at this wrapper; `detach: true`. `captureStderr` is always on.
 
 Env precedence: inherit process (unless `inheritEnv: false`) → factory `env` → `profile.env`.
 

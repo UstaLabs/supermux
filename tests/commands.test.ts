@@ -367,9 +367,9 @@ test("/prompts on session name", async () => {
   expect(result.text).toContain("zoom")
 })
 
-test("/prompts on cursor session errors", async () => {
+test("/prompts on cursor session succeeds", async () => {
   const cur = r.register({ name: "curs", workdir: "/c", pid: 9, agent: "cursor" })
   const result = await handleSlash({ command: "prompts", rest: `on ${cur.name}` }, ctx)
-  expect(result.text).toBe("cursor sessions cannot prompt")
-  expect(r.get(cur.id)?.prompts).toBe(false)
+  expect(result.text).toContain("prompts on")
+  expect(r.get(cur.id)?.prompts).toBe(true)
 })

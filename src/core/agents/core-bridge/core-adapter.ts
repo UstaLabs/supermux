@@ -28,7 +28,7 @@ export type CoreAdapterProfile = {
   kind: AgentKind
   /** How a model/effort change is applied. */
   configuration: { model: "configure" | "restart" | "unsupported"; effort: "configure" | "restart" | "unsupported" }
-  /** Whether prompts can be switched on (cursor: unsupported → setPrompts throws). */
+  /** Whether prompts can be switched on (`restart` re-opens with the same native id). */
   prompts: "restart" | "unsupported"
   /** Attachment rendering. */
   attachments: "image-block" | "path-in-prompt"
@@ -68,7 +68,7 @@ export const OPENCODE_CORE_PROFILE: CoreAdapterProfile = {
 export const CURSOR_CORE_PROFILE: CoreAdapterProfile = {
   kind: "cursor",
   configuration: { model: "restart", effort: "unsupported" },
-  prompts: "unsupported",
+  prompts: "restart",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
   startConfiguration: "empty",

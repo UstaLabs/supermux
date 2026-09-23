@@ -361,3 +361,49 @@ export function opencode(options: OpenCodeOptions): AgentDriver {
   // --print-logs is the only place OpenCode reports provider failures (the ACP turn ends as a normal completion).
   return acp({ ...rest, args: ['acp', '--print-logs', '--log-level', 'ERROR'], captureStderr: true, ...(model ? { sessionConfig: { model } } : {}) })
 }
+
+const CURSOR_PERMISSIONS = new Set(['force', 'auto-review', 'ask'])
+const CURSOR_MODES = new Set(['agent', 'plan', 'ask'])
+
+export type CursorOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'captureStderr'> & {
+  /** Prefix argv before Cursor global flags and `acp` (fixture path, `--plugin-dir`). */
+  commandArgs: string[]
+  model?: string
+  mode?: 'agent' | 'plan' | 'ask'
+  permissions: 'force' | 'auto-review' | 'ask'
+}
+
+function cursorPermissionFlags(permissions: CursorOptions['permissions']): string[] {
+  if (permissions === 'force') return ['--force']
+  if (permissions === 'auto-review') return ['--auto-review']
+  return []
+}
+
+function cursorSessionConfig(options: CursorOptions): Record<string, string> | undefined {
+  const sessionConfig: Record<string, string> = {}
+  if (options.model !== undefined) sessionConfig.model = options.model
+  if (options.mode !== undefined) sessionConfig.mode = options.mode
+  return Object.keys(sessionConfig).length ? sessionConfig : undefined
+}
+
+/** Uses Cursor's ACP entrypoint (`cursor-agent [flags] acp`). Global flags go before `acp`. */
+export function cursor(options: CursorOptions): AgentDriver {
+  if (!options || typeof options !== 'object') throw new TypeError('Cursor options are required')
+  for (const field of ['id', 'command', 'commandArgs', 'permissions', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs'] as const) {
+    if (options[field] === undefined) throw new TypeError(`Cursor ${field} is required`)
+  }
+  if (typeof options.id !== 'string' || !options.id) throw new TypeError('Cursor id is required')
+  if (typeof options.command !== 'string' || !options.command) throw new TypeError('Cursor command is required')
+  if (!Array.isArray(options.commandArgs) || options.commandArgs.some(value => typeof value !== 'string')) throw new TypeError('Cursor commandArgs is required')
+  if (!CURSOR_PERMISSIONS.has(options.permissions)) throw new TypeError('Cursor permissions must be force, auto-review, or ask')
+  if (options.model !== undefined && (typeof options.model !== 'string' || !options.model)) throw new TypeError('Cursor model must be a nonempty string')
+  if (options.mode !== undefined && !CURSOR_MODES.has(options.mode)) throw new TypeError('Cursor mode must be agent, plan, or ask')
+  const { model: _model, mode: _mode, permissions, commandArgs, ...rest } = options
+  const sessionConfig = cursorSessionConfig(options)
+  return acp({
+    ...rest,
+    args: [...commandArgs, ...cursorPermissionFlags(permissions), 'acp'],
+    captureStderr: true,
+    ...(sessionConfig ? { sessionConfig } : {}),
+  })
+}

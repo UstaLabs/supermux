@@ -3,7 +3,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { createCursorCoreHost, type CursorCoreHost } from "../../src/core/agents/cursor/core-host"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../packages/supermux-core/src/index.js"
-import type { CursorOptions } from "../../packages/supermux-core/src/cursor/index.js"
+import type { CursorOptions } from "../../packages/supermux-core/src/agents/index.js"
 
 /** A REAL library-backed Cursor host whose native child is a fake driver. */
 export function fakeCursorHost(nativeId = "cursor-sid"): {

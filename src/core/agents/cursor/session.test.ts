@@ -6,7 +6,7 @@ import { applyConfig, resumeCursorSession, spawn } from "./session"
 import type { ApplyConfigCtx } from "../session-types"
 import { createCursorCoreHost, type CursorCoreHost } from "./core-host"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
-import type { CursorOptions } from "../../../../packages/supermux-core/src/cursor/index.js"
+import type { CursorOptions } from "../../../../packages/supermux-core/src/agents/index.js"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { AgentKind } from "../../../shared/agents"
 import { openDb, runMigrations } from "../../storage/db"
@@ -163,6 +163,31 @@ describe("cursor core spawn/resume dialect", () => {
     expect(child.opens[1]?.resumeId).toBe("native-model")
     expect(child.ocCalls.at(-1)?.options.model).toBe("gpt-5")
     expect(adapter!.model).toBe("gpt-5")
+  })
+
+  test("prompts off uses force; setPrompts(true) reopens with ask", async () => {
+    const child = fakeChildFactory({ nativeId: "native-prompts" })
+    const host = await makeHost(child.factory)
+    const reg = registry()
+    const workdir = mkdtempSync(join(tmpdir(), "mux-cur-wd-"))
+    dirs.push(workdir)
+    let adapter: CoreAdapter | undefined
+    await spawn({
+      registry: reg,
+      bind: async () => {},
+      tmuxSession: "mux",
+      cursorHost: host,
+      registerAdapter: (_name, registered) => { adapter = registered as CoreAdapter },
+    }, {
+      workdir,
+      requestedName: "cur-prompts",
+      agent: AgentKind.Cursor,
+      id: "broker-id-prompts",
+    })
+    expect(child.ocCalls[0]?.options.permissions).toBe("force")
+    await adapter!.setPrompts(true)
+    expect(child.ocCalls.at(-1)?.options.permissions).toBe("ask")
+    expect(child.opens[1]?.resumeId).toBe("native-prompts")
   })
 
   test("resume of an existing native id exact-resumes", async () => {
