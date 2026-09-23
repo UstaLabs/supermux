@@ -11,9 +11,12 @@ import {
   decodeName,
   encodeName,
   ensureSocketDir,
+  assertTargetMatches,
+  isOurSocketBasename,
   keysFromNames,
   namesInScope,
-  serverSocketPath,
+  SOCKET_BASENAME_LEN,
+  socketBasename,
   targetSocketPath,
   zmxSocketDir,
 } from "./names"
@@ -23,7 +26,7 @@ import { workspaceScope } from "../../workspace/scope"
 const roundTrip = (scope: string, terminalId: string) =>
   decodeName(encodeName({ scope, terminalId }))
 
-const throwsCode = (fn: () => unknown, code: "name-too-long" | "socket-dir-unsafe") => {
+const throwsCode = (fn: () => unknown, code: "name-too-long" | "socket-dir-unsafe" | "protocol") => {
   try {
     fn()
   } catch (error) {
@@ -148,24 +151,79 @@ describe("zmx name and socket-path limits", () => {
     expect(encodeName(key)).not.toBe(encodeName(other))
   })
 
-  test("the server socket fits sun_path in our private directory", () => {
+  test("the encoded name is too long to BE a socket path — hence the split", () => {
+    // The measurement behind the layout: zmx is one socket per session
+    // (<socket_dir>/<session_name>), and a real workspace key encodes to 93
+    // characters. There is no directory short enough to make that fit, so the
+    // socket gets an opaque hash and the real name travels in the protocol.
+    const key = { scope: workspaceScope(randomUUID()), terminalId: "main" }
+    expect(encodeName(key).length).toBe(93)
+    expect("/run/user/1000/supermux/zmx/".length + 93).toBeGreaterThan(SOCKET_PATH_MAX)
+  })
+
+  test("a minted socket basename is short, opaque and derived from the key", () => {
+    const key = { scope: workspaceScope(randomUUID()), terminalId: "main" }
+    const name = socketBasename(key)
+    expect(name.length).toBe(SOCKET_BASENAME_LEN)
+    expect(isOurSocketBasename(name)).toBe(true)
+    // Derived, not allocated: a restarted broker computes the same one with
+    // nothing stored anywhere.
+    expect(socketBasename({ ...key })).toBe(name)
+    // ...and it leaks nothing about the workspace.
+    expect(name.includes(key.scope)).toBe(false)
+  })
+
+  test("distinct keys get distinct basenames, including the separator case", () => {
+    const seen = new Set<string>()
+    for (const key of [
+      { scope: "a", terminalId: "b" },
+      { scope: "a\u0000b", terminalId: "" },
+      { scope: "", terminalId: "a\u0000b" },
+      { scope: "ab", terminalId: "" },
+      { scope: "", terminalId: "ab" },
+    ]) seen.add(socketBasename(key))
+    expect(seen.size).toBe(5)
+  })
+
+  test("a socket basename that is not ours is not claimed", () => {
+    expect(isOurSocketBasename("someone-elses-session")).toBe(false)
+    expect(isOurSocketBasename("mx")).toBe(false)
+    expect(isOurSocketBasename("mx" + "g".repeat(20))).toBe(false)
+    expect(isOurSocketBasename("mx" + "a".repeat(21))).toBe(false)
+  })
+
+  test("a target socket path fits sun_path in our private directory", () => {
     const dir = mkdtempSync(join(tmpdir(), "zmx-names-"))
-    const path = serverSocketPath(dir)
-    expect(path.endsWith("/zmx.sock")).toBe(true)
+    const key = { scope: workspaceScope(randomUUID()), terminalId: "main" }
+    const path = targetSocketPath(dir, key)
+    expect(path.endsWith(`/${socketBasename(key)}`)).toBe(true)
     expect(path.length).toBeLessThanOrEqual(SOCKET_PATH_MAX)
   })
 
   test("a directory too deep for sun_path fails with our error, not bind()'s", () => {
     const dir = "/" + "d".repeat(SOCKET_PATH_MAX)
-    expect(throwsCode(() => serverSocketPath(dir), "name-too-long")).toBe(true)
+    const key = { scope: "w:x", terminalId: "main" }
+    expect(throwsCode(() => targetSocketPath(dir, key), "name-too-long")).toBe(true)
   })
 
-  test("a per-target socket cannot hold a real workspace name — hence one server socket", () => {
-    // This is the measurement behind the layout: 93-char name + directory +
-    // ".sock" is 126 bytes, and there is no directory short enough to fix it.
-    const key = { scope: workspaceScope(randomUUID()), terminalId: "main" }
-    expect(encodeName(key).length).toBe(93)
+  test("an unstorable key is refused before a socket path is minted for it", () => {
+    // The label has to be storable before the socket is worth creating, or we
+    // get a shell nothing can ever find again.
+    const key = { scope: "w:" + "s".repeat(80), terminalId: "x".repeat(64) }
     expect(throwsCode(() => targetSocketPath("/run/user/1000/supermux/zmx", key), "name-too-long")).toBe(true)
+  })
+
+  test("a session whose label is not ours is refused, never attached to", () => {
+    // Sharing one shell between two workspaces is the failure the whole naming
+    // scheme exists to prevent, so a mismatch is an error and not an attach.
+    const key = { scope: "w:alpha", terminalId: "main" }
+    expect(() => assertTargetMatches(key, encodeName(key))).not.toThrow()
+    expect(throwsCode(() => assertTargetMatches(key, undefined), "protocol")).toBe(true)
+    expect(throwsCode(
+      () => assertTargetMatches(key, encodeName({ scope: "w:beta", terminalId: "main" })),
+      "protocol",
+    )).toBe(true)
+    expect(throwsCode(() => assertTargetMatches(key, "garbage"), "protocol")).toBe(true)
   })
 })
 

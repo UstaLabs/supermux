@@ -13,19 +13,40 @@
 // byte-identical, so a non-canonical or invalid-UTF-8 name is rejected rather
 // than silently mapped onto some other scope.
 //
-// WHY THE SOCKET IS NOT NAMED AFTER THE TARGET
-// --------------------------------------------
+// SOCKET NAMING: ZMX IS ONE DAEMON, ONE SOCKET, ONE SESSION
+// ---------------------------------------------------------
+// Verified against the pinned upstream (see vendor/zmx/README.md §1):
+// `socket.zig:createSocket` binds `<socket_dir>/<session_name>` per session,
+// one double-forked daemon each, and `zmx list` enumerates that directory and
+// probes every socket. There is NO upstream primitive where one socket serves
+// many named targets, and adding one would mean re-tagging every message and
+// giving up zmx's per-session crash isolation.
+//
 // `sockaddr_un.sun_path` is 108 bytes on Linux and 104 on macOS — 103 usable
-// characters at the portable worst case. A realistic workspace key
-// ("w:" + a 36-char UUID, terminal "main") already encodes to a 93-character
-// name, and `/run/user/1000/supermux/zmx/<name>.sock` is 126 characters. There
-// is no directory short enough to make a per-target socket fit, and truncating
-// the name would collide two workspaces onto one shell — the one outcome we
-// refuse. So the encoded name is the TARGET name carried in the protocol, and
-// the socket is a single, fixed, short server socket inside our private
-// directory. `targetSocketPath` exists for the alternative per-target layout
-// and validates the same budget, so if Task 3/4 ever wants one the limit is
-// enforced BEFORE creation with a typed error instead of at bind() time.
+// at the portable worst case. A realistic workspace key ("w:" + a 36-char UUID,
+// terminal "main") encodes to a 93-character name, and
+// `/run/user/1000/supermux/zmx/<name>` is 121 characters. It does not fit, and
+// truncating would collide two workspaces onto one shell — the one outcome we
+// refuse.
+//
+// So the two names are SPLIT:
+//
+//   * `socketBasename(key)` — short and OPAQUE (22 chars), what zmx sees as
+//     the session name and what the socket file is called. Derived (a hash of
+//     the key) rather than allocated, so `ensure` is idempotent across broker
+//     restarts with nothing stored anywhere.
+//   * `encodeName(key)` — the full reversible name, carried in the PROTOCOL
+//     and stored by the patched daemon as the label `mux.target`. `zmx list`
+//     already reads labels off every socket it probes, so `list` recovers the
+//     scope and terminal id from the RUNNING DAEMONS — not from any file the
+//     broker has to keep in sync with them, and not from the socket name.
+//     That is what makes discovery survive a broker crash.
+//
+// A 80-bit hash can in principle collide. It is DETECTED, never merged: the
+// label carries the full key, so an attach compares what came back against
+// `encodeName(key)` and fails rather than handing two workspaces one shell.
+// `assertTargetMatches` is that comparison.
+import { createHash } from "crypto"
 import { chmodSync, lstatSync, mkdirSync } from "fs"
 import { isAbsolute, join } from "path"
 import { STATE_DIR } from "../../../shared/paths"
@@ -59,8 +80,40 @@ export const SOCKET_PATH_MAX = 103
  * encodes to 213, so this only bites pathological scopes. */
 export const TARGET_NAME_MAX = 255
 
-/** Fixed basename of the one server socket every target is reached through. */
-export const SERVER_SOCKET_BASENAME = "zmx.sock"
+/** Prefix of every socket basename we mint. Lets `list` skip sockets that are
+ * not ours without probing them. */
+export const SOCKET_BASENAME_PREFIX = "mx"
+
+/** Hex characters of the key digest in a socket basename. 80 bits: at the
+ * thousands-of-terminals scale this machine will ever see, a collision is
+ * vanishingly unlikely — and is caught rather than silently merged. */
+const SOCKET_DIGEST_HEX = 20
+
+/** Length of a minted basename: "mx" + 20 hex = 22. */
+export const SOCKET_BASENAME_LEN = SOCKET_BASENAME_PREFIX.length + SOCKET_DIGEST_HEX
+
+/**
+ * The zmx session name for a key: short, opaque, and DERIVED rather than
+ * allocated, so two brokers (or a broker before and after a restart) compute
+ * the same one without sharing state.
+ *
+ * `scope` and `terminalId` are joined with a NUL, which cannot occur in
+ * either, so scope "a"/id "b" and scope "a\0b"/id "" cannot hash alike.
+ */
+export function socketBasename(key: WorkspaceTerminalKey): string {
+  const digest = createHash("sha256")
+    .update(key.scope, "utf8")
+    .update("\0")
+    .update(key.terminalId, "utf8")
+    .digest("hex")
+  return `${SOCKET_BASENAME_PREFIX}${digest.slice(0, SOCKET_DIGEST_HEX)}`
+}
+
+/** True for a basename we minted. Not proof it is ours — only the `mux.target`
+ * label is that — but enough to skip a neighbour's session without probing. */
+export function isOurSocketBasename(basename: string): boolean {
+  return new RegExp(`^${SOCKET_BASENAME_PREFIX}[0-9a-f]{${SOCKET_DIGEST_HEX}}$`).test(basename)
+}
 
 /**
  * The encoded name, or a typed error. Call this BEFORE creating anything: a
@@ -140,15 +193,16 @@ export function ensureSocketDir(dir: string): string {
   return dir
 }
 
-/** The one server socket. Validated against sun_path so a long MUX_HOME fails
- * with our error instead of an opaque EINVAL from bind(). */
-export function serverSocketPath(dir: string): string {
-  return checkedSocketPath(join(dir, SERVER_SOCKET_BASENAME))
-}
-
-/** Per-target socket layout (see the header note on why this is not the default). */
+/**
+ * Where this target's daemon listens. Validated against sun_path so a long
+ * MUX_HOME fails with OUR typed error instead of an opaque EINVAL from bind(),
+ * and BEFORE anything is created.
+ */
 export function targetSocketPath(dir: string, key: WorkspaceTerminalKey): string {
-  return checkedSocketPath(join(dir, `${assertNameFits(key)}.sock`))
+  // assertNameFits first: the label has to be storable before the socket is
+  // worth creating, or we would have a shell nothing can ever find again.
+  assertNameFits(key)
+  return checkedSocketPath(join(dir, socketBasename(key)))
 }
 
 function checkedSocketPath(path: string): string {
@@ -162,14 +216,16 @@ function checkedSocketPath(path: string): string {
   return path
 }
 
-/** True only for a name that decodes to EXACTLY this scope. Deliberately not a
- * prefix test — "w:a" must never sweep up "w:ab". */
+/** True only for a `mux.target` label value that decodes to EXACTLY this
+ * scope. Deliberately not a prefix test — "w:a" must never sweep up "w:ab". */
 export function belongsToScope(name: string, scope: string): boolean {
   return decodeName(name)?.scope === scope
 }
 
-/** Our targets among whatever zmx reports, oldest-order preserved. Names that
- * are not ours (or are corrupt) are dropped, never guessed at. */
+/** Our targets among the `mux.target` labels `zmx list` reported, oldest-order
+ * preserved. Values that are not ours (or are corrupt) are dropped, never
+ * guessed at. This — not the socket name — is how `list` survives a broker
+ * restart: the labels live in the running daemons. */
 export function keysFromNames(names: readonly string[]): WorkspaceTerminalKey[] {
   const keys: WorkspaceTerminalKey[] = []
   for (const name of names) {
@@ -179,7 +235,32 @@ export function keysFromNames(names: readonly string[]): WorkspaceTerminalKey[] 
   return keys
 }
 
-/** The subset of `names` that belongs to exactly `scope` — what closeScope kills. */
+/** The subset of label values belonging to exactly `scope` — what closeScope
+ * kills. The caller maps each back to its socket via `socketBasename`. */
 export function namesInScope(names: readonly string[], scope: string): string[] {
   return names.filter(name => belongsToScope(name, scope))
 }
+
+/**
+ * Confirm the daemon behind an opaque socket is the target we asked for.
+ *
+ * The socket name is a hash, so it cannot prove identity on its own; the
+ * `mux.target` label can, and this is where the two are reconciled. A mismatch
+ * (a hash collision, or somebody else's session under a name shaped like ours)
+ * is an error, NEVER an attach: sharing one shell between two workspaces is
+ * the failure this whole naming scheme exists to prevent.
+ */
+export function assertTargetMatches(key: WorkspaceTerminalKey, label: string | undefined): void {
+  const expected = encodeName(key)
+  if (label === expected) return
+  throw new WorkspaceTerminalError(
+    "protocol",
+    label === undefined
+      ? `zmx session ${socketBasename(key)} carries no ${TARGET_LABEL_KEY} label`
+      : `zmx session ${socketBasename(key)} is ${label}, not ${expected}`,
+  )
+}
+
+/** The label key the patched daemon stores the encoded name under. Must match
+ * `BROKER_TARGET_LABEL` in vendor/zmx/patches/0001-supermux-session-contract.patch. */
+export const TARGET_LABEL_KEY = "mux.target"
