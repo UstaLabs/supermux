@@ -47,8 +47,8 @@
 // `encodeName(key)` and fails rather than handing two workspaces one shell.
 // `assertTargetMatches` is that comparison.
 import { createHash } from "crypto"
-import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "fs"
-import { isAbsolute, join } from "path"
+import { chmodSync, lstatSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from "fs"
+import { basename, isAbsolute, join } from "path"
 import { STATE_DIR } from "../../../shared/paths"
 import { WorkspaceTerminalError, type WorkspaceTerminalKey } from "../workspace-backend"
 
@@ -204,19 +204,72 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * True when `pid` looks like a supermux broker rather than whatever inherited
- * a recycled pid. Best effort, and deliberately biased: when we cannot tell
- * (no procfs — macOS), we say NO and take the directory over. Locking a user
- * out of their terminals because a pid was reused is a worse failure than the
- * one this check exists to catch, which is already the rare one.
+ * The executable a pid is RUNNING, as an absolute path where procfs can say so.
+ *
+ * Exported for the tests that feed it realistic command lines; nothing else
+ * should need it.
  */
-function looksLikeBroker(pid: number): boolean {
+export type ExecutableProbe = (pid: number) => string | null
+
+/** `/proc/<pid>/exe` of a binary replaced since it was exec'd (an upgrade,
+ * a `bun upgrade`) reads back with this glued on. */
+const DELETED_SUFFIX = " (deleted)"
+
+/**
+ * argv[0] out of a `/proc/<pid>/cmdline` blob: the bytes up to the FIRST NUL.
+ *
+ * The blob is every argument concatenated with NULs, which is exactly why
+ * matching a substring against the WHOLE of it was wrong: `bundle install`,
+ * `tmux attach` and any script living under a path with "mux" or "bun" in it
+ * all contain the needle somewhere, and each one of those made this broker
+ * refuse to start.
+ */
+export function executableFromCmdline(blob: string): string | null {
+  const argv0 = blob.split("\0")[0]
+  return argv0 && argv0.length > 0 ? argv0 : null
+}
+
+/** procfs answer for `ExecutableProbe`: the exec'd binary if the kernel will
+ * say (`/proc/<pid>/exe`), else argv[0], else nothing. Linux only. */
+function procExecutable(pid: number): string | null {
   try {
-    const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8")
-    return cmdline.includes("bun") || cmdline.includes("mux")
+    const exe = readlinkSync(`/proc/${pid}/exe`)
+    if (exe.length > 0) return exe.endsWith(DELETED_SUFFIX) ? exe.slice(0, -DELETED_SUFFIX.length) : exe
   } catch {
-    return false
+    // Unreadable (another uid, or a kernel that hides it): fall through to argv[0].
   }
+  try {
+    return executableFromCmdline(readFileSync(`/proc/${pid}/cmdline`, "utf8"))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * True when `pid` looks like a supermux broker rather than whatever inherited
+ * a recycled pid.
+ *
+ * THE COMPARISON IS AN EXECUTABLE IDENTITY, NOT A SUBSTRING. A second broker
+ * is the same program we are: it runs the basename of `process.execPath`
+ * (`bun`). So the question asked here is "is that pid running what WE are
+ * running", answered from `/proc/<pid>/exe` — argv[0] only when the kernel
+ * will not say — and never from the whole command line. The earlier version
+ * matched "bun" or "mux" anywhere in the joined cmdline, which made
+ * `bundle install`, `bunyan`, `tmux attach` and any argument or path
+ * containing either substring hold the directory hostage: `claimSocketDir`
+ * then refused with `socket-dir-unsafe`, and the user lost every terminal to
+ * a recycled pid. That is the lockout this check's own doc comment calls the
+ * WORSE failure, produced by the check itself.
+ *
+ * Still deliberately biased: when we cannot tell (no procfs — macOS, Windows),
+ * we say NO and take the directory over, because locking a user out is worse
+ * than a second broker that the marker cannot see. Which means this whole
+ * enforcement is a no-op off Linux — see vendor/zmx/README.md §5.
+ */
+export function looksLikeBroker(pid: number, executableOf: ExecutableProbe = procExecutable): boolean {
+  const exe = executableOf(pid)
+  if (!exe) return false
+  return basename(exe) === basename(process.execPath)
 }
 
 /**

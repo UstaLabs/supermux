@@ -13,6 +13,8 @@ import {
   decodeName,
   encodeName,
   ensureSocketDir,
+  executableFromCmdline,
+  looksLikeBroker,
   assertTargetMatches,
   isOurSocketBasename,
   keysFromNames,
@@ -226,6 +228,59 @@ describe("zmx name and socket-path limits", () => {
       "protocol",
     )).toBe(true)
     expect(throwsCode(() => assertTargetMatches(key, "garbage"), "protocol")).toBe(true)
+  })
+})
+
+describe("zmx broker identity", () => {
+  /** A procfs stand-in: what `/proc/<pid>/cmdline` would hold, NUL-separated
+   * exactly as the kernel writes it, resolved to argv[0] the way the real
+   * probe does when `/proc/<pid>/exe` is unreadable. */
+  const fromCmdlines = (blobs: Record<number, string>) =>
+    (pid: number) => {
+      const blob = blobs[pid]
+      return blob === undefined ? null : executableFromCmdline(blob)
+    }
+
+  test("a pid running something else entirely is NOT a broker", () => {
+    // Every one of these contains "bun" or "mux" somewhere in the joined
+    // cmdline, which is what the substring test matched. A recycled pid
+    // running any of them used to make the broker refuse to start with
+    // `socket-dir-unsafe` — the lockout the design calls the worse failure.
+    const blobs: Record<number, string> = {
+      101: "bundle\0install\0",
+      102: "/usr/bin/bundle\0exec\0rspec\0",
+      103: "bunyan\0-o\0short\0",
+      104: "tmux\0attach\0-t\0main\0",
+      105: "/usr/bin/tmux\0new-session\0",
+      106: "/bin/bash\0/home/x/mux-notes/run.sh\0",
+      107: "/usr/bin/python3\0/opt/bunker/tools/report.py\0",
+      108: "/home/x/.bun/install/cache/somepkg/bin/tool\0--watch\0", // a path with "bun" in it
+      109: "node\0/srv/app/server.js\0--mux-port=9898\0",
+    }
+    for (const pid of Object.keys(blobs).map(Number)) {
+      expect(looksLikeBroker(pid, fromCmdlines(blobs))).toBe(false)
+    }
+  })
+
+  test("a pid running OUR OWN executable is a broker", () => {
+    // A second broker is the same program we are, so identity is "runs what we
+    // run" — argv[0]'s basename, exactly, never a substring of the arguments.
+    const blobs: Record<number, string> = {
+      201: `${process.execPath}\0/srv/supermux/dist/main.js\0`,
+      202: `${process.execPath}\0`,
+    }
+    for (const pid of Object.keys(blobs).map(Number)) {
+      expect(looksLikeBroker(pid, fromCmdlines(blobs))).toBe(true)
+    }
+    // ...and this process, through the real procfs probe.
+    if (process.platform === "linux") expect(looksLikeBroker(process.pid)).toBe(true)
+  })
+
+  test("an unreadable or empty procfs answer is not a broker", () => {
+    expect(looksLikeBroker(1234, () => null)).toBe(false)
+    expect(looksLikeBroker(1234, fromCmdlines({ 1234: "" }))).toBe(false)
+    expect(looksLikeBroker(1234, fromCmdlines({ 1234: "\0\0" }))).toBe(false)
+    expect(executableFromCmdline("")).toBeNull()
   })
 })
 
