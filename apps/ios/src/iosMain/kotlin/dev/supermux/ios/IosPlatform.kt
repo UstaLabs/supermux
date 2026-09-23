@@ -213,7 +213,8 @@ class IosPlatform(
 /**
  * What an iPhone/iPad can do.
  *
- * `terminal` is true from H5 (SwiftTerm through `UIKitView`). `scrcpy` and `hardwareVideoDecode`
+ * `terminal` is true from H5, and since Plan 4 Task 3 it is the shared Compose renderer rather
+ * than SwiftTerm through a `UIKitView`. `scrcpy` and `hardwareVideoDecode`
  * stay false: every display renders through the Skia `VncFramebuffer`, which is a complete path
  * rather than a degraded one, and a VideoToolbox decoder is deferred (see the H5 plan). The App Store
  * owns updating, so `appUpdate` stays false forever. `push` is true from H3: `IosPushRegistrar`

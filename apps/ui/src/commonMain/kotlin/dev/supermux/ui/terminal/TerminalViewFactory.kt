@@ -30,10 +30,12 @@ import dev.supermux.net.TerminalClient
 /**
  * Builds the host's native terminal surface for one [TerminalClient].
  *
- * There are exactly two implementations: `JediTermTerminalViewFactory` (desktop — a
- * `JediTermWidget` inside a `SwingPanel`) and `TermlibTerminalViewFactory` (Android — ConnectBot
- * termlib's emulator inside an `AndroidView`). Both drive the SAME lifecycle, which is the contract
- * a shared caller may rely on:
+ * There is exactly ONE implementation now: [GhosttyTerminalViewFactory], mounted by every host as
+ * [SharedTerminal]. It replaced four — a `JediTermWidget` in a `SwingPanel`, ConnectBot termlib in
+ * an `AndroidView`, SwiftTerm in a `UIKitView` and xterm.js in the DOM — which is why the lifecycle
+ * below is written as a contract at all: it was the only thing holding those four to one behaviour,
+ * and it is now the seam a host uses to pass a different wasm URL or theme rather than a different
+ * engine. The lifecycle is unchanged, and is what a shared caller may rely on:
  *
  *  - **feed** — every byte the client emits reaches the emulator in arrival order (desktop through
  *    the connector's ordered FIFO, Android through `writeInput`).

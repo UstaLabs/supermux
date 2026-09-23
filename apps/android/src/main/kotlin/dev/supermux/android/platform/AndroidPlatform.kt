@@ -88,7 +88,8 @@ class AndroidPlatform(
 
     override val caps: Caps get() = ANDROID_CAPS
 
-    /** ConnectBot termlib in an `AndroidView` — the engine every Android terminal pane has used. */
+    /** The shared Compose terminal. Android named its own engine here until Plan 4 Task 3; the
+     * renderer is now the same code on every host, so there is nothing per-host left to say. */
     override fun terminalView(): TerminalViewFactory = SharedTerminal
 
     /** MediaCodec H.264, so a scrcpy display decodes in hardware here (desktop returns null). */

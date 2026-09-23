@@ -74,7 +74,8 @@ class DesktopPlatform : Platform {
         scrcpy = false,
     )
 
-    /** JediTerm in a `SwingPanel` — the engine every desktop terminal pane has always used. */
+    /** The shared Compose terminal. No `SwingPanel` is left on the terminal path: the grid is
+     * drawn by Compose, so the desktop pane is no longer a heavyweight interop child. */
     override fun terminalView(): TerminalViewFactory = SharedTerminal
 
     /** No MediaCodec here; every display falls back to its VNC framebuffer. */
