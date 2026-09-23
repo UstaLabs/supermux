@@ -67,6 +67,25 @@ internal data class ImeStep(
  * key press that just ran. Here the two paths stay separate on purpose — an IME commit that is NOT
  * an echo (a soft keyboard, a candidate, dictation) has to pass.
  *
+ * **Known limitation: a revision AFTER the commit.** Once a change ends a composition, the committed
+ * text is on the pty and the caller empties the field's buffer — so a soft keyboard that later comes
+ * back to "revise the word I already gave you" (autocorrect landing a word late, a swipe or
+ * dictation rewrite, a candidate re-picked after the fact) arrives at an EMPTY buffer and is
+ * indistinguishable from the user typing that word for the first time. It is therefore committed
+ * again, and the user sees the original followed by the correction — `teh the`, not `the`.
+ *
+ * This is not fixable here, and not a bug in this class. A terminal cannot un-send bytes: the
+ * original is already past the pty, quite possibly already consumed by a program on the far end of a
+ * network. "Correcting" it would mean synthesizing backspaces, which is wrong for everything that is
+ * not a line editor — a full-screen UI, a password prompt, a program in raw mode — and would turn a
+ * cosmetic duplicate into corrupted input. Suppressing a commit that happens to equal the last one
+ * would swallow the user really typing the same word twice, which is worse than the duplicate.
+ *
+ * What keeps it rare: the field asks for no autocorrect, no capitalization and no suggestions
+ * ([TerminalImeField]'s [KeyboardOptions]), so a keyboard that honours those hints never revises at
+ * all. `TerminalImeTest.aRevisionAfterTheCommitIsAppendedBecauseBytesCannotBeUnsent` pins the
+ * behaviour so that any future change to it is a deliberate one.
+ *
  * Read and written on the composition's thread only.
  */
 @Stable
@@ -137,6 +156,7 @@ internal fun TerminalImeField(
     focusRequester: FocusRequester,
     onCommit: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onComposing: () -> Unit = {},
 ) {
     val field = rememberTextFieldState()
     LaunchedEffect(state, field, enabled) {
@@ -146,6 +166,8 @@ internal fun TerminalImeField(
         }
         snapshotFlow { field.text.toString() to field.composition }.collect { (text, composition) ->
             val step = state.onChange(text, composition?.toIntRange())
+            // A live preedit sends nothing, but it IS the end of any hardware key's echo window.
+            if (step.marked.isNotEmpty()) onComposing()
             if (step.commit.isNotEmpty()) onCommit(step.commit)
             // Only ever emptied between compositions: an IME whose buffer is pulled away mid-word
             // re-sends the whole word, which is the classic "hello" -> "hhehelhellhello" bug.

@@ -108,6 +108,14 @@ internal class TerminalInputController(
         accessories.clear()
         router.reset()
         selection.finish()
+        // A composition that was live is NOT ended here: this relies on the platform IME finalizing
+        // or cancelling it on blur, which is what every one of them does (Android ends the batch
+        // edit and finishes composing, AWT/UIKit/the browser commit or abandon the preedit), and
+        // that finish arrives through the field as an ordinary change. [TerminalImeState] is
+        // deliberately NOT reset either: its `sent` counter tracks how much of the FIELD's buffer
+        // the terminal has heard, and focus loss does not empty that buffer — zeroing the counter
+        // against a buffer that still holds committed text would re-send the whole prefix on the
+        // next change. Only the buffer's own shrink may reset it; see [TerminalImeState.onChange].
     }
 
     /** Take the keyboard. Used by the pointer, the accessory bar and the a11y focus action. */
@@ -117,6 +125,16 @@ internal class TerminalInputController(
     fun commitText(text: String) {
         if (!enabled) return
         router.commitText(text)
+    }
+
+    /**
+     * The IME is composing. Nothing is sent — that is the whole point of a preedit — but it tells
+     * the echo gate that the hardware presses still waiting for an echo will not get one; see
+     * [TerminalTextGate].
+     */
+    fun composing() {
+        if (!enabled) return
+        router.composing()
     }
 
     // ----------------------------------------------------------------- clipboard ----

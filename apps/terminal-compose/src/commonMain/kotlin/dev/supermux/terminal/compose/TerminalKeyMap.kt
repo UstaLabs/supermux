@@ -141,31 +141,81 @@ private fun StringBuilder.appendCodePointCompat(codePoint: Int) {
  * an IME is the ONLY path for composed text, dictation and a soft keyboard's autocorrect — so the
  * fix is not to pick one but to make the second one notice.
  *
- * The rule: a hardware press records the text it submitted; the next [commit] of exactly that text
- * is dropped as its echo. Anything else (a different character, composed text, a second copy after
- * some other key) passes. The record is one character deep and is cleared by every key press, so a
- * duplicate is only ever suppressed within the press that produced it.
+ * The rule: a hardware press records the text it submitted, and the next [commit] of exactly that
+ * text is dropped as its echo. Anything else (a different character, composed text, a second copy
+ * once the echo has been accounted for) passes.
  *
- * The IME path itself is Plan 2 Task 5; this is the seam it plugs into.
+ * **Why a QUEUE and not one slot.** An echo is not synchronous: on Android the commit comes back
+ * through the IME process, so it can land AFTER the next hardware key event. With a single slot,
+ * two fast presses of the same character (`down a`, `down a`, `commit a`, `commit a`) drop one echo
+ * and treat the other as new input — three characters for two keystrokes. The pending echoes are
+ * therefore a FIFO, and each commit consumes its own.
+ *
+ * **Why the queue is BOUNDED.** Most platforms echo nothing at all (iOS, the browser, a desktop
+ * without a key-typed event), so entries that no commit will ever claim are the normal case, not the
+ * exception. An unbounded queue would grow for the life of the surface; at [MAX_PENDING] the oldest
+ * is dropped, which is also the oldest that could still plausibly be in flight.
+ *
+ * **Which way it fails.** The two paths are genuinely indistinguishable in one case — a stale
+ * pending echo and a character the user really typed — so this gate has to choose which mistake to
+ * make. Swallowing a keystroke is worse than sending an extra one: an extra character is visible and
+ * the user deletes it, whereas a swallowed one looks like broken hardware and silently corrupts what
+ * a program reads. So suppression is deliberately conservative:
+ *
+ * - a commit is dropped ONLY when a pending echo matches it exactly;
+ * - the match consumes that entry AND everything older than it — echoes keep the order of the
+ *   presses that produced them, so an older one that has not arrived by now never will;
+ * - a commit that matches NOTHING empties the queue: no outstanding echo explains it, so those
+ *   entries are stale and keeping them could only swallow a later real keystroke;
+ * - [composing] and [clear] empty it too (a live composition and a focus change are both boundaries
+ *   a hardware key's echo cannot cross).
+ *
+ * What is left is the one unavoidable hole: a press whose echo never arrives, followed — with no
+ * boundary in between — by the user genuinely typing that same character through an IME. That
+ * character is suppressed once. It takes a platform that echoes some presses and not others, and it
+ * costs one character; the alternative (suppressing on anything looser than an exact match) costs
+ * characters the user really typed.
  */
 internal class TerminalTextGate {
-    private var echo: String? = null
+    private val pending = ArrayDeque<String>()
 
-    /** A hardware key committed [text] (possibly ""); the matching IME echo is now expected. */
+    /** A hardware key committed [text]; the matching IME echo is now expected. */
     fun submitted(text: String) {
-        echo = text.ifEmpty { null }
+        // A key that produced no text (an arrow, Ctrl-C, F5) neither creates an echo nor cancels
+        // one: it is not a text event, and the presses before it may still be waiting for theirs.
+        if (text.isEmpty()) return
+        if (pending.size >= MAX_PENDING) pending.removeFirst()
+        pending.addLast(text)
     }
 
-    /** The text an IME committed, or null when it is the echo of the key press that just ran. */
+    /** The text an IME committed, or null when it is the echo of a hardware key press. */
     fun commit(text: String): String? {
-        val expected = echo
-        echo = null
-        return if (expected != null && expected == text) null else text.ifEmpty { null }
+        if (text.isEmpty()) return null
+        val matched = pending.indexOf(text)
+        if (matched < 0) {
+            pending.clear()
+            return text
+        }
+        repeat(matched + 1) { pending.removeFirst() }
+        return null
+    }
+
+    /**
+     * An IME composition is live. Whatever it commits is the composition's, not a key press's, so
+     * the presses still waiting for an echo have missed their chance.
+     */
+    fun composing() {
+        pending.clear()
     }
 
     /** Focus changed, or the surface was rebound: forget what was in flight. */
     fun clear() {
-        echo = null
+        pending.clear()
+    }
+
+    private companion object {
+        /** Echoes that may be outstanding at once. Eight is more presses than an echo ever lags. */
+        const val MAX_PENDING = 8
     }
 }
 
@@ -222,8 +272,16 @@ internal class TerminalKeyRouter(
     }
 
     /**
-     * Text an IME committed (Plan 2 Task 5's path), dropped when it is the echo of the hardware key
-     * that just ran. Returns true when something was sent.
+     * An IME composition is live ([TerminalImeState.marked] is not empty): a hardware key's echo
+     * cannot be what comes out of it, so nothing that was waiting for one still is.
+     */
+    fun composing() {
+        gate.composing()
+    }
+
+    /**
+     * Text an IME committed, dropped when it is the echo of a hardware key that just ran. Returns
+     * true when something was sent.
      */
     fun commitText(text: String): Boolean {
         val effective = gate.commit(text) ?: return false

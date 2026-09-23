@@ -6,6 +6,7 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.performTextInput
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -135,6 +136,100 @@ class TerminalImeTest {
         assertEquals("world", racing.step("hello world", null).commit)
     }
 
+    @Test fun aRevisionAfterTheCommitIsAppendedBecauseBytesCannotBeUnsent() {
+        // PINS A KNOWN LIMITATION, so that changing it is a deliberate act. See [TerminalImeState].
+        val ime = TerminalImeState()
+        assertEquals("teh ", ime.step("teh ", null).commit)
+        // The surface empties the buffer after the commit, which is what the next step sees.
+        assertEquals("", ime.step("", null).commit)
+
+        // The keyboard now revises the word it already committed. The buffer is empty, so this is
+        // indistinguishable from the user typing "the" for the first time — and the original bytes
+        // are already past the pty and cannot be taken back.
+        assertEquals("", ime.step("the", 0 until 3).commit)
+        assertEquals(
+            "the",
+            ime.step("the", null).commit,
+            "the revision stopped being appended — intended? then update TerminalImeState's KDoc, " +
+                "terminal-compose/README.md §6 and this test together",
+        )
+        // What the user sees on the wire is "teh the": the original, then the correction.
+    }
+
+    // ----------------------------------------------------------------- the echo gate ----
+
+    @Test fun twoPressesOfTheSameCharacterDropTwoEchoesAndNotOne() {
+        val gate = TerminalTextGate()
+        // An echo comes back through the IME process, so both presses can land before either echo.
+        gate.submitted("a")
+        gate.submitted("a")
+        assertNull(gate.commit("a"), "the first echo was typed a second time")
+        assertNull(gate.commit("a"), "the second press's echo was treated as new input")
+        // A third copy has no press behind it: someone really typed it.
+        assertEquals("a", gate.commit("a"), "a character the user typed was swallowed")
+    }
+
+    @Test fun anEchoThatBeatsTheNextPressIsStillMatchedToItsOwn() {
+        val gate = TerminalTextGate()
+        gate.submitted("a")
+        assertNull(gate.commit("a"))
+        gate.submitted("a")
+        assertNull(gate.commit("a"), "the second press's echo was treated as new input")
+        assertEquals("a", gate.commit("a"))
+    }
+
+    @Test fun anEchoThatNeverArrivesIsRetiredByTheNextOneThatDoes() {
+        val gate = TerminalTextGate()
+        // A platform that echoes some presses and not others leaves 'a' pending for ever.
+        gate.submitted("a")
+        gate.submitted("b")
+        // Echoes keep the order of their presses, so 'a''s can no longer be in flight behind 'b''s.
+        assertNull(gate.commit("b"))
+        assertEquals("a", gate.commit("a"), "a character the user typed was swallowed as a stale echo")
+    }
+
+    @Test fun aCommitThatMatchesNothingRetiresTheEchoesBehindIt() {
+        val gate = TerminalTextGate()
+        gate.submitted("a")
+        // Composed text is nobody's echo — and it means the pending ones are stale.
+        assertEquals("ş", gate.commit("ş"))
+        assertEquals("a", gate.commit("a"), "a character the user typed was swallowed as a stale echo")
+    }
+
+    @Test fun aLiveCompositionClosesTheEchoWindow() {
+        val gate = TerminalTextGate()
+        gate.submitted("a")
+        gate.composing()
+        assertEquals("a", gate.commit("a"), "a composed character was swallowed as a key's echo")
+
+        // And so does focus leaving the surface.
+        val refocused = TerminalTextGate()
+        refocused.submitted("a")
+        refocused.clear()
+        assertEquals("a", refocused.commit("a"))
+    }
+
+    @Test fun thePendingEchoQueueIsBounded() {
+        // Most platforms echo nothing at all, so unclaimed entries are the normal case: the queue
+        // has to forget the oldest rather than grow for the life of the surface.
+        val overflowing = TerminalTextGate()
+        for (c in 'a'..'i') overflowing.submitted(c.toString())
+        assertEquals("a", overflowing.commit("a"), "the echo queue grew past its bound")
+
+        // The bound is not tighter than it claims: eight presses deep, the oldest still matches.
+        val full = TerminalTextGate()
+        for (c in 'a'..'h') full.submitted(c.toString())
+        assertNull(full.commit("a"), "an echo within the bound was treated as new input")
+    }
+
+    @Test fun aKeyThatProducedNoTextNeitherEchoesNorCancelsOne() {
+        val gate = TerminalTextGate()
+        gate.submitted("a")
+        // An arrow key, Ctrl-C, F5: not a text event, and no reason to forget 'a''s echo.
+        gate.submitted("")
+        assertNull(gate.commit("a"), "an arrow key between a press and its echo let the echo through")
+    }
+
     // ----------------------------------------------------------------- the wire ----
 
     @OptIn(ExperimentalTestApi::class)
@@ -161,10 +256,45 @@ class TerminalImeTest {
         assertEquals("aş", fixture.recorded())
     }
 
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun twoFastPressesAndTwoLateEchoesTypeTwoCharacters() = terminalInputTest { fixture ->
+        // A soft keyboard fast enough that both presses land before either echo does. Three 'a' on
+        // the wire for two keystrokes is what a one-deep echo record produces here.
+        val router = TerminalKeyRouter(send = { fixture.session.key(it) })
+        router.handle(keyEvent(Key.A, 'a'.code))
+        router.handle(keyEvent(Key.A, 'a'.code, androidx.compose.ui.input.key.KeyEventType.KeyUp))
+        router.handle(keyEvent(Key.A, 'a'.code))
+        router.handle(keyEvent(Key.A, 'a'.code, androidx.compose.ui.input.key.KeyEventType.KeyUp))
+        assertEquals(false, router.commitText("a"), "the first press's echo was typed again")
+        assertEquals(false, router.commitText("a"), "the second press's echo was typed again")
+        waitUntil(timeoutMillis = INPUT_TIMEOUT) { fixture.recorder.bytes().size >= 2 }
+        waitForIdle()
+        assertEquals("aa", fixture.recorded())
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun aPressWhoseEchoNeverArrivesDoesNotSwallowATypedCharacter() = terminalInputTest { fixture ->
+        val router = TerminalKeyRouter(send = { fixture.session.key(it) })
+        // A hardware key on a platform that does not echo: nothing ever claims this pending echo.
+        router.handle(keyEvent(Key.A, 'a'.code))
+        // The user then types the SAME character on the soft keyboard, which composes first.
+        router.composing()
+        assertEquals(true, router.commitText("a"), "a character the user typed was swallowed")
+        waitUntil(timeoutMillis = INPUT_TIMEOUT) { fixture.recorder.bytes().size >= 2 }
+        waitForIdle()
+        // Both reach the program: the key the user pressed and the character the user typed.
+        assertEquals("aa", fixture.recorded())
+    }
+
     @OptIn(androidx.compose.ui.InternalComposeUiApi::class)
-    private fun keyEvent(key: Key, codePoint: Int) = androidx.compose.ui.input.key.KeyEvent(
+    private fun keyEvent(
+        key: Key,
+        codePoint: Int,
+        type: androidx.compose.ui.input.key.KeyEventType =
+            androidx.compose.ui.input.key.KeyEventType.KeyDown,
+    ) = androidx.compose.ui.input.key.KeyEvent(
         key = key,
-        type = androidx.compose.ui.input.key.KeyEventType.KeyDown,
+        type = type,
         codePoint = codePoint,
     )
 }

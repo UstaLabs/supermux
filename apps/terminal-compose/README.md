@@ -225,6 +225,36 @@ emits no "exit" event of its own.
 
 ---
 
+## 6. Composed text (IME)
+
+Nothing is required of the host here — the surface owns its own text input — but two behaviours are
+worth knowing about, because both are visible to the user.
+
+**A preedit byte is never sent.** Turkish dead keys, CJK candidates, emoji pickers, dictation and a
+software keyboard's own rewriting all show the user characters *before* they are final. The surface
+holds the composing text apart from the terminal's content and draws it at the cursor itself; the
+program hears exactly one thing, the committed string. See `TerminalImeState`.
+
+**One keystroke, one character.** A hardware key press can arrive twice — once as a key event and
+once as an IME commit of the same character (Android does this, and so does a desktop's key-typed
+event). `TerminalTextGate` drops the second copy: a press records the text it submitted, and a
+commit of exactly that text is its echo. The record is a small bounded queue, not a single slot,
+because an echo can lag several presses behind; and suppression is deliberately conservative — a
+commit is dropped only when a pending echo matches it exactly, and a commit that matches nothing
+retires the stale entries behind it. When the two are genuinely indistinguishable the gate errs
+towards sending: an extra character is visible and deletable, a swallowed keystroke is not.
+
+**Known limitation — a correction that arrives after the word.** Committed text is on the pty
+immediately, so a keyboard that later revises a word it already gave us (autocorrect landing late,
+a swipe or dictation rewrite) cannot be applied: the user sees the original followed by the
+correction, `teh the` rather than `the`. A terminal cannot un-send bytes, and synthesizing
+backspaces would corrupt everything that is not a line editor — a full-screen UI, a password
+prompt, a program in raw mode — so the surface does neither. It asks the platform for no
+autocorrect, no capitalization and no suggestions, which is what keeps it rare; the behaviour is
+pinned by `TerminalImeTest.aRevisionAfterTheCommitIsAppendedBecauseBytesCannotBeUnsent`.
+
+---
+
 ## What the surface does for you
 
 Collecting and acknowledging frames, measuring the grid and resizing the session once per distinct

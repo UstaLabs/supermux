@@ -357,6 +357,7 @@ fun Terminal(
                 enabled = active,
                 focusRequester = focusRequester,
                 onCommit = input::commitText,
+                onComposing = input::composing,
             )
             overlay()
         }
