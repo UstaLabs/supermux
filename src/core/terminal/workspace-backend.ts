@@ -26,11 +26,22 @@
 //
 // Viewer writes are split into `write` (user input) and `reply` (a terminal
 // REPLY the client's emulator produced — DA/DSR/kitty query answers). They land
-// on the same pty, but keeping them apart lets a backend answer queries from a
-// non-owning viewer without letting a background tab type into the shell, and
-// lets a slow/bounded queue drop bulk input before it drops a protocol reply.
-// Both return false when the byte could not be accepted (viewer gone, queue
-// full) so the caller can apply backpressure rather than silently losing bytes.
+// on the same pty, and keeping them apart is what lets the backend apply
+// OPPOSITE rules to them:
+//
+//   * `write` from any viewer reaches the pty. Typing is typing, and it never
+//     moves size ownership.
+//   * `reply` is OWNER-ONLY. A non-owning viewer's reply is DISCARDED — not
+//     queued, not answered later. Every viewer renders the same DA1/DSR query
+//     and every one of them answers it, so anything past the first answer is
+//     read by the shell as typed input. One query, one answer, from the viewer
+//     that owns the size.
+//
+// A background tab must therefore never be expected to satisfy a query. Both
+// calls return false when the byte could not be accepted (viewer gone, queue
+// full) so the caller can apply backpressure rather than silently losing
+// bytes; `reply` returning true means "handed to the backend", which for a
+// non-owner still ends in the drop described above.
 
 /** A workspace terminal's identity. `scope` is TerminalManager's namespace —
  * "w:<workspaceId>" for a workspace terminal (see core/workspace/scope.ts), or
@@ -55,7 +66,19 @@ export type WorkspaceTerminalEvent =
   | { type: "output"; bytes: Uint8Array }
   | { type: "replay-end"; epoch: string }
   | { type: "owner"; enabled: boolean }
-  | { type: "exit"; code: number }
+  /**
+   * The TARGET PROCESS ended. Never synthesised from a lost connection: a
+   * closed socket is also what a killed backend, a crashed one and a dropped
+   * connection look like, and "your program ended" closes a tab while "I
+   * cannot see your program" retries.
+   *
+   * `known: false` means the backend saw the program end but could not reap a
+   * status — the pty closing and the child becoming reapable RACE — so `code`
+   * and `signal` are both null. Reporting code 0 there would claim a clean
+   * exit nobody observed. A signalled exit carries `signal` with a null
+   * `code`, because 0 is a real exit code and "killed by SIGHUP" is not it.
+   */
+  | { type: "exit"; known: boolean; code: number | null; signal: number | null }
   | { type: "failure"; code: string; recoverable: boolean; message: string }
 
 export interface WorkspaceTerminalViewer {

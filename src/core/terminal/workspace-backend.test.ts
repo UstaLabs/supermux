@@ -40,7 +40,7 @@ type World = {
   pendingEnsure: Map<string, Promise<void>>
   hooks: { beforeCreate?: () => Promise<void>; beforeAttach?: () => Promise<void> }
   /** The target's process ended on its own. The target is GONE — nothing respawns it. */
-  exit(key: WorkspaceTerminalKey, code: number): Promise<void>
+  exit(key: WorkspaceTerminalKey, status: Omit<Extract<WorkspaceTerminalEvent, { type: "exit" }>, "type">): Promise<void>
 }
 
 const keyOf = (key: WorkspaceTerminalKey) => JSON.stringify([key.scope, key.terminalId])
@@ -55,12 +55,12 @@ function makeWorld(): World {
     epoch: 0,
     pendingEnsure: new Map(),
     hooks: {},
-    async exit(key, code) {
+    async exit(key, status) {
       const target = world.targets.get(keyOf(key))
       if (!target) return
       world.targets.delete(keyOf(key))
       for (const viewer of [...target.viewers.values()]) {
-        await viewer.deliver({ type: "exit", code })
+        await viewer.deliver({ type: "exit", ...status })
         viewer.kill()
       }
     },
@@ -323,8 +323,8 @@ describe("workspace terminal backend contract", () => {
     const { events, emit } = recorder()
     await backend.attachExisting(A, "v1", emit)
 
-    await world.exit(A, 0)
-    expect(events.at(-1)).toEqual({ type: "exit", code: 0 })
+    await world.exit(A, { known: true, code: 0, signal: null })
+    expect(events.at(-1)).toEqual({ type: "exit", known: true, code: 0, signal: null })
     expect(await backend.exists(A)).toBe(false)
 
     // `tmux new-session -A` would hand back a brand-new shell here. We must not.
