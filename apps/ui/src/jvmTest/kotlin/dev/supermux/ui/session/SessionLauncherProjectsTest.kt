@@ -96,6 +96,12 @@ class SessionLauncherProjectsTest {
     private fun ComposeUiTest.caption(text: String) =
         onNodeWithTag("launcher_workdir_caption").assertTextEquals(text)
 
+    /** No project chosen yet: no caption, and the heading asks for one (never a silent `~`). */
+    private fun ComposeUiTest.noProject() {
+        onNodeWithTag("launcher_workdir_caption").assertDoesNotExist()
+        onNodeWithTag("launcher_project_label", useUnmergedTree = true).assertTextEquals("Choose a project")
+    }
+
     @Test fun no_catalog_keeps_the_path_omnibox() = runComposeUiTest {
         pointer { Harness(catalog = flowOf(emptyList())) }
         waitForIdle()
@@ -121,6 +127,23 @@ class SessionLauncherProjectsTest {
         caption("~/beta")
         onNodeWithTag("launcher_project_label", useUnmergedTree = true).assertTextEquals("Beta")
         assertEquals("/home/u/beta", saved?.projectLocations?.get(projectLocationKey(HOST, "b")))
+    }
+
+    @Test fun with_no_sessions_the_catalogs_first_project_is_the_default() = runComposeUiTest {
+        val catalog = listOf(
+            project("b", "Beta", "/home/u/beta", sortOrder = 1),
+            project("a", "Alpha", "/home/u/alpha", sortOrder = 0),
+        )
+        pointer { Harness(catalog = flowOf(catalog)) }
+        waitForIdle()
+        caption("~/alpha")
+        onNodeWithTag("launcher_project_label", useUnmergedTree = true).assertTextEquals("Alpha")
+    }
+
+    @Test fun a_first_project_that_needs_a_location_choice_is_not_guessed() = runComposeUiTest {
+        pointer { Harness(catalog = flowOf(listOf(project("p", "App", "/home/u/app", "/home/u/app-web")))) }
+        waitForIdle()
+        noProject()
     }
 
     @Test fun several_locations_ask_and_the_pick_is_remembered() = runComposeUiTest {
@@ -210,7 +233,7 @@ class SessionLauncherProjectsTest {
         onNodeWithTag("launcher_use_path").performClick()
         waitForIdle()
         onNodeWithTag("launcher_project_error").assertTextEquals("Already in Other")
-        caption("~")
+        noProject()
     }
 
     @Test fun sidebar_preselect_applies_the_project() = runComposeUiTest {
@@ -238,7 +261,7 @@ class SessionLauncherProjectsTest {
         var applied = 0
         pointer { Harness(catalog = catalog, initialProjectId = "b", onInitialProjectApplied = { applied++ }) }
         waitForIdle()
-        caption("~")
+        noProject()
         assertEquals(0, applied)
         catalog.value = listOf(project("a", "Alpha", "/home/u/alpha"), project("b", "Beta", "/home/u/beta"))
         waitForIdle()
@@ -260,7 +283,7 @@ class SessionLauncherProjectsTest {
         onNodeWithTag(CatalogPickerTestIds.project("p")).performClick()
         waitForIdle()
         onNodeWithTag(CatalogPickerTestIds.location("/home/u/app")).assertIsDisplayed()
-        caption("~")
+        noProject()
     }
 
     @Test fun changing_agent_after_a_location_pick_keeps_the_remembered_locations() = runComposeUiTest {
@@ -341,7 +364,7 @@ class SessionLauncherProjectsTest {
         onNodeWithTag("launcher_project_pending").assertDoesNotExist()
         gate.complete(Unit)
         waitForIdle()
-        caption("~")
+        noProject()
         assertNull(saved?.projectLocations?.get(projectLocationKey(HOST, "e")))
         assertNull(saved?.projectLocations?.get(projectLocationKey("h2", "e")))
     }

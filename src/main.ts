@@ -1495,16 +1495,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     previewAgentCommands: async ({ agent, workdir }) => {
       const kind = agent as import("./core/agents/types").AgentKind
-      await commandRegistry.refreshPreview({
+      return commandRegistry.preview({
         kind,
         workdir,
         pluginSpawnArgs: pluginSpawnArgsForKind(kind, { sessionName: "__preview__" }),
         agentContext: agentModules[kind]?.commandContext?.({ sessionName: "__preview__", kindAdapters: () => adaptersOfKind(kind) }),
       })
-      return {
-        commands: commandRegistry.getPreview(kind, workdir),
-        resolved: commandRegistry.isPreviewResolved(kind, workdir),
-      }
     },
     onAgentHook: (event, body) => {
       const claudeSid = body?.session_id

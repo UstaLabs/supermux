@@ -26,6 +26,10 @@ import dev.supermux.proto.SlashCommand
 import dev.supermux.state.LauncherDraft
 import dev.supermux.state.LauncherPrefs
 import dev.supermux.state.StagedUpload
+import dev.supermux.state.worktreeChoiceKey
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
@@ -45,8 +49,7 @@ import kotlinx.coroutines.runBlocking
 /**
  * The shared [SessionLauncherScreen] (cluster F6) — three layers:
  *
- *  1. The PURE settle-vs-change helpers ([shouldResetModelOnAgentChange] /
- *     [shouldResetBaseBranchOnWorkdirChange]) + [filterBranches] are unit-tested
+ *  1. The PURE settle-vs-change helper ([shouldResetModelOnAgentChange]) + [filterBranches] are unit-tested
  *     directly (no Compose). These encode the subtle draft-restore-vs-genuine-change logic that
  *     caused a real device bug on iOS/Android — a restore-settle must NEVER reset the model or the
  *     base branch, a genuine later change MUST.
@@ -78,28 +81,6 @@ class SessionLauncherScreenTest {
 
     @Test fun model_reset_genuine_change_resets() {
         assertTrue(shouldResetModelOnAgentChange(lastSeen = "claude", current = "codex", restoring = false))
-    }
-
-    @Test fun base_branch_first_observation_seeds_when_blank() {
-        // No base branch yet → seed it from the repo's current branch (even on the first workdir).
-        assertTrue(shouldResetBaseBranchOnWorkdirChange(lastSeen = null, current = "/w", baseBranch = "", restoring = false))
-    }
-
-    @Test fun base_branch_first_observation_keeps_nonblank() {
-        // A restored non-blank base branch on the first workdir must survive.
-        assertFalse(shouldResetBaseBranchOnWorkdirChange(lastSeen = null, current = "/w", baseBranch = "main", restoring = false))
-    }
-
-    @Test fun base_branch_restore_settle_never_resets() {
-        assertFalse(shouldResetBaseBranchOnWorkdirChange(lastSeen = "/w", current = "/x", baseBranch = "", restoring = true))
-    }
-
-    @Test fun base_branch_genuine_workdir_change_resets() {
-        assertTrue(shouldResetBaseBranchOnWorkdirChange(lastSeen = "/w", current = "/x", baseBranch = "main", restoring = false))
-    }
-
-    @Test fun base_branch_same_workdir_keeps_nonblank() {
-        assertFalse(shouldResetBaseBranchOnWorkdirChange(lastSeen = "/w", current = "/w", baseBranch = "main", restoring = false))
     }
 
     // ── filterBranches ──────────────────────────────────────────────────────────────────────────
@@ -134,7 +115,11 @@ class SessionLauncherScreenTest {
         models: (String) -> List<ModelInfo> = { emptyList() },
         reasoning: (String, String?) -> ReasoningResponse? = { _, _ -> null },
         repoInfo: RepoInfo? = null,
+        /** Per-workdir repo info; overrides [repoInfo] when set. */
+        repoInfoAt: (suspend (String) -> RepoInfo?)? = null,
         commands: List<SlashCommand> = emptyList(),
+        /** Every workdir the screen asked repo info or slash commands for. */
+        asked: MutableList<String>? = null,
         // A restored draft workdir survives an EMPTY project list now — that reset
         // used to fire on "could not enumerate projects" and silently rewrite the
         // workdir to "~". Kept parameterised so a test can still exercise the
@@ -161,8 +146,8 @@ class SessionLauncherScreenTest {
                     validatePath = { null },
                     launcherModels = { models(it) },
                     launcherReasoning = { a, m -> reasoning(a, m) },
-                    launcherRepoInfo = { _, _ -> repoInfo },
-                    launcherCommands = { _, _ -> commands },
+                    launcherRepoInfo = { w, _ -> asked?.add(w); repoInfoAt?.invoke(w) ?: repoInfo },
+                    launcherCommands = { _, w -> asked?.add(w); commands },
                 ),
                 loadPrefs = { prefs },
                 onPrefsChange = onPrefsChange,
@@ -363,7 +348,7 @@ class SessionLauncherScreenTest {
         assertEquals("keep me", drafts.lastOrNull()?.text)
     }
 
-    @Test fun agent_change_resets_model_to_default() = runComposeUiTest {
+    @Test fun agent_change_brings_back_that_agents_remembered_model() = runComposeUiTest {
         pointerContent {
             Harness(
                 prefs = LauncherPrefs(agent = "claude", models = mapOf("claude" to "claude-x")),
@@ -383,6 +368,134 @@ class SessionLauncherScreenTest {
         waitForIdle()
         onNodeWithText("Default").assertIsDisplayed()
         onNodeWithText("Claude X").assertDoesNotExist()
+
+        // …and back: claude's remembered pick returns instead of staying on Default.
+        onNodeWithTag("launcher_agent_pill").performClick()
+        onNodeWithTag("agent_claude").performClick()
+        waitForIdle()
+        onNodeWithText("Claude X").assertIsDisplayed()
+    }
+
+    // ── no project is a state, not `~` ──────────────────────────────────────────────────────────
+
+    @Test fun nothing_to_pick_from_asks_for_a_project_and_loads_nothing() = runComposeUiTest {
+        val asked = mutableListOf<String>()
+        pointerContent { Harness(draft = LauncherDraft(text = "go"), repoInfo = repo, asked = asked) }
+        waitForIdle()
+        onNodeWithTag("launcher_project_label", useUnmergedTree = true).assertTextEquals("Choose a project")
+        onNodeWithTag("launcher_workdir_caption").assertDoesNotExist()
+        onNodeWithTag("launcher_worktree").assertDoesNotExist()
+        onNodeWithTag("launcher_submit").assertIsNotEnabled()
+        assertTrue(asked.isEmpty(), "no repo info / commands for a project nobody chose; got $asked")
+    }
+
+    @Test fun the_recent_project_is_the_first_and_only_thing_loaded() = runComposeUiTest {
+        val asked = mutableListOf<String>()
+        pointerContent {
+            Harness(sessions = listOf(session("s1", "/proj/x")), repoInfo = repo, asked = asked)
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_workdir_caption").assertTextEquals(dev.supermux.session.formatWorkdir("/proj/x", "/home/u"))
+        assertEquals(setOf("/proj/x"), asked.toSet())
+    }
+
+    // ── worktree + base branch follow the project ───────────────────────────────────────────────
+
+    @Test fun a_project_switch_never_submits_the_old_projects_branch() = runComposeUiTest {
+        var sessions by mutableStateOf(listOf(session("s1", "/proj/x")))
+        val gate = CompletableDeferred<RepoInfo?>()
+        val repoY = RepoInfo(
+            eligible = true,
+            currentBranch = "trunk",
+            repoRoot = "/proj/y",
+            branches = RepoBranches(local = listOf("trunk"), remote = emptyList()),
+        )
+        var captured: Submitted? = null
+        pointerContent {
+            Harness(
+                // No text yet: typing freezes the project, and this one must follow recency.
+                sessions = sessions,
+                repoInfoAt = { w -> if (w == "/proj/y") gate.await() else repo },
+                onSubmit = { w, a, m, r, t, st, wt, b, _ -> captured = Submitted(w, a, m, r, t, st.size, wt, b); null },
+            )
+        }
+        waitForIdle()
+        onNodeWithText("main").assertIsDisplayed()
+
+        // The most recent project moves to /proj/y while its repo info is still loading.
+        sessions = listOf(session("s2", "/proj/y"), session("s1", "/proj/x"))
+        waitForIdle()
+        onNodeWithTag("launcher_worktree").assertDoesNotExist()
+        onNodeWithTag("launcher_submit").assertIsNotEnabled()
+
+        gate.complete(repoY)
+        waitForIdle()
+        onNodeWithText("trunk").assertIsDisplayed()
+        onNodeWithTag("launcher_message").performTextInput("go")
+        waitForIdle()
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals("/proj/y", captured?.workdir)
+        assertEquals(true, captured?.worktree)
+        assertEquals("trunk", captured?.baseBranch)
+    }
+
+    @Test fun a_drafts_branch_stays_with_the_drafts_folder() = runComposeUiTest {
+        // No draft workdir → the stored branch belonged to some earlier default, not this project.
+        pointerContent {
+            Harness(
+                sessions = listOf(session("s1", "/proj/x")),
+                draft = LauncherDraft(baseBranch = "stale/branch"),
+                repoInfo = repo,
+            )
+        }
+        waitForIdle()
+        onNodeWithText("main").assertIsDisplayed()
+        onNodeWithText("stale/branch").assertDoesNotExist()
+    }
+
+    @Test fun worktree_off_is_remembered_for_that_folder_only() = runComposeUiTest {
+        var saved: LauncherPrefs? = null
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x"),
+                repoInfo = repo,
+                onPrefsChange = { saved = it },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_worktree").performClick()
+        waitForIdle()
+        onNodeWithTag("launcher_worktree_toggle").performClick()
+        waitForIdle()
+        assertEquals(setOf(worktreeChoiceKey("", "/proj/x")), saved?.worktreeOff)
+        onNodeWithText("No worktree").assertIsDisplayed()
+    }
+
+    @Test fun a_remembered_opt_out_spawns_that_folder_without_a_worktree() = runComposeUiTest {
+        var captured: Submitted? = null
+        pointerContent {
+            Harness(
+                prefs = LauncherPrefs(worktreeOff = setOf(worktreeChoiceKey("", "/proj/x"))),
+                draft = LauncherDraft(workdir = "/proj/x", text = "go"),
+                repoInfo = repo,
+                onSubmit = { w, a, m, r, t, st, wt, b, _ -> captured = Submitted(w, a, m, r, t, st.size, wt, b); null },
+            )
+        }
+        waitForIdle()
+        onNodeWithText("No worktree").assertIsDisplayed()
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(false, captured?.worktree)
+        assertEquals(null, captured?.baseBranch)
+    }
+
+    @Test fun a_remembered_opt_out_applies_only_to_its_folder() = runComposeUiTest {
+        val prefs = LauncherPrefs(worktreeOff = setOf(worktreeChoiceKey("", "/proj/other")))
+        pointerContent { Harness(prefs = prefs, draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo) }
+        waitForIdle()
+        onNodeWithText("main").assertIsDisplayed()
+        onNodeWithText("No worktree").assertDoesNotExist()
     }
 
     /**
@@ -414,7 +527,8 @@ class SessionLauncherScreenTest {
         SlashCommand(id = name, family = "agent", name = name, insertText = insert)
 
     @Test fun slash_menu_offers_matches_and_inserts_under_a_pointer() = runComposeUiTest {
-        pointerContent { Harness(commands = listOf(cmd("review"), cmd("refactor"))) }
+        // Commands load for a chosen project only.
+        pointerContent { Harness(draft = LauncherDraft(workdir = "/proj/x"), commands = listOf(cmd("review"), cmd("refactor"))) }
         waitForIdle()
         onNodeWithTag("launcher_message").performTextInput("/re")
         waitForIdle()
@@ -428,7 +542,7 @@ class SessionLauncherScreenTest {
     }
 
     @Test fun slash_menu_offers_matches_under_touch_too() = runComposeUiTest {
-        touchContent { Harness(commands = listOf(cmd("review"))) }
+        touchContent { Harness(draft = LauncherDraft(workdir = "/proj/x"), commands = listOf(cmd("review"))) }
         waitForIdle()
         onNodeWithTag("launcher_message").performTextInput("/rev")
         waitForIdle()
@@ -436,7 +550,7 @@ class SessionLauncherScreenTest {
     }
 
     @Test fun escape_dismisses_the_slash_menu_without_touching_the_draft() = runComposeUiTest {
-        pointerContent { Harness(commands = listOf(cmd("review"))) }
+        pointerContent { Harness(draft = LauncherDraft(workdir = "/proj/x"), commands = listOf(cmd("review"))) }
         waitForIdle()
         onNodeWithTag("launcher_message").performTextInput("/rev")
         waitForIdle()
@@ -517,6 +631,9 @@ class SessionLauncherScreenTest {
     }
 
     // ── worktree: Android's sheet on touch, desktop's dialog under a pointer ─────────────────────
+
+    private fun session(id: String, workdir: String) =
+        SessionInfo(id = id, name = id, workdir = workdir, agent = "claude")
 
     private val repo = RepoInfo(
         eligible = true,
