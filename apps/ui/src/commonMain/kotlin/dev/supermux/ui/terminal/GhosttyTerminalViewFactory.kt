@@ -218,34 +218,15 @@ private class GhosttyTerminalSurface(
         LaunchedEffect(terminal, predictions) {
             var opened: TerminalSession? = null
             try {
-                val session0 = factory.open { effect ->
-                    // Runs on the engine's own coroutine. Only two effects leave this machine:
-                    // what the user typed, and what the emulator ANSWERED. They take different
-                    // routes because the broker applies opposite rules to them — typing reaches
-                    // the pty from any viewer, a reply only from the size owner.
-                    when (effect) {
-                        is TerminalEffect.Input -> {
-                            // PREDICT FIRST, SEND SECOND, and never the other way round. The
-                            // instant `sendInput` hands the bytes over, the echo is racing us:
-                            // the adapter can put that echo on the prediction lane before this
-                            // coroutine gets to put the keystroke on it, and an echo that arrives
-                            // before the keystroke it confirms is read as a divergence. The
-                            // keystroke cannot come back before it has left.
-                            //
-                            // The caret is read HERE too, at the moment the key was encoded, not
-                            // when the lane drains: by then the echo may already have moved it,
-                            // and a prediction placed at the new caret is a prediction one cell
-                            // to the right of where the user typed.
-                            val caret = opened?.viewports?.value?.cursor?.toPredictionCursor()
-                            signals.trySend(
-                                PredictionSignal.Typed(effect.bytes, caret ?: ORIGIN, factory.now()),
-                            )
-                            terminal.sendInput(effect.bytes)
-                        }
-                        is TerminalEffect.Response -> terminal.sendReply(effect.bytes)
-                        else -> Unit
-                    }
-                }
+                val session0 = factory.open(
+                    terminalEffects(
+                        predict = { signal -> signals.trySend(signal) },
+                        sendInput = { bytes -> terminal.sendInput(bytes) },
+                        sendReply = { bytes -> terminal.sendReply(bytes) },
+                        now = factory::now,
+                        caret = { opened?.viewports?.value?.cursor?.toPredictionCursor() },
+                    ),
+                )
                 opened = session0
                 session = session0
                 adaptTerminalEvents(session0, terminal, signals, factory::now) {
@@ -494,6 +475,51 @@ internal suspend fun adaptTerminalEvents(
     subscribed.await()
     client.run()
     events.cancel()
+}
+
+/**
+ * The engine's effects, routed — PREDICT FIRST, SEND SECOND.
+ *
+ * Lifted out of the composable that installs it so the ORDER is testable. It is the one ordering
+ * in this file that a fake socket cannot reproduce: both halves happen inside a single call on the
+ * engine's coroutine, so no amount of driving the transport can observe them interleaved. Swapping
+ * the two lines leaves every end-to-end test green and breaks prediction the moment the round trip
+ * is fast — which is every local broker. A test that calls THIS and records the order is the only
+ * thing that fails when it is reverted.
+ *
+ * WHY THE ORDER. The instant [TerminalClient.sendInput] hands the bytes over, the echo is racing
+ * us: the event adapter can put that echo on the prediction lane before this coroutine gets to put
+ * the keystroke on it, and an echo that arrives before the keystroke it confirms is read as a
+ * divergence — the epoch never opens and nothing is ever predicted again. The keystroke cannot
+ * come back before it has left.
+ *
+ * [caret] is read HERE too, at the moment the key was encoded, not when the lane drains: by then
+ * the echo may already have moved it, and a prediction placed at the new caret is a prediction one
+ * cell to the right of where the user typed.
+ *
+ * Only two effects leave the engine: what the user typed, and what the emulator ANSWERED. They
+ * take different routes because the broker applies opposite rules to them — typing reaches the pty
+ * from any viewer, a reply only from the size owner.
+ *
+ * [sendInput]/[sendReply] are lambdas rather than the `TerminalClient` itself for one reason: the
+ * client is a final class whose writes are only observable through a running socket, and the whole
+ * point here is to observe a WRITE relative to a PREDICTION, with nothing running.
+ */
+internal fun terminalEffects(
+    predict: (PredictionSignal) -> Unit,
+    sendInput: (ByteArray) -> Unit,
+    sendReply: (ByteArray) -> Unit,
+    now: () -> Long,
+    caret: () -> CursorPos?,
+): (TerminalEffect) -> Unit = { effect ->
+    when (effect) {
+        is TerminalEffect.Input -> {
+            predict(PredictionSignal.Typed(effect.bytes, caret() ?: ORIGIN, now()))
+            sendInput(effect.bytes)
+        }
+        is TerminalEffect.Response -> sendReply(effect.bytes)
+        else -> Unit
+    }
 }
 
 /**

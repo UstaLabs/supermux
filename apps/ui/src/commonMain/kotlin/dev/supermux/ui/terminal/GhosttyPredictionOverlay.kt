@@ -96,7 +96,20 @@ data class PredictedCell(val row: Int, val column: Int, val text: String)
  * concurrently: the frame a prediction is measured against is the same frame being painted, which
  * is the only way the two can agree.
  *
- * Compose-thread confined, like the surface that owns it.
+ * COMPOSE-THREAD CONFINED, and it is confinement rather than synchronisation that makes it safe:
+ * [drawn] and [caret] are Compose snapshot state, and the shared `PredictionEngine` behind them is
+ * a plain state machine with no lock of its own. Nothing here is defended against a second writer,
+ * so there must not be one.
+ *
+ * WHAT ENFORCES IT: every mutator — [onInput], [onServerData], [clear] and [reconcile] — is called
+ * from a `LaunchedEffect` body in `GhosttyTerminalSurface.Content`, and those run on the
+ * composition's own dispatcher. The first three are the single consumer of the ordered prediction
+ * lane (`PredictionSignal`), which exists because typing arrives on the engine's coroutine and
+ * server bytes on the adapter's — the lane is what turns two producers into one caller here.
+ * [reconcile] is driven from the published-viewport collector on the same dispatcher.
+ *
+ * So: call these from a coroutine started by composition, or not at all. A background dispatcher
+ * would not fail loudly — it would lose a prediction or drop a confirm, occasionally.
  */
 @Stable
 class GhosttyPredictionState internal constructor(
