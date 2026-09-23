@@ -4,11 +4,13 @@ import kotlin.math.floor
 
 /**
  * Predictive local echo engine (Step 2: caret rewrite). Pure logic — no terminal
- * dependency — so it is exhaustively unit-testable and shareable across platforms
- * (iOS SwiftTerm, Android termlib, and the web xterm adapter).
+ * dependency — so it is exhaustively unit-testable and independent of whatever
+ * draws. It outlived the four per-platform renderers it was written for: since
+ * Plan 4 its one consumer is GhosttyPredictionOverlay, which paints the ops over
+ * the shared Compose surface on every client.
  *
- * It ORCHESTRATES what the terminal writes via abstract [DisplayOp]s (the adapter
- * maps them to the platform terminal's primitives). Two tracked cursors, VS Code style:
+ * It ORCHESTRATES what the terminal shows via abstract [DisplayOp]s (the overlay
+ * maps them to what it draws). Two tracked cursors, VS Code style:
  *   - physical:  where the server's authoritative caret is (advances on confirms)
  *   - tentative: physical + still-pending predictions = where the visible caret
  *                should sit so it rides the user's typing
@@ -57,7 +59,7 @@ data object HideCaret : DisplayOp
 data object ShowCaret : DisplayOp
 
 // ---------------------------------------------------------------------------
-// InputEvent — decoded xterm onData payloads
+// InputEvent — decoded keystroke payloads (the bytes a client sends to the pty)
 // ---------------------------------------------------------------------------
 
 sealed interface InputEvent
@@ -101,14 +103,14 @@ val DEFAULT_CONFIG = PredictionConfig(
 // decodeInput — mirrors types.ts decodeInput exactly
 // ---------------------------------------------------------------------------
 
-private val DEL = ""   // 0x7f — what xterm sends for the delete/backspace key
+private val DEL = ""   // 0x7f — what the delete/backspace key sends
 private val BS  = ""   // 0x08 — ASCII backspace
 private val ESC = ""   // 0x1b — escape character
 private val LEFT_ARROW  = "${ESC}[D"
 private val RIGHT_ARROW = "${ESC}[C"
 
 /**
- * Decode one xterm onData payload into a prediction input event.
+ * Decode one outbound keystroke payload into a prediction input event.
  * Only single printable chars, lone DEL/BS, and lone left/right arrows are
  * predictable; everything else (Enter, Tab, Ctrl-keys, other escapes, and any
  * multi-character payload such as a paste) is opaque.
