@@ -18,6 +18,49 @@ A running example of everything below: [`apps/terminal-sample`](../terminal-samp
 
 ---
 
+## Status — what has actually been run, and where
+
+**Everything below this section is written in the present tense, and on one platform that is
+earned.** This package has been exercised by 123 automated tests on the **desktop JVM, on Linux,
+under `xvfb-run`, with software rasterisation**. It has **never run on a device**: not an Android
+phone or tablet, not an iPhone or iPad, not a browser, not Windows, not on any GPU. Where a
+behaviour below is platform-specific, read this table first.
+
+| platform | what has run | what has not |
+|---|---|---|
+| desktop JVM (Linux) | `:terminal-compose:jvmTest` — 123 tests (114 `jvmTest`, 9 `commonTest`), driving the composable against a real `terminal-core` engine: input routing, scrolling, selection, IME, the semantics tree | a GPU-backed run; this host's Xvfb cannot create a GL context, so every frame is CPU-rasterised |
+| Android | compiles and publishes; `:terminal-sample:assembleDebug` packages the JNI engine for `arm64-v8a` and `x86_64` | **every runtime behaviour**. No emulator, no device. The soft-keyboard IME path in §6 has run only against the *desktop* JVM's key/commit events |
+| browser (wasmJs) | the `terminal-core` common suite runs in headless Chrome | this composable in a browser, at all. No Safari/WebKit run of anything (Safari automation is off on this host) |
+| iOS / iPadOS | nothing — the Apple compile and link tasks are disabled on Linux | the framework link, a simulator run, a device run, and every touch behaviour below |
+| Windows | nothing. There is no Windows machine here, and Linux is not substituted for it | everything |
+
+**`:terminal-compose:jvmTest` is FLAKY on this host.** Four runs on 2026-09-23: two green at 123/123,
+two failing **one test each, a different one each time** —
+`InputPolicyTest.anApplicationWheelIsEncodedByTheEngineAndNeverScrollsHistory` (*"the program's
+wheel also scrolled the surface", expected row=188 got row=0*) and
+`InputPolicyTest.aLongPressIsNeverAButtonTheProgramSees` (*"the release was not reported"*). Both
+read a value that a fed escape sequence has not necessarily been applied to yet, so they are races
+in the tests, not findings about the surface — but a suite that fails one in two runs cannot
+distinguish itself from one that found something, and it is not fixed here.
+
+Three specific claims made below as fact are the ones to treat as **design intent pending a device**:
+
+- **§6, composed text (IME).** `TerminalImeState` and `TerminalTextGate` are covered by 19 JVM
+  tests, driven by synthetic key and commit events. A real soft keyboard — Gboard, the iOS
+  keyboard, a CJK IME, dictation, swipe — has never reached this code. The "one keystroke, one
+  character" gate in particular is tuned against the *desktop* duplicate-event pattern.
+- **Touch selection handles.** The two-handle long-press selection described under *What the
+  surface does for you* has been driven only by synthesized pointer events. No finger has touched
+  it, and handle ergonomics are exactly the kind of thing that only a device shows.
+- **The accessibility tree.** `TerminalAccessibilityTest` (8 tests) asserts the semantics nodes and
+  their actions headlessly. **TalkBack and VoiceOver have not been run**, so what a screen reader
+  actually announces from this tree is unverified.
+
+None of this is a reason not to use the package. It is the difference between "tested" and "tested
+on the desktop JVM", which the rest of this document was not making.
+
+---
+
 ## 1. Initialization
 
 The **host owns the session**: it opens it, feeds it from its transport, and closes it. The
@@ -267,6 +310,9 @@ stable copy / paste / scroll / focus actions and deliberately no live region.
 
 Each of those is documented on the declaration that implements it; start at
 [`Terminal.kt`](src/commonMain/kotlin/dev/supermux/terminal/compose/Terminal.kt).
+
+Three of them — the touch handles, the soft-keyboard side of the IME, and the accessibility tree —
+have been asserted only on the desktop JVM, headlessly. See **Status** at the top.
 
 ## Publishing
 
