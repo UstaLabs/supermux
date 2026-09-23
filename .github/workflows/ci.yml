@@ -57,6 +57,7 @@ jobs:
       ios: ${{ steps.f.outputs.ios }}
       web: ${{ steps.f.outputs.web }}
       wire: ${{ steps.f.outputs.wire }}
+      zmx: ${{ steps.f.outputs.zmx }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -98,6 +99,15 @@ jobs:
               # lane through the `wire` filter below.)
               - 'apps/ios/**'
               - 'apps/ui/**'
+            # The POSIX workspace-terminal backend: the vendored zmx patch, the
+            # Zig helper, the TypeScript that drives them, and the build script
+            # that produces the binaries the suite refuses to run without.
+            zmx:
+              - 'vendor/zmx/**'
+              - 'scripts/build-zmx.sh'
+              - 'src/core/terminal/**'
+              - 'tests/integration/zmx-workspace*'
+              - 'apps/terminal-core/native/**'
             # The protocol seam. Any touch here runs every lane — see rule 1.
             wire:
               - 'src/shared/**'
@@ -135,6 +145,72 @@ jobs:
       # compile fine and fail at runtime.
       - name: Typecheck
         run: bun run typecheck
+
+  # ── zmx: the POSIX workspace-terminal backend, against real processes ──────
+  # The `ts` lane runs this backend's unit tests against a fake helper. This one
+  # builds the actual artifacts and runs tests/integration/zmx-workspace.test.ts,
+  # which starts real zmx daemons and real shells in a private socket directory.
+  #
+  # MUX_ZMX_INTEGRATION=1 is the point of the lane. Without it a missing binary
+  # is an unmet prerequisite and the suite skips — correct on a laptop, useless
+  # here. With it, a missing artifact FAILS: a build step that silently stopped
+  # producing the helper would otherwise turn this job green while testing
+  # nothing at all.
+  #
+  # Two native builds (a patched zmx + ghostty-vt, and the wasm terminal engine
+  # the assertions decode restores with) make this the slowest non-device lane
+  # cold, so both zig caches are restored and the lane is path-filtered.
+  zmx:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.zmx == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+
+      # Keyed on the pins, not on the diff: a lockfile change is the only thing
+      # that invalidates a compiled upstream.
+      - name: Cache the zig toolchain and the native build trees
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            build/zmx
+            apps/terminal-core/build
+          key: zmx-${{ runner.os }}-${{ hashFiles('vendor/zmx/upstream.lock.json', 'apps/terminal-core/native/upstream.lock.json', 'vendor/zmx/patches/*.patch') }}
+          restore-keys: zmx-${{ runner.os }}-
+
+      # The pin and the patch, before anything is compiled from them. This is
+      # the check vendor/zmx/README.md §5 said was not wired up anywhere.
+      - name: Verify the zmx pin and patch
+        run: bash scripts/build-zmx.sh --check-patches
+
+      - name: Build the patched zmx and the broker helper
+        run: bash scripts/build-zmx.sh
+        env:
+          MUX_ZIG_JOBS: "4"
+
+      # The reference client engine the restoration assertions decode with: the
+      # same supermux-terminal.wasm the browser client loads.
+      - name: Build the reference terminal engine
+        run: bash apps/terminal-core/wasm/build.sh
+
+      - name: Integration suite, no skips
+        run: bun test tests/integration/zmx-workspace.test.ts
+        env:
+          MUX_ZMX_INTEGRATION: "1"
+
+      - name: Leave no daemons behind
+        if: always()
+        run: |
+          # The suite cleans up after itself; this is the belt. Only sockets in
+          # the private per-run directories the suite mints are touched.
+          rm -rf "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/supermux/zmx-it-* || true
 
   # ── Browser journey: real browser + broker + shim, all on throwaway state ──
   # NOT a cheap lane: `bun run test:ui` → scripts/test-broker.sh → Gradle
