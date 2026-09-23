@@ -148,6 +148,12 @@ data class BenchmarkOptions(
     val scrollLines: Int = 50_000,
     /** How long one stream phase lasts before the scroll phase starts. */
     val streamSeconds: Int = 60,
+    /**
+     * Rows the scroll phase moves per FRAME. 8 rows of a 22 px cell at 60 Hz is ~10 000 px/s — a
+     * fast flick, not a nudge; the expensive path is the row boundary, and this is how often one
+     * is crossed.
+     */
+    val scrollRowsPerFrame: Float = 8f,
     val fixtureBytes: Int = 10 * 1024 * 1024,
     val warmupSeconds: Int = 10,
     val mode: BenchmarkMode = BenchmarkMode.UI,
@@ -174,6 +180,7 @@ data class BenchmarkOptions(
               --columns=<n> --rows=<n>   target grid (default 120x40)
               --scroll-lines=<n>  lines per scroll phase (default 50000)
               --stream-seconds=<n> stream phase length before each scroll phase (default 60)
+              --scroll-rows-per-frame=<n>  how fast the scroll phase flicks (default 8)
               --fixture-bytes=<n> fixed fixture size (default 10485760)
               --warmup=<seconds>  excluded from the report (default 10)
               --mode=ui|blank|parse
@@ -205,6 +212,7 @@ data class BenchmarkOptions(
                     "rows" -> options.copy(rows = value.toIntOrNull() ?: bad(arg))
                     "scroll-lines" -> options.copy(scrollLines = value.toIntOrNull() ?: bad(arg))
                     "stream-seconds" -> options.copy(streamSeconds = value.toIntOrNull() ?: bad(arg))
+                    "scroll-rows-per-frame" -> options.copy(scrollRowsPerFrame = value.toFloatOrNull() ?: bad(arg))
                     "fixture-bytes" -> options.copy(fixtureBytes = value.toIntOrNull() ?: bad(arg))
                     "warmup" -> options.copy(warmupSeconds = value.toIntOrNull() ?: bad(arg))
                     "mode" -> options.copy(mode = BenchmarkMode.byId(value) ?: bad(arg))
@@ -459,10 +467,11 @@ class BenchmarkRun(
             // ---- scroll phase ------------------------------------------------------------
             phase = "repeat $repeatIndex · scroll + stream"
             startPhase(scrollFrames)
-            val scrolled = scrollThroughHistory(options.scrollLines.toLong())
-            phaseLog += "repeat $repeatIndex scroll: $scrolled of ${options.scrollLines} lines " +
-                "(history holds ${diagnostics.snapshot().historyRows} rows; the rest is what the " +
-                "engine's line/byte budget had already evicted)"
+            val scrolled = scrollThroughHistory(options.scrollLines.toLong(), deadline)
+            phaseLog += "repeat $repeatIndex scroll: $scrolled of ${options.scrollLines} lines at " +
+                "${options.scrollRowsPerFrame} rows/frame (history holds " +
+                "${diagnostics.snapshot().historyRows} rows — a sweep to the oldest retained row " +
+                "and back down is one pass over everything the engine still has)"
             sampleMemory("scroll")
         }
 
@@ -517,7 +526,7 @@ class BenchmarkRun(
      * Returns how many rows it actually covered: the engine evicts history under a live stream, so
      * "50 000 lines" is a target, not a promise, and the report says which it got.
      */
-    private suspend fun scrollThroughHistory(lines: Long): Long {
+    private suspend fun scrollThroughHistory(lines: Long, deadlineMillis: Long): Long {
         val controller = scroll ?: run {
             note = "no scroll controller: the visible surface never composed"
             return 0
@@ -525,11 +534,15 @@ class BenchmarkRun(
         val cell = max(1, observedCellHeightPx).toFloat()
         // Three rows per frame up: fast enough to cover 50k lines in minutes, slow enough that
         // every frame really does cross a row boundary (which is the expensive path).
-        val stepPx = cell * ROWS_PER_FRAME
+        val stepPx = cell * options.scrollRowsPerFrame
         var covered = 0L
         var lastRow = controller.position.row
         var idleFrames = 0
         while (covered < lines) {
+            // The run's clock wins over the line target: a scroll phase that swallowed the whole
+            // ten minutes would leave the stream phase unmeasured, and the phase log says exactly
+            // how many of the requested lines it got through.
+            if (start.elapsedNow().inWholeMilliseconds >= deadlineMillis) break
             withFrameNanos { }
             controller.consumePx(-stepPx)
             val row = controller.position.row
@@ -559,7 +572,7 @@ class BenchmarkRun(
         var guard = 0
         while (!controller.following && guard++ < BOTTOM_FRAME_LIMIT) {
             withFrameNanos { }
-            controller.consumePx(cell * ROWS_PER_FRAME * 4)
+            controller.consumePx(cell * options.scrollRowsPerFrame * 4)
             val row = controller.position.row
             covered += max(0L, row - lastRow)
             lastRow = row
@@ -717,7 +730,6 @@ class BenchmarkRun(
     }
 
     private companion object {
-        const val ROWS_PER_FRAME = 8f
         const val IDLE_FRAME_LIMIT = 600
         const val BOTTOM_FRAME_LIMIT = 4000
         const val KEY_INTERVAL_MILLIS = 250L

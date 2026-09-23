@@ -815,6 +815,22 @@ consumer's compiled module**, so a `wasmJs` app must re-export `terminal-loader.
 `supermux-terminal.wasm` from the klib as its own wasmJs resources (recipe in that
 README). Bundling fails with `Can't resolve './terminal-loader.mjs'` otherwise.
 
+### The surface on top of it
+
+Most hosts do not drive this package directly: they take
+**`dev.supermux.terminal:terminal-compose`**, the one Compose Multiplatform composable that draws a
+`TerminalSession` on a plain canvas, and get `terminal-core` with it (`api`). The two are versioned
+and published as a PAIR — `-Pterminal.version=` moves both and `:terminal-compose:verifyPairedVersion`
+fails a publish where they have drifted.
+
+- Package docs with initialization, error, reset, effects and lifecycle examples:
+  [`../../terminal-compose/README.md`](../../terminal-compose/README.md).
+- A runnable sample and the repeatable benchmark:
+  [`../../terminal-sample/README.md`](../../terminal-sample/README.md), measurements in
+  [`../../terminal-sample/benchmarks/2026-09-terminal.md`](../../terminal-sample/benchmarks/2026-09-terminal.md).
+- The surface's own consumer check (published coordinates, separate Gradle build):
+  [`../../terminal-compose/consumer-smoke/README.md`](../../terminal-compose/consumer-smoke/README.md).
+
 ## Results
 
 Recorded 2026-09-22 on the shared Linux build host (x86_64, Ubuntu, glibc 2.43,
