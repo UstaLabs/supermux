@@ -254,6 +254,28 @@ describe("SessiondBackend", () => {
     expect(await Promise.race([viewer.exited!.then(() => "exit"), Bun.sleep(20).then(() => "pending")])).toBe("pending")
   })
 
+  test("the replay flag survives the wire; a frame without one is live", async () => {
+    const { client } = await harness()
+    const target = await client.create({ group: "g", name: "flagged", cwd: "/tmp", argv: ["fake"], env: {} })
+    const seen: Array<[string, boolean]> = []
+    await client.attach(target.id, "flagged", (data, replay) => {
+      seen.push([new TextDecoder().decode(data), replay])
+    })
+    const accept = (client as unknown as { acceptMessage(input: unknown): void }).acceptMessage.bind(client)
+    accept({
+      event: "data", targetId: target.id, viewerId: "flagged",
+      dataBase64: Buffer.from("history").toString("base64"), replay: true,
+    })
+    // No flag at all: LIVE. An older server degrades to an empty boundary
+    // rather than to history announced as live under a flag that lies.
+    accept({
+      event: "data", targetId: target.id, viewerId: "flagged",
+      dataBase64: Buffer.from("now").toString("base64"),
+    })
+    for (let attempt = 0; attempt < 50 && seen.length < 2; attempt++) await Bun.sleep(1)
+    expect(seen).toEqual([["history", true], ["now", false]])
+  })
+
   test("awaits each inbound viewer callback and preserves below-limit chunk order", async () => {
     const { client } = await harness()
     const target = await client.create({ group: "g", name: "ordered-viewer", cwd: "/tmp", argv: ["fake"], env: {} })
@@ -339,7 +361,7 @@ describe("SessiondBackend", () => {
     let closedViewers = 0
     const backend = {
       ...memory,
-      async attach(targetId: string, viewerId: string, onData: (data: Uint8Array) => void | Promise<void>) {
+      async attach(targetId: string, viewerId: string, onData: (data: Uint8Array, replay: boolean) => void | Promise<void>) {
         const viewer = await memory.attach(targetId, viewerId, onData)
         return { ...viewer, close() { closedViewers++; viewer.close() } }
       },

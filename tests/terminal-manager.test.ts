@@ -666,7 +666,7 @@ class ManagerBackend implements SessionBackend {
   async sendKeys(): Promise<void> {}
   async resize(_targetId: string, cols: number, rows: number): Promise<void> { this.resizes.push([cols, rows]) }
   async capture(): Promise<string | null> { return null }
-  async attach(targetId: string, _viewerId: string, _onData: (data: Uint8Array) => void | Promise<void>): Promise<RuntimeViewer> {
+  async attach(targetId: string, _viewerId: string, _onData: (data: Uint8Array, replay: boolean) => void | Promise<void>): Promise<RuntimeViewer> {
     await this.attachGate
     let open = true
     return {

@@ -5,7 +5,7 @@ type MemoryTarget = RuntimeTarget & {
   group: string
   output: number[]
   sentKeys: string[][]
-  viewers: Map<string, (data: Uint8Array) => void | Promise<void>>
+  viewers: Map<string, (data: Uint8Array, replay: boolean) => void | Promise<void>>
 }
 
 export type SessionBackendContractObservation = {
@@ -27,7 +27,8 @@ export function createMemorySessionBackendHarness(): {
 
   const publish = async (found: MemoryTarget, data: Uint8Array) => {
     found.output.push(...data)
-    await Promise.all([...found.viewers.values()].map(onData => onData(data)))
+    // Live output: this harness has no history of its own to replay.
+    await Promise.all([...found.viewers.values()].map(onData => onData(data, false)))
   }
 
   const backend: SessionBackend = {

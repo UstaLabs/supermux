@@ -32,7 +32,7 @@ class FakeBackend implements SessionBackend {
   failAttach?: Error
   failKill?: Error
   failPostCreateLivePid?: Error
-  private outputs = new Map<string, (data: Uint8Array) => void | Promise<void>>()
+  private outputs = new Map<string, (data: Uint8Array, replay: boolean) => void | Promise<void>>()
   private viewerExit?: (code: number) => void
   private viewerFailure?: (reason: string) => void
   private next = 1
@@ -61,7 +61,7 @@ class FakeBackend implements SessionBackend {
   async sendKeys(): Promise<void> {}
   async resize(targetId: string, cols: number, rows: number): Promise<void> { this.resizes.push({ targetId, cols, rows }) }
   async capture(): Promise<string | null> { return null }
-  async attach(targetId: string, viewerId: string, onData: (data: Uint8Array) => void | Promise<void>): Promise<RuntimeViewer> {
+  async attach(targetId: string, viewerId: string, onData: (data: Uint8Array, replay: boolean) => void | Promise<void>): Promise<RuntimeViewer> {
     this.attachCalls.push({ targetId, viewerId })
     if (this.failAttach) throw this.failAttach
     this.outputs.set(viewerId, onData)
@@ -102,7 +102,7 @@ class FakeBackend implements SessionBackend {
   }
 
   async emit(value: string): Promise<void> {
-    for (const output of this.outputs.values()) await output(bytes(value))
+    for (const output of this.outputs.values()) await output(bytes(value), false)
   }
   exit(code: number): void { this.viewerExit?.(code) }
   failViewer(reason: string): void { this.viewerFailure?.(reason) }
@@ -317,6 +317,10 @@ describe("SessiondTerm", () => {
  * so nothing here grants one — the lease is entirely the adapter's.
  */
 class ContractBackend implements SessionBackend {
+  /** Live bytes delivered between queueing the replay and the attach
+   * resolving. Set by the test that pins the replay boundary. */
+  liveDuringAttach?: string
+
   targets = new Map<string, RuntimeTarget & { group: string; pty: string[]; cols: number; rows: number; history: string }>()
   creates = 0
   viewerCloses = 0
@@ -358,7 +362,7 @@ class ContractBackend implements SessionBackend {
     if (target) { target.cols = cols; target.rows = rows }
   }
   async capture(): Promise<string | null> { return null }
-  async attach(targetId: string, viewerId: string, onData: (data: Uint8Array) => void | Promise<void>): Promise<RuntimeViewer> {
+  async attach(targetId: string, viewerId: string, onData: (data: Uint8Array, replay: boolean) => void | Promise<void>): Promise<RuntimeViewer> {
     await this.attachGate
     const target = this.targets.get(targetId)
     if (!target) throw new Error("no such target")
@@ -371,8 +375,13 @@ class ContractBackend implements SessionBackend {
     let exitHandler: ((code: number) => void) | undefined
     let failureHandler: ((reason: string) => void) | undefined
     this.viewers.set(viewerId, entry)
-    // The atomic replay, delivered from inside the attach barrier.
-    if (target.history.length > 0) void onData(bytes(target.history))
+    // The atomic replay, queued inside the attach barrier and MARKED as such —
+    // the viewer must not be inferring the boundary from arrival order.
+    if (target.history.length > 0) void onData(bytes(target.history), true)
+    // ...and, when a test asks for it, live output in the window between the
+    // replay being queued and this attach resolving. That window is exactly
+    // what a timing heuristic gets wrong.
+    if (this.liveDuringAttach !== undefined) void onData(bytes(this.liveDuringAttach), false)
     return {
       close: () => { if (open) { open = false; this.viewerCloses++; this.viewers.delete(viewerId) } },
       write: data => {
@@ -478,6 +487,24 @@ describe("SessiondWorkspaceBackend", () => {
     expect(text((events[2] as { bytes: Uint8Array }).bytes)).toBe("C:\\work$ ")
     const epochs = new Set(events.filter(e => "epoch" in e).map(e => (e as { epoch: string }).epoch))
     expect(epochs.size).toBe(1)
+  })
+
+  test("live output that lands before the attach resolves is live, not replay", async () => {
+    // THE BOUNDARY IS THE FRAME'S, NOT THE CLOCK'S. `SessionStore.attach`
+    // queues the replay inside its barrier, but the pump that delivers it is
+    // decoupled from the attach promise — and in production these bytes cross
+    // a socket. "Arrived before the attach resolved" therefore swept live
+    // output into the replay, and closed the boundary on a guess.
+    const { backend, workspace } = harness()
+    await workspace.ensure(CONTRACT_A, { ...CONTRACT_ENSURE, cwd: "C:\\work" })
+    backend.liveDuringAttach = "LIVE-AFTER-HISTORY"
+    const { events, emit } = recorder()
+    await workspace.attachExisting(CONTRACT_A, "v1", emit)
+
+    expect(events.map(event => event.type))
+      .toEqual(["reset", "replay-start", "output", "replay-end", "output"])
+    expect(text((events[2] as { bytes: Uint8Array }).bytes)).toBe("C:\\work$ ")
+    expect(text((events[4] as { bytes: Uint8Array }).bytes)).toBe("LIVE-AFTER-HISTORY")
   })
 
   test("a reply is refused until the viewer owns the lease AND the replay has closed", async () => {

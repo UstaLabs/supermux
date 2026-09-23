@@ -8,12 +8,21 @@
 //
 // What sessiond already gives us, and what it does not:
 //
-//   * ATOMIC REPLAY — yes. `SessionStore.attach` queues the target screen's
-//     raw history as one chunk INSIDE an output-order barrier, so a viewer
-//     never sees a half-consumed escape sequence and never misses a byte that
-//     was broadcast while it was attaching. `SessiondWorkspaceBackend` wraps
-//     exactly that chunk in the contract's `reset`/`replay-start`/`replay-end`
-//     boundary; it does not re-implement or re-order it.
+//   * ATOMIC REPLAY — yes, but only because the FRAME says so. `SessionStore
+//     .attach` queues the target screen's raw history as one chunk INSIDE an
+//     output-order barrier, so a viewer never sees a half-consumed escape
+//     sequence and never misses a byte that was broadcast while it was
+//     attaching. What the barrier does NOT give is a boundary the viewer can
+//     observe: the pump that delivers those bytes is decoupled from the promise
+//     `attach()` returns, and in production (win32 always uses
+//     `SessiondBackend`) they cross a socket as separate trips. Treating
+//     "arrived before the attach resolved" as the replay was therefore a timing
+//     heuristic — and one that closes early lets a query answer for content
+//     that scrolled past reach the pty as keystrokes. So every data frame
+//     carries `replay` (core/sessiond/protocol.ts), and
+//     `SessiondWorkspaceBackend` wraps exactly the chunks that say so in the
+//     contract's `reset`/`replay-start`/`replay-end` boundary; it does not
+//     re-implement or re-order them.
 //
 //   * A FOCUS LEASE — no. sessiond has no notion of one owner among several
 //     viewers, so the lease lives HERE: the adapter tracks focus claims per
@@ -435,7 +444,7 @@ export class SessiondWorkspaceBackend implements WorkspaceTerminalBackend {
     const viewer = new SessiondWorkspaceViewer(this, target, `${viewerId}-${randomUUID().slice(0, 8)}`, emit)
     let runtime: RuntimeViewer
     try {
-      runtime = await this.#backend.attach(targetId, viewer.id, data => viewer.accept(data))
+      runtime = await this.#backend.attach(targetId, viewer.id, (data, replay) => viewer.accept(data, replay))
     } catch (error) {
       this.#forget(target)
       throw error
@@ -547,14 +556,19 @@ export class SessiondWorkspaceBackend implements WorkspaceTerminalBackend {
 /**
  * One viewer of a Windows workspace terminal.
  *
- * The replay boundary is deterministic for an in-process sessiond: the store
- * queues the history inside the attach barrier and its delivery loop calls
- * `onData` synchronously from there, so everything that arrives before
- * `attach()` resolves IS the replay. Across the sessiond SOCKET that ordering
- * is not observable — the wire has no replay marker — so a remote attach
- * reports an EMPTY boundary and the history arrives as live output. That is a
- * known gap, not a claim: a `replay` flag on the sessiond data frame is what
- * would close it.
+ * THE REPLAY BOUNDARY IS THE FRAME'S, NOT THE CLOCK'S. `SessionStore.attach`
+ * queues the history inside its output-order barrier, but the pump that
+ * delivers it is decoupled from the promise `attach()` returns — and in
+ * production (win32 always uses `SessiondBackend`) the bytes cross a socket,
+ * where the pump, the attach response and the data frames are three
+ * independent trips. So "everything that arrived before `attach()` resolved"
+ * was a timing heuristic, and a heuristic that closes the boundary early lets
+ * a viewer answer a query for content that scrolled past — which the shell
+ * reads as typing.
+ *
+ * Each data chunk now carries `replay` (core/sessiond/protocol.ts), and the
+ * boundary is the last consecutive run of chunks that say so. The first live
+ * chunk closes it, whenever it arrives.
  */
 class SessiondWorkspaceViewer implements WorkspaceTerminalViewer {
   #runtime?: RuntimeViewer
@@ -562,8 +576,15 @@ class SessiondWorkspaceViewer implements WorkspaceTerminalViewer {
   /** True while we are deliberately dropping this viewer, so the teardown that
    * follows is never reported as a failure. */
   #discarding = false
-  /** Bytes delivered before `attach()` resolved: sessiond's atomic replay. */
-  #replay: Uint8Array[] | null = []
+  /** Chunks the wire MARKED as replay, held until the boundary is emitted. */
+  #replay: Uint8Array[] = []
+  /** Live chunks that arrived before `bind` opened the boundary. Kept apart so
+   * the replay cannot swallow them and they cannot overtake it. */
+  #beforeBind: Uint8Array[] = []
+  /** True once a chunk said it was live: the replay run is over for good. */
+  #replayEnded = false
+  /** True once `bind` has emitted the boundary and drained `#beforeBind`. */
+  #bound = false
   #replayClosed = false
   #owner = false
   #cols = 80
@@ -583,20 +604,27 @@ class SessiondWorkspaceViewer implements WorkspaceTerminalViewer {
     return !this.#dead
   }
 
-  /** Output from sessiond. Before the boundary closes it is the replay. */
-  accept(data: Uint8Array): void | Promise<void> {
+  /**
+   * Output from sessiond. `replay` is the wire's own statement about which
+   * side of the attach boundary this chunk is on; a chunk that does not say
+   * so is live, and ends the replay run whatever the clock says.
+   */
+  accept(data: Uint8Array, replay = false): void | Promise<void> {
     if (this.#dead) return
-    if (this.#replay) { this.#replay.push(data.slice()); return }
+    if (replay && !this.#replayEnded) { this.#replay.push(data.slice()); return }
+    this.#replayEnded = true
+    if (!this.#bound) { this.#beforeBind.push(data.slice()); return }
     return this.#deliver({ type: "output", bytes: data })
   }
 
-  /** Close the replay boundary and start reporting exits and failures. */
+  /** Emit the replay boundary and start reporting exits and failures. */
   async bind(runtime: RuntimeViewer): Promise<void> {
     this.#runtime = runtime
     if (this.#dead) { try { runtime.close() } catch {} ; return }
 
-    const replay = this.#replay ?? []
-    this.#replay = null
+    const replay = this.#replay
+    this.#replay = []
+    this.#replayEnded = true
     // One epoch, ours: sessiond has no epoch of its own to carry, and the
     // boundary is what tells a client "everything before this is history".
     const epoch = `sessiond-${this.id}`
@@ -605,6 +633,13 @@ class SessiondWorkspaceViewer implements WorkspaceTerminalViewer {
     for (const bytes of replay) await this.#deliver({ type: "output", bytes })
     await this.#deliver({ type: "replay-end", epoch })
     this.#replayClosed = true
+    // Live bytes that landed while the boundary was being emitted go out in
+    // arrival order, and only then does `accept` start delivering directly —
+    // draining in a loop, because more can arrive across these awaits.
+    while (this.#beforeBind.length > 0) {
+      await this.#deliver({ type: "output", bytes: this.#beforeBind.shift()! })
+    }
+    this.#bound = true
 
     if (runtime.onExit) this.#unsubscribeExit = runtime.onExit(code => { void this.#onExit(code) })
     else void runtime.exited?.then(code => { void this.#onExit(code) }, () => undefined)

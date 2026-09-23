@@ -140,8 +140,10 @@ class TerminalInputWriter {
 
 type Viewer = {
   id: string
-  onData: (data: Uint8Array) => void | Promise<void>
-  queue: Array<{ data: Uint8Array; replayBytes: number }>
+  onData: (data: Uint8Array, replay: boolean) => void | Promise<void>
+  /** `replayBytes` is the allowance accounting; `replay` is what the VIEWER is
+   * told, and it is the only thing that marks the attach boundary. */
+  queue: Array<{ data: Uint8Array; replayBytes: number; replay: boolean }>
   pendingBytes: number
   inFlightBytes: number
   replayAllowance: number
@@ -481,7 +483,7 @@ export class SessionStore implements SessionBackend {
   async attach(
     targetId: string,
     viewerId: string,
-    onData: (data: Uint8Array) => void | Promise<void>,
+    onData: (data: Uint8Array, replay: boolean) => void | Promise<void>,
   ): Promise<RuntimeViewer> {
     const target = this.activeTarget(targetId)
     let attached: RuntimeViewer | undefined
@@ -536,9 +538,13 @@ export class SessionStore implements SessionBackend {
         // Replay is queued synchronously inside the output-order barrier, but its
         // delivery is isolated from target output/capture. Its bytes temporarily
         // reserve a separate bounded allowance until that first chunk drains.
+        //
+        // It is also MARKED. The pump below is decoupled from the promise this
+        // function returns, so the viewer cannot tell the replay from live
+        // output by when it arrived; the flag is what says so.
         if (replay.byteLength > 0) {
           viewer.replayAllowance = replay.byteLength
-          this.enqueueViewer(viewer, replay, replay.byteLength)
+          this.enqueueViewer(viewer, replay, replay.byteLength, true)
         }
         let closed = false
         attached = {
@@ -666,13 +672,13 @@ export class SessionStore implements SessionBackend {
     return target.outputQueue
   }
 
-  private enqueueViewer(viewer: Viewer, data: Uint8Array, replayBytes = 0): void {
+  private enqueueViewer(viewer: Viewer, data: Uint8Array, replayBytes = 0, replay = false): void {
     if (!viewer.active) return
     if (viewer.pendingBytes + data.byteLength > this.viewerByteLimit + viewer.replayAllowance) {
       viewer.fail(`terminal viewer output queue exceeds ${this.viewerByteLimit} live bytes`)
       return
     }
-    viewer.queue.push({ data: data.slice(), replayBytes })
+    viewer.queue.push({ data: data.slice(), replayBytes, replay })
     viewer.pendingBytes += data.byteLength
     this.pumpViewer(viewer)
   }
@@ -688,7 +694,7 @@ export class SessionStore implements SessionBackend {
           const { data } = entry
           viewer.inFlightBytes = data.byteLength
           try {
-            await viewer.onData(data)
+            await viewer.onData(data, entry.replay)
           } catch (error) {
             viewer.fail(asError(error, "terminal viewer delivery failed").message)
             return
