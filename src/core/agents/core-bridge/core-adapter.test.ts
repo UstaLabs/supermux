@@ -841,6 +841,29 @@ acrossQueue("stall watchdog cancels through core after no activity", async (kind
   expect(fake.interruptCalls).toBeGreaterThan(0)
 })
 
+// A turn that has started (any event arrived) may then stay quiet for as long as
+// it needs — a subagent or a long tool run must not be cut by the watchdog.
+acrossQueue("stall watchdog is disarmed by the first event of the turn", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-quiet", sessionName: "s1", workdir,
+    persistSessionId: async () => {},
+    stallTimeoutMs: 30,
+  })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const sent = adapter.send("hi")
+  await waitUntil(() => fake.prompts.length === 1)
+  fake.emit({ protocol: "acp", value: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "working…" } } })
+  await new Promise((r) => setTimeout(r, 120))
+  fake.completePrompt()
+  await sent
+  await flush()
+  expect(events.find((e) => e.kind === "error")).toBeUndefined()
+  expect(fake.interruptCalls).toBe(0)
+})
+
 acrossQueue("native A plus queued B: no stall until owned dispatch; idle then running order", async (kind) => {
   const fake = fakeAgentDriver(kind)
   const { host, workdir } = await harness(kind, fake)

@@ -649,7 +649,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       return
     }
     if (event.type === "session.event") {
-      if (this.stallTimer) this.armStall()
+      // The watchdog only guards a prompt the agent never picks up (armed at
+      // message.started): the FIRST event of the turn proves the agent is on
+      // it, so disarm for good. Re-arming per event cut every quiet stretch —
+      // a subagent working for minutes, a long tool run — at 90 s.
+      if (this.stallTimer) this.disarmStall()
       this.bridge.handle(event.event)
       const env = event.event
       const cards = this.activity.handle({ ...env, event: env }, Date.now())

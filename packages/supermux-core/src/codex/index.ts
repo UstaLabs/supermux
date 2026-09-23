@@ -283,6 +283,25 @@ export function codex(options: CodexOptions): AgentDriver {
       if (sandbox === 'read-only') return { type: 'readOnly' }
       return { type: 'workspaceWrite' }
     }
+    // Child threads spawned by the collab tools (spawnAgent) take their sandbox and
+    // approval from the app-server's loaded config, not from the parent's per-turn
+    // policy — a full-access parent's subagent otherwise runs read-only without
+    // network. CODEX_HOME is session-private for a Core session, so writing the
+    // policy there (with hot reload) is what makes the mode apply to children too.
+    async function persistPolicyToConfig(spec: Extract<PermissionsSpec, { kind: 'codex' }>): Promise<void> {
+      try {
+        await rpc.request('config/batchWrite', {
+          edits: [
+            { keyPath: 'sandbox_mode', value: spec.sandbox, mergeStrategy: 'replace' },
+            { keyPath: 'approval_policy', value: spec.approvalPolicy, mergeStrategy: 'replace' },
+          ],
+          reloadUserConfig: true,
+        })
+      } catch (error) {
+        // Older app-servers may lack config/batchWrite; the per-turn policy still applies to this thread.
+        context.onUpdate({ protocol: 'native', value: { method: 'stderr', params: { line: `codex config/batchWrite failed: ${error instanceof Error ? error.message : String(error)}` } } })
+      }
+    }
     function turnOverrides() {
       const params: { model?: string; effort?: string; approvalPolicy: string; sandboxPolicy: Record<string, unknown> } = {
         approvalPolicy: livePermissions.approvalPolicy,
@@ -635,6 +654,7 @@ export function codex(options: CodexOptions): AgentDriver {
       rpc.write({ method: 'initialized', params: {} })
       const model = resolvedModel()
       const result = await Promise.race([rpc.request(context.forkFrom ? 'thread/fork' : context.resumeId ? 'thread/resume' : 'thread/start', { ...(context.forkFrom ? {threadId: context.forkFrom.agentSessionId, ...(context.forkFrom.at ? {lastTurnId: context.forkFrom.at.nativeTurnId} : {})} : context.resumeId ? { threadId: context.resumeId } : {}), cwd: context.cwd, approvalPolicy: livePermissions.approvalPolicy, sandbox: livePermissions.sandbox, ...(model ? { model } : {}) }), failure.promise])
+      await persistPolicyToConfig(livePermissions)
       if (typeof result?.thread?.id !== 'string' || !result.thread.id || (context.resumeId && result.thread.id !== context.resumeId)) throw new Error('Codex thread identity mismatch')
       captureNativeInitial(result)
       agentSessionId = result.thread.id
@@ -671,6 +691,7 @@ export function codex(options: CodexOptions): AgentDriver {
         if (next.kind !== 'codex') throw new TypeError('Codex permissions kind must be codex')
         livePermissions = next
         try { rpc.setMeta({ permissions: next }) } catch { /* */ }
+        await persistPolicyToConfig(next)
         return { applied: appliedFor(next) }
       },
       normalize: normalizer,

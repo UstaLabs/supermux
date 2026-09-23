@@ -14,6 +14,10 @@ createInterface({input:process.stdin}).on('line',line=>{
  const m=JSON.parse(line); if(process.env.TRACE) appendFileSync(process.env.TRACE,line+'\n')
  const reply=result=>send({id:m.id,result})
  if(m.method==='skills/list'){reply({data:[{skills:[{name:'demo',description:'stub',enabled:true}]}]});return}
+ if(m.method==='config/batchWrite'){
+  // The driver persists sandbox_mode/approval_policy for child threads; record it so tests can assert.
+  if(process.env.TRACE) appendFileSync(process.env.TRACE, JSON.stringify({configWrite:m.params})+'\n')
+  reply({version:'1',status:'ok',overriddenMetadata:[]});return}
  if(m.method==='initialize') {
   if(process.env.MODE==='setup-hang')return
   if(process.env.MODE==='setup-notice'){
