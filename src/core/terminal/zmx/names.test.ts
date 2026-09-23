@@ -14,6 +14,7 @@ import {
   encodeName,
   ensureSocketDir,
   executableFromCmdline,
+  isProcessAlive,
   looksLikeBroker,
   assertTargetMatches,
   isOurSocketBasename,
@@ -274,6 +275,17 @@ describe("zmx broker identity", () => {
     }
     // ...and this process, through the real procfs probe.
     if (process.platform === "linux") expect(looksLikeBroker(process.pid)).toBe(true)
+  })
+
+  test("a live process we may not SIGNAL is alive, not dead", () => {
+    // `kill(pid, 0)` raises EPERM for a process owned by another uid. That is
+    // positive proof of life, and reading it as ESRCH took over a socket
+    // directory whose owner was very much still running.
+    expect(isProcessAlive(1)).toBe(true)          // init: exists, and not ours
+    expect(isProcessAlive(process.pid)).toBe(true)
+    expect(isProcessAlive(2_147_483_646)).toBe(false)
+    expect(isProcessAlive(0)).toBe(false)
+    expect(isProcessAlive(-1)).toBe(false)
   })
 
   test("an unreadable or empty procfs answer is not a broker", () => {

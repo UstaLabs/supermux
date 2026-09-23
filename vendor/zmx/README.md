@@ -480,9 +480,26 @@ clean pin + verified patch (pass), an unrelated edit in the upstream cache
   needs no lock: it cannot take a held lease at all (`setLeader` refuses).
   (The marker is a pid file, not a kernel lock: it has to be readable, because
   "who has this directory" is the first question when a broker refuses to
-  start. A pid that is alive but is not a broker — procfs says so — is taken
+  start. The claim itself is an EXCLUSIVE create — `O_CREAT | O_EXCL` — so two
+  brokers starting in the same instant cannot both read "no owner" and both
+  win; only its `EEXIST` falls through to reading the marker and judging its
+  owner. A pid that is alive but is not a broker — procfs says so — is taken
   over rather than deferred to; locking a user out of their terminals over a
   recycled pid is the worse failure.)
+
+  **This enforcement is Linux-only, and silently so.** "Is that pid a broker"
+  is answered from `/proc/<pid>/exe` (its basename against
+  `process.execPath`'s — an executable identity, never a substring of the
+  command line, which used to make `bundle install` or any path containing
+  "mux" look like a live broker and lock the user out). There is no procfs on
+  macOS or Windows, and `looksLikeBroker` is deliberately biased towards taking
+  the directory over when it cannot tell — so **on those platforms a second
+  broker is not refused at all**, and the `owner:false` deduction rests on the
+  0700 directory and on nobody starting two brokers, exactly as it did before
+  the marker existed. Windows workspace terminals do not use this backend
+  (`sessiond-term.ts`); macOS does, and is uncovered. Closing that needs a
+  platform-specific answer (`proc_pidpath`, `ps -o comm=`) or a real kernel
+  lock, and neither is in this change.
 
 * **`kill` is identity-checked now** (Task 5). It was the one path that could
   destroy a session without reading its `mux.target` label — the TS command

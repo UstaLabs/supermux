@@ -198,9 +198,25 @@ export function ensureSocketDir(dir: string): string {
  * file is skipped rather than probed. */
 export const SOCKET_DIR_OWNER_FILE = ".broker-owner"
 
-function isProcessAlive(pid: number): boolean {
+/**
+ * Is anything running under this pid? Signal 0 asks the kernel without
+ * delivering anything. Also the broker's answer for a daemon it is waiting to
+ * see die (`backend.ts`, `close`).
+ *
+ * `EPERM` MEANS ALIVE, NOT DEAD. The kernel raises it for a process that
+ * exists but belongs to another uid — the one answer that is positive proof of
+ * life — and reading it as `ESRCH` would take over a socket directory whose
+ * owner is very much still running, which is the two-broker state the marker
+ * exists to prevent. Only `ESRCH` (and a pid that cannot be one) is death.
+ */
+export function isProcessAlive(pid: number): boolean {
   if (pid <= 0) return false
-  try { process.kill(pid, 0); return true } catch { return false }
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === "EPERM"
+  }
 }
 
 /**
