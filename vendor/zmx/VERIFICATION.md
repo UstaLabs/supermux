@@ -206,10 +206,10 @@ code=7, signal=null)` on the reading viewer, and `exists()` went false.
 Separately, `SIGKILL` on the shell produced `exit(known=true, code=null,
 signal=9)` — a signalled end is a signal, never exit code 0.
 
-### DEFECT: a slow `emit` is not backpressure
+### FIXED: a slow `emit` was not backpressure
 
-`HelperHandlers.onOutput` is documented as *"Called in order; awaiting here is
-the backpressure path."* It is not. Bun drains a subprocess pipe eagerly, so a
+`HelperHandlers.onOutput` was documented as *"Called in order; awaiting here is
+the backpressure path."* It was not. Bun drains a subprocess pipe eagerly, so a
 viewer whose callback never returns does not slow the helper at all:
 
 ```
@@ -227,11 +227,25 @@ broker**, where nothing bounds them. That is precisely the cost the cap exists t
 avoid, relocated to the process with the least to spare. A slow web socket on one
 tab can therefore grow the broker without limit.
 
-The fix belongs in `ZmxViewer`/`ZmxHelper`, not in the daemon: count the bytes
-queued behind `emit` and drop the viewer with the same recoverable
-`resync_required` failure once it passes a cap of our own. Pinned by
-*"a slow EMIT is not backpressure: the broker buffers the whole flood for it"* so
-the change is visible here.
+The fix belongs in `ZmxViewer`, not in the daemon, and is there now: the bytes
+queued behind `emit` are counted, and past `VIEWER_PENDING_MAX` (1 MiB, the
+daemon's own number) the viewer is dropped with the same recoverable
+`resync_required` failure and its queue is thrown away. The doc comment says
+what awaiting really does. Re-measured on the same 12 MiB flood:
+
+```
+flood                          12,582,912 B
+delivered while stalled               146 B
+queued behind emit at the drop  1,049,684 B   (cap 1,048,576)
+delivered after resume                146 B   (the queue was DROPPED)
+reader                         12,709,040 B
+slow viewer          failure(backend-unavailable, recoverable=true)
+                     "the broker dropped this viewer: resync_required"
+```
+
+The reader kept every byte, the shell answered `echo` immediately afterwards,
+and a fresh attach re-synced through a normal replay boundary. Pinned by
+*"a slow EMIT is bounded by the BROKER: the viewer is dropped, not buffered"*.
 
 ### DEFECT: a viewer dropped during its restore is not told why
 

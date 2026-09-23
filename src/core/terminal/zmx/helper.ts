@@ -160,7 +160,20 @@ function errorText(error: unknown): string {
 }
 
 export type HelperHandlers = {
-  /** Pty bytes. Called in order; awaiting here is the backpressure path. */
+  /**
+   * Pty bytes, in order.
+   *
+   * RETURNING A PROMISE HERE IS NOT BACKPRESSURE, whatever it looks like.
+   * Bun drains a subprocess pipe eagerly: a handler that never returns does
+   * not slow this process down at all, it only moves the backlog from the
+   * helper's socket into Bun's stream buffer, where nothing counts it.
+   * Measured: a viewer whose callback was suspended for a 12 MiB flood
+   * received every byte late, the daemon's 1 MiB cap never fired, and the
+   * helper's RSS stayed flat at 2.5 MB (vendor/zmx/VERIFICATION.md §5).
+   *
+   * So a handler that can fall behind has to BOUND ITSELF and drop the viewer
+   * when it cannot keep up — which is what `ZmxViewer` does.
+   */
   onOutput: (bytes: Uint8Array) => void | Promise<void>
   /** Everything else the helper says, already typed and version-checked. */
   onEvent: (event: HelperEvent) => void | Promise<void>

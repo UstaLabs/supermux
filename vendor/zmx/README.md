@@ -469,9 +469,12 @@ clean pin + verified patch (pass), an unrelated edit in the upstream cache
      script never passed `-Doptimize`), which ran the pty at ~43 KiB/s against a
      plain pty's ~28 MiB/s. Fixed: `ReleaseSafe`, 113× faster end to end, and the
      mode is now recorded in the manifest. §1.
-  2. **A slow `emit` is not backpressure.** Bun drains a subprocess pipe eagerly,
-     so the daemon's 1 MiB cap never fires for a viewer whose callback is slow —
-     12 MiB piled up inside the broker instead. §5.
+  2. ~~**A slow `emit` is not backpressure.**~~ **Fixed.** Bun drains a
+     subprocess pipe eagerly, so the daemon's 1 MiB cap never fired for a viewer
+     whose callback was slow — 12 MiB piled up inside the broker instead.
+     `ZmxViewer` now applies the same 1 MiB bound to what is queued behind
+     `emit`, and drops the viewer with the same recoverable `resync_required`.
+     §5.
   3. ~~**The restore ships scrollback and then erases it.**~~ **Fixed.**
      `ESC[2J` after the scrollback phase wiped it in place rather than scrolling
      it off, so the client kept `sent - rows + 1` lines and a terminal with less

@@ -5,12 +5,17 @@ import { basename, join } from "path"
 import {
   CONTRACT_A,
   CONTRACT_ENSURE,
+  deferred,
   recorder,
   runWorkspaceBackendContract,
   type Gate,
   type WorkspaceBackendWorld,
 } from "../workspace-backend.contract"
-import { WorkspaceTerminalError, type WorkspaceTerminalKey } from "../workspace-backend"
+import {
+  WorkspaceTerminalError,
+  type WorkspaceTerminalEvent,
+  type WorkspaceTerminalKey,
+} from "../workspace-backend"
 import {
   workspaceStartupEnvironment,
   WORKSPACE_ENV_ALLOWLIST,
@@ -96,6 +101,12 @@ class FakeHelper implements ZmxHelperFacade {
 
   async deliver(event: HelperEvent): Promise<void> {
     await this.handlers.onEvent(event)
+  }
+
+  /** Pty bytes, the way the real helper hands them over: fire and forget.
+   * Bun drains its stdout pipe whatever the broker does with them. */
+  emitOutput(bytes: Uint8Array): void {
+    void this.handlers.onOutput(bytes)
   }
 
   async send<T = unknown>(command: HelperCommandBody): Promise<T> {
@@ -297,10 +308,10 @@ function zmxWorld(): WorkspaceBackendWorld {
 runWorkspaceBackendContract("zmx", async () => zmxWorld())
 
 describe("ZmxWorkspaceBackend", () => {
-  function harness() {
+  function harness(extra: Partial<ZmxBackendOptions> = {}) {
     const fake = new FakeZmx()
     const socketDir = makeSocketDir()
-    const options: ZmxBackendOptions = { socketDir, launch: fake.launch, probe, hostEnv: HOST_ENV }
+    const options: ZmxBackendOptions = { socketDir, launch: fake.launch, probe, hostEnv: HOST_ENV, ...extra }
     return { fake, socketDir, backend: new ZmxWorkspaceBackend(options), options }
   }
 
@@ -490,6 +501,52 @@ describe("ZmxWorkspaceBackend", () => {
     const before = events.length
     await backend.close(CONTRACT_A)
     expect(events.slice(before).filter(event => event.type === "failure")).toEqual([])
+  })
+
+  test("a viewer whose emit falls behind is dropped recoverably, and its queue is dropped with it", async () => {
+    // AWAITING `emit` IS NOT BACKPRESSURE (vendor/zmx/VERIFICATION.md §5): Bun
+    // drains the helper's pipe eagerly, so a slow callback does not slow the
+    // daemon down, it only decides where the backlog piles up. This is the
+    // bound that makes the answer "nowhere".
+    const { fake, backend } = harness({ viewerPendingMax: 1024 })
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+
+    const events: WorkspaceTerminalEvent[] = []
+    const stall = deferred()
+    let slow = false
+    const viewer = await backend.attachExisting(CONTRACT_A, "slow", async event => {
+      events.push(event)
+      if (slow && event.type === "output") await stall.promise
+    })
+    const other = recorder()
+    await backend.attachExisting(CONTRACT_A, "reader", other.emit)
+    const helper = fake.launched.at(-2)!
+    const outputs = () => events.filter(event => event.type === "output").length
+    const delivered = outputs()
+
+    slow = true
+    helper.emitOutput(new Uint8Array(512)) // taken; `emit` blocks on it
+    await Bun.sleep(1) // ...and really has, before anything queues behind it
+    helper.emitOutput(new Uint8Array(512)) // queued: exactly at the cap
+    expect(events.some(event => event.type === "failure")).toBe(false)
+    helper.emitOutput(new Uint8Array(1)) // one byte over, and that is that
+    stall.resolve()
+    await Bun.sleep(5)
+
+    const failure = events.find(event => event.type === "failure")
+    expect(failure).toMatchObject({ type: "failure", code: "backend-unavailable", recoverable: true })
+    expect((failure as { message: string }).message).toContain("resync_required")
+    // The one chunk `emit` had already taken arrived; the 513 bytes behind it
+    // did NOT. They would have been drawn on top of the next epoch.
+    expect(outputs()).toBe(delivered + 1)
+    expect(viewer.write(new Uint8Array([0x61]))).toBe(false)
+
+    // The other viewer, and the target, never noticed.
+    fake.launched.at(-1)!.emitOutput(new Uint8Array(64))
+    await Bun.sleep(5)
+    expect(other.events.some(event => event.type === "failure")).toBe(false)
+    expect(other.events.filter(event => event.type === "output").length).toBeGreaterThan(1)
+    expect(await backend.exists(CONTRACT_A)).toBe(true)
   })
 
   test("list reports milliseconds from the daemon's own clock, oldest first", async () => {

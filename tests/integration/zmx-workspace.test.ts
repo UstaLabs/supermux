@@ -14,9 +14,11 @@
 //      same process and not a new one wearing its name.
 //   2. THE FOCUSED DEVICE OWNS THE GEOMETRY. `stty size` inside the real shell
 //      is the only authority on what reached TIOCSWINSZ.
-//   3. A SLOW VIEWER IS DROPPED, NOT ACCOMMODATED. The queue cap is enforced by
-//      the daemon against a socket that is genuinely not draining. A unit test
-//      can only assert the daemon's own state machine agrees with itself.
+//   3. A SLOW VIEWER IS DROPPED, NOT ACCOMMODATED. Two caps, in two processes:
+//      the daemon's, against a socket that is genuinely not draining, and the
+//      broker's, against an `emit` that is slow while the pipe drains fine. A
+//      unit test can only assert each state machine agrees with itself; only a
+//      real flood shows which one fires.
 //
 // SAFETY. Every target in this file lives in a private socket directory minted
 // per run under $XDG_RUNTIME_DIR, mode 0700, and nothing here ever enumerates,
@@ -34,7 +36,7 @@ import {
   type WorkspaceTerminalKey,
   type WorkspaceTerminalViewer,
 } from "../../src/core/terminal/workspace-backend"
-import { ZmxWorkspaceBackend, type ZmxHelperLaunch } from "../../src/core/terminal/zmx/backend"
+import { VIEWER_PENDING_MAX, ZmxWorkspaceBackend, type ZmxHelperLaunch } from "../../src/core/terminal/zmx/backend"
 import { ZmxHelper, type HelperBinaries } from "../../src/core/terminal/zmx/helper"
 import { encodeName, socketBasename } from "../../src/core/terminal/zmx/names"
 import {
@@ -702,14 +704,15 @@ suite("zmx workspace backend, against real processes", () => {
     resumedEngine.destroy()
   }, 600_000)
 
-  test("a slow EMIT is not backpressure: the broker buffers the whole flood for it", async () => {
-    // A CHARACTERISATION, NOT AN ENDORSEMENT. `HelperHandlers.onOutput` is
-    // documented as "awaiting here is the backpressure path", and it is not:
-    // Bun reads a subprocess pipe eagerly, so a viewer whose callback never
-    // returns keeps the helper draining the daemon at full speed and the
-    // daemon's 1 MiB cap never fires. The bytes do not disappear — they pile up
-    // inside the BROKER, where nothing bounds them, which is the cost the cap
-    // exists to avoid. Pinned so the fix is visible as a change here.
+  test("a slow EMIT is bounded by the BROKER: the viewer is dropped, not buffered", async () => {
+    // AWAITING `emit` IS NOT BACKPRESSURE. Bun reads a subprocess pipe eagerly,
+    // so a viewer whose callback never returns keeps the helper draining the
+    // daemon at full speed and the daemon's own 1 MiB cap never fires: the
+    // bytes used to pile up inside the BROKER instead, 12.7 MB of them, where
+    // nothing bounded them (VERIFICATION.md §5). `ZmxViewer` now counts what is
+    // queued behind `emit` and drops the viewer at the same 1 MiB, with the
+    // same recoverable `resync_required` the daemon uses — so the cost stays
+    // bounded wherever the slow part is.
     const key = await create("w:slowemit-0012", "main", 100, 30)
     const slow = await attach(key, "slow-callback")
     const fast = await attach(key, "reader")
@@ -722,17 +725,33 @@ suite("zmx workspace backend, against real processes", () => {
     await fast.waitForText("SLOW-DONE", 240_000)
     const whileStalled = slow.outputBytes
     slow.resume()
-    await waitFor(() => slow.outputBytes >= fast.outputBytes, 60_000,
-      () => `slow viewer got ${slow.outputBytes} of ${fast.outputBytes}`)
 
-    // Every byte arrived, late: no detach, no drop, no cap.
-    expect(slow.outputBytes).toBe(fast.outputBytes)
-    expect(slow.events.some(event => event.type === "failure")).toBe(false)
-    record("slow-emit-is-not-backpressure", {
+    // Dropped, recoverably, and TOLD WHY — this one the broker can say on its
+    // own side, so the reason survives (unlike the daemon's, which travels on
+    // the socket the viewer stopped reading).
+    const failure = await slow.waitForEvent(event => event.type === "failure", 60_000)
+    expect(failure).toMatchObject({ type: "failure", code: "backend-unavailable", recoverable: true })
+    expect((failure as { message: string }).message).toContain("resync_required")
+    await Bun.sleep(500)
+    // The queue was dropped, not delivered late: nowhere near the whole flood.
+    expect(slow.outputBytes).toBeLessThan(VIEWER_PENDING_MAX * 3)
+    expect(slow.outputBytes).toBeLessThan(fast.outputBytes / 2)
+    expect(slow.events.some(event => event.type === "exit")).toBe(false)
+
+    // The reader and the shell never noticed, and a fresh attach re-syncs.
+    fast.clear()
+    await run(fast, "echo SLOW-DROPPED-OK", "SLOWALIVE-DONE")
+    expect(fast.text).toContain("SLOW-DROPPED-OK")
+    const resumed = await attach(key, "slow-resumed")
+    await resumed.waitForEvent(event => event.type === "replay-end")
+
+    record("slow-emit-is-bounded", {
       floodBytes: FLOOD_BYTES, deliveredWhileStalled: whileStalled,
-      deliveredAfterResume: slow.outputBytes, readerBytes: fast.outputBytes,
-      failures: slow.events.filter(event => event.type === "failure").length,
+      deliveredBeforeDrop: slow.outputBytes, readerBytes: fast.outputBytes,
+      cap: VIEWER_PENDING_MAX, drop: (failure as { message: string }).message,
+      traceSlow: slow.trace,
     })
+    await resumed.viewer.detach()
     await slow.viewer.detach()
     await fast.viewer.detach()
   }, 600_000)
