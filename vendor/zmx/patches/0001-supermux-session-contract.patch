@@ -2348,7 +2348,7 @@ index 513d3f5..bf83c4c 100644
 +    try std.testing.expectEqual(@as(usize, 80), fx.termCols());
 +}
 diff --git a/src/util.zig b/src/util.zig
-index d96f5a1..99e0d72 100644
+index d96f5a1..68c0792 100644
 --- a/src/util.zig
 +++ b/src/util.zig
 @@ -766,9 +766,19 @@ fn writeColorOverrides(writer: *std.Io.Writer, term: *const ghostty_vt.Terminal)
@@ -2386,7 +2386,7 @@ index d96f5a1..99e0d72 100644
  
      const pages = &term.screens.active.pages;
      const screen_top = pages.getTopLeft(.screen);
-@@ -815,15 +826,13 @@ pub fn serializeTerminalState(alloc: std.mem.Allocator, term: *ghostty_vt.Termin
+@@ -815,15 +826,32 @@ pub fn serializeTerminalState(alloc: std.mem.Allocator, term: *ghostty_vt.Termin
                  ),
              };
              scroll_fmt.extra = .none; // no modes, cursor, keyboard — just content
@@ -2396,15 +2396,37 @@ index d96f5a1..99e0d72 100644
 +            try scroll_fmt.format(writer);
          }
  
-         // Clear visible screen after scrollback. \x1b[2J clears only the visible
-         // rows (not the scrollback buffer). \x1b[H homes the cursor. \x1b[0m resets
-         // SGR style so phase 1 styles don't bleed into phase 2.
+-        // Clear visible screen after scrollback. \x1b[2J clears only the visible
+-        // rows (not the scrollback buffer). \x1b[H homes the cursor. \x1b[0m resets
+-        // SGR style so phase 1 styles don't bleed into phase 2.
 -        builder.writer.writeAll("\x1b[2J\x1b[H\x1b[0m") catch {};
++        // END PHASE 1 BY SCROLLING IT OFF, NOT BY ERASING IT.
++        //
++        // Upstream ended this phase with `\x1b[2J` alone. `ED 2` erases the
++        // visible rows IN PLACE -- it does not scroll them into the client's
++        // scrollback -- so every scrollback line phase 1 had just drawn and
++        // that was still on screen when the separator arrived was WIPED
++        // instead of becoming history. Measured on a 100x30 client: of 98
++        // history lines on the wire, 69 survived (`sent - rows + 1`), and a
++        // terminal whose scrollback is shorter than one screenful came back
++        // with NO history at all. The bytes were paid for and thrown away.
++        //
++        // `rows` linefeeds at the bottom of the screen are the portable way to
++        // push exactly those rows out of the viewport and into the scrollback,
++        // which is where they belong. The viewport they leave behind is blank,
++        // which is what phase 2 needs and what ED 2 used to provide.
++        //
++        // The `\x1b[2J` is KEPT behind them: on a client of the same geometry
++        // it is a no-op, and on one that is taller than the daemon it still
++        // clears the residue phase 2 would otherwise have to draw over. \x1b[H
++        // homes the cursor and \x1b[0m resets SGR so phase 1 styles do not
++        // bleed into phase 2 -- both as before.
++        for (0..pages.rows) |_| try writer.writeAll("\r\n");
 +        try writer.writeAll("\x1b[2J\x1b[H\x1b[0m");
      }
  
      // Phase 2: visible screen with full extras (modes, cursor, keyboard, etc.)
-@@ -859,37 +868,107 @@ pub fn serializeTerminalState(alloc: std.mem.Allocator, term: *ghostty_vt.Termin
+@@ -859,37 +887,107 @@ pub fn serializeTerminalState(alloc: std.mem.Allocator, term: *ghostty_vt.Termin
          .screen = .all,
      };
  
@@ -2525,7 +2547,7 @@ index d96f5a1..99e0d72 100644
  pub const HistoryFormat = enum(u8) {
      plain = 0,
      vt = 1,
-@@ -2191,3 +2270,110 @@ test "stripAnsi: only escape sequences" {
+@@ -2191,3 +2289,143 @@ test "stripAnsi: only escape sequences" {
      defer alloc.free(result);
      try testing.expectEqualStrings("", result);
  }
@@ -2635,4 +2657,37 @@ index d96f5a1..99e0d72 100644
 +    const bounded = try serializeTerminalStateBounded(alloc, &term, 1 << 20);
 +    defer if (bounded) |b| alloc.free(b);
 +    try std.testing.expectEqual(unbounded == null, bounded == null);
++}
++
++test "writeTerminalState scrolls the scrollback off instead of erasing it" {
++    // THE DEFECT THIS PINS: the phase-1/phase-2 separator used to be `ED 2`
++    // alone, which erases the visible rows IN PLACE. Everything phase 1 had
++    // just drawn and that was still on screen -- one full screenful, or the
++    // WHOLE scrollback when it is shorter than one -- was wiped instead of
++    // becoming the client's history. The linefeeds below are what pushes it
++    // into the scrollback instead; `ED 2` stays behind them as a no-op on a
++    // client of the same geometry.
++    const alloc = std.testing.allocator;
++    var term = try testTerminal(alloc, 20, 4);
++    defer term.deinit(alloc);
++    var stream = term.vtStream();
++    defer stream.deinit();
++    // Six lines on a four-row screen: two scroll off, and the other four --
++    // every one of them still on the visible screen -- are what used to be
++    // lost.
++    for (1..7) |i| {
++        var buf: [16]u8 = undefined;
++        stream.nextSlice(try std.fmt.bufPrint(&buf, "LINE-{d}\r\n", .{i}));
++    }
++
++    const snapshot = serializeTerminalState(alloc, &term) orelse return error.TestUnexpectedNull;
++    defer alloc.free(snapshot);
++
++    // The separator is `rows` linefeeds and THEN the erase, in that order.
++    const separator = "\r\n" ** 4 ++ "\x1b[2J\x1b[H\x1b[0m";
++    const at = std.mem.indexOf(u8, snapshot, separator) orelse return error.TestUnexpectedNull;
++    // ... and the scrollback really is in front of it, not behind it.
++    try std.testing.expect(std.mem.indexOf(u8, snapshot[0..at], "LINE-1") != null);
++    // Nothing erases the screen BEFORE the scrollback is scrolled away.
++    try std.testing.expect(std.mem.indexOf(u8, snapshot[0..at], "\x1b[2J") == null);
 +}

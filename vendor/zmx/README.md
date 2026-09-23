@@ -308,6 +308,20 @@ The snapshot is built **outside** the client's write buffer and moved in 64 KiB
 chunks as the socket drains, so a slow viewer applies backpressure instead of
 growing the daemon.
 
+### Scrollback that survives the restore
+
+The two-phase snapshot ends phase 1 with **`rows` linefeeds** before the
+`\x1b[2J\x1b[H\x1b[0m` separator. Upstream emitted the erase alone, and `ED 2`
+clears the visible rows *in place*: every scrollback line phase 1 had just
+drawn and that was still on screen was wiped instead of becoming the client's
+history, so a client kept `sent - rows + 1` lines and a terminal with less than
+one screenful of scrollback kept **none**. The linefeeds push exactly those rows
+out of the viewport and into the scrollback, which is where they belong, and
+leave the same blank viewport phase 2 needs. The erase stays behind them: a
+no-op at equal geometry, and still the thing that clears residue on a client
+taller than the daemon. Measured end to end in `VERIFICATION.md` §6 — 99 lines
+sent, 99 retained — and pinned in `src/util.zig`'s own tests.
+
 One upstream behaviour changed, deliberately: the synchronized-output
 (DECSET 2026) save/restore is now a `defer`. Upstream skips the restore on its
 formatter-error path; with a bounded writer "ran out of room" is an *ordinary*
@@ -363,15 +377,16 @@ cd build/zmx/upstream && zig build test --summary all
 
 # patched
 cd build/zmx/upstream && zig build test --summary all
-#   Build Summary: 41/41 steps succeeded; 145/145 tests passed
+#   Build Summary: 41/41 steps succeeded; 146/146 tests passed
 ```
 
-(50 added: 95 upstream + 50 — the last two are "a dropped connection never
+(51 added: 95 upstream + 51 — the last two are "a dropped connection never
 announces an exit" and "a viewer that leaves mid-replay takes its replay with
 it", which pin by construction that only the two intended call sites can emit
 `BrokerExit` and that a viewer's snapshot + staged output die with it. Both
 runs on x86_64-linux, Zig 0.16.0, 2026-09-23; the patched number was 143
-before those two.) `scripts/build-zmx.sh` wraps both — `--stock-test` and the default
+before those two, and 145 before "writeTerminalState scrolls the scrollback off
+instead of erasing it".) `scripts/build-zmx.sh` wraps both — `--stock-test` and the default
 — and passes `ZIG_GLOBAL_CACHE_DIR`/`--cache-dir` into `build/zmx/`.
 
 A patch that applies is not validation, so there are two live checks. The
@@ -457,10 +472,12 @@ clean pin + verified patch (pass), an unrelated edit in the upstream cache
   2. **A slow `emit` is not backpressure.** Bun drains a subprocess pipe eagerly,
      so the daemon's 1 MiB cap never fires for a viewer whose callback is slow —
      12 MiB piled up inside the broker instead. §5.
-  3. **The restore ships scrollback and then erases it.** `ESC[2J` after the
-     scrollback phase wipes it in place rather than scrolling it off, so the
-     client keeps `sent - rows + 1` lines and a terminal with less than one
-     screen of scrollback keeps none. §6.
+  3. ~~**The restore ships scrollback and then erases it.**~~ **Fixed.**
+     `ESC[2J` after the scrollback phase wiped it in place rather than scrolling
+     it off, so the client kept `sent - rows + 1` lines and a terminal with less
+     than one screen of scrollback kept none. The phase now ends with `rows`
+     linefeeds and the erase behind them; re-measured 99 sent / 99 retained /
+     0 lost. §6.
   4. **A viewer dropped during its restore is not told why** — the
      `BrokerDetach` is queued on the socket it stopped reading, and it sees a
      closed connection instead. §5.

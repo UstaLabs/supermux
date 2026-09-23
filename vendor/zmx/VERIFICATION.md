@@ -280,13 +280,14 @@ parent. Killing what `list` reports is the third row, not the second — a
 distinction the first version of this suite got wrong, and the reason
 `daemonPidOf()` reads `/proc/<pid>/status`.
 
-### DEFECT: the restore ships scrollback and then erases it
+### FIXED: the restore shipped scrollback and then erased it
 
-The snapshot is *scrollback*, then `ESC[2J ESC[H ESC[0m`, then the *viewport*
-(upstream's `serializeTerminalState`, which this patch did not change). `ED 2`
-erases the screen **in place** instead of scrolling it off, so every scrollback
-line still on screen when the separator arrives is wiped rather than becoming the
-client's history. Measured on a 100×30 terminal:
+The snapshot is *scrollback*, then a phase separator, then the *viewport*. That
+separator was `ESC[2J ESC[H ESC[0m` alone (upstream's `serializeTerminalState`,
+which the first version of this patch did not change), and `ED 2` erases the
+screen **in place** instead of scrolling it off, so every scrollback line still
+on screen when the separator arrived was wiped rather than becoming the client's
+history. Measured on a 100×30 terminal:
 
 ```
 history lines on the wire   98
@@ -294,15 +295,25 @@ history rows in the client  69      (= 98 − 30 + 1)
 lost                        29
 ```
 
-Exactly one screenful, every time — and a terminal whose scrollback is **shorter
-than one screen comes back with no history at all** (measured separately: 14
-lines sent, 0 retained). The bytes are paid for and thrown away.
+Exactly one screenful, every time — and a terminal whose scrollback was
+**shorter than one screen came back with no history at all** (measured
+separately: 14 lines sent, 0 retained). The bytes were paid for and thrown away.
 
-The fix is in `util.writeTerminalState`: end the scrollback phase by scrolling it
-out (or cursor-position the viewport onto it) instead of `ED 2`, which would also
-mean re-pinning the patch sha and re-running the zig suite — a change with its
-own blast radius, deliberately not made here. Pinned as an **equality**
-(`historyRows === historySent - rows + 1`) so the number has to move when it is.
+`util.writeTerminalState` now ends the scrollback phase with **`rows`
+linefeeds**, which push exactly those rows out of the viewport and into the
+client's scrollback, and keeps the erase behind them, where it is a no-op at
+equal geometry and still clears residue on a client taller than the daemon. The
+same run, re-measured (2026-09-23, patch `705fd022…`, zig suite 146/146):
+
+```
+history lines on the wire   99
+history rows in the client  99
+lost                         0
+top retained row            HIST-001 RED-ÜNÏÇØDE-日本語-🎉
+```
+
+Pinned as an equality (`historyRows === historySent`) plus the identity of the
+oldest line, so a regression cannot pass by shipping a different number.
 
 ---
 

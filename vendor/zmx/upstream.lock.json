@@ -24,7 +24,7 @@
   "patches": [
     {
       "file": "patches/0001-supermux-session-contract.patch",
-      "sha256": "6160737b19fba319d0502d9e756788495c2bde62d12c402929e8e07a09c93efb",
+      "sha256": "705fd022b24417f4818fadd426771f4acb622a732e60444924f8ff309fa90534",
       "applies_to": "8bab1f0173b07e79835ea372d749af3dbf0d0842",
       "touches": ["src/ipc.zig", "src/loop.zig", "src/util.zig"],
       "does_not_touch": ["src/main.zig", "src/socket.zig", "src/posix.zig", "src/daemonize.zig", "src/cfg.zig", "src/label.zig", "build.zig", "build.zig.zon"]
@@ -40,7 +40,7 @@
     "date": "2026-09-23",
     "host": "x86_64-linux",
     "stock": "zig build test -> 41/41 steps, 95/95 tests passed",
-    "patched": "zig build test -> 41/41 steps, 145/145 tests passed (95 upstream + 50 added)",
+    "patched": "zig build test -> 41/41 steps, 146/146 tests passed (95 upstream + 51 added)",
     "cli_smoke": "zmx run / list / history / kill against the patched binary",
     "wire_smoke": "vendor/zmx/tools/broker_smoke.py against a live daemon socket: handshake, replay boundary, focus lease, input, stale-generation rejection, unsupported-version refusal",
     "helper_smoke": "src/core/terminal/zmx/helper/helper_smoke.py: create (argv, labelled), label-mismatch refusal, focus geometry with no keystroke, input, ZMX_SESSION stripped, owner reply, detach and SIGKILL of the helper both leave the target running, explicit kill destroys it, and `exit 7` arrives as {known:true, code:7}"

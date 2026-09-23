@@ -528,31 +528,42 @@ suite("zmx workspace backend, against real processes", () => {
     const primary = primaryEngine.viewport()
     expect(primary.alternateScreen).toBe(false)
 
-    // RETAINED HISTORY, and the size of what is lost on the way.
+    // RETAINED HISTORY: every line that is sent survives.
     //
-    // The snapshot is scrollback, then `ESC[2J ESC[H ESC[0m`, then the
-    // viewport (upstream's `serializeTerminalState`, unchanged by our patch).
-    // The scrollback lines really are sent — `historySent` below counts them
-    // on the wire — but `ED 2` ERASES THE SCREEN IN PLACE rather than scrolling
-    // it off, so everything still on screen when it arrives is wiped instead of
-    // becoming the client's history. What survives is what had already scrolled
-    // past the last row: `historySent - rows + 1`.
+    // The snapshot is scrollback, then the phase separator, then the viewport.
+    // That separator used to be `ESC[2J ESC[H ESC[0m` alone, and `ED 2` ERASES
+    // THE SCREEN IN PLACE rather than scrolling it off: everything phase 1 had
+    // just drawn and that was still on screen was wiped instead of becoming the
+    // client's history, so a client kept `sent - rows + 1` lines and a terminal
+    // with less than one screenful of scrollback kept NONE. The patch now ends
+    // phase 1 with `rows` linefeeds — which push exactly those rows into the
+    // client's scrollback — and keeps the erase behind them, where it is a
+    // no-op at equal geometry. See vendor/zmx/VERIFICATION.md §6.
     //
-    // Pinned as an equality, not an inequality, because it is a DEFECT and this
-    // is the number that has to change when it is fixed: a terminal whose
-    // scrollback is shorter than one screen comes back with NO history at all.
-    // See vendor/zmx/VERIFICATION.md §6.
-    const separator = bytes("\x1b[2J\x1b[H\x1b[0m")
+    // So the separator on the wire is that whole run, and the equality below is
+    // "nothing was lost", not a measurement of how much is.
+    const scrollOff = bytes("\r\n".repeat(primary.rows))
+    const separator = bytes(`${"\r\n".repeat(primary.rows)}\x1b[2J\x1b[H\x1b[0m`)
     const separatorAt = indexOfBytes(primaryReplay, separator)
     expect(separatorAt).toBeGreaterThan(0)
-    const historySent = countNewlines(primaryReplay.subarray(0, separatorAt))
+    // n newlines of content are n+1 lines; the last one has no newline after it.
+    const historySent = countNewlines(primaryReplay.subarray(0, separatorAt)) + 1
     expect(historySent).toBeGreaterThan(primary.rows)
-    expect(primary.historyRows).toBe(historySent - primary.rows + 1)
+    expect(primary.historyRows).toBe(historySent)
+    // ...and it is the OLDEST line that used to go first, so name it: the first
+    // line on the wire is the first line in the client's scrollback.
+    const firstSent = new TextDecoder().decode(primaryReplay.subarray(0, separatorAt))
+      .split("\n").map(line => /HIST-\d{3}/.exec(line)?.[0]).find(Boolean)
+    expect(firstSent).toBeDefined()
 
     primaryEngine.scrollTo(0)
     const top = rowsOf(primaryEngine.viewport())
     const styled = top.find(row => row.includes("RED-ÜNÏÇØDE-日本語-🎉"))
     expect(styled).toBeDefined()
+    // The OLDEST lines survive, not just the ones that had already scrolled
+    // past: the erase used to take the first screenful with it, and the first
+    // history line on the wire is now inside the client's retained scrollback.
+    expect(top.some(row => row.includes(firstSent!))).toBe(true)
     const styledRow = primaryEngine.viewport().grid.find(row => row.text.includes("RED-ÜNÏÇØDE"))!
     const redCell = styledRow.cells[styledRow.cells.findIndex(cell => cell.text === "R" && cell.flags !== 0)]!
     const plainCell = styledRow.cells[0]!
@@ -569,7 +580,8 @@ suite("zmx workspace backend, against real processes", () => {
       primary: {
         replayBytes: primaryReplay.length, alternateScreen: primary.alternateScreen,
         historyLinesSent: historySent, historyRows: primary.historyRows,
-        historyLostToED2: historySent - primary.historyRows, topRow: styled,
+        historyLost: historySent - primary.historyRows,
+        scrollOffBytes: scrollOff.length, topRow: styled, firstSent,
         boldRedFg: `0x${redCell.fg.toString(16)}`, plainFg: `0x${plainCell.fg.toString(16)}`,
       },
       replayResponses: responses,
