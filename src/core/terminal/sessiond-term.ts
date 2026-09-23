@@ -43,6 +43,7 @@
 import { randomUUID } from "node:crypto"
 import type { RuntimeViewer, SessionBackend } from "../runtime/session-backend"
 import {
+  MAX_TERMINAL_DIMENSION,
   WorkspaceTerminalError,
   type WorkspaceTerminalBackend,
   type WorkspaceTerminalEvent,
@@ -108,6 +109,24 @@ function defaultFindExecutable(name: string): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * A geometry a viewer claims, or nothing.
+ *
+ * The check used to be `Number.isInteger(cols) && cols > 0` with NO ceiling, so
+ * a viewer could say 2,000,000 columns and this adapter would keep it: the
+ * ConPTY is resized to it, and `core/sessiond/screen.ts` is an @xterm/headless
+ * model that allocates per cell. One frame off one socket, and the broker is
+ * asked for a grid with more cells than it has bytes of memory.
+ *
+ * Nothing is clamped. A refused dimension leaves the last GOOD one in place,
+ * which is the size the viewer is actually looking at — silently resizing a
+ * shell to a number nobody asked for is its own bug.
+ */
+function usableDimension(value: number): number | null {
+  if (!Number.isInteger(value) || value <= 0) return null
+  return value <= MAX_TERMINAL_DIMENSION ? value : null
 }
 
 function errorMessage(error: unknown): string {
@@ -699,8 +718,8 @@ class SessiondWorkspaceViewer implements WorkspaceTerminalViewer {
   }
 
   async resize(cols: number, rows: number): Promise<void> {
-    if (Number.isInteger(cols) && cols > 0) this.#cols = cols
-    if (Number.isInteger(rows) && rows > 0) this.#rows = rows
+    this.#cols = usableDimension(cols) ?? this.#cols
+    this.#rows = usableDimension(rows) ?? this.#rows
     // A background viewer may keep reporting layout; only the owner's reaches
     // the ConPTY.
     if (!this.#owner) return
@@ -708,8 +727,8 @@ class SessiondWorkspaceViewer implements WorkspaceTerminalViewer {
   }
 
   async focus(active: boolean, cols: number, rows: number): Promise<void> {
-    if (Number.isInteger(cols) && cols > 0) this.#cols = cols
-    if (Number.isInteger(rows) && rows > 0) this.#rows = rows
+    this.#cols = usableDimension(cols) ?? this.#cols
+    this.#rows = usableDimension(rows) ?? this.#rows
     if (this.#dead) return
     if (active) await this.backend.claimFocus(this.target, this)
     else await this.backend.releaseFocus(this.target, this)

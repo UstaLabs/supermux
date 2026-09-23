@@ -46,6 +46,7 @@ import { isAbsolute } from "path"
 import { makeLogger } from "../../../shared/log"
 import { STATE_DIR } from "../../../shared/paths"
 import {
+  MAX_TERMINAL_DIMENSION,
   WorkspaceTerminalError,
   type WorkspaceTerminalBackend,
   type WorkspaceTerminalEvent,
@@ -804,7 +805,12 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
 const LOGIN_CAPABLE_SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh", "mksh", "fish", "ash"])
 
 function clampDimension(value: number, fallback: number): number {
-  return Number.isInteger(value) && value > 0 && value <= 0xffff ? value : fallback
+  // MAX_TERMINAL_DIMENSION, not 0xffff. The u16 on the wire is what a value
+  // must FIT, not what it may be: a 60,000-column grid is not a display, and
+  // the protocol layer refuses anything over the shared bound long before it
+  // gets here — so accepting more here could only ever admit something that
+  // came in past the decoder.
+  return Number.isInteger(value) && value > 0 && value <= MAX_TERMINAL_DIMENSION ? value : fallback
 }
 
 /**

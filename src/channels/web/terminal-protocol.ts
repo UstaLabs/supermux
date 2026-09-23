@@ -27,7 +27,7 @@
 // revision-1 framing, which exists only until Plan 4 Tasks 3-5 delete the last
 // client that speaks it.
 
-import type { WorkspaceTerminalEvent } from "../../core/terminal/workspace-backend"
+import { MAX_TERMINAL_DIMENSION, type WorkspaceTerminalEvent } from "../../core/terminal/workspace-backend"
 
 /** The revision this broker speaks. Bump only with a matching Kotlin bump. */
 export const TERMINAL_PROTOCOL_VERSION = 2
@@ -67,15 +67,18 @@ export type DecodedClientControl =
   | { ok: true; frame: TerminalClientControl }
   | { ok: false; reason: string }
 
-const MAX_DIMENSION = 5000
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function dimension(value: unknown): number | null {
+/** A column or row count off the wire, or nothing. EXPORTED because the legacy
+ * revision-1 branch in `channels/web/index.ts` has to apply the same bound —
+ * it parsed `cols`/`rows` with a bare `typeof === "number"` and reached the
+ * backend with whatever it was given. */
+export function dimension(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isInteger(value)) return null
-  if (value < 0 || value > MAX_DIMENSION) return null
+  if (value < 0 || value > MAX_TERMINAL_DIMENSION) return null
   return value
 }
 

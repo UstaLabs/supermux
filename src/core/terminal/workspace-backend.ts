@@ -150,6 +150,23 @@ export interface WorkspaceTerminalBackend {
 }
 
 /**
+ * The largest column or row count any backend will accept, for every path a
+ * client can reach — ONE number, because two of them is how a bound gets
+ * bypassed. A viewer that claims 2,000,000 columns is not a viewer with a very
+ * wide window; the geometry it sends is attacker-controlled the moment the
+ * socket is, and it is handed to a pty, to a terminal model that allocates per
+ * cell, and (on zmx) onto a u16 wire that would truncate it into something
+ * else entirely.
+ *
+ * 5000 is far past any real display — a 4K screen at a 5px cell is 768
+ * columns — and small enough that the largest grid a client can ask for is
+ * 25 million cells rather than a number bounded only by `Number.MAX_SAFE_INTEGER`.
+ * An out-of-range value is REFUSED, never clamped: clamping would silently
+ * resize the shell to something the viewer did not ask for and cannot see.
+ */
+export const MAX_TERMINAL_DIMENSION = 5000
+
+/**
  * Codes shared by thrown errors and the `failure` event, so a client sees one
  * vocabulary whether a problem happened during attach or mid-stream.
  *

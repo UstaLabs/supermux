@@ -38,6 +38,7 @@ import {
   TerminalFrameLane,
   decodeClientControl,
   decodeReplyPayload,
+  dimension,
   parseTerminalRevision,
 } from "./terminal-protocol"
 import { ProjectConflictError, ProjectNotFoundError } from "../../core/project/service"
@@ -1030,16 +1031,25 @@ export class WebChannel implements Channel {
     if (typeof msg === "string") {
       try {
         const frame = JSON.parse(msg)
-        if (frame.type === "resize" && typeof frame.cols === "number" && typeof frame.rows === "number") {
-          tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows, viewerId)
+        // `dimension`, not `typeof === "number"`. This branch is revision 1 and
+        // it was reading geometry with a bare type test, so it accepted 1e9,
+        // 2 ** 40 and -0 alike and handed them straight to a backend — the same
+        // values `decodeClientControl` refuses on the revision-2 path beside it.
+        // A bound that one of two doors enforces is not a bound.
+        if (frame.type === "resize") {
+          const cols = dimension(frame.cols)
+          const rows = dimension(frame.rows)
+          if (cols !== null && rows !== null) {
+            tm.resize(ws.data.deviceName, sessionName, terminalId, cols, rows, viewerId)
+          }
         } else if (frame.type === "focus" && typeof frame.focused === "boolean") {
           tm.focus(
             ws.data.deviceName,
             sessionName,
             terminalId,
             frame.focused,
-            typeof frame.cols === "number" ? frame.cols : undefined,
-            typeof frame.rows === "number" ? frame.rows : undefined,
+            dimension(frame.cols) ?? undefined,
+            dimension(frame.rows) ?? undefined,
             viewerId,
           )
         } else if (frame.type === "close") {

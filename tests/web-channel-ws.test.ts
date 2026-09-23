@@ -445,3 +445,52 @@ test("ws send frame triggers onSendFromWeb callback", async () => {
   expect(received[0].target_session_id).toBe("ana")
   ws.close()
 })
+
+// The revision-1 branch parsed `cols`/`rows` with `typeof frame.cols === "number"`
+// and handed whatever came through to the backend — while the revision-2 decoder
+// beside it refused anything outside 0..5000. A bound one of two doors enforces
+// is not a bound, and the geometry behind it is applied to a pty and to a
+// terminal model that allocates per cell.
+test("legacy resize/focus geometry is bounded, exactly like revision 2's", async () => {
+  const resizeCalls: any[] = []
+  const focusCalls: any[] = []
+  await ch.stop()
+  ch = new WebChannel({
+    port: PORT,
+    devicesFile: DEV_PATH,
+    publicUrl: "http://127.0.0.1:" + PORT,
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getSessionWorkdir: () => "/w",
+    terminalManager: {
+      attach: () => ({ ok: true }),
+      detach: () => {},
+      resize: (...args: any[]) => { resizeCalls.push(args.slice(3, 5)); return true },
+      focus: (...args: any[]) => { focusCalls.push(args.slice(4, 6)); return true },
+    } as any,
+  })
+  await ch.start()
+
+  const ws = await connectTerm("ana", "scratch")
+  await new Promise((r) => setTimeout(r, 50))
+  for (const frame of [
+    { type: "resize", cols: 1e9, rows: 1e9 },
+    { type: "resize", cols: 5001, rows: 24 },
+    { type: "resize", cols: 80, rows: 5001 },
+    { type: "resize", cols: 80.5, rows: 24 },      // not an integer
+    { type: "resize", cols: -1, rows: 24 },
+    { type: "resize", cols: "80", rows: 24 },      // the NaN this used to forward
+  ]) ws.send(JSON.stringify(frame))
+  // ...and the two that ARE geometry: the inclusive bound, and an ordinary size.
+  ws.send(JSON.stringify({ type: "resize", cols: 5000, rows: 5000 }))
+  ws.send(JSON.stringify({ type: "resize", cols: 80, rows: 24 }))
+  ws.send(JSON.stringify({ type: "focus", focused: true, cols: 1e9, rows: 1e9 }))
+  await new Promise((r) => setTimeout(r, 100))
+
+  expect(resizeCalls).toEqual([[5000, 5000], [80, 24]])
+  // A focus is still a focus with an unusable geometry — it just carries none.
+  expect(focusCalls).toEqual([[undefined, undefined]])
+  ws.close()
+})

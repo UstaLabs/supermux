@@ -7,7 +7,7 @@ import {
   sessiondTerminalGroup,
   sessiondTerminalName,
 } from "./sessiond-term"
-import { isWorkspaceTerminalError, type WorkspaceTerminalKey } from "./workspace-backend"
+import { isWorkspaceTerminalError, MAX_TERMINAL_DIMENSION, type WorkspaceTerminalKey } from "./workspace-backend"
 import {
   CONTRACT_A,
   CONTRACT_ENSURE,
@@ -573,5 +573,40 @@ describe("SessiondWorkspaceBackend", () => {
     expect(first.events.at(-1)).toEqual({ type: "owner", enabled: true })
     await one.resize(64, 20)
     expect(backend.find(CONTRACT_A)!.cols).toBe(64)
+  })
+
+  test("a geometry no display could have is refused, and the last real one stands", async () => {
+    // The check here was `Number.isInteger(cols) && cols > 0`, with no ceiling.
+    // Every one of these came off a viewer socket and was kept: applied to the
+    // ConPTY, and handed to `core/sessiond/screen.ts`, an @xterm/headless model
+    // that allocates per cell. `1e9 x 1e9` is a grid with more cells than the
+    // broker has bytes.
+    const { backend, workspace } = harness()
+    await workspace.ensure(CONTRACT_A, { ...CONTRACT_ENSURE, cwd: "C:\\work" })
+    const viewer = await workspace.attachExisting(CONTRACT_A, "v1", recorder().emit)
+    await viewer.focus(true, 100, 40)
+    expect(backend.find(CONTRACT_A)!.cols).toBe(100)
+
+    for (const [cols, rows] of [
+      [1e9, 1e9],
+      [MAX_TERMINAL_DIMENSION + 1, 40],
+      [100, MAX_TERMINAL_DIMENSION + 1],
+      [2 ** 40, 2 ** 40],
+      [Number.MAX_SAFE_INTEGER, 40],
+    ] as const) {
+      await viewer.resize(cols, rows)
+      // NOT CLAMPED. A refused dimension leaves the size the viewer is actually
+      // looking at; silently resizing the shell to a number nobody asked for
+      // would be a second bug wearing the first one's fix.
+      expect([cols, rows, backend.find(CONTRACT_A)!.cols]).toEqual([cols, rows, 100])
+      expect([cols, rows, backend.find(CONTRACT_A)!.rows]).toEqual([cols, rows, 40])
+    }
+
+    // The bound is inclusive, and a legitimate resize still lands.
+    await viewer.resize(MAX_TERMINAL_DIMENSION, MAX_TERMINAL_DIMENSION)
+    expect(backend.find(CONTRACT_A)!.cols).toBe(MAX_TERMINAL_DIMENSION)
+    // ...and `focus` carries geometry too, so it is the same door.
+    await viewer.focus(true, 1e9, 1e9)
+    expect(backend.find(CONTRACT_A)!.cols).toBe(MAX_TERMINAL_DIMENSION)
   })
 })
