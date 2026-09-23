@@ -1203,9 +1203,28 @@ export class SessionManager {
   }
 
   private async resumeClaudeCoreArm(session: ResumeRow, name: string): Promise<void> {
+    const row = this.registry.get(session.id)
+    await this.retireTmuxWindow({ id: session.id, name, core: row?.core, tmux_window_id: row?.tmux_window_id })
     const { adapter } = await agents.claude.resume!(this.resumeCtx(session.id), session, name)
     this.registerClaudeRuntime(session.id, adapter)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
+  }
+
+  /** A tmux-era Claude row (core=0) may still have its interactive `claude`
+   *  running in the old window. Resuming the same claude session id through
+   *  Core while that process lives would put two writers on one conversation,
+   *  so the window is killed first; a Core row never has one. */
+  private async retireTmuxWindow(session: { id: string; name: string; core?: boolean; tmux_window_id?: string | null }): Promise<void> {
+    if (session.core) return
+    let wid: string | null = null
+    try { wid = await this.ports.backend.runtimeTargetIdOf({ id: session.id, name: session.name, tmux_window_id: session.tmux_window_id ?? undefined }) } catch { return }
+    if (!wid) return
+    try {
+      await this.ports.backend.kill(wid)
+      log.info("claude_tmux_window_retired", { name: session.name, window: wid })
+    } catch (err) {
+      log.warn("claude_tmux_window_retire_failed", { name: session.name, window: wid, err: String(err) })
+    }
   }
 
   /** Suspended → live (lazy, triggered by the next inbound message). */
