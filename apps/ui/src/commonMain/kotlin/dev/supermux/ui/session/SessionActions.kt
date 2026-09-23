@@ -32,6 +32,7 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
+import dev.supermux.proto.PermissionModeInfo
 import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SlashCommand
 import dev.supermux.state.FleetStore
@@ -77,6 +78,8 @@ class LauncherActions(
         { _, _ -> emptyList() },
     /** The host's INSTALLED agent kinds; empty keeps each launcher's own fallback list. */
     val launcherAgents: suspend () -> List<String> = { emptyList() },
+    /** Snapshot catalog of permission modes, keyed by agent. */
+    val permissionModes: Map<String, List<PermissionModeInfo>> = emptyMap(),
     val listForges: suspend () -> List<ForgeConnection> = { emptyList() },
     /** `null` = the search FAILED (distinguishable from an empty success). */
     val searchForge: suspend (query: String) -> ForgeSearchResponse? = { ForgeSearchResponse() },
@@ -103,7 +106,8 @@ class LauncherActions(
         worktree: Boolean,
         baseBranch: String?,
         replaceDraftId: String?,
-    ) -> String = { _, _, _, _, _, _, _, _, _ -> error("No host connected") },
+        permissionMode: String?,
+    ) -> String = { _, _, _, _, _, _, _, _, _, _ -> error("No host connected") },
     /** Save as a draft session (no agent process). Returns the draft's id, null on failure. */
     val createDraftSession: suspend (
         workdir: String,
@@ -150,9 +154,10 @@ fun rememberLauncherActions(
             fetchGlossary = { app.fetchGlossary().orEmpty() },
             transcribeDraft = { draft -> app.transcribeDraft(null, draft)?.text },
             transcribeAudio = { bytes, name, mime -> app.transcribeAudio(null, bytes, name, mime)?.text },
-            createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace ->
+            createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm ->
                 app.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,
+                    permissionMode = perm,
                 )
             },
             createDraftSession = { wd, agent, model, level, text, replace ->
@@ -198,9 +203,10 @@ fun rememberLauncherActions(
             fetchGlossary = { fleet.fetchGlossary().orEmpty() },
             transcribeDraft = { draft -> fleet.transcribeDraft(null, draft) },
             transcribeAudio = { bytes, name, mime -> fleet.transcribeAudio(null, bytes, name, mime) },
-            createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace ->
+            createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm ->
                 fleet.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,
+                    permissionMode = perm,
                 )
             },
             createDraftSession = { wd, agent, model, level, text, replace ->

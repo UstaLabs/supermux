@@ -87,6 +87,34 @@ describe("Claude core spawn", () => {
     expect(child.claudeCalls[0]?.options.args?.some((a) => a === "--append-system-prompt-file")).toBe(true)
   })
 
+  test("permissionMode ask maps onto the first open (no restart)", async () => {
+    const child = fakeChildFactory()
+    const dir = mkdtempSync(join(tmpdir(), "mux-claude-core-"))
+    dirs.push(dir)
+    const host = createClaudeCoreHost({ stateDirectory: dir, driverFactory: child.factory })
+    hosts.push(host)
+    const reg = registry()
+    const workdir = mkdtempSync(join(tmpdir(), "mux-claude-"))
+    dirs.push(workdir)
+
+    const result = await spawnSession({
+      registry: reg,
+      bind: async () => {},
+      tmuxSession: "mux",
+      claudeHost: host,
+    }, {
+      workdir,
+      requestedName: "claude-ask",
+      agent: AgentKind.Claude,
+      permissionMode: "ask",
+    })
+
+    expect(reg.get(result.session_id)?.permissionMode).toBe("ask")
+    expect(child.claudeCalls).toHaveLength(1)
+    expect(child.claudeCalls[0]?.options.permissionMode).toBeUndefined()
+    expect(child.opens).toHaveLength(1)
+  })
+
   test("rpc worker passes strict mcp from rpc config", async () => {
     const child = fakeChildFactory()
     const dir = mkdtempSync(join(tmpdir(), "mux-claude-core-"))

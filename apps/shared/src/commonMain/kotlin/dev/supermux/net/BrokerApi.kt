@@ -183,6 +183,8 @@ data class SpawnRequest(
     val baseBranch: String? = null,
     /** Reasoning ("thinking") effort to start the session at (agent-specific; ignored when unsupported). */
     val reasoningLevel: String? = null,
+    /** Catalog permission-mode id for the chosen agent (absent = broker default). */
+    val permissionMode: String? = null,
     /** draft | in_progress — draft creates without spawning an agent process. */
     val userStatus: String? = null,
     /**
@@ -307,6 +309,7 @@ data class SpawnResponse(
     val workdir: String,
     val agent: String,
     val model: String? = null,
+    val permissionMode: String? = null,
 )
 
 @Serializable

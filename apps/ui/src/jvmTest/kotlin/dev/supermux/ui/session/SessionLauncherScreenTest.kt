@@ -21,6 +21,7 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoBranches
 import dev.supermux.net.RepoInfo
+import dev.supermux.proto.PermissionModeInfo
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.state.LauncherDraft
@@ -148,8 +149,9 @@ class SessionLauncherScreenTest {
         onDraftChange: (LauncherDraft) -> Unit = {},
         onClearDraft: () -> Unit = {},
         onOpenSession: ((String) -> Unit)? = null,
-        onSubmit: suspend (String, String, String?, String?, String, List<StagedUpload>, Boolean, String?, String?) -> String? =
-            { _, _, _, _, _, _, _, _, _ -> null },
+        onSubmit: suspend (String, String, String?, String?, String, List<StagedUpload>, Boolean, String?, String?, String?) -> String? =
+            { _, _, _, _, _, _, _, _, _, _ -> null },
+        permissionCatalog: Map<String, List<PermissionModeInfo>> = emptyMap(),
     ) {
         SupermuxTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(
@@ -170,6 +172,7 @@ class SessionLauncherScreenTest {
                 onDraftChange = onDraftChange,
                 onClearDraft = onClearDraft,
                 onSubmit = onSubmit,
+                permissionCatalog = permissionCatalog,
                 onOpenSession = onOpenSession,
                 standalone = standalone,
                 workspaceWorkdir = workspaceWorkdir,
@@ -245,7 +248,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 onClearDraft = { cleared = true },
-                onSubmit = { w, a, m, r, t, s, wt, b, _replaceDraftId ->
+                onSubmit = { w, a, m, r, t, s, wt, b, _replaceDraftId, _perm ->
                     captured = Submitted(w, a, m, r, t, s.size, wt, b)
                     null
                 },
@@ -259,6 +262,32 @@ class SessionLauncherScreenTest {
             captured,
         )
         assertTrue(cleared) // successful submit clears the draft
+    }
+
+    @Test fun submit_sends_sticky_permission_mode() = runComposeUiTest {
+        var perm: String? = "unset"
+        val catalog = mapOf(
+            "claude" to listOf(
+                PermissionModeInfo("bypass", "Bypass", "skip", default = true),
+                PermissionModeInfo("ask", "Ask", "ask"),
+            ),
+        )
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
+                prefs = LauncherPrefs(permissionModes = mapOf("claude" to "ask")),
+                permissionCatalog = catalog,
+                onSubmit = { _, _, _, _, _, _, _, _, _, p ->
+                    perm = p
+                    null
+                },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_permissions_pill").assertIsDisplayed()
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals("ask", perm)
     }
 
     @Test fun submit_clear_cancels_the_pending_debounce_no_draft_resurrection() = runComposeUiTest {
@@ -296,7 +325,7 @@ class SessionLauncherScreenTest {
                 draft = LauncherDraft(workdir = "/other/proj", useWorktree = true, baseBranch = "dev", text = "tab text"),
                 repoInfo = repo,
                 workspaceWorkdir = "/ws/tree",
-                onSubmit = { w, a, m, r, t, s, wt, b, _ ->
+                onSubmit = { w, a, m, r, t, s, wt, b, _, _perm ->
                     captured = Submitted(w, a, m, r, t, s.size, wt, b)
                     null
                 },
@@ -320,7 +349,7 @@ class SessionLauncherScreenTest {
                 draft = LauncherDraft(text = "hi"),
                 projects = listOf("/proj/a"),
                 workspaceWorkdir = "/ws/tree",
-                onSubmit = { w, a, m, r, t, s, wt, b, _ ->
+                onSubmit = { w, a, m, r, t, s, wt, b, _, _perm ->
                     captured = Submitted(w, a, m, r, t, s.size, wt, b)
                     null
                 },
@@ -352,7 +381,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "keep me"),
                 onDraftChange = { drafts.add(it) },
-                onSubmit = { _, _, _, _, _, _, _, _, _ -> throw IllegalStateException("nope") },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _ -> throw IllegalStateException("nope") },
             )
         }
         waitForIdle()
@@ -394,7 +423,7 @@ class SessionLauncherScreenTest {
         pointerContent {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
-                onSubmit = { _, _, _, _, _, _, _, _, _ ->
+                onSubmit = { _, _, _, _, _, _, _, _, _, _ ->
                     throw IllegalStateException("spawn refused: workdir is not a directory")
                 },
             )
@@ -453,7 +482,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = ""),
                 commands = listOf(cmd("review")),
-                onSubmit = { _, _, _, _, _, _, _, _, _ -> submits++; null },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _ -> submits++; null },
             )
         }
         waitForIdle()
@@ -556,7 +585,7 @@ class SessionLauncherScreenTest {
                     ),
                     loadPrefs = { LauncherPrefs() },
                     loadDraft = { LauncherDraft(workdir = "/proj/x") },
-                    onSubmit = { _, _, _, _, _, _, _, _, _ -> null },
+                    onSubmit = { _, _, _, _, _, _, _, _, _, _ -> null },
                     standalone = true,
                 )
             }
@@ -612,7 +641,7 @@ class SessionLauncherScreenTest {
                     onBack = {},
                     loadPrefs = { LauncherPrefs() },
                     loadDraft = { LauncherDraft() },
-                    onSubmit = { _, _, _, _, _, _, _, _, _ -> null },
+                    onSubmit = { _, _, _, _, _, _, _, _, _, _ -> null },
                     topBarShown = true,
                 )
             }
@@ -648,7 +677,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "go"),
                 onOpenSession = { opened.add(it) },
-                onSubmit = { _, _, _, _, _, _, _, _, _ -> "s-new" },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _ -> "s-new" },
             )
         }
         waitForIdle()

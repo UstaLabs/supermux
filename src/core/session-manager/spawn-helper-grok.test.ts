@@ -121,4 +121,32 @@ describe("Grok spawn", () => {
     expect(existsSync(preamble)).toBe(true)
     expect(readFileSync(preamble, "utf8")).toContain("grok-shim")
   })
+
+  test("permissionMode ask maps onto the first open (no restart)", async () => {
+    const child = fakeChildFactory()
+    const dir = mkdtempSync(join(tmpdir(), "mux-grok-core-"))
+    dirs.push(dir)
+    const host = createGrokCoreHost({ stateDirectory: dir, driverFactory: child.factory })
+    hosts.push(host)
+    const reg = registry()
+    const workdir = mkdtempSync(join(tmpdir(), "mux-grok-"))
+    dirs.push(workdir)
+
+    const result = await spawnSession({
+      registry: reg,
+      bind: async () => {},
+      tmuxSession: "mux",
+      grokHost: host,
+    }, {
+      workdir,
+      requestedName: "grok-ask",
+      agent: AgentKind.Grok,
+      permissionMode: "ask",
+    })
+
+    expect(reg.get(result.session_id)?.permissionMode).toBe("ask")
+    expect(child.grokCalls).toHaveLength(1)
+    expect(child.grokCalls[0]?.options.alwaysApprove).toBe(false)
+    expect(child.opens).toHaveLength(1)
+  })
 })

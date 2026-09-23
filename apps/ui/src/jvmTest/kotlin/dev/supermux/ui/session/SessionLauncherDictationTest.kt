@@ -51,8 +51,8 @@ class SessionLauncherDictationTest {
         draft: LauncherDraft = LauncherDraft(),
         onSubmit: suspend (
             String, String, String?, String?, String, List<dev.supermux.state.StagedUpload>,
-            Boolean, String?, String?,
-        ) -> String? = { _, _, _, _, _, _, _, _, _ -> null },
+            Boolean, String?, String?, String?,
+        ) -> String? = { _, _, _, _, _, _, _, _, _, _ -> null },
     ) {
         SupermuxTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(
@@ -141,7 +141,7 @@ class SessionLauncherDictationTest {
                 // A transcribe that yields nothing → DictationController.fail("Transcription failed").
                 transcribeAudio = { _, _, _ -> null },
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
-                onSubmit = { _, _, _, _, _, _, _, _, _ -> throw IllegalStateException("spawn refused") },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _ -> throw IllegalStateException("spawn refused") },
             )
         }
         waitForIdle()

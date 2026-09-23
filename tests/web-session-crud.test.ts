@@ -105,6 +105,29 @@ test("POST /sessions with userStatus:draft → creates draft, does not spawn", a
   expect(spawnCalls).toHaveLength(0)
 })
 
+test("POST /sessions with permissionMode → forwarded to spawn", async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/sessions`, {
+    method: "POST",
+    headers: authed(),
+    body: JSON.stringify({ workdir: "~/project-b/", agent: "claude", permissionMode: "ask" }),
+  })
+  expect(res.status).toBe(200)
+  expect(spawnCalls).toHaveLength(1)
+  expect(spawnCalls[0].permissionMode).toBe("ask")
+})
+
+test("POST /sessions with unknown permissionMode → 400", async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/sessions`, {
+    method: "POST",
+    headers: authed(),
+    body: JSON.stringify({ workdir: "~/project-b/", agent: "claude", permissionMode: "not-a-mode" }),
+  })
+  expect(res.status).toBe(400)
+  const body = await res.json() as { error: string }
+  expect(body.error).toBe("unknown permission mode")
+  expect(spawnCalls).toHaveLength(0)
+})
+
 test("POST /sessions with firstMessage → forwarded to spawn", async () => {
   const res = await fetch(`http://127.0.0.1:${PORT}/sessions`, {
     method: "POST",

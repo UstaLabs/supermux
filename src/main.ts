@@ -1593,6 +1593,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         agent: (args.agent as any) ?? "claude",
         model: args.model,
         reasoningLevel: args.reasoningLevel,
+        permissionMode: args.permissionMode,
         worktree: args.worktree,
         baseBranch: args.baseBranch,
         inheritFromSessionId: args.inheritFrom,
@@ -1698,6 +1699,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         agent: entry?.agent ?? "claude",
         model: entry?.model,
         reasoningLevel: entry ? sessionEffort(entry) : undefined,
+        permissionMode: entry?.permissionMode ?? undefined,
         repo_root: entry?.repo_root || undefined,
         session_branch: entry?.session_branch || undefined,
       }
@@ -2490,6 +2492,7 @@ async function spawnSession(args: {
   agent?: AgentKind
   model?: string
   reasoningLevel?: string
+  permissionMode?: string
   worktree?: boolean
   baseBranch?: string
   /** When set (e.g. "continue in new conversation"), reuse that session's display-name base and worktree metadata instead of deriving a name from the workdir basename (often a uuid under ~/.mux/worktrees). */
@@ -2561,7 +2564,7 @@ async function spawnSession(args: {
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
+    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
   )
   // Claude's row now exists synchronously (born in the spawn path). Wait for
   // the shim to CONNECT — proof the window survived and the agent came up —
@@ -2681,8 +2684,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
       messageLog,
       chat_id: msg.chat_id,
       fromSession: undefined,
-      spawnSession: async (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string) => {
-        const r = await spawnSession({ workdir, requestedName: name, agent, model, reasoningLevel })
+      spawnSession: async (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string, permissionMode?: string) => {
+        const r = await spawnSession({ workdir, requestedName: name, agent, model, reasoningLevel, permissionMode })
         // The row exists when spawnSession resolves (all agents) — flip the
         // chat's active session directly.
         registry.setActive(msg.chat_id, r.session_id)

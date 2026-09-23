@@ -115,6 +115,7 @@ import dev.supermux.net.resolveReasoningLevel
 import dev.supermux.net.showReasoningPicker
 import dev.supermux.net.sortEffortLevelsLowToHigh
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.PermissionModeInfo
 import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
@@ -256,7 +257,10 @@ fun SessionLauncherScreen(
         worktree: Boolean,
         baseBranch: String?,
         replaceDraftId: String?,
+        permissionMode: String?,
     ) -> String?,
+    /** Snapshot catalog keyed by agent (labels + descriptions + default). */
+    permissionCatalog: Map<String, List<PermissionModeInfo>> = emptyMap(),
     onSaveDraft: suspend (
         workdir: String,
         agent: String,
@@ -346,6 +350,9 @@ fun SessionLauncherScreen(
     var lastRepoHost by remember { mutableStateOf<String?>(null) }
     var launcherModels by remember { mutableStateOf(emptyMap<String, String>()) }
     var launcherReasoning by remember { mutableStateOf(emptyMap<String, String>()) }
+    var launcherPermissionModes by remember { mutableStateOf(emptyMap<String, String>()) }
+    var permissionMode by remember { mutableStateOf<String?>(null) }
+    var permissionMenu by remember { mutableStateOf(false) }
 
     var models by remember { mutableStateOf(emptyList<ModelInfo>()) }
     var agentMenu by remember { mutableStateOf(false) }
@@ -384,6 +391,7 @@ fun SessionLauncherScreen(
         agent = agent,
         models = launcherModels,
         reasoningLevels = launcherReasoning,
+        permissionModes = launcherPermissionModes,
         projectLocations = projectLocations,
     )
     val loadCatalogImage = rememberCachedProjectImageLoader(
@@ -422,6 +430,16 @@ fun SessionLauncherScreen(
         reasoningLevels = levels
         reasoningVisible = resp != null && resp.visible && showReasoningPicker(levels)
         reasoningLevel = if (reasoningVisible) resolveReasoningLevel(levels, launcherReasoning[agent]) else null
+    }
+
+    LaunchedEffect(agent, permissionCatalog, launcherRestoring, launcherPermissionModes) {
+        if (launcherRestoring) return@LaunchedEffect
+        val catalog = permissionCatalog[agent].orEmpty()
+        val sticky = launcherPermissionModes[agent]
+        permissionMode = when {
+            sticky != null && catalog.any { it.id == sticky } -> sticky
+            else -> catalog.find { it.default }?.id ?: catalog.firstOrNull()?.id
+        }
     }
 
     // Worktree picker — refetch repo info on workdir change; reset base branch only on genuine change.
@@ -477,6 +495,7 @@ fun SessionLauncherScreen(
         agent = if (agents.contains(prefs.agent)) prefs.agent else "claude"
         launcherModels = prefs.models
         launcherReasoning = prefs.reasoningLevels
+        launcherPermissionModes = prefs.permissionModes
         projectLocations = prefs.projectLocations
         model = prefs.models[agent]
         val draft = loadDraft()
@@ -773,7 +792,7 @@ fun SessionLauncherScreen(
             try {
                 val sessionId = onSubmit(
                     workdir.trim(), agent, model, reasoningLevel, message.text.trim(),
-                    toUpload, wantsWorktree, base, activeDraftId,
+                    toUpload, wantsWorktree, base, activeDraftId, permissionMode,
                 )
                 onClearDraft()
                 if (sessionId != null) onOpenSession?.invoke(sessionId)
@@ -1142,6 +1161,74 @@ fun SessionLauncherScreen(
                             }
                         }
                     }
+                    val pickPermission: (String) -> Unit = { id ->
+                        permissionMode = id
+                        launcherPermissionModes = launcherPermissionModes + (agent to id)
+                        onPrefsChange(currentPrefs())
+                    }
+                    val permissionsControl: @Composable () -> Unit = {
+                        val modes = permissionCatalog[agent].orEmpty()
+                        if (modes.isNotEmpty()) {
+                            val current = modes.find { it.id == permissionMode }
+                                ?: modes.find { it.default }
+                                ?: modes.first()
+                            Box(Modifier.testTag("launcher_permissions_picker")) {
+                                if (pointer) {
+                                    ComposerPill(
+                                        label = "Permissions: ${current.label}",
+                                        testTag = "launcher_permissions_pill",
+                                        onClick = { if (!launcherRestoring) permissionMenu = true },
+                                    )
+                                    DropdownMenu(expanded = permissionMenu, onDismissRequest = { permissionMenu = false }) {
+                                        modes.forEach { mode ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Column {
+                                                        Text(mode.label)
+                                                        Text(
+                                                            mode.description,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = cs.onSurfaceVariant,
+                                                        )
+                                                    }
+                                                },
+                                                trailingIcon = {
+                                                    if (mode.id == current.id) {
+                                                        Icon(
+                                                            Icons.Filled.Check,
+                                                            null,
+                                                            Modifier.size(16.dp),
+                                                            tint = cs.primary,
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier.testTag("permissions-${mode.id}"),
+                                                onClick = {
+                                                    pickPermission(mode.id)
+                                                    permissionMenu = false
+                                                },
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    ComposerPill(
+                                        label = "Permissions: ${current.label}",
+                                        testTag = "launcher_permissions_pill",
+                                        onClick = { if (!launcherRestoring) permissionMenu = true },
+                                    )
+                                    if (permissionMenu) {
+                                        PickerSheet(
+                                            title = "Permissions",
+                                            options = modes.map { it.id to "${it.label} — ${it.description}" },
+                                            current = current.id,
+                                            onPick = { pickPermission(it) },
+                                            onDismiss = { permissionMenu = false },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                     val saveDraftButton: @Composable () -> Unit = {
                         // A workspace tab keeps its draft in the tab itself — no draft session.
                         if (workspaceWorkdir == null) TextButton(
@@ -1205,6 +1292,7 @@ fun SessionLauncherScreen(
                                         agentControl()
                                         modelControl()
                                         effortControl()
+                                        permissionsControl()
                                     }
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         composer.Mic()
@@ -1223,6 +1311,7 @@ fun SessionLauncherScreen(
                                     agentControl()
                                     modelControl()
                                     effortControl()
+                                    permissionsControl()
                                     Spacer(Modifier.weight(1f))
                                 }
                                 Spacer(Modifier.height(10.dp))

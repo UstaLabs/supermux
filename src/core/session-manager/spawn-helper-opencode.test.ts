@@ -115,4 +115,34 @@ describe("OpenCode spawn", () => {
     expect(json).toContain("oc-shim")
     expect(existsSync(join(sessionHome, "AGENTS.md"))).toBe(true)
   })
+
+  test("permissionMode ask is stored and applied on first open", async () => {
+    const child = fakeChildFactory()
+    const dir = mkdtempSync(join(tmpdir(), "mux-oc-core-"))
+    dirs.push(dir)
+    const host = createOpenCodeCoreHost({ stateDirectory: dir, driverFactory: child.factory })
+    hosts.push(host)
+    const reg = registry()
+    const workdir = mkdtempSync(join(tmpdir(), "mux-oc-"))
+    dirs.push(workdir)
+
+    const result = await spawnSession({
+      registry: reg,
+      bind: async () => {},
+      tmuxSession: "mux",
+      opencodeHost: host,
+    }, {
+      workdir,
+      requestedName: "oc-ask",
+      agent: AgentKind.OpenCode,
+      permissionMode: "ask",
+    })
+
+    expect(reg.get(result.session_id)?.permissionMode).toBe("ask")
+    expect(child.opens).toHaveLength(1)
+    const json = readFileSync(join(reg.get(result.session_id)!.agent_home!, "config", "opencode", "opencode.json"), "utf8")
+    const parsed = JSON.parse(json) as { permission?: Record<string, string> }
+    expect(parsed.permission?.edit).toBe("ask")
+    expect(parsed.permission?.bash).toBe("ask")
+  })
 })

@@ -37,7 +37,7 @@ beforeEach(() => {
     messageLog,
     chat_id: "chat-1",
     fromSession: "ana",  // who's calling the orchestration (n/a for chat-initiated)
-    spawnSession: async (workdir, name, agent, model) => { spawned.push({ workdir, name, agent, model }); return { name: name ?? "n", session_id: "s" } },
+    spawnSession: async (workdir, name, agent, model, reasoningLevel, permissionMode) => { spawned.push({ workdir, name, agent, model, reasoningLevel, permissionMode }); return { name: name ?? "n", session_id: "s" } },
     killSession:  async (name) => { killed.push(name) },
     refreshMenu:  async () => { menuRefreshed++ },
   }
@@ -72,29 +72,29 @@ test("/active shows current", async () => {
 
 test("/spawn <workdir> calls spawnSession and refreshes menu", async () => {
   await handleSlash({ command: "spawn", rest: "/tmp/foo" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "claude", model: undefined }])
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "claude", model: undefined, reasoningLevel: undefined, permissionMode: undefined }])
   expect(menuRefreshed).toBe(1)
 })
 
 test("/spawn <workdir> as <name>", async () => {
   await handleSlash({ command: "spawn", rest: "/tmp/foo as bar" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: "bar", agent: "claude", model: undefined }])
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: "bar", agent: "claude", model: undefined, reasoningLevel: undefined, permissionMode: undefined }])
 })
 
 test("/spawn --agent codex passes agent kind", async () => {
   await handleSlash({ command: "spawn", rest: "/tmp/foo --agent codex" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "codex", model: undefined }])
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "codex", model: undefined, reasoningLevel: undefined, permissionMode: undefined }])
 })
 
 test("/spawn_codex routes through cmdSpawn with --agent codex appended", async () => {
   await handleSlash({ command: "spawn_codex", rest: "/tmp/foo" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "codex", model: undefined }])
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "codex", model: undefined, reasoningLevel: undefined, permissionMode: undefined }])
   expect(menuRefreshed).toBe(1)
 })
 
 test("/spawn_cursor routes through cmdSpawn with --agent cursor appended", async () => {
   await handleSlash({ command: "spawn_cursor", rest: "/tmp/bar" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/bar", name: undefined, agent: "cursor", model: undefined }])
+  expect(spawned).toEqual([{ workdir: "/tmp/bar", name: undefined, agent: "cursor", model: undefined, reasoningLevel: undefined, permissionMode: undefined }])
   expect(menuRefreshed).toBe(1)
 })
 
@@ -104,7 +104,7 @@ test("/spawn_cursor routes through cmdSpawn with --agent cursor appended", async
 for (const kind of AGENT_KINDS) {
   test(`/${spawnCommandForAgent(kind)} spawns a ${kind} session and refreshes the menu`, async () => {
     await handleSlash({ command: spawnCommandForAgent(kind), rest: "/tmp/foo" }, ctx)
-    expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: kind, model: undefined }])
+    expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: kind, model: undefined, reasoningLevel: undefined, permissionMode: undefined }])
     expect(menuRefreshed).toBe(1)
   })
 }
@@ -205,19 +205,30 @@ test("/show prints recent log entries", async () => {
   expect(result.text).toContain("world")
 })
 
+test("/spawn --permissions ask passes permissionMode to spawnSession", async () => {
+  await handleSlash({ command: "spawn", rest: "/tmp/foo --permissions ask" }, ctx)
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "claude", model: undefined, reasoningLevel: undefined, permissionMode: "ask" }])
+})
+
+test("/spawn --permissions nope rejects unknown mode", async () => {
+  const r1 = await handleSlash({ command: "spawn", rest: "/tmp/foo --permissions nope" }, ctx)
+  expect(r1.text).toMatch(/unknown permission mode/i)
+  expect(spawned).toEqual([])
+})
+
 test("/spawn --model sonnet passes model to spawnSession", async () => {
   await handleSlash({ command: "spawn", rest: "/tmp/foo --model sonnet" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "claude", model: "sonnet" }])
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "claude", model: "sonnet", reasoningLevel: undefined, permissionMode: undefined }])
 })
 
 test("/spawn --model opus --agent codex passes both", async () => {
   await handleSlash({ command: "spawn", rest: "/tmp/foo --model opus --agent codex" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "codex", model: "opus" }])
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "codex", model: "opus", reasoningLevel: undefined, permissionMode: undefined }])
 })
 
 test("/spawn_cursor --model auto passes model", async () => {
   await handleSlash({ command: "spawn_cursor", rest: "/tmp/bar --model auto" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/bar", name: undefined, agent: "cursor", model: "auto" }])
+  expect(spawned).toEqual([{ workdir: "/tmp/bar", name: undefined, agent: "cursor", model: "auto", reasoningLevel: undefined, permissionMode: undefined }])
 })
 
 test("/model with no args shows current model for active session", async () => {

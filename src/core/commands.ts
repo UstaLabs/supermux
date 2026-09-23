@@ -14,7 +14,7 @@ export type CommandCtx = {
   messageLog: MessageStore
   chat_id: string
   fromSession?: string  // for orchestration tool-calls from a session; chat-initiated leaves this undefined
-  spawnSession: (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string) => Promise<{ name: string; session_id: string }>
+  spawnSession: (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string, permissionMode?: string) => Promise<{ name: string; session_id: string }>
   killSession: (id: string) => Promise<void>
   refreshMenu: () => Promise<void>
   listModels?: (agent: AgentKind) => { id: string; displayName: string }[]
@@ -139,16 +139,26 @@ async function cmdSpawn(rest: string, ctx: CommandCtx): Promise<SlashReply> {
     reasoningLevel = effortMatch[1]!
     cleaned = (cleaned.slice(0, effortMatch.index) + cleaned.slice(effortMatch.index! + effortMatch[0].length)).replace(/\s+/g, " ").trim()
   }
+  let permissionMode: string | undefined
+  const permMatch = cleaned.match(/--permissions\s+(\S+)/)
+  if (permMatch) {
+    permissionMode = permMatch[1]!
+    cleaned = (cleaned.slice(0, permMatch.index) + cleaned.slice(permMatch.index! + permMatch[0].length)).replace(/\s+/g, " ").trim()
+    if (!isPermissionMode(agent, permissionMode)) {
+      return { text: `unknown permission mode: ${permissionMode}` }
+    }
+  }
   const asMatch = cleaned.match(/^(\S+)\s+as\s+(\S+)$/)
   const workdir = asMatch ? asMatch[1]! : cleaned.trim()
   const name = asMatch ? asMatch[2]!.trim().slice(0, 80) : undefined
-  if (!workdir) return { text: `usage: /spawn <workdir> [as <name>] [--agent ${AGENT_KINDS.join("|")}] [--model <model>] [--effort <level>]` }
+  if (!workdir) return { text: `usage: /spawn <workdir> [as <name>] [--agent ${AGENT_KINDS.join("|")}] [--model <model>] [--effort <level>] [--permissions <id>]` }
   try {
-    const result = await ctx.spawnSession(workdir, name, agent, model, reasoningLevel)
+    const result = await ctx.spawnSession(workdir, name, agent, model, reasoningLevel, permissionMode)
     await ctx.refreshMenu()
     const parts: string[] = [agent]
     if (model) parts.push(model)
     if (reasoningLevel) parts.push(`effort=${reasoningLevel}`)
+    if (permissionMode) parts.push(`permissions=${permissionMode}`)
     const tag = `[${parts.join(":")}]`
     return { text: `spawned ${result.name} ${tag} in ${workdir}` }
   } catch (err: any) {

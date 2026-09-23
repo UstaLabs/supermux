@@ -597,7 +597,7 @@ class HostStore(
      * upload staged files, resolve spawn id). Android's launcher-picker `spawn` is this simpler
      * path, not a rename of createSessionWithFirstMessage.
      */
-    fun spawn(workdir: String, name: String?, agent: String, model: String? = null) {
+    fun spawn(workdir: String, name: String?, agent: String, model: String? = null, permissionMode: String? = null) {
         stateScope.launch {
             runApi("spawn") {
                 api.spawn(
@@ -606,6 +606,7 @@ class HostStore(
                         name = name?.trim()?.ifBlank { null },
                         agent = agent,
                         model = model?.ifBlank { null },
+                        permissionMode = permissionMode?.ifBlank { null },
                     ),
                 )
             }
@@ -1976,10 +1977,11 @@ class HostStore(
         inheritFrom: String? = null,
         firstMessage: String? = null,
         viewId: String? = null,
+        permissionMode: String? = null,
     ): String? = runApi("createSessionWithFirstMessage") {
         createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode,
         )
     }
 
@@ -2010,6 +2012,7 @@ class HostStore(
         firstMessage: String? = null,
         /** The pending chat tab in [workspaceId] this session fills (see [SpawnRequest.viewId]). */
         viewId: String? = null,
+        permissionMode: String? = null,
     ): String {
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
@@ -2035,6 +2038,7 @@ class HostStore(
                     worktree = worktree,
                     baseBranch = baseBranch?.ifBlank { null },
                     reasoningLevel = reasoningLevel?.ifBlank { null },
+                    permissionMode = permissionMode?.ifBlank { null },
                     workspaceId = workspaceId,
                     viewId = viewId?.ifBlank { null },
                     inheritFrom = inheritFrom?.ifBlank { null },

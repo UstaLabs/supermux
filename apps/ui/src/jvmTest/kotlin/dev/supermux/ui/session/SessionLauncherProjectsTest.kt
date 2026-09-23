@@ -75,7 +75,7 @@ class SessionLauncherProjectsTest {
                 ),
                 loadPrefs = { prefs },
                 onPrefsChange = onPrefsChange,
-                onSubmit = { _, _, _, _, _, _, _, _, _ -> null },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _ -> null },
                 workspaceWorkdir = workspaceWorkdir,
                 selectedHost = selectedHost,
                 initialProjectHost = initialProjectId?.let { HOST },

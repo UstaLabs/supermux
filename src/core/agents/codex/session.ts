@@ -12,6 +12,7 @@ import { join } from "path"
 import { randomUUID } from "crypto"
 import { STATE_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
+import { resolvePermissionMode } from "../permission-modes"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
 /** Slash-command discovery context: the live app-server JSON-RPC client.
@@ -122,12 +123,13 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
 
   const host = resolveHost(deps.codexHost)
   const sessionHome = join(STATE_DIR, "agents", "codex", name)
+  const permissionMode = resolvePermissionMode(AgentKind.Codex, args.permissionMode)
   const handle = host.register({
     id,
     env: {},
     command: resolveCodexCommand({}),
     args: brokerCodexArgs(name),
-    extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir }),
+    extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, permissionMode }),
   })
   let adapter: CoreAdapter | undefined
   try {
@@ -150,6 +152,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
       effort: args.effort,
       persistSessionId: persistNativeId(deps.onThreadId, name),
       resolveAttachment: deps.resolveAttachment,
+      permissionMode,
     })
 
     // Register BEFORE adapter.start(): start() completes the native handshake, which
@@ -168,6 +171,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
           is_default: deps.registry.listPAs().length === 0,
           agent_home: sessionHome,
           base_commits: captureBaseCommits(args.workdir),
+          permissionMode,
         })
       }
     } else {
@@ -180,7 +184,8 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         agent_home: sessionHome,
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
-      } as any)
+        permissionMode,
+      } as never)
     }
 
     await adapter.start()

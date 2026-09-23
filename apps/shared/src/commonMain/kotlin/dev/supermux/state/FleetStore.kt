@@ -1328,8 +1328,8 @@ class FleetStore(
         appForWorkspace(workspaceId)?.workspaceFsRefs(workspaceId)
 
     // Host-global (active host, or an explicit recordId where the caller knows it) ----------
-    fun spawn(workdir: String, name: String?, agent: String, model: String? = null) {
-        activeApp()?.spawn(workdir, name, agent, model)
+    fun spawn(workdir: String, name: String?, agent: String, model: String? = null, permissionMode: String? = null) {
+        activeApp()?.spawn(workdir, name, agent, model, permissionMode)
     }
     fun saveName(n: String) { activeApp()?.saveName(n) }
     fun revoke(n: String) { activeApp()?.revoke(n) }
@@ -1551,11 +1551,13 @@ class FleetStore(
         inheritFrom: String? = null,
         firstMessage: String? = null,
         hostRecordId: String? = null,
+        permissionMode: String? = null,
     ): String? {
         val app = spawnTarget(hostRecordId, workspaceId) ?: return null
         val newId = app.createSessionWithFirstMessage(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
             replaceDraftId, workspaceId, name, inheritFrom, firstMessage,
+            permissionMode = permissionMode,
         ) ?: return null
         return newId
     }
@@ -1580,12 +1582,13 @@ class FleetStore(
         firstMessage: String? = null,
         hostRecordId: String? = null,
         viewId: String? = null,
+        permissionMode: String? = null,
     ): String {
         val app = spawnTarget(hostRecordId, workspaceId)
             ?: throw IllegalStateException("No host connected")
         val newId = app.createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode,
         )
         return newId
     }

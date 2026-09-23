@@ -4,6 +4,7 @@ import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/sp
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
 import { randomUUID } from "crypto"
 import { AgentKind } from "../../../shared/agents"
+import { resolvePermissionMode } from "../permission-modes"
 import { CoreAdapter, CLAUDE_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getClaudeCoreHost } from "./core-host-provider"
 import { claudeSessionHome, type ClaudeCoreHost, type ClaudePrepareExtra } from "./core-host"
@@ -93,9 +94,10 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
 
   const host = resolveHost(deps.claudeHost)
   const sessionHome = claudeSessionHome(name)
+  const permissionMode = resolvePermissionMode(AgentKind.Claude, args.permissionMode)
   const extra = prepareExtra({
     id, sessionName: name, sessionHome, workdir: args.workdir,
-    model: args.model, effort: args.effort,
+    model: args.model, effort: args.effort, permissionMode,
     pa: !!args.pa, rpcMcpConfig: args.rpcMcpConfig,
   })
   const handle = host.register({
@@ -125,6 +127,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
       effort: args.effort,
       persistSessionId: persistNativeId(deps.onClaudeSessionId, name),
       resolveAttachment: deps.resolveAttachment,
+      permissionMode,
     })
     if (args.pa) {
       if (!args.pa.skipRegister) {
@@ -139,6 +142,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
           is_default: deps.registry.listPAs().length === 0,
           agent_home: sessionHome,
           core: true,
+          permissionMode,
         })
       }
     } else {
@@ -152,7 +156,8 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
         core: true,
-      } as any)
+        permissionMode,
+      } as never)
     }
     await adapter.start()
   } catch (err) {

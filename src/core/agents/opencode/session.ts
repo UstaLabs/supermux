@@ -11,6 +11,7 @@ import { join } from "path"
 import { randomUUID } from "crypto"
 import { STATE_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
+import { resolvePermissionMode } from "../permission-modes"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
 /** Slash-command discovery context for the opencode provider. */
@@ -106,10 +107,11 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
 
   const host = resolveHost(deps.opencodeHost)
   const sessionHome = join(STATE_DIR, "agents", "opencode", name)
+  const permissionMode = resolvePermissionMode(AgentKind.OpenCode, args.permissionMode)
   const handle = host.register({
     id,
     env: {},
-    extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: args.model }),
+    extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: args.model, permissionMode }),
   })
   let adapter: CoreAdapter | undefined
   try {
@@ -129,6 +131,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
       model: args.model,
       persistSessionId: persistNativeId(deps.onOpenCodeSessionId, name),
       resolveAttachment: deps.resolveAttachment,
+      permissionMode,
     })
 
     if (args.pa) {
@@ -144,6 +147,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
           is_default: deps.registry.listPAs().length === 0,
           agent_home: sessionHome,
           base_commits: captureBaseCommits(args.workdir),
+          permissionMode,
         })
       }
     } else {
@@ -156,6 +160,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         agent_home: sessionHome,
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
+        permissionMode,
       } as never)
     }
 

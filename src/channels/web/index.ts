@@ -28,7 +28,7 @@ import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from
 import { listBranches, switchBranch } from "../../core/git/branches"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
-import { permissionCatalog } from "../../core/agents/permission-modes"
+import { isPermissionMode, permissionCatalog } from "../../core/agents/permission-modes"
 import type { SlashCommand } from "../../core/slash-commands/types"
 import type { UpdateChecker } from "../../core/update/checker"
 import { detectUpdateMode } from "../../core/update/mode"
@@ -232,7 +232,7 @@ export interface WebChannelOpts {
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
   verifySuggest?: (id: string) => { content: string; source: string } | undefined
   verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
-  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; device?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; repo_root?: string; session_branch?: string }>
+  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; device?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
   renameSession?: (oldName: string, newName: string) => Promise<void>
@@ -2769,6 +2769,15 @@ export class WebChannel implements Channel {
         const firstMessage = typeof body.firstMessage === "string" && body.firstMessage.trim()
           ? body.firstMessage
           : undefined
+        const permissionModeRaw = typeof body.permissionMode === "string" ? body.permissionMode.trim() : ""
+        let permissionMode: string | undefined
+        if (permissionModeRaw) {
+          const kind = agent ?? "claude"
+          if (!isPermissionMode(kind, permissionModeRaw)) {
+            return this.json({ error: "unknown permission mode" }, 400)
+          }
+          permissionMode = permissionModeRaw
+        }
         // The launcher uploads its staged files BEFORE the spawn and names them here, so
         // the broker owns the whole first turn (text + files). Same ownership rule as a
         // WS `send`: only this device's own web uploads.
@@ -2789,6 +2798,7 @@ export class WebChannel implements Channel {
           agent,
           model: body.model as string | undefined,
           reasoningLevel: body.reasoningLevel as string | undefined,
+          permissionMode,
           worktree: body.worktree as boolean | undefined,
           baseBranch: body.baseBranch as string | undefined,
           inheritFrom,

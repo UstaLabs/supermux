@@ -91,4 +91,34 @@ describe("Codex spawn", () => {
     expect(existsSync(join(row!.agent_home!, "config.toml"))).toBe(true)
     expect(readFileSync(join(row!.agent_home!, "config.toml"), "utf8")).toContain("mux-shim")
   })
+
+  test("permissionMode maps onto the first open (no restart)", async () => {
+    process.env.OPENAI_API_KEY = "test-key"
+    const child = fakeChildFactory()
+    const dir = mkdtempSync(join(tmpdir(), "mux-codex-core-"))
+    dirs.push(dir)
+    const host = createCodexCoreHost({ stateDirectory: dir, driverFactory: child.factory })
+    hosts.push(host)
+    const reg = registry()
+    const workdir = mkdtempSync(join(tmpdir(), "mux-codex-"))
+    dirs.push(workdir)
+
+    const result = await spawnSession({
+      registry: reg,
+      bind: async () => {},
+      tmuxSession: "mux",
+      codexHost: host,
+    }, {
+      workdir,
+      requestedName: "codex-ask",
+      agent: AgentKind.Codex,
+      permissionMode: "on-request+workspace-write",
+    })
+
+    expect(reg.get(result.session_id)?.permissionMode).toBe("on-request+workspace-write")
+    expect(child.codexCalls).toHaveLength(1)
+    expect(child.codexCalls[0]?.options.approvalPolicy).toBe("on-request")
+    expect(child.codexCalls[0]?.options.sandbox).toBe("workspace-write")
+    expect(child.opens).toHaveLength(1)
+  })
 })
