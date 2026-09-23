@@ -70,7 +70,8 @@ All from `apps/`.
 # Desktop sample — RELEASE run (see "What `release` means" below)
 ./gradlew :terminal-sample:runRelease
 
-# Unit tests (fixtures + measurement arithmetic), desktop JVM
+# Tests, desktop JVM: the fixtures and the measurement arithmetic (common), plus seven Compose
+# UI tests that mount this app against a REAL engine and press reset / hide / show / dispose.
 ./gradlew :terminal-sample:jvmTest
 
 # Android: builds the sample APK (device/emulator needed to RUN it)
@@ -145,8 +146,8 @@ which build produced them (`-Dsupermux.sample.buildType`).
 
 | platform | what is checked here | what is not |
 |---|---|---|
-| desktop JVM (Linux) | `jvmTest`, `run`, `runRelease`, `benchmark` — all run, all measured | a GPU-backed run (this host falls back to software rendering under Xvfb) |
+| desktop JVM (Linux) | `jvmTest` (19 tests, incl. 7 driving this app against a real engine), `run`, `runRelease`, `benchmark` — all run, all measured | a GPU-backed run (this host falls back to software rendering under Xvfb) |
 | Android | `assembleDebug` builds an APK carrying `libsupermux_terminal_jni.so` for `arm64-v8a` and `x86_64` | running it: needs a device or emulator |
-| browser (wasmJs) | `wasmJsBrowserTest` runs the common suite in headless Chrome | a measured browser run |
+| browser (wasmJs) | `wasmJsBrowserTest` runs the common suite (12 tests) in headless Chrome | a measured browser run |
 | iOS | nothing on this host — the Apple compile/link tasks are disabled on Linux | the framework link and a simulator run, both Mac-only |
 | Windows | **nothing** — there is no Windows machine here. Not substituted with Linux; see `benchmarks/2026-09-terminal.md` | everything |
