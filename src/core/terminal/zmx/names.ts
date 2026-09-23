@@ -47,7 +47,7 @@
 // `encodeName(key)` and fails rather than handing two workspaces one shell.
 // `assertTargetMatches` is that comparison.
 import { createHash } from "crypto"
-import { chmodSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmdirSync, writeFileSync } from "fs"
+import { chmodSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmdirSync, unlinkSync, writeFileSync } from "fs"
 import { basename, isAbsolute, join, resolve } from "path"
 import { STATE_DIR } from "../../../shared/paths"
 import { WorkspaceTerminalError, type WorkspaceTerminalKey } from "../workspace-backend"
@@ -435,16 +435,20 @@ export function claimSocketDir(dir: string): string {
         "two brokers on one socket directory cannot each tell who owns a terminal's size",
       )
     }
-    // Free, ours already, or a dead/nonsense owner. `wx` first so the common
-    // case keeps the exclusive create (and its 0600) even under the lock; its
-    // EEXIST is the takeover, and the file being replaced is the one just
-    // judged, by the only process allowed to be judging it.
+    // Free, ours already, or a dead/nonsense owner. Always an exclusive create,
+    // never a write over the old file: `mode` is IGNORED for a path that
+    // already exists, so overwriting a marker somebody left 0644 would leave it
+    // 0644. Unlinking first is safe here and nowhere else — inside the lock no
+    // other claimer can be in the window, which is exactly the property the
+    // lock buys. The file being removed is the one just judged, by the only
+    // process allowed to be judging it.
     try {
       try {
         writeFileSync(path, mine, { flag: "wx", mode: 0o600 })
       } catch (error) {
         if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error
-        writeFileSync(path, mine, { mode: 0o600 })
+        unlinkSync(path)
+        writeFileSync(path, mine, { flag: "wx", mode: 0o600 })
       }
     } catch (error) {
       throw new WorkspaceTerminalError(

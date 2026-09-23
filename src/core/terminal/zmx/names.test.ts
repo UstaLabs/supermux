@@ -419,9 +419,19 @@ describe("zmx socket directory", () => {
     expect(claimSocketDir(dir)).toBe(dir)
   })
 
-  test("the marker is created exclusively, and 0600", () => {
+  test("the marker is created exclusively, and 0600 — including a TAKEOVER", () => {
     const dir = mkdtempSync(join(tmpdir(), "zmx-claim-"))
     claimSocketDir(dir)
+    expect(statSync(join(dir, SOCKET_DIR_OWNER_FILE)).mode & 0o777).toBe(0o600)
+
+    // `mode` is IGNORED for a path that already exists, so a takeover that
+    // wrote over the old file would inherit whatever permissions it had. The
+    // directory is 0700, so this is defence in depth rather than a hole — but
+    // a marker that silently stopped being 0600 is the kind of thing nobody
+    // notices until the directory's mode is the only thing left protecting it.
+    writeFileSync(join(dir, SOCKET_DIR_OWNER_FILE), "2147483646\n", { mode: 0o644 })
+    chmodSync(join(dir, SOCKET_DIR_OWNER_FILE), 0o644)
+    expect(claimSocketDir(dir)).toBe(dir)
     expect(statSync(join(dir, SOCKET_DIR_OWNER_FILE)).mode & 0o777).toBe(0o600)
   })
 
