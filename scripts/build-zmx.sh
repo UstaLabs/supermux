@@ -27,9 +27,22 @@
 # It NEVER installs, replaces or touches a system zmx binary: the build output
 # lives under the gitignored build/zmx/ cache and nothing is copied out of it.
 #
+# OPTIMIZE MODE IS NOT OPTIONAL. `b.standardOptimizeOption` defaults to Debug,
+# and a Debug zmx is not a slow build of the right program -- it is the wrong
+# program. Measured on this host with the daemon's own pty read loop and NO
+# broker viewer attached: 1 MiB of shell output took 24.2s (~43 KiB/s) from a
+# Debug binary, against 0.15s (~28 MiB/s) through a plain pty. A workspace
+# terminal that takes half a minute to print a megabyte of build log is a
+# product defect, so the mode is passed explicitly and matches what upstream's
+# own README tells people to build (`-Doptimize=ReleaseSafe`): the safety
+# checks stay on, because this process owns a shell.
+#
 # Environment overrides:
 #   MUX_ZIG_JOBS   parallel zig jobs (default 2 -- shared build host)
 #   MUX_ZIG_HOME   where Zig lives (default ~/.local/zig/<version>)
+#   MUX_ZIG_OPTIMIZE  zig optimize mode for the SHIPPED binaries
+#                     (default ReleaseSafe; the test steps stay in Debug, which
+#                      is where a Zig test suite is meant to run)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,6 +53,7 @@ UPSTREAM_DIR="$BUILD_DIR/upstream"
 HELPER_DIR="$REPO_ROOT/src/core/terminal/zmx/helper"
 OUT_DIR="$BUILD_DIR/out"
 ZIG_JOBS="${MUX_ZIG_JOBS:-2}"
+ZIG_OPTIMIZE="${MUX_ZIG_OPTIMIZE:-ReleaseSafe}"
 
 log() { printf '[zmx] %s\n' "$*" >&2; }
 die() { printf '[zmx] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -187,6 +201,7 @@ build_helper() {
   run_zig "$HELPER_DIR" build \
     --build-file "$HELPER_DIR/build.zig" \
     "${TARGET_ARGS[@]}" \
+    "-Doptimize=$ZIG_OPTIMIZE" \
     -Dzmx-src="$UPSTREAM_DIR/src" \
     -Dzmx-commit="$ZMX_SHA" \
     -Dpatch-sha256="$PATCH_SHA" \
@@ -229,19 +244,22 @@ if int(got["abi"]) != want:
   fi
   python3 -c '
 import json, sys, datetime
-out, abi, target, commit, patch, helper_sha, zmx_sha = sys.argv[1:8]
+out, abi, target, optimize, commit, patch, helper_sha, zmx_sha = sys.argv[1:9]
 with open(out, "w") as fh:
     json.dump({
         "schema": 1,
         "abi": int(abi),
         "target": target,
+        # Recorded, not decoration: a Debug zmx runs the pty at ~43 KiB/s and is
+        # indistinguishable from a release one by sha alone.
+        "optimize": optimize,
         "builtAt": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "helper": {"sha256": helper_sha},
         "zmx": {"commit": commit, "sha256": zmx_sha},
         "patch": {"sha256": patch},
     }, fh, indent=2)
     fh.write("\n")
-' "$OUT_DIR/manifest.json" "$abi" "$TARGET_NAME" "$ZMX_SHA" "$PATCH_SHA" \
+' "$OUT_DIR/manifest.json" "$abi" "$TARGET_NAME" "$ZIG_OPTIMIZE" "$ZMX_SHA" "$PATCH_SHA" \
     "$(sha256_of "$helper_bin")" "$(sha256_of "$zmx_bin")"
   log "manifest: $OUT_DIR/manifest.json"
 }
@@ -274,8 +292,8 @@ case "$MODE" in
     fetch_upstream
     verify_patch_file
     apply_patch
-    log "building zmx for $TARGET_NAME"
-    run_zig "$UPSTREAM_DIR" build "${TARGET_ARGS[@]}" --prefix "$OUT_DIR"
+    log "building zmx for $TARGET_NAME ($ZIG_OPTIMIZE)"
+    run_zig "$UPSTREAM_DIR" build "${TARGET_ARGS[@]}" "-Doptimize=$ZIG_OPTIMIZE" --prefix "$OUT_DIR"
     build_helper
     if [[ "$MODE" != build-only ]]; then
       log "running the upstream test target: $TEST_STEP"
