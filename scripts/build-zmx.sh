@@ -10,6 +10,12 @@
 #   scripts/build-zmx.sh --helper-only   build only the broker helper
 #   scripts/build-zmx.sh --target NAME   linux-x64 | linux-arm64 | macos-x64 |
 #                                        macos-arm64 | native (default: native)
+#   scripts/build-zmx.sh --out DIR       where the binaries + manifest land
+#                                        (default: build/zmx/out). A CROSS build
+#                                        must use its own dir: the default one is
+#                                        what the integration suite and a source
+#                                        -mode broker exec, and an aarch64 zmx
+#                                        sitting there is not runnable here.
 #
 # The BROKER HELPER (src/core/terminal/zmx/helper) is built here too: it is
 # compiled against the patched tree's own src/ipc.zig, so the pin, the patch
@@ -43,6 +49,7 @@
 #   MUX_ZIG_OPTIMIZE  zig optimize mode for the SHIPPED binaries
 #                     (default ReleaseSafe; the test steps stay in Debug, which
 #                      is where a Zig test suite is meant to run)
+#   MUX_ZMX_OUT_DIR   same as --out
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,7 +58,7 @@ LOCK="$VENDOR_DIR/upstream.lock.json"
 BUILD_DIR="$REPO_ROOT/build/zmx"
 UPSTREAM_DIR="$BUILD_DIR/upstream"
 HELPER_DIR="$REPO_ROOT/src/core/terminal/zmx/helper"
-OUT_DIR="$BUILD_DIR/out"
+OUT_DIR="${MUX_ZMX_OUT_DIR:-$BUILD_DIR/out}"
 ZIG_JOBS="${MUX_ZIG_JOBS:-2}"
 ZIG_OPTIMIZE="${MUX_ZIG_OPTIMIZE:-ReleaseSafe}"
 
@@ -87,7 +94,9 @@ while [[ $# -gt 0 ]]; do
     --helper-only)   MODE=helper ;;
     --target)        shift; TARGET_NAME="${1:-}"; [[ -n "$TARGET_NAME" ]] || die "--target needs a name" ;;
     --target=*)      TARGET_NAME="${1#--target=}" ;;
-    -h|--help)       sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --out)           shift; OUT_DIR="${1:-}"; [[ -n "$OUT_DIR" ]] || die "--out needs a directory" ;;
+    --out=*)         OUT_DIR="${1#--out=}" ;;
+    -h|--help)       sed -e '1d' -e '/^[^#]/,$d' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
   shift
@@ -117,6 +126,24 @@ TARGET_ARGS=()
 
 # ------------------------------------------------------------------ zig ----
 ZIG="${MUX_ZIG_HOME:-$HOME/.local/zig/$ZIG_VERSION}/zig"
+# Missing toolchain: provision it with terminal-core's installer rather than
+# telling a packaging script to go and read the docs. That installer is the ONE
+# place a Zig is fetched (pinned tarball + sha256 + minisign), and it is reused,
+# never duplicated -- so this runs it in a SUBSHELL. common.sh defines its own
+# `lock`, `LOCK`, `BUILD_DIR` and friends against the terminal-core lockfile, and
+# sourcing it here would silently repoint every lookup below at the wrong pin.
+#
+# Only when both lockfiles name the same Zig. They are independent pins (the
+# daemon-side and client-side VT versions are deliberately not forced equal), so
+# a divergence is a decision somebody has to make, not something to paper over.
+if [[ ! -x "$ZIG" ]]; then
+  TC_LOCK="$REPO_ROOT/apps/terminal-core/native/upstream.lock.json"
+  TC_ZIG="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["zig"]["version"])' "$TC_LOCK" 2>/dev/null || true)"
+  if [[ "$TC_ZIG" == "$ZIG_VERSION" && -z "${MUX_ZIG_HOME:-}" ]]; then
+    log "Zig $ZIG_VERSION not installed; provisioning it with apps/terminal-core/native/common.sh"
+    ( TARGET="zmx-toolchain"; . "$REPO_ROOT/apps/terminal-core/native/common.sh"; ensure_zig )
+  fi
+fi
 [[ -x "$ZIG" ]] || die "Zig $ZIG_VERSION not found at $ZIG.
 Provision it with the pinned, signature-verified installer:
   bash apps/terminal-core/native/build.sh linux-x64   # or your target"
