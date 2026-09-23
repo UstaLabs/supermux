@@ -10,6 +10,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.PredictionConfig
@@ -481,5 +483,46 @@ class GhosttyTerminalViewFactoryTest {
         until("the claim was released") {
             h.socket.controls.drop(before).any { it.contains("\"focus\"") && it.contains("false") }
         }
+    }
+
+    @Test
+    fun an_engine_that_never_loads_says_so_and_says_what_to_do() = runComposeUiTest {
+        // THE STALE-DEPLOY CASE, WHICH IS THE ONE THAT REACHES USERS AND NEEDS NO CACHE TO HAPPEN.
+        // Assets are content-hashed and served `immutable`, so a tab open since before a deploy is
+        // holding a bundle whose wasm URL the current build no longer serves — and nobody finds out
+        // until the first terminal is opened in that tab, because that is when the engine is first
+        // fetched. The engine ships with the app on every target, so this is never "this client has
+        // no terminal": it is a deployment fact with exactly one action attached, and a pane that
+        // says the wrong one of those leaves the user with nothing to do.
+        val h = Harness()
+        val refused = GhosttyTerminalViewFactory(
+            nowMs = h.clock,
+            openSession = { _, _ ->
+                error("supermux-terminal.wasm: HTTP 404 (MISSING_BINARY)")
+            },
+            predictionsOf = { h.predictions },
+        )
+        setContent {
+            val surface = refused.rememberTerminalSurface { h.connect() }
+            Box(Modifier.size(400.dp, 300.dp)) { surface.Content(Modifier, active = true, onExit = null) }
+        }
+
+        until("the load failure is on screen") {
+            onAllNodesWithTag(TERMINAL_LOAD_FAILED_TAG).fetchSemanticsNodes().isNotEmpty()
+        }
+        // The reason the loader gave, verbatim — the status, the ABI or the URL is the only thing
+        // that tells anyone which of the failures this was.
+        onNodeWithText(
+            "supermux-terminal.wasm: HTTP 404 (MISSING_BINARY)",
+            substring = true, useUnmergedTree = true,
+        ).assertExists()
+        // ...and the action, which is the whole point of not drawing a blank pane.
+        onNodeWithText("Reload", substring = true, useUnmergedTree = true).assertExists()
+        // NOT the "no engine here" hint: this host has one.
+        assertEquals(
+            0,
+            onAllNodesWithTag("terminal_unavailable").fetchSemanticsNodes().size,
+            "a failed load is not a host without a terminal",
+        )
     }
 }

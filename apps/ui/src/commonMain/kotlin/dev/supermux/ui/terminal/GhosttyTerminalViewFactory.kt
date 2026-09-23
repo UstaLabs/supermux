@@ -83,9 +83,14 @@ private val INITIAL_SIZE = TerminalSize(columns = 80, rows = 24, cellWidthPx = 8
  * Ghostty through [TerminalEvent.Output] exactly once, unchanged, with the origin the replay
  * boundary says. Predictions are drawn on top ([GhosttyPredictionState]) and never written in.
  *
- * @param wasmAssetUrl where the browser fetches the engine's `.wasm` from. Awaited before the
- *   first engine is built (`terminal-core/native/README.md`, "Browser (wasmJs)"); on every other
- *   target `TerminalRuntime.initialize` is a no-op and this is ignored. Task 4 stages the asset.
+ * @param wasmAssetUrl where the browser fetches the engine's `.wasm` from, for a host that serves
+ *   the file itself. Null — the default, and what every supermux host uses — takes the package's
+ *   own URL, which the bundler has already rewritten to the staged, content-hashed asset (see
+ *   [SharedTerminal]). Awaited before the first engine is built
+ *   (`terminal-core/native/README.md`, "Browser (wasmJs)"); on every other target
+ *   `TerminalRuntime.initialize` is a no-op and this is ignored. It must be host configuration,
+ *   never user input, and it can only be decided ONCE: a second `initialize` with a different URL
+ *   is rejected.
  * @param themeOf the palette, read in composition so it follows the app's theme.
  * @param nowMs the monotonic clock the prediction engine's latency gate and cooldown run on.
  * @param openSession the engine seam. Real builds get the native engine; a test passes its own so
@@ -137,11 +142,19 @@ class GhosttyTerminalViewFactory(
 /**
  * The renderer every host mounts.
  *
- * One instance, because there is nothing per-host left to vary: the engine is the same on all
- * five targets, the wasm module comes from the package's own default URL (the binary next to the
- * loader — see `terminal-core/native/README.md`, "Browser (wasmJs)"; Task 4 stages it), and the
- * factory itself holds no state. A host that genuinely needs a different asset URL or theme
- * constructs its own [GhosttyTerminalViewFactory].
+ * One instance, because there is nothing per-host left to vary: the engine is the same on all five
+ * targets and the factory holds no state.
+ *
+ * INCLUDING ON THE BROWSER, WHICH IS THE SURPRISING ONE. The wasm module comes from the package's
+ * own default URL — `new URL("./supermux-terminal.wasm", import.meta.url)`, the binary next to the
+ * loader. That is not a fallback: webpack (which the Kotlin plugin runs) recognises the pattern and
+ * emits the binary as an asset, `:web:stageForBroker` content-hashes every `.js`/`.wasm` into
+ * `assets/` and rewrites the reference inside the bundle, and the broker serves a `.wasm` as
+ * `application/wasm` and everything under `assets/` as `immutable`
+ * (`src/channels/web/static-serve.ts`). So the default URL already IS the hashed asset, and
+ * passing one explicitly here would only be a second place for the hash to go stale. A host that
+ * genuinely serves the file itself constructs its own
+ * [GhosttyTerminalViewFactory].
  */
 val SharedTerminal: TerminalViewFactory = GhosttyTerminalViewFactory()
 
@@ -262,10 +275,15 @@ private class GhosttyTerminalSurface(
             // module being fetched, and a pane that announced "this client has no terminal" for
             // those few hundred milliseconds would be lying. Once `failure` is set it is not
             // coming: the wasm never loaded, or the native library is missing.
+            //
+            // And that is not "this client has no terminal" either. The engine ships with the app
+            // on every target, so a load that failed is a DEPLOYMENT fact — most often a tab open
+            // since before a deploy, asking for a hashed asset the current build no longer serves
+            // — with an action attached to it. Saying it costs one hint and saves a blank pane.
             if (failure == null) {
                 Box(modifier.testTag(TERMINAL_GRID_TAG).background(theme.background))
             } else {
-                UnavailableTerminalHint(modifier)
+                TerminalLoadFailedHint(failure?.message, modifier)
             }
             return
         }
