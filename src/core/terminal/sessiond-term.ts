@@ -348,6 +348,18 @@ export class SessiondWorkspaceBackend implements WorkspaceTerminalBackend {
   readonly #targets = new Map<string, SessiondTargetState>()
   /** create/close serialisation, per logical target. */
   readonly #chain = new Map<string, Promise<unknown>>()
+  /**
+   * Targets whose close has been DECIDED but whose kill has not run yet.
+   *
+   * `close` forgets the state the moment it decides (it discards the viewers,
+   * and a state with no viewers is dropped), so `closing` on that object
+   * protects nothing afterwards: a concurrent `attachExisting` would allocate
+   * a fresh state with `closing:false`, `resolve` would still find the target
+   * -- the kill is behind the serialisation chain -- and a viewer would be
+   * attached to a ConPTY that is about to be terminated. This map is the part
+   * of the decision that survives the forget.
+   */
+  readonly #closing = new Map<string, Promise<void>>()
 
   constructor(options: SessiondWorkspaceOptions) {
     this.#backend = options.backend
@@ -433,6 +445,9 @@ export class SessiondWorkspaceBackend implements WorkspaceTerminalBackend {
     const missing = () =>
       new WorkspaceTerminalError("target-not-found", `no workspace terminal ${key.scope}/${key.terminalId}`)
 
+    // A close that has been decided but not finished is a target that is going
+    // away, whatever `resolve` still says about it.
+    if (this.#closing.has(keyId(key))) throw missing()
     const target = this.#target(key)
     if (target.closing) { this.#forget(target); throw missing() }
     const targetId = await this.#backend.resolve(group, name)
@@ -452,7 +467,7 @@ export class SessiondWorkspaceBackend implements WorkspaceTerminalBackend {
     // Attaching is not instant, and the replay was queued INSIDE it. A close
     // may have landed meanwhile: the target is gone and this viewer, which
     // sessiond has already registered, must not outlive it.
-    if (target.closing || this.#targets.get(keyId(key)) !== target) {
+    if (target.closing || this.#closing.has(keyId(key)) || this.#targets.get(keyId(key)) !== target) {
       try { runtime.close() } catch {}
       this.#forget(target)
       throw missing()
@@ -482,15 +497,26 @@ export class SessiondWorkspaceBackend implements WorkspaceTerminalBackend {
   async close(key: WorkspaceTerminalKey): Promise<void> {
     const group = sessiondTerminalGroup(key.scope)
     const name = sessiondTerminalName(key.terminalId)
+    const id = keyId(key)
     const target = this.#target(key)
     target.closing = true
     // Viewers first: a close we asked for must not reach a client as a failure.
     for (const viewer of [...target.viewers]) viewer.discard()
     this.#forget(target)
-    await this.#serialize(key, async () => {
+    const killed = this.#serialize(key, async () => {
       const targetId = await this.#backend.resolve(group, name)
       if (targetId) await this.#backend.kill(targetId)
     })
+    // Registered SYNCHRONOUSLY, in the same turn as the decision: an attach
+    // that runs before the kill does must not find a target to attach to.
+    // After it, `resolve`/`livePid` answer for themselves.
+    const marker = killed.then(() => undefined, () => undefined)
+    this.#closing.set(id, marker)
+    try {
+      await killed
+    } finally {
+      if (this.#closing.get(id) === marker) this.#closing.delete(id)
+    }
   }
 
   async closeScope(scope: string): Promise<void> {

@@ -262,6 +262,17 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
   readonly #targets = new Map<string, TargetState>()
   /** create/close serialisation, per logical target. */
   readonly #chain = new Map<string, Promise<unknown>>()
+  /**
+   * Targets whose close has been DECIDED but whose kill has not finished.
+   *
+   * `close` forgets the TargetState the moment it decides — it discards the
+   * viewers, and a state with no viewers is dropped — so `closing` on that
+   * object protects nothing afterwards: a concurrent `attachExisting` would
+   * allocate a FRESH state with `closing:false` and attach a viewer to a
+   * daemon that is already being killed. This map is the part of the decision
+   * that survives the forget, and it is what `attachExisting` consults.
+   */
+  readonly #closing = new Map<string, Promise<void>>()
   #viewerSeq = 0
 
   constructor(options: ZmxBackendOptions = {}) {
@@ -368,6 +379,12 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
   ): Promise<WorkspaceTerminalViewer> {
     const name = assertNameFits(key)
     const socket = targetSocketPath(this.#dir(), key)
+    // A close that has been decided but not finished is a target that is going
+    // away. It is checked BEFORE the state is looked up, because the state the
+    // close was holding is already gone.
+    if (this.#closing.has(keyOf(key))) {
+      throw new WorkspaceTerminalError("target-not-found", `workspace terminal ${name} is closing`)
+    }
     const target = this.#target(key)
     if (target.closing) {
       this.#forget(target)
@@ -393,7 +410,7 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
     }
     // Attaching is not instant. A close may have landed while we were in
     // flight; the target is gone and this viewer must not outlive it.
-    if (target.closing || this.#targets.get(keyOf(key)) !== target) {
+    if (target.closing || this.#closing.has(keyOf(key)) || this.#targets.get(keyOf(key)) !== target) {
       viewer.discard()
       throw new WorkspaceTerminalError("target-not-found", `workspace terminal ${name} was closed while attaching`)
     }
@@ -423,18 +440,30 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
   async close(key: WorkspaceTerminalKey): Promise<void> {
     const name = assertNameFits(key)
     const socket = targetSocketPath(this.#dir(), key)
+    const id = keyOf(key)
     const target = this.#target(key)
     target.closing = true
     // Viewers go first: their helpers are about to see the daemon hang up, and
     // a close we asked for must not reach a client as "I lost your terminal".
     for (const viewer of [...target.viewers.values()]) viewer.discard()
     this.#forget(target)
-    await this.#serialize(key, async () => {
+    const killed = this.#serialize(key, async () => {
       // `name` makes the kill identity-checked: a socket basename is a hash,
       // and killing a collision would destroy another workspace's shell.
       await this.#control(helper => helper.send({ op: "kill", socket, name }))
       log.info("zmx_target_closed", { scope: key.scope, terminalId: key.terminalId })
     })
+    // Registered SYNCHRONOUSLY, in the same turn as the decision: an attach
+    // that runs before the kill does must not find a target to attach to.
+    // Once the kill has run there is nothing listening, and an attach fails on
+    // its own — so the marker is dropped again here rather than kept.
+    const marker = killed.then(() => undefined, () => undefined)
+    this.#closing.set(id, marker)
+    try {
+      await killed
+    } finally {
+      if (this.#closing.get(id) === marker) this.#closing.delete(id)
+    }
   }
 
   async closeScope(scope: string): Promise<void> {

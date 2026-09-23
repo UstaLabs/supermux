@@ -65,6 +65,7 @@ class FakeZmx {
   epoch = 0
   createGate?: Promise<void>
   attachGate?: Promise<void>
+  killGate?: Promise<void>
   /** Every command any helper was asked to run, for order assertions. */
   readonly commands: HelperCommandBody[] = []
   readonly launched: FakeHelper[] = []
@@ -218,6 +219,7 @@ class FakeHelper implements ZmxHelperFacade {
   }
 
   async #kill(command: Extract<HelperCommandBody, { op: "kill" }>): Promise<void> {
+    await this.world.killGate
     const target = this.world.targets.get(command.socket)
     if (!target) return // already gone is success
     this.#verify(target, command.name)
@@ -287,7 +289,7 @@ function zmxWorld(): WorkspaceBackendWorld {
   const fake = new FakeZmx()
   const socketDir = makeSocketDir()
   const options: ZmxBackendOptions = { socketDir, launch: fake.launch, probe, hostEnv: HOST_ENV }
-  const gate = (which: "createGate" | "attachGate"): Gate => {
+  const gate = (which: "createGate" | "attachGate" | "killGate"): Gate => {
     let resolve!: () => void
     fake[which] = new Promise<void>(r => { resolve = r })
     return { release: () => { fake[which] = undefined; resolve() } }
@@ -301,6 +303,7 @@ function zmxWorld(): WorkspaceBackendWorld {
     exit: (key, status) => fake.exit(key, status),
     gateCreate: () => gate("createGate"),
     gateAttach: () => gate("attachGate"),
+    gateClose: () => gate("killGate"),
     dispose: async () => {},
   }
 }

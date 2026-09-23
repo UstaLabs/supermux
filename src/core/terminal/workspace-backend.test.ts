@@ -48,7 +48,12 @@ type World = {
   clock: number
   epoch: number
   pendingEnsure: Map<string, Promise<void>>
-  hooks: { beforeCreate?: () => Promise<void>; beforeAttach?: () => Promise<void> }
+  hooks: {
+    beforeCreate?: () => Promise<void>
+    beforeAttach?: () => Promise<void>
+    /** Held INSIDE `close`, after it has decided and before the target goes. */
+    beforeKill?: () => Promise<void>
+  }
   /** The target's process ended on its own. The target is GONE — nothing respawns it. */
   exit(key: WorkspaceTerminalKey, status: Omit<Extract<WorkspaceTerminalEvent, { type: "exit" }>, "type">): Promise<void>
 }
@@ -236,9 +241,13 @@ class RecordingBackend implements WorkspaceTerminalBackend {
   async close(key: WorkspaceTerminalKey): Promise<void> {
     this.world.calls.push(`close ${label(key)}`)
     const target = this.world.targets.get(keyOf(key))
+    // The decision is synchronous and the destruction is not: this backend
+    // takes the target out of reach FIRST, which is what makes an attach in
+    // the gap answer `target-not-found` with nothing else to remember.
     this.world.targets.delete(keyOf(key))
     if (!target) return
     for (const viewer of [...target.viewers.values()]) viewer.kill()
+    await this.world.hooks.beforeKill?.()
   }
 
   async closeScope(scope: string): Promise<void> {
@@ -260,7 +269,7 @@ class RecordingBackend implements WorkspaceTerminalBackend {
 /** The recording backend as a contract world. */
 function recordingWorld(): WorkspaceBackendWorld {
   const world = makeWorld()
-  const gate = (hook: "beforeCreate" | "beforeAttach"): Gate => {
+  const gate = (hook: "beforeCreate" | "beforeAttach" | "beforeKill"): Gate => {
     let resolve!: () => void
     const promise = new Promise<void>(r => { resolve = r })
     world.hooks[hook] = () => promise
@@ -278,6 +287,7 @@ function recordingWorld(): WorkspaceBackendWorld {
     exit: (key, status) => world.exit(key, status),
     gateCreate: () => gate("beforeCreate"),
     gateAttach: () => gate("beforeAttach"),
+    gateClose: () => gate("beforeKill"),
     dispose: async () => {},
   }
 }

@@ -326,6 +326,7 @@ class ContractBackend implements SessionBackend {
   viewerCloses = 0
   createGate?: Promise<void>
   attachGate?: Promise<void>
+  killGate?: Promise<void>
   private viewers = new Map<string, { targetId: string; exit(code: number): void; fail(reason: string): void }>()
   private next = 1
 
@@ -401,6 +402,7 @@ class ContractBackend implements SessionBackend {
   }
   async interrupt(): Promise<void> {}
   async kill(targetId: string): Promise<void> {
+    await this.killGate
     const target = this.targets.get(targetId)
     if (target) { target.alive = false; target.pid = null }
   }
@@ -437,7 +439,7 @@ function sessiondWorld(): WorkspaceBackendWorld {
     // back to PowerShell discovery — which is what Windows always did.
     findExecutable: (name: string) => (name === "pwsh.exe" ? "C:\\pwsh.exe" : null),
   }
-  const gate = (which: "createGate" | "attachGate"): Gate => {
+  const gate = (which: "createGate" | "attachGate" | "killGate"): Gate => {
     let resolve!: () => void
     backend[which] = new Promise<void>(r => { resolve = r })
     return { release: () => { backend[which] = undefined; resolve() } }
@@ -451,6 +453,7 @@ function sessiondWorld(): WorkspaceBackendWorld {
     exit: (key, status) => backend.endProcess(key, status.code ?? 0),
     gateCreate: () => gate("createGate"),
     gateAttach: () => gate("attachGate"),
+    gateClose: () => gate("killGate"),
     dispose: async () => {},
   }
 }

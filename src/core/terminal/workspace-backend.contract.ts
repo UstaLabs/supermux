@@ -55,6 +55,9 @@ export interface WorkspaceBackendWorld {
   gateCreate(): Gate
   /** Hold the next attach until `release()`. */
   gateAttach(): Gate
+  /** Hold the next DESTRUCTION of a target until `release()` — the kill a
+   * `close` performs, not the decision in front of it. */
+  gateClose(): Gate
   dispose(): Promise<void>
 }
 
@@ -195,6 +198,30 @@ export function runWorkspaceBackendContract(
       const error = await attaching.then(() => null, (e: unknown) => e)
       expect(isWorkspaceTerminalError(error, "target-not-found")).toBe(true)
       expect(await world.backend.exists(CONTRACT_A)).toBe(false)
+    })
+
+    withWorld("an attach that starts while a close is killing is target-not-found", async world => {
+      // THE OTHER ORDER, and the one that used to slip through. `close`
+      // decides synchronously — it marks the target, drops its viewers and
+      // FORGETS it — and only then queues the kill. An attach arriving in that
+      // window found no state, allocated a fresh one that knew nothing about
+      // the close, and attached a viewer to a target that was being destroyed.
+      await world.backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+      await world.backend.attachExisting(CONTRACT_A, "v1", recorder().emit)
+
+      const gate = world.gateClose()
+      const closing = world.backend.close(CONTRACT_A)
+      const { events, emit } = recorder()
+      const error = await world.backend.attachExisting(CONTRACT_A, "v2", emit)
+        .then(() => null, (e: unknown) => e)
+      expect(isWorkspaceTerminalError(error, "target-not-found")).toBe(true)
+      // And nothing was half-attached: a refused attach draws nothing.
+      expect(events).toEqual([])
+
+      gate.release()
+      await closing
+      expect(await world.backend.exists(CONTRACT_A)).toBe(false)
+      expect(await world.backend.list("w:alpha")).toEqual([])
     })
 
     withWorld("shutdownViewers closes viewers ONLY — targets keep running", async world => {
