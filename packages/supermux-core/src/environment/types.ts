@@ -35,6 +35,10 @@ export type OpenCodeEnvironmentSpec = EnvironmentSpec & {
   provider: Record<string, unknown> | null
   /** `plugin` array; [] = omit. */
   pluginPaths: string[]
+  /** OpenCode's per-tool permission policy (`permission.edit/bash/webfetch`). "ask" makes the
+   *  agent raise ACP session/request_permission for those tools; "allow" writes nothing and
+   *  keeps OpenCode's own default (auto-approve). Verified on OpenCode 1.16.2. */
+  permissions: "ask" | "allow"
 }
 
 export type ClaudeEnvironmentSpec = EnvironmentSpec & {

@@ -105,6 +105,7 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
         mcpServers: [muxShimServer("opencode", extra.sessionId, extra.sessionName)],
         skillsPaths,
         pluginPaths,
+        permissions: extra.prompts ? "ask" : "allow",
         provider: readGlobalProviderConfig() ?? null,
         instructions: openCodeInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
         configHome,

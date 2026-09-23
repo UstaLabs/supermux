@@ -80,6 +80,7 @@ function spec(over: Partial<OpenCodeEnvironmentSpec> & Pick<OpenCodeEnvironmentS
     mcpServers: [MUX],
     skillsPaths: ["/plugins/extra/skills"],
     pluginPaths: ["/plugins/superpowers"],
+    permissions: "allow",
     provider: { "alibaba-token-plan": { models: { "qwen3.8-max-preview": { name: "Qwen3.8 Max Preview" } } } },
     instructions: "preamble body\n",
     ...over,
@@ -114,6 +115,7 @@ test("omits instructions, plugin, skills, and provider when empty/null", async (
     configHome,
     instructions: null,
     pluginPaths: [],
+    permissions: "allow",
     skillsPaths: [],
     provider: null,
   }))
@@ -134,6 +136,7 @@ test("registers mux MCP with session id as MUX_SESSION_ID", async () => {
     configHome,
     instructions: null,
     pluginPaths: [],
+    permissions: "allow",
     skillsPaths: [],
     provider: null,
   }))
@@ -178,4 +181,20 @@ test("requireSpec TypeError names each missing field including provider", async 
     const s = { ...full }; delete s[field]
     await expect(prepareOpenCodeEnvironment(s)).rejects.toThrow(new RegExp(`${field} is required`))
   }
+})
+
+test("permissions ask writes OpenCode's per-tool ask policy; allow writes nothing", async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import("fs")
+  const { tmpdir } = await import("os")
+  const { join } = await import("path")
+  const dir = mkdtempSync(join(tmpdir(), "oc-perm-"))
+  try {
+    const base = { home: join(dir, "home"), workdir: join(dir, "wd"), mcpServers: [], skillsPaths: [], instructions: null, configHome: join(dir, "cfg"), provider: null, pluginPaths: [] }
+    await prepareOpenCodeEnvironment({ ...base, permissions: "ask" })
+    const asked = JSON.parse(readFileSync(join(dir, "cfg", "opencode", "opencode.json"), "utf8"))
+    expect(asked.permission).toEqual({ edit: "ask", bash: "ask", webfetch: "ask" })
+    await prepareOpenCodeEnvironment({ ...base, permissions: "allow" })
+    const allowed = JSON.parse(readFileSync(join(dir, "cfg", "opencode", "opencode.json"), "utf8"))
+    expect(allowed.permission).toBeUndefined()
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })
