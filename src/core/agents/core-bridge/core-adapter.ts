@@ -225,6 +225,14 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   get effort(): string | undefined { return this._effort }
   get permissionMode(): string | undefined { return this._permissionMode }
 
+  /** True while the Core session is open or a config restart is in flight: the
+   *  native process changing under a restart is not the agent dying. */
+  isAlive(): boolean {
+    if (this.restarting) return true
+    const state = this.session?.snapshot().state
+    return state !== undefined && state !== "closed" && state !== "failed"
+  }
+
   sessionSnapshotState(): SessionState | undefined {
     return this.session?.snapshot().state
   }

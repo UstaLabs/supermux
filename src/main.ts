@@ -154,6 +154,7 @@ import { hydrateCredentialEnv, applyCredentialEnv } from "./core/settings/app-co
 import { reverseProxySnippets } from "./core/settings/exposure"
 import { toActivityEvents } from "./core/agents/adapter-activity"
 import { isCoreBacked } from "./core/agents/core-bridge/activity-dispatch"
+import { CoreAdapter } from "./core/agents/core-bridge/core-adapter"
 import { LoginManager } from "./core/agents/login/manager"
 import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
@@ -1655,6 +1656,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             capabilities: sessionCapabilities(entry.agent),
             model: entry.model,
             reasoningLevel: sessionEffort(entry),
+
+            permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
             finish_job: entry.finish_job,
@@ -1738,6 +1741,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           capabilities: sessionCapabilities(s.agent),
           model: s.model,
           reasoningLevel: sessionEffort(s),
+
+          permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
           repo_root: s.repo_root || undefined,
           session_branch: s.session_branch || undefined,
           finish_job: s.finish_job,
@@ -1793,6 +1798,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             capabilities: sessionCapabilities(entry.agent),
             model: entry.model,
             reasoningLevel: sessionEffort(entry),
+
+            permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
             finish_job: entry.finish_job,
@@ -2386,6 +2393,13 @@ const server = await startSocketServer({
     if (connected) {
       agentStateStore.applyEvent(session_id, "connected")          // revives a dead session; no-op otherwise
     } else if (s && s.status !== "suspended") {
+      // A Core-backed session's liveness is the Core session, not the shim socket:
+      // a model/permission-mode change restarts the native process, whose shim
+      // drops and reconnects seconds later. Only a session with no live Core
+      // session behind it is dead.
+      const adapter = sessionManager.adapterFor(session_id)
+      const coreAlive = adapter instanceof CoreAdapter && adapter.isAlive()
+      if (coreAlive) return
       agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
       bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
     }
@@ -2754,6 +2768,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
               capabilities: sessionCapabilities(entry.agent),
               model: entry.model,
               reasoningLevel: sessionEffort(entry),
+
+              permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
               repo_root: entry.repo_root || undefined,
               session_branch: entry.session_branch || undefined,
               finish_job: entry.finish_job,

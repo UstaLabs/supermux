@@ -1123,6 +1123,24 @@ test("cursor: setPermissionMode restarts the same native id", async () => {
   expect(fake.opens[1]?.resumeId).toBe("native-keep")
 })
 
+// The shim socket drops while the native process is replaced; the broker must
+// not report the session dead for that window.
+test("isAlive stays true across a permission-mode restart and false after stop", async () => {
+  const kind = "cursor" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-alive", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  expect(adapter.isAlive()).toBe(false)
+  await adapter.start()
+  expect(adapter.isAlive()).toBe(true)
+  const restart = adapter.setPermissionMode("ask")
+  expect(adapter.isAlive()).toBe(true)
+  await restart
+  expect(adapter.isAlive()).toBe(true)
+  await adapter.stop()
+  expect(adapter.isAlive()).toBe(false)
+})
+
 test("setPermissionMode is a no-op for the same id", async () => {
   const kind = "grok" as const
   const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
