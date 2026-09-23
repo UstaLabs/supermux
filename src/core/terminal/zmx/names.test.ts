@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, chmodSync } from "fs"
+import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, chmodSync, existsSync, utimesSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { randomUUID } from "crypto"
@@ -9,6 +9,7 @@ import {
   assertNameFits,
   belongsToScope,
   claimSocketDir,
+  SOCKET_DIR_CLAIM_LOCK,
   SOCKET_DIR_OWNER_FILE,
   decodeName,
   encodeName,
@@ -351,20 +352,21 @@ describe("zmx socket directory", () => {
     expect(statSync(join(dir, SOCKET_DIR_OWNER_FILE)).mode & 0o777).toBe(0o600)
   })
 
-  // procfs only, like the refusal it asserts: off Linux `looksLikeBroker` says
-  // "not a broker" by design, so the loser would take the directory over.
-  test.skipIf(process.platform !== "linux")(
-    "two brokers claiming at the same instant: exactly ONE wins", async () => {
-      // THE RACE, RUN FOR REAL. Reading the marker, deciding and then writing
-      // it left a window in which two brokers starting together both saw "no
-      // owner" and both won — the two-broker state the lock exists to prevent,
-      // and one that JS run-to-completion does NOT rule out: the read is I/O,
-      // and the peer is another process anyway. Two real processes, released
-      // by a wall-clock barrier, are the only honest way to assert it.
-      const dir = mkdtempSync(join(tmpdir(), "zmx-race-"))
-      const namesModule = join(import.meta.dir, "names.ts")
-      const script = join(dir, "claimer.ts")
-      writeFileSync(script, `
+  /**
+   * TWO BROKERS CLAIMING ONE DIRECTORY, RUN FOR REAL.
+   *
+   * Two real processes released by a wall-clock barrier. A single process
+   * cannot assert this: the window being closed is between two syscalls, and
+   * JS run-to-completion rules out nothing when the peer is another process.
+   *
+   * Each child claims, records its answer, and stays alive until BOTH have
+   * answered — so a loser finds a LIVE owner in the marker, exactly as a
+   * second broker would during a restart.
+   */
+  const raceForTheClaim = async (dir: string) => {
+    const namesModule = join(import.meta.dir, "names.ts")
+    const script = join(dir, "claimer.ts")
+    writeFileSync(script, `
 import { readdirSync, writeFileSync } from "fs"
 import { join } from "path"
 import { claimSocketDir } from ${JSON.stringify(namesModule)}
@@ -374,32 +376,92 @@ while (Date.now() < startAt) { /* barrier: both processes claim in the same inst
 let result = "lost"
 try { claimSocketDir(dir); result = "won" } catch (error) { result = \`lost:\${(error as { code?: string }).code}\` }
 writeFileSync(join(dir, \`result-\${process.pid}\`), result)
-// Stay alive until BOTH have answered: a loser must find a LIVE owner in the
-// marker, exactly as a second broker would during a restart.
 const deadline = Date.now() + 10_000
 while (Date.now() < deadline &&
   readdirSync(dir).filter(name => name.startsWith("result-")).length < 2) { /* spin */ }
 console.log(result)
 `)
-      const startAt = Date.now() + 1500
-      const claimers = [0, 1].map(() => Bun.spawn([process.execPath, script], {
-        env: { ...process.env, RACE_DIR: dir, RACE_START: String(startAt) },
-        stdout: "pipe", stderr: "pipe",
-      }))
-      const outcomes = await Promise.all(claimers.map(async child => {
-        const [out, err] = await Promise.all([
-          new Response(child.stdout).text(), new Response(child.stderr).text(),
-        ])
-        await child.exited
-        return out.trim() || `no answer: ${err}`
-      }))
+    const startAt = Date.now() + 1500
+    const claimers = [0, 1].map(() => Bun.spawn([process.execPath, script], {
+      env: { ...process.env, RACE_DIR: dir, RACE_START: String(startAt) },
+      stdout: "pipe", stderr: "pipe",
+    }))
+    const outcomes = await Promise.all(claimers.map(async child => {
+      const [out, err] = await Promise.all([
+        new Response(child.stdout).text(), new Response(child.stderr).text(),
+      ])
+      await child.exited
+      return out.trim() || `no answer: ${err}`
+    }))
+    return { outcomes, pids: claimers.map(child => child.pid) }
+  }
 
-      expect(outcomes.filter(outcome => outcome === "won")).toHaveLength(1)
-      expect(outcomes.filter(outcome => outcome.startsWith("lost:socket-dir-unsafe"))).toHaveLength(1)
-      // ...and the directory belongs to the winner, not to whoever wrote last.
-      const owner = Number(readFileSync(join(dir, SOCKET_DIR_OWNER_FILE), "utf8").trim())
-      expect(claimers.map(child => child.pid)).toContain(owner)
+  /** Exactly one "won", one refusal, and the marker naming the winner — never
+   * whoever happened to write last. */
+  const expectExactlyOneWinner = (
+    dir: string, race: { outcomes: string[], pids: number[] },
+  ) => {
+    expect(race.outcomes.filter(outcome => outcome === "won")).toHaveLength(1)
+    expect(race.outcomes.filter(outcome => outcome.startsWith("lost:socket-dir-unsafe"))).toHaveLength(1)
+    const owner = Number(readFileSync(join(dir, SOCKET_DIR_OWNER_FILE), "utf8").trim())
+    expect(race.pids).toContain(owner)
+  }
+
+  // procfs only, like the refusal it asserts: off Linux `looksLikeBroker` says
+  // "not a broker" by design, so the loser would take the directory over.
+  test.skipIf(process.platform !== "linux")(
+    "two brokers claiming at the same instant: exactly ONE wins", async () => {
+      // The EMPTY-directory race. Reading the marker, deciding and then writing
+      // it left a window in which two brokers starting together both saw "no
+      // owner" and both won — the two-broker state the lock exists to prevent.
+      const dir = mkdtempSync(join(tmpdir(), "zmx-race-"))
+      expectExactlyOneWinner(dir, await raceForTheClaim(dir))
     }, 30_000)
+
+  // procfs only, for the same reason as the empty-directory race above.
+  test.skipIf(process.platform !== "linux")(
+    "two brokers taking over ONE stale marker: exactly ONE wins", async () => {
+      // THE OTHER HALF OF THE RACE, AND THE ONE THE EXCLUSIVE CREATE NEVER
+      // COVERED. `O_CREAT | O_EXCL` settles an empty directory, and nothing
+      // else: the moment a marker exists the create fails for EVERYONE and the
+      // claim falls through to read the pid → judge it dead → write ours. Two
+      // brokers restarting together read the same dead pid, both judge it
+      // dead, and both write. The file ends up naming one of them, so nothing
+      // looks broken — and both processes return believing they own the
+      // directory, which is precisely the state `owner:false` in backend.ts is
+      // deduced from and therefore the state that must be impossible.
+      //
+      // A crashed broker is not a rare setup, either: it is what every
+      // unclean shutdown leaves behind, and a supervisor restarting two
+      // workers is how two claimers arrive at once.
+      const dir = mkdtempSync(join(tmpdir(), "zmx-race-stale-"))
+      // The marker of a broker that died without cleaning up. The pid is at
+      // the top of the range, where nothing is ever running.
+      writeFileSync(join(dir, SOCKET_DIR_OWNER_FILE), "2147483646\n", { mode: 0o600 })
+
+      expectExactlyOneWinner(dir, await raceForTheClaim(dir))
+      // ...and the loser's refusal is about the WINNER, not about the corpse
+      // both of them found: a broker that refused over a pid nothing is
+      // running under would be refusing for a reason that cannot be acted on.
+      expect(readFileSync(join(dir, SOCKET_DIR_OWNER_FILE), "utf8").trim()).not.toBe("2147483646")
+    }, 30_000)
+
+  test("the claim lock is released, even when the claim is refused", () => {
+    // A lock that outlives its critical section is the lockout this file's
+    // own checks call the worse failure — so it must be gone whether the
+    // claim returned or threw, and a claim must never find one left behind.
+    const dir = mkdtempSync(join(tmpdir(), "zmx-lock-"))
+    claimSocketDir(dir)
+    expect(existsSync(join(dir, SOCKET_DIR_CLAIM_LOCK))).toBe(false)
+
+    // An abandoned lock — a broker killed inside the critical section — is
+    // broken once it is old enough, rather than locking the directory forever.
+    mkdirSync(join(dir, SOCKET_DIR_CLAIM_LOCK))
+    const longAgo = new Date(Date.now() - 600_000)
+    utimesSync(join(dir, SOCKET_DIR_CLAIM_LOCK), longAgo, longAgo)
+    expect(claimSocketDir(dir)).toBe(dir)
+    expect(existsSync(join(dir, SOCKET_DIR_CLAIM_LOCK))).toBe(false)
+  })
 
   // procfs only: `looksLikeBroker` cannot tell a broker from a recycled pid
   // without it, and deliberately takes the directory over rather than locking

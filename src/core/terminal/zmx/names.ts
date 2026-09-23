@@ -47,7 +47,7 @@
 // `encodeName(key)` and fails rather than handing two workspaces one shell.
 // `assertTargetMatches` is that comparison.
 import { createHash } from "crypto"
-import { chmodSync, lstatSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from "fs"
+import { chmodSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmdirSync, writeFileSync } from "fs"
 import { basename, isAbsolute, join } from "path"
 import { STATE_DIR } from "../../../shared/paths"
 import { WorkspaceTerminalError, type WorkspaceTerminalKey } from "../workspace-backend"
@@ -305,58 +305,158 @@ export function looksLikeBroker(pid: number, executableOf: ExecutableProbe = pro
  * the kernel holds, because it also has to be readable: "who has this
  * directory" is the first question when a broker refuses to start.
  *
- * THE CREATE IS EXCLUSIVE, AND THAT IS THE WHOLE LOCK. Reading the marker,
- * deciding, and then writing is two brokers both seeing "no owner" and both
- * winning — the exact scenario this exists to prevent. Nothing in JavaScript's
- * run-to-completion saves it either: the read is I/O, and the other broker is
- * another PROCESS regardless. So the first move is always `O_CREAT | O_EXCL`
- * (`flag: "wx"`), which the kernel serialises; only its `EEXIST` drops into
- * the read-then-decide path, where a marker demonstrably already exists and
- * the question is whether its owner is alive.
+ * READ, DECIDE, WRITE IS THE WHOLE OPERATION, AND ALL THREE MUST BE ONE STEP.
+ * An exclusive create (`O_CREAT | O_EXCL`) settles the EMPTY directory on its
+ * own — the kernel lets exactly one create win. It settles nothing once a
+ * marker exists, which is the case this actually has to survive: a broker that
+ * died without cleaning up leaves a STALE marker, and takeover is read the pid
+ * → judge it dead → write ours. Two brokers restarting together both read the
+ * same dead pid, both judge it dead, and both write. The second write is not
+ * even a corruption — the file ends up naming one of them — so both return
+ * happily and we are in the two-broker state this exists to prevent.
+ *
+ * Nothing in JavaScript's run-to-completion helps: the read is I/O, and the
+ * peer is another PROCESS regardless. Nor does writing the takeover atomically
+ * (a temp file plus `rename`): `rename` is atomic in that no reader sees a
+ * half-written marker, but it is not a compare-and-swap, so two renames still
+ * both "succeed" and re-reading afterwards can hand BOTH of them their own pid
+ * if the second rename lands after the first has already verified.
+ *
+ * POSIX has no compare-and-swap on file contents, so the read-decide-write is
+ * run under a MUTEX instead, and `mkdir` is it: the one call that is both
+ * atomic and exclusive everywhere we run, with a failure mode (`EEXIST`) that
+ * names the contention rather than hiding it. The critical section is a
+ * handful of synchronous syscalls, so the lock is held for microseconds and
+ * uncontended in every normal start.
+ *
+ * A HELD LOCK IS NEVER PERMANENT. A broker killed inside the critical section
+ * would otherwise leave a directory no broker can claim again — the lockout
+ * this file's own checks call the worse failure. So a lock older than
+ * [CLAIM_LOCK_STALE_MS] is broken and retaken: no real holder survives a
+ * thousandth of that, and the `mkdir` that follows is still exclusive, so
+ * breaking it cannot produce two winners on its own.
  */
 export function claimSocketDir(dir: string): string {
   const path = join(dir, SOCKET_DIR_OWNER_FILE)
   const mine = `${process.pid}\n`
-  try {
-    // Wins outright, or tells us somebody got here first. There is no third
-    // outcome, and no window between the two.
-    writeFileSync(path, mine, { flag: "wx", mode: 0o600 })
-    return dir
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") {
+  return withClaimLock(dir, () => {
+    // Inside the lock, so the pid read here cannot change before the decision
+    // below acts on it. That is the entire point of the lock.
+    const owner = readOwnerPid(path)
+    if (owner !== undefined && owner !== process.pid && isProcessAlive(owner) && looksLikeBroker(owner)) {
+      throw new WorkspaceTerminalError(
+        "socket-dir-unsafe",
+        `zmx socket dir ${dir} belongs to another broker (pid ${owner}); ` +
+        "two brokers on one socket directory cannot each tell who owns a terminal's size",
+      )
+    }
+    // Free, ours already, or a dead/nonsense owner. `wx` first so the common
+    // case keeps the exclusive create (and its 0600) even under the lock; its
+    // EEXIST is the takeover, and the file being replaced is the one just
+    // judged, by the only process allowed to be judging it.
+    try {
+      try {
+        writeFileSync(path, mine, { flag: "wx", mode: 0o600 })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error
+        writeFileSync(path, mine, { mode: 0o600 })
+      }
+    } catch (error) {
       throw new WorkspaceTerminalError(
         "socket-dir-unsafe",
         `cannot claim zmx socket dir ${dir}: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
-  }
+    return dir
+  })
+}
 
-  // A marker exists. Whose?
-  let owner: number | undefined
+/** The pid a marker names, or nothing when it is missing, unreadable or not a
+ * pid — none of which is evidence of a live owner. */
+function readOwnerPid(path: string): number | undefined {
+  let owner: number
   try {
     owner = Number(readFileSync(path, "utf8").trim())
   } catch {
-    owner = undefined // unreadable: it says nothing about a live owner
+    return undefined // missing or unreadable: it says nothing about an owner
   }
-  if (owner !== undefined && Number.isInteger(owner) && owner > 0
-    && owner !== process.pid && isProcessAlive(owner) && looksLikeBroker(owner)) {
-    throw new WorkspaceTerminalError(
-      "socket-dir-unsafe",
-      `zmx socket dir ${dir} belongs to another broker (pid ${owner}); ` +
-      "two brokers on one socket directory cannot each tell who owns a terminal's size",
-    )
+  return Number.isInteger(owner) && owner > 0 ? owner : undefined
+}
+
+/** The claim's mutex, a sibling of the marker so it lives and dies with the
+ * directory it guards. A directory, not a file: `mkdir` is the exclusive
+ * create, and a directory here is also skipped by `zmx list`, which probes the
+ * sockets it finds. */
+export const SOCKET_DIR_CLAIM_LOCK = ".broker-owner.lock"
+
+/** How long a claim will wait for a peer's critical section. Microseconds is
+ * the real figure; this is the bound before we call the directory contended. */
+const CLAIM_LOCK_WAIT_MS = 2_000
+
+/** Between attempts. Short, because the wait is normally zero. */
+const CLAIM_LOCK_POLL_MS = 2
+
+/** A lock this old was abandoned by a process that died mid-claim. Four orders
+ * of magnitude above the real hold time, so breaking it cannot race a live
+ * holder in any realistic scheduling. */
+const CLAIM_LOCK_STALE_MS = 10_000
+
+function withClaimLock<T>(dir: string, claim: () => T): T {
+  const lock = join(dir, SOCKET_DIR_CLAIM_LOCK)
+  const deadline = Date.now() + CLAIM_LOCK_WAIT_MS
+  for (;;) {
+    try {
+      mkdirSync(lock, { mode: 0o700 })
+      break
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code
+      if (code !== "EEXIST") {
+        throw new WorkspaceTerminalError(
+          "socket-dir-unsafe",
+          `cannot lock zmx socket dir ${dir}: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+      breakStaleClaimLock(lock)
+      if (Date.now() >= deadline) {
+        throw new WorkspaceTerminalError(
+          "socket-dir-unsafe",
+          `zmx socket dir ${dir} is locked by another claim after ${CLAIM_LOCK_WAIT_MS} ms ` +
+          `(remove ${SOCKET_DIR_CLAIM_LOCK} if no broker is starting)`,
+        )
+      }
+      sleepSync(CLAIM_LOCK_POLL_MS)
+    }
   }
-  // Ours already, or a dead/nonsense owner: take it over. Not exclusive, on
-  // purpose — the file we are replacing is the one we just judged.
   try {
-    writeFileSync(path, mine, { mode: 0o600 })
-  } catch (error) {
-    throw new WorkspaceTerminalError(
-      "socket-dir-unsafe",
-      `cannot claim zmx socket dir ${dir}: ${error instanceof Error ? error.message : String(error)}`,
-    )
+    return claim()
+  } finally {
+    // The lock outliving its critical section is the lockout; release it even
+    // when the claim threw, and never let the release mask that throw.
+    try { rmdirSync(lock) } catch { /* already gone: someone broke it as stale */ }
   }
-  return dir
+}
+
+/** Remove a lock nobody can still be holding. Silent on every error: losing
+ * this race to another breaker, or to the holder's own release, is the same
+ * outcome — the lock is gone and the `mkdir` above decides who gets it next. */
+function breakStaleClaimLock(lock: string): void {
+  try {
+    if (Date.now() - lstatSync(lock).mtimeMs < CLAIM_LOCK_STALE_MS) return
+    rmdirSync(lock)
+  } catch { /* gone, or not ours to break */ }
+}
+
+/** A synchronous pause, because the claim is synchronous. `Bun.sleepSync`
+ * where it exists; a short spin otherwise, which is honest for two-millisecond
+ * waits that in practice never happen. */
+function sleepSync(ms: number): void {
+  const bun = (globalThis as { Bun?: { sleepSync?: (ms: number) => void } }).Bun
+  if (typeof bun?.sleepSync === "function") {
+    bun.sleepSync(ms)
+    return
+  }
+  const until = Date.now() + ms
+  while (Date.now() < until) { /* spin */ }
 }
 
 /**
