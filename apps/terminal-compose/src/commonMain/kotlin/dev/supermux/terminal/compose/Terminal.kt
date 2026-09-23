@@ -128,6 +128,12 @@ fun Terminal(
     }
     val model = remember(session) { ViewportModel() }
     val layoutCache = remember { TextLayoutCache() }
+    // Draw work that does not depend on WHEN the paint happens, kept across paints: the grid's runs
+    // and each overscan edge's. A repaint with no new frame (a scroll offset, a blink, a neighbour
+    // invalidating) then walks no cells at all. See [FrameRunsCache].
+    val gridRuns = remember { FrameRunsCache() }
+    val runsAbove = remember { OverscanRunsCache() }
+    val runsBelow = remember { OverscanRunsCache() }
 
     val scope = rememberCoroutineScope()
     val scroll = remember(session, scope) {
@@ -302,7 +308,7 @@ fun Terminal(
                 clipRect(bottom = gridHeightPx(frame.size.rows, cell, size.height)) {
                     drawTerminalFrame(
                         frame = frame,
-                        runs = TerminalRuns.build(frame, theme),
+                        runs = gridRuns.runs(frame, theme),
                         metrics = metrics,
                         theme = theme,
                         measurer = measurer,
@@ -315,30 +321,32 @@ fun Terminal(
                     if (offset > 0f) {
                         val below = frame.viewportTop + frame.size.rows
                         scroll.rowBelow(frame)?.let {
-                            drawOverscanRow(
-                                frame = frame,
-                                row = it,
-                                absoluteRow = below,
+                            val strip = runsBelow.frame(frame, it, below)
+                            drawTerminalFrame(
+                                frame = strip,
+                                runs = runsBelow.runs(strip, theme),
                                 metrics = metrics,
                                 theme = theme,
                                 measurer = measurer,
                                 cache = layoutCache,
                                 scrollOffsetPx = offset - frame.size.rows * cell,
+                                cursorEnabled = false,
                             )
                         }
                     }
                     // Shifted down: the engine has not published the anchor's frame yet.
                     if (offset < 0f) {
                         scroll.rowAbove(frame)?.let {
-                            drawOverscanRow(
-                                frame = frame,
-                                row = it,
-                                absoluteRow = frame.viewportTop - 1,
+                            val strip = runsAbove.frame(frame, it, frame.viewportTop - 1)
+                            drawTerminalFrame(
+                                frame = strip,
+                                runs = runsAbove.runs(strip, theme),
                                 metrics = metrics,
                                 theme = theme,
                                 measurer = measurer,
                                 cache = layoutCache,
                                 scrollOffsetPx = offset + cell,
+                                cursorEnabled = false,
                             )
                         }
                     }

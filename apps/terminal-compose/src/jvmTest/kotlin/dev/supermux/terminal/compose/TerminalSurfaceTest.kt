@@ -39,7 +39,9 @@ import java.util.Collections
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotSame
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -210,6 +212,45 @@ class TerminalSurfaceTest {
         assertTrue(runs.texts.none { it.text.isEmpty() }, "an empty run would still cost a layout")
         assertTrue(runs.texts.none { it.column == 2 && it.row == 0 }, "the continuation cell drew something")
         assertTrue(runs.texts.none { it.column == 5 && it.row == 0 }, "the emoji continuation cell drew something")
+    }
+
+    // ------------------------------------------------------------------ run reuse ----
+
+    @Test fun anUnchangedFrameIsNeverTurnedIntoRunsTwice() {
+        val cache = FrameRunsCache()
+        val frame = fixtureFrame()
+        val first = cache.runs(frame, theme)
+        // A repaint with no new frame — a scroll offset, a blink, a neighbour invalidating.
+        assertSame(first, cache.runs(frame, theme), "an unchanged frame walked every cell again")
+        // A host that builds its theme inline hands the composable an equal-but-new object every
+        // recomposition; that is not a change either.
+        assertSame(first, cache.runs(frame, TerminalTheme()), "an equal theme was treated as a new one")
+
+        // A new frame IS a new screen, whatever it contains: frames are immutable and published one
+        // per update, so identity is the cheap and correct key.
+        assertNotSame(first, cache.runs(fixtureFrame(), theme), "a new frame reused stale runs")
+
+        // And a theme that actually differs rebuilds — with different colours, not just new objects.
+        val inverted = TerminalTheme(foreground = theme.background, background = theme.foreground)
+        val themed = cache.runs(frame, inverted)
+        assertNotSame(first, themed, "a theme change kept the old colours")
+        assertEquals(inverted.background, themed.texts.first { it.row == 2 }.style.foreground)
+    }
+
+    @Test fun anOverscanRowKeepsItsDerivedFrameAcrossPaints() {
+        val cache = OverscanRunsCache()
+        val frame = fixtureFrame()
+        val row = frame.rows[0]
+        val strip = cache.frame(frame, row, absoluteRow = 7)
+        assertEquals(1, strip.size.rows, "the strip is one row")
+        assertEquals(7L, strip.viewportTop)
+        // The fling case: the same row, repainted at a different offset many times per second.
+        assertSame(strip, cache.frame(frame, row, absoluteRow = 7), "the strip was rebuilt per paint")
+        assertSame(cache.runs(strip, theme), cache.runs(strip, theme), "the strip's runs were rebuilt")
+
+        // Everything its runs depend on is part of the key: the row, and where it sits.
+        assertNotSame(strip, cache.frame(frame, frame.rows[1], absoluteRow = 7))
+        assertNotSame(strip, cache.frame(frame, row, absoluteRow = 8))
     }
 
     // ------------------------------------------------------------------ geometry ----

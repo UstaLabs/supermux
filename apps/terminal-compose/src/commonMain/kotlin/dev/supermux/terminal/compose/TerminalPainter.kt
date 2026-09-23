@@ -85,6 +85,10 @@ fun DrawScope.drawTerminalFrame(
  * and is drawn as a one-row frame of its own at [absoluteRow]. It carries no cursor — the cursor
  * belongs to the real frame — but it keeps the frame's selection, which is in absolute coordinates
  * and therefore still lands on the right columns of this row.
+ *
+ * This entry point builds the row's runs on every call. The surface itself does not use it: it
+ * memoizes both the derived frame and its runs across paints ([OverscanRunsCache]), because a
+ * smooth scroll repaints the same row at a different offset many times per second.
  */
 fun DrawScope.drawOverscanRow(
     frame: TerminalFrame,
@@ -96,12 +100,7 @@ fun DrawScope.drawOverscanRow(
     cache: TextLayoutCache,
     scrollOffsetPx: Float,
 ) {
-    val single = frame.copy(
-        size = frame.size.copy(rows = 1),
-        rows = listOf(row.copy(index = 0)),
-        viewportTop = absoluteRow,
-        links = emptyList(),
-    )
+    val single = overscanFrame(frame, row, absoluteRow)
     drawTerminalFrame(
         frame = single,
         runs = TerminalRuns.build(single, theme),
@@ -113,6 +112,18 @@ fun DrawScope.drawOverscanRow(
         cursorEnabled = false,
     )
 }
+
+/**
+ * [row] as a one-row frame at absolute row [absoluteRow]: the shape [drawOverscanRow] and the
+ * surface's own memoized overscan path both paint, so the two can never drift apart.
+ */
+internal fun overscanFrame(frame: TerminalFrame, row: TerminalRow, absoluteRow: Long): TerminalFrame =
+    frame.copy(
+        size = frame.size.copy(rows = 1),
+        rows = listOf(row.copy(index = 0)),
+        viewportTop = absoluteRow,
+        links = emptyList(),
+    )
 
 /**
  * Measures the cell box for [theme]: the advance of the font's reference glyph, its line height and

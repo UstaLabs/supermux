@@ -4,6 +4,9 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import dev.supermux.terminal.CellFlags
 import dev.supermux.terminal.TerminalCell
+import dev.supermux.terminal.TerminalRow
+import dev.supermux.terminal.TerminalSelection
+import dev.supermux.terminal.TerminalSize
 import dev.supermux.terminal.Underline
 
 /**
@@ -86,6 +89,12 @@ data class FrameRuns(
  * Width-0 cells (the continuation of a wide glyph, a wrap spacer) never produce text: their glyph
  * was already drawn by the leading cell. They DO take part in background and decoration runs, which
  * is what makes a wide glyph's background and underline cover both of its cells.
+ *
+ * **One resolve per cell.** [resolve] is the expensive part (colour substitution, inverse, faint,
+ * bold brightening, and an allocation) and all three builders need the same answer, so each row is
+ * resolved ONCE into a list the builders read. Backgrounds take that same list even though a
+ * selection is not their business: selection only ever changes the FOREGROUND, so the background
+ * they read is the one they would have resolved for themselves.
  */
 object TerminalRuns {
 
@@ -98,7 +107,11 @@ object TerminalRuns {
         for (row in 0 until frame.size.rows) {
             val cells = frame.rows.getOrNull(row)?.cells ?: continue
             val selected = selectedColumns(frame, row)
-            buildBackgrounds(row, cells, theme, backgrounds)
+            val styles = ArrayList<ResolvedStyle>(cells.size)
+            for (column in cells.indices) {
+                styles += resolve(cells[column], theme, selected?.contains(column) == true)
+            }
+            buildBackgrounds(row, styles, theme, backgrounds)
             if (selected != null) {
                 val first = selected.first.coerceIn(0, frame.size.columns - 1)
                 val last = selected.last.coerceIn(0, frame.size.columns - 1)
@@ -106,8 +119,8 @@ object TerminalRuns {
                     selections += BackgroundRun(row, first, last - first + 1, theme.selectionBackground)
                 }
             }
-            buildTexts(row, cells, theme, selected, texts)
-            buildDecorations(row, cells, theme, selected, decorations)
+            buildTexts(row, cells, styles, texts)
+            buildDecorations(row, styles, decorations)
         }
         return FrameRuns(backgrounds, selections, texts, decorations)
     }
@@ -134,14 +147,14 @@ object TerminalRuns {
 
     private fun buildBackgrounds(
         row: Int,
-        cells: List<TerminalCell>,
+        styles: List<ResolvedStyle>,
         theme: TerminalTheme,
         out: MutableList<BackgroundRun>,
     ) {
         var runStart = -1
         var runColor = Color.Unspecified
-        for (column in cells.indices) {
-            val color = resolve(cells[column], theme).background
+        for (column in styles.indices) {
+            val color = styles[column].background
             // The surface already painted the default background; only deviations cost a rect.
             val paint = color != theme.background
             if (runStart >= 0 && (!paint || color != runColor)) {
@@ -153,14 +166,13 @@ object TerminalRuns {
                 runColor = color
             }
         }
-        if (runStart >= 0) out += BackgroundRun(row, runStart, cells.size - runStart, runColor)
+        if (runStart >= 0) out += BackgroundRun(row, runStart, styles.size - runStart, runColor)
     }
 
     private fun buildTexts(
         row: Int,
         cells: List<TerminalCell>,
-        theme: TerminalTheme,
-        selected: IntRange?,
+        styles: List<ResolvedStyle>,
         out: MutableList<TextRun>,
     ) {
         val batch = StringBuilder()
@@ -198,7 +210,7 @@ object TerminalRuns {
                 flush(column)
                 continue
             }
-            val style = resolve(cell, theme, selected?.contains(column) == true)
+            val style = styles[column]
             val text = cell.text
             if (style.invisible || text.isEmpty()) {
                 flush(column)
@@ -221,15 +233,13 @@ object TerminalRuns {
 
     private fun buildDecorations(
         row: Int,
-        cells: List<TerminalCell>,
-        theme: TerminalTheme,
-        selected: IntRange?,
+        styles: List<ResolvedStyle>,
         out: MutableList<DecorationRun>,
     ) {
         var runStart = -1
         var run: DecorationRun? = null
-        for (column in cells.indices) {
-            val style = resolve(cells[column], theme, selected?.contains(column) == true)
+        for (column in styles.indices) {
+            val style = styles[column]
             val decorated = style.underline != Underline.NONE || style.strikethrough || style.overline
             val here = if (decorated) {
                 DecorationRun(row, column, 1, style.underline, style.strikethrough, style.overline, style.foreground)
@@ -252,7 +262,7 @@ object TerminalRuns {
                 runStart = column
             }
         }
-        run?.let { out += it.copy(column = runStart, columns = cells.size - runStart) }
+        run?.let { out += it.copy(column = runStart, columns = styles.size - runStart) }
     }
 
     /**
@@ -299,4 +309,78 @@ object TerminalRuns {
 
     private const val ASCII_FIRST = ' '
     private const val ASCII_LAST = '~'
+}
+
+/**
+ * The runs of the frame this surface is painting, rebuilt only when that frame or the theme changes.
+ *
+ * A draw pass runs far more often than a frame arrives: a scroll offset, a cursor blink, a
+ * neighbouring composable invalidating, a window resize — every one of them repaints, and
+ * [TerminalRuns.build] walks every cell of the screen and allocates a [ResolvedStyle] for each. On
+ * an unchanged screen that whole walk is dead work, so it is done once and the answer kept.
+ *
+ * The key is the frame's IDENTITY, not its contents. [TerminalFrame] is immutable and a new one is
+ * published for every applied update, so one instance can only ever mean one screen; comparing the
+ * rows would cost as much as rebuilding them. The theme is compared by VALUE, because a host may
+ * hand the composable an equal-but-new theme on every recomposition.
+ *
+ * Not thread-safe: it belongs to one surface and is touched only from its draw pass.
+ */
+internal class FrameRunsCache {
+    private var frame: TerminalFrame? = null
+    private var theme: TerminalTheme? = null
+    private var runs: FrameRuns? = null
+
+    fun runs(frame: TerminalFrame, theme: TerminalTheme): FrameRuns {
+        val cached = runs
+        if (cached != null && this.frame === frame && this.theme == theme) return cached
+        val built = TerminalRuns.build(frame, theme)
+        this.frame = frame
+        this.theme = theme
+        this.runs = built
+        return built
+    }
+}
+
+/**
+ * One overscan row — the single row drawn outside the published grid while a fractional scroll
+ * offset exposes an edge — with both the one-row frame it is painted as and that frame's runs kept.
+ *
+ * It needs its own cache because the frame is DERIVED: `frame.copy(rows = listOf(row))` is a new
+ * object on every paint, so a [FrameRunsCache] alone would miss every time. The derived frame is
+ * therefore memoized first, on the things its runs actually depend on — the row (rows are immutable
+ * and shared between frames, so identity is enough), the absolute row it sits at, the grid size and
+ * the selection — and everything else the copy carries (the cursor, the frame number) is ignored
+ * because no run is built from it and the row is drawn with the cursor off.
+ *
+ * One of these per edge: the row above and the row below are different rows, and sharing a slot
+ * between them would miss on every paint that draws both.
+ */
+internal class OverscanRunsCache {
+    private var row: TerminalRow? = null
+    private var absoluteRow = Long.MIN_VALUE
+    private var size: TerminalSize? = null
+    private var selection: TerminalSelection? = null
+    private var frame: TerminalFrame? = null
+    private val cache = FrameRunsCache()
+
+    /** The one-row frame [row] is painted as, stable while nothing its runs depend on has changed. */
+    fun frame(source: TerminalFrame, row: TerminalRow, absoluteRow: Long): TerminalFrame {
+        val cached = frame
+        if (cached != null && this.row === row && this.absoluteRow == absoluteRow &&
+            size == source.size && selection == source.selection
+        ) {
+            return cached
+        }
+        val built = overscanFrame(source, row, absoluteRow)
+        this.row = row
+        this.absoluteRow = absoluteRow
+        size = source.size
+        selection = source.selection
+        frame = built
+        return built
+    }
+
+    /** The runs of a frame this cache built. */
+    fun runs(frame: TerminalFrame, theme: TerminalTheme): FrameRuns = cache.runs(frame, theme)
 }
