@@ -14,6 +14,7 @@ import dev.supermux.terminal.compose.TerminalEffectRelay
 import dev.supermux.terminal.compose.TerminalTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -201,7 +202,12 @@ class SampleTerminal(
 
     private fun startProducer(open: TerminalSession) {
         val previous = producer
-        producer = scope.launch {
+        // `Dispatchers.Default`, NOT the composition's dispatcher the scope carries. Generating a
+        // fixture chunk is a few hundred microseconds of StringBuilder work; on the UI thread it
+        // would land inside the frame it is supposed to be measured against, and the sample's own
+        // frame times would be measuring the sample. (On wasmJs there is one thread anyway, which
+        // is exactly why the session's owner loop yields per batch.)
+        producer = scope.launch(Dispatchers.Default) {
             previous?.cancelAndJoinQuietly()
             val stream = fixture.stream()
             try {

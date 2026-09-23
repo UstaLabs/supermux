@@ -57,6 +57,13 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
+        jvmTest.dependencies {
+            // The sample app is driven through Compose's own test harness against a REAL engine:
+            // "the sample works" is otherwise a claim nobody can check without a screen.
+            @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+            implementation(compose.desktop.uiTestJUnit4)
+            implementation(compose.desktop.currentOs)
+        }
         jvmMain.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(libs.coroutines.swing)
@@ -127,6 +134,12 @@ val stageTerminalWasmAssets by tasks.registering(Copy::class) {
 }
 kotlin.sourceSets.getByName("wasmJsMain").resources.srcDir(stageTerminalWasmAssets)
 kotlin.sourceSets.getByName("wasmJsTest").resources.srcDir(stageTerminalWasmAssets)
+
+// Compose UI tests drive one scene at a time; one fork keeps the gate green and terminating on a
+// loaded host (the same choice :desktop and :terminal-compose make).
+tasks.withType<Test>().configureEach {
+    maxParallelForks = 1
+}
 
 tasks.withType<org.jetbrains.kotlin.gradle.targets.js.testing.KotlinJsTest>().configureEach {
     if (System.getenv("CHROME_BIN") == null && File("/usr/bin/google-chrome").canExecute()) {
