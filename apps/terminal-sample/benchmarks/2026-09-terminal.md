@@ -278,6 +278,58 @@ taken.
 
 ---
 
+## 6b. ReleaseSafe vs ReleaseFast for the VT engine (2026-09-24)
+
+The engine is the one component in the product that parses **arbitrary remote bytes** — whatever a
+shell on the far end of a terminal socket prints. `ReleaseFast` turns off Zig's bounds, overflow,
+alignment and unreachable checks, so a parser bug reachable from those bytes is undefined behaviour
+rather than a panic. The zmx *daemon* is built `ReleaseSafe` for exactly that reason and
+`check-zmx-bundle.sh` refuses a bundle built any other way, so the client engine was the
+inconsistent one and the question was asked properly.
+
+**Method.** `:terminal-sample:benchmark --mode=parse --fixture=ansi` (30 MiB through engine + codec
++ `ViewportModel.apply`, no window). The two `build/native/linux-x64` trees were swapped between
+runs and the runs **interleaved** — RS, RF, RS, RF, … — because this host's load moved between 12.9
+and 18.6 during the measurement and two consecutive blocks would have measured the load. Reproduce
+either build with `ST_GHOSTTY_OPTIMIZE=<mode> bash apps/terminal-core/native/build.sh linux-x64`.
+
+| pair | ReleaseSafe | ReleaseFast | load at the RS run |
+|---|---|---|---|
+| 1 | 7.42 MiB/s | 10.52 MiB/s | 17.47 |
+| 2 | 8.33 MiB/s | 10.26 MiB/s | 18.56 |
+| 3 | 7.99 MiB/s | 10.35 MiB/s | 16.95 |
+| 4 | 8.03 MiB/s | 10.44 MiB/s | 12.87 |
+| **median** | **8.01 MiB/s** | **10.40 MiB/s** | |
+
+**~23% slower**, and consistently so: the four ReleaseFast runs span 0.26 MiB/s and the four
+ReleaseSafe runs 0.91, while the gap between them is 2.4 — this is the binary, not the box. (For
+contrast, four *non*-interleaved ReleaseFast runs earlier the same evening spanned 5.62–10.54 MiB/s,
+because one of them shared the machine with a Zig build. That is why these are interleaved.)
+
+**The decision is ReleaseFast, and the throughput is the lesser reason.** A ReleaseSafe
+`libghostty-vt` carries the panic/source-location table its safety checks need, and that table sits
+in `.rodata` with the **build machine's absolute paths** in it — which `native/build.sh`'s own
+`check_no_abs_paths` refuses, correctly, and which `llvm-objcopy --strip-debug` cannot remove
+because `.rodata` is not a debug section. Upstream's `-Dstrip` does not reach this target:
+`GhosttyLibVt` builds the `vt`/`vt_c` modules and `GhosttyZig.initVt` creates them without
+`.strip`, so the option only affects `GhosttyLib` and `GhosttyExe`. Measured:
+`-Doptimize=ReleaseSafe -Dstrip=true` still emits a 2.98 MB `libghostty-vt.so.0.1.0` containing
+`/home/<user>/…/zig-cache/…`, against 2.37 MB and nothing for ReleaseFast.
+
+Turning ReleaseSafe on therefore needs a change upstream (set `.strip` on the vt modules) or a
+second vendored patch, and this package deliberately keeps ghostty unpatched. That is a decision for
+whoever owns the pin. The reasoning is repeated at `build_ghostty` in `native/build.sh` so it is
+found by whoever next wonders.
+
+**What did change**: the C wrapper and the JNI glue are now built with
+`-fstack-protector-strong -D_FORTIFY_SOURCE=2` and linked `-z relro -z now -z noexecstack`. On
+linux-x64 the stack canary is new (`__stack_chk_fail` appears where nothing referenced it before);
+RELRO, BIND_NOW and a non-executable stack were already what `zig cc` produced by default, and are
+now explicit — which is what matters on the Android NDK link, where the default is not guaranteed
+and which this host cannot verify.
+
+---
+
 ## 7. What could not be measured, and why
 
 | target | status |

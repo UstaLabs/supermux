@@ -17,6 +17,9 @@
 #
 # Environment overrides:
 #   ST_ZIG_JOBS       parallel zig jobs (default 2 — shared build host)
+#   ST_GHOSTTY_OPTIMIZE  zig optimize mode for libghostty-vt (default ReleaseFast;
+#                     read the note at build_ghostty BEFORE changing it — it
+#                     records why, and what ReleaseSafe currently breaks).
 #   ST_ZIG_HOME       where Zig lives (default ~/.local/zig/<version>)
 #   ST_ALLOW_UNVERIFIED_ZIG=1  allow a Zig download without the minisign
 #                     check when python3 'cryptography' is missing (sha256 only)
@@ -57,6 +60,33 @@ ST_ABI_VERSION=2
 # one).
 WRAPPER_NAME="supermux_terminal"
 WRAPPER_SOURCES=("$NATIVE_DIR/src/terminal_bridge.c")
+
+# EXPLOIT MITIGATIONS, on every C object and every ELF we ship.
+#
+# These libraries are in the process that renders a terminal, and the bytes they
+# parse come off a socket from a shell somebody else's program is writing to.
+# They were built with none of the mitigations a distribution would require of
+# any other package handling remote input: no stack canaries, no fortified
+# string/memory calls, a writable GOT and a PT_GNU_STACK the loader was free to
+# map executable.
+#
+#   -fstack-protector-strong  canary on any frame with an array or an address-
+#                             taken local; "strong" rather than "all" is the
+#                             modern distribution default and costs ~1-2%.
+#   -D_FORTIFY_SOURCE=2       compile-time and cheap runtime bounds on the
+#                             mem*/str*/sprintf family. -U first, because some
+#                             toolchains (the NDK) define it themselves and a
+#                             redefinition warning is fatal under -Werror.
+#   -z relro -z now           the GOT is mapped read-only after relocation, so
+#                             it stops being a write-what-where target.
+#   -z noexecstack            an explicitly non-executable PT_GNU_STACK rather
+#                             than whatever the linker inferred.
+#
+# ELF only. macOS and Windows have their own mechanisms (hardened runtime,
+# /NXCOMPAT + /DYNAMICBASE) reached by different flags, and claiming these there
+# would be decoration.
+HARDEN_CFLAGS=(-fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2)
+HARDEN_LDFLAGS=(-Wl,-z,relro,-z,now -Wl,-z,noexecstack)
 # JNI glue (Android + desktop JVM): its own shared library lib<JNI_NAME>
 # linking the combined static archive above (see build_jni).
 JNI_NAME="supermux_terminal_jni"
@@ -155,17 +185,69 @@ ZIG_LOCAL_CACHE="$BUILD_DIR/zig-cache/$TARGET"
 # zig cc (probe + smoke link) uses the same caches as zig build.
 export ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE"
 
+# THE OPTIMIZE MODE IS A DECISION, and it is ReleaseFast — reluctantly, and not
+# for the reason anyone expects.
+#
+# This library is the one component in the product that parses ARBITRARY REMOTE
+# BYTES: whatever a shell on the far end of a terminal socket prints, including
+# whatever a program running in it was told to print. Everything else the client
+# does with untrusted input goes through Kotlin or JavaScript. ReleaseFast turns
+# OFF Zig's bounds, overflow, alignment and unreachable checks, so a parser bug
+# reachable from those bytes is undefined behaviour rather than a panic. The zmx
+# side of the product made the opposite call for the same reason
+# (`scripts/build-zmx.sh`: ReleaseSafe, "the safety checks stay on, because this
+# process owns a shell"), and `check-zmx-bundle.sh` refuses to ship a bundle
+# built any other way.
+#
+# So ReleaseSafe was built and measured here rather than argued about, and it
+# loses on BOTH counts.
+#
+#   THROUGHPUT, `:terminal-sample:benchmark --mode=parse --fixture=ansi`, the
+#   two builds swapped between runs so the host's load could not favour either
+#   (four pairs; full table in `apps/terminal-sample/benchmarks/` §9):
+#
+#     ReleaseFast  10.52  10.26  10.35  10.44  MiB/s   median 10.40
+#     ReleaseSafe   7.42   8.33   7.99   8.03  MiB/s   median  8.01
+#
+#   A consistent ~23% loss — tight enough across pairs to be the binary and not
+#   the box, on a host whose load moved between 12.9 and 18.6 during the run.
+#   Not catastrophic, but not free either, and this is the component a build log
+#   streams through.
+#
+# AND THE HARD STOP IS PATH HYGIENE. A ReleaseSafe `libghostty-vt` carries
+# the panic/source-location table its safety checks need, and that table sits in
+# `.rodata` with the BUILD MACHINE's absolute paths in it — which
+# `check_no_abs_paths` below refuses, correctly, and which
+# `llvm-objcopy --strip-debug` cannot remove because `.rodata` is not a debug
+# section. Upstream's own `-Dstrip` does not reach this target: `GhosttyLibVt`
+# builds the `vt`/`vt_c` modules, and `GhosttyZig.initVt` creates them without
+# `.strip`, so the option only affects `GhosttyLib` and `GhosttyExe`. Measured:
+# `-Doptimize=ReleaseSafe -Dstrip=true` still emits a 2.98 MB
+# `libghostty-vt.so.0.1.0` containing `/home/<user>/…/zig-cache/…`, against
+# 2.37 MB and nothing for ReleaseFast.
+#
+# Turning it on therefore needs either a change upstream (set `.strip` on the vt
+# modules) or a second vendored patch — and this package deliberately keeps
+# ghostty unpatched, unlike zmx. That is a decision for whoever owns the pin,
+# not something to slip in beside a cutover. Recorded here so the next person
+# does not rediscover it; `ST_GHOSTTY_OPTIMIZE=ReleaseSafe` reproduces the whole
+# thing in one command.
+#
+# The C wrapper beside it is NOT in the same position: it is built with the
+# mitigations in HARDEN_CFLAGS/HARDEN_LDFLAGS above, which is what a
+# distribution would require of any package handling remote input.
 build_ghostty() {
   local prefix="$WORK_DIR/ghostty"
+  local optimize="${ST_GHOSTTY_OPTIMIZE:-ReleaseFast}"
   rm -rf "$prefix"
-  log "zig build libghostty-vt ($ZIG_TARGET, cpu=$ZIG_CPU, -j$ZIG_JOBS)"
+  log "zig build libghostty-vt ($ZIG_TARGET, cpu=$ZIG_CPU, $optimize, -j$ZIG_JOBS)"
   (cd "$UPSTREAM_DIR" && nice -n 15 "$ZIG" build \
       "-j$ZIG_JOBS" \
       --global-cache-dir "$ZIG_GLOBAL_CACHE" \
       --cache-dir "$ZIG_LOCAL_CACHE" \
       --prefix "$prefix" \
       -Demit-lib-vt=true \
-      -Doptimize=ReleaseFast \
+      "-Doptimize=$optimize" \
       "-Dtarget=$ZIG_TARGET" \
       "-Dcpu=$ZIG_CPU" \
       "-Dlib-version-string=$LIBVT_VERSION")
@@ -262,6 +344,7 @@ build_wrapper() {
   local wdir="$WORK_DIR/wrapper" objs=() src obj
   rm -rf "$wdir"; mkdir -p "$wdir"
   local cflags=(-std=c11 -O2 -g0 -Wall -Wextra -Werror -fvisibility=hidden -DGHOSTTY_STATIC
+                "${HARDEN_CFLAGS[@]}"
                 "-ffile-prefix-map=$PKG_DIR/=" -I "$NATIVE_DIR/include" -I "$OUT_DIR/include")
   [[ "$TARGET" == windows-* ]] && cflags+=(-DST_BUILDING_SHARED) || cflags+=(-fPIC)
   log "wrapper: compile ${#WRAPPER_SOURCES[@]} source(s)"
@@ -293,12 +376,14 @@ build_wrapper() {
     linux-*)
       shared="$OUT_DIR/lib/lib$WRAPPER_NAME.so"
       "$ZIG" cc -target "$ZIG_TARGET" "-mcpu=$ZIG_CPU" -shared "${objs[@]}" "$ghostty_static" -lc++ \
+        "${HARDEN_LDFLAGS[@]}" \
         "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
         "-Wl,-soname,lib$WRAPPER_NAME.so" -o "$shared" ;;
     android-*)
       shared="$OUT_DIR/lib/lib$WRAPPER_NAME.so"
       "$NDK_BIN/clang++" "--target=$(lock "targets.$TARGET.ndk_clang_target")" -shared "${objs[@]}" "$ghostty_static" \
-        -static-libstdc++ "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
+        -static-libstdc++ "${HARDEN_LDFLAGS[@]}" \
+        "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
         -Wl,-z,max-page-size=16384 "-Wl,-soname,lib$WRAPPER_NAME.so" -o "$shared" ;;
     macos-*)
       if macos_dylib_supported; then
@@ -374,6 +459,7 @@ link_jni() {
   local variant="$1" dir="$2" name="$3"; shift 3
   local obj="$WORK_DIR/wrapper/terminal_jni_$variant.o" out
   local cflags=(-std=c11 -O2 -g0 -Wall -Wextra -Werror -fvisibility=hidden -DGHOSTTY_STATIC
+                "${HARDEN_CFLAGS[@]}"
                 "-ffile-prefix-map=$PKG_DIR/=" -I "$NATIVE_DIR/include" "${JNI_CFLAGS[@]}" "$@")
   [[ "$TARGET" == windows-* ]] || cflags+=(-fPIC)
   mkdir -p "$dir"
@@ -384,12 +470,14 @@ link_jni() {
     linux-*)
       out="$dir/lib$name.so"
       "$ZIG" cc -target "$ZIG_TARGET" "-mcpu=$ZIG_CPU" -shared "$obj" "$WRAPPER_STATIC" -lc++ \
+        "${HARDEN_LDFLAGS[@]}" \
         "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
         "-Wl,-soname,lib$name.so" -o "$out" >&2 ;;
     android-*)
       out="$dir/lib$name.so"
       "$NDK_BIN/clang++" "--target=$(lock "targets.$TARGET.ndk_clang_target")" -shared "$obj" "$WRAPPER_STATIC" \
-        -static-libstdc++ "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
+        -static-libstdc++ "${HARDEN_LDFLAGS[@]}" \
+        "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
         -Wl,-z,max-page-size=16384 "-Wl,-soname,lib$name.so" -o "$out" >&2 ;;
     macos-*)
       out="$dir/lib$name.dylib"
@@ -710,7 +798,7 @@ manifest = {
     "ghostty_commit": "$GHOSTTY_SHA",
     "libghostty_vt_version": "$LIBVT_VERSION",
     "zig_version": "$ZIG_VERSION",
-    "optimize": "ReleaseFast",
+    "optimize": "${ST_GHOSTTY_OPTIMIZE:-ReleaseFast}",
     "build_host": "$HOST_KEY",
     "android_ndk": "${NDK_ID:-}" or None,
     "strip_tool": "llvm-objcopy $LLVM_OBJCOPY_ID",
