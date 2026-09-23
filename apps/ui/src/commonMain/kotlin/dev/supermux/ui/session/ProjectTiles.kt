@@ -18,6 +18,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -46,7 +57,9 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.shape.CircleShape
+import dev.supermux.proto.ProjectDto
 import dev.supermux.session.OmniOption
+import dev.supermux.workspace.ProjectRef
 import dev.supermux.session.ProjectActivity
 import dev.supermux.session.formatAgoShort
 import dev.supermux.ui.theme.LocalSemantics
@@ -55,6 +68,75 @@ import dev.supermux.session.projectFolderName
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
+
+/** Test tags of the picker's catalog parts (a project, its location list, the way back). */
+object CatalogPickerTestIds {
+    /** Present while the picker is showing a host's project catalog. */
+    const val MENU = "launcher_catalog_menu"
+    const val BACK = "launcher_catalog_back"
+    fun project(id: String) = "launcher_catalog_project_$id"
+    fun location(path: String) = "launcher_catalog_location_$path"
+}
+
+/** A catalog project's option key — the picker's rows are keyed by path, a project has several. */
+internal const val CATALOG_KEY_PREFIX = "catalog:"
+
+/** What the picker knows about the host's catalog, for drawing a catalog option. */
+internal class PickerCatalog(
+    val byId: Map<String, ProjectDto>,
+    val hostKey: String,
+    val loadImage: suspend (ProjectRef) -> ByteArray?,
+) {
+    fun project(o: OmniOption.Local): ProjectDto? = o.projectId?.let(byId::get)
+}
+
+/** The option's display name: a catalog project's own name, else its folder. */
+internal fun OmniOption.Local.displayName(): String = name ?: projectFolderName(path)
+
+/** The paths an option stands for — every location of a catalog project, else its own path. */
+internal fun OmniOption.Local.paths(catalog: PickerCatalog): List<String> =
+    catalog.project(this)?.locations?.map { it.path } ?: listOf(path)
+
+/** Sessions across all of an option's paths, and the latest time one of them spoke. */
+internal fun OmniOption.Local.activity(catalog: PickerCatalog, activity: Map<String, ProjectActivity>): ProjectActivity? {
+    val xs = paths(catalog).mapNotNull { activity[it] }
+    if (xs.isEmpty()) return null
+    return ProjectActivity(xs.sumOf { it.sessions }, xs.mapNotNull { it.lastActiveMs }.maxOrNull())
+}
+
+/** Where the option lives: "~/work/app", "~/work/app +1" for more locations, or "No folder yet". */
+internal fun OmniOption.Local.locationText(catalog: PickerCatalog, home: String): String {
+    val p = catalog.project(this) ?: return homeRelativePath(path, home)
+    val first = p.locations.firstOrNull()?.path ?: return "No folder yet"
+    val more = p.locations.size - 1
+    return homeRelativePath(first, home) + if (more > 0) " +$more" else ""
+}
+
+internal fun OmniOption.Local.testTag(): String =
+    projectId?.let { CatalogPickerTestIds.project(it) } ?: "project_row_$path"
+
+/** The project's image when it has one, else its monogram. */
+@Composable
+internal fun ProjectMonogram(o: OmniOption.Local, catalog: PickerCatalog, size: androidx.compose.ui.unit.Dp) {
+    val name = o.displayName()
+    val hue = monogramHue(name)
+    @Composable
+    fun Letter() {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.size(size).clip(RoundedCornerShape(Radii.md)).background(hue.copy(alpha = 0.22f)),
+        ) {
+            Text(
+                name.trimStart('.', '~').firstOrNull()?.uppercase() ?: "~",
+                color = hue,
+                fontWeight = FontWeight.Bold,
+                fontSize = (size.value * 0.44f).sp,
+            )
+        }
+    }
+    val project = catalog.project(o)
+    if (project == null) Letter() else ProjectImage(ProjectRef(catalog.hostKey, project), catalog.loadImage, size = size) { Letter() }
+}
 
 /** How many recent projects the empty picker shows as tiles; the rest stay rows. */
 const val PROJECT_TILE_COUNT = 6
@@ -94,11 +176,12 @@ internal fun ProjectTileRow(
     row: List<OmniOption.Local>,
     current: String,
     home: String,
+    catalog: PickerCatalog,
     activity: Map<String, ProjectActivity>,
     nowMs: Long,
     highlighted: (String) -> Boolean,
     enabled: Boolean,
-    onPick: (String) -> Unit,
+    onPick: (OmniOption.Local) -> Unit,
 ) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
@@ -106,7 +189,16 @@ internal fun ProjectTileRow(
     ) {
         row.forEach { o ->
             Box(Modifier.weight(1f)) {
-                ProjectTile(o, homeRelativePath(o.path, home), activity[o.path], nowMs, selected = o.path == current, highlighted = highlighted(o.path), enabled = enabled) { onPick(o.path) }
+                ProjectTile(
+                    o,
+                    catalog,
+                    location = o.locationText(catalog, home),
+                    activity = o.activity(catalog, activity),
+                    nowMs = nowMs,
+                    selected = current in o.paths(catalog),
+                    highlighted = highlighted(o.path),
+                    enabled = enabled,
+                ) { onPick(o) }
             }
         }
         repeat(PROJECT_TILE_COLUMNS - row.size) { Box(Modifier.weight(1f)) }
@@ -116,6 +208,7 @@ internal fun ProjectTileRow(
 @Composable
 private fun ProjectTile(
     o: OmniOption.Local,
+    catalog: PickerCatalog,
     location: String,
     activity: ProjectActivity?,
     nowMs: Long,
@@ -125,8 +218,6 @@ private fun ProjectTile(
     onClick: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val name = projectFolderName(o.path)
-    val hue = monogramHue(name)
     val shape = RoundedCornerShape(Radii.md)
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -138,21 +229,11 @@ private fun ProjectTile(
             .border(Stroke.hairline, if (selected) cs.primary else cs.outlineVariant, shape)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = Space.sm, vertical = Space.md)
-            .testTag("project_row_${o.path}"),
+            .testTag(o.testTag()),
     ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.size(36.dp).clip(RoundedCornerShape(Radii.md)).background(hue.copy(alpha = 0.22f)),
-        ) {
-            Text(
-                name.trimStart('.', '~').firstOrNull()?.uppercase() ?: "~",
-                color = hue,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-            )
-        }
+        ProjectMonogram(o, catalog, 36.dp)
         Text(
-            name,
+            o.displayName(),
             color = cs.onSurface,
             fontSize = 12.sp,
             maxLines = 1,
@@ -260,4 +341,60 @@ internal fun PickerRow(
             .heightIn(min = if (touch) 44.dp else 32.dp)
             .padding(horizontal = Space.xs, vertical = 6.dp),
     ) { content() }
+}
+
+/**
+ * A catalog project's locations, in place of the search: "← Name", then one row per folder.
+ * Escape or the arrow goes back to the projects.
+ */
+@Composable
+internal fun CatalogLocations(
+    project: ProjectDto,
+    catalog: PickerCatalog,
+    current: String,
+    home: String,
+    activity: Map<String, ProjectActivity>,
+    nowMs: Long,
+    onBack: () -> Unit,
+    onLocation: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    val option = OmniOption.Local(label = "", path = CATALOG_KEY_PREFIX + project.id, name = project.name, projectId = project.id)
+    Column(
+        modifier
+            .onPreviewKeyEvent { e ->
+                if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) { onBack(); true } else false
+            }
+            .padding(bottom = Space.sm),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+            modifier = Modifier.padding(start = Space.xs, end = Space.md, top = Space.xs),
+        ) {
+            IconButton(onClick = onBack, modifier = Modifier.size(32.dp).testTag(CatalogPickerTestIds.BACK)) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to projects", tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            }
+            ProjectMonogram(option, catalog, 22.dp)
+            Text(project.name, color = cs.onSurface, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+        }
+        PickerSectionLabel("Choose a folder")
+        project.locations.forEach { loc ->
+            PickerRow(
+                onClick = { onLocation(loc.path) },
+                highlighted = false,
+                modifier = Modifier.testTag(CatalogPickerTestIds.location(loc.path)),
+            ) {
+                Icon(Icons.Filled.FolderOpen, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                StartEllipsizedText(
+                    homeRelativePath(loc.path, home),
+                    style = MaterialTheme.typography.bodyMedium.copy(color = cs.onSurface, fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                    modifier = Modifier.weight(1f),
+                )
+                activity[loc.path]?.let { ActivityLine(it, nowMs) }
+                if (loc.path == current) Icon(Icons.Filled.Check, "Current folder", Modifier.size(16.dp), tint = cs.primary)
+            }
+        }
+    }
 }

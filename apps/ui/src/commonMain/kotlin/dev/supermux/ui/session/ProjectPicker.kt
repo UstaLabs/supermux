@@ -80,6 +80,8 @@ import dev.supermux.session.OmniOption
 import dev.supermux.session.ProjectOption
 import dev.supermux.session.buildOmniboxOptions
 import dev.supermux.session.formatWorkdir
+import dev.supermux.workspace.ProjectRef
+import dev.supermux.proto.ProjectDto
 import androidx.compose.material.icons.filled.Lock
 import dev.supermux.session.looksLikePath
 import dev.supermux.session.fuzzyMatch
@@ -173,6 +175,19 @@ fun ProjectPicker(
     /** Sessions per project and when one last spoke, keyed by project path — the tiles' "● 2m". */
     activity: Map<String, ProjectActivity> = emptyMap(),
     /**
+     * The host's project catalog. When non-empty its projects ARE the picker's projects (plain
+     * folders outside it still turn up in search); picking one calls [onCatalogProject] and leaves
+     * the menu to the launcher, which either lands a location or opens [catalogLocationsFor].
+     */
+    catalog: List<ProjectDto> = emptyList(),
+    catalogHostKey: String = "",
+    loadCatalogImage: suspend (ProjectRef) -> ByteArray? = { null },
+    /** A catalog project whose locations to list instead of the search. */
+    catalogLocationsFor: ProjectDto? = null,
+    onCatalogProject: (ProjectDto) -> Unit = {},
+    onCatalogLocation: (ProjectDto, String) -> Unit = { _, _ -> },
+    onCatalogLocationsBack: () -> Unit = {},
+    /**
      * Production leaves this true (heading dropdown on a pointer host). UI tests that need real
      * [FocusRequester] semantics set false — headless skiko often does not report IsFocused inside
      * [DropdownMenu]. Ignored under Compact, where the container is a sheet.
@@ -212,8 +227,26 @@ fun ProjectPicker(
     // Offer a free-path pick when the typed query isn't already an exact known project path.
     // …and only when it reads as a path: a bare word is a project to find or a repo to create.
     val showTypedPath = looksLikePath(query) && projects.none { it == query }
-    val projectOptions = remember(projects, home) {
-        projects.map { ProjectOption(it, formatWorkdir(it, home)) }
+    val pickerCatalog = remember(catalog, catalogHostKey, loadCatalogImage) {
+        PickerCatalog(catalog.associateBy { it.id }, catalogHostKey, loadCatalogImage)
+    }
+    val projectOptions = remember(projects, home, catalog, activity) {
+        if (catalog.isEmpty()) {
+            projects.map { ProjectOption(it, formatWorkdir(it, home)) }
+        } else {
+            // Most recently active first; the stable sort keeps catalog order for the rest.
+            val lastActive = { p: ProjectDto -> p.locations.mapNotNull { activity[it.path]?.lastActiveMs }.maxOrNull() ?: Long.MIN_VALUE }
+            val inCatalog = catalog.flatMap { p -> p.locations.map { it.path } }.toHashSet()
+            catalog.sortedByDescending(lastActive).map { p ->
+                ProjectOption(
+                    path = CATALOG_KEY_PREFIX + p.id,
+                    label = p.locations.firstOrNull()?.let { formatWorkdir(it.path, home) }.orEmpty(),
+                    name = p.name,
+                    projectId = p.id,
+                    locations = p.locations.map { it.path },
+                )
+            } + projects.filter { it !in inCatalog }.map { ProjectOption(it, formatWorkdir(it, home)) }
+        }
     }
 
     // Autofocus immediately when the menu opens — never wait on broker forge loading.
@@ -276,7 +309,9 @@ fun ProjectPicker(
     val options = remember(query, projectOptions, pagedCloud, connections, home) {
         buildOmniboxOptions(query, projectOptions, pagedCloud, connections, home)
     }
+    // With a catalog, folders outside it are search results only — the resting picker is projects.
     val locals = options.filterIsInstance<OmniOption.Local>()
+        .filter { query.isNotEmpty() || catalog.isEmpty() || it.projectId != null }
     val clouds = options.filterIsInstance<OmniOption.Cloud>()
     val creates = options.filterIsInstance<OmniOption.Create>()
     val cloudGroups = remember(clouds, connections) {
@@ -304,6 +339,12 @@ fun ProjectPicker(
     fun pick(path: String) {
         onPick(path)
         onDismiss()
+    }
+
+    /** A local option: a catalog project goes to the launcher, a plain folder is picked. */
+    fun pickLocal(path: String) {
+        val project = if (path.startsWith(CATALOG_KEY_PREFIX)) pickerCatalog.byId[path.removePrefix(CATALOG_KEY_PREFIX)] else null
+        if (project != null) onCatalogProject(project) else pick(path)
     }
 
     /**
@@ -378,7 +419,7 @@ fun ProjectPicker(
     fun activateNav(target: OmniNav) {
         when (target) {
             is OmniNav.TypedPath -> confirmTypedPath()
-            is OmniNav.Local -> pick(target.path)
+            is OmniNav.Local -> pickLocal(target.path)
             is OmniNav.Clone -> resolve("clone ${target.repo.fullName}") {
                 actions.cloneForge(target.repo.connectionId, target.repo.owner, target.repo.name)
             }
@@ -426,6 +467,21 @@ fun ProjectPicker(
 
     @Composable
     fun MenuBody() {
+        catalogLocationsFor?.let { project ->
+            CatalogLocations(
+                project = project,
+                catalog = pickerCatalog,
+                current = current,
+                home = home,
+                activity = activity,
+                nowMs = nowMs,
+                onBack = onCatalogLocationsBack,
+                onLocation = { onCatalogLocation(project, it) },
+                modifier = if (touch) Modifier.fillMaxWidth() else Modifier.width(Size.omniboxWidth),
+            )
+            return
+        }
+        if (catalog.isNotEmpty()) Box(Modifier.size(0.dp).testTag(CatalogPickerTestIds.MENU))
         // Outer Box is ONLY for the resolving overlay (matchParentSize). Content is a Column —
         // siblings of a Box stack at TopStart (the old layout drew the list under the fields).
         Box(
@@ -653,13 +709,14 @@ fun ProjectPicker(
                                     row = row,
                                     current = current,
                                     home = home,
+                                    catalog = pickerCatalog,
                                     activity = activity,
                                     nowMs = nowMs,
                                     highlighted = { path ->
                                         navTargets.indexOfFirst { it is OmniNav.Local && it.path == path } == highlight
                                     },
                                     enabled = !resolving,
-                                    onPick = { pick(it) },
+                                    onPick = { pickLocal(it.path) },
                                 )
                             })
                         }
@@ -669,26 +726,27 @@ fun ProjectPicker(
                     }
                     listed.forEach { o ->
                         add("l_${o.path}" to {
-                            val selected = o.path == current
+                            val selected = current in o.paths(pickerCatalog)
                             // Name, the full location (trimmed from the start), then activity.
                             PickerRow(
-                                onClick = { pick(o.path) },
+                                onClick = { pickLocal(o.path) },
                                 highlighted = navTargets.indexOfFirst { it is OmniNav.Local && it.path == o.path } == highlight,
                                 enabled = !resolving,
-                                modifier = Modifier.testTag("project_row_${o.path}"),
+                                modifier = Modifier.testTag(o.testTag()),
                             ) {
+                                ProjectMonogram(o, pickerCatalog, 18.dp)
                                 Text(
-                                    highlightHits(projectFolderName(o.path), o.nameHits, cs.primary),
+                                    highlightHits(o.displayName(), o.nameHits, cs.primary),
                                     color = if (selected) cs.primary else cs.onSurface,
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 1,
                                 )
                                 StartEllipsizedText(
-                                    homeRelativePath(o.path, home),
+                                    o.locationText(pickerCatalog, home),
                                     style = MaterialTheme.typography.labelSmall.copy(color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace),
                                     modifier = Modifier.weight(1f),
                                 )
-                                activity[o.path]?.let { ActivityLine(it, nowMs) }
+                                o.activity(pickerCatalog, activity)?.let { ActivityLine(it, nowMs) }
                                 if (selected) Icon(Icons.Filled.Check, "Current project", Modifier.size(Space.lg), tint = cs.primary)
                             }
                         })
