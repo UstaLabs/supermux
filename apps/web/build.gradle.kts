@@ -31,6 +31,9 @@ kotlin {
             testTask {
                 useKarma { useChromeHeadless() }
             }
+            // Karma serves the engine `.wasm` as `application/wasm` — see
+            // web/karma.config.d/terminal-wasm.js, which is why the streaming compile the broker
+            // serves is the one the tests take too.
         }
         // No `applyBinaryen()` here on purpose: on KGP 2.3.x calling it is a hard ERROR
         // ("Binaryen is enabled by default. This call is redundant. Scheduled for removal in
@@ -73,6 +76,60 @@ kotlin {
             }
         }
     }
+}
+
+// ── The terminal engine's browser assets ────────────────────────────────────────────────────
+//
+// MEASURED (terminal-core/consumer-smoke, 2026-09-22) and hit here for real in Plan 4 Task 4: the
+// Kotlin/Wasm toolchain does NOT copy a DEPENDENCY klib's resources next to the consumer's
+// compiled module, so webpack fails the whole bundle with
+//   Module not found: Error: Can't resolve './terminal-loader.mjs'
+// — and it fails even though nothing in the app has run yet, because `@file:JsModule` is resolved
+// at BUNDLE time. Every browser host of terminal-core therefore re-exports the two files the
+// package ships inside its klib as its own wasmJs resources; `:terminal-sample` does the same, and
+// this is the line that made `:web` a browser host of it.
+//
+// It is also what makes the DEFAULT wasm URL correct. Once `supermux-terminal.wasm` sits beside
+// the loader, webpack recognises the loader's `new URL("./supermux-terminal.wasm",
+// import.meta.url)` and emits the binary as an asset, `stageForBroker` content-hashes it into
+// `assets/` with everything else and rewrites the reference — so no host has to pass
+// `wasmAssetUrl`, and there is no second place for the hash to go stale.
+//
+// The bytes come from `:terminal-core:stageWasmResources`, the task that verifies
+// `build/wasm/supermux-terminal.wasm` against its manifest (sha256 + size + ABI) before staging.
+val terminalCoreWasmResources: File =
+    project(":terminal-core").projectDir.resolve("build/gradle/generated/wasmResources")
+
+val stageTerminalWasmAssets by tasks.registering(Copy::class) {
+    description = "Re-export terminal-loader.mjs + supermux-terminal.wasm as this app's wasmJs resources."
+    dependsOn(":terminal-core:stageWasmResources")
+    from(terminalCoreWasmResources)
+    into(layout.buildDirectory.dir("generated/terminalWasmAssets"))
+}
+kotlin.sourceSets.getByName("wasmJsMain").resources.srcDir(stageTerminalWasmAssets)
+kotlin.sourceSets.getByName("wasmJsTest").resources.srcDir(stageTerminalWasmAssets)
+
+// `supermux-terminal.wasm` reaches the distribution TWICE, and that is the design working, not a
+// mistake: once as the wasmJs resource above (which is what lets webpack RESOLVE the loader's
+// `new URL(...)` at bundle time) and once as the asset webpack EMITS from that same URL. Same
+// file, same bytes, two producers — so the distribution copy has to be told that a duplicate is
+// expected instead of failing the build with "no duplicate handling strategy has been set".
+// EXCLUDE rather than INCLUDE: with identical bytes either is correct, and keeping the first
+// makes the outcome independent of the order the copy happens to visit its sources in.
+tasks.named<Sync>("wasmJsBrowserDistribution") {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// The same two environment facts `:terminal-core` and `:terminal-sample` need, now that `:web`'s
+// bundle carries the engine and its browser tests load a `.wasm` too. Without CHROME_BIN the task
+// fails on a host that has Chrome under a name Karma does not guess; with a D-Bus session bus,
+// headless Chrome can stall every http(s) navigation on a headless host (file: URLs still load),
+// which hangs Karma's capture.
+tasks.withType<org.jetbrains.kotlin.gradle.targets.js.testing.KotlinJsTest>().configureEach {
+    if (System.getenv("CHROME_BIN") == null && File("/usr/bin/google-chrome").canExecute()) {
+        environment("CHROME_BIN", "/usr/bin/google-chrome")
+    }
+    environment("DBUS_SESSION_BUS_ADDRESS", "disabled:")
 }
 
 // ── Staging for the broker ──────────────────────────────────────────────────────────────────
