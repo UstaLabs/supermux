@@ -24,10 +24,19 @@ kotlin {
     jvm()
     androidTarget()
     // Apple targets: their compile/link tasks are disabled on this Linux host
-    // (kotlin.native.ignoreDisabledTargets) and run on the Mac —
-    // `:terminal-sample:linkDebugFrameworkIosSimulatorArm64` is the iOS check.
-    iosArm64()
-    iosSimulatorArm64()
+    // (kotlin.native.ignoreDisabledTargets) and run on the Mac.
+    //
+    // The FRAMEWORK is declared explicitly, because without a `binaries.framework { }` a KMP
+    // library target produces only a klib and there is no `linkDebugFrameworkIosSimulatorArm64`
+    // task at all — which would make the iOS check in the README a command that does not exist.
+    // `TerminalSample.framework` is what an Xcode app imports to call `sampleViewController()`;
+    // static, so the app links one binary and has no embedding step to get wrong.
+    listOf(iosArm64(), iosSimulatorArm64()).forEach { target ->
+        target.binaries.framework {
+            baseName = "TerminalSample"
+            isStatic = true
+        }
+    }
     @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
     wasmJs {
         browser {

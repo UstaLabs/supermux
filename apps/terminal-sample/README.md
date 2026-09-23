@@ -82,7 +82,8 @@ All from `apps/`.
 # …and to look at it:
 ./gradlew :terminal-sample:wasmJsBrowserDevelopmentRun
 
-# iOS: on a Mac only (this Linux host disables the Apple compile/link tasks)
+# iOS: on a Mac only (this Linux host disables the Apple compile/link tasks).
+# Produces TerminalSample.framework, which an Xcode app imports to call sampleViewController().
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17
 ./gradlew :terminal-sample:linkDebugFrameworkIosSimulatorArm64
 ```
