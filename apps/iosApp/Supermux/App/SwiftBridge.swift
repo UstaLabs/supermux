@@ -367,14 +367,6 @@ final class SwiftBridge: NSObject, IosBridge {
     func cancelNotificationsFor(sessionId: String) {
         PushManager.shared.clearDelivered(sessionId: sessionId)
     }
-
-    // MARK: terminal (H5)
-
-    /// The SwiftTerm vendor. One per bridge and stateless — every terminal it makes owns its own
-    /// view, coordinator and prediction pipeline, so nothing is shared between panes.
-    private lazy var terminals = ComposeTerminalVendor()
-
-    func terminalVendor() -> (any IosTerminalVendor)? { terminals }
 }
 
 /// The scanner's one-shot completion, and the dismissal that goes with it.
