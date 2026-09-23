@@ -226,10 +226,55 @@ everything the stream adds on a CPU-bound 4-core box at load 15. Two of those th
 machine. Optimising the package against them would be optimising against llvmpipe and against the
 other agents' Gradle daemons.
 
-**So nothing was optimised in this task, deliberately.** The one number that is clearly the
-package's own — +13.35 ms to lay out and draw 4 800 cells — is measured through a software
-rasteriser, which is precisely the workload a GPU exists to remove. The next honest step is a
-GPU-backed run and a 60 Hz device, not a code change.
+The +13.35 ms rung is **"text layout + draw"**, and this file originally attributed all of it to the
+rasteriser — "precisely the workload a GPU exists to remove". That was not measured, and it was
+wrong about one thing: part of that rung was the surface **building its draw runs from every cell,
+on every paint, whether or not anything had changed**. That part was software, and it has since been
+fixed and re-measured — see the next section. The rest of the rung really is rasterisation, and the
+next honest step for it is still a GPU-backed run and a 60 Hz device.
+
+### The run-building change, re-measured (2026-09-23)
+
+`Terminal`'s Canvas lambda called `TerminalRuns.build(frame, theme)` unconditionally, and `build`
+resolved each cell's style up to **three** times (once each from the background, text and decoration
+builders). Two changes: resolve each cell once per build, and memoize the built `FrameRuns` on the
+frame's identity and the theme's value, so a paint with no new frame builds nothing at all.
+
+**The direct measurement** — `TerminalRuns.build` alone, on a synthetic 120x40 screen with styles,
+colours and underlines in it, 2 000 warm-up builds then 500 timed ones, on this box at load ~15.6:
+
+| `TerminalRuns.build`, 120x40 | p50 | p95 |
+|---|---:|---:|
+| before | **0.965 ms** | 1.519 ms |
+| after (one resolve per cell) | **0.425 ms** | 1.147 ms |
+| after, unchanged frame + theme (memoized) | **0 ms** — not called | — |
+
+**End to end it does not show.** The same benchmark invocations as §3 and the middle rung above, run
+back to back on the same box within half an hour of each other (load averages taken immediately
+before each run):
+
+| run | before p50 / p95 | after p50 / p95 | load before → after |
+|---|---|---|---|
+| `--mode=blank --minutes=1 --warmup=5` (host floor) | 15.14 / 30.68 | 15.07 / 30.63 | 12.8 → 15.6 |
+| `--minutes=2 --warmup=8 --terminals=4 --rate=1024 --stream-seconds=120 --scroll-lines=1` (static screen) | **27.75** / 56.77 | **27.66** / 59.62 | 13.2 → 16.0 |
+| `--minutes=3 --warmup=15 --terminals=4 --fixture=ansi --rate=1048576 --stream-seconds=60 --scroll-lines=50000`, stream phase | 58.07 / 137.08 | 57.19 / 137.65 | 13.5 → 14.1 |
+| the same run, scroll + stream phase | 53.02 / 129.82 | 55.24 / 134.62 | |
+
+(The 3-minute stream run is a shortened form of §5's 10-minute one, at identical settings otherwise.
+It is here only as a before/after pair against itself; §5's numbers remain the recorded ones.)
+
+**The win is small, and honestly so.** 0.5–1.0 ms of a 27.7 ms static frame is 2–3.5%, which is
+inside this box's run-to-run spread — the blank control's own p50 moved 0.07 ms between the two runs
+and the load average moved by 3. The frame times above say nothing either way, and quoting them as
+"no regression" is all they can support. What the direct measurement does say is that the work
+**existed** (0.965 ms per paint of a 120x40 grid, ~6% of a 16.7 ms budget and rising with the grid)
+and now does not: 2.3x cheaper when it has to run, and skipped entirely on a repaint with no new
+frame — which is every paint of a scroll offset, a cursor blink or a neighbouring composable
+invalidating.
+
+So the original claim — that there was nothing to optimise in software and the residual was purely
+the rasteriser's — does not survive contact with a profiler. It was a measurement that had not been
+taken.
 
 ---
 
@@ -274,3 +319,11 @@ SKIKO_RENDER_API=SOFTWARE xvfb-run -a -s "-screen 0 1600x1200x24" \
 
 Swap `--fixture=ansi` for `--fixture=plain` for the escape-free stream, and `--rate=max` to find the
 saturation point.
+
+The `TerminalRuns.build` numbers in §6 did **not** come from this harness — the benchmark has no
+per-stage timer for the draw path. They came from a throwaway `jvmTest` in `:terminal-compose` that
+builds a synthetic 120x40 frame (mixed bold/inverse/faint, a truecolour foreground every 11th cell,
+an underline every 13th), calls `TerminalRuns.build` 2 000 times to warm the JIT and then times 500
+more with `measureNanoTime`. It was deleted after the measurement rather than committed: it is a
+microbenchmark on a loaded shared box, not a regression gate, and a number that moves with the load
+average does not belong in a test suite.
