@@ -31,6 +31,17 @@ val supermuxVersionName = (findProperty("supermuxVersionName") as String?)
     ?.takeIf { it.isNotEmpty() }
     ?: defaultVersionName
 
+// The ABIs the shared terminal engine ships, from apps/gradle.properties. ONE source of truth with
+// `:terminal-core`'s `androidNativeTargets` — the module that stages the JNI libraries reads the
+// same line, so "which ABIs does the APK claim" and "which ABIs is the engine built for" are a
+// single decision rather than two lists that agree by review.
+val androidTerminalAbis: Set<String> =
+    (providers.gradleProperty("supermux.terminal.androidAbis").orNull
+        ?: error("supermux.terminal.androidAbis is not set (apps/gradle.properties)"))
+        .split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        .map { it.substringBefore('=').trim() }
+        .toSet()
+
 android {
     namespace = "dev.supermux.android"
     compileSdk = libs.versions.androidCompileSdk.get().toInt()
@@ -41,6 +52,19 @@ android {
         versionCode = supermuxVersionCode
         versionName = supermuxVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            // The APK claims exactly the ABIs the terminal engine actually ships — read from the
+            // SAME property `:terminal-core` stages its JNI libraries from, so the two cannot
+            // drift. `:terminal-core` FAILS the build when one of them was never built, which is
+            // what stops an APK being packaged with an ABI it has no engine for.
+            //
+            // Why this line exists at all: before Plan 4 the Android terminal was a library whose
+            // native part shipped for armeabi-v7a and x86 as well, so the APK was genuinely
+            // installable on a 32-bit device. The shared engine has no such targets, and without
+            // a filter the APK would keep advertising them and then have nothing to load. The
+            // reasoning for the two we DO ship is recorded next to the property itself.
+            abiFilters += androidTerminalAbis
+        }
     }
     buildFeatures { compose = true }
     signingConfigs {
@@ -67,7 +91,9 @@ android {
         getByName("release") {
             // Minification is intentionally OFF. R8 renamed/stripped code that several
             // subsystems resolve BY NAME at runtime and that static analysis can't see:
-            //  - org.connectbot termlib JNI callbacks  -> native crash opening the Terminal
+            //  - JNI callbacks into a native terminal library -> native crash opening the
+            //    Terminal (this was ConnectBot termlib; `:terminal-core`'s JNI is reached the
+            //    same way, so the reason outlived the library)
             //  - Google Tink behind EncryptedSharedPreferences -> SecureTokenStore lost the
             //    pairing across restarts
             //  - the cm6 editor @JavascriptInterface bridge (onChange/onSave/onReady/lspOut)
@@ -113,7 +139,6 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.websockets)
-    implementation(libs.termlib)
     implementation(libs.zxing.android.embedded)
     // Inline markdown images (async load + cache). ktor3 backend reuses our ktor stack.
     implementation(libs.coil.compose)

@@ -376,6 +376,40 @@ jobs:
       - name: Stage Firebase config
         run: cp apps/android/google-services.json.example apps/android/google-services.json
 
+      # ── The terminal engine's Android JNI libraries ──────────────────────────
+      # `:terminal-core` now FAILS the build when one is missing, rather than warning: an APK
+      # packaged without them installs, runs, and has a terminal that cannot open — AGP merges an
+      # empty jniLibs directory without a word. The ABIs are the ones apps/gradle.properties
+      # declares (`supermux.terminal.androidAbis`), which is the same line `abiFilters` reads.
+      # Cached on the pins, exactly like the integration lane's zmx/wasm trees.
+      - name: Cache the zig toolchain and the terminal native tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-native-${{ runner.os }}-
+      - name: Install the pinned NDK
+        run: |
+          sdkmanager "ndk;$(python3 -c "import json,sys; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
+      - name: Build the terminal engine for Android
+        env:
+          ST_ZIG_JOBS: "4"
+        run: |
+          python3 - <<'PY' > /tmp/abis.txt
+          import re
+          text = open("apps/gradle.properties").read()
+          spec = re.search(r"^supermux\.terminal\.androidAbis=(.*)$", text, re.M).group(1)
+          print("\n".join(e.split("=", 1)[1].strip() for e in spec.split(",")))
+          PY
+          while read -r target; do
+            [ -n "$target" ] || continue
+            echo "::group::native/build.sh $target"
+            bash apps/terminal-core/native/build.sh "$target"
+            echo "::endgroup::"
+          done < /tmp/abis.txt
+
       - name: Build debug APK
         working-directory: apps
         run: ./gradlew :android:assembleDebug --build-cache --console=plain
@@ -455,8 +489,9 @@ jobs:
           # launch when the container URL comes back nil. Ad-hoc keeps the entitlement without
           # needing an identity a fork does not have.
           #
-          # The two -skip flags: SwiftTerm ships a build-tool plugin from 1.20.0, and xcodebuild
-          # otherwise refuses to run it without interactive validation.
+          # No -skipPackagePluginValidation / -skipMacroValidation: those existed for SwiftTerm's
+          # build-tool plugin, and the app has no SwiftPM dependencies left (Plan 4 replaced the
+          # Swift-vended terminal with the shared Compose renderer).
           xcodebuild \
             -scheme Supermux \
             -configuration Debug \
@@ -469,8 +504,6 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=YES \
-            -skipPackagePluginValidation \
-            -skipMacroValidation \
             test
 
       - name: Upload xcresult

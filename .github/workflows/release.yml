@@ -219,6 +219,43 @@ jobs:
           else
             echo "::warning::ANDROID_KEYSTORE_BASE64 not set — release APK will be debug-signed and NOT upgradable across releases"
           fi
+
+      # ── The terminal engine's Android JNI libraries ──────────────────────────
+      # `:terminal-core` now FAILS the build when one is missing, rather than warning: an APK
+      # packaged without them installs, runs, and has a terminal that cannot open — AGP merges an
+      # empty jniLibs directory without a word. The ABIs are the ones apps/gradle.properties
+      # declares (`supermux.terminal.androidAbis`), which is the same line `abiFilters` reads.
+      # Cached on the pins, exactly like the integration lane's zmx/wasm trees.
+      - name: Cache the zig toolchain and the terminal native tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-native-${{ runner.os }}-
+      - name: Install the pinned NDK
+        working-directory: .
+        run: |
+          sdkmanager "ndk;$(python3 -c "import json,sys; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
+      - name: Build the terminal engine for Android
+        working-directory: .
+        env:
+          ST_ZIG_JOBS: "4"
+        run: |
+          python3 - <<'PY' > /tmp/abis.txt
+          import re
+          text = open("apps/gradle.properties").read()
+          spec = re.search(r"^supermux\.terminal\.androidAbis=(.*)$", text, re.M).group(1)
+          print("\n".join(e.split("=", 1)[1].strip() for e in spec.split(",")))
+          PY
+          while read -r target; do
+            [ -n "$target" ] || continue
+            echo "::group::native/build.sh $target"
+            bash apps/terminal-core/native/build.sh "$target"
+            echo "::endgroup::"
+          done < /tmp/abis.txt
+
       - name: Assemble release APK
         run: >
           ./gradlew :android:assembleRelease --console=plain --no-daemon

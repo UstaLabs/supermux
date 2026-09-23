@@ -41,7 +41,22 @@ val jvmNativeTargets = linkedMapOf(
     "windows-x64" to "supermux_terminal_jni.dll",
 )
 // Android: build.sh target -> jniLibs ABI directory.
-val androidNativeTargets = linkedMapOf("android-arm64" to "arm64-v8a", "android-x64" to "x86_64")
+//
+// Read from `supermux.terminal.androidAbis` in apps/gradle.properties rather than written here,
+// because `:android`'s `abiFilters` reads the SAME property: the set of ABIs the engine ships and
+// the set the APK claims are one decision, and a second copy of it is a divergence waiting to
+// happen (an APK that advertises an ABI it has no engine for degrades to an error hint, silently).
+val androidNativeTargets: Map<String, String> = run {
+    val spec = providers.gradleProperty("supermux.terminal.androidAbis").orNull
+        ?: throw GradleException("supermux.terminal.androidAbis is not set (apps/gradle.properties)")
+    spec.split(',').map { it.trim() }.filter { it.isNotEmpty() }.associate { entry ->
+        val (abi, target) = entry.split('=', limit = 2).let {
+            if (it.size == 2) it[0].trim() to it[1].trim()
+            else throw GradleException("supermux.terminal.androidAbis: '$entry' is not <abi>=<target>")
+        }
+        target to abi
+    }.toMap(LinkedHashMap())
+}
 // iOS: build.sh target -> Kotlin target name (static archive linked through cinterop).
 val iosNativeTargets = linkedMapOf("ios-arm64" to "iosArm64", "ios-simulator-arm64" to "iosSimulatorArm64")
 // Browser: wasm/build.sh output (supermux-terminal.wasm + manifest.json) and the loader it ships with.
@@ -307,6 +322,9 @@ abstract class StageAndroidJniLibs : DefaultTask() {
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
     @get:Internal abstract val verifier: Property<(File, String, String) -> Pair<File, String>?>
 
+    /** False only under `-Pterminal.allowMissingAndroidNative=true`. See [stage]. */
+    @get:Input abstract val required: Property<Boolean>
+
     @TaskAction fun stage() {
         val out = outputDir.get().asFile
         out.deleteRecursively()
@@ -317,12 +335,21 @@ abstract class StageAndroidJniLibs : DefaultTask() {
             if (found == null) { missing += target; continue }
             found.first.copyTo(File(out, "$abi/libsupermux_terminal_jni.so"), overwrite = true)
         }
-        if (missing.isNotEmpty()) {
-            logger.warn(
-                "terminal-core: no Android JNI library for ${missing.joinToString()} — the AAR lacks those ABIs " +
-                    "(build with native/build.sh <target>; verifyNativeArtifacts fails for releases)",
-            )
-        }
+        if (missing.isEmpty()) return
+        // FAIL, not warn. Staging nothing is invisible downstream on Android: AGP merges an empty
+        // jniLibs directory without complaint, `assembleDebug` succeeds, and the APK installs and
+        // runs — with a terminal that cannot open, because the engine it dlopens is not in the
+        // package. (`:web` is not exposed to this: webpack fails to resolve the loader's wasm and
+        // the bundle never builds.) A warning in a 2000-line Gradle log is not a signal; the only
+        // thing that makes an engine-less APK unshippable is refusing to build one.
+        val message =
+            "terminal-core: no Android JNI library for ${missing.joinToString()}.\n" +
+                "  An APK packaged now would claim these ABIs and have no terminal engine in them.\n" +
+                "  Build them:  ${missing.joinToString("\n               ") { "bash apps/terminal-core/native/build.sh $it" }}\n" +
+                "  Or, to deliberately produce an APK with NO terminal on those ABIs, pass\n" +
+                "  -Pterminal.allowMissingAndroidNative=true."
+        if (required.get()) throw GradleException(message)
+        logger.warn("$message\n  (allowed by -Pterminal.allowMissingAndroidNative)")
     }
 }
 
@@ -335,6 +362,9 @@ val stageAndroidJniLibs by tasks.registering(StageAndroidJniLibs::class) {
     })
     outputDir.set(layout.buildDirectory.dir("generated/jniLibs"))
     verifier.set { root, target, lib -> verifiedNativeLib(root, target, lib) }
+    required.set(
+        providers.gradleProperty("terminal.allowMissingAndroidNative").orNull?.toBoolean() != true,
+    )
 }
 androidComponents {
     onVariants { variant ->
