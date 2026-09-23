@@ -463,7 +463,62 @@ is the exact case again. `README.md` §3 carries the same table.
 
 ---
 
-## 7. What was not tested, and why
+## 7. tmux vs zmx, measured side by side (2026-09-24)
+
+§1 compared zmx against a bare pty to find the Debug build. This compares zmx against **the thing it
+replaces**: the tmux path workspace terminals actually used — `pty-helper` exec'ing
+`tmux -L muxterm -f <conf> new-session -A -s <name> -x -y -c`, with the server config the broker
+used to generate (`history-limit 50000`, `mouse on`, `status off`, `destroy-unattached off`,
+**`window-size latest`**, `tmux-256color` + `Tc`). That module was deleted in this workstream, so
+the arm is reconstructed verbatim from git history (`src/core/terminal/tmux-term.ts` @ `d75a472f^`
+and `MUXTERM_CONF` @ `9220fe09`) rather than imported.
+
+Harness: [`tools/bench-backends.ts`](tools/bench-backends.ts) — `bun run vendor/zmx/tools/bench-backends.ts`,
+`BENCH_MIB` to size the fixture. Both arms run the same `bash --norc --noprofile` on a 120x40 pty,
+`cat` the same generated file, and are measured the same three ways: the **shell's own blocking
+time** (`TIMEFORMAT` inside the shell, so it is the shell's wait and not the broker's), the bytes
+the viewer received, and the wall time until the stream went idle. A **bare pty** arm with no
+backend at all is the floor. Private tmux socket and private zmx socket dir per run; every kill is
+by a recorded pid.
+
+**Environment.** The usual shared box: Ryzen 5 3500U (4c/8t), Ubuntu 26.04, kernel 7.0.0-31, ~16 GiB
+of 27 GiB in use, swap full, **load average 10–16**, tmux 3.6, bun 1.3.14, zmx `8bab1f01` + patch
+`705fd022`, helper ABI 1, ReleaseSafe. 12 MiB fixtures of 80-byte lines.
+
+| | bare pty | **tmux** | **zmx** |
+|---|---|---|---|
+| 12 MiB plain, shell blocked | 0.833 s (14.41 MiB/s) | 2.165 s (**5.54 MiB/s**) | 1.863 s (**6.44 MiB/s**) |
+| 12 MiB ANSI, shell blocked | 0.764 s (15.71 MiB/s) | 4.710 s (**2.55 MiB/s**) | 2.423 s (**4.95 MiB/s**) |
+| delivered / written | 1.012 | **0.537** / **0.720** | **1.012** / **1.015** |
+| backend RSS after | — | 4.8 → **66 MB** / 29 MB | 4.96 → **13.6 MB** |
+| first attach | 38.7 ms to first byte | 38.7 ms to first byte | **8.5–12.5 ms to `replay-end`** |
+| reconnect | — | **10.6 ms**, first byte | **28.7 / 48.1 ms**, to `replay-end` |
+| what a reconnect restores | — | **6,901 B** — one screen | **797,261 / 743,896 B** — screen **and** scrollback |
+| background viewer TYPES: pty size | — | **60x20** | **120x40** |
+
+**Throughput is not a regression, on either fixture**: +16% plain, +94% on the escape-laden one.
+Both are well under the bare pty, so most of what a shell pays is for having a multiplexer at all.
+
+**Delivery is exact now, and was not before.** tmux is a screen-diffing renderer: it delivered 0.537
+and 0.720 of the bytes written here (and 0.827 in another run of the same script — it varies with
+timing). zmx delivers the stream. The ratios slightly over 1 are the pty's own `ONLCR`: 157,286
+newlines become CRLF, and 12,582,912 + 157,286 = 12,740,198 against the 12,740,217 measured.
+
+**The reconnect numbers are not two speeds of one thing.** tmux's 10.6 ms redraws one screen and
+throws the scrollback away; zmx's 28.7 ms serializes and ships the screen *and* ~780 KB of history —
+which is §6's fix being paid for, deliberately.
+
+**§3's focus rule, from the other side.** With `window-size latest`, a tmux client that merely
+*types* becomes the latest and takes the pty's geometry with it: a background viewer at 60x20
+resized the focused viewer's 120x40 pty. The patched daemon has upstream's `isUserInput` promotion
+removed, so the identical sequence left the pty at 120x40. Reproduced in both runs of the harness.
+
+**What this does NOT compare.** The CLIENT. The four renderers tmux's terminals were drawn with were
+deleted in this workstream, so there is no "before" UI to run and no honest client-side before/after
+to be had from this branch. Frame times for the new surface are
+`apps/terminal-sample/benchmarks/2026-09-terminal.md`; they have no counterpart.
+
+## 8. What was not tested, and why
 
 * **macOS and Windows.** No host. The suite skips on Windows by design and would
   skip on macOS for want of the artifacts; `scripts/build-zmx.sh --target
