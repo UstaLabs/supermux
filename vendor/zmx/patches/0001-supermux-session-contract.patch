@@ -438,7 +438,7 @@ index c81d15a..566aa0f 100644
 +    }) |t| try std.testing.expect(@intFromEnum(t) < first_broker);
 +}
 diff --git a/src/loop.zig b/src/loop.zig
-index 513d3f5..4c6ad4c 100644
+index 513d3f5..bf83c4c 100644
 --- a/src/loop.zig
 +++ b/src/loop.zig
 @@ -345,6 +345,12 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
@@ -689,7 +689,7 @@ index 513d3f5..4c6ad4c 100644
          }
          if (self.clients.items.len > 0) {
              lib_posix.kill(self.pid, lib_posix.SIG.WINCH) catch |err| {
-@@ -1348,6 +1483,602 @@ pub const Daemon = struct {
+@@ -1348,6 +1483,629 @@ pub const Daemon = struct {
          client.has_pending_output = true;
      }
  
@@ -1252,15 +1252,42 @@ index 513d3f5..4c6ad4c 100644
 +    /// `WNOHANG` is 1 on every platform zmx builds for (Linux, macOS, *BSD).
 +    const WNOHANG: u32 = 1;
 +
++    /// How long reportTargetExit will wait for a status before giving up and
++    /// reporting `known = 0`. The PTY closing and the child becoming reapable
++    /// are two events that RACE: the slave fd is released as the process
++    /// dies, so a single WNOHANG can land microseconds early.
++    ///
++    /// The status is the entire value of BrokerExit, and there is no second
++    /// chance at it -- the message is once-only and the teardown `defer`'s
++    /// waitpid status is discarded -- so a bounded wait here is the
++    /// difference between "exit 1" and "it ended, no idea how" for every
++    /// viewer. The daemon is on its way out at this point; nothing else is
++    /// waiting on this loop.
++    const EXIT_REAP_BUDGET_MS: usize = 200;
++    const EXIT_REAP_STEP_MS: usize = 5;
++
 +    pub fn reportTargetExit(self: *Daemon, gpa: std.mem.Allocator) void {
 +        if (self.broker_exit_sent) return;
 +        var exit = ipc.BrokerExit{ .known = 0, .signaled = 0, .signal = 0, .code = 0 };
 +        if (self.pid > 0) {
-+            const res = lib_posix.waitpid(self.pid, WNOHANG);
-+            // pid == 0 means "still running": the PTY closed but the process
-+            // group has not been reaped yet. We say so rather than invent a
-+            // code -- the `run()` teardown waitpid will collect it.
-+            if (res.pid == self.pid) exit = brokerExitFromStatus(res.status);
++            var waited: usize = 0;
++            while (true) {
++                const res = lib_posix.waitpid(self.pid, WNOHANG);
++                if (res.pid == self.pid) {
++                    exit = brokerExitFromStatus(res.status);
++                    break;
++                }
++                // pid == 0 means "still running": the PTY closed but the
++                // process has not been reaped yet. Give it a moment, then
++                // say we do not know rather than invent a code.
++                if (res.pid != 0 or waited >= EXIT_REAP_BUDGET_MS) break;
++                var ts: std.c.timespec = .{
++                    .sec = 0,
++                    .nsec = @intCast(EXIT_REAP_STEP_MS * std.time.ns_per_ms),
++                };
++                _ = std.c.nanosleep(&ts, null);
++                waited += EXIT_REAP_STEP_MS;
++            }
 +        }
 +        self.reportBrokerExit(gpa, exit);
 +    }
@@ -1292,7 +1319,7 @@ index 513d3f5..4c6ad4c 100644
      fn handleLabelClear(self: *Daemon, gpa: std.mem.Allocator, client: *Client) !void {
          var it = self.labels.iterator();
          while (it.next()) |entry| {
-@@ -1531,3 +2262,959 @@ test "handleEnvGet returns leader client's environment variables including unset
+@@ -1531,3 +2289,1027 @@ test "handleEnvGet returns leader client's environment variables including unset
      const pay3 = client_req.write_buf.items[@sizeOf(ipc.Header)..];
      try std.testing.expectEqualStrings("DISPLAY=:99\n", pay3);
  }
@@ -2151,6 +2178,74 @@ index 513d3f5..4c6ad4c 100644
 +    const exit = std.mem.bytesToValue(ipc.BrokerExit, frame.payload[0..@sizeOf(ipc.BrokerExit)]);
 +    try std.testing.expectEqual(@as(u8, 0), exit.known);
 +    try std.testing.expectEqual(@as(u8, 0), exit.code);
++}
++
++test "a dropped connection never announces an exit" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    const leaving = try fx.attachBroker("a");
++    const staying = try fx.attachBroker("b");
++    staying.write_buf.clearRetainingCapacity();
++
++    // A viewer going away -- for any reason -- says nothing about the shell.
++    // BrokerExit has exactly two call sites today (PTY EOF and an explicit
++    // report); this pins that a THIRD one cannot appear on the disconnect
++    // path without failing here, because "I lost the socket" and "your
++    // program ended" lead to opposite decisions in the UI.
++    fx.close(leaving);
++
++    try std.testing.expect(!fx.daemon.broker_exit_sent);
++    try std.testing.expectEqual(@as(usize, 0), countFrames(staying.write_buf.items, .BrokerExit));
++    try std.testing.expect(fx.daemon.running);
++}
++
++test "a viewer that leaves mid-replay takes its replay with it" {
++    const alloc = std.testing.allocator;
++    var fx: BrokerFixture = undefined;
++    try fx.init(alloc);
++    defer fx.deinit();
++
++    fx.fillHistory(300, "日本語テキスト────ありがとうございます とても長い行です");
++
++    const staying = try fx.attachBroker("a");
++    try fx.focus(staying, 100, 30);
++    const owner_gen = fx.daemon.broker_owner_gen;
++
++    // Backed-up socket => the snapshot is still streaming when it leaves.
++    const leaving = try fx.addClient();
++    leaving.is_broker = true;
++    leaving.is_terminal = true;
++    try leaving.write_buf.appendNTimes(alloc, 0, ipc.BROKER_PENDING_MAX / 2);
++    fx.daemon.beginBrokerReplay(alloc, leaving, &fx.term);
++    try std.testing.expect(leaving.replay != null);
++    try std.testing.expect(leaving.replay.?.snapshot.len > 0);
++
++    fx.daemon.queueClientOutput(alloc, leaving, "STAGED-WHILE-REPLAYING");
++    try std.testing.expect(leaving.replay.?.staged.items.len > 0);
++
++    staying.write_buf.clearRetainingCapacity();
++    // The snapshot and the staged bytes are the departing viewer's alone:
++    // closing must free them (the allocator checks that) and must not
++    // announce an exit, move the lease, or disturb the other viewer.
++    fx.close(leaving);
++
++    try std.testing.expect(!fx.daemon.broker_exit_sent);
++    try std.testing.expectEqual(@as(usize, 0), countFrames(staying.write_buf.items, .BrokerExit));
++    try std.testing.expectEqual(staying.socket_fd, fx.daemon.broker_owner_fd.?);
++    try std.testing.expectEqual(owner_gen, fx.daemon.broker_owner_gen);
++    try std.testing.expect(fx.daemon.running);
++
++    // The session is still usable: a fresh restore opens a NEW epoch.
++    const epoch_before = fx.daemon.broker_epoch;
++    const rejoining = try fx.attachBroker("c");
++    try std.testing.expect(fx.daemon.broker_epoch > epoch_before);
++    const start = findFrame(rejoining.write_buf.items, .BrokerReplayStart) orelse
++        return error.TestExpectedReplayStart;
++    const replay = std.mem.bytesToValue(ipc.BrokerReplay, start.payload[0..@sizeOf(ipc.BrokerReplay)]);
++    try std.testing.expectEqual(fx.daemon.broker_epoch, replay.epoch);
 +}
 +
 +// ------------------------------------------------------ stock CLI, intact ----
