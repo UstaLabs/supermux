@@ -13,6 +13,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import dev.supermux.net.AgentModelsResponse
+import dev.supermux.proto.SessionInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -68,6 +69,42 @@ class AgentModelsCacheTest {
         app.reduce(ServerFrame.AgentModelsChanged)
         app.awaitModel("gpt-b")
         assertEquals(listOf("/agents/models", "/agents/models"), paths)
+    }
+
+    @Test fun every_picker_answers_from_the_catalog_without_a_request() {
+        val paths = mutableListOf<String>()
+        val app = store(paths) { HttpStatusCode.OK to catalog("gpt-a") }
+        app.refreshAgentModels()
+        app.awaitModel("gpt-a")
+        app.reduce(
+            ServerFrame.SessionAdded(
+                SessionInfo(id = "s1", name = "s1", workdir = "/w", agent = "codex", model = "gpt-a", reasoningLevel = "high"),
+            ),
+        )
+        paths.clear()
+        runBlocking {
+            assertEquals(listOf("gpt-a"), app.launcherModels("codex").map { it.id })
+            assertEquals(true, app.launcherReasoning("codex", "gpt-a")?.visible)
+            val sm = app.sessionModels("s1")
+            assertEquals("gpt-a", sm?.current)
+            assertEquals(listOf("gpt-a"), sm?.models?.map { it.id })
+            val sr = app.sessionReasoning("s1")
+            assertEquals("high", sr?.current)
+            assertEquals(listOf("low", "high"), sr?.levels?.map { it.id })
+            // Right after a switch to Default: Default's levels, before the row catches up.
+            assertEquals(false, app.sessionReasoningFor("s1", null)?.visible)
+        }
+        assertEquals(emptyList<String>(), paths, "the catalog answers every picker")
+    }
+
+    @Test fun an_agent_missing_from_the_catalog_still_asks_the_broker() {
+        val paths = mutableListOf<String>()
+        val app = store(paths) { HttpStatusCode.OK to catalog("gpt-a") }
+        app.refreshAgentModels()
+        app.awaitModel("gpt-a")
+        paths.clear()
+        runBlocking { app.launcherModels("cursor") }
+        assertEquals(listOf("/models"), paths)
     }
 
     @Test fun an_older_broker_leaves_the_catalog_null() {

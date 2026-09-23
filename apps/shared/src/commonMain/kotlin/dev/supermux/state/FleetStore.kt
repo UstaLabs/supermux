@@ -1169,6 +1169,8 @@ class FleetStore(
 
     suspend fun sessionModels(id: String): ModelsResponse? = appFor(id)?.sessionModels(id)
     suspend fun sessionReasoning(id: String): ReasoningResponse? = appFor(id)?.sessionReasoning(id)
+    suspend fun sessionReasoningFor(id: String, model: String?): ReasoningResponse? =
+        appFor(id)?.sessionReasoningFor(id, model)
     /**
      * Switch the session's model / thinking level and report whether the broker ACCEPTED it.
      *

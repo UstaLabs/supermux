@@ -1826,9 +1826,13 @@ class HostStore(
     suspend fun validatePath(path: String): PathValidation? =
         runApi("validatePath") { api.validatePath(path) }
 
-    /** GET /models?agent= → models pickable in the launcher (no session yet). Empty on failure. */
+    /** [agent]'s entry in the cached catalog when it has models; null → ask the broker. */
+    private fun cachedAgent(agent: String) = _agentModels.value?.agent(agent)?.takeIf { it.models.isNotEmpty() }
+
+    /** The agent's models: the cached catalog, else GET /models?agent=. Empty on failure. */
     suspend fun launcherModels(agent: String): List<ModelInfo> =
-        runApi("launcherModels") { api.listModels(agent).models } ?: emptyList()
+        cachedAgent(agent)?.models
+            ?: runApi("launcherModels") { api.listModels(agent).models } ?: emptyList()
 
     /** Refetch [agentModels]; a newer request supersedes one still in flight. Failure keeps the last answer. */
     fun refreshAgentModels() {
@@ -1838,9 +1842,10 @@ class HostStore(
         }
     }
 
-    /** GET /reasoning-levels?agent=&model= → thinking levels for the launcher. Null on failure. */
+    /** Thinking levels for [agent]/[model]: the cached catalog, else GET /reasoning-levels. Null on failure. */
     suspend fun launcherReasoning(agent: String, model: String? = null): ReasoningResponse? =
-        runApi("launcherReasoning") { api.getReasoningLevels(agent, model) }
+        cachedAgent(agent)?.reasoningFor(model)?.let { ReasoningResponse(agent, levels = it.levels, visible = it.visible) }
+            ?: runApi("launcherReasoning") { api.getReasoningLevels(agent, model) }
 
     /** GET /repos/info?path= → git status for the launcher's worktree picker. Null on failure. */
     suspend fun launcherRepoInfo(workdir: String, fetch: Boolean = false): RepoInfo? =
@@ -1911,15 +1916,35 @@ class HostStore(
     // Back DesktopComposer's model/reasoning pills. All go through [runApi] and degrade to
     // null/false so a broker hiccup just leaves the pills showing their last-known state.
 
-    /** GET /sessions/<id>/models → the session's pickable models + current selection. Null on
-     *  failure. */
-    suspend fun sessionModels(id: String): ModelsResponse? =
-        runApi("sessionModels") { api.models(id) }
+    // The session pickers answer from the cached catalog too: its agent's models, with `current`
+    // from the live session row (which the composer prefers anyway). The broker is asked only when
+    // the catalog can't answer (older broker, or the agent has no models cached).
+    private fun sessionRow(id: String): SessionInfo? = _state.value.sessions.firstOrNull { it.id == id }
 
-    /** GET /sessions/<id>/reasoning-levels → the session's thinking levels + current + visibility.
-     *  Null on failure. */
+    /** The session's pickable models + current selection (catalog, else GET /sessions/<id>/models). */
+    suspend fun sessionModels(id: String): ModelsResponse? {
+        val s = sessionRow(id)
+        val cached = s?.let { cachedAgent(it.agent) }
+        if (s != null && cached != null) return ModelsResponse(agent = s.agent, current = s.model, models = cached.models)
+        return runApi("sessionModels") { api.models(id) }
+    }
+
+    /** The session's thinking levels + current + visibility (catalog, else GET /sessions/<id>/reasoning-levels). */
     suspend fun sessionReasoning(id: String): ReasoningResponse? =
-        runApi("sessionReasoning") { api.reasoningLevels(id) }
+        sessionRow(id)?.let { cachedSessionReasoning(it, it.model) }
+            ?: runApi("sessionReasoning") { api.reasoningLevels(id) }
+
+    /**
+     * The levels for [model] (null = Default) on this session — what the composer shows right after
+     * a switch, before the session row carries the new model. Broker fallback as [sessionReasoning].
+     */
+    suspend fun sessionReasoningFor(id: String, model: String?): ReasoningResponse? =
+        sessionRow(id)?.let { cachedSessionReasoning(it, model) } ?: sessionReasoning(id)
+
+    private fun cachedSessionReasoning(s: SessionInfo, model: String?): ReasoningResponse? =
+        cachedAgent(s.agent)?.reasoningFor(model)?.let {
+            ReasoningResponse(agent = s.agent, current = s.reasoningLevel, levels = it.levels, visible = it.visible)
+        }
 
     /** POST /sessions/<id>/model {"model"} — switch the session's model (persists broker-side).
      *  Returns true on success, false on any failure. */
