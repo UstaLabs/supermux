@@ -44,6 +44,17 @@ const STDERR_LIMIT = 16 * 1024
 /** How long `close()` waits for a clean detach before killing the process. */
 const CLOSE_TIMEOUT_MS = 2000
 
+/**
+ * How long a command waits for its ack before the helper is declared wedged.
+ *
+ * A helper that is ALIVE but not answering is the case neither the exit
+ * watcher nor the stdout reader can see: both are waiting on a pipe that is
+ * simply quiet. Without this an `ensure` or a `focus` awaits forever and takes
+ * the caller's request with it. The budget is generous because `create` waits
+ * on a zmx session appearing, which the helper itself bounds at 10s.
+ */
+export const SEND_TIMEOUT_MS = 20_000
+
 export type HelperManifest = {
   schema: number
   /** Protocol version the helper binary was built to speak. */
@@ -181,11 +192,15 @@ export class ZmxHelper {
   /** The helper's own account of itself, from its first frame. */
   hello: Extract<HelperEvent, { ev: "hello" }> | null = null
 
+  readonly #sendTimeoutMs: number
+
   private constructor(
     proc: Bun.Subprocess<"pipe", "pipe", "pipe">,
     manifest: HelperManifest,
     handlers: HelperHandlers,
+    sendTimeoutMs: number = SEND_TIMEOUT_MS,
   ) {
+    this.#sendTimeoutMs = sendTimeoutMs
     this.#proc = proc
     this.#manifestCheck(manifest)
     this.manifest = manifest
@@ -206,7 +221,15 @@ export class ZmxHelper {
     /** Extra environment for the helper process itself (not the target). */
     env?: Record<string, string>
     signal?: AbortSignal
+    /** Per-command ack budget. Exposed for tests; see SEND_TIMEOUT_MS. */
+    sendTimeoutMs?: number
   } = {}): Promise<ZmxHelper> {
+    // Checked BEFORE the spawn, not only subscribed to after it: an already
+    // aborted signal would otherwise leave a helper process running with
+    // nobody holding a handle to it.
+    if (options.signal?.aborted) {
+      throw new WorkspaceTerminalError("backend-unavailable", "zmx helper launch was aborted", true)
+    }
     const binaries = options.binaries ?? helperBinaries()
     const manifest = verifyHelperManifest(binaries)
 
@@ -229,8 +252,11 @@ export class ZmxHelper {
       )
     }
 
-    const helper = new ZmxHelper(proc, manifest, handlers)
+    const helper = new ZmxHelper(proc, manifest, handlers, options.sendTimeoutMs ?? SEND_TIMEOUT_MS)
+    // The signal may have fired between the check above and here; `aborted`
+    // makes the listener run immediately, so the race has one outcome.
     options.signal?.addEventListener("abort", () => helper.kill(), { once: true })
+    if (options.signal?.aborted) helper.kill()
     return helper
   }
 
@@ -256,11 +282,30 @@ export class ZmxHelper {
     const id = this.#nextId++
     const frame = encodeControl({ ...command, v: HELPER_PROTOCOL_VERSION, id })
     return new Promise<T>((resolve, reject) => {
-      this.#pending.set(id, { resolve: resolve as (value: unknown) => void, reject })
+      // A helper that is alive but silent answers neither the exit watcher nor
+      // the stdout reader, so the ack is bounded here or not at all. The
+      // process is killed rather than left holding a command we gave up on.
+      const timer = setTimeout(() => {
+        if (!this.#pending.delete(id)) return
+        reject(new WorkspaceTerminalError(
+          "backend-unavailable",
+          `zmx helper did not answer ${command.op} within ${this.#sendTimeoutMs}ms`,
+          true,
+        ))
+        this.kill()
+      }, this.#sendTimeoutMs)
+      // Never keep the process alive for an ack nobody is waiting on any more.
+      ;(timer as unknown as { unref?: () => void }).unref?.()
+      const settle = <R>(fn: (value: R) => void) => (value: R) => { clearTimeout(timer); fn(value) }
+      this.#pending.set(id, {
+        resolve: settle(resolve as (value: unknown) => void),
+        reject: settle(reject),
+      })
       try {
         this.#proc.stdin.write(frame)
         this.#proc.stdin.flush()
       } catch (error) {
+        clearTimeout(timer)
         this.#pending.delete(id)
         reject(new WorkspaceTerminalError("backend-unavailable", `zmx helper write failed: ${errorText(error)}`, true))
       }

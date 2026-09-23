@@ -76,7 +76,13 @@ pub const FrameReader = struct {
     }
 
     /// The next complete frame, or null when more bytes are needed.
+    ///
+    /// A reader that has already failed stays failed. There is no
+    /// resynchronisation on this wire: once a byte was not where the framing
+    /// says it must be, every later offset is a guess, and guessing would turn
+    /// a malformed control frame into plausible-looking pty input.
     pub fn next(self: *FrameReader) DecodeError!?Frame {
+        if (self.failed) return error.BadTag;
         const available = self.buf[self.cursor..self.len];
         if (available.len < HEADER_LEN) return null;
         const raw_tag = available[0];

@@ -288,6 +288,41 @@ process.stdin.on("data", () => { control({ v: 1, ev: "ok", id: 1 }); process.exi
     expect(collected.failures.length).toBe(0)
   })
 
+  test("an already-aborted signal never leaves a helper process behind", async () => {
+    const bins = fakeHelper(`${FAKE_PRELUDE}\nhello()\nsetInterval(() => {}, 1000)\n`)
+    const { handlers } = collector()
+    // Aborted BEFORE the launch: subscribing to the signal afterwards would
+    // have spawned a process nobody ever holds a handle to.
+    await expect(ZmxHelper.launch(handlers, { binaries: bins, signal: AbortSignal.abort() }))
+      .rejects.toThrow(/aborted/)
+
+    // And aborting later stops the one that is running.
+    const controller = new AbortController()
+    const helper = await ZmxHelper.launch(handlers, { binaries: bins, signal: controller.signal })
+    await waitFor(() => helper.hello !== null)
+    controller.abort()
+    await waitFor(() => helper.exited)
+  })
+
+  test("a helper that is alive but silent fails its command instead of hanging", async () => {
+    // Reads stdin and answers NOTHING. Neither the exit watcher nor the stdout
+    // reader can see this: both are waiting on a pipe that is simply quiet.
+    const bins = fakeHelper(`${FAKE_PRELUDE}
+hello()
+process.stdin.on("data", () => {})
+setInterval(() => {}, 1000)
+`)
+    const { handlers } = collector()
+    const helper = await ZmxHelper.launch(handlers, { binaries: bins, sendTimeoutMs: 60 })
+    await waitFor(() => helper.hello !== null)
+    const error = await helper.send({ op: "detach" }).then(() => null, (e: unknown) => e)
+    expect(isWorkspaceTerminalError(error, "backend-unavailable")).toBe(true)
+    expect((error as WorkspaceTerminalError).recoverable).toBe(true)
+    expect((error as Error).message).toContain("did not answer detach")
+    // The wedged process is not left running behind the caller's back.
+    await waitFor(() => helper.exited)
+  })
+
   test("writes after the helper is gone are refused rather than thrown", async () => {
     const bins = fakeHelper(`${FAKE_PRELUDE}\nhello()\nprocess.exit(0)\n`)
     const { handlers } = collector()

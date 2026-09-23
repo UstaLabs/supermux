@@ -283,8 +283,17 @@ export type HelperCommand =
   | { v: number; id: number; op: "resize"; cols: number; rows: number }
   /** Drop this viewer. The target survives; the helper then exits. */
   | { v: number; id: number; op: "detach" }
-  /** Destroy a target. Explicit, and never a side effect of helper exit. */
-  | { v: number; id: number; op: "kill"; socket: string }
+  /**
+   * Destroy a target. Explicit, and never a side effect of helper exit.
+   *
+   * `name` is REQUIRED and is not decoration: a socket basename is a 20-hex
+   * hash of the key, so the path alone cannot prove which daemon answers it.
+   * The helper reads the daemon's `mux.target` label and refuses a kill it
+   * cannot match — destroying a hash collision would destroy another
+   * workspace's shell, which is the one outcome this naming scheme exists to
+   * prevent (see names.ts, `assertTargetMatches`).
+   */
+  | { v: number; id: number; op: "kill"; socket: string; name: string }
 
 /**
  * A command without its envelope. `Omit` over a union collapses to the keys

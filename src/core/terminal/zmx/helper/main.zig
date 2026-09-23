@@ -556,11 +556,12 @@ fn spawnTarget(
     // inherited from a shell we happen to be running under would make `attach`
     // switch sessions instead of creating one, and ZMX_SESSION_PREFIX would
     // silently rename the socket we are about to look for.
-    const dropped = [_][]const u8{
-        "ZMX_SESSION",   "ZMX_SESSION_PREFIX", "ZMX_DIR",
-        "ZMX_DIR_MODE",  "ZMX_LOG_MODE",       "ZMX_TRACK_ENV",
-        "ZMX_NO_DETACH_KEY",
-    };
+    //
+    // The match is on the PREFIX, not a list of names: upstream adds ZMX_*
+    // knobs between pins, and a new one would otherwise be honoured silently
+    // by a helper built from a bumped pin. `ZMX_DIR` is re-added below, as the
+    // one variable we set ourselves.
+    const DROPPED_PREFIX = "ZMX_";
     var envp: std.ArrayList([:0]const u8) = .empty;
     defer {
         for (envp.items) |e| gpa.free(e);
@@ -572,11 +573,7 @@ fn spawnTarget(
                 var it = env_obj.iterator();
                 while (it.next()) |entry| {
                     const key = entry.key_ptr.*;
-                    var skip = false;
-                    for (dropped) |d| if (std.mem.eql(u8, key, d)) {
-                        skip = true;
-                    };
-                    if (skip) continue;
+                    if (std.mem.startsWith(u8, key, DROPPED_PREFIX)) continue;
                     const val = switch (entry.value_ptr.*) {
                         .string => |s| s,
                         else => continue,
@@ -823,19 +820,25 @@ fn cmdResize(state: *State, obj: std.json.ObjectMap, id: ?i64) void {
 }
 
 /// Destroy a target. Explicit, and never a side effect of this process dying.
+///
+/// IDENTITY IS MANDATORY HERE. A socket basename is a 20-hex hash of the key,
+/// so the path proves nothing about whose daemon is listening on it. Every
+/// other path that touches a session (`attach`, and `create` adopting an
+/// existing one) verifies `mux.target` before it acts; a kill that did not
+/// would be the one operation able to destroy a colliding workspace's shell.
+/// So `name` is required, and a session we cannot match is left alone.
 fn cmdKill(state: *State, obj: std.json.ObjectMap, id: ?i64) void {
     const socket_path = strField(obj, "socket") orelse return state.fail(id, "protocol", "kill needs socket");
+    const name = strField(obj, "name") orelse return state.fail(id, "protocol", "kill needs name");
     const fd = ipc.connectSession(socket_path) catch |err| {
         // Already gone is success: kill is idempotent.
         if (err == error.ConnectionRefused) return state.ok(id orelse 0);
         return state.fail(id, "backend-unavailable", @errorName(err));
     };
     defer _ = close(fd);
-    if (strField(obj, "name")) |name| {
-        verifyTarget(state.gpa, fd, name, 2000) catch |err| {
-            return state.fail(id, mapVerifyError(err), @errorName(err));
-        };
-    }
+    verifyTarget(state.gpa, fd, name, 2000) catch |err| {
+        return state.fail(id, mapVerifyError(err), @errorName(err));
+    };
     ipc.send(fd, .Kill, "") catch |err| {
         return state.fail(id, "backend-unavailable", @errorName(err));
     };
