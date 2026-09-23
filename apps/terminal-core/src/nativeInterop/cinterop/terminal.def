@@ -1,4 +1,6 @@
-# cinterop for the st_* ABI v1 (native/include/supermux_terminal.h) on iOS. The static archive
+# cinterop for the st_* ABI (ST_ABI_VERSION in native/include/supermux_terminal.h, currently 2) on
+# iOS. This line said "v1" long after the header said 2; a number repeated in prose is a number
+# that goes stale, so it now names where the real one lives. The static archive
 # libsupermux_terminal.a (st_* wrapper + libghostty-vt folded in) is built on the Mac by
 # `native/build.sh ios-arm64` / `ios-simulator-arm64`; build.gradle.kts passes its directory per
 # target with -libraryPath and cinterop embeds it in the klib. The archive bundles C++ (highway,
