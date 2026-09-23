@@ -48,7 +48,7 @@
 // `assertTargetMatches` is that comparison.
 import { createHash } from "crypto"
 import { chmodSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmdirSync, writeFileSync } from "fs"
-import { basename, isAbsolute, join } from "path"
+import { basename, isAbsolute, join, resolve } from "path"
 import { STATE_DIR } from "../../../shared/paths"
 import { WorkspaceTerminalError, type WorkspaceTerminalKey } from "../workspace-backend"
 
@@ -220,12 +220,23 @@ export function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * The executable a pid is RUNNING, as an absolute path where procfs can say so.
+ * What a pid is RUNNING: the executable as an absolute path where procfs can
+ * say so, the argument vector the kernel recorded, and the working directory
+ * those arguments are relative to.
  *
  * Exported for the tests that feed it realistic command lines; nothing else
  * should need it.
  */
-export type ExecutableProbe = (pid: number) => string | null
+export interface ProcessIdentity {
+  /** `/proc/<pid>/exe`, or argv[0] when the kernel will not say. */
+  readonly executable: string | null
+  /** Every argument, argv[0] included. Empty when the blob was unreadable. */
+  readonly argv: readonly string[]
+  /** `/proc/<pid>/cwd`, so a relative argument can be resolved. */
+  readonly cwd: string | null
+}
+
+export type ProcessProbe = (pid: number) => ProcessIdentity | null
 
 /** `/proc/<pid>/exe` of a binary replaced since it was exec'd (an upgrade,
  * a `bun upgrade`) reads back with this glued on. */
@@ -241,51 +252,121 @@ const DELETED_SUFFIX = " (deleted)"
  * refuse to start.
  */
 export function executableFromCmdline(blob: string): string | null {
-  const argv0 = blob.split("\0")[0]
+  const argv0 = argvFromCmdline(blob)[0]
   return argv0 && argv0.length > 0 ? argv0 : null
 }
 
-/** procfs answer for `ExecutableProbe`: the exec'd binary if the kernel will
- * say (`/proc/<pid>/exe`), else argv[0], else nothing. Linux only. */
-function procExecutable(pid: number): string | null {
+/** Every argument out of a `/proc/<pid>/cmdline` blob. The kernel terminates
+ * the last one too, so the trailing empty field is dropped rather than carried
+ * around as an argument nothing passed. */
+export function argvFromCmdline(blob: string): string[] {
+  const argv = blob.split("\0")
+  if (argv.length > 0 && argv[argv.length - 1] === "") argv.pop()
+  return argv
+}
+
+/** procfs answer for `ProcessProbe`. Linux only: everywhere else this returns
+ * nothing and the identity check below is a no-op by design. */
+function procIdentity(pid: number): ProcessIdentity | null {
+  let executable: string | null = null
   try {
     const exe = readlinkSync(`/proc/${pid}/exe`)
-    if (exe.length > 0) return exe.endsWith(DELETED_SUFFIX) ? exe.slice(0, -DELETED_SUFFIX.length) : exe
+    if (exe.length > 0) executable = exe.endsWith(DELETED_SUFFIX) ? exe.slice(0, -DELETED_SUFFIX.length) : exe
   } catch {
-    // Unreadable (another uid, or a kernel that hides it): fall through to argv[0].
+    // Unreadable (another uid, or a kernel that hides it): argv[0] will do.
   }
+  let argv: string[] = []
   try {
-    return executableFromCmdline(readFileSync(`/proc/${pid}/cmdline`, "utf8"))
+    argv = argvFromCmdline(readFileSync(`/proc/${pid}/cmdline`, "utf8"))
   } catch {
-    return null
+    // Same: a pid we cannot read is a pid we cannot identify.
   }
+  if (executable === null) executable = argv[0] ?? null
+  if (executable === null && argv.length === 0) return null
+  let cwd: string | null = null
+  try {
+    cwd = readlinkSync(`/proc/${pid}/cwd`)
+  } catch {
+    // Only needed to resolve a relative entry; absent, we compare basenames.
+  }
+  return { executable, argv, cwd }
 }
 
 /**
- * True when `pid` looks like a supermux broker rather than whatever inherited
- * a recycled pid.
+ * This process's own entry module — the script `bun` was pointed at — as an
+ * absolute path, or null when there is no such thing.
  *
- * THE COMPARISON IS AN EXECUTABLE IDENTITY, NOT A SUBSTRING. A second broker
- * is the same program we are: it runs the basename of `process.execPath`
- * (`bun`). So the question asked here is "is that pid running what WE are
- * running", answered from `/proc/<pid>/exe` — argv[0] only when the kernel
- * will not say — and never from the whole command line. The earlier version
- * matched "bun" or "mux" anywhere in the joined cmdline, which made
- * `bundle install`, `bunyan`, `tmux attach` and any argument or path
- * containing either substring hold the directory hostage: `claimSocketDir`
- * then refused with `socket-dir-unsafe`, and the user lost every terminal to
- * a recycled pid. That is the lockout this check's own doc comment calls the
- * WORSE failure, produced by the check itself.
- *
- * Still deliberately biased: when we cannot tell (no procfs — macOS, Windows),
- * we say NO and take the directory over, because locking a user out is worse
- * than a second broker that the marker cannot see. Which means this whole
- * enforcement is a no-op off Linux — see vendor/zmx/README.md §5.
+ * Null is the COMPILED case and it is not a failure: a single-file build runs
+ * as `supermux-broker`, `process.argv[1]` is absent or the executable itself,
+ * and the executable name alone is already an identity no bystander shares.
+ * The entry only matters while we run under a generic interpreter.
  */
-export function looksLikeBroker(pid: number, executableOf: ExecutableProbe = procExecutable): boolean {
-  const exe = executableOf(pid)
-  if (!exe) return false
-  return basename(exe) === basename(process.execPath)
+export function brokerEntry(): string | null {
+  const entry = process.argv[1]
+  if (!entry || entry === process.execPath) return null
+  return resolve(entry)
+}
+
+/**
+ * True when `pid` is a supermux broker rather than whatever inherited a
+ * recycled pid.
+ *
+ * TWO FACTS, AND NEITHER ALONE IS AN IDENTITY.
+ *
+ * The first is the executable: `/proc/<pid>/exe` (argv[0] only when the kernel
+ * will not say), compared to ours by basename, never as a substring of the
+ * command line. That much was already here, and it is what stopped
+ * `bundle install`, `bunyan`, `tmux attach` and every path containing "bun" or
+ * "mux" from holding the directory hostage.
+ *
+ * But under an interpreter that fact says only "is this bun". Every unrelated
+ * bun program this user runs — a dev server, a formatter, a scratch script, a
+ * `bunx` one-liner — answers YES, so a recycled pid landing on any of them
+ * makes the broker refuse to start and the user loses every terminal. That is
+ * the same lockout, reached through a different door.
+ *
+ * The second fact closes it, and the marker is where it comes from. We write
+ * that file, so a claiming broker records its OWN entry module beside its pid;
+ * `claimedEntry` is what a later broker reads back. A pid is ours only if it
+ * is still running that exact entry. A recycled pid running some other bun
+ * program is not, and is taken over. A genuinely live second broker — from
+ * this checkout or another one, which matters because `XDG_RUNTIME_DIR` makes
+ * every checkout on a machine share one socket directory — recorded its real
+ * entry and still matches, and is refused.
+ *
+ * Arguments are compared as the kernel recorded them, resolved against the
+ * pid's own `cwd` (a unit file may well have exec'd `bun src/main.ts`), with a
+ * basename comparison as the fallback when the cwd is unreadable.
+ *
+ * DELIBERATELY BIASED, STILL. A marker with no recorded entry (one written by
+ * an older broker) falls back to the executable alone, because refusing to
+ * start over a file we cannot fully read is worse than the second broker it
+ * might miss. And where nothing can be known at all — no procfs, so macOS and
+ * Windows — we say NO and take the directory over, which makes this whole
+ * enforcement a no-op off Linux. See vendor/zmx/README.md §5.
+ */
+export function looksLikeBroker(
+  pid: number,
+  claimedEntry?: string | null,
+  probe: ProcessProbe = procIdentity,
+): boolean {
+  const identity = probe(pid)
+  if (!identity?.executable) return false
+  if (basename(identity.executable) !== basename(process.execPath)) return false
+  // No entry to match: either the marker predates them, or we are a compiled
+  // binary whose own name is the identity. The executable stands alone.
+  if (!claimedEntry || brokerEntry() === null) return true
+  return identity.argv.some(argument => isTheSameEntry(argument, claimedEntry, identity.cwd))
+}
+
+/** One recorded argument against the entry a marker claims. */
+function isTheSameEntry(argument: string, entry: string, cwd: string | null): boolean {
+  if (argument.startsWith("-")) return false // an option, never a script
+  if (argument === entry) return true
+  if (cwd !== null) return resolve(cwd, argument) === entry
+  // No cwd to resolve against: the best that remains is the file's own name,
+  // which still rules out every bun program that is not running OUR script.
+  return basename(argument) === basename(entry)
 }
 
 /**
@@ -338,15 +419,19 @@ export function looksLikeBroker(pid: number, executableOf: ExecutableProbe = pro
  */
 export function claimSocketDir(dir: string): string {
   const path = join(dir, SOCKET_DIR_OWNER_FILE)
-  const mine = `${process.pid}\n`
+  // The pid, and the entry module a later broker checks that pid is still
+  // running. Recording it is what makes "is this pid ours" answerable at all —
+  // see `looksLikeBroker`.
+  const mine = `${process.pid}\n${brokerEntry() ?? ""}\n`
   return withClaimLock(dir, () => {
     // Inside the lock, so the pid read here cannot change before the decision
     // below acts on it. That is the entire point of the lock.
-    const owner = readOwnerPid(path)
-    if (owner !== undefined && owner !== process.pid && isProcessAlive(owner) && looksLikeBroker(owner)) {
+    const owner = readOwnerMarker(path)
+    if (owner !== undefined && owner.pid !== process.pid
+      && isProcessAlive(owner.pid) && looksLikeBroker(owner.pid, owner.entry)) {
       throw new WorkspaceTerminalError(
         "socket-dir-unsafe",
-        `zmx socket dir ${dir} belongs to another broker (pid ${owner}); ` +
+        `zmx socket dir ${dir} belongs to another broker (pid ${owner.pid}); ` +
         "two brokers on one socket directory cannot each tell who owns a terminal's size",
       )
     }
@@ -371,16 +456,26 @@ export function claimSocketDir(dir: string): string {
   })
 }
 
-/** The pid a marker names, or nothing when it is missing, unreadable or not a
- * pid — none of which is evidence of a live owner. */
-function readOwnerPid(path: string): number | undefined {
-  let owner: number
+/**
+ * What a marker claims: a pid on the first line and, since brokers started
+ * recording it, the entry module that pid was running on the second.
+ *
+ * Nothing when the file is missing, unreadable or does not lead with a pid —
+ * none of which is evidence of a live owner. A missing SECOND line is not the
+ * same thing: the marker is a broker's, it simply predates the entry, so the
+ * pid stands and `looksLikeBroker` falls back to the executable alone.
+ */
+function readOwnerMarker(path: string): { pid: number, entry: string | null } | undefined {
+  let lines: string[]
   try {
-    owner = Number(readFileSync(path, "utf8").trim())
+    lines = readFileSync(path, "utf8").split("\n")
   } catch {
     return undefined // missing or unreadable: it says nothing about an owner
   }
-  return Number.isInteger(owner) && owner > 0 ? owner : undefined
+  const pid = Number(lines[0]?.trim())
+  if (!Number.isInteger(pid) || pid <= 0) return undefined
+  const entry = lines[1]?.trim()
+  return { pid, entry: entry ? entry : null }
 }
 
 /** The claim's mutex, a sibling of the marker so it lives and dies with the

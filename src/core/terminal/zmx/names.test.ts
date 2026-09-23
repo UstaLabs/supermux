@@ -14,6 +14,7 @@ import {
   decodeName,
   encodeName,
   ensureSocketDir,
+  argvFromCmdline,
   executableFromCmdline,
   isProcessAlive,
   looksLikeBroker,
@@ -28,6 +29,20 @@ import {
 } from "./names"
 import { isWorkspaceTerminalError } from "../workspace-backend"
 import { workspaceScope } from "../../workspace/scope"
+
+/** The pid line of an owner marker. The rest of the file is the entry module
+ * the claiming broker recorded, which `looksLikeBroker` reads back. */
+const ownerPidIn = (dir: string): number =>
+  Number(readFileSync(join(dir, SOCKET_DIR_OWNER_FILE), "utf8").split("\n")[0]!.trim())
+
+/** `/proc/<pid>/cmdline` is empty until the child has finished exec'ing, and
+ * an identity read before then is no identity at all. */
+const waitForCmdline = async (pid: number): Promise<void> => {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (readFileSync(`/proc/${pid}/cmdline`, "utf8").length > 0) return
+    await Bun.sleep(5)
+  }
+}
 
 const roundTrip = (scope: string, terminalId: string) =>
   decodeName(encodeName({ scope, terminalId }))
@@ -235,12 +250,15 @@ describe("zmx name and socket-path limits", () => {
 
 describe("zmx broker identity", () => {
   /** A procfs stand-in: what `/proc/<pid>/cmdline` would hold, NUL-separated
-   * exactly as the kernel writes it, resolved to argv[0] the way the real
-   * probe does when `/proc/<pid>/exe` is unreadable. */
-  const fromCmdlines = (blobs: Record<number, string>) =>
+   * exactly as the kernel writes it, read as argv[0] plus the argument vector
+   * the way the real probe does when `/proc/<pid>/exe` is unreadable. `cwd` is
+   * null, so a relative argument falls back to its basename — which is the
+   * unreadable-cwd case the real probe also has to survive. */
+  const fromCmdlines = (blobs: Record<number, string>, cwd: string | null = null) =>
     (pid: number) => {
       const blob = blobs[pid]
-      return blob === undefined ? null : executableFromCmdline(blob)
+      if (blob === undefined) return null
+      return { executable: executableFromCmdline(blob), argv: argvFromCmdline(blob), cwd }
     }
 
   test("a pid running something else entirely is NOT a broker", () => {
@@ -260,22 +278,75 @@ describe("zmx broker identity", () => {
       109: "node\0/srv/app/server.js\0--mux-port=9898\0",
     }
     for (const pid of Object.keys(blobs).map(Number)) {
-      expect(looksLikeBroker(pid, fromCmdlines(blobs))).toBe(false)
+      expect(looksLikeBroker(pid, null, fromCmdlines(blobs))).toBe(false)
     }
   })
 
   test("a pid running OUR OWN executable is a broker", () => {
-    // A second broker is the same program we are, so identity is "runs what we
-    // run" — argv[0]'s basename, exactly, never a substring of the arguments.
+    // A second broker is the same program we are, so the first half of the
+    // identity is "runs what we run" — argv[0]'s basename, exactly, never a
+    // substring of the arguments.
     const blobs: Record<number, string> = {
       201: `${process.execPath}\0/srv/supermux/dist/main.js\0`,
       202: `${process.execPath}\0`,
     }
     for (const pid of Object.keys(blobs).map(Number)) {
-      expect(looksLikeBroker(pid, fromCmdlines(blobs))).toBe(true)
+      expect(looksLikeBroker(pid, null, fromCmdlines(blobs))).toBe(true)
     }
     // ...and this process, through the real procfs probe.
     if (process.platform === "linux") expect(looksLikeBroker(process.pid)).toBe(true)
+  })
+
+  test("ANOTHER BUN APP IS NOT OUR BROKER — the executable alone is not an identity", () => {
+    // Under an interpreter, "runs what we run" says only "is this bun". Every
+    // unrelated bun program this user runs answers yes, so a recycled pid
+    // landing on any of them made the broker refuse to start and the user lost
+    // every terminal — the same lockout as the old substring test, reached
+    // through a different door.
+    //
+    // The marker is what closes it: a broker records its own entry module
+    // beside its pid, and a pid is ours only while it is still running THAT.
+    const entry = "/srv/supermux/src/main.ts"
+    const others: Record<number, string> = {
+      301: `${process.execPath}\0-e\0setTimeout(() => {}, 30_000)\0`,       // bun -e
+      302: `${process.execPath}\0run\0dev\0`,                               // somebody's dev server
+      303: `${process.execPath}\0/home/x/scratch/scrape.ts\0`,              // a scratch script
+      304: `${process.execPath}\0x\0prettier\0--write\0.\0`,                // bunx
+      305: `${process.execPath}\0/srv/other-app/src/main.js\0`,             // a DIFFERENT main
+      306: `${process.execPath}\0--inspect\0/srv/supermux/src/shim.ts\0`,   // our repo, other entry
+    }
+    for (const pid of Object.keys(others).map(Number)) {
+      expect(looksLikeBroker(pid, entry, fromCmdlines(others))).toBe(false)
+    }
+
+    // A real second broker still is one — including one started from another
+    // checkout, which matters because XDG_RUNTIME_DIR gives every checkout on
+    // a machine the same socket directory. It recorded its own entry, and it
+    // is still running it.
+    const brokers: Record<number, string> = {
+      311: `${process.execPath}\0${entry}\0`,
+      312: `${process.execPath}\0--smol\0${entry}\0--port\x009898\0`,
+    }
+    for (const pid of Object.keys(brokers).map(Number)) {
+      expect(looksLikeBroker(pid, entry, fromCmdlines(brokers))).toBe(true)
+    }
+    // ...and one the unit file exec'd with a RELATIVE entry, resolved against
+    // the pid's own working directory rather than guessed at.
+    expect(looksLikeBroker(
+      321, entry, fromCmdlines({ 321: `${process.execPath}\0src/main.ts\0` }, "/srv/supermux"),
+    )).toBe(true)
+    expect(looksLikeBroker(
+      321, entry, fromCmdlines({ 321: `${process.execPath}\0src/main.ts\0` }, "/srv/other-app"),
+    )).toBe(false)
+  })
+
+  test("a marker with no recorded entry falls back to the executable", () => {
+    // Written by a broker that predates the entry line. Refusing to start over
+    // a file we cannot fully read would be worse than the second broker this
+    // might miss, so the older, looser check stands for it.
+    const blobs = { 401: `${process.execPath}\0/srv/supermux/src/main.ts\0` }
+    expect(looksLikeBroker(401, null, fromCmdlines(blobs))).toBe(true)
+    expect(looksLikeBroker(401, undefined, fromCmdlines(blobs))).toBe(true)
   })
 
   test("a live process we may not SIGNAL is alive, not dead", () => {
@@ -290,9 +361,11 @@ describe("zmx broker identity", () => {
   })
 
   test("an unreadable or empty procfs answer is not a broker", () => {
-    expect(looksLikeBroker(1234, () => null)).toBe(false)
-    expect(looksLikeBroker(1234, fromCmdlines({ 1234: "" }))).toBe(false)
-    expect(looksLikeBroker(1234, fromCmdlines({ 1234: "\0\0" }))).toBe(false)
+    expect(looksLikeBroker(1234, null, () => null)).toBe(false)
+    expect(looksLikeBroker(1234, null, fromCmdlines({ 1234: "" }))).toBe(false)
+    expect(looksLikeBroker(1234, null, fromCmdlines({ 1234: "\0\0" }))).toBe(false)
+    expect(argvFromCmdline("")).toEqual([])
+    expect(argvFromCmdline("bun\0-e\0x\0")).toEqual(["bun", "-e", "x"])
     expect(executableFromCmdline("")).toBeNull()
   })
 })
@@ -330,7 +403,7 @@ describe("zmx socket directory", () => {
     const marker = join(dir, SOCKET_DIR_OWNER_FILE)
 
     expect(claimSocketDir(dir)).toBe(dir)
-    expect(readFileSync(marker, "utf8").trim()).toBe(String(process.pid))
+    expect(ownerPidIn(dir)).toBe(process.pid)
     // Idempotent for the process that already holds it: a second backend over
     // the same directory is a restart in a test, not a second broker.
     expect(claimSocketDir(dir)).toBe(dir)
@@ -338,7 +411,7 @@ describe("zmx socket directory", () => {
     // A pid nothing is running under is a broker that died without cleaning up.
     writeFileSync(marker, "2147483646\n")
     expect(claimSocketDir(dir)).toBe(dir)
-    expect(readFileSync(marker, "utf8").trim()).toBe(String(process.pid))
+    expect(ownerPidIn(dir)).toBe(process.pid)
 
     // ...and so is an unreadable or nonsense marker: it says nothing about a
     // live owner, and refusing on it would lock the user out for a typo.
@@ -403,8 +476,7 @@ console.log(result)
   ) => {
     expect(race.outcomes.filter(outcome => outcome === "won")).toHaveLength(1)
     expect(race.outcomes.filter(outcome => outcome.startsWith("lost:socket-dir-unsafe"))).toHaveLength(1)
-    const owner = Number(readFileSync(join(dir, SOCKET_DIR_OWNER_FILE), "utf8").trim())
-    expect(race.pids).toContain(owner)
+    expect(race.pids).toContain(ownerPidIn(dir))
   }
 
   // procfs only, like the refusal it asserts: off Linux `looksLikeBroker` says
@@ -443,7 +515,7 @@ console.log(result)
       // ...and the loser's refusal is about the WINNER, not about the corpse
       // both of them found: a broker that refused over a pid nothing is
       // running under would be refusing for a reason that cannot be acted on.
-      expect(readFileSync(join(dir, SOCKET_DIR_OWNER_FILE), "utf8").trim()).not.toBe("2147483646")
+      expect(ownerPidIn(dir)).not.toBe(2147483646)
     }, 30_000)
 
   test("the claim lock is released, even when the claim is refused", () => {
@@ -470,22 +542,54 @@ console.log(result)
     "a socket dir held by ANOTHER live broker is refused, not shared", async () => {
       // The `owner:false` deduction in backend.ts is only sound while ONE
       // process owns every broker viewer of a target; two brokers on one
-      // directory would each miss the other's leases. A live, bun-shaped
-      // process is what a lingering old broker looks like during a restart.
+      // directory would each miss the other's leases. A live process running
+      // our own entry module is what a lingering old broker looks like during
+      // a restart — and the marker names that entry, because the broker that
+      // wrote the marker recorded it.
       const dir = mkdtempSync(join(tmpdir(), "zmx-claim-"))
-      const stand_in = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30_000)"], {
+      const entry = join(dir, "broker-entry.ts")
+      writeFileSync(entry, "setTimeout(() => {}, 30_000)\n")
+      const stand_in = Bun.spawn([process.execPath, entry], {
         stdin: "ignore", stdout: "ignore", stderr: "ignore",
       })
       try {
-        // /proc/<pid>/cmdline is empty until the child has finished exec'ing.
-        for (let attempt = 0; attempt < 200; attempt++) {
-          if (readFileSync(`/proc/${stand_in.pid}/cmdline`, "utf8").length > 0) break
-          await Bun.sleep(5)
-        }
-        writeFileSync(join(dir, SOCKET_DIR_OWNER_FILE), `${stand_in.pid}\n`)
+        await waitForCmdline(stand_in.pid)
+        writeFileSync(join(dir, SOCKET_DIR_OWNER_FILE), `${stand_in.pid}\n${entry}\n`)
         expect(throwsCode(() => claimSocketDir(dir), "socket-dir-unsafe")).toBe(true)
       } finally {
         stand_in.kill()
+      }
+    })
+
+  // procfs only: without it `looksLikeBroker` already answers "not a broker"
+  // for everything, so there is no tightening left to demonstrate.
+  test.skipIf(process.platform !== "linux")(
+    "A DIFFERENT BUN APP IS NOT OUR BROKER — the directory is taken over, not refused",
+    async () => {
+      // THE LOCKOUT THIS CLOSES, WITH REAL PROCESSES. "Runs the same
+      // executable we do" is, under an interpreter, only "is this bun". The
+      // user's dev server, formatter, scratch script and `bunx` one-liner all
+      // answered yes, so a recycled pid landing on any of them made the broker
+      // refuse to start with `socket-dir-unsafe` and the user lost every
+      // terminal — for a process that has nothing to do with supermux.
+      //
+      // The marker's recorded entry is the second fact that settles it: this
+      // pid is bun, it is alive, and it is NOT running what the marker says a
+      // broker was running, so it is a corpse's pid handed to a stranger.
+      const dir = mkdtempSync(join(tmpdir(), "zmx-stranger-"))
+      const stranger = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30_000)"], {
+        stdin: "ignore", stdout: "ignore", stderr: "ignore",
+      })
+      try {
+        await waitForCmdline(stranger.pid)
+        writeFileSync(
+          join(dir, SOCKET_DIR_OWNER_FILE),
+          `${stranger.pid}\n/srv/supermux/src/main.ts\n`,
+        )
+        expect(claimSocketDir(dir)).toBe(dir)
+        expect(ownerPidIn(dir)).toBe(process.pid)
+      } finally {
+        stranger.kill()
       }
     })
 

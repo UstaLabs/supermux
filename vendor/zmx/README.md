@@ -480,18 +480,31 @@ clean pin + verified patch (pass), an unrelated edit in the upstream cache
   needs no lock: it cannot take a held lease at all (`setLeader` refuses).
   (The marker is a pid file, not a kernel lock: it has to be readable, because
   "who has this directory" is the first question when a broker refuses to
-  start. The claim itself is an EXCLUSIVE create — `O_CREAT | O_EXCL` — so two
-  brokers starting in the same instant cannot both read "no owner" and both
-  win; only its `EEXIST` falls through to reading the marker and judging its
-  owner. A pid that is alive but is not a broker — procfs says so — is taken
-  over rather than deferred to; locking a user out of their terminals over a
-  recycled pid is the worse failure.)
+  start. It holds the pid on the first line and the claiming broker's own
+  ENTRY MODULE on the second — see the identity paragraph below. The claim
+  itself runs under a `mkdir` mutex, because read-decide-write is the whole
+  operation and all three have to be one step: an exclusive create
+  (`O_CREAT | O_EXCL`) settles an EMPTY directory, but over a STALE marker the
+  create fails for everyone and two brokers restarting together both read the
+  same dead pid, both judge it dead, and both write. A lock older than ten
+  seconds was abandoned mid-claim and is broken rather than locking the
+  directory forever. A pid that is alive but is not a broker — procfs says so
+  — is taken over rather than deferred to; locking a user out of their
+  terminals over a recycled pid is the worse failure.)
 
   **This enforcement is Linux-only, and silently so.** "Is that pid a broker"
-  is answered from `/proc/<pid>/exe` (its basename against
-  `process.execPath`'s — an executable identity, never a substring of the
-  command line, which used to make `bundle install` or any path containing
-  "mux" look like a live broker and lock the user out). There is no procfs on
+  is TWO facts, and neither alone is an identity. The first is `/proc/<pid>/exe`
+  (its basename against `process.execPath`'s — an executable identity, never a
+  substring of the command line, which used to make `bundle install` or any
+  path containing "mux" look like a live broker and lock the user out). Under
+  an interpreter that fact says only "is this bun", so every unrelated bun
+  program the user runs answered yes and a recycled pid landing on one locked
+  them out just the same. The second fact closes it: a claiming broker records
+  its own entry module in the marker, and a pid is ours only while it is still
+  running THAT — compared against the pid's `/proc/<pid>/cmdline`, resolved
+  against its `/proc/<pid>/cwd` (the unit file execs `bun src/main.ts`). A
+  marker with no recorded entry (written by an older broker) falls back to the
+  executable alone. There is no procfs on
   macOS or Windows, and `looksLikeBroker` is deliberately biased towards taking
   the directory over when it cannot tell — so **on those platforms a second
   broker is not refused at all**, and the `owner:false` deduction rests on the
