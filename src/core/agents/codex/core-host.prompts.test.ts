@@ -27,7 +27,7 @@ function fakeDriver(): AgentDriver {
   }
 }
 
-test("codex ask-family mode uses on-request/workspace-write/host", async () => {
+test("codex ask mode uses untrusted/workspace-write/host", async () => {
   const captured: CodexOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "codex-host-"))
   dirs.push(dir)
@@ -39,11 +39,11 @@ test("codex ask-family mode uses on-request/workspace-write/host", async () => {
     },
   })
   const extra = {
-    sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir, permissionMode: "on-request+workspace-write",
+    sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir, permissionMode: "ask",
   }
   const handle = host.register({ id: "id1", env: {}, extra })
   await handle.start({ cwd: dir })
-  expect(captured[0]?.approvalPolicy).toBe("on-request")
+  expect(captured[0]?.approvalPolicy).toBe("untrusted")
   expect(captured[0]?.sandbox).toBe("workspace-write")
   expect(captured[0]?.permissionPrompts).toBe("host")
   await handle.stop({ mode: "shutdown" })

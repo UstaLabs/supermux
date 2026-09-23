@@ -1,6 +1,6 @@
 import type { AgentDriver, ContentBlock, HistoryOptions, PermissionHandler, SessionConfiguration, CloseOptions } from '../types.js'
 import { requireCloseMode } from '../types.js'
-import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
+import type { RequestPermissionResponse, ToolKind } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 import { createCodexNormalizer } from './normalize.js'
 
@@ -303,8 +303,31 @@ export function codex(options: CodexOptions): AgentDriver {
       }
       return undefined
     }
-    function hostOptions(params: any) {
+    // Codex asks for MCP tool approval through `mcpServer/elicitation/request` with
+    // `_meta.codex_approval_kind === 'mcp_tool_call'` (observed on the real app-server:
+    // `_meta.persist: ['session','always']`, message `Allow the <server> MCP server to
+    // run tool "<name>"?`); the answer is an MCP elicitation result
+    // `{ action: 'accept' | 'decline' | 'cancel', content?, _meta? }`.
+    function isMcpToolApproval(method: string, params: any): boolean {
+      return method === 'mcpServer/elicitation/request' && params?._meta?.codex_approval_kind === 'mcp_tool_call'
+    }
+    function elicitationTool(params: any): { server: string; tool: string } {
+      const server = typeof params?.serverName === 'string' ? params.serverName : 'mcp'
+      const fromMessage = typeof params?.message === 'string' ? /tool "([^"]+)"/.exec(params.message)?.[1] : undefined
+      return { server, tool: fromMessage ?? 'tool' }
+    }
+    function elicitationPersists(params: any, scope: 'session' | 'always'): boolean {
+      const persist = params?._meta?.persist
+      return Array.isArray(persist) && persist.includes(scope)
+    }
+    function hostOptions(params: any, method?: string) {
       const options: { optionId: string; name: string; kind: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always' }[] = [...permissionOptions]
+      if (method && isMcpToolApproval(method, params)) {
+        // "Always" here means for this session (Codex's own scope); the global
+        // 'always' persistence writes the user's config and is not offered.
+        if (elicitationPersists(params, 'session')) options.splice(1, 0, { optionId: 'allow_always', name: 'Allow for this session', kind: 'allow_always' as const })
+        return options
+      }
       if (hasAlwaysDecision(params?.availableDecisions)) {
         options.splice(1, 0, { optionId: 'allow_always', name: 'Allow always', kind: 'allow_always' as const })
       }
@@ -320,11 +343,15 @@ export function codex(options: CodexOptions): AgentDriver {
         return undefined
       }
     }
-    async function askHost(params: any, signal: AbortSignal) {
+    async function askHost(params: any, signal: AbortSignal, method?: string) {
+      const mcpApproval = method ? isMcpToolApproval(method, params) : false
+      const mcp = mcpApproval ? elicitationTool(params) : undefined
       const toolCallId = typeof params?.approvalId === 'string' && params.approvalId
         ? params.approvalId
-        : typeof params?.itemId === 'string' && params.itemId ? params.itemId : 'approval'
-      const title = typeof params?.command === 'string' && params.command
+        : typeof params?.itemId === 'string' && params.itemId ? params.itemId : mcp ? `mcp:${mcp.server}:${mcp.tool}` : 'approval'
+      const title = mcp
+        ? `${mcp.server}: ${mcp.tool}`
+        : typeof params?.command === 'string' && params.command
         ? params.command
         : typeof params?.grantRoot === 'string' && params.grantRoot ? params.grantRoot : 'tool'
       let cancel!: () => void
@@ -339,8 +366,8 @@ export function codex(options: CodexOptions): AgentDriver {
           Promise.resolve().then(() => ask({
             sessionId: agentSessionId!,
             coreSessionId: context.sessionId,
-            toolCall: { toolCallId, title, kind: typeof params?.command === 'string' ? 'execute' : 'edit', rawInput: params },
-            options: hostOptions(params),
+            toolCall: { toolCallId, title, kind: (mcp ? 'other' : typeof params?.command === 'string' ? 'execute' : 'edit') as ToolKind, rawInput: mcp ? { server: mcp.server, tool: mcp.tool, arguments: params?._meta?.tool_params } : params },
+            options: hostOptions(params, method),
             detail: {
               ...(typeof params?.command === 'string' ? { command: params.command } : {}),
               ...(typeof params?.cwd === 'string' ? { cwd: params.cwd } : {}),
@@ -357,7 +384,15 @@ export function codex(options: CodexOptions): AgentDriver {
       const isCommand = method === 'item/commandExecution/requestApproval'
       const isFile = method === 'item/fileChange/requestApproval'
       const isPermissions = method === 'item/permissions/requestApproval'
-      if (!isCommand && !isFile && !isPermissions) {
+      const isMcpApproval = isMcpToolApproval(method, message.params)
+      if (method === 'mcpServer/elicitation/request' && !isMcpApproval) {
+        // Free-form MCP elicitations (server-driven forms) are not surfaced yet: decline
+        // explicitly so the server's tool call fails fast instead of hanging.
+        try { rpc.write({ id: message.id, result: { action: 'decline' } }) }
+        catch (error) { if (!fatal) fail(error instanceof Error ? error : new Error(String(error))) }
+        return
+      }
+      if (!isCommand && !isFile && !isPermissions && !isMcpApproval) {
         try { rpc.write({ id: message.id, error: { code: -32601, message: 'Client does not support this server request' } }) }
         catch (error) { if (!fatal) fail(error instanceof Error ? error : new Error(String(error))) }
         return
@@ -365,7 +400,7 @@ export function codex(options: CodexOptions): AgentDriver {
       const params = message.params
       const key = JSON.stringify(message.id)
       const fingerprint = permissionFingerprint(method, params)
-      const denyResult = isPermissions ? deniedPermissionsResult() : { decision: 'decline' as const }
+      const denyResult: Record<string, unknown> = isPermissions ? deniedPermissionsResult() : isMcpApproval ? { action: 'decline' } : { decision: 'decline' as const }
       const requestThreadId = agentSessionId
       const requestTurnId = typeof params?.turnId === 'string' ? params.turnId : undefined
       const unfinished = liveUnfinished()
@@ -386,7 +421,12 @@ export function codex(options: CodexOptions): AgentDriver {
         writeResult(message.id, sameTurn && answered.fingerprint === fingerprint ? answered.result : denyResult)
         return
       }
-      if (!matching) { writeResult(message.id, denyResult); return }
+      if (!matching) {
+        // Without host prompts the mode says "never ask": an MCP tool approval is
+        // granted for this call instead of failing the tool behind the user's back.
+        writeResult(message.id, isMcpApproval && !hostPermissions ? { action: 'accept', content: {} } : denyResult)
+        return
+      }
       if (pendingPermissions.has(key)) return
       if (pendingPermissions.size >= MAX_PENDING_PERMISSIONS) { writeResult(message.id, denyResult); return }
       if (isPermissions) {
@@ -412,7 +452,10 @@ export function codex(options: CodexOptions): AgentDriver {
             && current.id === capturedTurnId
             && agentSessionId === requestThreadId
           let result: Record<string, unknown> = denyResult
-          if (liveOk && optionId === 'allow_once') result = { decision: 'accept' as const }
+          if (isMcpApproval) {
+            if (liveOk && optionId === 'allow_once') result = { action: 'accept', content: {} }
+            else if (liveOk && optionId === 'allow_always' && elicitationPersists(params, 'session')) result = { action: 'accept', content: {}, _meta: { persist: 'session' } }
+          } else if (liveOk && optionId === 'allow_once') result = { decision: 'accept' as const }
           else if (liveOk && optionId === 'allow_always') {
             const amendment = execpolicyAmendment(params)
             result = amendment
@@ -428,7 +471,7 @@ export function codex(options: CodexOptions): AgentDriver {
           } catch { /* never reject the host-callback promise */ }
         }
       }
-      void askHost(params, controller.signal).then(answer => {
+      void askHost(params, controller.signal, method).then(answer => {
         settle(answer.optionId)
       }, () => {
         settle(undefined)
@@ -450,7 +493,7 @@ export function codex(options: CodexOptions): AgentDriver {
       if (message.id != null) {
         const requestTurnId = typeof params?.turnId === 'string' ? params.turnId : undefined
         if (requestTurnId && !live.has(requestTurnId) && !tombstones.has(requestTurnId)) bindLive(requestTurnId, 'native')
-        if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval' || method === 'item/permissions/requestApproval' || method === 'item/tool/requestUserInput' || method === 'applyPatchApproval' || method === 'execCommandApproval') {
+        if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval' || method === 'item/permissions/requestApproval' || method === 'item/tool/requestUserInput' || method === 'applyPatchApproval' || method === 'execCommandApproval' || method === 'mcpServer/elicitation/request') {
           context.onUpdate({ protocol: 'native', value: { method, params, id: message.id } })
         }
         handleServerRequest(message)

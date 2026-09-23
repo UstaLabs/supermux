@@ -98,6 +98,8 @@ createInterface({input:process.stdin}).on('line',line=>{
     if(text==='ask-command'||text==='ask-hang'){ask('approval','item/commandExecution/requestApproval',{command:'npm test',approvalId:'cb-1'});return}
     if(text==='ask-always'){ask('approval','item/commandExecution/requestApproval',{command:'ls',approvalId:'al-1',proposedExecpolicyAmendment:['ls'],availableDecisions:['accept',{acceptWithExecpolicyAmendment:{execpolicy_amendment:['ls']}},'cancel']});return}
     if(text==='ask-file'){ask('approval','item/fileChange/requestApproval',{grantRoot:'/tmp'});return}
+    // Real app-server shape for an MCP tool approval (captured 2026-09-23).
+    if(text==='ask-mcp'){ask('elicit-1','mcpServer/elicitation/request',{serverName:'mux-shim',mode:'form',_meta:{codex_approval_kind:'mcp_tool_call',persist:['session','always'],tool_params:{name:'Node.js Runtime Test'}},message:'Allow the mux-shim MCP server to run tool "rename_session"?',requestedSchema:{type:'object',properties:{}}});return}
     if(text==='ask-stale'){pendingApprovals.add('stale');send({id:'stale',method:'item/commandExecution/requestApproval',params:{threadId:'other-thread',turnId:id,itemId:'item-1',command:'ls'}});return}
     if(text==='ask-unknown'){pendingApprovals.add('unknown');send({id:'unknown',method:'item/tool/requestUserInput',params:{threadId:thread,turnId:id}});return}
     if(text==='ask-permissions'){ask('perm-approval','item/permissions/requestApproval',{cwd:'/',reason:null,permissions:{network:null,fileSystem:null},startedAtMs:0,environmentId:null});return}
@@ -122,7 +124,12 @@ createInterface({input:process.stdin}).on('line',line=>{
   pendingApprovals.delete(m.id)
   if(m.error){done('turn-'+turn,'failed');return}
   const current=process.env.MODE==='native-ask'?(process.env.TURN_ID||'auto-1'):'turn-'+turn
-  if(m.result && Object.prototype.hasOwnProperty.call(m.result,'permissions')){
+  if(m.id==='elicit-1'){
+    const expected=process.env.EXPECT_ELICITATION||'decline'
+    if(m.result?.action!==expected) process.exit(4)
+    if(expected==='accept' && process.env.EXPECT_PERSIST && m.result?._meta?.persist!==process.env.EXPECT_PERSIST) process.exit(4)
+    if(expected==='accept' && !process.env.EXPECT_PERSIST && m.result?._meta) process.exit(4)
+  } else if(m.result && Object.prototype.hasOwnProperty.call(m.result,'permissions')){
     if(m.result.scope!=='turn' || Object.keys(m.result.permissions||{}).length!==0) process.exit(4)
   } else {
     const expected=process.env.EXPECT_DECISION

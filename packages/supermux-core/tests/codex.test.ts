@@ -550,6 +550,29 @@ test('host allow_always writes acceptWithExecpolicyAmendment',async()=>{
  finally{await r.close({ mode: "shutdown" })}
 })
 
+test('MCP tool approval (mcpServer/elicitation/request) is a permission request; allow once / for this session / reject',async()=>{
+ for(const [optionId,expect_action,persist] of [['allow_once','accept',''],['allow_always','accept','session'],['reject_once','decline','']] as const){
+  let seen:{title:string,options:string[]}|undefined
+  const r=await driver({EXPECT_ELICITATION:expect_action,...(persist?{EXPECT_PERSIST:persist}:{})},{permissionPrompts:'host'}).open(ctx({
+   requestPermission:async req=>{
+    seen={title:req.toolCall.title??'',options:req.options.map(o=>o.optionId)}
+    return {outcome:{outcome:'selected',optionId}}
+   },
+  }))
+  try{
+   expect(await r.prompt(input('ask-mcp'),signal())).toEqual({stopReason:'end_turn'})
+   expect(seen?.title).toBe('mux-shim: rename_session')
+   expect(seen?.options).toEqual(['allow_once','allow_always','reject_once'])
+  }finally{await r.close({ mode: "shutdown" })}
+ }
+})
+
+test('without host prompts an MCP tool approval is granted (the mode says never ask)',async()=>{
+ const r=await driver({EXPECT_ELICITATION:'accept'},{permissionPrompts:'none'}).open(ctx())
+ try{expect(await r.prompt(input('ask-mcp'),signal())).toEqual({stopReason:'end_turn'})}
+ finally{await r.close({ mode: "shutdown" })}
+})
+
 test('onRuntimeRequest exposes skills/list and refuses turn/thread methods after close',async()=>{
  let hooked:{sessionId:string,agentSessionId:string,request:(method:string,params:unknown)=>Promise<unknown>}|undefined
  const r=await driver({}, {onRuntimeRequest:(info,request)=>{hooked={...info,request}}}).open(ctx())

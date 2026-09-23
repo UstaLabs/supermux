@@ -38,7 +38,7 @@ test("unknown id throws; missing id resolves to default", () => {
   expect(() => driverSettingsFor("grok", "nope")).toThrow(/unknown permission mode/)
   expect(resolvePermissionMode("grok", undefined)).toBe(defaultPermissionMode("grok"))
   expect(isPermissionMode("claude", "ask")).toBe(true)
-  expect(isPermissionMode("claude", "never+full-access")).toBe(false)
+  expect(isPermissionMode("claude", "full-access")).toBe(false)
 })
 
 test("claude ask leaves permissionMode undefined; bypass uses bypassPermissions", () => {

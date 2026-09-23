@@ -4,7 +4,7 @@
 ALTER TABLE sessions ADD COLUMN permission_mode TEXT;
 
 UPDATE sessions SET permission_mode = CASE
-  WHEN prompts = 1 AND agent = 'codex' THEN 'on-request+workspace-write'
+  WHEN prompts = 1 AND agent = 'codex' THEN 'ask'
   WHEN prompts = 1 THEN 'ask'
   ELSE NULL
 END;

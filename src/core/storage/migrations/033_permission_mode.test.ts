@@ -14,7 +14,7 @@ test("033 adds permission_mode and backfills from prompts", () => {
   const codex = db.query("SELECT permission_mode FROM sessions WHERE id = 'c1'").get() as { permission_mode: string | null }
   const claude = db.query("SELECT permission_mode FROM sessions WHERE id = 'd1'").get() as { permission_mode: string | null }
   expect(grok.permission_mode).toBe("ask")
-  expect(codex.permission_mode).toBe("on-request+workspace-write")
+  expect(codex.permission_mode).toBe("ask")
   expect(claude.permission_mode).toBeNull()
 })
 

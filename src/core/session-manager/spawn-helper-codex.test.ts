@@ -112,10 +112,10 @@ describe("Codex spawn", () => {
       workdir,
       requestedName: "codex-ask",
       agent: AgentKind.Codex,
-      permissionMode: "on-request+workspace-write",
+      permissionMode: "auto",
     })
 
-    expect(reg.get(result.session_id)?.permissionMode).toBe("on-request+workspace-write")
+    expect(reg.get(result.session_id)?.permissionMode).toBe("auto")
     expect(child.codexCalls).toHaveLength(1)
     expect(child.codexCalls[0]?.options.approvalPolicy).toBe("on-request")
     expect(child.codexCalls[0]?.options.sandbox).toBe("workspace-write")

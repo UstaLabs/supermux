@@ -57,9 +57,11 @@ const CLAUDE: PermissionModeEntry[] = [
 ]
 
 const CODEX: PermissionModeEntry[] = [
-  { id: "never+full-access", label: "Never + full access", description: "Never ask; danger-full-access sandbox.", default: true },
-  { id: "on-request+workspace-write", label: "On request + workspace write", description: "Ask on request; workspace-write sandbox." },
-  { id: "untrusted+read-only", label: "Untrusted + read-only", description: "Untrusted policy; read-only sandbox." },
+  // Named after Codex's own /approvals presets so the picker reads like the Codex app.
+  { id: "full-access", label: "Full access", description: "Codex's Full Access preset: never asks, no sandbox.", default: true },
+  { id: "auto", label: "Auto", description: "Codex's Auto preset: works in the workspace without asking; asks only to leave it (network, other paths)." },
+  { id: "ask", label: "Ask", description: "Approve each command before it runs (trusted read-only commands excepted); workspace-write sandbox." },
+  { id: "read-only", label: "Read only", description: "Codex's Read Only preset: no edits, no commands with side effects; asks to escalate." },
 ]
 
 const GROK: PermissionModeEntry[] = [
@@ -95,7 +97,7 @@ const ASK_IDS: Record<AgentKind, string> = {
   grok: "ask",
   opencode: "ask",
   cursor: "ask",
-  codex: "on-request+workspace-write",
+  codex: "ask",
 }
 
 export function permissionCatalog(): Record<AgentKind, PermissionModeEntry[]> {
@@ -149,13 +151,16 @@ export function driverSettingsFor(agent: AgentKind, id: string): DriverSettings 
     return { agent, permissionMode, permissionPrompts: "host" }
   }
   if (agent === "codex") {
-    if (id === "never+full-access") {
+    if (id === "full-access") {
       return { agent, approvalPolicy: "never", sandbox: "danger-full-access", permissionPrompts: "none" }
     }
-    if (id === "on-request+workspace-write") {
+    if (id === "auto") {
       return { agent, approvalPolicy: "on-request", sandbox: "workspace-write", permissionPrompts: "host" }
     }
-    return { agent, approvalPolicy: "untrusted", sandbox: "read-only", permissionPrompts: "host" }
+    if (id === "ask") {
+      return { agent, approvalPolicy: "untrusted", sandbox: "workspace-write", permissionPrompts: "host" }
+    }
+    return { agent, approvalPolicy: "on-request", sandbox: "read-only", permissionPrompts: "host" }
   }
   if (agent === "grok") {
     return { agent, alwaysApprove: id === "always-approve" }
