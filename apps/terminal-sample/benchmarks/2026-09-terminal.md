@@ -72,19 +72,23 @@ five already misses the 16.7 ms budget with an empty window, and one frame in th
 ## 4. The parse profile: what a frame costs **before anything is drawn**
 
 `--mode=parse`: no window, no Compose. One session at 120x40 with a renderer that acknowledges as
-fast as it can, fed 30 MiB of the ANSI fixture unthrottled.
+fast as it can, fed 30 MiB of the fixture unthrottled. Both fixtures, so the cost of the escape
+sequences themselves is visible.
 
-| metric | value |
-|---|---|
-| fixture | `ansi`, 10 MiB × 3 |
-| bytes fed | 30.00 MiB in **3149 ms** |
-| **throughput (parser + codec + session)** | **9.53 MiB/s** |
-| frames published | 119 (all full — see below), 264 346 bytes per frame |
-| **`ViewportModel.apply` p50** | **0.123 ms** |
-| `ViewportModel.apply` p95 | 0.217 ms |
-| `ViewportModel.apply` max | 1.442 ms |
-| engine history at end | 31 234 rows |
-| RSS | 129 MiB → 263 MiB |
+| metric | `--fixture=ansi` | `--fixture=plain` |
+|---|---|---|
+| bytes fed | 30.00 MiB in **3149 ms** | 30.00 MiB in **1649 ms** |
+| **throughput (parser + codec + session)** | **9.53 MiB/s** | **18.19 MiB/s** |
+| frames published | 119 (all full), 264 346 B/frame | 117 (all full), 268 865 B/frame |
+| **`ViewportModel.apply` p50** | **0.123 ms** | **0.143 ms** |
+| `ViewportModel.apply` p95 | 0.217 ms | 0.312 ms |
+| `ViewportModel.apply` max | 1.442 ms | 3.060 ms |
+| engine history at end | 31 234 rows | 32 048 rows |
+| RSS | 129 MiB → 263 MiB | 118 MiB → 264 MiB |
+
+**Escape sequences cost about half the throughput**: the same 30 MiB of plain UTF-8 goes through at
+18.19 MiB/s and the SGR/cursor/erase-laden version at 9.53 MiB/s. The row model does not care —
+`apply` is within noise of itself either way, because what it copies is decoded cells, not bytes.
 
 Two things this settles:
 
@@ -101,13 +105,131 @@ Two things this settles:
 
 ## 5. The 10-minute run
 
-<!-- HEADLINE-RUN -->
+```
+--minutes=10 --warmup=15 --terminals=4 --fixture=ansi --rate=1048576
+--stream-seconds=60 --scroll-lines=50000
+```
+
+Four terminals, 1 MiB/s each (**4 MiB/s aggregate**, a firehose by shell standards), one visible and
+focused. The pane converged on the target: **120x40 cells, cell 8x22 px**.
+
+### Frame times
+
+| phase | frames | p50 | p95 | p99 | max | >16.7 ms | >33.3 ms | >100 ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| stream | 1925 | **55.06** | **142.78** | 219.67 | 959.3 | 1886 | 1401 | 261 |
+| scroll + stream | 8654 | **55.24** | **130.74** | 212.94 | 978.8 | 8534 | 6537 | 949 |
+| warm-up (excluded) | 106 | 106.30 | 613.31 | 872.09 | 1223.9 | 106 | 96 | 57 |
+| *(control: blank window, §3)* | *3565* | *15.03* | *28.71* | *55.66* | *145.5* | *756* | *124* | *1* |
+
+**Scrolling costs nothing extra.** p50 55.24 ms while scrolling versus 55.06 ms while merely
+streaming, and a *lower* p95 — the local-scroll path is arithmetic plus a paint offset, and it asks
+the engine for a row only when a boundary is crossed. On a machine that could hold 60 Hz at all this
+would be the headline result; here it is visible only as the absence of a difference.
+
+### Throughput, queues, effects
+
+| metric | value | against its bound |
+|---|---|---|
+| output fed | **2.55 GiB** (2 732 695 293 B) in 10 min | the requested rate, exactly: 242.10 MiB / 60.5 s and 242.03 MiB / 60.5 s per stream phase = **4.00 MiB/s** across four terminals, both times |
+| input bytes (engine-encoded) | 578 | synthetic keys through the focused surface's accessory sink |
+| **output queue high water** | **16 826 B in flight** | cap is **1 048 576 B per session** — 1.6% |
+| backpressure | 14 718 waits, **45.6 s total** | across 4 producers over 600 s = **1.9% of producer time**. Applied, and rarely |
+| **refused enqueues** | **0** | nothing was dropped |
+| frames published | 5785 (5711 full) | see §4 on why "full" dominates under a firehose |
+| observer gaps | 0 | the passive tap never fell behind |
+| engine history | 30 925 rows, peak 31 307 | limits are 50 000 lines / 32 MiB — **the BYTE budget binds first**, and the line limit is never reached at 120 columns of this fixture |
+
+### Memory over ten minutes
+
+| t (s) | phase | RSS | heap | history rows | output so far |
+|---:|---|---:|---:|---:|---:|
+| 1 | stream | 700.52 MiB | 232.50 MiB | 31 207 | 2.26 MiB |
+| 21 | stream | 1.07 GiB | 65.36 MiB | 31 071 | 84.14 MiB |
+| 52 | stream | 1.11 GiB | 172.24 MiB | 31 295 | 208.82 MiB |
+| 354 | scroll | 1.13 GiB | 78.07 MiB | 31 089 | 1.38 GiB |
+| 405 | stream | 1.14 GiB | 119.56 MiB | 31 302 | 1.58 GiB |
+| 652 | scroll | 1.15 GiB | 268.13 MiB | 30 925 | 2.54 GiB |
+| 652 | after closing all four sessions | **1.04 GiB** | 268.64 MiB | 30 925 | 2.55 GiB |
+
+RSS 700 MiB → 1.04 GiB, peak 1.15 GiB; heap peak 336 MiB (of a fixed `-Xmx2g`).
+
+The shape is what matters: RSS climbs to ~1.07 GiB in the first **21 seconds** — that is four
+scrollbacks filling to their 32 MiB byte budget plus the JVM taking its heap — and then adds
+**~80 MiB over the remaining 10.5 minutes**, at a decaying rate (+40 MiB in the first 31 s of that,
++40 MiB over the next 600 s) while **2.5 GiB** of output flowed through. Closing the four sessions
+returned 110 MiB immediately. History rows stay pinned at ~31 000 throughout, so the engine's
+eviction is doing its job and nothing is accumulating per byte fed.
+
+Ten minutes is not a leak test, and this does not prove there is no slow leak. What it does show is
+that memory is **not** a function of bytes processed: 2.5 GiB of output moved the resident set by
+under 8% after the initial fill.
+
+### Phase log
+
+```
+repeat 1 stream: 242.10 MiB in 60524 ms (4.00 MiB/s across 4 terminals)
+repeat 1 scroll: 62045 of 50000 lines at 8.0 rows/frame
+repeat 2 stream: 242.03 MiB in 60508 ms (4.00 MiB/s across 4 terminals)
+repeat 2 scroll: 24649 of 50000 lines at 8.0 rows/frame  (cut off by the run's 10-minute deadline)
+```
+
+A scroll phase sweeps to the oldest retained row and rides back down, so "62 045 lines" is two full
+passes over everything the engine still had. The second phase was cut short by the clock, which the
+harness reports rather than hiding.
+
+### A saturation run, for contrast
+
+The same shape at **4 MiB/s per terminal** (16 MiB/s aggregate, 2 min, 2026-09-23) is past this
+machine's capacity — §4 puts one session's parse ceiling at 9.53 MiB/s — and it degrades the way it
+should: p50 76.3 ms, p95 281.4 ms, **2.09 GiB accepted with 0 refused enqueues**, a 4 386 B queue
+high-water, and 219 s of backpressure across four producers. The bound that gave way was
+*throughput*, applied as backpressure onto the producer. Nothing was dropped and nothing grew
+without limit.
 
 ---
 
 ## 6. Against the spec's targets
 
-<!-- TARGETS -->
+| target | result | verdict |
+|---|---|---|
+| **steady local scrolling p95 ≤ 16.7 ms on a 60 Hz test device** | scroll p95 **130.74 ms** here — but the blank control's p95 is already **28.71 ms**, and 21% of *empty-window* frames miss the budget | **NOT MET, and not measurable here.** There is no 60 Hz test device on this host; a software rasteriser on a loaded 4-core box cannot stand in for one. What the run does establish is that **scrolling adds nothing over streaming** (p50 55.24 vs 55.06 ms), which is the property the local-scroll design is supposed to have |
+| **no >100 ms UI stall during the stream** | **261 frames over 100 ms** in 1925 stream frames (13.6%) | **NOT MET here.** The ladder: 1 in 3565 with an empty window (0.03%), 58 in 3640 with four terminals mounted and a static screen (1.6%), 261 in 1925 under the stream (13.6%). So it is the STREAM that produces the stalls, not merely mounting a terminal — and on a box where the empty window already stalls at all, how much of that survives a GPU is not knowable from here |
+| **queues stay within configured byte caps** | high water **16 826 B** against a **1 048 576 B** cap (1.6%); **0 refused enqueues**; backpressure applied for 1.9% of producer time. Under 4x saturation: still 0 refusals | **MET, with room** |
+| **no unbounded RSS growth over a 10-minute repeat** | +80 MiB after the first 21 s while 2.5 GiB flowed through, at a decaying rate; history pinned at ~31 000 rows; 110 MiB returned on close | **MET as far as ten minutes can show it.** Memory is not a function of bytes processed |
+
+### Where the frame time goes
+
+Profiled before optimising, as the task requires. Three runs of the same harness differing in exactly one thing each, so the ladder is measured
+rather than inferred. All p50, same 120x40 grid, same four mounted terminals:
+
+| run | p50 | delta | what the delta is |
+|---|---:|---:|---|
+| `--mode=blank` — empty window | **15.03 ms** | — | the compositor and the software rasteriser on this box |
+| `--rate=1024` — four terminals mounted, screen essentially static (29 frames published in 2 min) | **28.38 ms** | **+13.35 ms** | **text layout + draw** of a 120x40 grid, repeated every frame |
+| `--rate=1048576` — the 10-minute run, 4 MiB/s aggregate | **55.06 ms** | **+26.68 ms** | everything streaming adds: parsing on other threads competing for the same 4 cores, new text runs, layout-cache misses, and a screen that actually changes |
+
+And, from `--mode=parse` (§4), the two stages that happen before a frame is drawn at all:
+
+| stage | cost |
+|---|---|
+| parser + codec + session | **9.53 MiB/s** (ANSI) / **18.19 MiB/s** (plain), single session, unthrottled |
+| snapshot copy (`ViewportModel.apply`) | **p50 0.123 ms**, p95 0.217 ms, max 1.44 ms |
+
+**What not to optimise.** The snapshot copy is 0.12 ms — under 1% of a 16.7 ms budget and under
+0.3% of what a frame actually costs here. The parser is not blocking anything either: the 10-minute
+run sustained its requested 4 MiB/s exactly, with 0 refused enqueues and backpressure for 1.9% of
+producer time. Neither is where the frame went.
+
+**Where it did go**, in order: 15 ms of host floor, 13 ms of drawing a full grid, 27 ms of
+everything the stream adds on a CPU-bound 4-core box at load 15. Two of those three are this
+machine. Optimising the package against them would be optimising against llvmpipe and against the
+other agents' Gradle daemons.
+
+**So nothing was optimised in this task, deliberately.** The one number that is clearly the
+package's own — +13.35 ms to lay out and draw 4 800 cells — is measured through a software
+rasteriser, which is precisely the workload a GPU exists to remove. The next honest step is a
+GPU-backed run and a 60 Hz device, not a code change.
 
 ---
 
@@ -134,8 +256,14 @@ cd apps
 SKIKO_RENDER_API=SOFTWARE xvfb-run -a -s "-screen 0 1600x1200x24" \
   ./gradlew :terminal-sample:benchmark -Pbenchmark.args="--mode=blank --minutes=1 --warmup=5"
 
-# parse profile — engine + codec + row model, no window
+# the middle rung — four terminals mounted, screen essentially static
+SKIKO_RENDER_API=SOFTWARE xvfb-run -a -s "-screen 0 1600x1200x24" \
+  ./gradlew :terminal-sample:benchmark \
+  -Pbenchmark.args="--minutes=2 --warmup=8 --terminals=4 --rate=1024 --stream-seconds=120 --scroll-lines=1"
+
+# parse profile — engine + codec + row model, no window (run it for both fixtures)
 ./gradlew :terminal-sample:benchmark -Pbenchmark.args="--mode=parse --fixture=ansi --minutes=1"
+./gradlew :terminal-sample:benchmark -Pbenchmark.args="--mode=parse --fixture=plain --minutes=1"
 
 # the 10-minute run
 SKIKO_RENDER_API=SOFTWARE xvfb-run -a -s "-screen 0 1600x1200x24" \

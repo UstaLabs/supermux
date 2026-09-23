@@ -532,8 +532,9 @@ class BenchmarkRun(
             return 0
         }
         val cell = max(1, observedCellHeightPx).toFloat()
-        // Three rows per frame up: fast enough to cover 50k lines in minutes, slow enough that
-        // every frame really does cross a row boundary (which is the expensive path).
+        // The expensive path is the ROW BOUNDARY (that is where a `scrollTo` reaches the engine),
+        // so the step is expressed in rows per frame and the default crosses several per frame —
+        // a flick, not a nudge.
         val stepPx = cell * options.scrollRowsPerFrame
         var covered = 0L
         var lastRow = controller.position.row
