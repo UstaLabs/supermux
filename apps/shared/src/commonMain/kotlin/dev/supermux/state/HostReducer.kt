@@ -212,6 +212,13 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         if (state.displays.none { it.id == frame.id }) state
         else state.copy(displays = state.displays.filterNot { it.id == frame.id })
     }
+    is ServerFrame.WorktreeSizes -> state.copy(
+        worktreeSizes = state.worktreeSizes + frame.sizes.associate { it.id to it.bytes },
+    )
+    is ServerFrame.WorktreesRemoved -> state.copy(
+        worktreeSizes = state.worktreeSizes - frame.ids.toSet(),
+        removedWorktreeIds = state.removedWorktreeIds + frame.ids,
+    )
     else -> state
 }
 

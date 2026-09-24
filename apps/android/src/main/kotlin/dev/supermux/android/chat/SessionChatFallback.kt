@@ -96,6 +96,7 @@ fun SessionChatFallback(
             sessionLinks = sessionLinks,
             vmModels = { vm.fleet.sessionModels(it) },
             vmReasoning = { vm.fleet.sessionReasoning(it) },
+            vmReasoningFor = { id, model -> vm.fleet.sessionReasoningFor(id, model) },
             onPickModel = { vm.fleet.switchModel(session.id, it) },
             onPickEffort = { vm.fleet.switchReasoning(session.id, it) },
             commands = commands,

@@ -15,6 +15,7 @@ private val sectionSlugs = mapOf(
     SettingsSection.System to "system",
     SettingsSection.GitHosting to "git-hosting",
     SettingsSection.Proxies to "proxies",
+    SettingsSection.Worktrees to "worktrees",
     SettingsSection.Assistant to "assistant",
     SettingsSection.Curator to "curator",
     SettingsSection.Voice to "voice",

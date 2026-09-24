@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "fs"
+import { existsSync, readFileSync, readdirSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import { Database } from "bun:sqlite"
@@ -26,6 +26,36 @@ export interface ClaudeExtraUsage {
   currency: string
 }
 
+// One banked usage-limit reset grant (Claude Code's `/limit-reset`, program
+// "cedar_ember"). A grant can hold several resets; `clears` names the limit
+// windows one use refills (five_hour, seven_day, …).
+export interface ClaudeResetGrant {
+  id: string
+  label: string
+  resetsTotal: number
+  resetsLeft: number
+  startsAtIso: string | null
+  /** Use-by date; the grant expires after it. */
+  endsAtIso: string | null
+  clears: string[]
+  paused: boolean
+  usableNow: boolean
+  /** true = only usable while at a limit; false = usable any time. */
+  useRequiresLimit: boolean
+}
+
+export interface ClaudeResets {
+  eligible: boolean
+  ineligibleReason: string | null
+  atLimit: boolean
+  grants: ClaudeResetGrant[]
+  /** The grant a redeem spends next; null when none is usable. */
+  nextGrantId: string | null
+  /** Sum of resetsLeft across grants. */
+  resetsLeft: number
+  cooldownUntilIso: string | null
+}
+
 export interface ClaudeUsage {
   fiveHour: UsageWindow
   sevenDay: UsageWindow
@@ -33,6 +63,10 @@ export interface ClaudeUsage {
   sevenDaySonnet: UsageWindow | null
   sevenDayFable: UsageWindow | null
   extraUsage: ClaudeExtraUsage | null
+  /** Banked limit resets. null when the account has no reset program; absent
+   *  on data that never saw a live fetch (local seed), which the store fills
+   *  from the last live value. */
+  resets?: ClaudeResets | null
 }
 
 // A per-model gate from the payload's `model_usage` map, independent of the
@@ -122,6 +156,8 @@ export interface UsageResponse {
 // ── Credential paths ──
 
 const CLAUDE_CREDS = join(homedir(), ".claude", ".credentials.json")
+const CLAUDE_JSON  = join(homedir(), ".claude.json")
+const CLAUDE_VERSIONS_DIR = join(homedir(), ".local", "share", "claude", "versions")
 const CODEX_AUTH   = join(homedir(), ".codex", "auth.json")
 const CURSOR_DB   = join(homedir(), ".config", "Cursor", "User", "globalStorage", "state.vscdb")
 const OPENCODE_DB = join(openCodeDataDir({ home: homedir() }), "opencode.db")
@@ -154,25 +190,93 @@ function isoFromUnixMsString(value: unknown): string | null {
 
 // ── Claude ──
 
-export async function fetchClaudeUsage(
-  credsPath: string = CLAUDE_CREDS,
-): Promise<ClaudeUsage | null> {
-  if (!existsSync(credsPath)) return null
+// The banked-reset block (`cedar_ember`) is only answered for the Claude Code
+// CLI: the server reads the surface and version from the User-Agent, and
+// answers `ineligible_reason: "surface"` or `"cli_version"` to anything else.
+// So we send the UA of the newest installed CLI, with a known-good fallback.
+const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
+const CLAUDE_RESET_PROGRAM = "cedar_ember"
+const CLAUDE_CLI_FALLBACK_VERSION = "2.1.280"
 
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number)
+  const pb = b.split(".").map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d !== 0) return d
+  }
+  return 0
+}
+
+export function claudeCliVersion(versionsDir: string = CLAUDE_VERSIONS_DIR): string {
+  try {
+    const versions = readdirSync(versionsDir).filter((v) => /^\d+\.\d+\.\d+$/.test(v))
+    const newest = versions.sort(compareVersions).pop()
+    if (newest && compareVersions(newest, CLAUDE_CLI_FALLBACK_VERSION) > 0) return newest
+  } catch {
+    // no native install — use the fallback
+  }
+  return CLAUDE_CLI_FALLBACK_VERSION
+}
+
+function claudeHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    "anthropic-beta": "oauth-2025-04-20",
+    "User-Agent": `claude-cli/${claudeCliVersion()} (external, cli)`,
+  }
+}
+
+function readClaudeToken(credsPath: string): string | null {
+  if (!existsSync(credsPath)) return null
   const raw = JSON.parse(readFileSync(credsPath, "utf-8"))
   const oauth = raw.claudeAiOauth ?? raw
   const expiresAt = oauth.expiresAt
   if (typeof expiresAt === "string" && new Date(expiresAt).getTime() < Date.now()) return null
   if (typeof expiresAt === "number" && expiresAt < Date.now()) return null
+  return oauth.accessToken ?? oauth.access_token ?? null
+}
 
-  const token = oauth.accessToken ?? oauth.access_token
+const RESET_ID = /^[a-z0-9_-]{1,40}$/
+
+function mapClaudeResets(block: any): ClaudeResets | null {
+  if (!block || typeof block !== "object") return null
+  const grants: ClaudeResetGrant[] = (Array.isArray(block.grants) ? block.grants : [])
+    .filter((g: any) => typeof g?.id === "string" && RESET_ID.test(g.id))
+    .map((g: any) => ({
+      id: g.id,
+      label: typeof g.label === "string" ? g.label : "",
+      resetsTotal: Number.isInteger(g.resets_total) ? g.resets_total : 0,
+      resetsLeft: Number.isInteger(g.resets_left) && g.resets_left > 0 ? g.resets_left : 0,
+      startsAtIso: isoFromIsoLike(g.starts_at),
+      endsAtIso: isoFromIsoLike(g.ends_at),
+      clears: Array.isArray(g.clears) ? g.clears.filter((c: unknown) => typeof c === "string") : [],
+      paused: g.paused === true,
+      usableNow: g.usable_now === true,
+      useRequiresLimit: g.use_requires_limit !== false,
+    }))
+  const next = typeof block.next_grant_id === "string" && grants.some((g) => g.id === block.next_grant_id)
+    ? block.next_grant_id
+    : null
+  return {
+    eligible: block.eligible === true,
+    ineligibleReason: typeof block.ineligible_reason === "string" ? block.ineligible_reason : null,
+    atLimit: block.at_limit === true,
+    grants,
+    nextGrantId: next,
+    resetsLeft: grants.reduce((sum, g) => sum + g.resetsLeft, 0),
+    cooldownUntilIso: isoFromIsoLike(block.cooldown_until),
+  }
+}
+
+export async function fetchClaudeUsage(
+  credsPath: string = CLAUDE_CREDS,
+): Promise<ClaudeUsage | null> {
+  const token = readClaudeToken(credsPath)
   if (!token) return null
 
-  const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "anthropic-beta": "oauth-2025-04-20",
-    },
+  const res = await fetch(CLAUDE_USAGE_URL, {
+    headers: claudeHeaders(token),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   })
   if (!res.ok) throw new Error(`Claude usage API ${res.status}: ${await res.text()}`)
@@ -230,6 +334,61 @@ export async function fetchClaudeUsage(
     sevenDaySonnet: scopedWindow("Sonnet") ?? legacyWindow(data.seven_day_sonnet),
     sevenDayFable: scopedWindow("Fable"),
     extraUsage,
+    resets: mapClaudeResets(data.cedar_ember),
+  }
+}
+
+// `result` ∈ reset | already_used | not_limited | cooldown | ineligible |
+// unavailable. Typed as string so an unknown future code passes through.
+export interface ClaudeResetResult {
+  result: string
+  reason: string | null
+  resetsLeft: number | null
+  cleared: string[]
+}
+
+function readClaudeOrgUuid(claudeJsonPath: string): string | null {
+  if (!existsSync(claudeJsonPath)) return null
+  try {
+    const raw = JSON.parse(readFileSync(claudeJsonPath, "utf-8"))
+    const org = raw?.oauthAccount?.organizationUuid
+    return typeof org === "string" && org ? org : null
+  } catch {
+    return null
+  }
+}
+
+// Spends one banked reset of `grantId` (the status block's `nextGrantId`).
+// `requestId` makes the claim idempotent: a retry with the same id cannot
+// spend a second reset.
+export async function redeemClaudeReset(
+  grantId: string,
+  opts: { credsPath?: string; claudeJsonPath?: string; requestId?: string } = {},
+): Promise<ClaudeResetResult> {
+  if (!RESET_ID.test(grantId)) throw new Error("Invalid reset grant id")
+  const token = readClaudeToken(opts.credsPath ?? CLAUDE_CREDS)
+  if (!token) throw new Error("Claude credentials not found or token expired")
+  const org = readClaudeOrgUuid(opts.claudeJsonPath ?? CLAUDE_JSON)
+  if (!org) throw new Error("Claude organization not found")
+
+  const res = await fetch(`https://api.anthropic.com/api/organizations/${org}/reset_rate_limits`, {
+    method: "POST",
+    headers: { ...claudeHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      program: CLAUDE_RESET_PROGRAM,
+      grant_id: grantId,
+      request_id: opts.requestId ?? globalThis.crypto.randomUUID(),
+    }),
+    signal: AbortSignal.timeout(25_000),
+  })
+  if (!res.ok) throw new Error(`Claude reset API ${res.status}: ${await res.text()}`)
+
+  const data = (await res.json()) as any
+  return {
+    result: String(data.result ?? "unavailable"),
+    reason: typeof data.reason === "string" ? data.reason : null,
+    resetsLeft: Number.isInteger(data.resets_left) ? data.resets_left : null,
+    cleared: Array.isArray(data.cleared) ? data.cleared.filter((c: unknown) => typeof c === "string") : [],
   }
 }
 

@@ -47,6 +47,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
@@ -83,6 +84,8 @@ import dev.supermux.ui.session.RowContextMenuEntry
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.widgets.KeepAlivePanel
+import dev.supermux.ui.worktree.WorktreeDeleteAction
+import dev.supermux.ui.worktree.reportWorktreeDelete
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
@@ -196,6 +199,7 @@ fun WorkspacePanes(
     val fileOpener = ws.fileOpener
     var walkthroughSessionId by remember(current.id) { mutableStateOf<String?>(null) }
     val windowsSeam = LocalPlatform.current.windows
+    val notices = LocalPlatform.current.notices
 
     PaneHost(
         layout = layout,
@@ -323,6 +327,16 @@ fun WorkspacePanes(
                         onCloseCandidate(null)
                     }
                 },
+                chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
+                worktreeForWorkdir = { app.worktreeForWorkdir(it) },
+                onConfirmDeletingWorktree = { ids ->
+                    // Dismiss first; the (possibly minutes-long) close+delete runs on the store's
+                    // scope so leaving this workspace never cancels it or loses its notice.
+                    onCloseCandidate(null)
+                    app.closeViewAndDeleteWorktree(v.workspaceId, v.id, ids) {
+                        reportWorktreeDelete(notices, it, WorktreeDeleteAction.Close)
+                    }
+                },
             )
         }
     }
@@ -360,6 +374,8 @@ fun PhoneWorkspacePanes(
     // Minus whatever an extra window claimed: this phone layout, in split screen beside its own
     // extra window, must not show those views twice.
     val windowsSeam = LocalPlatform.current.windows
+    val notices = LocalPlatform.current.notices
+    val scope = rememberCoroutineScope()
     val layout = ui.windows.layoutFor(
         ui.windows.mainHostId,
         current.layout.toDomainOrNull() ?: ws.layoutSync.tree,
@@ -513,6 +529,14 @@ fun PhoneWorkspacePanes(
             onConfirm = {
                 app.closeWorkspaceView(current.id, v.id)
                 closeCandidate = null
+            },
+            chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
+            worktreeForWorkdir = { app.worktreeForWorkdir(it) },
+            onConfirmDeletingWorktree = { ids ->
+                closeCandidate = null
+                app.closeViewAndDeleteWorktree(current.id, v.id, ids) {
+                    reportWorktreeDelete(notices, it, WorktreeDeleteAction.Close)
+                }
             },
         )
     }

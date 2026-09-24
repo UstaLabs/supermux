@@ -63,6 +63,20 @@ const log = makeLogger("channels/web")
 const RATE_LIMIT_WINDOW_MS = 5 * 60_000
 const RATE_LIMIT_MAX = 16
 
+// Bun.serve's socket idle timeout (seconds): the connection is dropped if it goes quiet — no
+// bytes sent OR received — for this long. This is an IDLE timeout, not a deadline on the
+// whole request: a handler may run far longer than this as long as it keeps the socket from
+// going silent for this many consecutive seconds (it doesn't here — the response is written
+// once, atomically, at the end). Bun's default is 10s, which is why routes slower than that
+// used to get "Empty reply from server" while the broker stayed healthy:
+//  - GET /worktrees over a large ~/.mux/worktrees root (tens of thousands of folders): ~15-35s
+//  - GET /repos?fetch=1 (a real network `git fetch`): up to a 15s budget
+// 255 is Bun's own hard maximum for this option (0 would disable it, which risks a socket
+// held open forever by a client that never closes). Client-side fetch timeouts (2min list,
+// 10min delete) are meaningless while the SERVER drops the connection first, so this must be
+// raised too. See src/channels/web/serve-idle-timeout.test.ts.
+export const SERVE_IDLE_TIMEOUT_SECONDS = 255
+
 // Only a proxy we actually sit behind may name the peer for us. frpc (relay) and the nginx
 // exposure recipe both forward from loopback and set X-Forwarded-For; anyone else reaching
 // the port directly is quoting a header they invented. Trusting it from every caller let a
@@ -91,7 +105,7 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
 // match what the store would have generated itself — it ends up in layout trees
@@ -240,6 +254,8 @@ export interface WebChannelOpts {
   // Session-less reasoning levels for the New Session launcher (no session id yet):
   // resolves the levels an agent+model offers before spawn. Codex's are per-model.
   getReasoningLevels?: (agent: AgentKind, model?: string) => { agent: string; levels: { id: string; description?: string }[]; visible: boolean }
+  /** GET /agents/models — every installed agent's models + reasoning in one answer (see core/models/agent-models). */
+  getAgentModels?: () => { agents: import("../../core/models/agent-models").AgentModelsEntry[] }
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
@@ -258,6 +274,14 @@ export interface WebChannelOpts {
   spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; device?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
+  /** Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
+  worktrees?: {
+    root: () => string
+    list: () => Promise<unknown[]>
+    changes: (id: string) => Promise<unknown>
+    forWorkdir: (workdir: string) => Promise<unknown | undefined>
+    remove: (ids: string[]) => Promise<Array<{ id: string; ok: boolean; error?: string; inUseBy?: string[] }>>
+  }
   renameSession?: (oldName: string, newName: string) => Promise<void>
   reorderSessions?: (orderedIds: string[]) => void
   listWorkspaces?: () => import("../../core/workspace/dto").WorkspaceDto[]
@@ -529,8 +553,20 @@ export class WebChannel implements Channel {
     if (this.deviceTokenStore) {
       this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
     }
-    this.server = Bun.serve<WSData>({
+    this.server = Bun.serve<WSData>(this.buildServeOptions())
+    this.heartbeatTimer = setInterval(() => this.pingAll(), 30_000)
+    log.info("web channel listening", { port: this.boundPort })
+  }
+
+  /** Split out of `start()` so a test can assert on the options object itself — including
+   *  that `idleTimeout` is actually the value `Bun.serve` receives, not just that the
+   *  constant is big enough — without needing to spin up a real socket to check it. */
+  private buildServeOptions(): Parameters<typeof Bun.serve<WSData>>[0] {
+    return {
       port: this.opts.port,
+      // See SERVE_IDLE_TIMEOUT_SECONDS above: without this, any response slower than Bun's
+      // 10s default gets its connection dropped mid-flight.
+      idleTimeout: SERVE_IDLE_TIMEOUT_SECONDS,
       fetch: (req, server) => this.routeRequestOrUpgrade(req, server),
       websocket: {
         // Negotiated per-connection (clients that don't support it are unaffected).
@@ -603,9 +639,7 @@ export class WebChannel implements Channel {
           if (d) { ws.data._termDrain = undefined; d.resolve() }
         },
       },
-    })
-    this.heartbeatTimer = setInterval(() => this.pingAll(), 30_000)
-    log.info("web channel listening", { port: this.boundPort })
+    }
   }
 
   async stop(): Promise<void> {
@@ -1559,6 +1593,22 @@ export class WebChannel implements Channel {
     return undefined
   }
 
+  /** After an archive the user confirmed with "also delete": delete EXACTLY the worktree ids
+   *  the dialog displayed (the repeatable `deleteWorktree=<id>` query param) — never ids derived
+   *  from the archived rows, which would include worktrees the user deliberately kept. A live
+   *  owner still refuses per id (in_use). The archive already succeeded: a failed delete is
+   *  reported per id, never undone and never a failed request.
+   *  Spec: docs/superpowers/specs/2026-09-22-explicit-worktree-cleanup-design.md §3.3 */
+  private async deleteConfirmedWorktrees(ids: string[]): Promise<Array<{ id: string; ok: boolean; error?: string; inUseBy?: string[] }>> {
+    if (!this.opts.worktrees) return ids.map((id) => ({ id, ok: false, error: "not configured" }))
+    try {
+      return await this.opts.worktrees.remove(ids)
+    } catch (e: any) {
+      const error = String(e?.message ?? e)
+      return [...new Set(ids)].map((id) => ({ id, ok: false, error }))
+    }
+  }
+
   private json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
   }
@@ -2361,6 +2411,12 @@ export class WebChannel implements Channel {
       return this.json(result, result.ok ? 200 : 400)
     }
 
+    if (method === "GET" && path === "/agents/models") {
+      const catalog = this.opts.getAgentModels?.()
+      if (!catalog) return this.json({ error: "agent models unavailable" }, 503)
+      return this.json(catalog)
+    }
+
     if (method === "GET" && path === "/agents/status") {
       const statuses = this.opts.getAgentStatuses?.()
       if (!statuses) return this.json({ error: "agent detection unavailable" }, 503)
@@ -2902,7 +2958,7 @@ export class WebChannel implements Channel {
       if (!p?.trim()) return this.json({ error: "path required" }, 400)
       const doFetch = url.searchParams.get("fetch") === "1"
       try {
-        return this.json(getRepoInfo(normalizeExistingWorkdir(p, home()), { fetch: doFetch }))
+        return this.json(await getRepoInfo(normalizeExistingWorkdir(p, home()), { fetch: doFetch }))
       } catch (err: any) {
         return this.json({ isGitRepo: false, eligible: false, error: err?.message ?? String(err) })
       }
@@ -3014,12 +3070,14 @@ export class WebChannel implements Channel {
     if (method === "DELETE" && path.match(/^\/sessions\/[^/]+$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.killSession) return this.json({ error: "not configured" }, 503)
+      const worktreeIds = url.searchParams.getAll("deleteWorktree")
       try {
         await this.opts.killSession(id)
-        return new Response(null, { status: 204 })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+      if (!url.searchParams.has("deleteWorktree")) return new Response(null, { status: 204 })
+      return this.json({ worktree: await this.deleteConfirmedWorktrees(worktreeIds) })
     }
     if (method === "PATCH" && path === "/sessions/reorder") {
       const body = await req.json().catch(() => ({})) as { orderedIds?: unknown }
@@ -3027,6 +3085,39 @@ export class WebChannel implements Channel {
       if (!this.opts.reorderSessions) return this.json({ error: "not configured" }, 503)
       this.opts.reorderSessions(ids)
       return this.json({ ok: true })
+    }
+    // ── Worktrees ───────────────────────────────────────────────────────────
+    // Spec: docs/superpowers/specs/2026-09-22-explicit-worktree-cleanup-design.md §3.3
+    // Deletion is explicit only. No route here runs on a timer.
+    if (method === "GET" && path === "/worktrees") {
+      if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+      return this.json({ root: this.opts.worktrees.root(), worktrees: await this.opts.worktrees.list() })
+    }
+    if (method === "GET" && path === "/worktrees/by-workdir") {
+      if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+      const found = await this.opts.worktrees.forWorkdir(url.searchParams.get("path") ?? "")
+      return found ? this.json(found) : this.json({ error: "not a worktree" }, 404)
+    }
+    {
+      const m = method === "GET" ? /^\/worktrees\/([^/]+)\/changes$/.exec(path) : null
+      if (m) {
+        if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+        try {
+          return this.json(await this.opts.worktrees.changes(decodeURIComponent(m[1]!)))
+        } catch (err: any) {
+          return this.json({ error: err?.message ?? String(err) }, 404)
+        }
+      }
+    }
+    if (method === "DELETE" && path === "/worktrees") {
+      if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+      const body = await req.json().catch(() => ({})) as { ids?: unknown }
+      const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string") : []
+      try {
+        return this.json({ results: await this.opts.worktrees.remove(ids) })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 500)
+      }
     }
     // ── Workspaces ──────────────────────────────────────────────────────────
     // Spec: docs/superpowers/specs/2026-08-06-workspaces-and-views-design.md §7
@@ -3086,13 +3177,15 @@ export class WebChannel implements Channel {
     if (method === "DELETE" && path.match(/^\/workspaces\/[^/]+$/)) {
       if (!this.opts.archiveWorkspace) return this.json({ error: "not configured" }, 503)
       const id = decodeURIComponent(path.split("/")[2]!)
+      const worktreeIds = url.searchParams.getAll("deleteWorktree")
       try {
         await this.opts.archiveWorkspace(id)
         this.broadcastToAll({ type: "workspace_removed", id })
-        return new Response(null, { status: 204 })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+      if (!url.searchParams.has("deleteWorktree")) return new Response(null, { status: 204 })
+      return this.json({ worktree: await this.deleteConfirmedWorktrees(worktreeIds) })
     }
     if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/restore$/)) {
       if (!this.opts.restoreWorkspace) return this.json({ error: "not configured" }, 503)
@@ -3164,15 +3257,17 @@ export class WebChannel implements Channel {
       const parts = path.split("/")
       const workspaceId = decodeURIComponent(parts[2]!)
       const viewId = decodeURIComponent(parts[4]!)
+      const worktreeIds = url.searchParams.getAll("deleteWorktree")
       try {
         await this.opts.closeWorkspaceView(viewId)
         this.broadcastToAll({ type: "view_removed", workspaceId, viewId })
         const ws = this.opts.getWorkspace?.(workspaceId)
         if (ws) this.broadcastToAll({ type: "workspace_changed", workspace: ws })
-        return new Response(null, { status: 204 })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+      if (!url.searchParams.has("deleteWorktree")) return new Response(null, { status: 204 })
+      return this.json({ worktree: await this.deleteConfirmedWorktrees(worktreeIds) })
     }
     if (method === "POST" && path.match(/^\/views\/[^/]+\/move$/)) {
       if (!this.opts.moveWorkspaceView) return this.json({ error: "not configured" }, 503)
@@ -3355,6 +3450,26 @@ export class WebChannel implements Channel {
         const codex = await fetchCodexUsage().catch(() => null) // best-effort refresh
         if (codex) getUsageStore().apply("codex", codex, "live")
         return this.json({ ...result, codex })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 502)
+      }
+    }
+
+    if (method === "POST" && path === "/usage/claude/reset") {
+      const { redeemClaudeReset, fetchClaudeUsage } = await import("../../core/usage/index")
+      const { getUsageStore } = await import("../../core/usage/store")
+      try {
+        // Spend the grant the server offers next — re-read it rather than trust
+        // a client's possibly stale snapshot.
+        const before = await fetchClaudeUsage()
+        const grantId = before?.resets?.nextGrantId
+        if (!grantId) {
+          return this.json({ result: "no_reset", reason: before?.resets?.ineligibleReason ?? null, resetsLeft: before?.resets?.resetsLeft ?? 0, cleared: [], claude: before })
+        }
+        const result = await redeemClaudeReset(grantId)
+        const claude = await fetchClaudeUsage().catch(() => null) // best-effort refresh
+        if (claude) getUsageStore().apply("claude", claude, "live")
+        return this.json({ ...result, claude })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 502)
       }

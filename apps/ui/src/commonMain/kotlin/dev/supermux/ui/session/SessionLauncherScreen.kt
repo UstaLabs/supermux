@@ -24,13 +24,20 @@
 // worktree/host pills, the settle-vs-change effects, and submit.
 //
 // THE SUBTLE PART (identical on both hosts, and the reason it is extracted + unit-tested): the
-// [launcherRestoring] gate plus lastSeenAgent / lastSeenWorkdir (NOT one-shot "armed" booleans)
-// distinguish a draft-restore SETTLING from a genuine later user change, so restoring a draft never
-// wrongly resets the model (on an agent echo) or the base branch (on a workdir echo). This caused a
-// real device bug on iOS/Android, so the decision lives in [shouldResetModelOnAgentChange] /
-// [shouldResetBaseBranchOnWorkdirChange].
+// [launcherRestoring] gate plus lastSeenAgent (NOT a one-shot "armed" boolean) distinguishes a
+// draft-restore SETTLING from a genuine later agent change, so restoring a draft never wrongly swaps
+// the model on an agent echo. This caused a real device bug on iOS/Android, so the decision lives in
+// [shouldResetModelOnAgentChange]. The base branch needs no such heuristic: it is tagged with the
+// workdir it was chosen for (`baseBranchFor`), set BEFORE any fetch suspends, so a cancelled fetch
+// can never leave one project's branch on another.
+//
+// NO PROJECT IS A STATE, not `~`: `workdir` is null until the draft, the most recent session, the
+// catalog or the user names one. Nothing (repo info, slash commands) loads for a null workdir, the
+// heading reads "Choose a project" and send stays disabled — home is only ever an explicit pick.
 package dev.supermux.ui.session
 
+import dev.supermux.chat.parseChatTs
+import dev.supermux.session.projectActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.LocalIndication
@@ -93,6 +100,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
@@ -127,6 +136,7 @@ import dev.supermux.state.LauncherDraft
 import dev.supermux.state.LauncherPrefs
 import dev.supermux.state.ProjectLocationResult
 import dev.supermux.state.StagedUpload
+import dev.supermux.state.worktreeChoiceKey
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -170,7 +180,8 @@ const val LAUNCHER_PICK_REQUESTER: String = "session-launcher"
 // ── Pure settle-vs-change decisions (the subtle part; unit-tested) ───────────────────────────────
 
 /**
- * Should picking/echoing [current] as the agent RESET the model back to Default?
+ * Should picking/echoing [current] as the agent swap the model to that agent's REMEMBERED one
+ * (its sticky `LauncherPrefs.models` entry, or Default when it has none)?
  *
  * Only when this is a genuine LATER change, never a restore-settle: false while [restoring], false
  * on the very first observation ([lastSeen] == null, i.e. "never recorded yet"), and false when the
@@ -179,22 +190,6 @@ const val LAUNCHER_PICK_REQUESTER: String = "session-launcher"
  */
 fun shouldResetModelOnAgentChange(lastSeen: String?, current: String, restoring: Boolean): Boolean =
     !restoring && lastSeen != null && lastSeen != current
-
-/**
- * Should observing [current] as the workdir RESET the base branch to the repo's current branch?
- *
- * True on a genuine workdir change ([lastSeen] non-null and different) OR when there is no base
- * branch yet ([baseBranch] blank — so a fresh repo gets its current branch seeded). Never while
- * [restoring] (the draft's own baseBranch must survive the restore-settle). Mirrors Android's
- * two-branch `if (lastSeen != null && lastSeen != workdir) … else if (baseBranch.isBlank()) …`.
- */
-fun shouldResetBaseBranchOnWorkdirChange(
-    lastSeen: String?,
-    current: String,
-    baseBranch: String,
-    restoring: Boolean,
-): Boolean =
-    !restoring && ((lastSeen != null && lastSeen != current) || baseBranch.isBlank())
 
 /** Local + remote branches from [RepoInfo], filtered by a case-insensitive [query] substring. */
 fun filterBranches(repoInfo: RepoInfo?, query: String): List<String> {
@@ -304,7 +299,8 @@ fun SessionLauncherScreen(
     val pointer = LocalPointerAvailable.current
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     val chrome = (standalone || compact) && !topBarShown
-    var workdir by remember { mutableStateOf("~") }
+    // null = no project yet (see the header): never a placeholder path that would load as one.
+    var workdir by remember { mutableStateOf<String?>(null) }
     var workdirTouched by remember { mutableStateOf(false) }
     var agent by remember { mutableStateOf("claude") }
     var model by remember { mutableStateOf<String?>(null) } // null == "Default"
@@ -341,7 +337,6 @@ fun SessionLauncherScreen(
     }
 
     var lastSeenAgent by remember { mutableStateOf<String?>(null) }
-    var lastSeenWorkdir by remember { mutableStateOf<String?>(null) }
     var lastSeenHost by remember { mutableStateOf<String?>(null) }
     var lastRepoHost by remember { mutableStateOf<String?>(null) }
     var launcherModels by remember { mutableStateOf(emptyMap<String, String>()) }
@@ -352,6 +347,9 @@ fun SessionLauncherScreen(
     var modelMenu by remember { mutableStateOf(false) }
     var reasoningMenu by remember { mutableStateOf(false) }
     var projectMenu by remember { mutableStateOf(false) }
+    /** The project heading's width — the picker centres its dropdown under it. */
+    var projectHeadingWidth by remember { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
 
     // ── Persistent projects (Task 10) ──
     // A workspace tab is locked to its directory and never consults projects: it gets an empty
@@ -365,7 +363,6 @@ fun SessionLauncherScreen(
     // Catalog known AND non-empty → project picker; otherwise today's path omnibox.
     val useCatalog = workspaceWorkdir == null && catalog.isNotEmpty()
     val projectHostKey = selectedHost.orEmpty()
-    var catalogMenu by remember { mutableStateOf(false) }
     var catalogLocationsFor by remember { mutableStateOf<String?>(null) }
     // A location-less project waiting for the omnibox to name a folder to register.
     var pendingLocationProject by remember { mutableStateOf<ProjectDto?>(null) }
@@ -378,6 +375,8 @@ fun SessionLauncherScreen(
     val currentCatalog by rememberUpdatedState(catalog)
     // Last location per (host, project) — persisted inside LauncherPrefs.
     var projectLocations by remember { mutableStateOf(emptyMap<String, String>()) }
+    // Folders whose sessions skip the isolated worktree — persisted inside LauncherPrefs.
+    var worktreeOff by remember { mutableStateOf(emptySet<String>()) }
     // Every prefs write goes through this, so no field (e.g. projectLocations) is dropped by a
     // write that only meant to change the agent or model.
     fun currentPrefs() = LauncherPrefs(
@@ -385,71 +384,109 @@ fun SessionLauncherScreen(
         models = launcherModels,
         reasoningLevels = launcherReasoning,
         projectLocations = projectLocations,
+        worktreeOff = worktreeOff,
     )
     val loadCatalogImage = rememberCachedProjectImageLoader(
         remember(actions) { { ref: ProjectRef -> actions.projectImage(ref.project) } },
         projectImageCache,
     )
 
-    LaunchedEffect(selectedHost, launcherRestoring) {
+    // The host's cached model catalog: agents, models and reasoning come from it with no request.
+    // Null (an older broker, or no answer yet) → the per-call fetches below, as before.
+    val agentModels by actions.agentModels.collectAsState(null)
+
+    LaunchedEffect(selectedHost, launcherRestoring, agentModels) {
         if (launcherRestoring) return@LaunchedEffect
-        agents = listOf("claude", "codex", "cursor", "opencode", "grok")
-        val fetched = actions.launcherAgents()
+        val fetched = agentModels?.agents?.map { it.kind } ?: run {
+            agents = listOf("claude", "codex", "cursor", "opencode", "grok")
+            actions.launcherAgents()
+        }
         if (fetched.isNotEmpty()) {
             agents = fetched
             if (agent !in fetched) agent = fetched.first()
         }
     }
 
-    // Model picker — refetch on agent change; reset selection to Default only on a genuine change.
-    LaunchedEffect(selectedHost, agent, launcherRestoring) {
+    // Model picker — refetch on agent change; a genuine change brings back THAT agent's remembered
+    // model (claude → codex → claude keeps claude's pick), Default when it has none.
+    var modelsFor by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(selectedHost, agent, launcherRestoring, agentModels) {
         if (launcherRestoring) return@LaunchedEffect
-        models = emptyList()
-        val loadedModels = actions.launcherModels(agent)
+        val listKey = "${selectedHost.orEmpty()}|$agent"
+        val cached = agentModels?.agent(agent)
+        // A refetch for the same host+agent keeps its list up (no raw-id/"Default" flicker).
+        if (cached == null && modelsFor != listKey) models = emptyList()
+        val loadedModels = cached?.models ?: actions.launcherModels(agent)
         models = loadedModels
-        if (model != null && loadedModels.none { it.id == model }) model = null
-        if (shouldResetModelOnAgentChange(lastSeenAgent, agent, launcherRestoring)) model = null
+        modelsFor = listKey
+        if (shouldResetModelOnAgentChange(lastSeenAgent, agent, launcherRestoring)) model = launcherModels[agent]
+        // An empty answer means "couldn't list", not "your model is gone" — keep the pick then.
+        if (model != null && loadedModels.isNotEmpty() && loadedModels.none { it.id == model }) model = null
         lastSeenAgent = agent
     }
 
     // Thinking-level picker — refetch on agent/model change; hide when there's no real choice.
     var reasoningLevels by remember { mutableStateOf(emptyList<ReasoningLevel>()) }
     var reasoningVisible by remember { mutableStateOf(false) }
-    LaunchedEffect(selectedHost, agent, model, launcherRestoring) {
+    LaunchedEffect(selectedHost, agent, model, launcherRestoring, agentModels) {
         if (launcherRestoring) return@LaunchedEffect
-        val resp = actions.launcherReasoning(agent, model)
-        val levels = resp?.levels ?: emptyList()
+        val cached = agentModels?.agent(agent)?.reasoningFor(model)
+        val resp = if (cached != null) null else actions.launcherReasoning(agent, model)
+        val levels = cached?.levels ?: resp?.levels ?: emptyList()
         reasoningLevels = levels
-        reasoningVisible = resp != null && resp.visible && showReasoningPicker(levels)
+        reasoningVisible = (cached?.visible ?: (resp != null && resp.visible)) && showReasoningPicker(levels)
         reasoningLevel = if (reasoningVisible) resolveReasoningLevel(levels, launcherReasoning[agent]) else null
     }
 
-    // Worktree picker — refetch repo info on workdir change; reset base branch only on genuine change.
+    // Worktree picker — refetch repo info on workdir change. Both the repo info and the base branch
+    // are tagged with the workdir they belong to, and dropped BEFORE the fetch suspends: the pill
+    // and a submit can never use the previous project's eligibility or branch.
     var repoInfo by remember { mutableStateOf<RepoInfo?>(null) }
-    var useWorktree by remember { mutableStateOf(true) }
+    /** The workdir [repoInfo] answers for; null while its fetch is in flight (send waits on it). */
+    var repoInfoFor by remember { mutableStateOf<String?>(null) }
     var baseBranch by remember { mutableStateOf("") }
+    /** The workdir [baseBranch] was picked or seeded for. */
+    var baseBranchFor by remember { mutableStateOf<String?>(null) }
+    // Worktree on/off is remembered PER FOLDER (LauncherPrefs.worktreeOff), on by default.
+    val worktreeKey = workdir?.let { worktreeChoiceKey(selectedHost.orEmpty(), it) }
+    val useWorktree = worktreeKey == null || worktreeKey !in worktreeOff
+    fun setWorktree(on: Boolean) {
+        val key = worktreeKey ?: return
+        worktreeOff = if (on) worktreeOff - key else worktreeOff + key
+        onPrefsChange(currentPrefs())
+    }
     var showWorktreePicker by remember { mutableStateOf(false) }
     var worktreeFetching by remember { mutableStateOf(false) }
     var fetchedRepos by remember { mutableStateOf(setOf<String>()) }
     LaunchedEffect(selectedHost, workdir, launcherRestoring) {
-        if (launcherRestoring) { repoInfo = null; return@LaunchedEffect }
+        repoInfo = null
+        repoInfoFor = null
+        if (launcherRestoring) return@LaunchedEffect
         val switchedRepoHost = lastRepoHost != null && lastRepoHost != selectedHost
-        if (switchedRepoHost) fetchedRepos = emptySet()
-        val info = if (workdir.isBlank()) null else actions.launcherRepoInfo(workdir, false)
-        repoInfo = info
         lastRepoHost = selectedHost
-        if (switchedRepoHost || shouldResetBaseBranchOnWorkdirChange(lastSeenWorkdir, workdir, baseBranch, launcherRestoring)) {
-            baseBranch = info?.currentBranch ?: ""
+        if (switchedRepoHost) {
+            fetchedRepos = emptySet()
+            baseBranchFor = null
         }
-        lastSeenWorkdir = workdir
+        val wd = workdir
+        if (baseBranchFor != wd) {
+            baseBranch = ""
+            baseBranchFor = wd
+        }
+        if (wd == null) return@LaunchedEffect
+        val info = actions.launcherRepoInfo(wd, false)
+        repoInfo = info
+        repoInfoFor = wd
+        if (baseBranch.isBlank()) baseBranch = info?.currentBranch.orEmpty()
     }
     // Re-list branches whenever the worktree picker opens; network fetch once per repo (web/iOS parity).
     LaunchedEffect(showWorktreePicker, workdir) {
-        if (!showWorktreePicker || workdir.isBlank()) return@LaunchedEffect
+        val wd = workdir
+        if (!showWorktreePicker || wd == null) return@LaunchedEffect
         val root = repoInfo?.repoRoot
         val shouldFetch = root != null && root !in fetchedRepos
         worktreeFetching = shouldFetch
-        val fresh = actions.launcherRepoInfo(workdir, shouldFetch)
+        val fresh = actions.launcherRepoInfo(wd, shouldFetch)
         if (fresh != null) {
             repoInfo = fresh
             if (baseBranch.isBlank()) baseBranch = fresh.currentBranch.orEmpty()
@@ -467,7 +504,8 @@ fun SessionLauncherScreen(
     var launcherCommands by remember { mutableStateOf(emptyList<SlashCommand>()) }
     LaunchedEffect(selectedHost, agent, workdir, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
-        launcherCommands = actions.launcherCommands(agent, workdir)
+        val wd = workdir
+        launcherCommands = if (wd == null) emptyList() else actions.launcherCommands(agent, wd)
     }
 
     // Restore persisted prefs + draft ONCE. Flipping launcherRestoring false is the LAST assignment
@@ -478,6 +516,7 @@ fun SessionLauncherScreen(
         launcherModels = prefs.models
         launcherReasoning = prefs.reasoningLevels
         projectLocations = prefs.projectLocations
+        worktreeOff = prefs.worktreeOff
         model = prefs.models[agent]
         val draft = loadDraft()
         val restoredWorkdir = workspaceWorkdir ?: draft.workdir
@@ -485,9 +524,10 @@ fun SessionLauncherScreen(
             workdir = restoredWorkdir
             workdirTouched = true
         }
-        if (workspaceWorkdir == null) {
-            useWorktree = draft.useWorktree
+        // The draft's branch belongs to the draft's folder only — never to a default project.
+        if (workspaceWorkdir == null && draft.workdir != null) {
             baseBranch = draft.baseBranch
+            baseBranchFor = draft.workdir
         }
         message = TextFieldValue(draft.text, TextRange(draft.text.length))
         launcherRestoring = false
@@ -547,6 +587,10 @@ fun SessionLauncherScreen(
     val recentProjectPaths = remember(sessions, lastBySession) {
         recentWorkdirs(sessionsByRecency(sessions, lastTs))
     }
+    // The picker tiles' "● 2m": sessions per project and when one last spoke.
+    val pickerActivity = remember(sessions, lastBySession) {
+        projectActivity(sessions) { parseChatTs(lastBySession[it.id]?.ts) }
+    }
     // Picker list: recently-active projects first (web orderProjectsByRecency parity).
     val projects = remember(knownProjects, recentProjectPaths) {
         orderProjectsByRecency(recentProjectPaths, knownProjects)
@@ -561,12 +605,12 @@ fun SessionLauncherScreen(
         if (launcherRestoring || workspaceWorkdir != null) return@LaunchedEffect
         if (knownProjects.isEmpty()) return@LaunchedEffect
         val known = projects.toHashSet()
+        // No project yet is the default effect's to fill, not a path to correct.
+        val wd = workdir ?: return@LaunchedEffect
         // A catalog location is valid even when GET /projects has no session there yet (an empty
         // project's freshly registered folder).
-        if (workdir.isBlank() ||
-            (workdir != "~" && workdir !in known && workdir !in catalogPaths && recentProjectPaths.none { it == workdir })
-        ) {
-            workdir = recentProjectPaths.firstOrNull() ?: knownProjects.firstOrNull() ?: "~"
+        if (wd.isBlank() || (wd !in known && wd !in catalogPaths && recentProjectPaths.none { it == wd })) {
+            workdir = recentProjectPaths.firstOrNull() ?: knownProjects.firstOrNull()
         }
     }
 
@@ -584,13 +628,23 @@ fun SessionLauncherScreen(
     LaunchedEffect(workspaceWorkdir) {
         if (!workspaceWorkdir.isNullOrBlank()) { workdir = workspaceWorkdir; workdirTouched = true }
     }
-    LaunchedEffect(recentProjectPaths, workdirTouched, composing, launcherRestoring) {
-        if (launcherRestoring) return@LaunchedEffect
+    // Last resort when no session names a project: the catalog's first project when it resolves to
+    // ONE folder without asking, else any project the broker knows. Still nothing → null ("Choose a
+    // project"), never home.
+    val fallbackProject = remember(catalog, projectLocations, projectHostKey, knownProjects) {
+        catalog.firstOrNull()
+            ?.let { p -> launchLocation(p, projectLocations[projectLocationKey(projectHostKey, p.id)]) as? LaunchLocation.Chosen }
+            ?.path
+            ?: knownProjects.firstOrNull()
+    }
+    LaunchedEffect(recentProjectPaths, fallbackProject, workdirTouched, composing, launcherRestoring) {
+        if (launcherRestoring || workspaceWorkdir != null) return@LaunchedEffect
         workdir = chooseDefaultProject(
             current = workdir,
             recent = recentProjectPaths,
             picked = workdirTouched,
             composing = composing,
+            fallback = fallbackProject,
         )
     }
 
@@ -602,7 +656,7 @@ fun SessionLauncherScreen(
         projectError = null
         projectConflict = null
         pendingLocationProject = null
-        catalogMenu = false
+        projectMenu = false
         catalogLocationsFor = null
         projectLocations = projectLocations + (projectLocationKey(projectHostKey, project.id) to path)
         onPrefsChange(currentPrefs())
@@ -615,12 +669,11 @@ fun SessionLauncherScreen(
             is LaunchLocation.Chosen -> pickProjectLocation(project, loc.path)
             is LaunchLocation.Choose -> {
                 catalogLocationsFor = project.id
-                catalogMenu = true
+                projectMenu = true
             }
             LaunchLocation.NeedsLocation -> {
                 // The existing path entry (typed path → validatePath, known folders, clone/create)
                 // names the folder; registration happens when it picks.
-                catalogMenu = false
                 catalogLocationsFor = null
                 pendingLocationProject = project
                 projectMenu = true
@@ -725,15 +778,18 @@ fun SessionLauncherScreen(
     val composerActions = remember(actions) {
         ComposerActions(transcribeDraft = actions.transcribeDraft, loadGlossary = actions.fetchGlossary)
     }
-    val canSend = workdir.isNotBlank() && (message.text.isNotBlank() || staged.isNotEmpty())
-    val canSaveDraft = workdir.isNotBlank() && message.text.isNotBlank()
+    val hasProject = !workdir.isNullOrBlank()
+    // Send also waits for THIS workdir's repo info: the worktree decision is made from it.
+    val canSend = hasProject && repoInfoFor == workdir && (message.text.isNotBlank() || staged.isNotEmpty())
+    val canSaveDraft = hasProject && message.text.isNotBlank()
     fun doSaveDraft() {
-        if (!canSaveDraft || submitting) return
+        val wd = workdir
+        if (!canSaveDraft || submitting || wd == null) return
         scope.launch {
             submitting = true
             error = null
             try {
-                val id = onSaveDraft(workdir.trim(), agent, model, reasoningLevel, message.text.trim(), activeDraftId)
+                val id = onSaveDraft(wd.trim(), agent, model, reasoningLevel, message.text.trim(), activeDraftId)
                 if (id != null) {
                     onClearDraft()
                     draftCleared = true
@@ -752,7 +808,8 @@ fun SessionLauncherScreen(
     // Spawn → (upload staged files) → send first message. onSubmit does the broker work; success
     // clears the draft and hands the new id to [onOpenSession] where the caller wants it.
     fun doSubmit() {
-        if (!canSend || submitting) return
+        val wd = workdir
+        if (!canSend || submitting || wd == null) return
         // No haptic here: the shared Composer's send path already fires the Confirm tick, and this
         // is only ever reached through it (the button and Enter are both the composer's).
         submitting = true
@@ -772,7 +829,7 @@ fun SessionLauncherScreen(
         scope.launch {
             try {
                 val sessionId = onSubmit(
-                    workdir.trim(), agent, model, reasoningLevel, message.text.trim(),
+                    wd.trim(), agent, model, reasoningLevel, message.text.trim(),
                     toUpload, wantsWorktree, base, activeDraftId,
                 )
                 onClearDraft()
@@ -848,7 +905,9 @@ fun SessionLauncherScreen(
                         // renders as a dropdown that must hang off this heading.
                         // A workspace tab is locked to its directory: the folder caption under the
                         // composer names it, so there is no project dropdown here.
-                        if (workspaceWorkdir == null) Box {
+                        if (workspaceWorkdir == null) Box(
+                            Modifier.onSizeChanged { projectHeadingWidth = with(density) { it.width.toDp() } },
+                        ) {
                             Row(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(Space.sm))
@@ -857,25 +916,21 @@ fun SessionLauncherScreen(
                                     // clobbered by the restore effect settling — ignore taps until
                                     // restore lands.
                                     .clickable(enabled = !launcherRestoring) {
-                                        if (useCatalog) {
-                                            catalogLocationsFor = null
-                                            catalogMenu = true
-                                        } else {
-                                            pendingLocationProject = null
-                                            projectMenu = true
-                                        }
+                                        catalogLocationsFor = null
+                                        pendingLocationProject = null
+                                        projectMenu = true
                                     }
                                     .padding(horizontal = Space.sm, vertical = Space.xs)
                                     .testTag("launcher_project_field"),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(Space.xs),
                             ) {
-                                val owner = if (useCatalog) projectOwning(catalog, workdir) else null
+                                val owner = if (useCatalog) workdir?.let { projectOwning(catalog, it) } else null
                                 if (owner != null) {
                                     ProjectImage(ProjectRef(projectHostKey, owner), loadCatalogImage, size = 18.dp) {}
                                 }
                                 Text(
-                                    owner?.name ?: formatWorkdir(workdir, home),
+                                    owner?.name ?: workdir?.let { formatWorkdir(it, home) } ?: "Choose a project",
                                     color = cs.onSurfaceVariant,
                                     fontSize = 17.sp,
                                     fontWeight = FontWeight.Medium,
@@ -894,7 +949,7 @@ fun SessionLauncherScreen(
                             // dropdown wherever a pointer drives (cluster F5).
                             ProjectPicker(
                                 expanded = projectMenu,
-                                current = workdir,
+                                current = workdir.orEmpty(),
                                 projects = projects,
                                 home = home,
                                 actions = actions,
@@ -906,29 +961,19 @@ fun SessionLauncherScreen(
                                         workdir = path; workdirTouched = true; error = null; projectError = null; projectConflict = null
                                     }
                                 },
-                                onDismiss = { projectMenu = false; pendingLocationProject = null },
+                                onDismiss = { projectMenu = false; pendingLocationProject = null; catalogLocationsFor = null },
+                                activity = pickerActivity,
+                                anchorWidth = projectHeadingWidth,
+                                // One picker: the catalog's projects when the host has one — except
+                                // while a location-less project waits for a folder, which is path entry.
+                                catalog = if (useCatalog && pendingLocationProject == null) catalog else emptyList(),
+                                catalogHostKey = projectHostKey,
+                                loadCatalogImage = loadCatalogImage,
+                                catalogLocationsFor = catalogLocationsFor?.let { id -> catalog.firstOrNull { it.id == id } },
+                                onCatalogProject = { applyProject(it) },
+                                onCatalogLocation = { p, path -> pickProjectLocation(p, path) },
+                                onCatalogLocationsBack = { catalogLocationsFor = null },
                             )
-                            if (useCatalog) {
-                                CatalogProjectPicker(
-                                    expanded = catalogMenu,
-                                    projects = catalog,
-                                    hostId = projectHostKey,
-                                    current = workdir,
-                                    home = home,
-                                    locationsFor = catalogLocationsFor,
-                                    loadImage = loadCatalogImage,
-                                    onProject = { applyProject(it) },
-                                    onShowLocations = { catalogLocationsFor = it },
-                                    onLocation = { p, path -> pickProjectLocation(p, path) },
-                                    onOther = {
-                                        catalogMenu = false
-                                        catalogLocationsFor = null
-                                        pendingLocationProject = null
-                                        projectMenu = true
-                                    },
-                                    onDismiss = { catalogMenu = false; catalogLocationsFor = null },
-                                )
-                            }
                         }
                         pendingLocationProject?.let { p ->
                             Text(
@@ -1248,8 +1293,9 @@ fun SessionLauncherScreen(
                         Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("launcher_mic_error"))
                     }
 
-                    // Folder caption — a calm restatement of the resolved workdir.
-                    Row(
+                    // Folder caption — a calm restatement of the resolved workdir (none yet → none).
+                    val captionText = workspaceLabel ?: workdir?.let { formatWorkdir(it, home) }
+                    if (captionText != null) Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically,
@@ -1262,7 +1308,7 @@ fun SessionLauncherScreen(
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            workspaceLabel ?: formatWorkdir(workdir, home),
+                            captionText,
                             color = cs.onSurfaceVariant,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp,
@@ -1307,13 +1353,14 @@ fun SessionLauncherScreen(
         WorktreePicker(
             pointer = pointer,
             useWorktree = useWorktree,
-            onToggle = { useWorktree = it },
+            onToggle = { setWorktree(it) },
             baseBranch = baseBranch,
             repoInfo = repoInfo,
             loading = worktreeFetching,
             onPickBranch = { branch ->
                 baseBranch = branch
-                useWorktree = true
+                baseBranchFor = workdir
+                setWorktree(true)
                 showWorktreePicker = false
             },
             onDismiss = { showWorktreePicker = false },

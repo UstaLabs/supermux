@@ -157,6 +157,7 @@ import { LoginManager } from "./core/agents/login/manager"
 import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { getRepoInfo } from "./core/git/repo-info"
+import { buildAgentModels } from "./core/models/agent-models"
 import { createWorktree, ensureWorktreeAt, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
@@ -164,6 +165,8 @@ import { suggestVerify } from "./core/worktree/verify-suggest"
 import { loadFinishConfig } from "./core/worktree/finish-config"
 import { computeLiteStatus } from "./core/worktree/lite-status"
 import { GitStatusService, type ServiceSession } from "./core/worktree/git-status-service"
+import { WorktreeService } from "./core/worktree/service"
+import type { OwnerRow } from "./core/worktree/inventory"
 import { deriveName, ensureUnique } from "./core/session-manager/naming"
 
 const log = makeLogger("main")
@@ -345,6 +348,15 @@ if (appliedCreds.length) log.info("credentials_hydrated", { vars: appliedCreds }
 // and mislabel the auth mode as "stored_credential".
 const agentHasCredential = (kind: AgentKind): boolean =>
   hasStoredCredential(kind, settings.getAppConfig(appConfigEnv))
+/** Every agent kind's install/auth status — GET /agents/status and the /agents/models catalog. */
+const detectAgentStatuses = () => detectAllAgents(
+  { hasBinary, fileExists: existsSync, hasCredential: agentHasCredential },
+  {
+    home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
+    appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
+    env: process.env,
+  },
+)
 const TG_TOKEN = appConfig.telegramBotToken || undefined
 const hasTelegram = !!TG_TOKEN
 // First-boot seed: curator config comes from env once, then the DB is the source
@@ -524,7 +536,18 @@ const MODEL_REFRESH_INTERVAL_MS = 15 * 60_000
 function refreshModels(discoverers: ModelDiscoverers = modelDiscoverers): Promise<void> {
   return refreshModelCache(modelCache, discoverers, {
     onEmpty: (agent) => log.warn("model_discovery_empty", { agent }),
+  }).then((changed) => {
+    if (changed.length > 0) announceAgentModelsChanged(changed)
   })
+}
+
+/**
+ * Tell every client its cached GET /agents/models is stale (a model list changed, or an agent was
+ * installed). No payload: clients refetch the catalog, so there is one shape to keep in sync.
+ */
+function announceAgentModelsChanged(agents: AgentKind[]): void {
+  log.info("agent_models_changed", { agents })
+  webChannel?.broadcastToAll({ type: "agent_models_changed" })
 }
 
 const agentModelRefreshes = new Map<AgentKind, Promise<void>>()
@@ -1127,6 +1150,17 @@ if (channelCheck.error) { log.error("no_channel_configured", { error: channelChe
 const MUX_WEB_PORT = process.env.MUX_WEB_PORT ? parseInt(process.env.MUX_WEB_PORT, 10) : undefined
 const MUX_WEB_PUBLIC_URL = process.env.MUX_WEB_PUBLIC_URL
 let webChannel: WebChannel | undefined
+// Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). Constructed
+// BEFORE the WebChannel so its opts can call into it; its broadcast closes over
+// webChannel the same way every other service below does — only invoked at
+// request/event time, well after webChannel is assigned.
+const worktreeService = new WorktreeService({
+  root: worktreesRoot(),
+  owners: () => registry.db
+    .query("SELECT id, name, status, user_status, workdir, base_branch, session_branch FROM sessions")
+    .all() as OwnerRow[],
+  broadcast: (frame) => webChannel?.broadcastToAll(frame),
+})
 // Background liveness poller for exposed proxies. Constructed BEFORE the
 // WebChannel so the channel opts (listProxies/createProxy/updateProxy) can call
 // monitor.getStatus; its onChange closes over webChannel (assigned just below)
@@ -1383,6 +1417,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // the installer exits. Referenced lazily by the startAgentInstall closures.
   const installManager = createInstallManager({
     isInstalled: (kind) => detectAgent(kind, { hasBinary, fileExists: existsSync }, { home: homedir() }).installed,
+    // A new agent joins the launcher's catalog: discover its models, then announce either way.
+    onSettled: (kind) => {
+      void refreshAgentModels(kind).finally(() => announceAgentModelsChanged([kind]))
+    },
   })
   webChannel = new WebChannel({
     updateChecker,
@@ -1511,16 +1549,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     previewAgentCommands: async ({ agent, workdir }) => {
       const kind = agent as import("./core/agents/types").AgentKind
-      await commandRegistry.refreshPreview({
+      return commandRegistry.preview({
         kind,
         workdir,
         pluginSpawnArgs: pluginSpawnArgsForKind(kind, { sessionName: "__preview__" }),
         agentContext: agentModules[kind]?.commandContext?.({ sessionName: "__preview__", kindAdapters: () => adaptersOfKind(kind) }),
       })
-      return {
-        commands: commandRegistry.getPreview(kind, workdir),
-        resolved: commandRegistry.isPreviewResolved(kind, workdir),
-      }
     },
     onAgentHook: (event, body) => {
       const claudeSid = body?.session_id
@@ -1584,6 +1618,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(id)
       if (!s) return { ok: false, error: "session not found" }
       return switchSessionReasoningLevel(s.id, reasoningLevel, { applyNow })
+    },
+    getAgentModels: () => {
+      const installed = detectAgentStatuses().filter((s) => s.installed).map((s) => s.kind as AgentKind)
+      // An installed agent with nothing cached yet (boot discovery failed): retry in the
+      // background; a non-empty result announces agent_models_changed and clients refetch.
+      for (const kind of installed) if (lookupModels(kind).length === 0) void refreshAgentModels(kind)
+      return buildAgentModels(installed, lookupModels)
     },
     getReasoningLevels: (agent, model) => {
       const models = lookupModels(agent)
@@ -1871,6 +1912,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       // spec §9.3: closing the last chat does not close the workspace.
       if (workspaceId) archiveWorkspaceIfEmpty(workspaceId)
     },
+    worktrees: {
+      root: () => worktreesRoot(),
+      list: () => worktreeService.list(),
+      changes: (id) => worktreeService.changes(id),
+      forWorkdir: (w) => worktreeService.forWorkdir(w),
+      remove: (ids) => worktreeService.remove(ids),
+    },
     renameSession: async (id, newName) => {
       const s = registry.get(id)
       if (!s) throw new Error("session not found")
@@ -2107,14 +2155,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return next
     },
     getAgentStatuses: () => {
-      return detectAllAgents(
-        { hasBinary, fileExists: existsSync, hasCredential: agentHasCredential },
-        {
-          home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
-          appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
-          env: process.env,
-        },
-      )
+      return detectAgentStatuses()
     },
     startAgentLogin: (kind) => loginManager.start(kind as any),
     getAgentLogin: (kind) => loginManager.get(kind as any),
@@ -2525,7 +2566,7 @@ async function spawnSession(args: {
   let effectiveWorkdir = workdir
   let wt: WorktreeHandle | undefined
   if (args.worktree !== false) {
-    const info = getRepoInfo(workdir)
+    const info = await getRepoInfo(workdir)
     if (info.eligible && info.repoRoot) {
       try {
         wt = await createWorktree({

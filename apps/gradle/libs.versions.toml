@@ -21,6 +21,7 @@ androidTargetSdk = "36"
 # 1.12.x artifacts Compose Multiplatform 1.12.0 resolves for the Android target.
 composeBom = "2026.09.00"
 activityCompose = "1.10.1"
+fragment = "1.8.5"
 lifecycle = "2.8.7"
 coreSplashscreen = "1.0.1"
 skie = "0.10.14"
@@ -82,6 +83,7 @@ ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
 ktor-server-websockets = { module = "io.ktor:ktor-server-websockets", version.ref = "ktor" }
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "androidSecurity" }
 coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "fragment" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
 androidx-core-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "coreSplashscreen" }
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }

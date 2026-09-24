@@ -255,9 +255,9 @@ test("PUT image: a chunked body with no content-length is still capped as it str
     method: "PUT",
     headers: { authorization: `Bearer ${token}`, "content-type": "image/png" },
     body,
-    // `duplex` is in the lockfile's RequestInit now; the @ts-expect-error that used
-    // to sit here became an error of its own ("unused directive") and failed the lane.
-    duplex: "half",
+    // Bun/undici requires duplex for a streaming request body. Not every fetch typing declares
+    // it, so it goes in through a cast rather than a @ts-expect-error that breaks once one does.
+    ...({ duplex: "half" } as RequestInit),
   })
   expect(res.status).toBe(413)
   expect(await res.json()).toEqual({ error: "image too large" })

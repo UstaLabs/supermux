@@ -376,13 +376,4 @@ export class SessionStore {
     const rec = rowToRecord(rows[0]!)
     return { ...rec, pid: 0, connected: false }
   }
-
-  listArchivedWorktrees(): Array<{ id: string; workdir: string; repo_root: string; base_branch: string; session_branch: string }> {
-    const rows = this.db.query(
-      "SELECT id, workdir, repo_root, base_branch, session_branch FROM sessions WHERE status = 'archived' AND repo_root IS NOT NULL"
-    ).all() as Array<{ id: string; workdir: string; repo_root: string; base_branch: string | null; session_branch: string | null }>
-    return rows
-      .filter((r) => !!r.session_branch)
-      .map((r) => ({ id: r.id, workdir: r.workdir, repo_root: r.repo_root, base_branch: r.base_branch || "HEAD", session_branch: r.session_branch! }))
-  }
 }

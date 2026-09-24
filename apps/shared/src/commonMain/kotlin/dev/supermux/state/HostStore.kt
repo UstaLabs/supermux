@@ -16,6 +16,7 @@ import dev.supermux.state.StagedUpload
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallJob
+import dev.supermux.net.AgentModelsResponse
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AppConfigDto
@@ -51,6 +52,7 @@ import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.ClaudeResetResult
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
@@ -68,6 +70,10 @@ import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.VncClient
+import dev.supermux.net.WorktreeChangesDto
+import dev.supermux.net.WorktreeDeleteResultDto
+import dev.supermux.net.WorktreeForWorkdirDto
+import dev.supermux.net.WorktreeSummaryDto
 import dev.supermux.host.viewingFramesFor
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
@@ -183,6 +189,15 @@ class HostStore(
     // whole surface, same as before this split.
     private val httpDictate = deps.httpFactory(120_000)
     private val apiDictate = apiOverride ?: BrokerApi(baseUrl, token, httpDictate)
+
+    // Worktree calls (final review I-1): the broker deletes a batch SEQUENTIALLY (a big
+    // `rm -rf node_modules` alone can pass 15 s) and by-workdir/changes run `du`, so on the 15 s
+    // default a slow-but-successful call would read as "Broker unreachable" while the broker keeps
+    // working. Lists/lookups share the 2-minute dictation client; deletes (plain and the three
+    // archive-and-delete calls) get a lazily built 10-minute one. [apiOverride] backs both in tests.
+    private val apiWorktreeRead = apiDictate
+    private val httpWorktreeDelete = lazy { deps.httpFactory(WORKTREE_DELETE_TIMEOUT_MS) }
+    private val apiWorktreeDelete by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpWorktreeDelete.value) }
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
 
     // ── Viewing presence (mirrors iOS BrokerSession / web useViewing) ──────────────
@@ -319,6 +334,13 @@ class HostStore(
     // Last GET /usage (or usage_updated) snapshot. The Usage popover renders this immediately
     // on open and updates in place when a usage_updated frame arrives — never waits on the
     // network to draw. Seeded by [usage]/[refreshUsage]; WS [ServerFrame.UsageUpdated] replaces it.
+    // The launcher's model catalog (GET /agents/models), fetched on every snapshot (= connect or
+    // reconnect) and on `agent_models_changed` — never per New Session open. Null until the first
+    // answer, and stays null on a broker older than the endpoint (the launcher then asks per call).
+    private val _agentModels = MutableStateFlow<AgentModelsResponse?>(null)
+    val agentModels: StateFlow<AgentModelsResponse?> = _agentModels
+    private var agentModelsJob: Job? = null
+
     private val _usage = MutableStateFlow<UsageResponse?>(null)
     val usageSnapshot: StateFlow<UsageResponse?> = _usage
 
@@ -399,7 +421,9 @@ class HostStore(
                 _onboarded.value = frame.onboarded
                 lastSentViewing = null
                 sendViewingIfChanged()
+                refreshAgentModels()
             }
+            ServerFrame.AgentModelsChanged -> refreshAgentModels()
             is ServerFrame.SessionRemoved -> {
                 walkthroughs.remove(frame.id)
                 refreshArchived()
@@ -1397,8 +1421,17 @@ class HostStore(
      * to kill, so the row never left the sidebar and looked un-archivable.
      */
     fun archiveWorkspace(workspaceId: String) {
-        // Optimistic: live list drops it, archived fold gains it. workspace_removed
-        // is authoritative for peers (they still have the DTO in live list).
+        markWorkspaceArchivedLocally(workspaceId)
+        stateScope.launch {
+            runCatching { api.archiveWorkspace(workspaceId) }
+                .onFailure { println("[HostStore] archiveWorkspace failed: $it") }
+        }
+    }
+
+    /** Optimistic: live list drops [workspaceId], archived fold gains it. workspace_removed
+     *  is authoritative for peers (they still have the DTO in live list). Shared by
+     *  [archiveWorkspace] and [archiveWorkspaceAndDeleteWorktree]. */
+    private fun markWorkspaceArchivedLocally(workspaceId: String) {
         _state.update { st ->
             val moving = st.workspaces.find { it.id == workspaceId } ?: return@update st
             val archived = moving.copy(status = "archived")
@@ -1410,10 +1443,6 @@ class HostStore(
                     st.archivedWorkspaces + archived
                 },
             )
-        }
-        stateScope.launch {
-            runCatching { api.archiveWorkspace(workspaceId) }
-                .onFailure { println("[HostStore] archiveWorkspace failed: $it") }
         }
     }
 
@@ -1558,6 +1587,11 @@ class HostStore(
     suspend fun redeemCodexReset(): CodexResetResult? =
         runApi("redeemCodexReset") { api.redeemCodexReset() }
 
+    /** POST /usage/claude/reset — spend one banked Claude limit reset; returns the refreshed
+     *  Claude usage so the card can update in place. Null on any failure. */
+    suspend fun redeemClaudeReset(): ClaudeResetResult? =
+        runApi("redeemClaudeReset") { api.redeemClaudeReset() }
+
     suspend fun personalAssistants(): List<PADto> =
         runApi("personalAssistants") { api.listPAs() } ?: emptyList()
 
@@ -1657,6 +1691,37 @@ class HostStore(
     /** DELETE /devices/<name> — revoke a paired device. False on failure. */
     suspend fun revokeDevice(name: String): Boolean =
         runApi("revokeDevice") { api.revokeDevice(name); true } ?: false
+
+    // ── Worktrees ─────────────────────────────────────────────────────────
+    suspend fun worktrees(): List<WorktreeSummaryDto>? = runApi("worktrees") { apiWorktreeRead.worktrees().worktrees }
+    suspend fun worktreeChanges(id: String): WorktreeChangesDto? = runApi("worktreeChanges") { apiWorktreeRead.worktreeChanges(id) }
+    suspend fun worktreeForWorkdir(workdir: String): WorktreeForWorkdirDto? = runApi("worktreeForWorkdir") { apiWorktreeRead.worktreeForWorkdir(workdir) }
+    suspend fun deleteWorktrees(ids: List<String>): List<WorktreeDeleteResultDto>? = runApi("deleteWorktrees") { apiWorktreeDelete.deleteWorktrees(ids) }
+    suspend fun killAndDeleteWorktree(id: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto>? =
+        runApi("killAndDeleteWorktree") { apiWorktreeDelete.killAndDeleteWorktree(id, worktreeIds) }
+    suspend fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto>? {
+        // Same optimistic move as archiveWorkspace(): the row leaves the sidebar immediately.
+        markWorkspaceArchivedLocally(id)
+        return runApi("archiveWorkspaceAndDeleteWorktree") { apiWorktreeDelete.archiveWorkspaceAndDeleteWorktree(id, worktreeIds) }
+    }
+    suspend fun closeViewAndDeleteWorktree(workspaceId: String, viewId: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto>? =
+        runApi("closeViewAndDeleteWorktree") { apiWorktreeDelete.closeViewAndDeleteWorktree(workspaceId, viewId, worktreeIds) }
+
+    // Fire-and-forget variants for the archive/settle/close dialogs (final review m1): a delete can
+    // take minutes, so the dialog is dismissed first and the call runs on [stateScope] — navigation
+    // or a closed dialog never cancels it — reporting its per-worktree results (null = the archive
+    // request itself failed) through [onDone], like [kill].
+    fun killAndDeleteWorktree(id: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit) {
+        stateScope.launch { onDone(killAndDeleteWorktree(id, worktreeIds)) }
+    }
+    fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit) {
+        stateScope.launch { onDone(archiveWorkspaceAndDeleteWorktree(id, worktreeIds)) }
+    }
+    fun closeViewAndDeleteWorktree(
+        workspaceId: String, viewId: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit,
+    ) {
+        stateScope.launch { onDone(closeViewAndDeleteWorktree(workspaceId, viewId, worktreeIds)) }
+    }
 
     /** Fire-and-forget Android name for [revokeDevice]. */
     fun revoke(n: String) {
@@ -1761,13 +1826,26 @@ class HostStore(
     suspend fun validatePath(path: String): PathValidation? =
         runApi("validatePath") { api.validatePath(path) }
 
-    /** GET /models?agent= → models pickable in the launcher (no session yet). Empty on failure. */
-    suspend fun launcherModels(agent: String): List<ModelInfo> =
-        runApi("launcherModels") { api.listModels(agent).models } ?: emptyList()
+    /** [agent]'s entry in the cached catalog when it has models; null → ask the broker. */
+    private fun cachedAgent(agent: String) = _agentModels.value?.agent(agent)?.takeIf { it.models.isNotEmpty() }
 
-    /** GET /reasoning-levels?agent=&model= → thinking levels for the launcher. Null on failure. */
+    /** The agent's models: the cached catalog, else GET /models?agent=. Empty on failure. */
+    suspend fun launcherModels(agent: String): List<ModelInfo> =
+        cachedAgent(agent)?.models
+            ?: runApi("launcherModels") { api.listModels(agent).models } ?: emptyList()
+
+    /** Refetch [agentModels]; a newer request supersedes one still in flight. Failure keeps the last answer. */
+    fun refreshAgentModels() {
+        agentModelsJob?.cancel()
+        agentModelsJob = stateScope.launch {
+            runApi("agentModels") { api.agentModels() }?.let { _agentModels.value = it }
+        }
+    }
+
+    /** Thinking levels for [agent]/[model]: the cached catalog, else GET /reasoning-levels. Null on failure. */
     suspend fun launcherReasoning(agent: String, model: String? = null): ReasoningResponse? =
-        runApi("launcherReasoning") { api.getReasoningLevels(agent, model) }
+        cachedAgent(agent)?.reasoningFor(model)?.let { ReasoningResponse(agent, levels = it.levels, visible = it.visible) }
+            ?: runApi("launcherReasoning") { api.getReasoningLevels(agent, model) }
 
     /** GET /repos/info?path= → git status for the launcher's worktree picker. Null on failure. */
     suspend fun launcherRepoInfo(workdir: String, fetch: Boolean = false): RepoInfo? =
@@ -1838,15 +1916,35 @@ class HostStore(
     // Back DesktopComposer's model/reasoning pills. All go through [runApi] and degrade to
     // null/false so a broker hiccup just leaves the pills showing their last-known state.
 
-    /** GET /sessions/<id>/models → the session's pickable models + current selection. Null on
-     *  failure. */
-    suspend fun sessionModels(id: String): ModelsResponse? =
-        runApi("sessionModels") { api.models(id) }
+    // The session pickers answer from the cached catalog too: its agent's models, with `current`
+    // from the live session row (which the composer prefers anyway). The broker is asked only when
+    // the catalog can't answer (older broker, or the agent has no models cached).
+    private fun sessionRow(id: String): SessionInfo? = _state.value.sessions.firstOrNull { it.id == id }
 
-    /** GET /sessions/<id>/reasoning-levels → the session's thinking levels + current + visibility.
-     *  Null on failure. */
+    /** The session's pickable models + current selection (catalog, else GET /sessions/<id>/models). */
+    suspend fun sessionModels(id: String): ModelsResponse? {
+        val s = sessionRow(id)
+        val cached = s?.let { cachedAgent(it.agent) }
+        if (s != null && cached != null) return ModelsResponse(agent = s.agent, current = s.model, models = cached.models)
+        return runApi("sessionModels") { api.models(id) }
+    }
+
+    /** The session's thinking levels + current + visibility (catalog, else GET /sessions/<id>/reasoning-levels). */
     suspend fun sessionReasoning(id: String): ReasoningResponse? =
-        runApi("sessionReasoning") { api.reasoningLevels(id) }
+        sessionRow(id)?.let { cachedSessionReasoning(it, it.model) }
+            ?: runApi("sessionReasoning") { api.reasoningLevels(id) }
+
+    /**
+     * The levels for [model] (null = Default) on this session — what the composer shows right after
+     * a switch, before the session row carries the new model. Broker fallback as [sessionReasoning].
+     */
+    suspend fun sessionReasoningFor(id: String, model: String?): ReasoningResponse? =
+        sessionRow(id)?.let { cachedSessionReasoning(it, model) } ?: sessionReasoning(id)
+
+    private fun cachedSessionReasoning(s: SessionInfo, model: String?): ReasoningResponse? =
+        cachedAgent(s.agent)?.reasoningFor(model)?.let {
+            ReasoningResponse(agent = s.agent, current = s.reasoningLevel, levels = it.levels, visible = it.visible)
+        }
 
     /** POST /sessions/<id>/model {"model"} — switch the session's model (persists broker-side).
      *  Returns true on success, false on any failure. */
@@ -2112,6 +2210,12 @@ class HostStore(
         if (cancelProjections) projectionJob.cancel()
         http.close()
         httpDictate.close()
+        if (httpWorktreeDelete.isInitialized()) httpWorktreeDelete.value.close()
+    }
+
+    private companion object {
+        /** Ceiling for a worktree delete batch (final review I-1); the Settings screen also chunks. */
+        const val WORKTREE_DELETE_TIMEOUT_MS = 600_000L
     }
 }
 

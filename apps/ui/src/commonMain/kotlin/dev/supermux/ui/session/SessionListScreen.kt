@@ -1,9 +1,9 @@
 // The one session/workspace list both apps render (cluster F4).
 //
-// Desktop's list on every host — the same frame (new-session card, host chips, section header,
-// list, footer) and the same rows. The only extras: where this screen is the whole surface (a
-// phone) it paints the logo title and clears the system bars; touch-sized hit targets live inside
-// the shared rows.
+// Desktop's list on every host — the same frame (new-session card, section header, list, footer
+// with the host switch) and the same rows. The only extras: where this screen is the whole surface
+// (a phone) it paints the logo title and clears the system bars; touch-sized hit targets live
+// inside the shared rows.
 //
 // The screen owns NO navigation of its own: it registers no `BackHandler` (the list is the phone's
 // back destination, not a back consumer) and Android's shared-element scopes stay at the
@@ -114,8 +114,8 @@ import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.host.HostDot
-import dev.supermux.ui.host.HostFilterChips
 import dev.supermux.ui.panes.PaneDragController
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.mux_logo
 import dev.supermux.ui.theme.AppearanceMode
@@ -129,6 +129,8 @@ import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
+import dev.supermux.ui.worktree.WorktreeCleanupSection
+import dev.supermux.ui.worktree.reportWorktreeDelete
 import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.WORKSPACE_FLAT_SCOPE
 import dev.supermux.workspace.WorkspaceDragWorkingState
@@ -212,7 +214,6 @@ fun SessionListScreen(
     hosts: List<HostView> = emptyList(),
     sessionHost: Map<String, String> = emptyMap(),
     hostFilter: String? = null,
-    onHostFilter: (String?) -> Unit = {},
     onAddHost: () -> Unit = {},
     // ── Persistent projects; default-empty so an old broker keeps the path grouping ──
     /** Every host's project catalog, host-qualified (the same id space as [workspaceHost]). */
@@ -1191,7 +1192,7 @@ fun SessionListScreen(
 
     // ── Chrome ────────────────────────────────────────────────────────────────────────────────
     val listTag = if (useWorkspaces) WorkspaceListTestIds.LIST else TestIds.SESSION_LIST
-    // One frame at every width (desktop's): new-session card, chips, section header, list, footer.
+    // One frame at every width (desktop's): new-session card, section header, list, footer.
     // Where this screen is the whole surface (a phone) it keeps the logo title above, and clears
     // the system bars itself.
     Column(
@@ -1217,18 +1218,6 @@ fun SessionListScreen(
             }
         }
         NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
-        if (multiHost) {
-            HostFilterChips(
-                hosts = hosts,
-                sessions = sessions,
-                sessionHost = sessionHost,
-                selected = hostFilter,
-                onSelect = onHostFilter,
-                onAddHost = onAddHost,
-                onRenameHost = actions.renameHost,
-                onForgetHost = actions.forgetHost,
-            )
-        }
         SessionsSectionHeader(
             title = if (useWorkspaces) "Workspaces" else "Sessions",
             groupByProject = groupByProject,
@@ -1295,36 +1284,75 @@ fun SessionListScreen(
         )
     }
     archiveWorkspaceTarget?.let { target ->
+        var deleteWt by remember(target.id) { mutableStateOf(false) }
+        var deleteIds by remember(target.id) { mutableStateOf(emptyList<String>()) }
+        val notices = LocalPlatform.current.notices
+        val sessionIds = target.chatSessionIds()
+        val workdirs = sessionIds.mapNotNull { id -> sessions.firstOrNull { it.id == id }?.workdir }.ifEmpty { listOf(target.workdir) }
         AlertDialog(
             onDismissRequest = { archiveWorkspaceTarget = null },
             title = { Text("Archive workspace?") },
-            text = { Text("This archives \"${target.name}\" and ends its agents. This can't be undone.") },
+            text = {
+                Column {
+                    Text("This archives \"${target.name}\" and ends its agents. This can't be undone.")
+                    WorktreeCleanupSection(workdirs, sessionIds.toSet(), { wd -> actions.worktreeForWorkspaceWorkdir(target.id, wd) }, onDeleteChange = { c, ids -> deleteWt = c; deleteIds = ids })
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    actions.archiveWorkspace(target.id)
+                    val id = target.id
                     archiveWorkspaceTarget = null
-                }) { Text("Archive", color = cs.error) }
+                    if (deleteWt && deleteIds.isNotEmpty()) {
+                        val ids = deleteIds
+                        actions.archiveWorkspaceAndDeleteWorktree(id, ids) { reportWorktreeDelete(notices, it) }
+                    } else {
+                        actions.archiveWorkspace(id)
+                    }
+                }) { Text(if (deleteWt) "Archive & delete" else "Archive", color = cs.error) }
             },
             dismissButton = { TextButton(onClick = { archiveWorkspaceTarget = null }) { Text("Cancel") } },
         )
     }
     killTarget?.let { target ->
         val discard = target.sectionKey() == SectionKey.DRAFT
+        var deleteWt by remember(target.id) { mutableStateOf(false) }
+        var deleteIds by remember(target.id) { mutableStateOf(emptyList<String>()) }
+        val notices = LocalPlatform.current.notices
         AlertDialog(
             onDismissRequest = { killTarget = null },
             title = { Text(if (discard) "Discard draft?" else "Settle session?") },
             text = {
-                Text(
-                    if (discard) {
-                        "This permanently discards \"${target.name}\". This can't be undone."
-                    } else {
-                        "This ends \"${target.name}\" and its agent. This can't be undone."
-                    },
-                )
+                Column {
+                    Text(
+                        if (discard) {
+                            "This permanently discards \"${target.name}\". This can't be undone."
+                        } else {
+                            "This ends \"${target.name}\" and its agent. This can't be undone."
+                        },
+                    )
+                    if (!discard) {
+                        WorktreeCleanupSection(
+                            listOf(target.workdir), setOf(target.id), { wd -> actions.worktreeForSessionWorkdir(target.id, wd) },
+                            onDeleteChange = { c, ids -> deleteWt = c; deleteIds = ids },
+                        )
+                    }
+                }
             },
             confirmButton = {
-                TextButton(onClick = { onKill(target.id); killTarget = null }) {
-                    Text(if (discard) "Discard" else "Settle", color = cs.error)
+                TextButton(onClick = {
+                    val id = target.id
+                    killTarget = null
+                    if (!discard && deleteWt && deleteIds.isNotEmpty()) {
+                        val ids = deleteIds
+                        actions.killAndDeleteWorktree(id, ids) { res ->
+                            reportWorktreeDelete(notices, res)
+                            onKilled(id)
+                        }
+                    } else {
+                        onKill(id)
+                    }
+                }) {
+                    Text(if (discard) "Discard" else if (deleteWt) "Settle & delete" else "Settle", color = cs.error)
                 }
             },
             dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },
@@ -1614,10 +1642,11 @@ private fun NavItem(label: String, icon: ImageVector, tag: String, onClick: () -
 }
 
 /**
- * Desktop's sticky sidebar footer: theme / usage / devices / settings.
+ * The sticky sidebar footer: the host switch on the left; theme / usage / devices / settings on
+ * the right.
  *
  * A slot rather than parameters on the screen — usage is an anchored popover whose body only the
- * shell can build, and Android has no footer at all.
+ * shell can build, and so is the host switch ([hostSwitcher]), which reaches the fleet.
  */
 @Composable
 fun SessionListFooter(
@@ -1629,6 +1658,7 @@ fun SessionListFooter(
     usageOpen: Boolean = false,
     onUsageDismiss: () -> Unit = {},
     usageContent: (@Composable () -> Unit)? = null,
+    hostSwitcher: (@Composable () -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     // The icon shows what you'll switch TO: sun when dark, moon when light.
@@ -1650,6 +1680,9 @@ fun SessionListFooter(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.End,
         ) {
+            if (hostSwitcher != null) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { hostSwitcher() }
+            }
             FooterIcon(themeIcon, themeLabel, "sidebar_footer_theme", onToggleTheme)
             Box {
                 FooterIcon(Icons.Filled.DataUsage, "Usage", "sidebar_footer_usage", onUsage)

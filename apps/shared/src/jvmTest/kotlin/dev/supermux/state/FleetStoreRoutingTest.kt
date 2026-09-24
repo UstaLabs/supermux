@@ -115,6 +115,32 @@ class FleetStoreRoutingTest {
         f.fleet.close()
     }
 
+    // Final review I-4: the archive dialog's worktree lookup asks the host that OWNS the
+    // session/workspace, never the active one (host A here).
+    @Test fun worktreeLookupForSessionHitsTheOwningHostOnly() = runTest(UnconfinedTestDispatcher()) {
+        val f = fixture(this)
+        advanceUntilIdle()
+        f.calls.values.forEach { it.clear() }
+
+        f.fleet.worktreeForSessionWorkdir("s-b", "/b")
+
+        assertEquals(listOf("GET /worktrees/by-workdir"), f.calls.getValue("b").toList())
+        assertEquals(emptyList(), f.calls.getValue("a").toList(), "host A must not be asked about host B's session")
+        f.fleet.close()
+    }
+
+    @Test fun worktreeLookupForWorkspaceHitsTheOwningHostOnly() = runTest(UnconfinedTestDispatcher()) {
+        val f = fixture(this)
+        advanceUntilIdle()
+        f.calls.values.forEach { it.clear() }
+
+        f.fleet.worktreeForWorkspaceWorkdir("w-b", "/b")
+
+        assertEquals(listOf("GET /worktrees/by-workdir"), f.calls.getValue("b").toList())
+        assertEquals(emptyList(), f.calls.getValue("a").toList(), "host A must not be asked about host B's workspace")
+        f.fleet.close()
+    }
+
     @Test fun mergedWorkspacesFoldBothHosts() = runTest(UnconfinedTestDispatcher()) {
         val f = fixture(this)
         advanceUntilIdle()

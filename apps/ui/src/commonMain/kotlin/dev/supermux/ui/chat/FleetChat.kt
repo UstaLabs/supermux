@@ -70,6 +70,7 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
             ),
             loadModels = { fleet.sessionModels(sessionId) },
             loadReasoning = { fleet.sessionReasoning(sessionId) },
+            loadReasoningFor = { model -> fleet.sessionReasoningFor(sessionId, model) },
             pickModel = { fleet.switchModel(sessionId, it) },
             pickReasoning = { fleet.switchReasoning(sessionId, it) },
             ensureMessagesLoaded = { fleet.ensureMessagesLoaded(sessionId) },

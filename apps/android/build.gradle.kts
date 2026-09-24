@@ -131,6 +131,10 @@ dependencies {
     implementation(libs.compose.material3)
     implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.androidx.activity.compose)
+    // Not used directly: a transitive dependency drags in a pre-1.3.0 androidx.fragment, whose
+    // FragmentActivity breaks the ActivityResult APIs (PushPermission) — lintVitalRelease treats
+    // that as fatal (InvalidFragmentVersionForActivityResult). Pin a current one.
+    implementation(libs.androidx.fragment)
     implementation(libs.androidx.core.splashscreen)
     // (Navigation 3 replaced navigation-compose in cluster G8: the shared `SupermuxApp` root
     //  drives one `NavDisplay` back stack on BOTH hosts, and it arrives transitively from :ui.)

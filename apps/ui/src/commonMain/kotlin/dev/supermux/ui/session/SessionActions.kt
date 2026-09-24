@@ -26,12 +26,15 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import dev.supermux.net.AgentModelsResponse
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.WorktreeDeleteResultDto
+import dev.supermux.net.WorktreeForWorkdirDto
 import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SlashCommand
 import dev.supermux.state.FleetStore
@@ -68,6 +71,13 @@ class LauncherActions(
     val projectImage: suspend (project: ProjectDto) -> ByteArray? = { null },
     /** `null` = transport failure; an INVALID path is a non-null `PathValidation(ok=false)`. */
     val validatePath: suspend (path: String) -> PathValidation? = { null },
+    /**
+     * The target host's cached model catalog (GET /agents/models, refreshed on connect and on
+     * `agent_models_changed`). While it is non-null the launcher reads agents, models and
+     * reasoning from it with no request; null (an older broker, or not answered yet) falls back
+     * to [launcherAgents] / [launcherModels] / [launcherReasoning] per call.
+     */
+    val agentModels: Flow<AgentModelsResponse?> = flowOf(null),
     val launcherModels: suspend (agent: String) -> List<ModelInfo> = { emptyList() },
     val launcherReasoning: suspend (agent: String, model: String?) -> ReasoningResponse? = { _, _ -> null },
     /** `fetch=true` refreshes origin's remote-tracking refs (once per repo, on picker open). */
@@ -137,6 +147,7 @@ fun rememberLauncherActions(
             addProjectLocation = { id, path -> app.addProjectLocation(id, path) },
             projectImage = { app.projectImageBytes(it) },
             validatePath = { app.validatePath(it) },
+            agentModels = app.agentModels,
             launcherModels = { app.launcherModels(it) },
             launcherReasoning = { agent, model -> app.launcherReasoning(agent, model) },
             launcherRepoInfo = { workdir, fetch -> app.launcherRepoInfo(workdir, fetch) },
@@ -185,6 +196,7 @@ fun rememberLauncherActions(
             },
             projectImage = { fleet.activeApp()?.projectImageBytes(it) },
             validatePath = { fleet.validatePath(it) },
+            agentModels = fleet.activeAgentModels,
             launcherModels = { fleet.launcherModels(it) },
             launcherReasoning = { agent, model -> fleet.launcherReasoning(agent, model) },
             launcherRepoInfo = { workdir, fetch -> fleet.launcherRepoInfo(workdir, fetch) },
@@ -239,6 +251,18 @@ class SessionListActions(
     val restoreWorkspace: (workspaceId: String) -> Unit = {},
     val renameHost: (recordId: String, name: String) -> Unit = { _, _ -> },
     val forgetHost: (recordId: String) -> Unit = {},
+    /** Worktree lookup for the archive dialogs (spec 2026-09-22-explicit-worktree-cleanup), asked
+     *  of the host that OWNS the session / workspace being archived (never just the active host). */
+    val worktreeForSessionWorkdir: suspend (sessionId: String, workdir: String) -> WorktreeForWorkdirDto? = { _, _ -> null },
+    val worktreeForWorkspaceWorkdir: suspend (workspaceId: String, workdir: String) -> WorktreeForWorkdirDto? = { _, _ -> null },
+    /** Archive + delete exactly [worktreeIds] (the ids the dialog displayed and the user confirmed).
+     *  Fire-and-forget on the store's own scope (the dialog is already gone, and the screen may be
+     *  too, by the time a long delete finishes); `onDone` gets the per-worktree results, null when
+     *  the archive request itself failed. */
+    val killAndDeleteWorktree: (id: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit) -> Unit =
+        { _, _, onDone -> onDone(null) },
+    val archiveWorkspaceAndDeleteWorktree: (workspaceId: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit) -> Unit =
+        { _, _, onDone -> onDone(null) },
 )
 
 /**
@@ -262,6 +286,10 @@ fun SessionListActions.withWorkspaceOps(
     restoreWorkspace = restoreWorkspace,
     renameHost = renameHost,
     forgetHost = forgetHost,
+    worktreeForSessionWorkdir = worktreeForSessionWorkdir,
+    worktreeForWorkspaceWorkdir = worktreeForWorkspaceWorkdir,
+    killAndDeleteWorktree = killAndDeleteWorktree,
+    archiveWorkspaceAndDeleteWorktree = archiveWorkspaceAndDeleteWorktree,
 )
 
 /** [SessionListActions] against ONE paired host — single-host desktop. */
@@ -287,6 +315,10 @@ fun rememberSessionListActions(
             restoreWorkspace = { app.restoreWorkspace(it) },
             renameHost = { id, name -> renameHost(id, name) },
             forgetHost = { id -> forgetHost(id) },
+            worktreeForSessionWorkdir = { _, workdir -> app.worktreeForWorkdir(workdir) },
+            worktreeForWorkspaceWorkdir = { _, workdir -> app.worktreeForWorkdir(workdir) },
+            killAndDeleteWorktree = { id, ids, onDone -> app.killAndDeleteWorktree(id, ids, onDone) },
+            archiveWorkspaceAndDeleteWorktree = { id, ids, onDone -> app.archiveWorkspaceAndDeleteWorktree(id, ids, onDone) },
         )
     }
 }
@@ -307,5 +339,9 @@ fun rememberSessionListActions(fleet: FleetStore): SessionListActions = remember
         restoreWorkspace = { fleet.restoreWorkspace(it) },
         renameHost = { id, name -> fleet.renameHost(id, name) },
         forgetHost = { id -> fleet.forgetHost(id) },
+        worktreeForSessionWorkdir = { id, workdir -> fleet.worktreeForSessionWorkdir(id, workdir) },
+        worktreeForWorkspaceWorkdir = { id, workdir -> fleet.worktreeForWorkspaceWorkdir(id, workdir) },
+        killAndDeleteWorktree = { id, ids, onDone -> fleet.killAndDeleteWorktree(id, ids, onDone) },
+        archiveWorkspaceAndDeleteWorktree = { id, ids, onDone -> fleet.archiveWorkspaceAndDeleteWorktree(id, ids, onDone) },
     )
 }
