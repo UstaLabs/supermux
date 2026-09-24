@@ -348,6 +348,42 @@ Each of those is documented on the declaration that implements it; start at
 Three of them — the touch handles, the soft-keyboard side of the IME, and the accessibility tree —
 have been asserted only on the desktop JVM, headlessly. See **Status** at the top.
 
+## The font
+
+The package **ships its own monospace face** — JetBrains Mono 2.304, Regular / Bold / Italic, as
+Compose resources inside every artifact — and the default `TerminalTheme` draws with it.
+
+It has to. A terminal takes its CELL from the font's advance (`measureCellMetrics`) and then places
+every glyph on that grid, so "some monospace font" is geometry, not taste. Asking the platform for
+the family *name* `FontFamily.Monospace` works on the desktop JVM, Android and iOS, and silently
+does not in the browser: Compose's wasm build maps the generic families to a list of names (`Menlo`,
+`Consolas`, `DejaVu Sans Mono`, `Courier`, `monospace`) and skiko's wasm font manager has **no
+families registered at all**, so every one of them misses and Skia draws with a proportional
+default. The grid stays right — the painter splits a run that does not fit its cells and draws it
+glyph by glyph — but an `i` then sits in an `M`-sized cell, and a screen of text looks stretched.
+That was the bug; the font file is the fix.
+
+- **Overriding it:** pass your own family in `TerminalTheme(fontFamily = …)`. It is used verbatim;
+  only the DEFAULT (`FontFamily.Monospace`) is read as "the face this package ships". Anything that
+  derives geometry from the same theme — a prediction overlay, a decoration drawn beside the grid —
+  must resolve it the same way, with `rememberTerminalTheme(theme)`.
+- **Coverage:** ASCII, Latin-1, Latin Extended-A, box drawing (U+2500–257F) and block elements
+  (U+2580–259F) complete, most of Greek/Cyrillic, a few Powerline private-use glyphs. CJK, emoji and
+  Braille are not in it and fall back to the platform — expected, and harmless: a wide cluster gets
+  its own run spanning exactly the cells the engine gave it.
+- **Bold-italic** resolves to the Italic face: every face has the same 600/1000 em advance, so which
+  one wins cannot move a column.
+- **Weight on the wire:** 829 KB of TTF (382 KiB gzipped) for the three faces, fetched by the web
+  client when a terminal first mounts and then immutable-cached. They sit under
+  `assets/composeResources/` and are outside `apps/web`'s bundle ceiling, which counts the top-level
+  `assets/*.{js,wasm,mjs}` only.
+- **Licence:** SIL Open Font License 1.1 — [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md),
+  which is also packaged into every jar/AAR as `META-INF/dev.supermux.terminal/`.
+
+`TerminalFontTest` is the guard: it asserts that the default theme is NOT left asking the platform
+for a name, that all 95 printable ASCII characters measure the same advance (bold and italic too),
+and that the cell is that advance rounded — the three things that were false in the browser.
+
 ## Publishing
 
 ```sh

@@ -157,6 +157,24 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 //
 // The staged `editor/` bundle (CodeMirror, 1.3 MB raw) sits outside assets/ and is deliberately not
 // counted: it is a separate, lazily-loaded page.
+//
+// NEITHER ARE THE FONTS, and that is now worth a number rather than a clause. `assets.listFiles()`
+// below is top level only, so everything under `assets/composeResources/` is outside this ceiling
+// by construction:
+//
+//     geist * 6 (`:ui`, the app's type scale)        810 KB raw   369 KiB gzip
+//     jetbrains_mono * 3 (`:terminal-compose`)       829 KB raw   382 KiB gzip   ← added 2026-09-24
+//     -------------------------------------------------------------------------
+//     fonts, first load                            1 638 KB raw   751 KiB gzip
+//
+// The terminal's three faces are NEW (the surface used to ask the platform for
+// `FontFamily.Monospace`, which resolves to nothing in the browser — see
+// `terminal-compose/TerminalFont.kt`). They are fetched when a terminal first mounts, not with the
+// shell, and then served `immutable` like every other hashed asset. They add NOTHING to the sum
+// this guard checks; the figures above are measured on the files themselves (`gzip -9`), so the
+// headroom under the 8 MiB ceiling is still the 1.43 MiB measured on 2026-09-23 plus whatever the
+// Kotlin of that change costs in the app wasm — re-read the `stageForBroker:` line of the next
+// staged build for the exact total.
 val maxGzipBytes = 8L * 1024 * 1024
 
 fun sha8(bytes: ByteArray): String =

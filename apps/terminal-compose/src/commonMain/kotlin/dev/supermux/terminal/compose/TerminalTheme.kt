@@ -35,6 +35,11 @@ import kotlin.math.roundToInt
  *   default: Ghostty reports the resolved colour and the weight separately, and doubling the two is
  *   what makes themes look washed out.
  * - [faintAlpha] is the alpha SGR 2 (faint) multiplies the foreground by.
+ * - [fontFamily] defaults to [FontFamily.Monospace], which the surface reads as "the monospace face
+ *   this package SHIPS" rather than as a request to the platform's font manager — see
+ *   [packagedTerminalFontFamily] for why a renderer carries a font of its own, and
+ *   [rememberTerminalTheme] for where the substitution happens. A host that has its own terminal
+ *   face passes it here and it is used verbatim.
  */
 @Immutable
 data class TerminalTheme(

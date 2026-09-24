@@ -49,6 +49,12 @@ kotlin {
             api(compose.runtime)
             api(compose.foundation)
             api(compose.ui)
+            // The default terminal face ships INSIDE this artifact as a Compose resource (see
+            // TerminalFont.kt for why a renderer carries a font at all). `implementation`, not
+            // `api`: no resource type appears in this module's public signatures — the generated
+            // `Res` accessor is internal (`publicResClass = false`) and the only thing that leaves
+            // here is a `FontFamily`.
+            implementation(compose.components.resources)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
@@ -61,6 +67,14 @@ kotlin {
             implementation(compose.desktop.currentOs)
         }
     }
+}
+
+// The font resources above. INTERNAL accessors: `Res.font.jetbrains_mono_*` is this module's own
+// business, and a consumer that wants the family calls `packagedTerminalFontFamily()`.
+compose.resources {
+    packageOfResClass = "dev.supermux.terminal.compose.resources"
+    publicResClass = false
+    generateResClass = always
 }
 
 android {
@@ -86,10 +100,17 @@ android {
 // The pair is published together on purpose — see `version` above and the gate below.
 
 // The MIT licence, in every jar and inside the AAR, namespaced under META-INF so it can never
-// collide with another dependency's META-INF/LICENSE. There is no THIRD-PARTY-NOTICES.md here:
-// unlike :terminal-core this module ships no compiled third-party object code, only Kotlin that
-// depends on Compose Multiplatform at ordinary Maven coordinates.
-val licenseFiles = files(layout.projectDirectory.file("LICENSE"))
+// collide with another dependency's META-INF/LICENSE.
+//
+// THIRD-PARTY-NOTICES.md travels with it, for ONE reason: this module compiles no third-party
+// object code (unlike :terminal-core) but it does ship a third-party DATA file — JetBrains Mono,
+// the default terminal face, as a Compose resource inside every artifact. OFL-1.1 asks for the
+// notice to accompany the font, so it is in the archive next to it rather than in the repository
+// only.
+val licenseFiles = files(
+    layout.projectDirectory.file("LICENSE"),
+    layout.projectDirectory.file("THIRD-PARTY-NOTICES.md"),
+)
 tasks.withType<Jar>().configureEach {
     from(licenseFiles) { into("META-INF/dev.supermux.terminal") }
     // Reproducible archives, for the same reason :terminal-core has them: two publishes of the

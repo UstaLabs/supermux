@@ -42,6 +42,7 @@ import dev.supermux.net.decodeInput
 import dev.supermux.terminal.TerminalViewport
 import dev.supermux.terminal.compose.TerminalTheme
 import dev.supermux.terminal.compose.measureCellMetrics
+import dev.supermux.terminal.compose.rememberTerminalTheme
 import kotlin.time.TimeSource
 
 /**
@@ -281,11 +282,16 @@ fun GhosttyPredictionOverlay(
 ) {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
-    val metrics = remember(measurer, theme, density) { measureCellMetrics(measurer, theme, density) }
-    val style = remember(theme) {
-        TextStyle(fontFamily = theme.fontFamily, fontSize = theme.fontSize)
+    // The SAME theme the grid is painted with, font included: `Terminal` substitutes the face
+    // terminal-compose ships wherever a theme left `fontFamily` at its default, and a cell width
+    // measured from any other font would put every predicted glyph a fraction of a cell off — a
+    // drift that grows with the column and is worst exactly where typing happens.
+    val resolved = rememberTerminalTheme(theme)
+    val metrics = remember(measurer, resolved, density) { measureCellMetrics(measurer, resolved, density) }
+    val style = remember(resolved) {
+        TextStyle(fontFamily = resolved.fontFamily, fontSize = resolved.fontSize)
     }
-    val color = remember(theme) { theme.foreground.copy(alpha = PREDICTION_ALPHA) }
+    val color = remember(resolved) { resolved.foreground.copy(alpha = PREDICTION_ALPHA) }
     // Read inside the composable, not inside the draw lambda only: the Canvas must RECOMPOSE when
     // a prediction appears, and a snapshot read that happens only in the draw phase would
     // invalidate drawing without ever re-running this.

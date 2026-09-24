@@ -55,7 +55,9 @@ import dev.supermux.terminal.TerminalSize
  *   pastes go to the engine's encoders, ordinary wheel and touch gestures stay local. See
  *   [TerminalInputPolicy] for the routing rules and [TerminalAccessoryState] for the bar.
  * - Maps [theme] onto the engine's default colours and palette before repainting, so that cells the
- *   engine already resolved (palette indices, OSC colours) follow the theme too.
+ *   engine already resolved (palette indices, OSC colours) follow the theme too, and draws it with
+ *   the monospace face this package ships unless the theme named one of its own
+ *   ([rememberTerminalTheme]).
  * - Reports the failure that stopped the session, if one ever does, through [onFailure]: a renderer
  *   uses only non-blocking calls, so without it a dead terminal is just a screen that stopped
  *   changing.
@@ -121,11 +123,15 @@ fun Terminal(
     overlay: @Composable BoxScope.() -> Unit = {},
 ) {
     val density = LocalDensity.current
+    // The theme with its FONT resolved, and the only theme anything below this line reads: a theme
+    // that left `fontFamily` at its default is asking for the face this package ships, because the
+    // browser has no system monospace to look a family name up in. See [rememberTerminalTheme].
+    val resolved = rememberTerminalTheme(theme)
     // cacheSize = 0: this surface owns its own bounded cache (TextRunCache) and measures the same
     // strings over and over; a second unbounded one behind it would only hide the bounds.
     val measurer = rememberTextMeasurer(cacheSize = 0)
-    val metrics = remember(theme.fontFamily, theme.fontSize, theme.lineHeightScale, density) {
-        measureCellMetrics(measurer, theme, density)
+    val metrics = remember(resolved.fontFamily, resolved.fontSize, resolved.lineHeightScale, density) {
+        measureCellMetrics(measurer, resolved, density)
     }
     val model = remember(session) { ViewportModel() }
     val layoutCache = remember { TextLayoutCache() }
@@ -155,8 +161,8 @@ fun Terminal(
 
     // The engine resolved palette indices and OSC colours itself, so a theme change has to reach it
     // before the next paint or half the screen would keep the old palette.
-    val engineColors = remember(theme.foreground, theme.background, theme.cursor, theme.ansi) {
-        theme.engineColors()
+    val engineColors = remember(resolved.foreground, resolved.background, resolved.cursor, resolved.ansi) {
+        resolved.engineColors()
     }
     LaunchedEffect(session, engineColors) {
         // A dead session reports itself through `failure`; a throw here would take the UI with it.
@@ -239,7 +245,7 @@ fun Terminal(
     val input = remember(session, model, scroll, selection, accessories, scope) {
         TerminalInputController(session, model, scroll, selection, accessories, scope, focusRequester)
     }
-    val handleRadiusPx = with(density) { theme.selectionHandleSize.toPx() / 2f }
+    val handleRadiusPx = with(density) { resolved.selectionHandleSize.toPx() / 2f }
     // What a TAP has to be able to raise. Null on a desktop, and on any target Compose cannot
     // control the keyboard of; see [TerminalInputController.focusFromTouch].
     val keyboard = LocalSoftwareKeyboardController.current
@@ -304,7 +310,7 @@ fun Terminal(
                 ),
         ) {
             Canvas(Modifier.fillMaxSize()) {
-                drawRect(theme.background)
+                drawRect(resolved.background)
                 val frame = model.frame ?: return@Canvas
                 val cell = metrics.height
                 val offset = scroll.paintOffset(frame)
@@ -313,9 +319,9 @@ fun Terminal(
                 clipRect(bottom = gridHeightPx(frame.size.rows, cell, size.height)) {
                     drawTerminalFrame(
                         frame = frame,
-                        runs = gridRuns.runs(frame, theme),
+                        runs = gridRuns.runs(frame, resolved),
                         metrics = metrics,
-                        theme = theme,
+                        theme = resolved,
                         measurer = measurer,
                         cache = layoutCache,
                         scrollOffsetPx = offset,
@@ -329,9 +335,9 @@ fun Terminal(
                             val strip = runsBelow.frame(frame, it, below)
                             drawTerminalFrame(
                                 frame = strip,
-                                runs = runsBelow.runs(strip, theme),
+                                runs = runsBelow.runs(strip, resolved),
                                 metrics = metrics,
-                                theme = theme,
+                                theme = resolved,
                                 measurer = measurer,
                                 cache = layoutCache,
                                 scrollOffsetPx = offset - frame.size.rows * cell,
@@ -345,9 +351,9 @@ fun Terminal(
                             val strip = runsAbove.frame(frame, it, frame.viewportTop - 1)
                             drawTerminalFrame(
                                 frame = strip,
-                                runs = runsAbove.runs(strip, theme),
+                                runs = runsAbove.runs(strip, resolved),
                                 metrics = metrics,
-                                theme = theme,
+                                theme = resolved,
                                 measurer = measurer,
                                 cache = layoutCache,
                                 scrollOffsetPx = offset + cell,
@@ -360,7 +366,7 @@ fun Terminal(
                 // below the last), so they are drawn past the clip the overscan rows need.
                 drawSelectionHandles(
                     handles = selectionHandles(frame, metrics, offset),
-                    theme = theme,
+                    theme = resolved,
                     radiusPx = handleRadiusPx,
                 )
             }
