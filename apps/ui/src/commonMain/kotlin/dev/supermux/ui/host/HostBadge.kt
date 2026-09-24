@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -247,7 +248,7 @@ fun HostSwitcher(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text("⌄", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            Icon(Icons.Filled.ExpandMore, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             if (hosts.size > 1) {
