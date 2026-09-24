@@ -111,10 +111,23 @@ class TerminalAccessoryState {
         sink?.paste(text, allowUnsafe, onResult)
     }
 
+    /**
+     * Hide the soft keyboard without taking this terminal's focus away — the accessory bar's "hide
+     * keyboard" button, iOS's stand-in for the back gesture Android already has.
+     *
+     * Deliberately not a [sendKey]: this is not something the pty ever hears about, and it must NOT
+     * clear the armed modifiers or move focus — an iPad with a Magic Keyboard attached keeps typing
+     * into this terminal right after the panel closes. Does nothing before [bind] / after [unbind].
+     */
+    fun hideKeyboard() {
+        sink?.hideKeyboard()
+    }
+
     /** What [Terminal] installs while it is composed; see the class documentation. */
     internal interface Sink {
         fun key(key: TerminalKey)
         fun paste(text: String, allowUnsafe: Boolean, onResult: (Boolean) -> Unit)
+        fun hideKeyboard()
     }
 
     internal fun bind(sink: Sink) {

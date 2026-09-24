@@ -218,6 +218,17 @@ internal class TerminalInputController(
         if (key.action != KeyAction.RELEASE) afterLocalInput()
     }
 
+    /**
+     * Hide the soft keyboard IME panel, deliberately leaving [focused] and the armed modifiers
+     * alone. [SoftwareKeyboardController.hide] only asks the platform to dismiss its panel; it does
+     * not blur the field, so a hardware keyboard (an iPad's Magic Keyboard) keeps typing into this
+     * terminal right after, and tapping the grid again still calls [focusFromTouch] to bring the
+     * soft keyboard straight back.
+     */
+    override fun hideKeyboard() {
+        keyboard?.hide()
+    }
+
     override fun paste(text: String, allowUnsafe: Boolean, onResult: (Boolean) -> Unit) {
         if (text.isEmpty()) {
             onResult(true)

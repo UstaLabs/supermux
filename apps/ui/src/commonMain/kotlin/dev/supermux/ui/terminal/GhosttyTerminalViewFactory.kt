@@ -119,7 +119,9 @@ class GhosttyTerminalViewFactory(
         // The bar's presses become KEYS, not bytes: Ghostty owns the encoding (see
         // TerminalKeySink.semantic), so an armed Ctrl is applied exactly once, by the same encoder
         // that handles the physical keyboard and the IME.
-        val keys = rememberSemanticTerminalKeySink { key, mods -> sendAccessoryKey(accessories, key, mods) }
+        val keys = rememberSemanticTerminalKeySink(
+            hideKeyboard = { accessories.hideKeyboard() },
+        ) { key, mods -> sendAccessoryKey(accessories, key, mods) }
         return remember(client, keys, accessories) {
             GhosttyTerminalSurface(this, client, keys, accessories)
         }

@@ -53,12 +53,17 @@ sealed interface TerminalKey {
  */
 @Stable
 class TerminalKeySink(
-    // `semantic` comes FIRST so that `send` stays the trailing parameter: every byte-sink call
-    // site in the tree is `TerminalKeySink { bytes -> … }`, and a trailing lambda binds to the
-    // LAST parameter. Putting the new one at the end would have silently rebound all of them to
-    // it — the compiler catches the shape mismatch, but only because the two lambdas happen to
-    // differ; an optional parameter of the same shape would have compiled and done nothing.
+    // `semantic` and `onHideKeyboard` both come BEFORE `send` so `send` stays the trailing
+    // parameter: every byte-sink call site in the tree is `TerminalKeySink { bytes -> … }`, and a
+    // trailing lambda binds to the LAST parameter. Putting either at the end would have silently
+    // rebound those call sites to it — the compiler only catches that when the lambda shapes
+    // differ, and `() -> Unit` vs `(ByteArray) -> Unit` do, but nothing guarantees the next one
+    // will.
     private val semantic: ((TerminalKey, Mods) -> Unit)? = null,
+    // The bar's "hide keyboard" button. No-op by default: most sinks (a raw byte sink, a test
+    // fake) have never needed it, and hiding the IME is not something that belongs in `semantic`
+    // — it is not a keystroke the emulator encodes, and it must never touch the armed modifiers.
+    private val onHideKeyboard: () -> Unit = {},
     private val send: (ByteArray) -> Unit,
 ) {
     var ctrl: TerminalModState by mutableStateOf(TerminalModState.OFF)
@@ -151,6 +156,13 @@ class TerminalKeySink(
         consumeOnce()
         return bytes
     }
+
+    /**
+     * Hide the soft keyboard, without touching [ctrl]/[alt] or moving focus away from the pane —
+     * see [TerminalKeyBar]'s "hide keyboard" button and `TerminalInputController.hideKeyboard`,
+     * which is what a semantic sink's [onHideKeyboard] ultimately reaches.
+     */
+    fun hideKeyboard() = onHideKeyboard()
 }
 
 /**
@@ -182,11 +194,22 @@ fun rememberTerminalKeySink(send: (ByteArray) -> Unit): TerminalKeySink {
 /**
  * A sink whose presses are handed to [press] as KEYS, not bytes — for a host whose emulator does
  * its own encoding. Same non-keying rule as [rememberTerminalKeySink], for the same reason.
+ *
+ * [hideKeyboard] wires the bar's "hide keyboard" button through to whatever the host's real IME
+ * controller is; the default no-ops for a caller that never draws that button.
  */
 @Composable
-fun rememberSemanticTerminalKeySink(press: (TerminalKey, Mods) -> Unit): TerminalKeySink {
+fun rememberSemanticTerminalKeySink(
+    hideKeyboard: () -> Unit = {},
+    press: (TerminalKey, Mods) -> Unit,
+): TerminalKeySink {
     val current by rememberUpdatedState(press)
+    val currentHideKeyboard by rememberUpdatedState(hideKeyboard)
     return remember {
-        TerminalKeySink(send = { }, semantic = { key, mods -> current(key, mods) })
+        TerminalKeySink(
+            send = { },
+            semantic = { key, mods -> current(key, mods) },
+            onHideKeyboard = { currentHideKeyboard() },
+        )
     }
 }

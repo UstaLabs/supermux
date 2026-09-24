@@ -385,6 +385,25 @@ class TerminalInputTest {
         assertTrue(controllerOf(fixture).focused)
     }
 
+    /**
+     * The accessory bar's "hide keyboard" button (iOS's stand-in for Android's back gesture): it
+     * must ask the platform to dismiss the IME panel, and it must NOT blur the field — an iPad with
+     * a Magic Keyboard attached keeps typing into this terminal right after the panel closes, and a
+     * tap on the grid still has to bring the soft keyboard straight back ([focusFromTouch]).
+     */
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun hideKeyboardHidesTheImeWithoutDroppingFocus() = terminalInputTest { fixture ->
+        assertTrue(controllerOf(fixture).focused, "the fixture did not leave the surface focused")
+        val before = fixture.keyboard.hides.get()
+
+        fixture.accessories.hideKeyboard()
+        waitForIdle()
+
+        assertEquals(before + 1, fixture.keyboard.hides.get(), "the accessory button did not hide the IME")
+        assertTrue(controllerOf(fixture).focused, "hiding the IME dropped focus — a hardware keyboard would stop working")
+        assertFalse(fixture.accessories.armed, "hiding the keyboard is not a keystroke and must not touch armed modifiers")
+    }
+
     @OptIn(ExperimentalTestApi::class)
     @Test fun aSurfaceThatGoesInactiveStopsClaimingTheKeyboard() = terminalInputTest { fixture ->
         val input = controllerOf(fixture)
