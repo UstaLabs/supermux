@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.placeCursorAtEnd
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -21,6 +22,36 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
+import dev.supermux.terminal.TerminalKeys
+
+/**
+ * The seed the hidden editing buffer always carries, and the reason a soft Backspace works at all.
+ *
+ * **The problem it solves.** A software keyboard does not press keys; it EDITS the focused field.
+ * iOS's delete key calls `deleteBackward()`, which Compose turns into "delete one code point before
+ * the cursor" — and on an EMPTY buffer that deletes nothing. Compose's own change tracker then
+ * throws the edit away as a no-op (`ChangeTracker.trackChange` returns early when `preStart ==
+ * preEnd && postLength == 0`), so it never reaches an `InputTransformation`, never changes
+ * `TextFieldState.text`, and never produces a snapshot this surface could observe. The keystroke is
+ * INVISIBLE, at every seam Compose offers. That is exactly what "delete does not work on iOS" was.
+ *
+ * **The fix.** The buffer is never empty: between compositions it holds [IME_SEED], a short run of
+ * zero-width spaces with the cursor after them. A delete now always has something to eat, the buffer
+ * really shrinks, and the surface can tell the terminal that a Backspace happened — then re-seed.
+ *
+ * Zero-width space, not a space: the IME is asked for no autocorrect and no capitalization, but a
+ * keyboard that ignored those hints must still not see a word it can "correct". Nothing draws it —
+ * this field paints nothing — and it is stripped before the arithmetic in [TerminalImeState] ever
+ * sees the buffer, so the terminal never hears about it.
+ *
+ * **Why FOUR.** One would do if every edit were observed, but `snapshotFlow` is conflated: two
+ * deletes that land between two collector runs are seen as one buffer. Each seed character is one
+ * Backspace of burst headroom, and four covers a held delete key on any repeat rate a keyboard
+ * produces. The cost is the one case that can eat the whole seed at once — a select-all + delete —
+ * which would be reported as four Backspaces; nothing on a one-pixel field with a permanently
+ * collapsed cursor can produce that gesture.
+ */
+internal const val IME_SEED: String = "​​​​"
 
 /**
  * What one IME change means for the terminal: what to send, what is still being composed, and
@@ -36,6 +67,11 @@ internal data class ImeStep(
      * pull the ground out from under an in-flight composition.
      */
     val clear: Boolean,
+    /**
+     * Backspaces the IME asked for by eating into [IME_SEED] — a delete the user meant for the
+     * TERMINAL, not for a composition. Sent as [TerminalKeys.BACKSPACE] presses, never as bytes.
+     */
+    val backspaces: Int = 0,
 )
 
 /**
@@ -122,11 +158,75 @@ internal class TerminalImeState {
         return ImeStep(commit = commit, marked = marked, clear = clear)
     }
 
+    /**
+     * Fold one RAW field buffer in: [IME_SEED] and all.
+     *
+     * This is the entry point [TerminalImeField] uses, and the only one that knows about the seed.
+     * It splits the buffer into the part the terminal may never hear about (the surviving seed) and
+     * the part [onChange] has always reasoned about (`committed-prefix + composing-span`):
+     *
+     * - seed intact → nothing was deleted; this is an ordinary change.
+     * - seed SHORT → the IME deleted past the end of everything it was composing and ate into the
+     *   seed, which is the only shape a "the user pressed Backspace at the terminal" edit has. Each
+     *   missing seed character is one [TerminalKeys.BACKSPACE].
+     *
+     * Deleting inside a COMPOSITION never reaches the seed, which is exactly right: those characters
+     * were never sent, so taking them back is the IME's business and the program must not hear a
+     * Backspace for them.
+     */
+    fun onBuffer(buffer: String, composition: IntRange?): ImeStep {
+        val seed = intactSeedOf(buffer)
+        val step = onChange(buffer.substring(seed), composition?.shiftedBy(seed))
+        return step.copy(backspaces = IME_SEED.length - seed)
+    }
+
     /** Focus left, the surface was rebound, or the field was emptied: forget everything in flight. */
     fun reset() {
         sent = 0
         marked = ""
     }
+}
+
+/** How much of [IME_SEED] is still at the front of [buffer]: [IME_SEED].length when nothing ate it. */
+internal fun intactSeedOf(buffer: String): Int {
+    var kept = 0
+    while (kept < IME_SEED.length && kept < buffer.length && buffer[kept] == IME_SEED[kept]) kept++
+    return kept
+}
+
+/** The composing span in the seed-stripped buffer's coordinates, or null when it falls away. */
+private fun IntRange.shiftedBy(seed: Int): IntRange? {
+    val from = (first - seed).coerceAtLeast(0)
+    val until = last + 1 - seed
+    return if (until > from) from until until else null
+}
+
+/**
+ * The committed string as the ORDERED input it stands for: text runs with Returns between them.
+ *
+ * A soft keyboard's Return is not a key press anywhere the platform does not send key events for
+ * it — on iOS it is `insertText("\n")`, which lands in the editing buffer as ordinary text. Sending
+ * that text would put a literal `0x0A` on the pty, and `0x0A` is not what Return means: a terminal's
+ * Return is `CR`, or `CRLF` under newline mode (LNM), or a kitty-keyboard report if the program
+ * asked for one. Only the engine's encoder knows which, so the newline is turned back into the KEY
+ * it came from ([TerminalKeys.ENTER]) and the encoder decides the bytes.
+ *
+ * `CRLF` counts once: a keyboard (or a paste) that wrote both is describing one Return.
+ */
+internal inline fun commitAsInput(commit: String, onText: (String) -> Unit, onEnter: () -> Unit) {
+    var start = 0
+    var at = 0
+    while (at < commit.length) {
+        val char = commit[at]
+        if (char == '\n' || char == '\r') {
+            if (at > start) onText(commit.substring(start, at))
+            onEnter()
+            if (char == '\r' && at + 1 < commit.length && commit[at + 1] == '\n') at++
+            start = at + 1
+        }
+        at++
+    }
+    if (start < commit.length) onText(commit.substring(start))
 }
 
 /**
@@ -148,6 +248,23 @@ internal class TerminalImeState {
  * a focus group around it, so `focusRequester.requestFocus()` on the group lands here, hardware keys
  * are still seen first by the Box's `onPreviewKeyEvent` (a preview runs from the root down to the
  * focused node) and the field itself never gets to insert anything the terminal already handled.
+ *
+ * **Return and Backspace, which a soft keyboard does not press.** A hardware keyboard produces key
+ * events, and those are the Box's ([TerminalKeyRouter]). A SOFTWARE keyboard produces EDITS, and two
+ * of them are keys a terminal cannot do without:
+ *
+ * - **Return.** iOS calls `insertText("\n")`. Compose intercepts that for a field whose
+ *   `imeOptions.singleLine` is set and runs the IME ACTION instead — and with [ImeAction.None] the
+ *   action does nothing at all, so the newline is dropped on the floor and Return is dead. The field
+ *   is therefore NOT [TextFieldLineLimits.SingleLine]: the newline reaches the buffer as text, and
+ *   [commitAsInput] turns it back into a [TerminalKeys.ENTER] press for the engine's encoder. The
+ *   line limit costs nothing — this field never draws a line.
+ * - **Backspace.** iOS calls `deleteBackward()`, which on an empty buffer deletes nothing and is
+ *   discarded by Compose before any observer sees it. [IME_SEED] is what gives it something to eat;
+ *   see that constant.
+ *
+ * Neither can double-send on a platform that DOES deliver these as key events: the Box's preview
+ * consumes the key before the field can act on it, so the buffer never sees the edit at all.
  */
 @Composable
 internal fun TerminalImeField(
@@ -156,22 +273,33 @@ internal fun TerminalImeField(
     focusRequester: FocusRequester,
     onCommit: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onKey: (Int) -> Unit = {},
     onComposing: () -> Unit = {},
 ) {
-    val field = rememberTextFieldState()
+    val field = rememberTextFieldState(IME_SEED, TextRange(IME_SEED.length))
     LaunchedEffect(state, field, enabled) {
         if (!enabled) {
+            // A pane that went to the background keeps its buffer, and a buffer that still held
+            // committed text would be re-sent the moment the pane came back (the counter this
+            // resets is the only record of what the terminal already heard). Re-seeding it here is
+            // safe precisely because the field is disabled: no IME session is running on it.
             state.reset()
+            field.edit { replace(0, length, IME_SEED); placeCursorAtEnd() }
             return@LaunchedEffect
         }
         snapshotFlow { field.text.toString() to field.composition }.collect { (text, composition) ->
-            val step = state.onChange(text, composition?.toIntRange())
+            val step = state.onBuffer(text, composition?.toIntRange())
             // A live preedit sends nothing, but it IS the end of any hardware key's echo window.
             if (step.marked.isNotEmpty()) onComposing()
-            if (step.commit.isNotEmpty()) onCommit(step.commit)
-            // Only ever emptied between compositions: an IME whose buffer is pulled away mid-word
-            // re-sends the whole word, which is the classic "hello" -> "hhehelhellhello" bug.
-            if (step.clear && text.isNotEmpty()) field.edit { replace(0, length, "") }
+            // Deletions first: they describe the text that was on the screen BEFORE this change.
+            repeat(step.backspaces) { onKey(TerminalKeys.BACKSPACE) }
+            if (step.commit.isNotEmpty()) commitAsInput(step.commit, onCommit) { onKey(TerminalKeys.ENTER) }
+            // Only ever re-seeded between compositions: an IME whose buffer is pulled away mid-word
+            // re-sends the whole word, which is the classic "hello" -> "hhehelhellhello" bug. And
+            // only when the buffer is not ALREADY the bare seed, or this write would feed itself.
+            if (step.clear && text != IME_SEED) {
+                field.edit { replace(0, length, IME_SEED); placeCursorAtEnd() }
+            }
         }
     }
     BasicTextField(
@@ -185,7 +313,9 @@ internal fun TerminalImeField(
             autoCorrectEnabled = false,
             imeAction = ImeAction.None,
         ),
-        lineLimits = TextFieldLineLimits.SingleLine,
+        // MultiLine, not SingleLine, and the whole of Return on iOS turns on it — see the KDoc
+        // above. One line, because a field that draws nothing has no use for a second.
+        lineLimits = TextFieldLineLimits.MultiLine(1, 1),
         // Never calls innerTextField: the field exists for the IME, not for the screen.
         decorator = { Box(Modifier.size(1.dp)) },
     )

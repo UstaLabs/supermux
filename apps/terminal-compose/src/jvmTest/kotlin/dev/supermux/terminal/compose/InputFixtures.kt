@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -119,6 +121,27 @@ internal class RecordingClipboard(@Volatile var content: String? = null) : Termi
     }
 }
 
+/**
+ * The soft keyboard, counted instead of raised.
+ *
+ * There is no software keyboard on the desktop, so `LocalSoftwareKeyboardController` is null there
+ * and the surface's calls would go nowhere. What matters is that they are MADE — "a tap raises the
+ * keyboard" is the whole of the fix for a keyboard that only sometimes appeared — so the test
+ * installs one and counts.
+ */
+internal class RecordingKeyboard : SoftwareKeyboardController {
+    val shows = AtomicInteger()
+    val hides = AtomicInteger()
+
+    override fun show() {
+        shows.incrementAndGet()
+    }
+
+    override fun hide() {
+        hides.incrementAndGet()
+    }
+}
+
 /** One live [Terminal] on one real session, plus everything a test needs to poke at it. */
 internal class InputFixture(
     val session: TerminalSession,
@@ -130,6 +153,7 @@ internal class InputFixture(
     val clipboard: RecordingClipboard,
     val clipboardRequests: MutableList<TerminalEffect.ClipboardRequest>,
     val relay: TerminalEffectRelay,
+    val keyboard: RecordingKeyboard,
 ) {
     /** The selection the ENGINE holds, which is the only one that is ever drawn. */
     fun selection(): dev.supermux.terminal.TerminalSelection? = session.viewports.value.selection
@@ -194,8 +218,12 @@ internal fun terminalInputTest(
         val links = mutableListOf<String>()
         val clipboard = RecordingClipboard()
         val requests = CopyOnWriteArrayList<TerminalEffect.ClipboardRequest>()
+        val keyboard = RecordingKeyboard()
         setContent {
-            CompositionLocalProvider(LocalTerminalEffects provides relay) {
+            CompositionLocalProvider(
+                LocalTerminalEffects provides relay,
+                LocalSoftwareKeyboardController provides keyboard,
+            ) {
                 Box(Modifier.size(400.dp, 300.dp)) {
                     Terminal(
                         session = session,
@@ -228,6 +256,7 @@ internal fun terminalInputTest(
                 clipboard = clipboard,
                 clipboardRequests = requests,
                 relay = relay,
+                keyboard = keyboard,
             ),
         )
     } finally {

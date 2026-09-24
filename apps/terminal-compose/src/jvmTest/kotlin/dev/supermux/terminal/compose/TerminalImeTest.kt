@@ -1,9 +1,14 @@
 package dev.supermux.terminal.compose
 
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performKeyPress
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.performTextInput
+import dev.supermux.terminal.KeyAction
+import dev.supermux.terminal.TerminalKeys
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -154,6 +159,141 @@ class TerminalImeTest {
                 "terminal-compose/README.md §6 and this test together",
         )
         // What the user sees on the wire is "teh the": the original, then the correction.
+    }
+
+    // ------------------------------------------------- what a SOFT keyboard does instead ----
+    //
+    // A software keyboard does not press keys; it EDITS the focused field. Two of those edits are
+    // keys a terminal cannot do without, and both were dead on iOS before this suite existed:
+    // Return arrived as an inserted "\n" (or, with the field marked single-line, as an IME action
+    // that did nothing at all), and Backspace arrived as `deleteBackward()` on an EMPTY buffer —
+    // a no-op Compose discards before any observer can see it. [IME_SEED] and [ImeStep.backspaces]
+    // are the answer to the second; [commitAsInput] is the answer to the first.
+
+    /** The buffer as the FIELD holds it: the seed, then whatever the IME has put after it. */
+    private fun seeded(after: String = "") = IME_SEED + after
+
+    @Test fun aSoftKeyboardsBackspaceEatsTheSeedAndBecomesABackspaceKey() {
+        val ime = TerminalImeState()
+        assertEquals(0, ime.onBuffer(seeded(), null).backspaces, "a settled buffer reported a delete")
+
+        // iOS's deleteBackward() on a buffer with nothing composing: one code point, off the seed.
+        val once = ime.onBuffer(IME_SEED.dropLast(1), null)
+        assertEquals(1, once.backspaces, "the delete key reached the buffer and nothing was sent")
+        assertEquals("", once.commit, "a Backspace was sent as TEXT instead of as a key")
+        assertTrue(once.clear, "the buffer was not re-seeded, so the next Backspace would be lost")
+
+        // A held delete key, fast enough that several land between two conflated snapshots.
+        val burst = TerminalImeState().onBuffer(IME_SEED.dropLast(3), null)
+        assertEquals(3, burst.backspaces, "a burst of deletes was under-counted")
+    }
+
+    @Test fun deletingInsideACompositionIsNotABackspaceForTheProgram() {
+        val ime = TerminalImeState()
+        // "ab" is being composed, so the program has heard nothing at all yet.
+        assertEquals("", ime.onBuffer(seeded("ab"), 4 until 6).commit)
+        // Backspace now shortens the PREEDIT. Those bytes were never sent; taking them back is the
+        // IME's business and a Backspace on the wire would delete the user's real shell line.
+        val shorter = ime.onBuffer(seeded("a"), 4 until 5)
+        assertEquals(0, shorter.backspaces, "deleting a preedit character sent a Backspace")
+        assertEquals("a", shorter.marked)
+        // Only once the composition is gone does a further delete reach the seed — and the terminal.
+        assertEquals(0, ime.onBuffer(seeded(), null).backspaces)
+        assertEquals(1, ime.onBuffer(IME_SEED.dropLast(1), null).backspaces)
+    }
+
+    @Test fun theSeedIsStrippedBeforeTheTerminalEverHearsTheBuffer() {
+        val ime = TerminalImeState()
+        // Everything the existing arithmetic does, one seed to the right: nothing about the
+        // committed prefix, the composing span or the echo window changes.
+        assertEquals("", ime.onBuffer(seeded("にほ"), 4 until 6).commit)
+        assertEquals("にほ", ime.marked)
+        assertEquals("日本", ime.onBuffer(seeded("日本"), null).commit)
+        // And the zero-width spaces themselves are never committed, however the buffer moves.
+        assertTrue(IME_SEED.none { it != '\u200B' }, "the seed stopped being invisible")
+        assertEquals(IME_SEED.length, intactSeedOf(seeded("anything")))
+        assertEquals(0, intactSeedOf(""))
+    }
+
+    @Test fun aReturnFromAnImeBecomesTheEnterKeyAndNeverALiteralNewline() {
+        // What iOS hands over for the return key: an inserted "\n" in the editing buffer.
+        assertEquals(listOf("ENTER"), pieces("\n"))
+        assertEquals(listOf("ls", "ENTER"), pieces("ls\n"))
+        assertEquals(listOf("a", "ENTER", "b"), pieces("a\nb"))
+        // CRLF is ONE Return: a keyboard that wrote both is describing one key, not two.
+        assertEquals(listOf("a", "ENTER", "b"), pieces("a\r\nb"))
+        assertEquals(listOf("ENTER", "ENTER"), pieces("\n\n"))
+        // Ordinary text is untouched and arrives in one piece, not one per character.
+        assertEquals(listOf("héllo"), pieces("héllo"))
+    }
+
+    /** [commitAsInput]'s output as a readable list: text runs, with "ENTER" where a key goes. */
+    private fun pieces(commit: String): List<String> = buildList {
+        commitAsInput(commit, onText = { add(it) }, onEnter = { add("ENTER") })
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun anImeReturnIsEncodedByTheEngineAndNotWrittenHere() = terminalInputTest { fixture ->
+        val router = TerminalKeyRouter(send = { fixture.session.key(it) })
+        router.imeKey(TerminalKeys.ENTER)
+        waitUntil(timeoutMillis = INPUT_TIMEOUT) { fixture.engine.keyCalls.get() >= 2 }
+        waitForIdle()
+        // CR, not LF: a terminal's Return is 0x0D, and the "\n" the keyboard inserted would have
+        // been 0x0A — a different character, and the wrong one for every line editor there is.
+        assertEquals(listOf(0x0D.toByte()), fixture.recorder.bytes().toList())
+        assertEquals(TerminalKeys.ENTER, fixture.engine.keys.first().physicalCode)
+        assertEquals("", fixture.engine.keys.first().text, "the Return was sent as TEXT")
+
+        // And under a mode the program negotiated — here the kitty keyboard protocol, which the
+        // surface never sees being turned on — the IME's Return and the HARDWARE Return have to
+        // come out as the same bytes, whatever the encoder decides those are. That is the whole
+        // claim: one semantic key, one encoder, no second implementation in Kotlin.
+        fixture.feed("\u001b[>1u")
+        waitForIdle()
+        fixture.recorder.clear()
+        onNodeWithTag(INPUT_TAG).performKeyPress(keyEvent(Key.Enter, 0x0D))
+        onNodeWithTag(INPUT_TAG).performKeyPress(keyEvent(Key.Enter, 0x0D, KeyEventType.KeyUp))
+        waitUntil(timeoutMillis = INPUT_TIMEOUT) { fixture.recorder.bytes().isNotEmpty() }
+        waitForIdle()
+        val hardware = fixture.recorded()
+
+        fixture.recorder.clear()
+        router.imeKey(TerminalKeys.ENTER)
+        waitUntil(timeoutMillis = INPUT_TIMEOUT) { fixture.recorder.bytes().isNotEmpty() }
+        waitForIdle()
+        assertEquals(hardware, fixture.recorded(), "the IME's Return took a different path from the key")
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun anImeBackspaceIsTheBackspaceKeyAndNotASeedCharacter() = terminalInputTest { fixture ->
+        val router = TerminalKeyRouter(send = { fixture.session.key(it) })
+        router.imeKey(TerminalKeys.BACKSPACE)
+        // On the KEY CALLS, not the bytes: the release produces no byte of its own, so a test that
+        // waited for bytes would race the half of this it is here to assert.
+        waitUntil(timeoutMillis = INPUT_TIMEOUT) { fixture.engine.keyCalls.get() >= 2 }
+        waitForIdle()
+        // DEL (0x7F), which is what a terminal's Backspace is — and never the zero-width space the
+        // keyboard actually deleted.
+        assertEquals(listOf(0x7F.toByte()), fixture.recorder.bytes().toList())
+        assertEquals(TerminalKeys.BACKSPACE, fixture.engine.keys.first().physicalCode)
+        assertEquals("", fixture.engine.keys.first().text, "a Backspace carried text")
+        // Press AND release, in that order: a program running the kitty keyboard protocol is owed
+        // both, and the hardware path sends both.
+        assertEquals(KeyAction.PRESS, fixture.engine.keys[0].action)
+        assertEquals(KeyAction.RELEASE, fixture.engine.keys[1].action)
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun aReturnTypedIntoTheRealFieldReachesTheProgramAsCarriageReturn() = terminalInputTest { fixture ->
+        // THE REGRESSION TEST for "Enter does not work on iOS": the newline goes in through the
+        // IME's own node — an EDIT of the text field, exactly as `insertText("\n")` produces — and
+        // never as a key event. Before the fix this reached the program as nothing at all.
+        onNode(hasSetTextAction()).performTextInput("ls\n")
+        waitUntil(timeoutMillis = INPUT_TIMEOUT) { fixture.recorder.bytes().size >= 3 }
+        waitForIdle()
+        assertEquals("ls\r", fixture.recorded())
+        // The seed the buffer carries for Backspace's sake is NOT part of it.
+        assertEquals(false, fixture.recorded().contains('\u200B'), "the seed reached the program")
     }
 
     // ----------------------------------------------------------------- the echo gate ----

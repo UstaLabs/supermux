@@ -9,6 +9,8 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performKeyPress
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import dev.supermux.terminal.KeyAction
 import dev.supermux.terminal.Modifiers
@@ -342,6 +344,65 @@ class TerminalInputTest {
         press(fixture, Key.A, codePoint = 'a'.code)
         waitForIdle()
         assertTrue(fixture.scroll.following, "typing did not return the surface to the newest output")
+    }
+
+    // ----------------------------------------------------------------- focus & keyboard ----
+    //
+    // A terminal never pops the soft keyboard because it APPEARED — a new tab must not take the
+    // screen away from whatever the user was doing. A TAP is the opposite: it is the one gesture
+    // that means "type here", and it has to work every time, which is what these pin.
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun aTapOnAnAlreadyFocusedTerminalStillRaisesTheKeyboard() = terminalInputTest { fixture ->
+        // The surface starts focused (the fixture focused it), which is exactly the state that used
+        // to swallow the tap: `requestFocus()` on a focused field changes nothing, Compose starts no
+        // input session, and the keyboard the user had dismissed never came back.
+        assertTrue(controllerOf(fixture).focused, "the fixture did not leave the surface focused")
+        val before = fixture.keyboard.shows.get()
+
+        onNodeWithTag(INPUT_TAG).performTouchInput {
+            down(fixture.centreOf(3, 2))
+            up()
+        }
+        waitForIdle()
+
+        assertEquals(before + 1, fixture.keyboard.shows.get(), "a tap did not raise the keyboard")
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun aMouseClickNeverRaisesTheKeyboard() = terminalInputTest { fixture ->
+        val before = fixture.keyboard.shows.get()
+        onNodeWithTag(INPUT_TAG).performMouseInput {
+            moveTo(fixture.centreOf(3, 2))
+            press()
+            release()
+        }
+        waitForIdle()
+
+        // A desktop click takes focus, as it always did, and nothing else: popping a soft keyboard
+        // over a window with a real keyboard attached would be the bug, not the fix.
+        assertEquals(before, fixture.keyboard.shows.get(), "a mouse click popped the soft keyboard")
+        assertTrue(controllerOf(fixture).focused)
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun aSurfaceThatGoesInactiveStopsClaimingTheKeyboard() = terminalInputTest { fixture ->
+        val input = controllerOf(fixture)
+        assertTrue(input.focused)
+
+        // What a tab switch does to the pane that is leaving: it is still COMPOSED (the hosts keep
+        // it alive at 0x0), so nothing is disposed and nothing tells it focus went away. A stale
+        // `focused` there is what a screen reader reads and what the session reports to the program.
+        input.enabled = false
+        waitForIdle()
+        assertFalse(input.focused, "a background pane still claimed the keyboard")
+
+        // And it takes no input while it is down, however it is poked.
+        fixture.recorder.clear()
+        input.imeKey(TerminalKeys.ENTER)
+        input.commitText("x")
+        waitForIdle()
+        fixture.assertSilence("input to a background pane")
     }
 
     /**

@@ -291,6 +291,26 @@ internal class TerminalKeyRouter(
     }
 
     /**
+     * A key a SOFTWARE keyboard produced as an edit rather than as a key event: iOS's Return and
+     * its Backspace, which arrive as an inserted newline and as a deletion — see [TerminalImeField].
+     *
+     * It is the same semantic key the hardware path sends, reported the same way (a press and its
+     * release, so a program running the kitty keyboard protocol gets a well-formed pair) and with
+     * whatever the accessory bar has armed. NOTHING is encoded here: `\r` versus `\r\n` under
+     * newline mode, `0x7F` versus `0x08` under the backarrow mode, a kitty report — all of that is
+     * the engine's, because only the engine saw the program negotiate it.
+     *
+     * The echo gate is deliberately not involved: these keys carry no TEXT, so there is no echo for
+     * a later commit to be mistaken for, and no pending one that this should retire.
+     */
+    fun imeKey(code: Int) {
+        val modifiers = armedModifiers()
+        send(TerminalKey(code, "", modifiers, KeyAction.PRESS))
+        send(TerminalKey(code, "", modifiers, KeyAction.RELEASE))
+        onSubmitted()
+    }
+
+    /**
      * Focus left (or the surface was rebound). Keys held at that moment will never produce a
      * key-up here, so forget them — otherwise the next press of one of them would be reported as a
      * repeat of a press the program never saw.

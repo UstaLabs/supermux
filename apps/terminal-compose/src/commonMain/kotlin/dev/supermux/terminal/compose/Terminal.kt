@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntSize
 import dev.supermux.terminal.TerminalEffect
@@ -239,10 +240,14 @@ fun Terminal(
         TerminalInputController(session, model, scroll, selection, accessories, scope, focusRequester)
     }
     val handleRadiusPx = with(density) { theme.selectionHandleSize.toPx() / 2f }
+    // What a TAP has to be able to raise. Null on a desktop, and on any target Compose cannot
+    // control the keyboard of; see [TerminalInputController.focusFromTouch].
+    val keyboard = LocalSoftwareKeyboardController.current
     // The controller is long-lived; these follow every recomposition without restarting it.
     SideEffect {
         input.metrics = metrics
         input.enabled = active
+        input.keyboard = keyboard
         input.onLink = onLink
         input.clipboard = clipboard
         input.handleRadiusPx = handleRadiusPx
@@ -365,6 +370,9 @@ fun Terminal(
                 enabled = active,
                 focusRequester = focusRequester,
                 onCommit = input::commitText,
+                // Return and Backspace, which a soft keyboard delivers as EDITS rather than as key
+                // events: they go back out as the keys they are, through the engine's own encoder.
+                onKey = input::imeKey,
                 onComposing = input::composing,
             )
             overlay()

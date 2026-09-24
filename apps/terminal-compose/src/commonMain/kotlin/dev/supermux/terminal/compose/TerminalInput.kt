@@ -24,6 +24,7 @@ import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import dev.supermux.terminal.KeyAction
 import dev.supermux.terminal.Modifiers
 import dev.supermux.terminal.MouseAction
@@ -63,8 +64,21 @@ internal class TerminalInputController(
     /** The cell box every hit test is measured against; the surface keeps it current. */
     var metrics: CellMetrics = CellMetrics(1f, 1f, 1f, 1f)
 
-    /** False for an inactive surface: no keys, no pointer, no focus reports. */
+    /**
+     * False for an inactive surface: no keys, no pointer, no focus reports.
+     *
+     * Going false drops the surface's focus STATE on the spot rather than waiting to be told. A pane
+     * that goes to the background is laid out at 0x0 and keeps its composition (see the hosts'
+     * `KeepAlivePanel`), so there is no dispose to hang a reset on, and a `focused = true` left
+     * standing there is a lie two layers read — the semantics node tells a screen reader this
+     * terminal has the keyboard, and the session keeps reporting focus to the program.
+     */
     var enabled: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            if (!value) onFocusChanged(false)
+        }
 
     /** An OSC 8 hyperlink the user activated with a plain click. */
     var onLink: (String) -> Unit = {}
@@ -121,10 +135,44 @@ internal class TerminalInputController(
     /** Take the keyboard. Used by the pointer, the accessory bar and the a11y focus action. */
     fun requestFocus(): Boolean = enabled && runCatching { focusRequester.requestFocus() }.isSuccess
 
+    /**
+     * A FINGER landed on the terminal: focus the hidden field AND raise the soft keyboard.
+     *
+     * Two different things, and the second one is why "sometimes the keyboard appears and sometimes
+     * it does not". Compose starts a platform input session — which is what raises the keyboard —
+     * when the field's focus CHANGES. `requestFocus()` on a field that is already focused changes
+     * nothing, so it starts no session and shows nothing. And the field stays focused through every
+     * ordinary way a user dismisses the keyboard: Android's back gesture, the iPad's "hide
+     * keyboard" key, a hardware keyboard being paired. From then on, tapping the terminal did
+     * NOTHING — the one gesture that means "type here".
+     *
+     * So the show is explicit and unconditional, on top of the focus request. It is not the same as
+     * popping the keyboard when a terminal merely appears (which this surface still refuses to do,
+     * see [Terminal]'s `active`): this only ever runs for a deliberate touch.
+     */
+    fun focusFromTouch(): Boolean {
+        if (!enabled) return false
+        val took = requestFocus()
+        keyboard?.show()
+        return took
+    }
+
+    /** The platform's soft keyboard, or null where there is none (a desktop). */
+    var keyboard: SoftwareKeyboardController? = null
+
     /** Text an IME committed. Never preedit — see [TerminalImeState]. */
     fun commitText(text: String) {
         if (!enabled) return
         router.commitText(text)
+    }
+
+    /**
+     * A key a software keyboard produced as an EDIT: iOS's Return and Backspace, which arrive as an
+     * inserted newline and as a deletion rather than as key events. See [TerminalImeField].
+     */
+    fun imeKey(code: Int) {
+        if (!enabled) return
+        router.imeKey(code)
     }
 
     /**
@@ -350,7 +398,9 @@ internal class TerminalInputController(
             handle = handle,
         )
         // Touching a terminal is how a user says "type here"; the host never has to ask for focus.
-        requestFocus()
+        // A finger says it louder: it also wants the soft keyboard back, whether or not the field
+        // was already focused. A mouse does not — a desktop click must never pop a keyboard.
+        if (device == PointerDevice.TOUCH) focusFromTouch() else requestFocus()
         if (handle != null) {
             change.consume()
             return

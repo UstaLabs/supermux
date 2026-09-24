@@ -287,6 +287,40 @@ commit is dropped only when a pending echo matches it exactly, and a commit that
 retires the stale entries behind it. When the two are genuinely indistinguishable the gate errs
 towards sending: an extra character is visible and deletable, a swallowed keystroke is not.
 
+**Return and Backspace from a software keyboard.** A soft keyboard does not press keys; it *edits*
+the focused field, and on iOS that is the only thing it does — there are no key events at all. Two
+of those edits are keys a terminal cannot do without, and both need translating back:
+
+* **Return** arrives as an inserted `"\n"`. The hidden field is therefore deliberately *not*
+  `TextFieldLineLimits.SingleLine`: Compose turns a return on a single-line field into an IME
+  *action* instead of text, and with `ImeAction.None` that action does nothing, so the keystroke is
+  dropped on the floor. With the newline in the buffer, `commitAsInput` turns it back into a
+  `TerminalKeys.ENTER` press — `CRLF` counting once — and the engine's encoder decides the bytes
+  (`CR`, or `CRLF` under newline mode, or a kitty report). A literal `0x0A` would be the wrong
+  character for every line editor there is.
+* **Backspace** arrives as "delete one code point before the cursor", which on an *empty* buffer
+  deletes nothing — and Compose discards a no-op edit before any observer can see it
+  (`ChangeTracker.trackChange` returns early), so the keystroke is invisible at every seam the
+  toolkit offers. The buffer therefore always carries `IME_SEED`, a short run of zero-width spaces
+  with the cursor after them. A delete now really shrinks it; each eaten seed character is one
+  `TerminalKeys.BACKSPACE`, and the seed is re-laid afterwards. It is stripped before the
+  composing-prefix arithmetic ever sees the buffer, so the terminal never hears about it, and a
+  delete *inside a composition* never reaches it — those characters were never sent, so no
+  Backspace is owed for them.
+
+Neither can double-send where the platform *does* deliver these as key events (Android, the
+desktop, the browser): the surface's key preview consumes the key before the field can act on it,
+so the buffer never sees the edit.
+
+**The keyboard on a tap.** The surface never raises the soft keyboard because it *appeared* — a new
+terminal must not take the screen away from whatever the user was doing. A deliberate *touch* is the
+opposite, and it always focuses the field **and** calls `SoftwareKeyboardController.show()`. Both,
+because they are different things: Compose only starts a platform input session (which is what
+raises the keyboard) on a focus *change*, and the field stays focused through every ordinary way a
+user dismisses the keyboard — Android's back gesture, the iPad's "hide keyboard" key, a hardware
+keyboard being paired. Without the explicit show, tapping the terminal after any of those did
+nothing at all. A *mouse* click takes focus and no more.
+
 **Known limitation — a correction that arrives after the word.** Committed text is on the pty
 immediately, so a keyboard that later revises a word it already gave us (autocorrect landing late,
 a swipe or dictation rewrite) cannot be applied: the user sees the original followed by the
