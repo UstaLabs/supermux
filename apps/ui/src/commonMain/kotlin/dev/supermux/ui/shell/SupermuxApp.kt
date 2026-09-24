@@ -126,6 +126,7 @@ import dev.supermux.ui.display.rememberDisplayActions
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.host.AddHostScreen
 import dev.supermux.ui.host.HostScopePicker
+import dev.supermux.ui.host.HostSwitcher
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.notify.NotificationController
@@ -778,7 +779,6 @@ fun SupermuxApp(
                                 hosts = hostViews,
                                 sessionHost = sessionHost,
                                 hostFilter = hostFilter,
-                                onHostFilter = setHostFilter,
                                 onAddHost = { ui.openAddHost() },
                                 projects = projectRefs,
                                 workspaceHost = workspaceHostOf,
@@ -819,6 +819,23 @@ fun SupermuxApp(
                                             usageOpen = ui.usageOpen,
                                             onUsageDismiss = { ui.closeUsage() },
                                             usageContent = usagePopoverBody,
+                                            hostSwitcher = {
+                                                HostSwitcher(
+                                                    hosts = hostViews,
+                                                    sessions = sessions,
+                                                    sessionHost = sessionHost,
+                                                    selected = hostFilter,
+                                                    // A picked host is also where host-global ops
+                                                    // (spawn / usage / settings) land next.
+                                                    onSelect = { id ->
+                                                        setHostFilter(id)
+                                                        id?.let { fleet.setActiveHost(it) }
+                                                    },
+                                                    onAddHost = { ui.openAddHost() },
+                                                    onRenameHost = listActions.renameHost,
+                                                    onForgetHost = listActions.forgetHost,
+                                                )
+                                            },
                                         )
                                     }
                                 },
