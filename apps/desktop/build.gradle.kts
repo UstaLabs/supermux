@@ -5,6 +5,11 @@ import java.net.URI
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.util.Collections
+import java.util.zip.CRC32
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -354,6 +359,89 @@ compose.desktop {
     }
 }
 
+/**
+ * Re-point every packaged `native.properties` at the bytes actually shipped beside it, and report
+ * the jars that had to be rewritten.
+ *
+ * macOS packaging MUTATES the JNI engine we ship inside a jar: Compose's mac path re-signs every
+ * Mach-O it copies into the app image (ad-hoc + hardened runtime for a local build, the configured
+ * Developer ID for a release), which appends a code-signature blob. `:terminal-core`'s
+ * `stageJvmNativeResources` writes `native.properties` (sha256 + size) from the PRE-signing file and
+ * `JvmNativeLibrary` verifies the extracted copy against it before `System.load`, so on macOS the
+ * engine refuses to load — in every packaged build, releases included. Measured 2026-09-24:
+ * packaged 1 487 376 B / `7063b30a…` against the recorded 1 477 808 B / `6d412251…`, i.e. exactly
+ * one appended signature.
+ *
+ * A digest of bytes that something later rewrites can only be correct if it is computed after that
+ * rewrite, so this runs at the END of packaging. It is NOT a weakening of the check: the comparison
+ * stays exact (it is what stops a poisoned extraction cache from being dlopen'd) — only the recorded
+ * value moves to the real, shipped bytes. On Linux and Windows nothing re-signs, the staged digests
+ * already describe the shipped bytes, and this is a no-op.
+ */
+fun rewritePackagedNativeDigests(appDir: File): List<File> {
+    if (!appDir.isDirectory) return emptyList()
+    val changed = mutableListOf<File>()
+    for (jar in appDir.listFiles().orEmpty().filter { it.isFile && it.name.endsWith(".jar") }.sorted()) {
+        val updates = linkedMapOf<String, ByteArray>()
+        ZipFile(jar).use { zip ->
+            val propsEntries = Collections.list(zip.entries())
+                .filter { it.name.startsWith("dev/supermux/terminal/native/") && it.name.endsWith("/native.properties") }
+            for (props in propsEntries) {
+                val text = zip.getInputStream(props).use { it.readBytes() }.toString(Charsets.UTF_8)
+                val fields = text.lineSequence()
+                    .filter { !it.startsWith("#") && it.contains('=') }
+                    .associate { it.substringBefore('=') to it.substringAfter('=') }
+                val lib = fields["library"] ?: continue
+                val libEntry = zip.getEntry("${props.name.substringBeforeLast('/')}/$lib") ?: continue
+                val bytes = zip.getInputStream(libEntry).use { it.readBytes() }
+                val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+                if (fields["sha256"] == sha && fields["size"] == bytes.size.toString()) continue
+                logger.lifecycle(
+                    "terminal-core: ${jar.name}!${props.name} records ${fields["sha256"]}/${fields["size"]} " +
+                        "but the packaged library is $sha/${bytes.size} (re-signed during packaging) — rewriting it",
+                )
+                updates[props.name] = text.lineSequence().map {
+                    when {
+                        it.startsWith("sha256=") -> "sha256=$sha"
+                        it.startsWith("size=") -> "size=${bytes.size}"
+                        else -> it
+                    }
+                }.joinToString("\n", postfix = "\n").toByteArray()
+            }
+            if (updates.isEmpty()) return@use
+            val tmp = File(jar.parentFile, "${jar.name}.digest-tmp")
+            ZipOutputStream(tmp.outputStream().buffered()).use { out ->
+                for (entry in Collections.list(zip.entries())) {
+                    val body = updates[entry.name] ?: zip.getInputStream(entry).use { it.readBytes() }
+                    // Keep STORED entries stored (their size/crc must be set by hand); everything
+                    // else is written with the default deflate.
+                    val copy = ZipEntry(entry.name).apply {
+                        time = entry.time
+                        if (entry.method == ZipEntry.STORED) {
+                            method = ZipEntry.STORED
+                            size = body.size.toLong()
+                            compressedSize = body.size.toLong()
+                            crc = CRC32().apply { update(body) }.value
+                        }
+                    }
+                    out.putNextEntry(copy)
+                    out.write(body)
+                    out.closeEntry()
+                }
+            }
+            changed += jar
+        }
+        if (updates.isNotEmpty()) {
+            Files.move(
+                File(jar.parentFile, "${jar.name}.digest-tmp").toPath(),
+                jar.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+    }
+    return changed
+}
+
 // Compose configures its jpackage task inputs after the nativeDistributions DSL is evaluated. Apply
 // the complete verified JBR image afterward so its late default cannot restore the minimized jlink
 // runtime (which drops JCEF's non-module Chromium payload). The build JDK still supplies jpackage.
@@ -385,6 +473,32 @@ afterEvaluate {
             }
             check(Files.isRegularFile(nativeMarker)) {
                 "Packaged application is missing the JCEF native runtime at $nativeMarker"
+            }
+            // The LAST thing to touch the packaged JNI engine, after jpackage and its signing.
+            val appLibDir = when {
+                macBuildHost -> appRoot.resolve("Contents/app")
+                hostOs.contains("win") -> appRoot.resolve("app")
+                else -> appRoot.resolve("lib/app")
+            }
+            val rewritten = rewritePackagedNativeDigests(appLibDir.toFile())
+            if (rewritten.isNotEmpty() && macBuildHost) {
+                // jpackage already sealed the bundle; a rewritten jar under Contents/app invalidates
+                // that seal, so re-sign with the same identity and options Compose signs with
+                // (ad-hoc for an unsigned local build — jpackage's own default on arm64).
+                val identity = (project.findProperty("smMacSignIdentity") as String?)?.takeIf { it.isNotBlank() } ?: "-"
+                val argv = mutableListOf(
+                    "codesign", "--force", "--sign", identity,
+                    "--options", "runtime",
+                    "--entitlements", project.file("entitlements.mac.plist").absolutePath,
+                )
+                if (identity != "-") argv += "--timestamp"
+                (project.findProperty("smMacSignKeychain") as String?)?.takeIf { it.isNotBlank() }
+                    ?.let { argv += listOf("--keychain", it) }
+                argv += appRoot.toFile().absolutePath
+                val proc = ProcessBuilder(argv).redirectErrorStream(true).start()
+                val out = proc.inputStream.bufferedReader().readText()
+                check(proc.waitFor() == 0) { "re-sealing the app after rewriting ${rewritten.size} jar(s) failed: $out" }
+                logger.lifecycle("terminal-core: re-sealed ${appRoot.fileName} after rewriting ${rewritten.joinToString { it.name }}")
             }
         }
     }
