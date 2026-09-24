@@ -10,7 +10,6 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.host.HostView
 import dev.supermux.host.PairingPayload
-import dev.supermux.proto.SessionInfo
 import dev.supermux.state.AddHostResult
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.LocalPlatform
@@ -20,74 +19,24 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Compose render proofs for the shared multi-host fleet UI (spec §5): the `All · <host…> · +`
- * chip row + per-row host badges, and the [AddHostScreen] paste flow. Moved here from desktop's
- * `host/FleetListUiTest` when both app copies collapsed into `:ui`; the chip cases now drive
- * [HostFilterChips]/[HostBadge] directly. The two cases that exercised the multi-host /
+ * Compose render proofs for the shared multi-host fleet UI (spec §5): per-row host badges and the
+ * [AddHostScreen] paste flow (the footer switcher lives in [HostBadgeTest]). Moved here from
+ * desktop's `host/FleetListUiTest` when both app copies collapsed into `:ui`; the badge case drives
+ * [HostBadge] directly. The two cases that exercised the multi-host /
  * `showRowHostBadge` GATING stayed behind in `desktop/.../session/SessionListPanelHostGatingTest`,
  * because that gating lives in the per-app list panels, which did not move.
  */
 @OptIn(ExperimentalTestApi::class)
 class FleetListUiTest {
 
-    private fun session(id: String, wd: String = "/home/u/proj") =
-        SessionInfo(id = id, name = "sess-$id", workdir = wd, agent = "claude")
-
     private val twoHosts = listOf(
         HostView(recordId = "h1", hostId = "a", displayName = "MacBook", online = true),
         HostView(recordId = "h2", hostId = "b", displayName = "Raspberry Pi", online = false, lastSeenAt = 1L),
     )
 
-    @Test fun chipRowAndBadges_renderInMultiHostMode() = runComposeUiTest {
-        setContent {
-            HostFilterChips(
-                hosts = twoHosts,
-                sessions = listOf(session("s1"), session("s2")),
-                sessionHost = mapOf("s1" to "h1", "s2" to "h2"),
-                selected = null,
-                onSelect = {},
-                onAddHost = {},
-            )
-            HostBadge(twoHosts[0])
-        }
-        onNodeWithTag("host_filter_chips").assertIsDisplayed()
-        onNodeWithTag("host_chip_all").assertIsDisplayed()
-        onNodeWithTag("host_chip_h1").assertIsDisplayed()
-        onNodeWithTag("host_chip_h2").assertIsDisplayed()
-        onNodeWithTag("host_chip_add").assertIsDisplayed()
+    @Test fun hostBadge_rendersInMultiHostMode() = runComposeUiTest {
+        setContent { HostBadge(twoHosts[0]) }
         onNodeWithTag("host_badge_h1").assertIsDisplayed()
-    }
-
-    @Test fun clickingAHostChip_reportsTheSelection() = runComposeUiTest {
-        var selected: String? = "sentinel"
-        setContent {
-            HostFilterChips(
-                hosts = twoHosts,
-                sessions = listOf(session("s1"), session("s2")),
-                sessionHost = mapOf("s1" to "h1", "s2" to "h2"),
-                selected = null,
-                onSelect = { selected = it },
-                onAddHost = {},
-            )
-        }
-        onNodeWithTag("host_chip_h2").performClick()
-        assertEquals("h2", selected)
-    }
-
-    @Test fun clickingAddChip_firesOnAddHost() = runComposeUiTest {
-        var fired = false
-        setContent {
-            HostFilterChips(
-                hosts = twoHosts,
-                sessions = listOf(session("s1")),
-                sessionHost = mapOf("s1" to "h1"),
-                selected = null,
-                onSelect = {},
-                onAddHost = { fired = true },
-            )
-        }
-        onNodeWithTag("host_chip_add").performClick()
-        assertTrue(fired)
     }
 
     @Test fun addHostScreen_pasteInvalidPayload_showsErrorAndDoesNotClaim() = runComposeUiTest {
