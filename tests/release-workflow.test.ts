@@ -280,6 +280,7 @@ test("every verification lane GATES the release instead of running beside it", (
     const text = jobBetween(workflow, `  ${job}:`, "\n  ")
     expect(text, `${job} is conditional and cannot be a prerequisite`).not.toMatch(/^ {4}if:/m)
   }
+})
 
 // ── release channels: an alpha tag must never reach what a stable install reads ──────────────
 
@@ -293,7 +294,9 @@ test("everything that publishes waits on the tag's channel + branch guard", () =
   expect(workflow).toContain('*) CHANNEL=stable; BRANCH=main ;;')
   expect(workflow).toContain('git merge-base --is-ancestor "$GITHUB_SHA" "origin/$BRANCH"')
   expect(dockerJob).toContain("needs: classify")
-  expect(releaseJob).toContain("needs: [classify,")
+  // The needs list moved from the inline form to a block list when the verification
+  // lanes were added; what matters is that the release still waits on classify.
+  expect(releaseJob).toMatch(/needs:(\s*\[classify,|\s*\n\s+- classify\b)/)
   expect(publishJob).toContain("needs: [classify, release]")
 })
 
