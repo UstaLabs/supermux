@@ -230,6 +230,8 @@ The markdown preview is not part of the editor and is unchanged.
 - **The 11 `EditorCallbacks`** become host callbacks or plugin effects.
 - **Editor settings** (`EditorSettingsScreen`, `editor-config.ts`) keep their values.
 - **Per-session editor state** stays owned by session id, as it is today.
+- **Line endings:** the rope knows only `\n`. The host normalizes `\r\n` to `\n` on load and
+  remembers the file's line ending to restore it on save.
 
 ## 9. Removed at cutover
 
