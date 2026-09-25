@@ -200,10 +200,13 @@ class ChangeSet internal constructor(internal val ops: List<Op>) {
 
         /**
          * Build from [specs], all in coordinates of a document of [docLength]. Specs may come in any
-         * order but must not overlap (two pure insertions at the same position are kept in order).
+         * order but must not overlap (two pure insertions at the same position are kept in order,
+         * and a pure insertion goes before a replacement that starts where it is).
          */
         fun of(docLength: Int, specs: List<ChangeSpec>): ChangeSet {
-            val sorted = specs.withIndex().sortedWith(compareBy({ it.value.from }, { it.index })).map { it.value }
+            val sorted = specs.withIndex()
+                .sortedWith(compareBy({ it.value.from }, { it.value.to > it.value.from }, { it.index }))
+                .map { it.value }
             val b = Builder()
             var pos = 0
             for (s in sorted) {

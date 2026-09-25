@@ -18,6 +18,13 @@ class ChangeSetTest {
         assertFailsWith<IllegalArgumentException> { ChangeSet.of(10, ChangeSpec(0, 5), ChangeSpec(3, 6)) }
     }
 
+    @Test fun anInsertAndAReplacementAtTheSamePositionWorkInEitherOrder() {
+        val a = ChangeSet.of(10, ChangeSpec(5, 8, "b"), ChangeSpec(5, 5, "a"))
+        val b = ChangeSet.of(10, ChangeSpec(5, 5, "a"), ChangeSpec(5, 8, "b"))
+        assertEquals(a, b)
+        assertEquals("01234ab89", a.apply("0123456789"))
+    }
+
     @Test fun normalFormMakesEqualEffectsEqual() {
         val a = ChangeSet.Builder().retain(2).insert("x").delete(3).retain(1).build()
         val b = ChangeSet.Builder().retain(2).delete(3).insert("x").retain(1).build()
