@@ -117,6 +117,7 @@ static int jmatcher_init(JNIEnv *env, jmatcher *m, jobject matcher) {
 /* ------------------------------------------------------------- languages --- */
 
 SES_JNI(jint, abiVersion)(JNIEnv *env, jclass cls) { (void)env; (void)cls; return (jint)ses_abi_version(); }
+SES_JNI(jlong, debugLiveTrees)(JNIEnv *env, jclass cls) { (void)env; (void)cls; return (jlong)ses_debug_live_trees(); }
 SES_JNI(jint, languageCount)(JNIEnv *env, jclass cls) { (void)env; (void)cls; return (jint)ses_language_count(); }
 
 SES_JNI(jstring, languageName)(JNIEnv *env, jclass cls, jint i) {

@@ -88,7 +88,9 @@ static void match_callback(void) {
   CHECK("no matcher: #match? predicates pass", st == SES_OK && n == 24, "status %d n %u", st, n);
   ses_free(a);
   ses_query_free(q);
+  CHECK("one live tree", ses_debug_live_trees() == 1, "%lld", (long long)ses_debug_live_trees());
   ses_tree_free(t);
+  CHECK("no live trees", ses_debug_live_trees() == 0, "%lld", (long long)ses_debug_live_trees());
   ses_parser_free(p);
   free(src);
 }

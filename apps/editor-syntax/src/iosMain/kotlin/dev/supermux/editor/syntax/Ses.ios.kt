@@ -3,6 +3,7 @@
 package dev.supermux.editor.syntax
 
 import dev.supermux.editor.syntax.cinterop.ses_abi_version
+import dev.supermux.editor.syntax.cinterop.ses_debug_live_trees
 import dev.supermux.editor.syntax.cinterop.ses_free
 import dev.supermux.editor.syntax.cinterop.ses_language_count
 import dev.supermux.editor.syntax.cinterop.ses_language_has_tables
@@ -234,6 +235,8 @@ internal actual object Ses {
             mref?.dispose()
         }
     }
+
+    actual fun debugLiveTrees(): Long = ses_debug_live_trees()
 
     /** Copy a ses_*-returned int buffer into an IntArray and free it. */
     private fun takeInts(p: CPointer<IntVar>?, n: Int): IntArray {

@@ -165,7 +165,7 @@ for t in sorted(os.listdir(root)):
     for f in sorted(os.listdir(lib)):
         b = open(os.path.join(lib, f), "rb").read()
         out.append({"target": t, "file": f, "sha256": hashlib.sha256(b).hexdigest(), "size": len(b)})
-json.dump({"format": 1, "abi_version": 1, "tree_sitter_commit": ts, "libraries": out},
+json.dump({"format": 1, "abi_version": 2, "tree_sitter_commit": ts, "libraries": out},
           open(os.path.join(root, "manifest.json"), "w"), indent=1)
 print("manifest: %d libraries" % len(out))
 PY

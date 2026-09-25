@@ -3,6 +3,7 @@
  * Everything is UTF-16: tree-sitter parses TSInputEncodingUTF16LE, so byte = 2 x unit, and this
  * file is the only place that multiplies or divides by 2.
  */
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,7 +54,10 @@ struct ses_query {
   uint8_t *settings;    /* packed directive records, see ses_query_pattern_settings */
 };
 
+static _Atomic int64_t g_live_trees; /* ses_debug_live_trees */
+
 uint32_t ses_abi_version(void) { return SES_ABI_VERSION; }
+int64_t ses_debug_live_trees(void) { return atomic_load(&g_live_trees); }
 void ses_free(void *p) { free(p); }
 
 /* ---------------------------------------------------------------- languages --- */
@@ -172,6 +176,7 @@ ses_tree *ses_parser_parse(ses_parser *p, const ses_tree *old, ses_read_fn fn, v
     *st = SES_ERR_TIMEOUT;
     return NULL;
   }
+  atomic_fetch_add(&g_live_trees, 1);
   *st = SES_OK;
   return (ses_tree *)t;
 }
@@ -184,8 +189,17 @@ ses_tree *ses_parser_parse_utf16(ses_parser *p, const ses_tree *old, const uint1
 
 /* -------------------------------------------------------------------- tree --- */
 
-ses_tree *ses_tree_copy(const ses_tree *t) { return t ? (ses_tree *)ts_tree_copy(TREE(t)) : NULL; }
-void ses_tree_free(ses_tree *t) { if (t) ts_tree_delete(TREE(t)); }
+ses_tree *ses_tree_copy(const ses_tree *t) {
+  TSTree *c = t ? ts_tree_copy(TREE(t)) : NULL;
+  if (c) atomic_fetch_add(&g_live_trees, 1);
+  return (ses_tree *)c;
+}
+
+void ses_tree_free(ses_tree *t) {
+  if (!t) return;
+  atomic_fetch_sub(&g_live_trees, 1);
+  ts_tree_delete(TREE(t));
+}
 
 void ses_tree_edit(ses_tree *t, uint32_t start, uint32_t old_end, uint32_t new_end, uint32_t sr, uint32_t sc,
                    uint32_t oer, uint32_t oec, uint32_t ner, uint32_t nec) {

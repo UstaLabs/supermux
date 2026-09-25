@@ -191,6 +191,9 @@ SES_API ses_status ses_query_captures_utf16(const ses_query *query, const ses_tr
                                             uint32_t len, ses_match_fn match, void *match_ctx,
                                             int32_t **out, uint32_t *out_count);
 
+/** Trees alive right now (made by a parse or ses_tree_copy, not yet freed). For leak tests. */
+SES_API int64_t ses_debug_live_trees(void);
+
 /** Frees any buffer this ABI returned (sexp strings, int arrays). NULL is a no-op. */
 SES_API void ses_free(void *ptr);
 

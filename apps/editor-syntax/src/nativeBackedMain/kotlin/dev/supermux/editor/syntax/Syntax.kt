@@ -194,4 +194,6 @@ internal expect object Ses {
     fun queryRegex(query: Long, id: Int): ByteArray
     fun queryPatternSettings(query: Long, pattern: Int): ByteArray
     fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?): IntArray
+    /** Native trees alive right now (leak tests). */
+    fun debugLiveTrees(): Long
 }
