@@ -1,0 +1,89 @@
+package dev.supermux.editor.core
+
+/**
+ * What a plugin wants drawn, as DATA. The core never draws; editor-compose maps these to pixels.
+ *
+ * Styling is by semantic class names (`tok-keyword`, `diff-add`, `search-match`) that the
+ * surface's theme resolves, so no Compose type ever enters a plugin. Widgets are referenced by
+ * [WidgetKey]; the surface looks up what to render for a key.
+ */
+sealed class Decoration {
+    /** Style a span of text. [inclusiveStart]/[inclusiveEnd]: does text typed at the edge join the mark? */
+    data class Mark(
+        val classes: Set<String>,
+        val inclusiveStart: Boolean = false,
+        val inclusiveEnd: Boolean = false,
+    ) : Decoration()
+
+    /** Style a whole line (put it at the line's start position, zero length). */
+    data class LineStyle(val classes: Set<String>) : Decoration()
+
+    /** A widget inside a line, at a point. [side] < 0 draws it before a cursor at that point. */
+    data class InlineWidget(val key: WidgetKey, val side: Int = 1) : Decoration()
+
+    /**
+     * A widget with its own height BETWEEN lines: diff alignment gaps, "⋯ 120 unchanged lines",
+     * review threads. [above] places it above the line containing the position, else below.
+     */
+    data class BlockWidget(val key: WidgetKey, val above: Boolean = false, val estimatedHeightLines: Float = 1f) : Decoration()
+
+    /** Hide a range, optionally showing a widget instead (a folded region's "…"). */
+    data class Replace(val widget: WidgetKey? = null) : Decoration()
+}
+
+/** Identifies widget content: [type] picks the renderer, [id] the instance (a thread id, a fold). */
+data class WidgetKey(val type: String, val id: String)
+
+/** One decorated range. Point decorations have from == to. */
+data class Ranged<T>(val from: Int, val to: Int, val value: T) {
+    init { require(from in 0..to) { "invalid range $from..$to" } }
+}
+
+/**
+ * An immutable, sorted set of ranged values that moves through edits.
+ *
+ * Sorted by (from, to). A range entirely inside deleted text disappears when mapped; marks grow
+ * or not at their edges according to their inclusive flags.
+ */
+class RangeSet<T> private constructor(val ranges: List<Ranged<T>>) {
+    val size: Int get() = ranges.size
+
+    /** Every range overlapping [from, to]; point ranges at the edges count. */
+    fun between(from: Int, to: Int): List<Ranged<T>> = ranges.filter { it.to >= from && it.from <= to }
+
+    fun map(changes: ChangeSet): RangeSet<T> {
+        if (changes.isEmpty) return this
+        val out = ArrayList<Ranged<T>>(ranges.size)
+        for (r in ranges) {
+            val v = r.value
+            val (startAssoc, endAssoc) = if (v is Decoration.Mark) {
+                (if (v.inclusiveStart) -1 else 1) to (if (v.inclusiveEnd) 1 else -1)
+            } else if (r.from == r.to) {
+                val side = (v as? Decoration.InlineWidget)?.side ?: -1
+                side to side
+            } else 1 to -1
+            val from = changes.mapPos(r.from, startAssoc)
+            val to = changes.mapPos(r.to, endAssoc)
+            // A range whose text was all deleted carries nothing any more.
+            if (r.from < r.to && from >= to) continue
+            out += Ranged(from, to, v)
+        }
+        return of(out)
+    }
+
+    fun update(add: List<Ranged<T>> = emptyList(), filter: ((Ranged<T>) -> Boolean)? = null): RangeSet<T> =
+        of((if (filter == null) ranges else ranges.filter(filter)) + add)
+
+    override fun equals(other: Any?) = other is RangeSet<*> && other.ranges == ranges
+    override fun hashCode() = ranges.hashCode()
+    override fun toString() = ranges.joinToString { "${it.from}-${it.to}:${it.value}" }
+
+    companion object {
+        fun <T> empty(): RangeSet<T> = RangeSet(emptyList())
+        fun <T> of(ranges: List<Ranged<T>>): RangeSet<T> =
+            RangeSet(ranges.sortedWith(compareBy({ it.from }, { it.to })))
+    }
+}
+
+/** Decorations from every plugin; the surface draws all of them, in precedence order. */
+val decorationsFacet: Facet<RangeSet<Decoration>, List<RangeSet<Decoration>>> = Facet.list("decorations")
