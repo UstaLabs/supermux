@@ -90,6 +90,18 @@ class RopeTest {
         assertNotEquals(a, Rope.of(text.dropLast(1)))
     }
 
+    @Test fun chunksNeverSplitASurrogatePair() {
+        val text = "a" + "😀".repeat(5000)
+        for (r in listOf(Rope.of(text), Rope.of("x").replace(1, 1, text))) {
+            var pos = 0
+            while (pos < r.length) {
+                val c = r.chunkAt(pos)
+                pos += c.length
+                assertFalse(c[c.length - 1].isHighSurrogate(), "chunk ends inside a surrogate pair at $pos")
+            }
+        }
+    }
+
     @Test fun bigDocumentStaysShallow() {
         val r = Rope.of("x".repeat(4_000_000))
         assertTrue(r.depth <= 13, "depth ${r.depth}")

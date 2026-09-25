@@ -148,7 +148,9 @@ internal sealed class RopeNode {
             val leaves = ArrayList<RopeLeaf>(text.length / LEAF_MAX + 1)
             var i = 0
             while (i < text.length) {
-                val end = minOf(text.length, i + LEAF_MAX)
+                var end = minOf(text.length, i + LEAF_MAX)
+                // Keep a surrogate pair in one leaf, so every chunk a parser sees is whole code points.
+                if (end < text.length && text[end - 1].isHighSurrogate()) end--
                 leaves += RopeLeaf(text.substring(i, end))
                 i = end
             }
