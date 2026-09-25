@@ -1,0 +1,2 @@
+headers = editor_grammars.h
+staticLibraries = libeditorgrammars.a
