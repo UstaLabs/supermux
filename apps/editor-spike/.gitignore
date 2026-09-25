@@ -1,3 +1,6 @@
 native/out/
 native/src/
 src/wasmJsTest/resources/*.wasm
+iosProbe/build/
+iosProbe/EditorImeProbe.xcodeproj/
+iosProbe/Sources/Info.plist
