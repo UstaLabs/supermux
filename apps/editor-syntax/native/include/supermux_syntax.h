@@ -36,7 +36,7 @@ extern "C" {
 #endif
 
 /** ABI version implemented by this header. Bumped on any incompatible change. */
-#define SES_ABI_VERSION 2u
+#define SES_ABI_VERSION 3u
 
 typedef int32_t ses_status;
 #define SES_OK 0
@@ -107,6 +107,16 @@ SES_API void ses_parser_free(ses_parser *parser);
 SES_API ses_status ses_parser_set_language(ses_parser *parser, const char *name);
 /** 0 = no limit. A parse over the limit returns NULL with SES_ERR_TIMEOUT. */
 SES_API void ses_parser_set_timeout_micros(ses_parser *parser, uint64_t micros);
+/**
+ * Restrict the parser's next parses to these UTF-16 ranges (injections: a <script> element's
+ * content, a Markdown fence). [ranges] is a packed [start, end]* array of [count_ints] ints, sorted
+ * and non-overlapping (start <= end, each start >= the previous end). tree-sitter also needs each
+ * boundary's (row, column), so the document is read through [read] from index 0 up to the last
+ * boundary. NULL / 0 resets to the whole document. SES_ERR_INVALID_ARGUMENT for an odd count, a
+ * missing reader, or ranges that are unordered or overlap (the previous ranges then stay).
+ */
+SES_API ses_status ses_parser_set_included_ranges(ses_parser *parser, const int32_t *ranges, uint32_t count_ints,
+                                                  ses_read_fn read, void *ctx);
 
 /**
  * Parse the document read through [read]. [old_tree] (may be NULL) must already carry every edit
@@ -169,7 +179,9 @@ SES_API const char *ses_query_regex(const ses_query *query, uint32_t id, uint32_
  * none; valid while the query lives). Each record, little-endian:
  *   u8 kind (SES_SETTING_*), i32 capture id (-1: none), u32 key_len, key (UTF-8),
  *   u32 value_len (0xFFFFFFFF: no value), value (UTF-8).
- * Other directives (#offset!, #select-adjacent!, ...) and unknown predicates are ignored.
+ * Other directives (#offset!, #select-adjacent!, ...) and unknown predicates are ignored. A
+ * #set! whose key or value is a capture (`(#set! key @c)`) makes ses_query_new fail with
+ * SES_ERR_QUERY.
  */
 SES_API const uint8_t *ses_query_pattern_settings(const ses_query *query, uint32_t pattern, uint32_t *out_len);
 
@@ -179,17 +191,22 @@ SES_API const uint8_t *ses_query_pattern_settings(const ses_query *query, uint32
  * against the document read through [read]; the #match? family additionally through [match]. A
  * match failing a predicate is removed from the cursor (ts_query_cursor_remove_match), so later
  * captures of that match are dropped too. With [read] NULL no text predicate is evaluated, with
- * [match] NULL no #match?-family one (they pass). Result: a packed
+ * [match] NULL no #match?-family one (they pass). The predicates of one match are evaluated once
+ * per call, however many captures it has. Result: a packed
  * [start, end, captureIndex, patternIndex]* int array in *out (free with ses_free), *out_count ints
- * (4 per capture). At most SES_QUERY_MATCH_LIMIT matches are kept in progress.
+ * (4 per capture). At most SES_QUERY_MATCH_LIMIT matches are kept in progress; when the cursor
+ * had to drop some, *out_exceeded_match_limit (may be NULL) is 1, else 0: the result may then miss
+ * captures.
  */
 SES_API ses_status ses_query_captures(const ses_query *query, const ses_tree *tree, uint32_t start,
                                       uint32_t end, ses_read_fn read, void *read_ctx, ses_match_fn match,
-                                      void *match_ctx, int32_t **out, uint32_t *out_count);
+                                      void *match_ctx, int32_t **out, uint32_t *out_count,
+                                      int32_t *out_exceeded_match_limit);
 SES_API ses_status ses_query_captures_utf16(const ses_query *query, const ses_tree *tree,
                                             uint32_t start, uint32_t end, const uint16_t *text,
                                             uint32_t len, ses_match_fn match, void *match_ctx,
-                                            int32_t **out, uint32_t *out_count);
+                                            int32_t **out, uint32_t *out_count,
+                                            int32_t *out_exceeded_match_limit);
 
 /** Trees alive right now (made by a parse or ses_tree_copy, not yet freed). For leak tests. */
 SES_API int64_t ses_debug_live_trees(void);

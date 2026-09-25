@@ -184,13 +184,29 @@ bindings do. Details:
   `SyntaxQuery` compiles each one once, as a Kotlin `Regex`, and tests it with
   `containsMatchIn`.
 - A malformed predicate makes the query fail with `SES_ERR_QUERY`: a capture
-  where a string belongs, or the wrong arity.
+  where a string belongs, or the wrong arity. So does a `#set!` whose key or
+  value is a capture (`(#set! key @c)`).
+- tree-sitter returns a match once per capture; its predicates (and so its
+  regex upcalls) run once per match within one `ses_query_captures` call.
 - `#lua-match?` is not supported. It passes, and `ses_query_flags` bit 0 is set.
-- `#set!`, `#is?` and `#is-not?` are returned per pattern by
-  `ses_query_pattern_settings` and `SyntaxQuery.patternSettings`. Other
-  directives are ignored.
+  The shipped queries never use it (`tools/fetch-queries.py` rewrites or drops it).
+- `#set!`, `#is?` and `#is-not?` are returned per pattern, with their capture,
+  by `ses_query_pattern_settings` and `SyntaxQuery.patternSettings` (a
+  `List<PatternSetting>`; `settingsMap` is the capture-less `#set!` as a map).
+  Other directives are ignored.
 - Captures are `[start, end, captureIndex, patternIndex]`.
 - A cursor keeps at most `SES_QUERY_MATCH_LIMIT` (65536) matches in progress.
+  When it had to drop some, `ses_query_captures` sets its
+  `out_exceeded_match_limit` flag (`Captures.exceededMatchLimit` in Kotlin).
+
+## Included ranges (ABI 3)
+
+`ses_parser_set_included_ranges` restricts a parser to packed UTF-16
+`[start, end]*` ranges, for injected languages (a `<script>` element's content,
+a Markdown fence). tree-sitter also wants each boundary's row and column, so it
+takes the same pull reader as a parse and reads the document once up to the last
+boundary. Ranges must be sorted and must not overlap; NULL / 0 resets the parser
+to the whole document.
 
 ## Licences
 

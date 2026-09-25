@@ -33,7 +33,7 @@ class RobustnessTest {
             // #eq? reads every key's text through the source, which fails on the 3rd key or so.
             SyntaxQuery("json", """((pair key: (string (string_content) @k)) (#eq? @k "zz"))""").use { q ->
                 assertFailsWith<Boom> { q.captures(t, 0, doc.length, throwingSource(failAt = 60)) }
-                assertEquals(0, q.captures(t, 0, doc.length, ChunkedSource(doc)).size) // still usable
+                assertEquals(0, q.captures(t, 0, doc.length, ChunkedSource(doc)).ints.size) // still usable
             }
         }
         assertEquals(before, Ses.debugLiveTrees())

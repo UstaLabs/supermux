@@ -1,6 +1,6 @@
 /*
  * bridge_test <build/gen dir>: ses_* ABI tests in C, built with -fsanitize=address,undefined by
- * `native/build.sh ctest` (and at the end of `gen`). Links javascript and json (bundled tables).
+ * `native/build.sh ctest` (and at the end of `gen`). Links javascript, json and html (bundled tables).
  * Each check prints "ok <name>" or "FAIL <name>: ..."; the exit status is the failure count.
  */
 #include <stdio.h>
@@ -27,6 +27,22 @@ static uint16_t *u16(const char *ascii, uint32_t *len) {
   for (size_t i = 0; i < n; i++) o[i] = (unsigned char)ascii[i];
   *len = (uint32_t)n;
   return o;
+}
+
+
+typedef struct { const uint16_t *s; uint32_t len; } buffer_ctx;
+static const uint16_t *read_buffer(void *ctx, uint32_t index, uint32_t *out_len) {
+  buffer_ctx *b = ctx;
+  if (index >= b->len) { *out_len = 0; return NULL; }
+  *out_len = b->len - index;
+  return b->s + index;
+}
+typedef buffer_ctx small_ctx;
+static const uint16_t *read_small(void *ctx, uint32_t index, uint32_t *out_len) {
+  small_ctx *b = ctx;
+  if (index >= b->len) { *out_len = 0; return NULL; }
+  *out_len = b->len - index < 3 ? b->len - index : 3;
+  return b->s + index;
 }
 
 static ses_query *query(const char *lang, const char *src, ses_status *st) {
@@ -80,16 +96,16 @@ static void match_callback(void) {
   int32_t *a = NULL;
   uint32_t n = 0;
   int calls = 0;
-  st = ses_query_captures_utf16(q, t, 0, len, src, len, starts_with_a, &calls, &a, &n);
+  st = ses_query_captures_utf16(q, t, 0, len, src, len, starts_with_a, &calls, &a, &n, NULL);
   int32_t want[] = {0, 3, 0, 0, 5, 8, 1, 1, 10, 12, 0, 0};
   CHECK("match captures [start, end, capture, pattern]", st == SES_OK && n == 12 && memcmp(a, want, sizeof want) == 0,
         "status %d n %u", st, n);
   CHECK("the matcher ran", calls >= 3, "calls %d", calls);
   ses_free(a);
   a = NULL;
-  st = ses_query_captures_utf16(q, t, 0, len, src, len, fails, NULL, &a, &n);
+  st = ses_query_captures_utf16(q, t, 0, len, src, len, fails, NULL, &a, &n, NULL);
   CHECK("a failing matcher aborts the query", st == SES_ERR_CALLBACK && a == NULL, "status %d", st);
-  st = ses_query_captures_utf16(q, t, 0, len, src, len, NULL, NULL, &a, &n);
+  st = ses_query_captures_utf16(q, t, 0, len, src, len, NULL, NULL, &a, &n, NULL);
   CHECK("no matcher: #match? predicates pass", st == SES_OK && n == 24, "status %d n %u", st, n);
   ses_free(a);
   ses_query_free(q);
@@ -111,6 +127,172 @@ static void pattern_settings(void) {
   CHECK("a pattern without directives", q && ses_query_pattern_settings(q, 1, &l1) == NULL && l1 == 0 &&
         ses_query_pattern_count(q) == 2, "len %u", l1);
   ses_query_free(q);
+}
+
+
+/* Captures as a packed int array; the caller frees. */
+static int32_t *caps(ses_query *q, ses_tree *t, const uint16_t *src, uint32_t len, uint32_t *n, int32_t *exceeded) {
+  int32_t *a = NULL;
+  *n = 0;
+  ses_status st = ses_query_captures_utf16(q, t, 0, len, src, len, NULL, NULL, &a, n, exceeded);
+  if (st != SES_OK) { printf("captures failed: %d\n", st); return NULL; }
+  return a;
+}
+
+/* JavaScript parsed only inside the <script> element's content range of an HTML document. */
+static void included_ranges(void) {
+  const char *doc = "<p>x</p>\n<script>let a = 1;</script>";
+  uint32_t len;
+  uint16_t *src = u16(doc, &len);
+  ses_status st;
+  ses_parser *hp = ses_parser_new();
+  ses_parser_set_language(hp, "html");
+  ses_tree *ht = ses_parser_parse_utf16(hp, NULL, src, len, &st);
+  ses_query *raw = query("html", "(script_element (raw_text) @c)", &st);
+  uint32_t n = 0;
+  int32_t *a = raw && ht ? caps(raw, ht, src, len, &n, NULL) : NULL;
+  CHECK("html finds the script content", a && n == 4 && a[0] == 17 && a[1] == 27, "n %u", n);
+  int32_t range[2] = {a ? a[0] : 0, a ? a[1] : 0};
+  ses_free(a);
+  ses_parser *jp = ses_parser_new();
+  ses_parser_set_language(jp, "javascript");
+  buffer_ctx b = {src, len};
+  st = ses_parser_set_included_ranges(jp, range, 2, read_buffer, &b);
+  CHECK("set included ranges", st == SES_OK, "status %d", st);
+  ses_tree *jt = ses_parser_parse_utf16(jp, NULL, src, len, &st);
+  ses_query *prog = query("javascript", "(program) @p \"let\" @k", &st);
+  a = prog && jt ? caps(prog, jt, src, len, &n, NULL) : NULL;
+  CHECK("the js root spans exactly the range, let at 17",
+        a && n == 8 && a[0] == 17 && a[1] == 27 && a[4] == 17 && a[5] == 20, "n %u: %d-%d %d-%d", n,
+        a ? a[0] : -1, a ? a[1] : -1, a && n >= 8 ? a[4] : -1, a && n >= 8 ? a[5] : -1);
+  CHECK("the js tree has no error", jt && !ses_tree_has_error(jt), "sexp %s", "");
+  ses_free(a);
+  int32_t bad[4] = {10, 20, 5, 30};
+  CHECK("unordered ranges are refused", ses_parser_set_included_ranges(jp, bad, 4, read_buffer, &b) == SES_ERR_INVALID_ARGUMENT, "accepted");
+  CHECK("an odd count is refused", ses_parser_set_included_ranges(jp, bad, 3, read_buffer, &b) == SES_ERR_INVALID_ARGUMENT, "accepted");
+  CHECK("reset to the whole document", ses_parser_set_included_ranges(jp, NULL, 0, NULL, NULL) == SES_OK, "refused");
+  ses_tree *whole = ses_parser_parse_utf16(jp, NULL, src, len, &st);
+  CHECK("after the reset the whole document is javascript", whole && ses_tree_has_error(whole), "no error");
+  ses_tree_free(whole);
+  ses_query_free(prog); ses_query_free(raw);
+  ses_tree_free(jt); ses_tree_free(ht);
+  ses_parser_free(jp); ses_parser_free(hp);
+  free(src);
+}
+
+/* The points of included ranges: a range starting on line 2 parses with the right rows. */
+static void included_range_points(void) {
+  const char *doc = "x\nyy\n  let b = 2;\n";
+  uint32_t len;
+  uint16_t *src = u16(doc, &len);
+  ses_status st;
+  ses_parser *jp = ses_parser_new();
+  ses_parser_set_language(jp, "javascript");
+  buffer_ctx b = {src, len};
+  int32_t range[2] = {7, 18};
+  /* a 3-unit reader: boundaries are found across chunk edges */
+  small_ctx sc = {src, len};
+  st = ses_parser_set_included_ranges(jp, range, 2, read_small, &sc);
+  ses_tree *jt = st == SES_OK ? ses_parser_parse_utf16(jp, NULL, src, len, &st) : NULL;
+  char *sexp = jt ? ses_tree_root_sexp(jt) : NULL;
+  CHECK("a range after two lines parses", jt && !ses_tree_has_error(jt), "%s", sexp ? sexp : "(none)");
+  ses_free(sexp);
+  (void)b;
+  ses_tree_free(jt);
+  ses_parser_free(jp);
+  free(src);
+}
+
+/* #set! with a capture where the value belongs is malformed. */
+static void set_with_capture_value(void) {
+  ses_status st;
+  ses_query *q = query("javascript", "((identifier) @c (#set! k @c))", &st);
+  CHECK("#set! with a capture value is a query error", !q && st == SES_ERR_QUERY, "q %p status %d", (void *)q, st);
+  ses_query_free(q);
+}
+
+/* Two #set! directives on one pattern keep their capture ids. */
+static void settings_keep_capture_id(void) {
+  ses_status st;
+  ses_query *q = query("javascript", "((identifier) @a (number) @b (#set! @a k \"1\") (#set! @b k \"2\"))", &st);
+  uint32_t len = 0;
+  const uint8_t *s = q ? ses_query_pattern_settings(q, 0, &len) : NULL;
+  static const uint8_t want[] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 'k', 1, 0, 0, 0, '1',
+                                 1, 1, 0, 0, 0, 1, 0, 0, 0, 'k', 1, 0, 0, 0, '2'};
+  CHECK("settings keep the capture id", s && len == sizeof want && memcmp(s, want, len) == 0, "len %u", len);
+  ses_query_free(q);
+}
+
+static int32_t count_calls(void *ctx, uint32_t id, const uint16_t *text, uint32_t len) {
+  int *calls = ctx;
+  (*calls)++;
+  (void)id;
+  return len > 0 && text[0] == 'x';
+}
+
+/* A pattern with 3 captures and one #match?: one regex upcall per match, not per capture. */
+static void match_callback_once_per_match(void) {
+  uint32_t len;
+  uint16_t *src = u16("let x1 = 1; let x2 = 2; let y = 3;", &len);
+  ses_status st;
+  ses_parser *p = ses_parser_new();
+  ses_parser_set_language(p, "javascript");
+  ses_tree *t = ses_parser_parse_utf16(p, NULL, src, len, &st);
+  ses_query *q = query("javascript",
+                       "((variable_declarator name: (identifier) @a value: (number) @b) @c (#match? @a \"^x\"))", &st);
+  int32_t *a = NULL;
+  uint32_t n = 0;
+  int calls = 0;
+  st = ses_query_captures_utf16(q, t, 0, len, src, len, count_calls, &calls, &a, &n, NULL);
+  CHECK("two matching declarators, three captures each", st == SES_OK && n == 24, "status %d n %u", st, n);
+  CHECK("one regex upcall per match", calls == 3, "calls %d", calls);
+  ses_free(a);
+  ses_query_free(q);
+  ses_tree_free(t);
+  ses_parser_free(p);
+  free(src);
+}
+
+/* Matches that never finish pile up past SES_QUERY_MATCH_LIMIT: reported, not silent. Each of P
+   identical patterns keeps one in-progress state per number seen (none ever finds its string), so
+   P * N states hold captures. Many patterns rather than one: tree-sitter compares the states of
+   one pattern pairwise at every node, so a single pattern with 65536 states would take hours. */
+static void match_limit_exceeded(void) {
+  enum { N = 72, P = 1024 };
+  char *doc = malloc(N * 2 + 3);
+  char *w = doc;
+  *w++ = '[';
+  for (int i = 0; i < N; i++) { if (i) *w++ = ','; *w++ = '1'; }
+  *w++ = ']';
+  *w = 0;
+  static const char pat[] = "(array (number) @a (string)) ";
+  char *qs = malloc(P * (sizeof pat - 1) + 1);
+  for (int i = 0; i < P; i++) memcpy(qs + i * (sizeof pat - 1), pat, sizeof pat - 1);
+  qs[P * (sizeof pat - 1)] = 0;
+  uint32_t len;
+  uint16_t *src = u16(doc, &len);
+  ses_status st;
+  ses_parser *p = ses_parser_new();
+  ses_parser_set_language(p, "json");
+  ses_tree *t = ses_parser_parse_utf16(p, NULL, src, len, &st);
+  ses_query *q = query("json", qs, &st);
+  uint32_t n = 0;
+  int32_t exceeded = -1;
+  int32_t *a = q && t ? caps(q, t, src, len, &n, &exceeded) : NULL;
+  CHECK("the match limit was exceeded", exceeded == 1, "exceeded %d n %u", exceeded, n);
+  ses_free(a);
+  ses_query_free(q);
+  q = query("json", "(number) @n", &st);
+  exceeded = -1;
+  a = q ? caps(q, t, src, len, &n, &exceeded) : NULL;
+  CHECK("a plain query does not exceed it", exceeded == 0 && n == N * 4, "exceeded %d n %u", exceeded, n);
+  ses_free(a);
+  ses_query_free(q);
+  ses_tree_free(t);
+  ses_parser_free(p);
+  free(src);
+  free(qs);
+  free(doc);
 }
 
 static uint8_t *slurp(const char *path, size_t *len) {
@@ -178,6 +360,7 @@ static void tampered_blob(void) {
 }
 
 int main(int argc, char **argv) {
+  setvbuf(stdout, NULL, _IOLBF, 0); /* progress is visible in a log */
   gen_dir = argc > 1 ? argv[1] : "build/gen";
   sha256_vector();
   sha256_cost();
@@ -186,6 +369,12 @@ int main(int argc, char **argv) {
   any_of_with_captures();
   match_callback();
   pattern_settings();
+  included_ranges();
+  included_range_points();
+  set_with_capture_value();
+  settings_keep_capture_id();
+  match_callback_once_per_match();
+  match_limit_exceeded();
   printf("%s: %d failure(s)\n", failures ? "FAIL" : "PASS", failures);
   return failures;
 }

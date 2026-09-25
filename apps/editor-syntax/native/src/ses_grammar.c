@@ -224,12 +224,14 @@ const void *ses_grammar_language(ses_grammar *g) {
 }
 
 int32_t ses_tables_provide(ses_grammar *g, const uint8_t *z, size_t len) {
-  int32_t st = check_sesz(g, z, len);
-  if (st) return st;
-  if (!sha_matches(g, z, len)) return SES_ERR_BAD_TABLES; /* before anything is accepted */
-  uint8_t *copy = malloc(len);
+  /* Copy first, then check the copy: the caller's buffer may change after the check (a mapped
+     file, a buffer another thread writes), but the copy is what gets inflated. */
+  uint8_t *copy = malloc(len ? len : 1);
   if (!copy) return SES_ERR_OUT_OF_MEMORY;
   memcpy(copy, z, len);
+  int32_t st = check_sesz(g, copy, len);
+  if (st) { free(copy); return st; }
+  if (!sha_matches(g, copy, len)) { free(copy); return SES_ERR_BAD_TABLES; } /* before anything is accepted */
   pthread_mutex_lock(&g_lock);
   if (atomic_load_explicit(&g->loaded, memory_order_relaxed)) { /* already loaded: nothing to do */
     pthread_mutex_unlock(&g_lock);

@@ -34,7 +34,7 @@ class SesHighlighter(language: String, private val chunk: Int = 4096) : AutoClos
 
     fun highlights(query: String, from: Int = 0, to: Int = source.length): List<Span> =
         SyntaxQuery(lang, query).use { q ->
-            val a = q.captures(tree!!, from, to, ChunkedSource(source, chunk))
+            val a = q.captures(tree!!, from, to, ChunkedSource(source, chunk)).ints
             List(a.size / 4) { Span(a[4 * it], a[4 * it + 1], q.captureNames[a[4 * it + 2]]) }
                 .sortedWith(compareBy<Span>({ it.start }, { -it.end }, { it.capture }))
         }

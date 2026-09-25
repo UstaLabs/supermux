@@ -176,6 +176,21 @@ SES_JNI(void, parserSetTimeoutMicros)(JNIEnv *env, jclass cls, jlong p, jlong us
   ses_parser_set_timeout_micros(P(p), (uint64_t)us);
 }
 
+/* [start, end]* UTF-16 ranges (null or empty: the whole document); source feeds the points. */
+SES_JNI(jint, parserSetIncludedRanges)(JNIEnv *env, jclass cls, jlong p, jintArray ranges, jobject source) {
+  (void)cls;
+  jsize n = ranges ? (*env)->GetArrayLength(env, ranges) : 0;
+  if (n == 0) return ses_parser_set_included_ranges(P(p), NULL, 0, NULL, NULL);
+  jreader r;
+  if (jreader_init(env, &r, source) != 0) return SES_ERR_INVALID_ARGUMENT; /* NoSuchMethodError pending */
+  jint *a = (*env)->GetIntArrayElements(env, ranges, NULL);
+  if (!a) { jreader_release(&r); return SES_ERR_OUT_OF_MEMORY; }
+  jint st = ses_parser_set_included_ranges(P(p), (const int32_t *)a, (uint32_t)n, source ? jreader_read : NULL, &r);
+  (*env)->ReleaseIntArrayElements(env, ranges, a, JNI_ABORT);
+  jreader_release(&r);
+  return st; /* a throwing source: its exception is pending and propagates */
+}
+
 /* Returns the tree (0 on failure, status in status[0]). */
 SES_JNI(jlong, parse)(JNIEnv *env, jclass cls, jlong p, jlong old, jobject source, jintArray status) {
   (void)cls;
@@ -301,17 +316,18 @@ SES_JNI(jbyteArray, queryCaptureName)(JNIEnv *env, jclass cls, jlong q, jint i) 
 }
 
 /* [start, end, captureIndex, patternIndex]* in UTF-16 units; source (nullable) feeds the text
-   predicates, matcher (nullable) the #match? family. */
+   predicates, matcher (nullable) the #match? family; flags[0] = 1 when the match limit was exceeded. */
 SES_JNI(jintArray, queryCaptures)(JNIEnv *env, jclass cls, jlong q, jlong t, jint start, jint end, jobject source,
-                                  jobject matcher) {
+                                  jobject matcher, jintArray flags) {
   (void)cls;
   jreader r;
   jmatcher m;
   if (jreader_init(env, &r, source) != 0 || jmatcher_init(env, &m, matcher) != 0) return NULL;
   int32_t *a = NULL;
   uint32_t n = 0;
+  int32_t exceeded = 0;
   ses_status st = ses_query_captures(P(q), P(t), (uint32_t)start, (uint32_t)end, source ? jreader_read : NULL, &r,
-                                     matcher ? jmatcher_match : NULL, &m, &a, &n);
+                                     matcher ? jmatcher_match : NULL, &m, &a, &n, &exceeded);
   jreader_release(&r);
   if ((*env)->ExceptionCheck(env)) { ses_free(a); return NULL; } /* the source or a regex threw: propagate */
   if (st) {
@@ -322,5 +338,6 @@ SES_JNI(jintArray, queryCaptures)(JNIEnv *env, jclass cls, jlong q, jlong t, jin
   }
   jintArray res = to_int_array(env, a, n);
   ses_free(a);
+  if (flags) { jint f = exceeded; (*env)->SetIntArrayRegion(env, flags, 0, 1, &f); }
   return res;
 }

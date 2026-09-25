@@ -36,6 +36,10 @@ internal actual object Ses {
     @JvmStatic actual external fun parserSetLanguage(parser: Long, name: String): Int
     @JvmStatic actual external fun parserSetTimeoutMicros(parser: Long, micros: Long)
 
+    @JvmStatic private external fun parserSetIncludedRanges(parser: Long, ranges: IntArray, source: Any): Int
+    actual fun parserSetIncludedRanges(parser: Long, ranges: IntArray, source: TextSource): Int =
+        parserSetIncludedRanges(parser, ranges, TextSourceJni(source) as Any)
+
     @JvmStatic private external fun parse(parser: Long, old: Long, source: Any, status: IntArray): Long
     actual fun parse(parser: Long, old: Long, source: TextSource, status: IntArray): Long =
         parse(parser, old, TextSourceJni(source) as Any, status)
@@ -60,7 +64,11 @@ internal actual object Ses {
     @JvmStatic actual external fun queryPatternSettings(query: Long, pattern: Int): ByteArray
     @JvmStatic actual external fun debugLiveTrees(): Long
 
-    @JvmStatic private external fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: Any?, matcher: Any?): IntArray
-    actual fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?): IntArray =
-        queryCaptures(query, tree, start, end, source?.let { TextSourceJni(it) } as Any?, match?.let { MatcherJni(it) } as Any?)
+    @JvmStatic private external fun queryCaptures(
+        query: Long, tree: Long, start: Int, end: Int, source: Any?, matcher: Any?, flags: IntArray,
+    ): IntArray
+    actual fun queryCaptures(
+        query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?, flags: IntArray,
+    ): IntArray =
+        queryCaptures(query, tree, start, end, source?.let { TextSourceJni(it) } as Any?, match?.let { MatcherJni(it) } as Any?, flags)
 }

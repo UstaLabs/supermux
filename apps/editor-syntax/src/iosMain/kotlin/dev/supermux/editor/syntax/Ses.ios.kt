@@ -14,6 +14,7 @@ import dev.supermux.editor.syntax.cinterop.ses_parser_free
 import dev.supermux.editor.syntax.cinterop.ses_parser_new
 import dev.supermux.editor.syntax.cinterop.ses_parser_parse
 import dev.supermux.editor.syntax.cinterop.ses_parser_parse_utf16
+import dev.supermux.editor.syntax.cinterop.ses_parser_set_included_ranges
 import dev.supermux.editor.syntax.cinterop.ses_parser_set_language
 import dev.supermux.editor.syntax.cinterop.ses_parser_set_timeout_micros
 import dev.supermux.editor.syntax.cinterop.ses_query_capture_count
@@ -140,6 +141,15 @@ internal actual object Ses {
     actual fun parserSetTimeoutMicros(parser: Long, micros: Long) =
         ses_parser_set_timeout_micros(parser.toCPointer(), micros.toULong())
 
+    actual fun parserSetIncludedRanges(parser: Long, ranges: IntArray, source: TextSource): Int {
+        if (ranges.isEmpty()) return ses_parser_set_included_ranges(parser.toCPointer(), null, 0u, null, null)
+        return ranges.usePinned { pinned ->
+            withReader(source, cleanup = {}) { ctx ->
+                ses_parser_set_included_ranges(parser.toCPointer(), pinned.addressOf(0), ranges.size.toUInt(), readChunk, ctx)
+            }
+        }
+    }
+
     actual fun parse(parser: Long, old: Long, source: TextSource, status: IntArray): Long = memScoped {
         val st = alloc<IntVar>()
         val t = withReader(source, cleanup = { ses_tree_free(it) }) { ctx ->
@@ -213,10 +223,13 @@ internal actual object Ses {
         s.reinterpret<ByteVar>().readBytes(len.value.toInt())
     }
 
-    actual fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?): IntArray = memScoped {
+    actual fun queryCaptures(
+        query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?, flags: IntArray,
+    ): IntArray = memScoped {
         val out = alloc<CPointerVar<IntVar>>()
         out.value = null
         val n = alloc<UIntVar>()
+        val exceeded = alloc<IntVar>()
         val matcher = match?.let { Matcher(it) }
         val mref = matcher?.let { StableRef.create(it) }
         try {
@@ -225,11 +238,12 @@ internal actual object Ses {
                 ses_query_captures(
                     query.toCPointer(), tree.toCPointer(), start.toUInt(), end.toUInt(),
                     if (ctx == null) null else readChunk, ctx,
-                    if (mref == null) null else matchRegex, mref?.asCPointer(), out.ptr, n.ptr,
+                    if (mref == null) null else matchRegex, mref?.asCPointer(), out.ptr, n.ptr, exceeded.ptr,
                 )
             }
             matcher?.failure?.let { throw it } // SES_ERR_CALLBACK: the C side freed its buffer already
             check(st, "queryCaptures")
+            flags[0] = exceeded.value
             takeInts(out.value, n.value.toInt())
         } finally {
             mref?.dispose()

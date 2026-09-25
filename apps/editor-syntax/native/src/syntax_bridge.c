@@ -187,6 +187,45 @@ ses_tree *ses_parser_parse_utf16(ses_parser *p, const ses_tree *old, const uint1
   return ses_parser_parse(p, old, buffer_read, &b, st);
 }
 
+ses_status ses_parser_set_included_ranges(ses_parser *p, const int32_t *ranges, uint32_t count, ses_read_fn fn,
+                                          void *ctx) {
+  if (!p) return SES_ERR_INVALID_ARGUMENT;
+  if (!ranges || count == 0) {
+    ts_parser_set_included_ranges(p->ts, NULL, 0); /* the whole document */
+    return SES_OK;
+  }
+  if (count % 2 || !fn) return SES_ERR_INVALID_ARGUMENT;
+  for (uint32_t i = 0; i < count; i++) {
+    /* every boundary >= the previous one: start <= end, and each start >= the previous end */
+    if (ranges[i] < 0 || (i > 0 && ranges[i] < ranges[i - 1])) return SES_ERR_INVALID_ARGUMENT;
+  }
+  uint32_t n = count / 2;
+  TSRange *r = calloc(n, sizeof *r);
+  if (!r) return SES_ERR_OUT_OF_MEMORY;
+  /* One pass over the text up to the last boundary: the (row, UTF-16 column) of each boundary. */
+  uint32_t pos = 0, row = 0, col = 0;
+  for (uint32_t k = 0; k < count; k++) {
+    uint32_t target = (uint32_t)ranges[k];
+    while (pos < target) {
+      uint32_t cl = 0;
+      const uint16_t *c = fn(ctx, pos, &cl);
+      if (!c || cl == 0) { col += target - pos; pos = target; break; } /* past the end: same line */
+      uint32_t take = cl < target - pos ? cl : target - pos;
+      for (uint32_t i = 0; i < take; i++) {
+        if (c[i] == '\n') { row++; col = 0; }
+        else col++;
+      }
+      pos += take;
+    }
+    TSPoint pt = {row, col * 2};
+    if (k % 2 == 0) { r[k / 2].start_byte = target * 2; r[k / 2].start_point = pt; }
+    else { r[k / 2].end_byte = target * 2; r[k / 2].end_point = pt; }
+  }
+  bool ok = ts_parser_set_included_ranges(p->ts, r, n);
+  free(r);
+  return ok ? SES_OK : SES_ERR_INVALID_ARGUMENT;
+}
+
 /* -------------------------------------------------------------------- tree --- */
 
 ses_tree *ses_tree_copy(const ses_tree *t) {
@@ -295,12 +334,14 @@ static uint32_t regex_id(ses_query *q, uint32_t value_id) {
   return q->regex_count++;
 }
 
-/* One directive record (see ses_query_pattern_settings); a directive without a key is ignored. */
-static void put_setting(ses_query *q, bytes *o, uint8_t kind, const TSQueryPredicateStep *s, uint32_t k, uint32_t e) {
+/* One directive record (see ses_query_pattern_settings); a directive without a key is ignored.
+   False for a #set! whose key or value is a capture: malformed. */
+static bool put_setting(ses_query *q, bytes *o, uint8_t kind, const TSQueryPredicateStep *s, uint32_t k, uint32_t e) {
   uint32_t j = k + 1, kl, vl;
   int32_t cap = -1;
   if (j < e && s[j].type == STEP_CAPTURE) cap = (int32_t)s[j++].value_id;
-  if (j >= e || s[j].type != STEP_STRING) return;
+  if (kind == SES_SETTING_SET && ((j < e && s[j].type == STEP_CAPTURE) || (j + 1 < e && s[j + 1].type == STEP_CAPTURE))) return false;
+  if (j >= e || s[j].type != STEP_STRING) return true;
   const char *key = ts_query_string_value_for_id(q->ts, s[j++].value_id, &kl);
   put(o, &kind, 1);
   put32(o, (uint32_t)cap);
@@ -313,6 +354,7 @@ static void put_setting(ses_query *q, bytes *o, uint8_t kind, const TSQueryPredi
   } else {
     put32(o, 0xFFFFFFFFu);
   }
+  return true;
 }
 
 /* SES_ERR_QUERY for a malformed text predicate (wrong arity, a capture where a string belongs). */
@@ -380,7 +422,7 @@ static ses_status build_predicates(ses_query *q) {
       } else if (is(name, nl, "lua-match?")) {
         q->flags |= 1u; /* Lua patterns: not evaluated, see ses_query_flags */
       } else if (is(name, nl, "set!")) {
-        put_setting(q, &set, SES_SETTING_SET, s, k, e);
+        if (!put_setting(q, &set, SES_SETTING_SET, s, k, e)) goto malformed;
       } else if (is(name, nl, "is?")) {
         put_setting(q, &set, SES_SETTING_IS, s, k, e);
       } else if (is(name, nl, "is-not?")) {
@@ -494,6 +536,45 @@ static bool text_of(texter *tx, uint32_t s, uint32_t e, u16str *out) {
   return true;
 }
 
+/* Match ids whose predicates passed in this ses_query_captures call: tree-sitter returns a match
+   once per capture, and its predicates (regex upcalls above all) must run once. A failed match is
+   removed from the cursor, so it never comes back. Open addressing, id + 1 (0 = empty). */
+typedef struct {
+  uint64_t *slot;
+  uint32_t cap, n;
+} idset;
+
+static uint32_t id_hash(uint32_t id) { return id * 2654435761u; }
+
+static bool idset_has(const idset *s, uint32_t id) {
+  if (!s->cap) return false;
+  for (uint32_t i = id_hash(id) & (s->cap - 1);; i = (i + 1) & (s->cap - 1)) {
+    if (s->slot[i] == 0) return false;
+    if (s->slot[i] == (uint64_t)id + 1) return true;
+  }
+}
+
+static bool idset_add(idset *s, uint32_t id) {
+  if ((s->n + 1) * 2 > s->cap) {
+    uint32_t cap = s->cap ? s->cap * 2 : 64;
+    uint64_t *slot = calloc(cap, sizeof *slot);
+    if (!slot) return false;
+    for (uint32_t j = 0; j < s->cap; j++) {
+      if (!s->slot[j]) continue;
+      uint32_t i = id_hash((uint32_t)(s->slot[j] - 1)) & (cap - 1);
+      while (slot[i]) i = (i + 1) & (cap - 1);
+      slot[i] = s->slot[j];
+    }
+    free(s->slot);
+    s->slot = slot;
+    s->cap = cap;
+  }
+  uint32_t i = id_hash(id) & (s->cap - 1);
+  while (s->slot[i] && s->slot[i] != (uint64_t)id + 1) i = (i + 1) & (s->cap - 1);
+  if (!s->slot[i]) { s->slot[i] = (uint64_t)id + 1; s->n++; }
+  return true;
+}
+
 static bool u16eq(u16str a, u16str b) { return a.len == b.len && memcmp(a.s, b.s, a.len * 2) == 0; }
 
 static bool node_text_is(texter *tx, TSNode n, u16str v) {
@@ -561,7 +642,9 @@ static bool predicates_pass(const ses_query *q, const TSQueryMatch *m, texter *t
 }
 
 ses_status ses_query_captures(const ses_query *q, const ses_tree *t, uint32_t start, uint32_t end, ses_read_fn fn,
-                              void *ctx, ses_match_fn match, void *match_ctx, int32_t **out, uint32_t *count) {
+                              void *ctx, ses_match_fn match, void *match_ctx, int32_t **out, uint32_t *count,
+                              int32_t *exceeded) {
+  if (exceeded) *exceeded = 0;
   if (!q || !t || !out || !count || end < start) return SES_ERR_INVALID_ARGUMENT;
   if (ts_tree_language(TREE(t)) != q->lang) return SES_ERR_INVALID_ARGUMENT;
   TSQueryCursor *cur = ts_query_cursor_new();
@@ -573,13 +656,17 @@ ses_status ses_query_captures(const ses_query *q, const ses_tree *t, uint32_t st
   int32_t *a = malloc(cap * sizeof(int32_t));
   texter tx = {{fn, ctx}, match, match_ctx, NULL, 0, SES_OK};
   ses_status st = a ? SES_OK : SES_ERR_OUT_OF_MEMORY;
+  idset passed = {0};
   TSQueryMatch m;
   uint32_t ci;
   while (st == SES_OK && ts_query_cursor_next_capture(cur, &m, &ci)) {
-    if (q->pred_start[m.pattern_index] != q->pred_start[m.pattern_index + 1] && !predicates_pass(q, &m, &tx)) {
-      if (tx.err) { st = tx.err; break; }
-      ts_query_cursor_remove_match(cur, m.id);
-      continue;
+    if (q->pred_start[m.pattern_index] != q->pred_start[m.pattern_index + 1] && !idset_has(&passed, m.id)) {
+      if (!predicates_pass(q, &m, &tx)) {
+        if (tx.err) { st = tx.err; break; }
+        ts_query_cursor_remove_match(cur, m.id);
+        continue;
+      }
+      if (!idset_add(&passed, m.id)) { st = SES_ERR_OUT_OF_MEMORY; break; }
     }
     TSNode node = m.captures[ci].node;
     if (n + 4 > cap) {
@@ -593,6 +680,8 @@ ses_status ses_query_captures(const ses_query *q, const ses_tree *t, uint32_t st
     a[n++] = (int32_t)m.pattern_index;
   }
   free(tx.buf);
+  free(passed.slot);
+  if (exceeded) *exceeded = ts_query_cursor_did_exceed_match_limit(cur) ? 1 : 0;
   ts_query_cursor_delete(cur);
   if (st != SES_OK) { free(a); return st; }
   *out = a;
@@ -602,7 +691,7 @@ ses_status ses_query_captures(const ses_query *q, const ses_tree *t, uint32_t st
 
 ses_status ses_query_captures_utf16(const ses_query *q, const ses_tree *t, uint32_t start, uint32_t end,
                                     const uint16_t *text, uint32_t len, ses_match_fn match, void *match_ctx,
-                                    int32_t **out, uint32_t *count) {
+                                    int32_t **out, uint32_t *count, int32_t *exceeded) {
   buffer b = {text, len};
-  return ses_query_captures(q, t, start, end, text ? buffer_read : NULL, &b, match, match_ctx, out, count);
+  return ses_query_captures(q, t, start, end, text ? buffer_read : NULL, &b, match, match_ctx, out, count, exceeded);
 }

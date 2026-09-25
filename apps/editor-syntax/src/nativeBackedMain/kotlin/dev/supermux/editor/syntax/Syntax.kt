@@ -10,7 +10,7 @@ package dev.supermux.editor.syntax
  */
 
 object SyntaxLanguages {
-    const val ABI_VERSION = 2
+    const val ABI_VERSION = 3
 
     /** Every compiled-in grammar (code); [hasTables] says whether it is usable yet. */
     fun names(): List<String> = List(Ses.languageCount()) { Ses.languageName(it) }
@@ -39,6 +39,14 @@ class SyntaxParser(val language: String) : AutoCloseable {
     }
 
     fun setTimeoutMicros(micros: Long) = Ses.parserSetTimeoutMicros(live(), micros)
+
+    /**
+     * Restrict the next parses to these UTF-16 ranges (packed [start, end]*, sorted, not
+     * overlapping); empty = the whole document. [text] is the document: tree-sitter needs each
+     * boundary's row and column, read from it.
+     */
+    fun setIncludedRanges(ranges: IntArray, text: TextSource) =
+        check(Ses.parserSetIncludedRanges(live(), ranges, text), "setIncludedRanges")
 
     /** Parse, reusing [old] (which must already carry every [SyntaxTree.edit] since it was made). */
     fun parse(source: TextSource, old: SyntaxTree? = null): SyntaxTree {
@@ -105,7 +113,10 @@ class SyntaxQuery(val language: String, source: String) : AutoCloseable {
         }
     }
     private val matcher: RegexMatcher? =
-        if (regexes.isEmpty()) null else RegexMatcher { id, text -> regexes[id].containsMatchIn(text) }
+        if (regexes.isEmpty()) null else RegexMatcher { id, text -> regexCalls?.invoke(); regexes[id].containsMatchIn(text) }
+
+    /** Tests: called on every regex evaluation. */
+    internal var regexCalls: (() -> Unit)? = null
 
     private inline fun <T> guarded(block: () -> T): T =
         try { block() } catch (t: Throwable) { close(); throw t }
@@ -117,28 +128,30 @@ class SyntaxQuery(val language: String, source: String) : AutoCloseable {
      * they pass. A match that fails a predicate is dropped whole, so with several patterns
      * capturing one node the first pattern that survives its predicates comes first.
      */
-    fun captures(tree: SyntaxTree, start: Int, end: Int, text: TextSource? = null): IntArray {
+    fun captures(tree: SyntaxTree, start: Int, end: Int, text: TextSource? = null): Captures {
         check(ptr != 0L) { "query closed" }
-        return Ses.queryCaptures(ptr, tree.live(), start, end, text, matcher)
+        val flags = IntArray(1)
+        val ints = Ses.queryCaptures(ptr, tree.live(), start, end, text, matcher, flags)
+        return Captures(ints, flags[0] != 0)
     }
 
-    /**
-     * Pattern [pattern]'s directives: `#set! key [value]` as `key` -> value, and `#is? prop [value]` /
-     * `#is-not? prop [value]` as `"is?:prop"` / `"is-not?:prop"` -> value (null without one). A
-     * leading capture argument (`#set! @c key value`) is not part of the key; a later directive with
-     * the same key wins.
-     */
-    fun patternSettings(pattern: Int): Map<String, String?> {
+    /** Pattern [pattern]'s directives (#set!, #is?, #is-not?) in source order, each with its capture. */
+    fun patternSettings(pattern: Int): List<PatternSetting> {
         check(ptr != 0L) { "query closed" }
         require(pattern in 0 until patternCount) { "pattern $pattern of $patternCount" }
         return decodeSettings(Ses.queryPatternSettings(ptr, pattern))
     }
 
+    /** The capture-less `#set! key [value]` directives of [pattern] as key -> value (a later one wins). */
+    fun settingsMap(pattern: Int): Map<String, String?> =
+        patternSettings(pattern).filter { it.kind == PatternSetting.Kind.SET && it.captureId == null }
+            .associate { it.key to it.value }
+
     override fun close() { if (ptr != 0L) { Ses.queryFree(ptr); ptr = 0L } }
 }
 
-/** ses_query_pattern_settings' packed records (see supermux_syntax.h) as patternSettings' map. */
-internal fun decodeSettings(b: ByteArray): Map<String, String?> {
+/** ses_query_pattern_settings' packed records (see supermux_syntax.h). */
+internal fun decodeSettings(b: ByteArray): List<PatternSetting> {
     var i = 0
     fun u32(): Int {
         val v = (b[i].toInt() and 0xFF) or ((b[i + 1].toInt() and 0xFF) shl 8) or
@@ -147,14 +160,14 @@ internal fun decodeSettings(b: ByteArray): Map<String, String?> {
         return v
     }
     fun str(len: Int): String = b.decodeToString(i, i + len).also { i += len }
-    val out = LinkedHashMap<String, String?>()
+    val out = ArrayList<PatternSetting>()
     while (i < b.size) {
-        val kind = b[i++].toInt()
-        u32() // capture id: not part of the key
+        val kind = when (b[i++].toInt()) { 2 -> PatternSetting.Kind.IS; 3 -> PatternSetting.Kind.IS_NOT; else -> PatternSetting.Kind.SET }
+        val capture = u32().takeIf { it >= 0 }
         val key = str(u32())
         val vl = u32()
         val value = if (vl == -1) null else str(vl)
-        out[when (kind) { 2 -> "is?:$key"; 3 -> "is-not?:$key"; else -> key }] = value
+        out += PatternSetting(kind, capture, key, value)
     }
     return out
 }
@@ -176,6 +189,7 @@ internal expect object Ses {
     fun parserFree(parser: Long)
     fun parserSetLanguage(parser: Long, name: String): Int
     fun parserSetTimeoutMicros(parser: Long, micros: Long)
+    fun parserSetIncludedRanges(parser: Long, ranges: IntArray, source: TextSource): Int
     fun parse(parser: Long, old: Long, source: TextSource, status: IntArray): Long
     fun parseString(parser: Long, old: Long, text: String, status: IntArray): Long
     fun treeCopy(tree: Long): Long
@@ -193,7 +207,8 @@ internal expect object Ses {
     fun queryRegexCount(query: Long): Int
     fun queryRegex(query: Long, id: Int): ByteArray
     fun queryPatternSettings(query: Long, pattern: Int): ByteArray
-    fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?): IntArray
+    /** flags[0] = 1 when the cursor exceeded its match limit. */
+    fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?, flags: IntArray): IntArray
     /** Native trees alive right now (leak tests). */
     fun debugLiveTrees(): Long
 }

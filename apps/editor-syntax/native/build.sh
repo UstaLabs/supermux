@@ -33,7 +33,7 @@ PY
 }
 
 # The C ABI tests, host-built with ASan + UBSan (every sanitizer report is fatal), against the
-# generated javascript and json grammars (bundled tables) of build/gen.
+# generated javascript, json and html grammars (bundled tables) of build/gen.
 ctest() {
   local TS="$HERE/build/tree-sitter/lib" G="$HERE/build/gen" W="$HERE/build/ctest" o objs=()
   local SAN=(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g)
@@ -44,13 +44,13 @@ ctest() {
   c bridge.o -I"$TS/include" -I"$HERE/native/include" "$HERE/native/src/syntax_bridge.c"
   c loader.o -I"$HERE/native/include" "$HERE/native/src/ses_grammar.c"
   c test.o -I"$HERE/native/include" "$HERE/native/tests/bridge_test.c"
-  for lang in javascript json; do
+  for lang in javascript json html; do
     local src; src="$(dirname "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['parser_c'])" "$G/$lang/$lang.plan.json")")"
     c "parser_$lang.o" -I"$src" -I"$HERE/native/include" "$G/$lang/parser_$lang.c"
     c "blob_$lang.o" "$G/$lang/blob_$lang.c"
     if [ -f "$src/scanner.c" ]; then c "scanner_$lang.o" -I"$src" "$src/scanner.c"; fi
   done
-  python3 "$HERE/tools/gen-registry.py" "$W/registry.c" javascript:bundled json:bundled
+  python3 "$HERE/tools/gen-registry.py" "$W/registry.c" javascript:bundled json:bundled html:bundled
   c registry.o -I"$HERE/native/include" "$W/registry.c"
   "${CC[@]}" "${objs[@]}" -lz -o "$W/bridge_test"
   "$W/bridge_test" "$G"
@@ -215,7 +215,7 @@ for t in sorted(os.listdir(root)):
     for f in sorted(os.listdir(lib)):
         b = open(os.path.join(lib, f), "rb").read()
         out.append({"target": t, "file": f, "sha256": hashlib.sha256(b).hexdigest(), "size": len(b)})
-json.dump({"format": 1, "abi_version": 2, "tree_sitter_commit": ts, "libraries": out},
+json.dump({"format": 1, "abi_version": 3, "tree_sitter_commit": ts, "libraries": out},
           open(os.path.join(root, "manifest.json"), "w"), indent=1)
 print("manifest: %d libraries" % len(out))
 PY

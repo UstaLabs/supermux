@@ -88,8 +88,8 @@ class SesBindingTest {
                 SyntaxQuery("json", JSON_HIGHLIGHTS).use { q ->
                     // a window in the middle of the document, like visible lines + overscan
                     val from = doc.length / 2
-                    val a = q.captures(fromRope, from, from + 500, TextSource { rope.chunkAt(it) })
-                    val b = q.captures(fromString, from, from + 500, ChunkedSource(doc))
+                    val a = q.captures(fromRope, from, from + 500, TextSource { rope.chunkAt(it) }).ints
+                    val b = q.captures(fromString, from, from + 500, ChunkedSource(doc)).ints
                     assertTrue(a.isNotEmpty())
                     assertEquals(b.toList(), a.toList())
                     for (i in a.indices step 4) {
