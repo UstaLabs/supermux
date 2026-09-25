@@ -30,7 +30,7 @@ const val JSON_HIGHLIGHTS = """
 // Raw string: the \n below is a backslash + n in the JSON (an escape_sequence), not a newline.
 const val SAMPLE = """{"ağ": [1, true, null], "e😀": "x\n"}"""
 
-private val GOLDEN = listOf(
+internal val GOLDEN = listOf(
     "1-5 string", "1-5 string.special.key",
     "8-9 number",
     "11-15 constant.builtin",
