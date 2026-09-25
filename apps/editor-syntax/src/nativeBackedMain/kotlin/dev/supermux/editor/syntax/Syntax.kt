@@ -135,6 +135,17 @@ class SyntaxQuery(val language: String, source: String) : AutoCloseable {
         return Captures(ints, flags[0] != 0)
     }
 
+    /**
+     * The captures of nodes intersecting UTF-16 [start, end), grouped per match (see [Matches]);
+     * the nodes of capture [childrenOf] (-1: none) also report their children.
+     */
+    fun matches(tree: SyntaxTree, start: Int, end: Int, text: TextSource? = null, childrenOf: Int = -1): Matches {
+        check(ptr != 0L) { "query closed" }
+        val flags = IntArray(1)
+        val ints = Ses.queryMatches(ptr, tree.live(), start, end, text, matcher, childrenOf, flags)
+        return Matches(ints, flags[0] != 0)
+    }
+
     /** Pattern [pattern]'s directives (#set!, #is?, #is-not?) in source order, each with its capture. */
     fun patternSettings(pattern: Int): List<PatternSetting> {
         check(ptr != 0L) { "query closed" }
@@ -207,6 +218,9 @@ internal expect object Ses {
     fun queryRegexCount(query: Long): Int
     fun queryRegex(query: Long, id: Int): ByteArray
     fun queryPatternSettings(query: Long, pattern: Int): ByteArray
+    fun queryMatches(
+        query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?, childrenOf: Int, flags: IntArray,
+    ): IntArray
     /** flags[0] = 1 when the cursor exceeded its match limit. */
     fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?, flags: IntArray): IntArray
     /** Native trees alive right now (leak tests). */

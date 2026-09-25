@@ -295,6 +295,56 @@ static void match_limit_exceeded(void) {
   free(doc);
 }
 
+
+/* ses_query_matches groups captures per match: [pattern, n, (start, end, capture)*]*. */
+static uint32_t record_len(const int32_t *a) {
+  uint32_t l = 2;
+  for (int32_t c = 0; c < a[1]; c++) l += 4 + 3 * (uint32_t)a[l + 3];
+  return l;
+}
+
+static int has_record(const int32_t *a, uint32_t n, const int32_t *rec, uint32_t len) {
+  for (uint32_t i = 0; i < n;) {
+    uint32_t l = record_len(a + i);
+    if (l == len && memcmp(a + i, rec, len * sizeof *rec) == 0) return 1;
+    i += l;
+  }
+  return 0;
+}
+
+static void matches_group_captures(void) {
+  uint32_t len;
+  uint16_t *src = u16("let a = 1; let bb = 22;", &len);
+  ses_status st;
+  ses_parser *p = ses_parser_new();
+  ses_parser_set_language(p, "javascript");
+  ses_tree *t = ses_parser_parse_utf16(p, NULL, src, len, &st);
+  ses_query *q = query("javascript",
+                       "(variable_declarator name: (identifier) @n value: (number) @v) ((identifier) @x (#eq? @x \"bb\"))", &st);
+  int32_t *a = NULL;
+  uint32_t n = 0;
+  int32_t exceeded = -1;
+  buffer_ctx b = {src, len};
+  st = q ? ses_query_matches(q, t, 0, len, read_buffer, &b, NULL, NULL, UINT32_MAX, &a, &n, &exceeded) : -1;
+  static const int32_t d1[] = {0, 2, 4, 5, 0, 0, 8, 9, 1, 0}, d2[] = {0, 2, 15, 17, 0, 0, 20, 22, 1, 0}, bb[] = {1, 1, 15, 17, 2, 0};
+  CHECK("matches group captures per match; a failed predicate drops its match",
+        st == SES_OK && n == 26 && exceeded == 0 && has_record(a, n, d1, 10) && has_record(a, n, d2, 10) && has_record(a, n, bb, 6),
+        "status %d n %u exceeded %d", st, n, exceeded);
+  ses_free(a);
+  /* the children of one capture: a declarator's children are name, "=", value */
+  ses_query *dq = query("javascript", "(variable_declarator) @d", &st);
+  st = dq ? ses_query_matches(dq, t, 0, 10, read_buffer, &b, NULL, NULL, 0, &a, &n, &exceeded) : -1;
+  static const int32_t kids[] = {0, 1, 4, 9, 0, 3, 4, 5, 1, 6, 7, 0, 8, 9, 1};
+  CHECK("the requested capture's children, named or not", st == SES_OK && n == 15 && memcmp(a, kids, sizeof kids) == 0,
+        "status %d n %u", st, n);
+  ses_free(a);
+  ses_query_free(dq);
+  ses_query_free(q);
+  ses_tree_free(t);
+  ses_parser_free(p);
+  free(src);
+}
+
 static uint8_t *slurp(const char *path, size_t *len) {
   FILE *f = fopen(path, "rb");
   if (!f) return NULL;
@@ -375,6 +425,7 @@ int main(int argc, char **argv) {
   settings_keep_capture_id();
   match_callback_once_per_match();
   match_limit_exceeded();
+  matches_group_captures();
   printf("%s: %d failure(s)\n", failures ? "FAIL" : "PASS", failures);
   return failures;
 }

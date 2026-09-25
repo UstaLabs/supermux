@@ -21,6 +21,7 @@ import dev.supermux.editor.syntax.cinterop.ses_query_capture_count
 import dev.supermux.editor.syntax.cinterop.ses_query_capture_name
 import dev.supermux.editor.syntax.cinterop.ses_query_captures
 import dev.supermux.editor.syntax.cinterop.ses_query_flags
+import dev.supermux.editor.syntax.cinterop.ses_query_matches
 import dev.supermux.editor.syntax.cinterop.ses_query_free
 import dev.supermux.editor.syntax.cinterop.ses_query_new
 import dev.supermux.editor.syntax.cinterop.ses_query_pattern_count
@@ -221,6 +222,32 @@ internal actual object Ses {
         val len = alloc<UIntVar>()
         val s = ses_query_pattern_settings(query.toCPointer(), pattern.toUInt(), len.ptr) ?: return ByteArray(0)
         s.reinterpret<ByteVar>().readBytes(len.value.toInt())
+    }
+
+    actual fun queryMatches(
+        query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?, childrenOf: Int, flags: IntArray,
+    ): IntArray = memScoped {
+        val out = alloc<CPointerVar<IntVar>>()
+        out.value = null
+        val n = alloc<UIntVar>()
+        val exceeded = alloc<IntVar>()
+        val matcher = match?.let { Matcher(it) }
+        val mref = matcher?.let { StableRef.create(it) }
+        try {
+            val st = withReader(source, cleanup = { ses_free(out.value) }) { ctx ->
+                ses_query_matches(
+                    query.toCPointer(), tree.toCPointer(), start.toUInt(), end.toUInt(),
+                    if (ctx == null) null else readChunk, ctx,
+                    if (mref == null) null else matchRegex, mref?.asCPointer(), childrenOf.toUInt(), out.ptr, n.ptr, exceeded.ptr,
+                )
+            }
+            matcher?.failure?.let { throw it }
+            check(st, "queryMatches")
+            flags[0] = exceeded.value
+            takeInts(out.value, n.value.toInt())
+        } finally {
+            mref?.dispose()
+        }
     }
 
     actual fun queryCaptures(

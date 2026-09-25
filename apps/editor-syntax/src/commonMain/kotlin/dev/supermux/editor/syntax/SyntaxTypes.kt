@@ -48,3 +48,39 @@ class Captures(val ints: IntArray, val exceededMatchLimit: Boolean) {
     fun capture(i: Int) = ints[4 * i + 2]
     fun pattern(i: Int) = ints[4 * i + 3]
 }
+
+/**
+ * A query's matches, in tree-sitter's match order, predicates applied: for injections, where a
+ * match's captures (its @injection.language and @injection.content) belong together. Packed ints
+ * (see ses_query_matches): per match `pattern, n`, then per capture `start, end, captureIndex, k`
+ * and k `(childStart, childEnd, childIsNamed)` triples for the capture whose children were asked for.
+ */
+class Matches(val ints: IntArray, val exceededMatchLimit: Boolean) {
+    class Capture(val start: Int, val end: Int, val index: Int, val children: IntArray) {
+        /** Child [i] as (start, end, isNamed). */
+        val childCount: Int get() = children.size / 3
+        fun childStart(i: Int) = children[3 * i]
+        fun childEnd(i: Int) = children[3 * i + 1]
+        fun childIsNamed(i: Int) = children[3 * i + 2] != 0
+    }
+
+    class Match(val pattern: Int, val captures: List<Capture>)
+
+    fun toList(): List<Match> {
+        val out = ArrayList<Match>()
+        var i = 0
+        while (i < ints.size) {
+            val pattern = ints[i]
+            val n = ints[i + 1]
+            i += 2
+            val caps = ArrayList<Capture>(n)
+            repeat(n) {
+                val k = ints[i + 3]
+                caps += Capture(ints[i], ints[i + 1], ints[i + 2], ints.copyOfRange(i + 4, i + 4 + 3 * k))
+                i += 4 + 3 * k
+            }
+            out += Match(pattern, caps)
+        }
+        return out
+    }
+}

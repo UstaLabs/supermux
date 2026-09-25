@@ -28,7 +28,7 @@ class NativeBackend(
 
     companion object {
         /** Where a code-only grammar's tables blob lives among the app's resources. */
-        fun tablesPath(language: String) = "editor-syntax/tables/$language.sesz"
+        fun tablesPath(language: String) = LanguageRegistry.tablesResource(language)
     }
 }
 
@@ -54,5 +54,7 @@ private class NativeQuery(private val query: SyntaxQuery) : QueryHandle {
     override fun settings(pattern: Int): List<PatternSetting> = query.patternSettings(pattern)
     override fun captures(tree: TreeHandle, start: Int, end: Int, text: TextSource): Captures =
         query.captures((tree as NativeTree).tree, start, end, text)
+    override fun matches(tree: TreeHandle, start: Int, end: Int, text: TextSource, childrenOf: Int): Matches =
+        query.matches((tree as NativeTree).tree, start, end, text, childrenOf)
     override fun close() = query.close()
 }

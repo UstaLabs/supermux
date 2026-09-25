@@ -69,3 +69,29 @@ class NativeBackendTest {
         }
     }
 }
+
+class MatchesTest {
+    @Test
+    fun matchesGroupCapturesPerMatch() {
+        val backend = testBackend()
+        val src = "let a = 1; let bb = 22;"
+        backend.newParser("javascript").use { p ->
+            p.parse(ChunkedSource(src), null).use { t ->
+                backend.newQuery(
+                    "javascript",
+                    """(variable_declarator name: (identifier) @n value: (number) @v) ((identifier) @x (#eq? @x "bb"))""",
+                ).use { q ->
+                    val got = q.matches(t, 0, src.length, ChunkedSource(src)).toList()
+                        .map { m -> "p${m.pattern}:" + m.captures.joinToString(",") { "${it.start}-${it.end}@${q.captureNames[it.index]}" } }
+                        .sorted()
+                    assertEquals(listOf("p0:15-17@n,20-22@v", "p0:4-5@n,8-9@v", "p1:15-17@x"), got)
+                }
+                backend.newQuery("javascript", "(variable_declarator) @d").use { q ->
+                    val d = q.matches(t, 0, 10, ChunkedSource(src), childrenOf = 0).toList().single().captures.single()
+                    assertEquals(listOf(4, 9), listOf(d.start, d.end))
+                    assertEquals(listOf("4-5 true", "6-7 false", "8-9 true"), List(d.childCount) { "${d.childStart(it)}-${d.childEnd(it)} ${d.childIsNamed(it)}" })
+                }
+            }
+        }
+    }
+}

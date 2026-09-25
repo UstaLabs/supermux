@@ -52,4 +52,10 @@ interface QueryHandle : AutoCloseable {
 
     /** [start, end, captureIndex, patternIndex]* over nodes intersecting [start, end); predicates applied. */
     fun captures(tree: TreeHandle, start: Int, end: Int, text: TextSource): Captures
+
+    /**
+     * The same captures grouped per match (injections need a match's captures together); the
+     * nodes of capture [childrenOf] (-1: none) also report their children.
+     */
+    fun matches(tree: TreeHandle, start: Int, end: Int, text: TextSource, childrenOf: Int = -1): Matches
 }

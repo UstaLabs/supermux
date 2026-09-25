@@ -689,6 +689,66 @@ ses_status ses_query_captures(const ses_query *q, const ses_tree *t, uint32_t st
   return SES_OK;
 }
 
+static bool grow(int32_t **a, uint32_t *cap, uint32_t need) {
+  if (need <= *cap) return true;
+  uint32_t c = *cap;
+  while (need > c) c *= 2;
+  int32_t *b = realloc(*a, c * sizeof(int32_t));
+  if (!b) return false;
+  *a = b;
+  *cap = c;
+  return true;
+}
+
+ses_status ses_query_matches(const ses_query *q, const ses_tree *t, uint32_t start, uint32_t end, ses_read_fn fn,
+                             void *ctx, ses_match_fn match, void *match_ctx, uint32_t children_of, int32_t **out,
+                             uint32_t *count, int32_t *exceeded) {
+  if (exceeded) *exceeded = 0;
+  if (!q || !t || !out || !count || end < start) return SES_ERR_INVALID_ARGUMENT;
+  if (ts_tree_language(TREE(t)) != q->lang) return SES_ERR_INVALID_ARGUMENT;
+  TSQueryCursor *cur = ts_query_cursor_new();
+  if (!cur) return SES_ERR_OUT_OF_MEMORY;
+  ts_query_cursor_set_byte_range(cur, start * 2, end * 2);
+  ts_query_cursor_set_match_limit(cur, SES_QUERY_MATCH_LIMIT);
+  ts_query_cursor_exec(cur, q->ts, ts_tree_root_node(TREE(t)));
+  uint32_t cap = 64, n = 0;
+  int32_t *a = malloc(cap * sizeof(int32_t));
+  texter tx = {{fn, ctx}, match, match_ctx, NULL, 0, SES_OK};
+  ses_status st = a ? SES_OK : SES_ERR_OUT_OF_MEMORY;
+  TSQueryMatch m;
+  while (st == SES_OK && ts_query_cursor_next_match(cur, &m)) {
+    if (q->pred_start[m.pattern_index] != q->pred_start[m.pattern_index + 1] && !predicates_pass(q, &m, &tx)) {
+      if (tx.err) { st = tx.err; break; }
+      continue;
+    }
+    if (!grow(&a, &cap, n + 2 + 4u * m.capture_count)) { st = SES_ERR_OUT_OF_MEMORY; break; }
+    a[n++] = (int32_t)m.pattern_index;
+    a[n++] = (int32_t)m.capture_count;
+    for (uint16_t c = 0; c < m.capture_count && st == SES_OK; c++) {
+      TSNode node = m.captures[c].node;
+      uint32_t k = m.captures[c].index == children_of ? ts_node_child_count(node) : 0;
+      if (!grow(&a, &cap, n + 4 + 3 * k + 4u * (m.capture_count - c - 1))) { st = SES_ERR_OUT_OF_MEMORY; break; }
+      a[n++] = (int32_t)(ts_node_start_byte(node) / 2);
+      a[n++] = (int32_t)(ts_node_end_byte(node) / 2);
+      a[n++] = (int32_t)m.captures[c].index;
+      a[n++] = (int32_t)k;
+      for (uint32_t i = 0; i < k; i++) {
+        TSNode ch = ts_node_child(node, i);
+        a[n++] = (int32_t)(ts_node_start_byte(ch) / 2);
+        a[n++] = (int32_t)(ts_node_end_byte(ch) / 2);
+        a[n++] = ts_node_is_named(ch) ? 1 : 0;
+      }
+    }
+  }
+  free(tx.buf);
+  if (exceeded) *exceeded = ts_query_cursor_did_exceed_match_limit(cur) ? 1 : 0;
+  ts_query_cursor_delete(cur);
+  if (st != SES_OK) { free(a); return st; }
+  *out = a;
+  *count = n;
+  return SES_OK;
+}
+
 ses_status ses_query_captures_utf16(const ses_query *q, const ses_tree *t, uint32_t start, uint32_t end,
                                     const uint16_t *text, uint32_t len, ses_match_fn match, void *match_ctx,
                                     int32_t **out, uint32_t *count, int32_t *exceeded) {

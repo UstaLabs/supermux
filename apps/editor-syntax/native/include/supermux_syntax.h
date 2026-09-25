@@ -208,6 +208,21 @@ SES_API ses_status ses_query_captures_utf16(const ses_query *query, const ses_tr
                                             int32_t **out, uint32_t *out_count,
                                             int32_t *out_exceeded_match_limit);
 
+/**
+ * Like ses_query_captures, but grouped per match, in tree-sitter's match order, for injections:
+ * a match's @injection.language and @injection.content belong together. Predicates are applied
+ * the same way; a match failing one is left out. *out (free with ses_free) is a packed int array
+ * of *out_count ints:
+ *   per match: patternIndex, n, then n captures;
+ *   per capture: start, end, captureIndex, k, then k x (childStart, childEnd, childIsNamed).
+ * k is the number of the node's children when captureIndex == [children_of] (an injection's
+ * content, whose children an injection may exclude), else 0. UINT32_MAX: no children anywhere.
+ */
+SES_API ses_status ses_query_matches(const ses_query *query, const ses_tree *tree, uint32_t start,
+                                     uint32_t end, ses_read_fn read, void *read_ctx, ses_match_fn match,
+                                     void *match_ctx, uint32_t children_of, int32_t **out, uint32_t *out_count,
+                                     int32_t *out_exceeded_match_limit);
+
 /** Trees alive right now (made by a parse or ses_tree_copy, not yet freed). For leak tests. */
 SES_API int64_t ses_debug_live_trees(void);
 

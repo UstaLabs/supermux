@@ -341,3 +341,29 @@ SES_JNI(jintArray, queryCaptures)(JNIEnv *env, jclass cls, jlong q, jlong t, jin
   if (flags) { jint f = exceeded; (*env)->SetIntArrayRegion(env, flags, 0, 1, &f); }
   return res;
 }
+
+/* Grouped per match (see ses_query_matches); childrenOf -1 = none; flags[0] as queryCaptures. */
+SES_JNI(jintArray, queryMatches)(JNIEnv *env, jclass cls, jlong q, jlong t, jint start, jint end, jobject source,
+                                 jobject matcher, jint childrenOf, jintArray flags) {
+  (void)cls;
+  jreader r;
+  jmatcher m;
+  if (jreader_init(env, &r, source) != 0 || jmatcher_init(env, &m, matcher) != 0) return NULL;
+  int32_t *a = NULL;
+  uint32_t n = 0;
+  int32_t exceeded = 0;
+  ses_status st = ses_query_matches(P(q), P(t), (uint32_t)start, (uint32_t)end, source ? jreader_read : NULL, &r,
+                                    matcher ? jmatcher_match : NULL, &m, (uint32_t)childrenOf, &a, &n, &exceeded);
+  jreader_release(&r);
+  if ((*env)->ExceptionCheck(env)) { ses_free(a); return NULL; }
+  if (st) {
+    char msg[64];
+    snprintf(msg, sizeof msg, "ses_query_matches failed (ses status %d)", (int)st);
+    throw_new(env, "java/lang/IllegalArgumentException", msg);
+    return NULL;
+  }
+  jintArray res = to_int_array(env, a, n);
+  ses_free(a);
+  if (flags) { jint f = exceeded; (*env)->SetIntArrayRegion(env, flags, 0, 1, &f); }
+  return res;
+}
