@@ -1,0 +1,181 @@
+/*
+ * Grammar tables loader: inflates a grammar's .sesz blob on first use, validates it against what
+ * the grammar's code was generated with, builds the string-pointer arrays and lets the grammar fill
+ * its TSLanguage. Blob formats: tools/sestables.py. Loaded tables are never freed (like the static
+ * tables they replace).
+ */
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdlib.h>
+#include <string.h>
+#include <zlib.h>
+
+#include "ses_grammar.h"
+#include "ses_registry.h"
+#include "supermux_syntax.h"
+
+struct ses_tables {
+  const uint8_t *payload;
+  uint32_t count;
+  const void **at; /* per table: bytes pointer, or the rebuilt const char *[] */
+};
+
+typedef struct provided {
+  ses_grammar *grammar;
+  uint8_t *bytes;
+  size_t len;
+  struct provided *next;
+} provided;
+
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+static provided *g_provided; /* guarded by g_lock */
+
+static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
+static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
+static uint64_t rd64(const uint8_t *p) { return (uint64_t)rd32(p) | (uint64_t)rd32(p + 4) << 32; }
+
+#define SESZ_HEADER 24u
+#define SEST_HEADER 32u
+
+const void *ses_tables_at(const ses_tables *t, uint32_t index) {
+  return index < t->count ? t->at[index] : NULL;
+}
+
+/* Header-only check (no inflate): magic, format, hash. */
+static int32_t check_sesz(const ses_grammar *g, const uint8_t *z, size_t len) {
+  if (len < SESZ_HEADER || memcmp(z, "SESZ", 4) != 0 || rd32(z + 4) != 1) return SES_ERR_BAD_TABLES;
+  if (rd64(z + 16) != g->hash) return SES_ERR_BAD_TABLES;
+  if ((size_t)rd32(z + 12) + SESZ_HEADER != len) return SES_ERR_BAD_TABLES;
+  return SES_OK;
+}
+
+static int32_t load_locked(ses_grammar *g, const uint8_t *z, size_t len) {
+  int32_t st = check_sesz(g, z, len);
+  if (st) return st;
+  uLongf raw_size = rd32(z + 8);
+  uint8_t *raw = malloc(raw_size ? raw_size : 1);
+  if (!raw) return SES_ERR_OUT_OF_MEMORY;
+  uLongf got = raw_size;
+  if (uncompress(raw, &got, z + SESZ_HEADER, (uLong)(len - SESZ_HEADER)) != Z_OK || got != raw_size) goto bad;
+  if (raw_size < SEST_HEADER || memcmp(raw, "SEST", 4) != 0 || rd16(raw + 4) != 1) goto bad;
+  uint32_t n = rd16(raw + 6);
+  if (n != g->table_count || rd32(raw + 8) != g->abi || rd64(raw + 16) != g->hash || rd64(raw + 24) != raw_size) goto bad;
+  if (SEST_HEADER + 16ull * n > raw_size) goto bad;
+
+  size_t strings = 0;
+  for (uint32_t i = 0; i < n; i++) {
+    const uint8_t *e = raw + SEST_HEADER + 16 * i;
+    uint32_t off = rd32(e), size = rd32(e + 4), count = rd32(e + 8), kind = rd16(e + 12);
+    const ses_table_spec *s = &g->specs[i];
+    if (kind != s->kind || size != s->size || count != s->count) goto bad;
+    if ((off & 15) || (uint64_t)off + size > raw_size) goto bad;
+    if (kind == SES_TABLE_STRINGS) strings += count;
+  }
+  ses_tables *t = malloc(sizeof *t + n * sizeof(void *) + strings * sizeof(char *));
+  if (!t) { free(raw); return SES_ERR_OUT_OF_MEMORY; }
+  t->payload = raw;
+  t->count = n;
+  t->at = (const void **)(t + 1);
+  const char **pool_ptrs = (const char **)(t->at + n);
+  for (uint32_t i = 0; i < n; i++) {
+    const uint8_t *e = raw + SEST_HEADER + 16 * i;
+    uint32_t off = rd32(e), size = rd32(e + 4), count = rd32(e + 8), kind = rd16(e + 12);
+    if (kind == SES_TABLE_BYTES) { t->at[i] = raw + off; continue; }
+    /* strings: u32 offsets[count], then the pool; every string must end inside the table */
+    if ((uint64_t)count * 4 > size) { free(t); goto bad; }
+    const char *pool = (const char *)raw + off + 4ull * count;
+    size_t pool_size = size - 4ull * count;
+    for (uint32_t k = 0; k < count; k++) {
+      uint32_t so = rd32(raw + off + 4 * k);
+      if (so == 0xFFFFFFFFu) { pool_ptrs[k] = NULL; continue; }
+      if (so >= pool_size || !memchr(pool + so, 0, pool_size - so)) { free(t); goto bad; }
+      pool_ptrs[k] = pool + so;
+    }
+    t->at[i] = pool_ptrs;
+    pool_ptrs += count;
+  }
+  g->fill(t); /* t and raw live forever: the TSLanguage points into them */
+  atomic_store_explicit(&g->loaded, g->language, memory_order_release);
+  return SES_OK;
+bad:
+  free(raw);
+  return SES_ERR_BAD_TABLES;
+}
+
+static provided *find_provided(ses_grammar *g) {
+  for (provided *p = g_provided; p; p = p->next)
+    if (p->grammar == g) return p;
+  return NULL;
+}
+
+const ses_registry_entry *ses_registry_find(const char *name) {
+  if (!name) return NULL;
+  for (uint32_t i = 0; i < ses_registry_count; i++)
+    if (strcmp(ses_registry[i].name, name) == 0) return &ses_registry[i];
+  return NULL;
+}
+
+static const ses_registry_entry *entry_for(ses_grammar *g) {
+  for (uint32_t i = 0; i < ses_registry_count; i++)
+    if (ses_registry[i].grammar() == g) return &ses_registry[i];
+  return NULL;
+}
+
+const void *ses_grammar_language(ses_grammar *g) {
+  void *lang = atomic_load_explicit(&g->loaded, memory_order_acquire);
+  if (lang) return lang;
+  pthread_mutex_lock(&g_lock);
+  lang = atomic_load_explicit(&g->loaded, memory_order_relaxed);
+  if (!lang) {
+    provided *p = find_provided(g);
+    const ses_registry_entry *e = p ? NULL : entry_for(g);
+    int32_t st;
+    if (p) st = load_locked(g, p->bytes, p->len);
+    else if (e && e->blob) st = load_locked(g, e->blob, *e->blob_size);
+    else st = SES_ERR_NO_TABLES;
+    g->status = st;
+    lang = atomic_load_explicit(&g->loaded, memory_order_relaxed);
+  }
+  pthread_mutex_unlock(&g_lock);
+  return lang;
+}
+
+int32_t ses_tables_provide(ses_grammar *g, const uint8_t *z, size_t len) {
+  int32_t st = check_sesz(g, z, len);
+  if (st) return st;
+  uint8_t *copy = malloc(len);
+  if (!copy) return SES_ERR_OUT_OF_MEMORY;
+  memcpy(copy, z, len);
+  pthread_mutex_lock(&g_lock);
+  if (atomic_load_explicit(&g->loaded, memory_order_relaxed)) { /* already loaded: nothing to do */
+    pthread_mutex_unlock(&g_lock);
+    free(copy);
+    return SES_OK;
+  }
+  provided *p = find_provided(g);
+  if (p) { free(p->bytes); }
+  else {
+    p = calloc(1, sizeof *p);
+    if (!p) { pthread_mutex_unlock(&g_lock); free(copy); return SES_ERR_OUT_OF_MEMORY; }
+    p->grammar = g; p->next = g_provided; g_provided = p;
+  }
+  p->bytes = copy; p->len = len;
+  pthread_mutex_unlock(&g_lock);
+  return SES_OK;
+}
+
+int ses_tables_available(ses_grammar *g, const ses_registry_entry *e) {
+  if (atomic_load_explicit(&g->loaded, memory_order_acquire)) return 1;
+  if (e && e->blob) return 1;
+  pthread_mutex_lock(&g_lock);
+  int r = find_provided(g) != NULL;
+  pthread_mutex_unlock(&g_lock);
+  return r;
+}
+
+int32_t ses_grammar_status(ses_grammar *g) {
+  pthread_mutex_lock(&g_lock);
+  int32_t st = g->status;
+  pthread_mutex_unlock(&g_lock);
+  return st;
+}
