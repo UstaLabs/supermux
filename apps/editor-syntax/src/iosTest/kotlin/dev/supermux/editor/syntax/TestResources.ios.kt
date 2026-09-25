@@ -15,9 +15,9 @@ import platform.posix.fread
 import platform.posix.fseek
 import platform.posix.ftell
 
-internal actual fun useTestAppResources() {
-    SyntaxResources.extraDirectories = listOf(TEST_TABLES_RESOURCE_DIR)
-}
+// The tables sit next to the test executable, i.e. in its main bundle (build.gradle.kts
+// bundleTablesFor*), exactly where Supermux.app has them: no extra directory is needed.
+internal actual fun useTestAppResources() = Unit
 
 // The simulator runs on the Mac's file system: read the staged file where Gradle put it.
 actual fun testResource(path: String): ByteArray {

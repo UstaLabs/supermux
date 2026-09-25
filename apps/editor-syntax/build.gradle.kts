@@ -380,6 +380,21 @@ val iosTestResourcePath by tasks.registering {
 kotlin.sourceSets.getByName("iosTest").kotlin.srcDir(iosTestResourcePath)
 tasks.matching { it.name.startsWith("ios") && it.name.endsWith("Test") }.configureEach { dependsOn(stageTestTables, stageTables) }
 
+// The iOS test executable's main bundle is its own directory: put the tables there, exactly where
+// an app bundle has them (<resources>/editor-syntax/tables/), so the simulator tests load every
+// code-only grammar through SyntaxResources' NSBundle lookup, as the app does (iosApp/project.yml
+// copies the same directory into Supermux.app).
+// One copy per simulator test executable (debugTest, and perfReleaseTest from binaries.test("perf")).
+for (binary in listOf("debugTest", "perfReleaseTest")) {
+    val copy = tasks.register("bundleTablesFor${binary.replaceFirstChar { it.uppercase() }}IosSimulatorArm64", Copy::class) {
+        description = "Put editor-syntax/tables/ next to the $binary iOS simulator executable (its main bundle)."
+        from(stageTables.flatMap { it.outputDir })
+        into(layout.buildDirectory.dir("bin/iosSimulatorArm64/$binary"))
+    }
+    tasks.matching { it.name == "iosSimulatorArm64Test" || it.name == "link${binary.replaceFirstChar { it.uppercase() }}IosSimulatorArm64" }
+        .configureEach { if (name.startsWith("link")) finalizedBy(copy) else dependsOn(copy) }
+}
+
 androidComponents {
     onVariants { variant ->
         variant.sources.jniLibs?.addGeneratedSourceDirectory(stageAndroidJniLibs, StageAndroidJniLibs::outputDir)

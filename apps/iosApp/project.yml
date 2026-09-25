@@ -162,7 +162,15 @@ targets:
           # :ios:syncEditorWeb refreshes Supermux/EditorWeb from apps/android/src/main/assets/editor
           # (the ONE source of truth for the CodeMirror bundle — desktop copies from there too).
           # It runs BEFORE the resources phase, so the .app can never ship a stale cm6.js again.
-          ./gradlew --no-daemon :ios:syncEditorWeb :ios:embedAndSignAppleFrameworkForXcode
+          ./gradlew --no-daemon :ios:syncEditorWeb :editor-syntax:stageTables :ios:embedAndSignAppleFrameworkForXcode
+          # The native editor's code-only grammars keep their parse tables as data
+          # (editor-syntax/tables/<lang>.sesz); editor-syntax reads them from the main bundle
+          # (SyntaxResources.ios.kt). A static framework carries no resources, so copy them in here.
+          TABLES="$SRCROOT/../editor-syntax/build/gradle/generated/tables/editor-syntax"
+          test -d "$TABLES/tables" || { echo "error: $TABLES/tables is missing (run native/build.sh on the Mac)"; exit 1; }
+          DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/editor-syntax"
+          mkdir -p "$DEST"
+          rsync -a --delete "$TABLES/" "$DEST/"
 
   SupermuxWatch:
     type: application
