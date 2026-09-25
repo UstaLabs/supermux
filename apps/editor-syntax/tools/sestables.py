@@ -281,6 +281,12 @@ def cmd_emit(workdir, lang):
     out.append('''#include "ses_grammar.h"
 
 /* ---- sestables.py: the TSLanguage is filled from the tables blob on first use ---- */
+
+/* Older generators `#define extern __declspec(dllexport)` on Windows: hide tree_sitter_<lang>() there
+   too when the build hides TS_PUBLIC (the library exports only the ses_* / JNI entry points). */
+#if defined(_WIN32) && defined(TREE_SITTER_HIDE_SYMBOLS) && defined(extern)
+#undef extern
+#endif
 static TSLanguage ses_language = {
     %s,
 };

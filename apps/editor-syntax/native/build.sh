@@ -142,10 +142,10 @@ build_target() {
   # never be exported, or it could interpose on another library's C++ runtime in the same process.
   printf '_Java_*\n_ses_*\n' > "$OBJ/exports.txt"                                  # Mach-O
   printf '{\n  global: Java_*; ses_*;\n  local: *;\n};\n' > "$OBJ/exports.map"         # ELF version script
-  local ELF_EXPORTS=(-Wl,--version-script="$OBJ/exports.map" -Wl,--exclude-libs,ALL)
-  # PE: only dllexport'ed symbols are exported: the JNI functions, and each grammar's TS_PUBLIC
-  # tree_sitter_<lang>(), which --exclude-symbols drops.
-  local PE_EXCLUDE; PE_EXCLUDE="$(printf 'tree_sitter_%s,' "${spec[@]%%:*}")"
+  # (zig's linker has no --exclude-libs; its `local: *` already hides the static libc++ it links in.)
+  local ELF_EXPORTS=(-Wl,--version-script="$OBJ/exports.map"); [[ "$T" == android-* ]] && ELF_EXPORTS+=(-Wl,--exclude-libs,ALL)
+  # PE: only dllexport'ed symbols are exported, i.e. the JNI functions (TREE_SITTER_HIDE_SYMBOLS and
+  # sestables.py keep the grammars' tree_sitter_<lang>() from being dllexport'ed).
   case "$T" in
     macos-*) "${CC[@]}" -dynamiclib -Wl,-dead_strip -Wl,-exported_symbols_list,"$OBJ/exports.txt" "${objs[@]}" "${LIBS[@]}" \
       -o "$OUT/lib/libsupermux_syntax_jni.dylib" ;;
@@ -155,7 +155,7 @@ build_target() {
         -o "$OUT/lib/libsupermux_syntax_jni.so"
       "$NDKBIN/llvm-strip" --strip-unneeded "$OUT/lib/libsupermux_syntax_jni.so" ;;
     linux-*) "${LINK[@]}" -shared -Wl,--gc-sections "${ELF_EXPORTS[@]}" "${objs[@]}" -o "$OUT/lib/libsupermux_syntax_jni.so" ;;  # zig c++ links libc++ statically
-    windows-*) "${LINK[@]}" -shared -Wl,--exclude-symbols,"${PE_EXCLUDE%,}" "${objs[@]}" -o "$OUT/lib/supermux_syntax_jni.dll"
+    windows-*) "${LINK[@]}" -shared "${objs[@]}" -o "$OUT/lib/supermux_syntax_jni.dll"
       rm -f "$OUT/lib/"*.lib "$OUT/lib/"*.pdb ;;
   esac
   check_exports "$T" "$OUT/lib"
