@@ -128,7 +128,8 @@ class EditorState private constructor(
         val done = facetValues
         if (done != null && done.containsKey(f)) return done[f] as O
         if (config.staticValues.containsKey(f)) return config.staticValues[f] as O
-        return f.combineIn(config.providers[f].orEmpty(), this)
+        val providers = config.providers[f] ?: return f.emptyValue
+        return f.combineIn(providers, this)
     }
 
     /**

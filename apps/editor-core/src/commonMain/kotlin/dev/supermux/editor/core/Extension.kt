@@ -45,6 +45,9 @@ class Facet<I, O> private constructor(
     fun of(value: I): Extension = FacetProvider(this, value, null)
     fun compute(get: (EditorState) -> I): Extension = FacetProvider(this, null, get)
 
+    /** The output when nothing provides this facet: computed once, the same instance everywhere. */
+    internal val emptyValue: O by lazy { combine(emptyList()) }
+
     @Suppress("UNCHECKED_CAST")
     internal fun combineIn(providers: List<FacetProvider<*>>, state: EditorState?): O =
         combine(providers.map { (it as FacetProvider<I>).valueIn(state) })

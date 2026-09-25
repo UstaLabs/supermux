@@ -168,4 +168,10 @@ class StateTest {
         assertEquals(2, t.field(two))
     }
 
+    @Test fun aFacetWithoutProvidersReturnsOneInstance() {
+        val empty = Facet.list<String>("empty")
+        val s = EditorState.create()
+        assertSame(s.facet(empty), s.facet(empty))
+        assertSame(s.facet(empty), s.update(ChangeSpec(0, 0, "x")).state.facet(empty))
+    }
 }
