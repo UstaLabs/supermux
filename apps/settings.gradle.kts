@@ -44,3 +44,6 @@ include(":terminal-compose")
 // :terminal-core) and on NOTHING else here — that independence IS the check, and it is what lets
 // the pair be published on its own.
 include(":terminal-sample")
+// The native editor's pure-Kotlin core (rope, transactions, extensions). Depends on nothing else here,
+// like :terminal-core (docs/superpowers/specs/2026-09-25-native-editor-design.md).
+include(":editor-core")
