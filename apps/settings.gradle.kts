@@ -47,3 +47,5 @@ include(":terminal-sample")
 // The native editor's pure-Kotlin core (rope, transactions, extensions). Depends on nothing else here,
 // like :terminal-core (docs/superpowers/specs/2026-09-25-native-editor-design.md).
 include(":editor-core")
+// The native editor's syntax layer: tree-sitter behind an owned ses_* C ABI, grammars as code + table blobs.
+include(":editor-syntax")

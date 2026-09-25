@@ -1,0 +1,135 @@
+package dev.supermux.editor.syntax
+
+/**
+ * The native tree-sitter binding (ses_* C ABI) as plain Kotlin objects. Every offset, length, row
+ * and column here is in UTF-16 code units, exactly like String/Rope indexes and web-tree-sitter's
+ * startIndex/endIndex: there is no byte encoding anywhere on the Kotlin side.
+ *
+ * Not thread-safe per object (a parser, tree or query cursor is used by one thread at a time); a
+ * [SyntaxQuery] may be shared once built. Grammar loading is thread-safe inside the C runtime.
+ */
+
+object SyntaxLanguages {
+    const val ABI_VERSION = 1
+
+    /** Every compiled-in grammar (code); [hasTables] says whether it is usable yet. */
+    fun names(): List<String> = List(Ses.languageCount()) { Ses.languageName(it) }
+    fun hasTables(name: String): Boolean = Ses.languageHasTables(name) == 1
+    /** Tables for a grammar whose blob is not bundled (e.g. downloaded). Checked against the code's hash. */
+    fun provideTables(name: String, sesz: ByteArray) = check(Ses.provideTables(name, sesz), "provideTables($name)")
+    fun load(name: String) = check(Ses.languageLoad(name), "load($name)")
+
+    init {
+        val abi = Ses.abiVersion()
+        if (abi != ABI_VERSION) throw SyntaxException("native ses ABI $abi, binding needs $ABI_VERSION", -2)
+    }
+}
+
+internal fun check(status: Int, what: String) {
+    if (status != SyntaxStatus.OK) throw SyntaxException("$what failed", status)
+}
+
+class SyntaxParser(val language: String) : AutoCloseable {
+    private var ptr: Long = Ses.parserNew().also { if (it == 0L) throw SyntaxException("parserNew", -4) }
+
+    init {
+        SyntaxLanguages // ABI check
+        val st = Ses.parserSetLanguage(ptr, language)
+        if (st != SyntaxStatus.OK) { close(); throw SyntaxException("setLanguage($language)", st) }
+    }
+
+    fun setTimeoutMicros(micros: Long) = Ses.parserSetTimeoutMicros(live(), micros)
+
+    /** Parse, reusing [old] (which must already carry every [SyntaxTree.edit] since it was made). */
+    fun parse(source: TextSource, old: SyntaxTree? = null): SyntaxTree {
+        val status = IntArray(1)
+        val t = Ses.parse(live(), old?.live() ?: 0L, source, status)
+        if (t == 0L) throw SyntaxException("parse", status[0])
+        return SyntaxTree(t)
+    }
+
+    fun parse(text: String, old: SyntaxTree? = null): SyntaxTree {
+        val status = IntArray(1)
+        val t = Ses.parseString(live(), old?.live() ?: 0L, text, status)
+        if (t == 0L) throw SyntaxException("parse", status[0])
+        return SyntaxTree(t)
+    }
+
+    private fun live(): Long { check(ptr != 0L) { "parser closed" }; return ptr }
+
+    override fun close() { if (ptr != 0L) { Ses.parserFree(ptr); ptr = 0L } }
+}
+
+class SyntaxTree internal constructor(private var ptr: Long) : AutoCloseable {
+    internal fun live(): Long { check(ptr != 0L) { "tree closed" }; return ptr }
+
+    fun copy(): SyntaxTree = SyntaxTree(Ses.treeCopy(live()))
+
+    fun edit(e: TextEdit) = Ses.treeEdit(
+        live(), e.start, e.oldEnd, e.newEnd, e.startRow, e.startColumn, e.oldEndRow, e.oldEndColumn,
+        e.newEndRow, e.newEndColumn,
+    )
+
+    fun sexp(): String = Ses.treeSexp(live())
+    val hasError: Boolean get() = Ses.treeHasError(live())
+
+    /** Packed [start, end]* (UTF-16) of what changed from this (edited) tree to its reparse [new]. */
+    fun changedRanges(new: SyntaxTree): IntArray = Ses.treeChangedRanges(live(), new.live())
+
+    override fun close() { if (ptr != 0L) { Ses.treeFree(ptr); ptr = 0L } }
+}
+
+class SyntaxQuery(val language: String, source: String) : AutoCloseable {
+    private var ptr: Long
+    val captureNames: List<String>
+    /** Bit 0: uses #match?-family predicates, which the native side does not evaluate yet. */
+    val flags: Int
+
+    init {
+        SyntaxLanguages
+        val err = IntArray(3)
+        ptr = Ses.queryNew(language, source.encodeToByteArray(), err)
+        if (ptr == 0L) throw SyntaxException("query: error type ${err[2]} at byte ${err[1]}", err[0])
+        captureNames = List(Ses.queryCaptureCount(ptr)) { Ses.queryCaptureName(ptr, it).decodeToString() }
+        flags = Ses.queryFlags(ptr)
+    }
+
+    /**
+     * Captures of nodes intersecting UTF-16 [start, end): packed [start, end, captureIndex]* in
+     * UTF-16 units, in tree-sitter's capture order. [text] feeds #eq?/#any-of? predicates.
+     */
+    fun captures(tree: SyntaxTree, start: Int, end: Int, text: TextSource? = null): IntArray {
+        check(ptr != 0L) { "query closed" }
+        return Ses.queryCaptures(ptr, tree.live(), start, end, text)
+    }
+
+    override fun close() { if (ptr != 0L) { Ses.queryFree(ptr); ptr = 0L } }
+}
+
+/** The raw ses_* ABI, one actual per binding (JNI / cinterop). Pointers are Longs, 0 = null. */
+internal expect object Ses {
+    fun abiVersion(): Int
+    fun languageCount(): Int
+    fun languageName(index: Int): String
+    fun languageHasTables(name: String): Int
+    fun provideTables(name: String, bytes: ByteArray): Int
+    fun languageLoad(name: String): Int
+    fun parserNew(): Long
+    fun parserFree(parser: Long)
+    fun parserSetLanguage(parser: Long, name: String): Int
+    fun parserSetTimeoutMicros(parser: Long, micros: Long)
+    fun parse(parser: Long, old: Long, source: TextSource, status: IntArray): Long
+    fun parseString(parser: Long, old: Long, text: String, status: IntArray): Long
+    fun treeCopy(tree: Long): Long
+    fun treeFree(tree: Long)
+    fun treeEdit(tree: Long, start: Int, oldEnd: Int, newEnd: Int, sr: Int, sc: Int, oer: Int, oec: Int, ner: Int, nec: Int)
+    fun treeSexp(tree: Long): String
+    fun treeHasError(tree: Long): Boolean
+    fun treeChangedRanges(old: Long, new: Long): IntArray
+    fun queryNew(language: String, utf8: ByteArray, err: IntArray): Long
+    fun queryFree(query: Long)
+    fun queryCaptureCount(query: Long): Int
+    fun queryCaptureName(query: Long, index: Int): ByteArray
+    fun queryFlags(query: Long): Int
+    fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?): IntArray
+}
