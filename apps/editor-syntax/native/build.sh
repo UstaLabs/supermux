@@ -114,7 +114,7 @@ build_target() {
     macos-*) "${CC[@]}" -dynamiclib -Wl,-dead_strip "${objs[@]}" "${LIBS[@]}" -o "$OUT/lib/libsupermux_syntax_jni.dylib" ;;
     ios-*) xcrun libtool -static -o "$OUT/lib/libsupermux_syntax.a" "${objs[@]}" 2>/dev/null ;;
     android-*) [ "$CXXLIB" = 1 ] && LIBS=(-lz -static-libstdc++)
-      "${CC[@]}" -shared -Wl,--gc-sections -Wl,-z,max-page-size=16384 "${objs[@]}" "${LIBS[@]}" -o "$OUT/lib/libsupermux_syntax_jni.so"
+      "${LINK[@]}" -shared -Wl,--gc-sections -Wl,-z,max-page-size=16384 "${objs[@]}" "${LIBS[@]}" -o "$OUT/lib/libsupermux_syntax_jni.so"
       "$NDKBIN/llvm-strip" --strip-unneeded "$OUT/lib/libsupermux_syntax_jni.so" ;;
     linux-*) "${LINK[@]}" -shared -Wl,--gc-sections "${objs[@]}" -o "$OUT/lib/libsupermux_syntax_jni.so" ;;  # zig c++ links libc++ statically
     windows-*) "${LINK[@]}" -shared "${objs[@]}" -o "$OUT/lib/supermux_syntax_jni.dll"
