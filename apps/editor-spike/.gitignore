@@ -1,2 +1,3 @@
 native/out/
 native/src/
+src/wasmJsTest/resources/*.wasm

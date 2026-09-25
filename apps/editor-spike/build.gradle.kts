@@ -30,7 +30,12 @@ kotlin {
         t.binaries.framework { baseName = "EditorSpike"; isStatic = true }
     }
     @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
-    wasmJs { browser { testTask { useKarma { useChromeHeadless() } } } }
+    wasmJs {
+        browser { testTask { useKarma { useChromeHeadless() } } }
+        // Compose's checkComposeUiTestConfigurationForWasmJs refuses a wasm test task without an
+        // executable (Skiko would not be bundled; CMP-4906).
+        binaries.executable()
+    }
     applyDefaultHierarchyTemplate()
 
     sourceSets {

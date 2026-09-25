@@ -41,3 +41,9 @@ for T in arm64-v8a:aarch64-linux-android26 x86_64:x86_64-linux-android26; do
     -o "$OUT/jniLibs/$ABI/libeditorgrammars.so"
 done
 ls -l "$OUT"/*/libeditorgrammars.* "$OUT"/jniLibs/*/libeditorgrammars.so
+
+# web: the runtime wasm from web-tree-sitter and the grammar wasm the npm package ships prebuilt
+RES="$HERE/../src/wasmJsTest/resources"; mkdir -p "$RES"
+cp "$SRC/$PKG/tree-sitter-json.wasm" "$RES/"
+curl -sL "https://registry.npmjs.org/web-tree-sitter/-/web-tree-sitter-0.25.10.tgz" | tar xz -C "$SRC"
+cp "$SRC/package/tree-sitter.wasm" "$RES/" 2>/dev/null || cp "$SRC/package/web-tree-sitter.wasm" "$RES/tree-sitter.wasm"
