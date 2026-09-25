@@ -315,7 +315,9 @@
    "parserDirs": [
     "src"
    ],
-   "tables": "code"
+   "tables": "code",
+   "licenseFile": "native/licenses/tree-sitter-groovy.LICENSE",
+   "licenseSource": "no licence file upstream, checked 2026-09-25 at https://github.com/amaanq/tree-sitter-groovy/tree/v0.1.2 (70efb0b9b50f95bcbd89dcfd42b275e0304e10cf); its Cargo.toml and package.json declare MIT with this author. The file is the standard MIT text naming that author."
   },
   {
    "lang": "lua",
@@ -406,7 +408,10 @@
    "note": "the npm parser.c is ABI 9 (runtime 0.25 needs 13-15): fetch.sh regenerates it from the package grammar.json",
    "regenerate": {
     "cli": "tree-sitter-cli@0.25.10",
-    "abi": 14
+    "abi": 14,
+    "parserSha256": {
+     "src": "42e64e42649964efd2301cfef23859ba050b2f54b336ee14df73f3b47c46db89"
+    }
    }
   },
   {
@@ -491,7 +496,9 @@
    "parserDirs": [
     "src"
    ],
-   "tables": "code"
+   "tables": "code",
+   "licenseFile": "native/licenses/tree-sitter-vb-dotnet.LICENSE",
+   "licenseSource": "no licence file upstream, checked 2026-09-25 at https://github.com/CodeAnt-AI/tree-sitter-vb-dotnet/tree/cfca210ce8fdcb5245bd9cd5c47ce0a21a8488d5 (HEAD 2025-07-28; the repo has no tags); its Cargo.toml and package.json declare MIT with this author. The file is the standard MIT text naming that author."
   },
   {
    "lang": "wast",
