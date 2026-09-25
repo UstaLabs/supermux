@@ -1,0 +1,1334 @@
+{
+ "format": 1,
+ "sources": {
+  "npm": {
+   "what": "a file inside the grammar's npm tarball; url and sha256 in native/grammars.lock.json",
+   "license": "the grammar's (grammars.lock.json)",
+   "precedence": "auto"
+  },
+  "helix": {
+   "repo": "helix-editor/helix",
+   "commit": "079a789e8cb08ead67f19e1971a1b7438b37354b",
+   "dir": "runtime/queries",
+   "license": "MPL-2.0",
+   "precedence": "last",
+   "licenseSha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+  },
+  "nvim": {
+   "repo": "nvim-treesitter/nvim-treesitter",
+   "commit": "f603a2f4da48728f80257fb5fbb90145fd1dc173",
+   "dir": "runtime/queries",
+   "license": "Apache-2.0",
+   "precedence": "last",
+   "licenseSha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  }
+ },
+ "languages": {
+  "bash": {
+   "highlights": {
+    "sources": [
+     "npm:shell/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:shell/queries/highlights.scm": "b74220d954f485b7626d2b2b61f37b522e12eb1830803e388e57dd797dc99f11"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:bash/injections.scm"
+    ],
+    "files": {
+     "helix:bash/injections.scm": "7f1926247a8096d7692a4297ef4910f6662249fe5fb9ec0acd07f91c8bdcc7ab"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:bash/folds.scm"
+    ],
+    "files": {
+     "nvim:bash/folds.scm": "49da7eddb5ec5b96e61a5b5090d78dfacd190bb037543278245a86677a85d2f0"
+    }
+   }
+  },
+  "c": {
+   "highlights": {
+    "sources": [
+     "npm:c/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:c/queries/highlights.scm": "3378d854dda695b2b282b9468247524ed4271ef74af691033d2e36883379409c"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:c/injections.scm"
+    ],
+    "files": {
+     "helix:c/injections.scm": "5850cd488a5f96272a64ba2dad5273096f20b9bbcf6710930b1f56485c6b0d68"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:c/folds.scm"
+    ],
+    "files": {
+     "nvim:c/folds.scm": "f909cc918deec9a7845203a1c86d29b6177fbe0cb8603b83ef3d81b6a9276a59"
+    }
+   }
+  },
+  "c_sharp": {
+   "highlights": {
+    "sources": [
+     "npm:csharp/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:csharp/queries/highlights.scm": "ab8a9930aeeee70fa2dbfde82e4763170b7e826bc642338ad0683772c20c060f"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:c-sharp/injections.scm"
+    ],
+    "files": {
+     "helix:c-sharp/injections.scm": "8db8eba23a8109ab14901ca62e2bcb27e2c38d96cbe0362c02dc6f71fdafd28f"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:c_sharp/folds.scm"
+    ],
+    "files": {
+     "nvim:c_sharp/folds.scm": "596a82b2b891c67d59971ad7285bc651ea811f82a6a49041438a78d47709ddf3"
+    }
+   }
+  },
+  "clojure": {
+   "highlights": {
+    "sources": [
+     "helix:clojure/highlights.scm"
+    ],
+    "files": {
+     "helix:clojure/highlights.scm": "c173e69026926b26fbf833735fe8969e294466b61076e05582712f28595ec5a5"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:clojure/injections.scm"
+    ],
+    "files": {
+     "helix:clojure/injections.scm": "f99927cea7c50987bd63e5ef6a3f586b145720a34db76ed72a24e0b8eeb4cc3a"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:clojure/folds.scm"
+    ],
+    "files": {
+     "nvim:clojure/folds.scm": "35a9953e9a4cc1d3ba65910fbe8640dfbfec1e073dd061b0a4ab0898d537dc0a"
+    }
+   }
+  },
+  "cpp": {
+   "highlights": {
+    "sources": [
+     "npm:c/queries/highlights.scm",
+     "npm:cpp/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:c/queries/highlights.scm": "3378d854dda695b2b282b9468247524ed4271ef74af691033d2e36883379409c",
+     "npm:cpp/queries/highlights.scm": "52136576a9a9dacd9e95a8de0f351689bf46140738572ab4e9f24c9278e6b458"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:cpp/queries/injections.scm"
+    ],
+    "files": {
+     "npm:cpp/queries/injections.scm": "0791a308ef7c0a9e40b8415a2e9cee85b528a8bb21697e65c79872e8848dd972"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:cpp/folds.scm"
+    ],
+    "files": {
+     "nvim:cpp/folds.scm": "a1e1ba255956cfb30e720b7ef251027339ec7305a25d6771e20fba611728fb0a",
+     "nvim:c/folds.scm": "f909cc918deec9a7845203a1c86d29b6177fbe0cb8603b83ef3d81b6a9276a59"
+    }
+   }
+  },
+  "css": {
+   "highlights": {
+    "sources": [
+     "npm:css/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:css/queries/highlights.scm": "23f7948a3817a0d06d7120158c3bee4ec5b58daa77e524985a4738b364db17b2"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:css/injections.scm"
+    ],
+    "files": {
+     "helix:css/injections.scm": "8db8eba23a8109ab14901ca62e2bcb27e2c38d96cbe0362c02dc6f71fdafd28f"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:css/folds.scm"
+    ],
+    "files": {
+     "nvim:css/folds.scm": "27753670bbafb11b56c19daec2598e26993aad7bcefe68d697051fd2c52c1df0"
+    }
+   }
+  },
+  "dart": {
+   "highlights": {
+    "sources": [
+     "npm:dart/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:dart/queries/highlights.scm": "3c7a544590b20f73a485d63aa51d01692c1886800b21d3f9c071e95fffb9c809"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:dart/injections.scm"
+    ],
+    "files": {
+     "helix:dart/injections.scm": "8db8eba23a8109ab14901ca62e2bcb27e2c38d96cbe0362c02dc6f71fdafd28f"
+    }
+   },
+   "folds": {
+    "sources": [
+     "npm:dart/queries/folds.scm"
+    ],
+    "files": {
+     "npm:dart/queries/folds.scm": "94d35a867b7b7e6aef61dc82cc72b7bbd0994bf9df2471b1c364c5b5ed218cff"
+    }
+   }
+  },
+  "dtd": {
+   "highlights": {
+    "sources": [
+     "npm:xml/queries/dtd/highlights.scm"
+    ],
+    "files": {
+     "npm:xml/queries/dtd/highlights.scm": "5091ae8e8311c16a1bbdffa0ee8819b55b97b786cca12392a9252a5393206bc9"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:dtd/injections.scm"
+    ],
+    "files": {
+     "helix:dtd/injections.scm": "8db8eba23a8109ab14901ca62e2bcb27e2c38d96cbe0362c02dc6f71fdafd28f"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:dtd/folds.scm"
+    ],
+    "files": {
+     "nvim:dtd/folds.scm": "03a0b00445e5a4641a9ec7f9cc2e0fe5079165aa61ce49e0cfc6531c0c010a6e"
+    }
+   }
+  },
+  "elm": {
+   "highlights": {
+    "sources": [
+     "npm:elm/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:elm/queries/highlights.scm": "a912e6c6da177c052f9d10b135d31bf3aee288678374f4217638ca4f3b71845e"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:elm/queries/injections.scm"
+    ],
+    "files": {
+     "npm:elm/queries/injections.scm": "fb2a7a9a27c47e41347b3eb596701201a7652abc35d1180a3286900e611e1f1b"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:elm/folds.scm"
+    ],
+    "files": {
+     "nvim:elm/folds.scm": "85c185002bbb6a87207aa9e679525dc4192d092eb3c23ecbb82c0acfb99b5c20"
+    }
+   }
+  },
+  "fsharp": {
+   "highlights": {
+    "sources": [
+     "npm:fsharp/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:fsharp/queries/highlights.scm": "6c4bb51bdc8bbb3d88a1efbe2ccb49ce9e817789a8360dcb070fad33bfa72672"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:fsharp/queries/injections.scm"
+    ],
+    "files": {
+     "npm:fsharp/queries/injections.scm": "12fd940546eab37406ca1a479db48dd0ce6115bd34e37759017181cfe96f5c69"
+    }
+   },
+   "folds": {
+    "sources": [
+     "npm:fsharp/queries/folds.scm"
+    ],
+    "files": {
+     "npm:fsharp/queries/folds.scm": "ded9a8df5b2db9d011ef19ec3024f6e347cf7ca194f5e8372e1b6d48bf0690b3"
+    }
+   }
+  },
+  "fsharp_signature": {
+   "highlights": {
+    "sources": [
+     "npm:fsharp/fsharp_signature/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:fsharp/fsharp_signature/queries/highlights.scm": "b2166853aab5f4dd94744f4929732e4a07d549f0d44638ccad3e4fd4486db495"
+    }
+   }
+  },
+  "glsl": {
+   "highlights": {
+    "sources": [
+     "npm:glsl/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:glsl/queries/highlights.scm": "e43ffe517d8810dba9e3dbb195cb65ea7e6b575bbaf513dd6032416034b06211"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:glsl/injections.scm"
+    ],
+    "files": {
+     "helix:glsl/injections.scm": "8211533445e25c0cadbc5691a42bb141fd51328b7630e3fd01ddaa48e9566f81",
+     "helix:c/injections.scm": "5850cd488a5f96272a64ba2dad5273096f20b9bbcf6710930b1f56485c6b0d68"
+    }
+   },
+   "folds": {
+    "sources": [
+     "helix:glsl/folds.scm"
+    ],
+    "files": {
+     "helix:glsl/folds.scm": "e721d3ecb16a6bb63c84329693d5756b63e1aa3d3732f03631921bfa0d13d536"
+    }
+   }
+  },
+  "go": {
+   "highlights": {
+    "sources": [
+     "npm:go/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:go/queries/highlights.scm": "81182c986547eba7fa6316e82dfd621fb13b8fc89efac85432aee51a48ed0896"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:go/injections.scm"
+    ],
+    "files": {
+     "helix:go/injections.scm": "6a27305bb84114d2eb0730f647597e5510ce90f51c571b38d155cc7364ad81bd"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:go/folds.scm"
+    ],
+    "files": {
+     "nvim:go/folds.scm": "567972d1109b435df218c9308979c9d91ec9a477ebb841d2cd393e516f6b2369"
+    }
+   }
+  },
+  "groovy": {
+   "highlights": {
+    "sources": [
+     "helix:groovy/highlights.scm"
+    ],
+    "files": {
+     "helix:groovy/highlights.scm": "5c7fdbca61cc381e8c66ca6cc556e1073ba9c997358f09891e1b096b91898907"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:groovy/injections.scm"
+    ],
+    "files": {
+     "helix:groovy/injections.scm": "f79909e3042d2813cfc86852b80c2ec7ac177882f223011fff800aea0937099b"
+    }
+   },
+   "folds": {
+    "sources": [
+     "helix:groovy/folds.scm"
+    ],
+    "files": {
+     "helix:groovy/folds.scm": "8eef1e49d145c91a37670810ee136a597c249f9327ad655e07fa150deaa7c8bd"
+    }
+   }
+  },
+  "haskell": {
+   "highlights": {
+    "sources": [
+     "npm:haskell/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:haskell/queries/highlights.scm": "f8232b2c9b79ca3038c08c0b13602776019039d8e7668c60c18dcbc373c32e16"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:haskell/queries/injections.scm"
+    ],
+    "files": {
+     "npm:haskell/queries/injections.scm": "156d5d5e67ff199cb768a7ce72eccacfbfd2de9701f7f8c44cb016a4cddfc04e"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:haskell/folds.scm"
+    ],
+    "files": {
+     "nvim:haskell/folds.scm": "f75e83e954df52fb3a261032d195ce799162f0797e5345e097cf19c1637285cf"
+    }
+   }
+  },
+  "haxe": {
+   "highlights": {
+    "sources": [
+     "npm:haxe/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:haxe/queries/highlights.scm": "3b619b93e54b5cbda711fc72e2e03a892618ddb45a76483578609895f00e4225"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:haxe/queries/injections.scm"
+    ],
+    "files": {
+     "npm:haxe/queries/injections.scm": "9b7bf49cac44bb0afc567582408d558c5cacd5c60faa42d6ddbfc1fc4604c46b"
+    }
+   },
+   "folds": {
+    "sources": [
+     "npm:haxe/queries/folds.scm"
+    ],
+    "files": {
+     "npm:haxe/queries/folds.scm": "d8a1b62e2a1a5a3ac287ceff8e4a39e402b58677fa6c1f8ffe4bed6c801869d6"
+    }
+   }
+  },
+  "html": {
+   "highlights": {
+    "sources": [
+     "npm:html/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:html/queries/highlights.scm": "1ebb3811a8cdc054385b847a3aac6fbf7079faefd5b3dfab5bbad256cd5afdcf"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:html/queries/injections.scm"
+    ],
+    "files": {
+     "npm:html/queries/injections.scm": "6faa29537e952ee444aaa6ac00f72956d13f65616aade74bd665f5ac405f9c32"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:html/folds.scm"
+    ],
+    "files": {
+     "nvim:html/folds.scm": "554602944873b08eec04ffe76ab79b5d4609f75394490c124397426a9b0d3e44"
+    }
+   }
+  },
+  "java": {
+   "highlights": {
+    "sources": [
+     "npm:java/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:java/queries/highlights.scm": "576c0df8df0b116cd642140ddc508c01f9d3283582afd8581c1f35caf4d71386"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:java/injections.scm"
+    ],
+    "files": {
+     "helix:java/injections.scm": "7a2a5f9b28dbde596ea955639ab0905705940cf9c2dcc370b54e4f491172b97a"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:java/folds.scm"
+    ],
+    "files": {
+     "nvim:java/folds.scm": "3046a1482b0936a2a3a869528fdf5ad279aac11cc1abe8180c497cb7557c98a6"
+    }
+   }
+  },
+  "javascript": {
+   "highlights": {
+    "sources": [
+     "npm:javascript/queries/highlights.scm",
+     "npm:javascript/queries/highlights-jsx.scm",
+     "npm:javascript/queries/highlights-params.scm"
+    ],
+    "files": {
+     "npm:javascript/queries/highlights.scm": "d3630ae6dc9b2b27b230b5f8bb92b05cd491fb12bff353dae62a0a6d780461ee",
+     "npm:javascript/queries/highlights-jsx.scm": "0cad1712acaf40804bc5dc7c8476858752c1f549cdf7d8c63c747317be0f8fa6",
+     "npm:javascript/queries/highlights-params.scm": "bbe7a58cacfb1c954cb0eab44779fd80421ed59b762b975723447207635de50d"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:javascript/queries/injections.scm"
+    ],
+    "files": {
+     "npm:javascript/queries/injections.scm": "bea345407ce1f24bccf2b3c1a128acc14e19301327074285368586e793dcb86d"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:javascript/folds.scm"
+    ],
+    "files": {
+     "nvim:javascript/folds.scm": "b6473f9af85876eaca477fbe61462e80f316c5b12387be62fe1b40cae72914c2",
+     "nvim:ecma/folds.scm": "a97b18e52b7bc8b70075ed1a78dad12e72e5e5ae769bb212d8276186a972dd91",
+     "nvim:jsx/folds.scm": "2010b94da6016d00ebe18e31d321df127c11aa3fb75d39ae2e2a32d1fce042ff"
+    }
+   }
+  },
+  "json": {
+   "highlights": {
+    "sources": [
+     "npm:json/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:json/queries/highlights.scm": "0511524465b56aed122580792254e68b6abbbfde7119f1d02b135acbe278233f"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:json/injections.scm"
+    ],
+    "files": {
+     "helix:json/injections.scm": "8db8eba23a8109ab14901ca62e2bcb27e2c38d96cbe0362c02dc6f71fdafd28f"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:json/folds.scm"
+    ],
+    "files": {
+     "nvim:json/folds.scm": "7946e857230de4899bc8eed17744fe0672c404bfdcc53118dfdedd7bb509af92"
+    }
+   }
+  },
+  "julia": {
+   "highlights": {
+    "sources": [
+     "npm:julia/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:julia/queries/highlights.scm": "6963a8450d144a18761a7b4e68787af497d06e51e92c31c15893cc583a19d0a4"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:julia/injections.scm"
+    ],
+    "files": {
+     "helix:julia/injections.scm": "587e02b1989c1196d0143a3cd15c35cf37e123137c55921bea63421fa3ade5f0"
+    }
+   },
+   "folds": {
+    "sources": [
+     "helix:julia/folds.scm"
+    ],
+    "files": {
+     "helix:julia/folds.scm": "4d7e489fe1abb3420d270d9ab820a98e53d168c5afc646f12f9fe4f7e5e68616"
+    }
+   }
+  },
+  "kotlin": {
+   "highlights": {
+    "sources": [
+     {
+      "ref": "helix:kotlin/highlights.scm",
+      "why": "fwcd's npm file is a 2023 nvim-treesitter snapshot with its #lua-match? patterns cut: a function with modifiers (override fun f) is a variable there. Helix's file targets the same grammar and is maintained."
+     }
+    ],
+    "files": {
+     "helix:kotlin/highlights.scm": "ba8916e082ec8fcd13cb1da4ca771a4c571f7ede886e42719be39f37f867b0ba"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:kotlin/injections.scm"
+    ],
+    "files": {
+     "helix:kotlin/injections.scm": "0198cd727ab860b9be20814acc5143632ab742500a8f41ddbcc73e0c13e3023d"
+    }
+   },
+   "folds": {
+    "sources": [
+     "helix:kotlin/folds.scm"
+    ],
+    "files": {
+     "helix:kotlin/folds.scm": "1937a96e70c6beec1d35538cbb4616770aa06ed3867392ea2d1128041b9ea38a"
+    }
+   }
+  },
+  "lua": {
+   "highlights": {
+    "sources": [
+     "npm:lua/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:lua/queries/highlights.scm": "0ddb74b9e476d0b183a39a275dc9a6a370a69fb94bc9f7e6fac4c2cbe64f7b75"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:lua/queries/injections.scm"
+    ],
+    "files": {
+     "npm:lua/queries/injections.scm": "74914a7e9801547dad61d5b348d7b2128e8d426d51cbabb19053b75763764d33"
+    }
+   },
+   "folds": {
+    "sources": [
+     "helix:lua/folds.scm"
+    ],
+    "files": {
+     "helix:lua/folds.scm": "63e68f4212363c865d0634a06334117111878a721e2cdf89173769fa25ada80e"
+    }
+   }
+  },
+  "markdown": {
+   "highlights": {
+    "sources": [
+     "npm:markdown/tree-sitter-markdown/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:markdown/tree-sitter-markdown/queries/highlights.scm": "0f8db8b016b0c739db7307215dcd1d33d9cbf5222b64e60d45dc4f4c08dc684b"
+    }
+   },
+   "injections": {
+    "sources": [
+     {
+      "ref": "helix:markdown/injections.scm",
+      "why": "the npm file has no injection.include-unnamed-children: this grammar lexes backticks, tildes and brackets inside a fence as anonymous children of code_fence_content, and excluding children (the default) shreds the content; Helix's file sets it"
+     }
+    ],
+    "files": {
+     "helix:markdown/injections.scm": "cc615b6c2ae1faa77afe148222386ece2730bf04da5ec79be5c63ee37a655d12"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:markdown/folds.scm"
+    ],
+    "files": {
+     "nvim:markdown/folds.scm": "f9cb82eb75c5d3c6946903bb2318278d3ca378e507b14569d2bb8af8bba69b95"
+    }
+   }
+  },
+  "markdown_inline": {
+   "highlights": {
+    "sources": [
+     "npm:markdown/tree-sitter-markdown-inline/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:markdown/tree-sitter-markdown-inline/queries/highlights.scm": "7b1915baef43e3e48669a79fd8da4d0a262f06dc31586cf6bd48d7fa2779c8b4"
+    }
+   },
+   "injections": {
+    "sources": [
+     {
+      "ref": "helix:markdown.inline/injections.scm",
+      "why": "the npm file has no injection.include-unnamed-children: this grammar lexes backticks, tildes and brackets inside a fence as anonymous children of code_fence_content, and excluding children (the default) shreds the content; Helix's file sets it"
+     }
+    ],
+    "files": {
+     "helix:markdown.inline/injections.scm": "51ae33c1f4b30f4c528c83b92d0fbf0bf9cc0054d8b05dd16be488621241b8e7"
+    }
+   }
+  },
+  "nginx": {
+   "highlights": {
+    "sources": [
+     "npm:nginx/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:nginx/queries/highlights.scm": "c7a67f2aa80f146d31b0d0545f3dedea5d6237f860c155bc5bcff6d56f938a65"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:nginx/queries/injections.scm"
+    ],
+    "files": {
+     "npm:nginx/queries/injections.scm": "e8bc96da2faabe257a32d805d3954e200215d94a85fce4d521530c89e0969244"
+    }
+   },
+   "folds": {
+    "sources": [
+     "npm:nginx/queries/folds.scm"
+    ],
+    "files": {
+     "npm:nginx/queries/folds.scm": "779bfcdbbd5f384096972784f43cb68047e88749150aa6e8fc2d5c52a6cee949"
+    }
+   }
+  },
+  "objc": {
+   "highlights": {
+    "sources": [
+     "npm:objc/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:objc/queries/highlights.scm": "ce7e30b5aab3d659a096812d8c227e83cd9bbb60470eb44def45bd5cb7737386"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:objc/queries/injections.scm"
+    ],
+    "files": {
+     "npm:objc/queries/injections.scm": "567f5dabcabdf8287bd92a073397aa0646aef97770fa57c0b357f0e64ddee16d"
+    }
+   },
+   "folds": {
+    "sources": [
+     "npm:objc/queries/folds.scm"
+    ],
+    "files": {
+     "npm:objc/queries/folds.scm": "ab98525c9291c1d2bfc1047ef321cd34c754f965526b7f1c4dc00c2e1f643ebf"
+    }
+   }
+  },
+  "ocaml": {
+   "highlights": {
+    "sources": [
+     "npm:ocaml/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:ocaml/queries/highlights.scm": "9bdabb038c60c159cef48f4d9f775bdd951230190dd7721da9aaea073a2c8cce"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:ocaml/injections.scm"
+    ],
+    "files": {
+     "helix:ocaml/injections.scm": "8db8eba23a8109ab14901ca62e2bcb27e2c38d96cbe0362c02dc6f71fdafd28f"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:ocaml/folds.scm"
+    ],
+    "files": {
+     "nvim:ocaml/folds.scm": "203437b7b10e5a859004ee006cf03e24a12d68d01c3961e87ec67550357d705d"
+    }
+   }
+  },
+  "ocaml_interface": {
+   "highlights": {
+    "sources": [
+     "npm:ocaml/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:ocaml/queries/highlights.scm": "9bdabb038c60c159cef48f4d9f775bdd951230190dd7721da9aaea073a2c8cce"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:ocaml-interface/injections.scm"
+    ],
+    "files": {
+     "helix:ocaml-interface/injections.scm": "8db8eba23a8109ab14901ca62e2bcb27e2c38d96cbe0362c02dc6f71fdafd28f"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:ocaml_interface/folds.scm"
+    ],
+    "files": {
+     "nvim:ocaml_interface/folds.scm": "3f84652d98726d6e943b156e53ecbb99d88a1bdd7356c415505b5637ce3ffe05",
+     "nvim:ocaml/folds.scm": "203437b7b10e5a859004ee006cf03e24a12d68d01c3961e87ec67550357d705d"
+    }
+   }
+  },
+  "ocaml_type": {
+   "highlights": {
+    "sources": [
+     "npm:ocaml/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:ocaml/queries/highlights.scm": "9bdabb038c60c159cef48f4d9f775bdd951230190dd7721da9aaea073a2c8cce"
+    }
+   }
+  },
+  "pascal": {
+   "highlights": {
+    "sources": [
+     "npm:pascal/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:pascal/queries/highlights.scm": "df7e358a6265b43769236d4f378fb0064c55af915f36f03be44350947ccd4d94"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:pascal/injections.scm"
+    ],
+    "files": {
+     "helix:pascal/injections.scm": "8db8eba23a8109ab14901ca62e2bcb27e2c38d96cbe0362c02dc6f71fdafd28f"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:pascal/folds.scm"
+    ],
+    "files": {
+     "nvim:pascal/folds.scm": "c7614d8cc1386ff649c5d2bb261731178b791ff6f15bcdf7b40ed010e0bef160"
+    }
+   }
+  },
+  "perl": {
+   "highlights": {
+    "sources": [
+     "npm:perl/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:perl/queries/highlights.scm": "715dfb71507662f0af43665370eadfacc811054b33db9d3d946c9bacf8420959"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:perl/queries/injections.scm"
+    ],
+    "files": {
+     "npm:perl/queries/injections.scm": "2d24932020a5c058c4ef456ed4516c5764909e7d40472bb345c4de11af4a5054"
+    }
+   },
+   "folds": {
+    "sources": [
+     "npm:perl/queries/folds.scm"
+    ],
+    "files": {
+     "npm:perl/queries/folds.scm": "63e44b1ebaea7ee30cf95608867b2666b95fe43024f2e35823492054214e39cc"
+    }
+   }
+  },
+  "php": {
+   "highlights": {
+    "sources": [
+     "npm:php/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:php/queries/highlights.scm": "a2a7367659cff3b4be09961c8117d69a9b8703bfc266f8092e089b1760f197e9"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:php/queries/injections.scm",
+     "npm:php/queries/injections-text.scm"
+    ],
+    "files": {
+     "npm:php/queries/injections.scm": "8ea6bcf32f19a43cb102fb962d8fa9395a51d08102c0a4495b61a923887fc5cd",
+     "npm:php/queries/injections-text.scm": "ff860723e49b56f0c4c2913e3711e76e822067e0afc8ecfbefeccf5b0c6a4385"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:php/folds.scm"
+    ],
+    "files": {
+     "nvim:php/folds.scm": "28a611e72b425f496800fd568aeb8ce3211112b44fbb7fb5c2b4b757b3148339",
+     "nvim:php_only/folds.scm": "1ef1d73c096f2aba7eac494864155dc1348099e5d54a56cf89fe36c35f23240b"
+    }
+   }
+  },
+  "php_only": {
+   "highlights": {
+    "sources": [
+     "npm:php/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:php/queries/highlights.scm": "a2a7367659cff3b4be09961c8117d69a9b8703bfc266f8092e089b1760f197e9"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:php/queries/injections.scm"
+    ],
+    "files": {
+     "npm:php/queries/injections.scm": "8ea6bcf32f19a43cb102fb962d8fa9395a51d08102c0a4495b61a923887fc5cd"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:php_only/folds.scm"
+    ],
+    "files": {
+     "nvim:php_only/folds.scm": "1ef1d73c096f2aba7eac494864155dc1348099e5d54a56cf89fe36c35f23240b"
+    }
+   }
+  },
+  "python": {
+   "highlights": {
+    "sources": [
+     "npm:python/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:python/queries/highlights.scm": "a6708f209381618e2b398972c8f1ccd892f0c064eab35a2a3f911c3e22e79a7e"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:python/injections.scm"
+    ],
+    "files": {
+     "helix:python/injections.scm": "6122c62372d8c9e54226115a1068724b45cfc6cfa0e2b96f6157b146d303ec67"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:python/folds.scm"
+    ],
+    "files": {
+     "nvim:python/folds.scm": "7ea0eb74ffee66415a3b6fd51b47873b411bc80d8eb4dfb7aa6ffa0cf7fad1f3"
+    }
+   }
+  },
+  "r": {
+   "highlights": {
+    "sources": [
+     "npm:r/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:r/queries/highlights.scm": "7fd08df9b6529a3b38507aac14da883025779f81c255a896ba961900cf0b4cd6"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:r/injections.scm"
+    ],
+    "files": {
+     "helix:r/injections.scm": "8db8eba23a8109ab14901ca62e2bcb27e2c38d96cbe0362c02dc6f71fdafd28f"
+    }
+   }
+  },
+  "ruby": {
+   "highlights": {
+    "sources": [
+     "npm:ruby/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:ruby/queries/highlights.scm": "0858de9feece6dcd3408a541f995a34918d587ac2c552096026b0e47e2b332e6"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:ruby/injections.scm"
+    ],
+    "files": {
+     "helix:ruby/injections.scm": "52e41f636d09c79d50c72d974977c9eaf0db9842f8c56d7acbf079d53e91fb5e"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:ruby/folds.scm"
+    ],
+    "files": {
+     "nvim:ruby/folds.scm": "6872cdab99e4c4efeeaecb3575fa7e98205043f1187a8e3b6d3de4bf1a8ba8b9"
+    }
+   }
+  },
+  "rust": {
+   "highlights": {
+    "sources": [
+     "npm:rust/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:rust/queries/highlights.scm": "0f0343107f14a7690157f51090a979eb8f8bfe4eada7c61763ddb4c54b1311d1"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:rust/queries/injections.scm"
+    ],
+    "files": {
+     "npm:rust/queries/injections.scm": "723146f179bc0edfba2f51731c99afce8bed3b677dfb4435c303859fae299ba5"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:rust/folds.scm"
+    ],
+    "files": {
+     "nvim:rust/folds.scm": "e990d25ccf16b731621cda0536b517267396b02c33b2e6e3b3b3c6dfb6f4c000"
+    }
+   }
+  },
+  "scala": {
+   "highlights": {
+    "sources": [
+     "npm:scala/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:scala/queries/highlights.scm": "8b3dc3bd20e05112854d3f4bd9a564fe53b762db89db9760d83d4f8e3828d0ab"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:scala/injections.scm"
+    ],
+    "files": {
+     "helix:scala/injections.scm": "cd2e2de93e38e27f0e0baf137a9a387396d08a68dd69945435a99dee1bad2add"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:scala/folds.scm"
+    ],
+    "files": {
+     "nvim:scala/folds.scm": "3a6ee04e9605a8c4bd85e88752cc074998794179b7d34f587f8f2b036f486182"
+    }
+   }
+  },
+  "sql": {
+   "highlights": {
+    "sources": [
+     "npm:sql/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:sql/queries/highlights.scm": "80e726903b67fbe471bf1272a447ab6a6758e95654f9e9c8f5c2e4af729af8de"
+    }
+   },
+   "injections": {
+    "sources": [
+     "nvim:sql/injections.scm"
+    ],
+    "files": {
+     "nvim:sql/injections.scm": "e623f01991542b9fa72383225a6fdec1da1b8d7696dd652d10e78d2ff186d089"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:sql/folds.scm"
+    ],
+    "files": {
+     "nvim:sql/folds.scm": "21163ae316e615e2b96da4ce0f4bcbc9f46a7ef28b5c09d8701a1d28ea28e8ef"
+    }
+   }
+  },
+  "swift": {
+   "highlights": {
+    "sources": [
+     "npm:swift/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:swift/queries/highlights.scm": "b0bbeb918904b252e8bd361f4afb4756647232391110a67deecbf7227464aff8"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:swift/queries/injections.scm"
+    ],
+    "files": {
+     "npm:swift/queries/injections.scm": "fd541e467fd2667ed7cfdf604b0f3b3d1ac2632791972840eaedd0b99a581e58"
+    }
+   },
+   "folds": {
+    "sources": [
+     "npm:swift/queries/folds.scm"
+    ],
+    "files": {
+     "npm:swift/queries/folds.scm": "4f00b0b392dce70a0127b67d1c7858f1074768125f3c1702b22acd036e5c9ba0"
+    }
+   }
+  },
+  "toml": {
+   "highlights": {
+    "sources": [
+     "npm:toml/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:toml/queries/highlights.scm": "2fb5c61d33a70389312254c9c392e2c5dd6313d958d6e5f8f74cadd5e0811707"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:toml/injections.scm"
+    ],
+    "files": {
+     "helix:toml/injections.scm": "8db8eba23a8109ab14901ca62e2bcb27e2c38d96cbe0362c02dc6f71fdafd28f"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:toml/folds.scm"
+    ],
+    "files": {
+     "nvim:toml/folds.scm": "b51d400c8ec94947adf98c1474364ae2210e80e71d144ce32ae276d36e993267"
+    }
+   }
+  },
+  "tsx": {
+   "highlights": {
+    "sources": [
+     "npm:javascript/queries/highlights.scm",
+     "npm:javascript/queries/highlights-jsx.scm",
+     "npm:typescript/queries/highlights.scm"
+    ],
+    "why": "tree-sitter.json lists the TypeScript file first, for earlier-pattern-wins; with the later pattern winning the generic JavaScript file goes first and the specific files after it",
+    "files": {
+     "npm:javascript/queries/highlights.scm": "d3630ae6dc9b2b27b230b5f8bb92b05cd491fb12bff353dae62a0a6d780461ee",
+     "npm:javascript/queries/highlights-jsx.scm": "0cad1712acaf40804bc5dc7c8476858752c1f549cdf7d8c63c747317be0f8fa6",
+     "npm:typescript/queries/highlights.scm": "e0c35adb819127bfd4f853fac5419e7d8ba44760246201d04a4a5ce0228a10c5"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:javascript/queries/injections.scm"
+    ],
+    "files": {
+     "npm:javascript/queries/injections.scm": "bea345407ce1f24bccf2b3c1a128acc14e19301327074285368586e793dcb86d"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:tsx/folds.scm"
+    ],
+    "files": {
+     "nvim:tsx/folds.scm": "0631577ba119c6b1f9fbabe70d70ad17ae81e4e7d8afb0e2309bd8acee0f5f76",
+     "nvim:typescript/folds.scm": "e5b1b0552e8312f1d048ecfaa9a7fc96e32533e3e173e9185dee563c473ae224",
+     "nvim:ecma/folds.scm": "a97b18e52b7bc8b70075ed1a78dad12e72e5e5ae769bb212d8276186a972dd91",
+     "nvim:jsx/folds.scm": "2010b94da6016d00ebe18e31d321df127c11aa3fb75d39ae2e2a32d1fce042ff"
+    }
+   }
+  },
+  "typescript": {
+   "highlights": {
+    "sources": [
+     "npm:javascript/queries/highlights.scm",
+     "npm:typescript/queries/highlights.scm"
+    ],
+    "why": "tree-sitter.json lists the TypeScript file first, for earlier-pattern-wins; with the later pattern winning the generic JavaScript file goes first and the specific files after it",
+    "files": {
+     "npm:javascript/queries/highlights.scm": "d3630ae6dc9b2b27b230b5f8bb92b05cd491fb12bff353dae62a0a6d780461ee",
+     "npm:typescript/queries/highlights.scm": "e0c35adb819127bfd4f853fac5419e7d8ba44760246201d04a4a5ce0228a10c5"
+    }
+   },
+   "injections": {
+    "sources": [
+     "npm:javascript/queries/injections.scm"
+    ],
+    "files": {
+     "npm:javascript/queries/injections.scm": "bea345407ce1f24bccf2b3c1a128acc14e19301327074285368586e793dcb86d"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:typescript/folds.scm"
+    ],
+    "files": {
+     "nvim:typescript/folds.scm": "e5b1b0552e8312f1d048ecfaa9a7fc96e32533e3e173e9185dee563c473ae224",
+     "nvim:ecma/folds.scm": "a97b18e52b7bc8b70075ed1a78dad12e72e5e5ae769bb212d8276186a972dd91"
+    }
+   }
+  },
+  "vb_dotnet": {},
+  "vue": {
+   "highlights": {
+    "sources": [
+     "helix:vue/highlights.scm"
+    ],
+    "files": {
+     "helix:vue/highlights.scm": "8c487f098c6a098c7be2300afd3443aa53a7fae21460c410737e1b6cc39ace80"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:vue/injections.scm"
+    ],
+    "files": {
+     "helix:vue/injections.scm": "4dc3b3b571333a154b319b997c2577cb4dead1f2480b68f26a7fa8f0d0456b70"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:vue/folds.scm"
+    ],
+    "files": {
+     "nvim:vue/folds.scm": "36aef211d764a8ebe1ce54e66f887418d908333de22cfa2a790673b588d00bb7"
+    }
+   }
+  },
+  "wat": {
+   "highlights": {
+    "sources": [
+     "npm:wast/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:wast/queries/highlights.scm": "b6921a4992e7a29adab303dcb3167ae48f29e4676b722ae8fbe55fe164d9da09"
+    }
+   }
+  },
+  "xml": {
+   "highlights": {
+    "sources": [
+     "npm:xml/queries/xml/highlights.scm"
+    ],
+    "files": {
+     "npm:xml/queries/xml/highlights.scm": "aa4a561c846928c3a4d885acbe690a60689661a45684babe16cf8b7a1509b610"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:xml/injections.scm"
+    ],
+    "files": {
+     "helix:xml/injections.scm": "8db8eba23a8109ab14901ca62e2bcb27e2c38d96cbe0362c02dc6f71fdafd28f"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:xml/folds.scm"
+    ],
+    "files": {
+     "nvim:xml/folds.scm": "253ff7e7c187d28c9621e6e1328a09d7eda1707db2eca749899cacdd9a36e181"
+    }
+   }
+  },
+  "yaml": {
+   "highlights": {
+    "sources": [
+     "npm:yaml/queries/highlights.scm"
+    ],
+    "files": {
+     "npm:yaml/queries/highlights.scm": "2fbfbbd5ca0928d0a7e09e59f8f2964b14a328a7ee0ce799270d9013dcce49a0"
+    }
+   },
+   "injections": {
+    "sources": [
+     "helix:yaml/injections.scm"
+    ],
+    "files": {
+     "helix:yaml/injections.scm": "d3075ef2c75598fef3ab60c4c9181ffcdc02cc8b9f515d82dbba4d1ae78e1f91"
+    }
+   },
+   "folds": {
+    "sources": [
+     "nvim:yaml/folds.scm"
+    ],
+    "files": {
+     "nvim:yaml/folds.scm": "a7ff158e0d3a9ac4b8e2537c542e72071ffaeca0fd0a6d15c38744941fd98111"
+    }
+   }
+  }
+ },
+ "notes": {
+  "dart/highlights": [
+   "dart/highlights (npm:dart/queries/highlights.scm): dropped pattern (#vim-match? is not evaluated by the backend): ((identifier) @variable.builtin (#vim-match? @variable.builtin \"^(abstract|as|covariant|deferred|dynamic|export|external|factory|Function|get|implements|import| ..."
+  ],
+  "dtd/injections": [
+   "dtd/injections: dropped pattern (unknown node type at 'comment) @injection.content' against our grammar): ((comment) @injection.content (#set! injection.language \"comment\"))"
+  ],
+  "elm/folds": [
+   "elm/folds (nvim:elm/folds.scm): dropped pattern (#not-has-parent? is not evaluated by the backend): ((function_call_expr) @_fn (#not-has-parent? @_fn parenthesized_expr)) @fold"
+  ],
+  "fsharp/injections": [
+   "fsharp/injections (npm:fsharp/queries/injections.scm): dropped pattern (#offset! is not evaluated by the backend): ((block_comment_content) @injection.content (#match? @injection.content \"^\\\\*\") (#offset! @injection.content 0 1 0 0) (#set! injection.language \"markdown\"))",
+   "fsharp/injections (npm:fsharp/queries/injections.scm): dropped pattern (#offset! is not evaluated by the backend): ((xml_doc) @injection.content (#offset! @injection.content 0 3 0 0) (#set! injection.language \"xml\") (#set! injection.combined))"
+  ],
+  "glsl/highlights": [
+   "glsl/highlights (npm:glsl/queries/highlights.scm): (#lua-match? @variable.builtin \"^gl_\") -> (#match? @variable.builtin \"^gl_\")",
+   "glsl/highlights (npm:glsl/queries/highlights.scm): written earlier-pattern-wins ((field_identifier) catch-all after 1, before 0 contextual patterns; (identifier) catch-all after 4, before 1 contextual patterns): patterns reversed"
+  ],
+  "go/highlights": [
+   "go/highlights (npm:go/queries/highlights.scm): written earlier-pattern-wins ((field_identifier) catch-all after 2, before 0 contextual patterns; (identifier) catch-all after 3, before 0 contextual patterns): patterns reversed"
+  ],
+  "haxe/highlights": [
+   "haxe/highlights: removed alternative \"as\" (unknown node type against our grammar)",
+   "haxe/highlights: dropped pattern (unknown field at 'constructor: (type_name) @constructor' against our grammar): (call_expression \"new\" @keyword constructor: (type_name) @constructor )"
+  ],
+  "javascript/highlights": [
+   "javascript/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)",
+   "javascript/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)"
+  ],
+  "javascript/injections": [
+   "javascript/injections (npm:javascript/queries/injections.scm): dropped pattern (#offset! is not evaluated by the backend): (call_expression function: ((identifier) @_name (#eq? @_name \"hbs\")) arguments: ((template_string) @glimmer (#offset! @glimmer 0 1 0 -1)))"
+  ],
+  "julia/highlights": [
+   "julia/highlights (npm:julia/queries/highlights.scm): dropped pattern (#has-ancestor? is not evaluated by the backend): ((identifier) @variable.builtin (#any-of? @variable.builtin \"begin\" \"end\") (#has-ancestor? @variable.builtin index_expression))"
+  ],
+  "kotlin/highlights": [
+   "kotlin/highlights: dropped pattern (unknown node type at 'quest) @operator)' against our grammar): (nullable_type (quest) @operator)",
+   "kotlin/highlights: dropped pattern (unknown node type at 'interpolation_identifier_start) @punctua' against our grammar): (string_literal (interpolation_identifier_start) @punctuation.special (interpolated_identifier) @variable)",
+   "kotlin/highlights: dropped pattern (unknown node type at 'interpolation_expression_start) @punctua' against our grammar): (string_literal (interpolation_expression_start) @punctuation.special (interpolated_expression) @none (interpolation_expression_end) @punctuation.special)",
+   "kotlin/highlights: dropped pattern (unknown node type at 'null_literal) @constant.builtin' against our grammar): (null_literal) @constant.builtin",
+   "kotlin/highlights: dropped pattern (unknown node type at 'receiver_type)' against our grammar): (function_declaration receiver: (receiver_type) (simple_identifier) @function)",
+   "kotlin/highlights: dropped pattern (unknown node type at 'receiver_type)' against our grammar): (property_declaration receiver: (receiver_type) (variable_declaration (simple_identifier) @variable.other.member))"
+  ],
+  "markdown/folds": [
+   "markdown/folds (nvim:markdown/folds.scm): removed (#trim! @fold) (it only trims a fold's trailing blank lines)",
+   "markdown/folds (nvim:markdown/folds.scm): removed (#trim! @fold) (it only trims a fold's trailing blank lines)"
+  ],
+  "objc/highlights": [
+   "objc/highlights (npm:objc/queries/highlights.scm): dropped pattern (#has-ancestor? is not evaluated by the backend): ((identifier) @property (#has-ancestor? @property struct_declaration))"
+  ],
+  "ocaml_interface/highlights": [
+   "ocaml_interface/highlights: removed alternative (shebang) (unknown node type against our grammar)"
+  ],
+  "ocaml_type/highlights": [
+   "ocaml_type/highlights: removed alternative (shebang) (unknown node type against our grammar)"
+  ],
+  "pascal/highlights": [
+   "pascal/highlights (npm:pascal/queries/highlights.scm): written earlier-pattern-wins ((typeref) catch-all after 1, before 0 contextual patterns; (identifier) catch-all after 35, before 0 contextual patterns): patterns reversed"
+  ],
+  "perl/highlights": [
+   "perl/highlights (npm:perl/queries/highlights.scm): (#lua-match? @preproc \"^#!/\") -> (#match? @preproc \"^#!/\")"
+  ],
+  "ruby/highlights": [
+   "ruby/highlights (npm:ruby/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)"
+  ],
+  "scala/highlights": [
+   "scala/highlights (npm:scala/queries/highlights.scm): written earlier-pattern-wins ((type_identifier) catch-all after 0, before 1 contextual patterns; (operator_identifier) catch-all after 4, before 0 contextual patterns): patterns reversed"
+  ],
+  "tsx/highlights": [
+   "tsx/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)",
+   "tsx/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)"
+  ],
+  "tsx/injections": [
+   "tsx/injections (npm:javascript/queries/injections.scm): dropped pattern (#offset! is not evaluated by the backend): (call_expression function: ((identifier) @_name (#eq? @_name \"hbs\")) arguments: ((template_string) @glimmer (#offset! @glimmer 0 1 0 -1)))"
+  ],
+  "typescript/highlights": [
+   "typescript/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)",
+   "typescript/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)"
+  ],
+  "typescript/injections": [
+   "typescript/injections (npm:javascript/queries/injections.scm): dropped pattern (#offset! is not evaluated by the backend): (call_expression function: ((identifier) @_name (#eq? @_name \"hbs\")) arguments: ((template_string) @glimmer (#offset! @glimmer 0 1 0 -1)))"
+  ],
+  "xml/injections": [
+   "xml/injections: dropped pattern (unknown node type at 'comment) @injection.content' against our grammar): ((comment) @injection.content (#set! injection.language \"comment\"))"
+  ]
+ }
+}

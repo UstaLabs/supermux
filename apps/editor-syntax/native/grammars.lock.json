@@ -223,15 +223,16 @@
   },
   {
    "lang": "kotlin",
-   "package": "@tree-sitter-grammars/tree-sitter-kotlin",
-   "version": "1.1.0",
-   "url": "https://registry.npmjs.org/@tree-sitter-grammars/tree-sitter-kotlin/-/tree-sitter-kotlin-1.1.0.tgz",
-   "sha256": "28916be3fdb0487dbd4fd0ea62281f969f15cab2bf13132ceb18d2fb167aa697",
+   "package": "tree-sitter-kotlin",
+   "version": "0.3.8",
+   "url": "https://registry.npmjs.org/tree-sitter-kotlin/-/tree-sitter-kotlin-0.3.8.tgz",
+   "sha256": "e2da896c8316af1d491afc69b49173da97373bb757d07f11c455a0963c62e6b0",
    "license": "MIT",
    "parserDirs": [
     "src"
    ],
-   "tables": "bundled"
+   "tables": "bundled",
+   "note": "fwcd's grammar (M2b): the one Helix, nvim-treesitter and its own queries/highlights.scm target. @tree-sitter-grammars/tree-sitter-kotlin 1.1.0 (M2a) is a rewrite with other node names and no query set anywhere."
   },
   {
    "lang": "dart",
@@ -314,17 +315,16 @@
   },
   {
    "lang": "groovy",
-   "package": "tree-sitter-groovy",
-   "version": "0.1.2",
-   "url": "https://registry.npmjs.org/tree-sitter-groovy/-/tree-sitter-groovy-0.1.2.tgz",
-   "sha256": "2d694fb9cae6c77ccffb47c00f50909f471ea7360d56a5fccb0f0a35d7d5693d",
+   "package": "murtaza64/tree-sitter-groovy",
+   "version": "git-c688bef1f7aa",
+   "url": "https://codeload.github.com/murtaza64/tree-sitter-groovy/tar.gz/c688bef1f7aa35a028a005558fc454712828d4cc",
+   "sha256": "6e5fcc90dde0cb77d15ecfebd0848cdcb6f8dd36d9e0a04dcb171f6144beb7d7",
    "license": "MIT",
    "parserDirs": [
     "src"
    ],
    "tables": "code",
-   "licenseFile": "native/licenses/tree-sitter-groovy.LICENSE",
-   "licenseSource": "no licence file upstream, checked 2026-09-25 at https://github.com/amaanq/tree-sitter-groovy/tree/v0.1.2 (70efb0b9b50f95bcbd89dcfd42b275e0304e10cf); its Cargo.toml and package.json declare MIT with this author. The file is the standard MIT text naming that author."
+   "note": "git (M2b): murtaza64's grammar, the commit Helix pins (235009aa) plus only its LICENSE; Helix and nvim-treesitter's queries target it. The npm tree-sitter-groovy 0.1.2 (M2a) is amaanq's, with no query set anywhere."
   },
   {
    "lang": "lua",
@@ -403,23 +403,16 @@
   },
   {
    "lang": "clojure",
-   "package": "tree-sitter-clojure",
-   "version": "0.4.0",
-   "url": "https://registry.npmjs.org/tree-sitter-clojure/-/tree-sitter-clojure-0.4.0.tgz",
-   "sha256": "426f85e1422e851660867d3dd767dd8c071da79651a360e88cf918e3cbe8aa72",
-   "license": "MIT",
+   "package": "sogaiu/tree-sitter-clojure",
+   "version": "git-e43eff80d17c",
+   "url": "https://codeload.github.com/sogaiu/tree-sitter-clojure/tar.gz/e43eff80d17cf34852dcd92ca5e6986d23a7040f",
+   "sha256": "61ad9510735908e6a6588b3a89a5af5659d89392e2b48663977b5fa02ea64522",
+   "license": "CC0-1.0",
    "parserDirs": [
     "src"
    ],
    "tables": "code",
-   "note": "the npm parser.c is ABI 9 (runtime 0.25 needs 13-15): fetch.sh regenerates it from the package grammar.json",
-   "regenerate": {
-    "cli": "tree-sitter-cli@0.25.10",
-    "abi": 14,
-    "parserSha256": {
-     "src": "42e64e42649964efd2301cfef23859ba050b2f54b336ee14df73f3b47c46db89"
-    }
-   }
+   "note": "git (M2b): sogaiu's grammar at the commit Helix pins, which its queries target; the npm tree-sitter-clojure 0.4.0 (M2a) is oakmac's, with other node names and an ABI 9 parser.c"
   },
   {
    "lang": "elm",

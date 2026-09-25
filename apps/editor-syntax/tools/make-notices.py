@@ -62,5 +62,21 @@ for g in lock:
           % (g['package'], g['version'], g['license'], pj.get('license'), a, r))
         continue
     w('### %s %s (%s)\n\n```\n%s\n```\n' % (g['package'], g['version'], g['license'], t))
+# The query files (src/commonMain/resources/queries), compiled into the library as text.
+q = json.load(open(os.path.join(here, 'native/queries.lock.json')))
+w('## Queries\n')
+w('The highlight, injection and fold queries are compiled into every artifact as text (the Kotlin class '
+  '`BundledQueries`, generated from `src/commonMain/resources/queries/`). Each file names its sources in its header; '
+  '`native/queries.lock.json` pins each source file by sha256 and lists every change made to it. Files from a grammar\'s '
+  'npm package are under that grammar\'s licence (above). The others:\n')
+for kind, src in q['sources'].items():
+    if 'repo' not in src: continue
+    used = sorted({r if isinstance(r, str) else r['ref'] for l in q['languages'].values() for k in l.values()
+                   for r in k['sources'] if (r if isinstance(r, str) else r['ref']).startswith(kind + ':')})
+    text = open(os.path.join(b, 'query-sources', '%s-%s-LICENSE' % (kind, src['commit'][:12])), encoding='utf-8').read().strip()
+    w('### %s at `%s` (%s)\n' % (src['repo'], src['commit'], src['license']))
+    w('Files used, from `%s/`, modified as the lock\'s notes say; the modified files are these query files themselves, '
+      'shipped as source: %s.\n' % (src['dir'], ', '.join('`%s`' % u.split(':', 1)[1] for u in used)))
+    w('```\n%s\n```\n' % text)
 open(os.path.join(here, 'THIRD-PARTY-NOTICES.md'), 'w').write('\n'.join(out) + '\n')
 print('ok', len(out))

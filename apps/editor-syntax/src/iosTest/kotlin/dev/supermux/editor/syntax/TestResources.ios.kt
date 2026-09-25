@@ -35,3 +35,7 @@ actual fun testResource(path: String): ByteArray {
         fclose(f)
     }
 }
+
+internal actual fun goldenUpdateDir(): String? = null
+
+internal actual fun writeTextFile(path: String, text: String): Unit = error("goldens are written on the JVM only")
