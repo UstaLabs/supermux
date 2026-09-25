@@ -1,4 +1,8 @@
+import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
+import java.util.zip.Deflater
+import java.util.zip.DeflaterOutputStream
+import java.util.zip.Inflater
 import org.jetbrains.kotlin.gradle.plugin.KotlinSourceSetTree
 
 plugins {
@@ -214,14 +218,14 @@ abstract class StageTestTables : DefaultTask() {
         File(dir, "fsharp.sesz").writeBytes(sesz)
         fun u32(at: Int) = (0..3).fold(0L) { v, i -> v or ((sesz[at + i].toLong() and 0xFF) shl (8 * i)) }
         val raw = ByteArray(u32(8).toInt())
-        java.util.zip.Inflater().run {
+        Inflater().run {
             setInput(sesz, 24, sesz.size - 24)
             check(inflate(raw) == raw.size) { "$src: short inflate" }
             end()
         }
         raw[raw.size / 2] = (raw[raw.size / 2].toInt() xor 0x5A).toByte()
-        val z = java.io.ByteArrayOutputStream().also { o ->
-            java.util.zip.DeflaterOutputStream(o, java.util.zip.Deflater(9)).use { it.write(raw) }
+        val z = ByteArrayOutputStream().also { o ->
+            DeflaterOutputStream(o, Deflater(9)).use { it.write(raw) }
         }.toByteArray()
         val tampered = sesz.copyOfRange(0, 24) + z
         for (i in 0..3) tampered[12 + i] = (z.size ushr (8 * i)).toByte()
