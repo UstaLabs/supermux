@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { color: red; }
+  </style>
+</head>
+<body class="x">
+  <script>
+    const n = 1 + 2;
+  </script>
+</body>
+</html>

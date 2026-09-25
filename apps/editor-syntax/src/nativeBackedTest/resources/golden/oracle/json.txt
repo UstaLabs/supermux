@@ -1,0 +1,8 @@
+1-5 tok-string-special
+8-9 tok-number
+11-15 tok-constant-builtin
+17-21 tok-constant-builtin
+24-29 tok-string-special
+31-33 tok-string
+33-35 tok-escape
+35-36 tok-string

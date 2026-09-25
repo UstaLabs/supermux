@@ -1,0 +1,10 @@
+package main
+
+import "fmt"
+
+func main() {
+    xs := make([]int, 0, 4)
+    xs = append(xs, len("ağ"))
+    fmt.Println(xs, cap(xs))
+    println("done")
+}

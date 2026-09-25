@@ -1,0 +1,13 @@
+<html>
+<body>
+<?php
+namespace App;
+
+function greet(string $name): string {
+    return "Hello, " . $name;
+}
+?>
+<p class="x"><?= greet("ağ") ?></p>
+<script>let n = 1;</script>
+</body>
+</html>

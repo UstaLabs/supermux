@@ -1,0 +1,18 @@
+package demo.app
+
+import kotlin.math.max
+
+/** A shape. */
+sealed class Shape(val name: String) {
+    abstract fun area(): Double
+
+    data class Circle(val r: Double) : Shape("circle") {
+        override fun area() = Math.PI * r * r
+    }
+}
+
+fun main(args: Array<String>) {
+    val shapes = listOf(Shape.Circle(1.5))
+    for (s in shapes) println("${s.name}: ${max(s.area(), 0.0)} ağ 😀")
+    // done
+}

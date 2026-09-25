@@ -1,0 +1,7 @@
+program Hello;
+var
+  i: Integer;
+begin
+  for i := 1 to 3 do
+    WriteLn('Hello ', i);
+end.
