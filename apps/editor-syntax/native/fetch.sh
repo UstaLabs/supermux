@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# fetch.sh: tree-sitter at the locked commit, and every grammar tarball at its locked sha256, into build/.
+# Idempotent; refuses a tarball whose sha256 differs from native/grammars.lock.json.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")/.." && pwd)"          # apps/editor-syntax
+B="$HERE/build"; mkdir -p "$B/dl" "$B/grammars"
+TS_COMMIT=$(python3 -c "import json;print(json.load(open('$HERE/native/upstream.lock.json'))['tree-sitter']['commit'])")
+if [ ! -d "$B/tree-sitter/.git" ] || [ "$(git -C "$B/tree-sitter" rev-parse HEAD)" != "$TS_COMMIT" ]; then
+  rm -rf "$B/tree-sitter"
+  git clone -q --filter=blob:none https://github.com/tree-sitter/tree-sitter "$B/tree-sitter"
+  git -C "$B/tree-sitter" checkout -q "$TS_COMMIT"
+fi
+python3 - "$HERE" <<'PY'
+import hashlib, json, os, subprocess, sys, tarfile, urllib.request
+here = sys.argv[1]; b = os.path.join(here, "build")
+for g in json.load(open(os.path.join(here, "native/grammars.lock.json")))["grammars"]:
+    if g["tables"] == "excluded":
+        continue
+    tgz = os.path.join(b, "dl", "%s-%s.tgz" % (g["lang"], g["version"]))
+    if not os.path.exists(tgz):
+        urllib.request.urlretrieve(g["url"], tgz)
+    sha = hashlib.sha256(open(tgz, "rb").read()).hexdigest()
+    if sha != g["sha256"]:
+        sys.exit("sha256 mismatch for %s: %s != %s" % (g["lang"], sha, g["sha256"]))
+    dest = os.path.join(b, "grammars", g["lang"])
+    if not os.path.isdir(dest):
+        os.makedirs(dest)
+        with tarfile.open(tgz) as t:
+            for m in t.getmembers():
+                m.name = m.name.split("/", 1)[1] if "/" in m.name else ""
+                if m.name:
+                    t.extract(m, dest)
+print("fetched")
+PY
