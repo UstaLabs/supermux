@@ -3,6 +3,7 @@
 #          build.sh ctest    : the C ABI tests (native/tests/bridge_test.c) under ASan + UBSan
 #          build.sh <target> : one native library                               -> build/natives/<target>/lib/
 #          build.sh all      : gen + every target this host can build           (+ build/natives/manifest.json)
+#          build.sh manifest : rewrite build/natives/manifest.json (libraries + code-only tables blobs)
 # Targets (all built on the Mac; the Linux and Windows ones cross-compile with zig):
 #   macos-arm64 macos-x64    libsupermux_syntax_jni.dylib (ses_* + JNI; desktop JVM)
 #   linux-x64 linux-arm64    libsupermux_syntax_jni.so    (zig, glibc 2.28, zlib compiled in)
@@ -201,29 +202,45 @@ PY
   echo "$T: exports ok"
 }
 
-# build/natives/manifest.json: every library present under build/natives/<target>/lib/.
+# build/natives/manifest.json: every library present under build/natives/<target>/lib/, and the
+# tables blob (build/gen/<lang>/<lang>.sesz) of every code-only grammar, which the app ships as a
+# resource (editor-syntax/tables/<lang>.sesz).
 manifest() {
   python3 - "$HERE" <<'PY'
 import hashlib, json, os, sys
 here = sys.argv[1]; root = os.path.join(here, "build/natives")
+sys.path.insert(0, os.path.join(here, "tools"))
+from sestables import LANG_FN
 ts = json.load(open(os.path.join(here, "native/upstream.lock.json")))["tree-sitter"]["commit"]
+def entry(path, **kw):
+    b = open(path, "rb").read()
+    return dict(kw, sha256=hashlib.sha256(b).hexdigest(), size=len(b))
 out = []
 for t in sorted(os.listdir(root)):
     lib = os.path.join(root, t, "lib")
     if not os.path.isdir(lib):
         continue
     for f in sorted(os.listdir(lib)):
-        b = open(os.path.join(lib, f), "rb").read()
-        out.append({"target": t, "file": f, "sha256": hashlib.sha256(b).hexdigest(), "size": len(b)})
-json.dump({"format": 1, "abi_version": 3, "tree_sitter_commit": ts, "libraries": out},
+        out.append(entry(os.path.join(lib, f), target=t, file=f))
+tables = []
+for g in json.load(open(os.path.join(here, "native/grammars.lock.json")))["grammars"]:
+    if g["tables"] != "code":
+        continue
+    for d in g["parserDirs"]:
+        src = os.path.join(here, "build/grammars", g["lang"], d, "parser.c")
+        lang = LANG_FN.search(open(src, encoding="utf-8").read()).group("lang")
+        tables.append(entry(os.path.join(here, "build/gen", lang, lang + ".sesz"), lang=lang, file=lang + ".sesz"))
+tables.sort(key=lambda e: e["lang"])
+json.dump({"format": 2, "abi_version": 3, "tree_sitter_commit": ts, "libraries": out, "tables": tables},
           open(os.path.join(root, "manifest.json"), "w"), indent=1)
-print("manifest: %d libraries" % len(out))
+print("manifest: %d libraries, %d code-only tables blobs" % (len(out), len(tables)))
 PY
 }
 
 case "${1:-}" in
   gen) gen ;;
   ctest) ctest ;;
+  manifest) manifest ;;
   all) gen; for t in "${TARGETS[@]}"; do build_target "$t"; done; cat "$HERE/build/natives/manifest.json" ;;
   "") echo "usage: build.sh gen|ctest|<target>|all" >&2; exit 2 ;;
   *) build_target "$1" ;;

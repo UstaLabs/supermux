@@ -8,7 +8,7 @@ package dev.supermux.editor.syntax
  * when the resource is missing.
  */
 class NativeBackend(
-    private val tables: (language: String) -> ByteArray? = { null },
+    private val tables: (language: String) -> ByteArray? = { SyntaxResources.read(tablesPath(it)) },
 ) : SyntaxBackend {
     override val languages: Set<String> by lazy { SyntaxLanguages.names().toSet() }
 

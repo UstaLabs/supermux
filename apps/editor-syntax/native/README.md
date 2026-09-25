@@ -147,6 +147,32 @@ the check on.
 
 A failed load is remembered, so a bad blob is inflated at most once.
 
+## Tables resources (code-only grammars)
+
+`build.sh` (every target, or `build.sh manifest`) lists each code-only grammar's
+`build/gen/<lang>/<lang>.sesz` in `build/natives/manifest.json` under `tables`
+(sha256 + size). Gradle's `stageTables` checks every blob against it and stages
+them as resources `editor-syntax/tables/<lang>.sesz` (29 blobs, 5.4 MB):
+- **JVM**: jvmMain resources, so the desktop jar carries them.
+- **Android**: Java resources of every variant (`variant.sources.resources`), so
+  the AAR carries them. They are read through the class loader like on the JVM,
+  so the binding needs no `Context` (the plan said assets; resources work the
+  same and keep the lookup identical to the desktop's).
+- **iOS**: a static framework has no resources of its own. `SyntaxResources`
+  looks in the app bundle, `<main bundle>/editor-syntax/tables/<lang>.sesz`,
+  then in `SyntaxResources.extraDirectories`. **Copy step for `:ios`**: run
+  `./gradlew :editor-syntax:stageTables`, then add an Xcode "Run Script" build
+  phase before "Copy Bundle Resources" finishes:
+  ```sh
+  rsync -a "$SRCROOT/../editor-syntax/build/gradle/generated/tables/editor-syntax" \
+        "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/"
+  ```
+  The iOS simulator tests point `extraDirectories` at that staged directory.
+
+`NativeBackend.ensureLanguage(lang)` provides a code-only grammar's blob from
+there on first use; a missing resource is `SyntaxException(NO_TABLES)` naming it.
+The loader then checks the blob against the SHA-256 compiled into the grammar.
+
 ## Tables as data
 
 A generated grammar is mostly parse tables. For fsharp, the tables are 11.2 MB

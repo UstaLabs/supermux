@@ -129,9 +129,11 @@ class SesBindingTest {
     fun codeOnlyGrammarNeedsTables() {
         // haskell, not the prototype's python: python is in the core set, whose tables are bundled.
         assertTrue("haskell" in SyntaxLanguages.names())
-        assertFalse(SyntaxLanguages.hasTables("haskell"))
-        val e = assertFailsWith<SyntaxException> { SyntaxParser("haskell") }
-        assertEquals(SyntaxStatus.NO_TABLES, e.status)
+        // On a device, AllGrammarsTest may have provided every code-only grammar's tables already.
+        if (!SyntaxLanguages.hasTables("haskell")) {
+            val e = assertFailsWith<SyntaxException> { SyntaxParser("haskell") }
+            assertEquals(SyntaxStatus.NO_TABLES, e.status)
+        }
         val bad = assertFailsWith<SyntaxException> { SyntaxLanguages.provideTables("haskell", ByteArray(40)) }
         assertEquals(SyntaxStatus.BAD_TABLES, bad.status)
         assertEquals(SyntaxStatus.UNKNOWN_LANGUAGE, assertFailsWith<SyntaxException> { SyntaxParser("cobol") }.status)
