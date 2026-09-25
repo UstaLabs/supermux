@@ -21,12 +21,17 @@ import dev.supermux.editor.syntax.cinterop.ses_query_captures
 import dev.supermux.editor.syntax.cinterop.ses_query_flags
 import dev.supermux.editor.syntax.cinterop.ses_query_free
 import dev.supermux.editor.syntax.cinterop.ses_query_new
+import dev.supermux.editor.syntax.cinterop.ses_query_pattern_count
+import dev.supermux.editor.syntax.cinterop.ses_query_pattern_settings
+import dev.supermux.editor.syntax.cinterop.ses_query_regex
+import dev.supermux.editor.syntax.cinterop.ses_query_regex_count
 import dev.supermux.editor.syntax.cinterop.ses_tree_changed_ranges
 import dev.supermux.editor.syntax.cinterop.ses_tree_copy
 import dev.supermux.editor.syntax.cinterop.ses_tree_edit
 import dev.supermux.editor.syntax.cinterop.ses_tree_free
 import dev.supermux.editor.syntax.cinterop.ses_tree_has_error
 import dev.supermux.editor.syntax.cinterop.ses_tree_root_sexp
+import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.CPointerVar
@@ -84,18 +89,38 @@ private val readChunk = staticCFunction { ctx: COpaquePointer?, index: UInt, out
     ctx!!.asStableRef<Reader>().get().next(index.toInt(), outLen!!)
 }
 
-private inline fun <R> withReader(source: TextSource?, block: (COpaquePointer?) -> R): R {
+/**
+ * Runs [block] with a reader for [source]. When the source threw, the C side saw the end of the
+ * document and finished normally: [cleanup] then frees what [block] returned before the source's
+ * exception is rethrown.
+ */
+private inline fun <R> withReader(source: TextSource?, cleanup: (R) -> Unit, block: (COpaquePointer?) -> R): R {
     if (source == null) return block(null)
     val reader = Reader(source)
     val ref = StableRef.create(reader)
     try {
         val r = block(ref.asCPointer())
-        reader.failure?.let { throw it }
+        reader.failure?.let { cleanup(r); throw it }
         return r
     } finally {
         reader.release()
         ref.dispose()
     }
+}
+
+/** The #match? callback's Kotlin side; a throwing matcher aborts the query (SES_ERR_CALLBACK). */
+private class Matcher(val matcher: RegexMatcher) {
+    var failure: Throwable? = null
+
+    fun match(id: Int, text: CPointer<UShortVar>?, len: Int): Int {
+        if (failure != null) return -1
+        val s = if (text == null || len == 0) "" else CharArray(len) { text[it].toInt().toChar() }.concatToString()
+        return try { if (matcher.matches(id, s)) 1 else 0 } catch (t: Throwable) { failure = t; -1 }
+    }
+}
+
+private val matchRegex = staticCFunction { ctx: COpaquePointer?, id: UInt, text: CPointer<UShortVar>?, len: UInt ->
+    ctx!!.asStableRef<Matcher>().get().match(id.toInt(), text, len.toInt())
 }
 
 internal actual object Ses {
@@ -116,7 +141,9 @@ internal actual object Ses {
 
     actual fun parse(parser: Long, old: Long, source: TextSource, status: IntArray): Long = memScoped {
         val st = alloc<IntVar>()
-        val t = withReader(source) { ctx -> ses_parser_parse(parser.toCPointer(), old.toCPointer(), readChunk, ctx, st.ptr) }
+        val t = withReader(source, cleanup = { ses_tree_free(it) }) { ctx ->
+            ses_parser_parse(parser.toCPointer(), old.toCPointer(), readChunk, ctx, st.ptr)
+        }
         status[0] = st.value
         t.toLong()
     }
@@ -172,18 +199,40 @@ internal actual object Ses {
         s.readBytes(len.value.toInt())
     }
     actual fun queryFlags(query: Long): Int = ses_query_flags(query.toCPointer()).toInt()
+    actual fun queryPatternCount(query: Long): Int = ses_query_pattern_count(query.toCPointer()).toInt()
+    actual fun queryRegexCount(query: Long): Int = ses_query_regex_count(query.toCPointer()).toInt()
+    actual fun queryRegex(query: Long, id: Int): ByteArray = memScoped {
+        val len = alloc<UIntVar>()
+        val s = ses_query_regex(query.toCPointer(), id.toUInt(), len.ptr) ?: return ByteArray(0)
+        s.readBytes(len.value.toInt())
+    }
+    actual fun queryPatternSettings(query: Long, pattern: Int): ByteArray = memScoped {
+        val len = alloc<UIntVar>()
+        val s = ses_query_pattern_settings(query.toCPointer(), pattern.toUInt(), len.ptr) ?: return ByteArray(0)
+        s.reinterpret<ByteVar>().readBytes(len.value.toInt())
+    }
 
-    actual fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?): IntArray = memScoped {
+    actual fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?): IntArray = memScoped {
         val out = alloc<CPointerVar<IntVar>>()
+        out.value = null
         val n = alloc<UIntVar>()
-        val st = withReader(source) { ctx ->
-            ses_query_captures(
-                query.toCPointer(), tree.toCPointer(), start.toUInt(), end.toUInt(),
-                if (ctx == null) null else readChunk, ctx, out.ptr, n.ptr,
-            )
+        val matcher = match?.let { Matcher(it) }
+        val mref = matcher?.let { StableRef.create(it) }
+        try {
+            // A throwing source: the C side finished (it saw the end of the document), so free its buffer.
+            val st = withReader(source, cleanup = { ses_free(out.value) }) { ctx ->
+                ses_query_captures(
+                    query.toCPointer(), tree.toCPointer(), start.toUInt(), end.toUInt(),
+                    if (ctx == null) null else readChunk, ctx,
+                    if (mref == null) null else matchRegex, mref?.asCPointer(), out.ptr, n.ptr,
+                )
+            }
+            matcher?.failure?.let { throw it } // SES_ERR_CALLBACK: the C side freed its buffer already
+            check(st, "queryCaptures")
+            takeInts(out.value, n.value.toInt())
+        } finally {
+            mref?.dispose()
         }
-        check(st, "queryCaptures")
-        takeInts(out.value, n.value.toInt())
     }
 
     /** Copy a ses_*-returned int buffer into an IntArray and free it. */

@@ -5,8 +5,12 @@ data class Span(val start: Int, val end: Int, val capture: String) {
     override fun toString() = "$start-$end $capture"
 }
 
-/** A String read in [size]-unit chunks (size 3 splits surrogate pairs on purpose). */
-class ChunkedSource(private val text: String, private val size: Int = Int.MAX_VALUE) : TextSource {
+/**
+ * A String read in [size]-unit chunks (size 3 splits surrogate pairs on purpose). The default is a
+ * bounded chunk, like a rope's: tree-sitter asks again at many positions, and a whole-rest-of-the-
+ * document substring per call would make every read O(n).
+ */
+class ChunkedSource(private val text: String, private val size: Int = 4096) : TextSource {
     override fun chunkAt(index: Int): CharSequence =
         if (index >= text.length) "" else text.substring(index, minOf(text.length.toLong(), index.toLong() + size).toInt())
 }
@@ -15,7 +19,7 @@ class ChunkedSource(private val text: String, private val size: Int = Int.MAX_VA
  * The M0 SpikeHighlighter contract on the ses_* binding: parse, highlight, one edit + incremental
  * reparse. NO offset conversion of any kind: tree-sitter's UTF-16 results are used as they come.
  */
-class SesHighlighter(language: String, private val chunk: Int = Int.MAX_VALUE) : AutoCloseable {
+class SesHighlighter(language: String, private val chunk: Int = 4096) : AutoCloseable {
     private val parser = SyntaxParser(language)
     private val lang = language
     var source = ""; private set
@@ -31,7 +35,7 @@ class SesHighlighter(language: String, private val chunk: Int = Int.MAX_VALUE) :
     fun highlights(query: String, from: Int = 0, to: Int = source.length): List<Span> =
         SyntaxQuery(lang, query).use { q ->
             val a = q.captures(tree!!, from, to, ChunkedSource(source, chunk))
-            List(a.size / 3) { Span(a[3 * it], a[3 * it + 1], q.captureNames[a[3 * it + 2]]) }
+            List(a.size / 4) { Span(a[4 * it], a[4 * it + 1], q.captureNames[a[4 * it + 2]]) }
                 .sortedWith(compareBy<Span>({ it.start }, { -it.end }, { it.capture }))
         }
 

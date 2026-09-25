@@ -36,7 +36,7 @@ extern "C" {
 #endif
 
 /** ABI version implemented by this header. Bumped on any incompatible change. */
-#define SES_ABI_VERSION 1u
+#define SES_ABI_VERSION 2u
 
 typedef int32_t ses_status;
 #define SES_OK 0
@@ -57,6 +57,8 @@ typedef int32_t ses_status;
 #define SES_ERR_INCOMPATIBLE_LANGUAGE (-12)
 /** The parse hit the timeout (ses_parser_set_timeout_micros) or was cancelled. */
 #define SES_ERR_TIMEOUT (-13)
+/** A ses_match_fn failed (returned < 0); the caller's own error is pending on its side. */
+#define SES_ERR_CALLBACK (-14)
 
 typedef struct ses_parser ses_parser;
 typedef struct ses_tree ses_tree;
@@ -69,6 +71,16 @@ typedef struct ses_query ses_query;
  * surrogate pair; tree-sitter asks again from the pair's start.
  */
 typedef const uint16_t *(*ses_read_fn)(void *ctx, uint32_t index, uint32_t *out_len);
+
+/**
+ * Regex callback for the #match? family: does the query's regex [regex_id] (ses_query_regex) match
+ * anywhere in [text] ([len] UTF-16 units; [text] is never NULL)? Return 1 for a match, 0 for none,
+ * < 0 to abort the query with SES_ERR_CALLBACK.
+ */
+typedef int32_t (*ses_match_fn)(void *ctx, uint32_t regex_id, const uint16_t *text, uint32_t len);
+
+/** ses_query_captures keeps at most this many matches in progress (ts_query_cursor_set_match_limit). */
+#define SES_QUERY_MATCH_LIMIT 65536u
 
 SES_API uint32_t ses_abi_version(void);
 
@@ -141,21 +153,43 @@ SES_API void ses_query_free(ses_query *query);
 SES_API uint32_t ses_query_capture_count(const ses_query *query);
 /** The capture's name (UTF-8, NOT NUL-terminated: *out_len bytes); valid while the query lives. */
 SES_API const char *ses_query_capture_name(const ses_query *query, uint32_t index, uint32_t *out_len);
-/** Bit 0: the query uses #match?-family predicates, which this ABI does NOT evaluate (they pass). */
+/** Bit 0: the query uses #lua-match?, which this ABI does NOT evaluate (those predicates pass). */
 SES_API uint32_t ses_query_flags(const ses_query *query);
+SES_API uint32_t ses_query_pattern_count(const ses_query *query);
+/** Distinct regexes of the query's #match? / #not-match? / #any-match? / #any-not-match? predicates. */
+SES_API uint32_t ses_query_regex_count(const ses_query *query);
+/** Regex [id]'s pattern (UTF-8, NOT NUL-terminated: *out_len bytes); valid while the query lives. */
+SES_API const char *ses_query_regex(const ses_query *query, uint32_t id, uint32_t *out_len);
+
+#define SES_SETTING_SET 1u    /* #set! [@capture] key [value] */
+#define SES_SETTING_IS 2u     /* #is? [@capture] property [value] */
+#define SES_SETTING_IS_NOT 3u /* #is-not? [@capture] property [value] */
+/**
+ * Pattern [pattern]'s directives, in source order, packed as *out_len bytes (NULL / 0 when it has
+ * none; valid while the query lives). Each record, little-endian:
+ *   u8 kind (SES_SETTING_*), i32 capture id (-1: none), u32 key_len, key (UTF-8),
+ *   u32 value_len (0xFFFFFFFF: no value), value (UTF-8).
+ * Other directives (#offset!, #select-adjacent!, ...) and unknown predicates are ignored.
+ */
+SES_API const uint8_t *ses_query_pattern_settings(const ses_query *query, uint32_t pattern, uint32_t *out_len);
 
 /**
  * Run [query] over the nodes of [tree] that intersect UTF-16 [start, end), in tree-sitter capture
  * order. Text predicates (#eq? #not-eq? #any-eq? #any-not-eq? #any-of? #not-any-of?) are evaluated
- * against the document read through [read] (may be NULL when the query has none). Result: a packed
- * [start, end, captureIndex]* int array in *out (free with ses_free), *out_count ints (3 per capture).
+ * against the document read through [read]; the #match? family additionally through [match]. A
+ * match failing a predicate is removed from the cursor (ts_query_cursor_remove_match), so later
+ * captures of that match are dropped too. With [read] NULL no text predicate is evaluated, with
+ * [match] NULL no #match?-family one (they pass). Result: a packed
+ * [start, end, captureIndex, patternIndex]* int array in *out (free with ses_free), *out_count ints
+ * (4 per capture). At most SES_QUERY_MATCH_LIMIT matches are kept in progress.
  */
 SES_API ses_status ses_query_captures(const ses_query *query, const ses_tree *tree, uint32_t start,
-                                      uint32_t end, ses_read_fn read, void *ctx, int32_t **out,
-                                      uint32_t *out_count);
+                                      uint32_t end, ses_read_fn read, void *read_ctx, ses_match_fn match,
+                                      void *match_ctx, int32_t **out, uint32_t *out_count);
 SES_API ses_status ses_query_captures_utf16(const ses_query *query, const ses_tree *tree,
                                             uint32_t start, uint32_t end, const uint16_t *text,
-                                            uint32_t len, int32_t **out, uint32_t *out_count);
+                                            uint32_t len, ses_match_fn match, void *match_ctx,
+                                            int32_t **out, uint32_t *out_count);
 
 /** Frees any buffer this ABI returned (sexp strings, int arrays). NULL is a no-op. */
 SES_API void ses_free(void *ptr);

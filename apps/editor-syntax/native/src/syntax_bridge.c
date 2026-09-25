@@ -29,12 +29,13 @@ typedef struct {
 
 typedef struct {
   int op;
-  bool positive;      /* eq? vs not-eq? */
+  bool positive;      /* eq? vs not-eq?, match? vs not-match? */
   bool match_all;     /* eq? (every node) vs any-eq? (some node) */
   uint32_t capture;   /* left-hand capture id */
   int32_t other;      /* right-hand capture id, or -1 when comparing against values */
   u16str *values;
   uint32_t value_count;
+  uint32_t regex;     /* P_MATCH: index into regex_ids */
 } predicate;
 
 struct ses_query {
@@ -46,6 +47,10 @@ struct ses_query {
   predicate *preds;
   uint16_t *u16_pool;
   u16str *vals;
+  uint32_t regex_count;
+  uint32_t *regex_ids;  /* the string value id of each distinct regex */
+  uint32_t *set_start;  /* pattern_count + 1 offsets into settings */
+  uint8_t *settings;    /* packed directive records, see ses_query_pattern_settings */
 };
 
 uint32_t ses_abi_version(void) { return SES_ABI_VERSION; }
@@ -246,6 +251,56 @@ static u16str *add_value(ses_query *q, uint32_t id, uint32_t *vc, uint32_t *pool
   return slot;
 }
 
+typedef struct {
+  uint8_t *b;
+  size_t n, cap;
+  bool oom;
+} bytes;
+
+static void put(bytes *o, const void *p, size_t n) {
+  if (o->oom) return;
+  if (o->n + n > o->cap) {
+    size_t cap = o->cap * 2 + n + 64;
+    uint8_t *b = realloc(o->b, cap);
+    if (!b) { o->oom = true; return; }
+    o->b = b; o->cap = cap;
+  }
+  memcpy(o->b + o->n, p, n);
+  o->n += n;
+}
+
+static void put32(bytes *o, uint32_t v) {
+  uint8_t b[4] = {(uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24)};
+  put(o, b, 4);
+}
+
+static uint32_t regex_id(ses_query *q, uint32_t value_id) {
+  for (uint32_t i = 0; i < q->regex_count; i++)
+    if (q->regex_ids[i] == value_id) return i;
+  q->regex_ids[q->regex_count] = value_id;
+  return q->regex_count++;
+}
+
+/* One directive record (see ses_query_pattern_settings); a directive without a key is ignored. */
+static void put_setting(ses_query *q, bytes *o, uint8_t kind, const TSQueryPredicateStep *s, uint32_t k, uint32_t e) {
+  uint32_t j = k + 1, kl, vl;
+  int32_t cap = -1;
+  if (j < e && s[j].type == STEP_CAPTURE) cap = (int32_t)s[j++].value_id;
+  if (j >= e || s[j].type != STEP_STRING) return;
+  const char *key = ts_query_string_value_for_id(q->ts, s[j++].value_id, &kl);
+  put(o, &kind, 1);
+  put32(o, (uint32_t)cap);
+  put32(o, kl);
+  put(o, key, kl);
+  if (j < e && s[j].type == STEP_STRING) {
+    const char *v = ts_query_string_value_for_id(q->ts, s[j].value_id, &vl);
+    put32(o, vl);
+    put(o, v, vl);
+  } else {
+    put32(o, 0xFFFFFFFFu);
+  }
+}
+
 /* SES_ERR_QUERY for a malformed text predicate (wrong arity, a capture where a string belongs). */
 static ses_status build_predicates(ses_query *q) {
   TSQuery *tq = q->ts;
@@ -268,10 +323,14 @@ static ses_status build_predicates(ses_query *q) {
   q->preds = calloc(total ? total : 1, sizeof(predicate));
   q->u16_pool = malloc((u16_total ? u16_total : 1) * sizeof(uint16_t));
   q->vals = calloc(strings + 1, sizeof(u16str));
-  if (!q->pred_start || !q->preds || !q->u16_pool || !q->vals) return SES_ERR_OUT_OF_MEMORY;
+  q->regex_ids = calloc(total + 1, sizeof(uint32_t));
+  q->set_start = calloc(np + 1, sizeof(uint32_t));
+  if (!q->pred_start || !q->preds || !q->u16_pool || !q->vals || !q->regex_ids || !q->set_start) return SES_ERR_OUT_OF_MEMORY;
+  bytes set = {0};
   uint32_t pc = 0, pool = 0, vc = 0;
   for (uint32_t i = 0; i < np; i++) {
     q->pred_start[i] = pc;
+    q->set_start[i] = (uint32_t)set.n;
     uint32_t steps;
     const TSQueryPredicateStep *s = ts_query_predicates_for_pattern(tq, i, &steps);
     for (uint32_t k = 0; k < steps;) {
@@ -283,30 +342,46 @@ static ses_status build_predicates(ses_query *q) {
       pr.other = -1;
       bool eq = is(name, nl, "eq?"), neq = is(name, nl, "not-eq?"), aeq = is(name, nl, "any-eq?"), aneq = is(name, nl, "any-not-eq?");
       bool anyof = is(name, nl, "any-of?"), nanyof = is(name, nl, "not-any-of?");
-      bool match = is(name, nl, "match?") || is(name, nl, "not-match?") || is(name, nl, "any-match?") ||
-                   is(name, nl, "any-not-match?") || is(name, nl, "lua-match?");
+      bool m = is(name, nl, "match?"), nm = is(name, nl, "not-match?"), am = is(name, nl, "any-match?"),
+           anm = is(name, nl, "any-not-match?");
       if (eq || neq || aeq || aneq) {
-        if (n != 3 || s[k + 1].type != STEP_CAPTURE) return SES_ERR_QUERY;
+        if (n != 3 || s[k + 1].type != STEP_CAPTURE) goto malformed;
         pr.op = P_EQ; pr.positive = eq || aeq; pr.match_all = eq || neq; pr.capture = s[k + 1].value_id;
         if (s[k + 2].type == STEP_CAPTURE) pr.other = (int32_t)s[k + 2].value_id;
         else { pr.values = add_value(q, s[k + 2].value_id, &vc, &pool); pr.value_count = 1; }
         q->preds[pc++] = pr;
       } else if (anyof || nanyof) {
-        if (n < 2 || s[k + 1].type != STEP_CAPTURE) return SES_ERR_QUERY;
+        if (n < 2 || s[k + 1].type != STEP_CAPTURE) goto malformed;
         for (uint32_t j = k + 2; j < e; j++)
-          if (s[j].type != STEP_STRING) return SES_ERR_QUERY;
+          if (s[j].type != STEP_STRING) goto malformed;
         pr.op = P_ANY_OF; pr.positive = anyof; pr.capture = s[k + 1].value_id; pr.values = &q->vals[vc];
         for (uint32_t j = k + 2; j < e; j++) add_value(q, s[j].value_id, &vc, &pool);
         pr.value_count = n - 2;
         q->preds[pc++] = pr;
-      } else if (match) {
-        q->flags |= 1u; /* not evaluated: see ses_query_flags */
-      } /* directives (#set! #is? #offset! ...) and unknown predicates: ignored, like a filter-less engine */
+      } else if (m || nm || am || anm) {
+        if (n != 3 || s[k + 1].type != STEP_CAPTURE || s[k + 2].type != STEP_STRING) goto malformed;
+        pr.op = P_MATCH; pr.positive = m || am; pr.match_all = m || nm; pr.capture = s[k + 1].value_id;
+        pr.regex = regex_id(q, s[k + 2].value_id);
+        q->preds[pc++] = pr;
+      } else if (is(name, nl, "lua-match?")) {
+        q->flags |= 1u; /* Lua patterns: not evaluated, see ses_query_flags */
+      } else if (is(name, nl, "set!")) {
+        put_setting(q, &set, SES_SETTING_SET, s, k, e);
+      } else if (is(name, nl, "is?")) {
+        put_setting(q, &set, SES_SETTING_IS, s, k, e);
+      } else if (is(name, nl, "is-not?")) {
+        put_setting(q, &set, SES_SETTING_IS_NOT, s, k, e);
+      } /* other directives (#offset! #select-adjacent! ...) and unknown predicates: ignored */
       k = e + 1;
     }
   }
   q->pred_start[np] = pc;
-  return SES_OK;
+  q->set_start[np] = (uint32_t)set.n;
+  q->settings = set.b;
+  return set.oom ? SES_ERR_OUT_OF_MEMORY : SES_OK;
+malformed:
+  q->settings = set.b; /* freed with the query */
+  return SES_ERR_QUERY;
 }
 
 ses_query *ses_query_new(const char *language, const char *src, uint32_t len, uint32_t *err_offset,
@@ -340,6 +415,9 @@ void ses_query_free(ses_query *q) {
   free(q->preds);
   free(q->vals);
   free(q->u16_pool);
+  free(q->regex_ids);
+  free(q->set_start);
+  free(q->settings);
   free(q);
 }
 
@@ -354,19 +432,39 @@ const char *ses_query_capture_name(const ses_query *q, uint32_t i, uint32_t *len
 }
 
 uint32_t ses_query_flags(const ses_query *q) { return q ? q->flags : 0; }
+uint32_t ses_query_pattern_count(const ses_query *q) { return q ? q->pattern_count : 0; }
+uint32_t ses_query_regex_count(const ses_query *q) { return q ? q->regex_count : 0; }
 
-/* Text of UTF-16 [s, e) through the reader into a growing scratch buffer. */
+const char *ses_query_regex(const ses_query *q, uint32_t id, uint32_t *len) {
+  uint32_t l = 0;
+  const char *r = q && id < q->regex_count ? ts_query_string_value_for_id(q->ts, q->regex_ids[id], &l) : NULL;
+  if (len) *len = l;
+  return r;
+}
+
+const uint8_t *ses_query_pattern_settings(const ses_query *q, uint32_t pattern, uint32_t *len) {
+  uint32_t a = 0, b = 0;
+  if (q && pattern < q->pattern_count) { a = q->set_start[pattern]; b = q->set_start[pattern + 1]; }
+  if (len) *len = b - a;
+  return b > a ? q->settings + a : NULL;
+}
+
+/* Text of UTF-16 [s, e) through the reader into a growing scratch buffer; the regex callback. A
+   failure (out of memory, the callback) is recorded in err and ends the query. */
 typedef struct {
   reader r;
+  ses_match_fn match;
+  void *match_ctx;
   uint16_t *buf;
   uint32_t cap;
+  ses_status err;
 } texter;
 
 static bool text_of(texter *tx, uint32_t s, uint32_t e, u16str *out) {
   uint32_t n = e - s;
   if (n > tx->cap) {
     uint16_t *b = realloc(tx->buf, n * sizeof(uint16_t));
-    if (!b) return false;
+    if (!b) { tx->err = SES_ERR_OUT_OF_MEMORY; return false; }
     tx->buf = b; tx->cap = n;
   }
   uint32_t got = 0;
@@ -391,10 +489,21 @@ static bool node_text_is(texter *tx, TSNode n, u16str v) {
   return text_of(tx, s, e, &t) && u16eq(t, v);
 }
 
+/* Does the regex match [n]'s text? Sets tx->err on failure. */
+static bool node_matches(texter *tx, TSNode n, uint32_t regex) {
+  static const uint16_t empty = 0;
+  u16str t;
+  if (!text_of(tx, ts_node_start_byte(n) / 2, ts_node_end_byte(n) / 2, &t)) return false;
+  int32_t r = tx->match(tx->match_ctx, regex, t.len ? t.s : &empty, t.len);
+  if (r < 0) { tx->err = SES_ERR_CALLBACK; return false; }
+  return r > 0;
+}
+
 static bool predicates_pass(const ses_query *q, const TSQueryMatch *m, texter *tx) {
   for (uint32_t pi = q->pred_start[m->pattern_index]; pi < q->pred_start[m->pattern_index + 1]; pi++) {
     const predicate *p = &q->preds[pi];
     if (!tx->r.fn) continue; /* no text: cannot evaluate (documented) */
+    if (p->op == P_MATCH && !tx->match) continue; /* no regex engine: likewise */
     bool any = false, all = true, seen = false;
     for (uint16_t c = 0; c < m->capture_count; c++) {
       if (m->captures[c].index != p->capture) continue;
@@ -411,7 +520,7 @@ static bool predicates_pass(const ses_query *q, const TSQueryMatch *m, texter *t
           u16str t; uint16_t small[256]; uint16_t *heap = NULL;
           if (!text_of(tx, os, oe, &t)) return false;
           uint16_t *keep = t.len <= 256 ? small : (heap = malloc(t.len * 2));
-          if (!keep) return false;
+          if (!keep) { tx->err = SES_ERR_OUT_OF_MEMORY; return false; }
           memcpy(keep, t.s, t.len * 2);
           u16str ov = {keep, t.len};
           ok = node_text_is(tx, n, ov);
@@ -421,11 +530,14 @@ static bool predicates_pass(const ses_query *q, const TSQueryMatch *m, texter *t
         ok = ok == p->positive;
       } else if (p->op == P_EQ) {
         ok = node_text_is(tx, n, p->values[0]) == p->positive;
+      } else if (p->op == P_MATCH) {
+        ok = node_matches(tx, n, p->regex) == p->positive;
       } else {
         bool in = false;
         for (uint32_t v = 0; v < p->value_count && !in; v++) in = node_text_is(tx, n, p->values[v]);
         ok = in == p->positive;
       }
+      if (tx->err) return false;
       any = any || ok; all = all && ok;
     }
     bool pass = p->op == P_ANY_OF ? all : (p->match_all ? all : (seen && any));
@@ -435,26 +547,28 @@ static bool predicates_pass(const ses_query *q, const TSQueryMatch *m, texter *t
 }
 
 ses_status ses_query_captures(const ses_query *q, const ses_tree *t, uint32_t start, uint32_t end, ses_read_fn fn,
-                              void *ctx, int32_t **out, uint32_t *count) {
+                              void *ctx, ses_match_fn match, void *match_ctx, int32_t **out, uint32_t *count) {
   if (!q || !t || !out || !count || end < start) return SES_ERR_INVALID_ARGUMENT;
   if (ts_tree_language(TREE(t)) != q->lang) return SES_ERR_INVALID_ARGUMENT;
   TSQueryCursor *cur = ts_query_cursor_new();
   if (!cur) return SES_ERR_OUT_OF_MEMORY;
   ts_query_cursor_set_byte_range(cur, start * 2, end * 2);
+  ts_query_cursor_set_match_limit(cur, SES_QUERY_MATCH_LIMIT);
   ts_query_cursor_exec(cur, q->ts, ts_tree_root_node(TREE(t)));
-  uint32_t cap = 3 * 64, n = 0;
+  uint32_t cap = 4 * 64, n = 0;
   int32_t *a = malloc(cap * sizeof(int32_t));
-  texter tx = {{fn, ctx}, NULL, 0};
+  texter tx = {{fn, ctx}, match, match_ctx, NULL, 0, SES_OK};
   ses_status st = a ? SES_OK : SES_ERR_OUT_OF_MEMORY;
   TSQueryMatch m;
   uint32_t ci;
   while (st == SES_OK && ts_query_cursor_next_capture(cur, &m, &ci)) {
     if (q->pred_start[m.pattern_index] != q->pred_start[m.pattern_index + 1] && !predicates_pass(q, &m, &tx)) {
+      if (tx.err) { st = tx.err; break; }
       ts_query_cursor_remove_match(cur, m.id);
       continue;
     }
     TSNode node = m.captures[ci].node;
-    if (n + 3 > cap) {
+    if (n + 4 > cap) {
       int32_t *b = realloc(a, (cap *= 2) * sizeof(int32_t));
       if (!b) { st = SES_ERR_OUT_OF_MEMORY; break; }
       a = b;
@@ -462,6 +576,7 @@ ses_status ses_query_captures(const ses_query *q, const ses_tree *t, uint32_t st
     a[n++] = (int32_t)(ts_node_start_byte(node) / 2);
     a[n++] = (int32_t)(ts_node_end_byte(node) / 2);
     a[n++] = (int32_t)m.captures[ci].index;
+    a[n++] = (int32_t)m.pattern_index;
   }
   free(tx.buf);
   ts_query_cursor_delete(cur);
@@ -472,7 +587,8 @@ ses_status ses_query_captures(const ses_query *q, const ses_tree *t, uint32_t st
 }
 
 ses_status ses_query_captures_utf16(const ses_query *q, const ses_tree *t, uint32_t start, uint32_t end,
-                                    const uint16_t *text, uint32_t len, int32_t **out, uint32_t *count) {
+                                    const uint16_t *text, uint32_t len, ses_match_fn match, void *match_ctx,
+                                    int32_t **out, uint32_t *count) {
   buffer b = {text, len};
-  return ses_query_captures(q, t, start, end, text ? buffer_read : NULL, &b, out, count);
+  return ses_query_captures(q, t, start, end, text ? buffer_read : NULL, &b, match, match_ctx, out, count);
 }

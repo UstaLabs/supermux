@@ -19,6 +19,12 @@ internal actual object Ses {
         fun chunk(index: Int): String = source.chunkAt(index).toString()
     }
 
+    /** What the C matcher calls back for the #match? family: `boolean match(int, String)`. */
+    private class MatcherJni(private val matcher: RegexMatcher) {
+        @Suppress("unused") // called from JNI
+        fun match(id: Int, text: String): Boolean = matcher.matches(id, text)
+    }
+
     @JvmStatic actual external fun abiVersion(): Int
     @JvmStatic actual external fun languageCount(): Int
     @JvmStatic actual external fun languageName(index: Int): String
@@ -48,8 +54,12 @@ internal actual object Ses {
     @JvmStatic actual external fun queryCaptureCount(query: Long): Int
     @JvmStatic actual external fun queryCaptureName(query: Long, index: Int): ByteArray
     @JvmStatic actual external fun queryFlags(query: Long): Int
+    @JvmStatic actual external fun queryPatternCount(query: Long): Int
+    @JvmStatic actual external fun queryRegexCount(query: Long): Int
+    @JvmStatic actual external fun queryRegex(query: Long, id: Int): ByteArray
+    @JvmStatic actual external fun queryPatternSettings(query: Long, pattern: Int): ByteArray
 
-    @JvmStatic private external fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: Any?): IntArray
-    actual fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?): IntArray =
-        queryCaptures(query, tree, start, end, source?.let { TextSourceJni(it) } as Any?)
+    @JvmStatic private external fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: Any?, matcher: Any?): IntArray
+    actual fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?): IntArray =
+        queryCaptures(query, tree, start, end, source?.let { TextSourceJni(it) } as Any?, match?.let { MatcherJni(it) } as Any?)
 }

@@ -10,7 +10,7 @@ package dev.supermux.editor.syntax
  */
 
 object SyntaxLanguages {
-    const val ABI_VERSION = 1
+    const val ABI_VERSION = 2
 
     /** Every compiled-in grammar (code); [hasTables] says whether it is usable yet. */
     fun names(): List<String> = List(Ses.languageCount()) { Ses.languageName(it) }
@@ -80,30 +80,88 @@ class SyntaxTree internal constructor(private var ptr: Long) : AutoCloseable {
 }
 
 class SyntaxQuery(val language: String, source: String) : AutoCloseable {
-    private var ptr: Long
-    val captureNames: List<String>
-    /** Bit 0: uses #match?-family predicates, which the native side does not evaluate yet. */
-    val flags: Int
-
-    init {
+    private var ptr: Long = run {
         SyntaxLanguages
         val err = IntArray(3)
-        ptr = Ses.queryNew(language, source.encodeToByteArray(), err)
-        if (ptr == 0L) throw SyntaxException("query: error type ${err[2]} at byte ${err[1]}", err[0])
-        captureNames = List(Ses.queryCaptureCount(ptr)) { Ses.queryCaptureName(ptr, it).decodeToString() }
-        flags = Ses.queryFlags(ptr)
+        val p = Ses.queryNew(language, source.encodeToByteArray(), err)
+        if (p == 0L) throw SyntaxException("query: error type ${err[2]} at byte ${err[1]}", err[0])
+        p
     }
+    // Everything below runs after queryNew: a failure must free the native query (guarded).
+    val captureNames: List<String> = guarded { List(Ses.queryCaptureCount(ptr)) { Ses.queryCaptureName(ptr, it).decodeToString() } }
+    /** Bit 0: uses #lua-match?, which is not evaluated (those predicates pass). */
+    val flags: Int = guarded { Ses.queryFlags(ptr) }
+    val patternCount: Int = guarded { Ses.queryPatternCount(ptr) }
+
+    /** The #match?-family regexes, compiled once per query (Kotlin Regex, found anywhere in the node text). */
+    private val regexes: List<Regex> = guarded {
+        List(Ses.queryRegexCount(ptr)) { id ->
+            val pattern = Ses.queryRegex(ptr, id).decodeToString()
+            try {
+                Regex(pattern)
+            } catch (e: IllegalArgumentException) {
+                throw SyntaxException("query: #match? regex /$pattern/ does not compile: ${e.message}", SyntaxStatus.QUERY)
+            }
+        }
+    }
+    private val matcher: RegexMatcher? =
+        if (regexes.isEmpty()) null else RegexMatcher { id, text -> regexes[id].containsMatchIn(text) }
+
+    private inline fun <T> guarded(block: () -> T): T =
+        try { block() } catch (t: Throwable) { close(); throw t }
 
     /**
-     * Captures of nodes intersecting UTF-16 [start, end): packed [start, end, captureIndex]* in
-     * UTF-16 units, in tree-sitter's capture order. [text] feeds #eq?/#any-of? predicates.
+     * Captures of nodes intersecting UTF-16 [start, end): packed [start, end, captureIndex,
+     * patternIndex]* in UTF-16 units, in tree-sitter's capture order. [text] feeds the text
+     * predicates (#eq?, #any-of?, and the #match? family, evaluated with Kotlin Regex); without it
+     * they pass. A match that fails a predicate is dropped whole, so with several patterns
+     * capturing one node the first pattern that survives its predicates comes first.
      */
     fun captures(tree: SyntaxTree, start: Int, end: Int, text: TextSource? = null): IntArray {
         check(ptr != 0L) { "query closed" }
-        return Ses.queryCaptures(ptr, tree.live(), start, end, text)
+        return Ses.queryCaptures(ptr, tree.live(), start, end, text, matcher)
+    }
+
+    /**
+     * Pattern [pattern]'s directives: `#set! key [value]` as `key` -> value, and `#is? prop [value]` /
+     * `#is-not? prop [value]` as `"is?:prop"` / `"is-not?:prop"` -> value (null without one). A
+     * leading capture argument (`#set! @c key value`) is not part of the key; a later directive with
+     * the same key wins.
+     */
+    fun patternSettings(pattern: Int): Map<String, String?> {
+        check(ptr != 0L) { "query closed" }
+        require(pattern in 0 until patternCount) { "pattern $pattern of $patternCount" }
+        return decodeSettings(Ses.queryPatternSettings(ptr, pattern))
     }
 
     override fun close() { if (ptr != 0L) { Ses.queryFree(ptr); ptr = 0L } }
+}
+
+/** ses_query_pattern_settings' packed records (see supermux_syntax.h) as patternSettings' map. */
+internal fun decodeSettings(b: ByteArray): Map<String, String?> {
+    var i = 0
+    fun u32(): Int {
+        val v = (b[i].toInt() and 0xFF) or ((b[i + 1].toInt() and 0xFF) shl 8) or
+            ((b[i + 2].toInt() and 0xFF) shl 16) or ((b[i + 3].toInt() and 0xFF) shl 24)
+        i += 4
+        return v
+    }
+    fun str(len: Int): String = b.decodeToString(i, i + len).also { i += len }
+    val out = LinkedHashMap<String, String?>()
+    while (i < b.size) {
+        val kind = b[i++].toInt()
+        u32() // capture id: not part of the key
+        val key = str(u32())
+        val vl = u32()
+        val value = if (vl == -1) null else str(vl)
+        out[when (kind) { 2 -> "is?:$key"; 3 -> "is-not?:$key"; else -> key }] = value
+    }
+    return out
+}
+
+/** Does regex [id] of the query match somewhere in [text]? Called from the native cursor loop. */
+internal fun interface RegexMatcher {
+    fun matches(id: Int, text: String): Boolean
 }
 
 /** The raw ses_* ABI, one actual per binding (JNI / cinterop). Pointers are Longs, 0 = null. */
@@ -131,5 +189,9 @@ internal expect object Ses {
     fun queryCaptureCount(query: Long): Int
     fun queryCaptureName(query: Long, index: Int): ByteArray
     fun queryFlags(query: Long): Int
-    fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?): IntArray
+    fun queryPatternCount(query: Long): Int
+    fun queryRegexCount(query: Long): Int
+    fun queryRegex(query: Long, id: Int): ByteArray
+    fun queryPatternSettings(query: Long, pattern: Int): ByteArray
+    fun queryCaptures(query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?): IntArray
 }

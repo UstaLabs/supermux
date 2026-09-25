@@ -92,7 +92,7 @@ class SesBindingTest {
                     val b = q.captures(fromString, from, from + 500, ChunkedSource(doc))
                     assertTrue(a.isNotEmpty())
                     assertEquals(b.toList(), a.toList())
-                    for (i in a.indices step 3) {
+                    for (i in a.indices step 4) {
                         val text = doc.substring(a[i], a[i + 1])
                         if (q.captureNames[a[i + 2]] == "number") assertTrue(text.all { it.isDigit() }, text)
                         if (q.captureNames[a[i + 2]] == "string") assertTrue(text.startsWith('"') && text.endsWith('"'), text)

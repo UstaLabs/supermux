@@ -4,10 +4,12 @@
  * One thin layer over the ses_* ABI. Pointers cross as jlong. Text crosses as Java Strings, which
  * are already UTF-16: GetStringChars hands tree-sitter the code units directly (no UTF-8, no
  * modified UTF-8, no offset tables). Pull reads call back into Kotlin (TextSourceJni.chunk(int)),
- * one local ref per chunk, released before the next upcall.
+ * one local ref per chunk, released before the next upcall; #match? regexes likewise
+ * (MatcherJni.match(int, String)).
  */
 #include <jni.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -81,6 +83,37 @@ static int jreader_init(JNIEnv *env, jreader *r, jobject source) {
   return r->chunk ? 0 : -1;
 }
 
+/* ------------------------------------------------------------ regex matcher --- */
+
+typedef struct {
+  JNIEnv *env;
+  jobject matcher; /* MatcherJni */
+  jmethodID match; /* boolean match(int, String) */
+} jmatcher;
+
+static int32_t jmatcher_match(void *ctx, uint32_t id, const uint16_t *text, uint32_t len) {
+  jmatcher *m = ctx;
+  JNIEnv *env = m->env;
+  if ((*env)->ExceptionCheck(env)) return -1;
+  jstring s = (*env)->NewString(env, (const jchar *)text, (jsize)len);
+  if (!s) return -1;
+  jboolean r = (*env)->CallBooleanMethod(env, m->matcher, m->match, (jint)id, s);
+  (*env)->DeleteLocalRef(env, s);
+  if ((*env)->ExceptionCheck(env)) return -1;
+  return r ? 1 : 0;
+}
+
+static int jmatcher_init(JNIEnv *env, jmatcher *m, jobject matcher) {
+  memset(m, 0, sizeof *m);
+  m->env = env;
+  m->matcher = matcher;
+  if (!matcher) return 0;
+  jclass c = (*env)->GetObjectClass(env, matcher);
+  m->match = (*env)->GetMethodID(env, c, "match", "(ILjava/lang/String;)Z");
+  (*env)->DeleteLocalRef(env, c);
+  return m->match ? 0 : -1;
+}
+
 /* ------------------------------------------------------------- languages --- */
 
 SES_JNI(jint, abiVersion)(JNIEnv *env, jclass cls) { (void)env; (void)cls; return (jint)ses_abi_version(); }
@@ -104,7 +137,8 @@ SES_JNI(jint, languageHasTables)(JNIEnv *env, jclass cls, jstring name) {
 SES_JNI(jint, provideTables)(JNIEnv *env, jclass cls, jstring name, jbyteArray bytes) {
   (void)cls;
   const char *n = name_chars(env, name);
-  if (!n || !bytes) return SES_ERR_INVALID_ARGUMENT;
+  if (!n) return SES_ERR_INVALID_ARGUMENT;
+  if (!bytes) { (*env)->ReleaseStringUTFChars(env, name, n); return SES_ERR_INVALID_ARGUMENT; }
   jsize len = (*env)->GetArrayLength(env, bytes);
   jbyte *b = (*env)->GetByteArrayElements(env, bytes, NULL);
   jint r = b ? ses_language_provide_tables(n, (const uint8_t *)b, (size_t)len) : SES_ERR_OUT_OF_MEMORY;
@@ -207,9 +241,12 @@ SES_JNI(jintArray, treeChangedRanges)(JNIEnv *env, jclass cls, jlong old, jlong 
 /* err[0] = status, err[1] = error byte offset, err[2] = TSQueryError. */
 SES_JNI(jlong, queryNew)(JNIEnv *env, jclass cls, jstring language, jbyteArray utf8, jintArray err) {
   (void)cls;
-  if (!utf8) return 0;
-  const char *n = name_chars(env, language);
-  if (!n) return 0;
+  const char *n = utf8 ? name_chars(env, language) : NULL;
+  if (!n) {
+    jint e[3] = {SES_ERR_INVALID_ARGUMENT, 0, 0};
+    (*env)->SetIntArrayRegion(env, err, 0, 3, e);
+    return 0;
+  }
   jsize len = (*env)->GetArrayLength(env, utf8);
   jbyte *b = (*env)->GetByteArrayElements(env, utf8, NULL);
   uint32_t off = 0;
@@ -226,6 +263,30 @@ SES_JNI(jlong, queryNew)(JNIEnv *env, jclass cls, jstring language, jbyteArray u
 SES_JNI(void, queryFree)(JNIEnv *env, jclass cls, jlong q) { (void)env; (void)cls; ses_query_free(P(q)); }
 SES_JNI(jint, queryCaptureCount)(JNIEnv *env, jclass cls, jlong q) { (void)env; (void)cls; return (jint)ses_query_capture_count(P(q)); }
 SES_JNI(jint, queryFlags)(JNIEnv *env, jclass cls, jlong q) { (void)env; (void)cls; return (jint)ses_query_flags(P(q)); }
+SES_JNI(jint, queryPatternCount)(JNIEnv *env, jclass cls, jlong q) { (void)env; (void)cls; return (jint)ses_query_pattern_count(P(q)); }
+SES_JNI(jint, queryRegexCount)(JNIEnv *env, jclass cls, jlong q) { (void)env; (void)cls; return (jint)ses_query_regex_count(P(q)); }
+
+static jbyteArray to_byte_array(JNIEnv *env, const void *b, uint32_t len) {
+  jbyteArray r = (*env)->NewByteArray(env, (jsize)len);
+  if (r && len) (*env)->SetByteArrayRegion(env, r, 0, (jsize)len, (const jbyte *)b);
+  return r;
+}
+
+/* Regex [id]'s pattern as UTF-8 bytes. */
+SES_JNI(jbyteArray, queryRegex)(JNIEnv *env, jclass cls, jlong q, jint id) {
+  (void)cls;
+  uint32_t len = 0;
+  const char *s = ses_query_regex(P(q), (uint32_t)id, &len);
+  return to_byte_array(env, s, s ? len : 0);
+}
+
+/* The packed directive records of [pattern] (empty when none). */
+SES_JNI(jbyteArray, queryPatternSettings)(JNIEnv *env, jclass cls, jlong q, jint pattern) {
+  (void)cls;
+  uint32_t len = 0;
+  const uint8_t *s = ses_query_pattern_settings(P(q), (uint32_t)pattern, &len);
+  return to_byte_array(env, s, s ? len : 0);
+}
 
 /* Capture names as UTF-8 bytes (a capture name may in theory be non-ASCII; NewStringUTF would mangle it). */
 SES_JNI(jbyteArray, queryCaptureName)(JNIEnv *env, jclass cls, jlong q, jint i) {
@@ -238,17 +299,26 @@ SES_JNI(jbyteArray, queryCaptureName)(JNIEnv *env, jclass cls, jlong q, jint i) 
   return r;
 }
 
-/* [start, end, captureIndex]* in UTF-16 units; source (nullable) feeds the text predicates. */
-SES_JNI(jintArray, queryCaptures)(JNIEnv *env, jclass cls, jlong q, jlong t, jint start, jint end, jobject source) {
+/* [start, end, captureIndex, patternIndex]* in UTF-16 units; source (nullable) feeds the text
+   predicates, matcher (nullable) the #match? family. */
+SES_JNI(jintArray, queryCaptures)(JNIEnv *env, jclass cls, jlong q, jlong t, jint start, jint end, jobject source,
+                                  jobject matcher) {
   (void)cls;
   jreader r;
-  if (jreader_init(env, &r, source) != 0) return NULL;
+  jmatcher m;
+  if (jreader_init(env, &r, source) != 0 || jmatcher_init(env, &m, matcher) != 0) return NULL;
   int32_t *a = NULL;
   uint32_t n = 0;
-  ses_status st = ses_query_captures(P(q), P(t), (uint32_t)start, (uint32_t)end, source ? jreader_read : NULL, &r, &a, &n);
+  ses_status st = ses_query_captures(P(q), P(t), (uint32_t)start, (uint32_t)end, source ? jreader_read : NULL, &r,
+                                     matcher ? jmatcher_match : NULL, &m, &a, &n);
   jreader_release(&r);
-  if ((*env)->ExceptionCheck(env)) { ses_free(a); return NULL; }
-  if (st) { throw_new(env, "java/lang/IllegalArgumentException", "ses_query_captures failed"); return NULL; }
+  if ((*env)->ExceptionCheck(env)) { ses_free(a); return NULL; } /* the source or a regex threw: propagate */
+  if (st) {
+    char msg[64];
+    snprintf(msg, sizeof msg, "ses_query_captures failed (ses status %d)", (int)st);
+    throw_new(env, "java/lang/IllegalArgumentException", msg);
+    return NULL;
+  }
   jintArray res = to_int_array(env, a, n);
   ses_free(a);
   return res;
