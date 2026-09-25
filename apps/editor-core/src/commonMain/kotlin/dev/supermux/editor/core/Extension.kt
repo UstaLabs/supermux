@@ -99,8 +99,11 @@ internal class Configuration(
 ) {
     companion object {
         fun resolve(root: Extension, compartmentContent: Map<Compartment, Extension>): Configuration {
-            val buckets = Precedence.entries.associateWith { ArrayList<Extension>() }
-            val seen = HashSet<Extension>()
+            // Every occurrence of a field or provider in tree order, and the highest precedence each
+            // one appears at: a duplicate is kept once, at its highest-precedence place.
+            val occurrences = ArrayList<Pair<Extension, Precedence>>()
+            val best = HashMap<Extension, Precedence>()
+            val provided = HashMap<StateField<*>, Extension?>() // provide() runs once per field
             val compartments = LinkedHashMap<Compartment, Extension>()
 
             fun visit(e: Extension, prec: Precedence) {
@@ -112,17 +115,19 @@ internal class Configuration(
                         compartments[e.compartment] = content
                         visit(content, prec)
                     }
-                    is StateField<*> -> {
-                        if (seen.add(e)) {
-                            buckets.getValue(prec) += e
-                            e.provided()?.let { visit(it, prec) }
-                        }
+                    is StateField<*>, is FacetProvider<*> -> {
+                        occurrences += e to prec
+                        val b = best[e]
+                        if (b == null || prec < b) best[e] = prec
+                        if (e is StateField<*>) provided.getOrPut(e) { e.provided() }?.let { visit(it, prec) }
                     }
-                    is FacetProvider<*> -> if (seen.add(e)) buckets.getValue(prec) += e
                 }
             }
             visit(root, Precedence.DEFAULT)
 
+            val buckets = Precedence.entries.associateWith { ArrayList<Extension>() }
+            val placed = HashSet<Extension>()
+            for ((e, prec) in occurrences) if (best[e] == prec && placed.add(e)) buckets.getValue(prec) += e
             val ordered = Precedence.entries.flatMap { buckets.getValue(it) }
             val fields = ordered.filterIsInstance<StateField<*>>()
             val providers = LinkedHashMap<Facet<*, *>, MutableList<FacetProvider<*>>>()

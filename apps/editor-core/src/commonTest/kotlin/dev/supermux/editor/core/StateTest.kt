@@ -101,6 +101,11 @@ class StateTest {
         assertEquals(listOf("once"), EditorState.create(extensions = extensionOf(w, w)).facet(words))
     }
 
+    @Test fun aDuplicateKeepsItsHighestPrecedencePlace() {
+        val w = words.of("x")
+        assertEquals(listOf("x", "a"), EditorState.create(extensions = extensionOf(words.of("a"), w, Prec.highest(w))).facet(words))
+    }
+
     @Test fun changesAndAChangeSetTogetherAreRejected() {
         assertFailsWith<IllegalArgumentException> {
             TransactionSpec(changes = listOf(ChangeSpec(0)), changeSet = ChangeSet.empty(0))
