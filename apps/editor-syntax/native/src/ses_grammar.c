@@ -4,10 +4,12 @@
  * its TSLanguage. Blob formats: tools/sestables.py. Loaded tables are never freed (like the static
  * tables they replace).
  *
- * Integrity: every .sesz must hash (SHA-256, whole file) to the value compiled into its grammar's
- * code. A provided blob is checked before it is accepted; a bundled one on its first load (define
- * SES_VERIFY_BUNDLED=0 to skip that). A failed load is remembered: the same blob is never inflated
- * twice, and only a newly provided blob is tried again.
+ * Integrity: every provided .sesz must hash (SHA-256, whole file) to the value compiled into its
+ * grammar's code, or it is refused before it is accepted. A bundled blob sits in the same read-only
+ * binary as that hash, so it is not re-hashed by default: fsharp's 835 KB costs 5-10 ms on an M-series
+ * Mac and 14-67 ms on the Android emulator, over the 5 ms first-use budget. -DSES_VERIFY_BUNDLED=1 turns
+ * it on. A failed load is remembered: the same blob is never inflated twice, and only a newly provided
+ * blob is tried again.
  */
 #include <pthread.h>
 #include <stdatomic.h>
@@ -40,7 +42,7 @@ static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 static uint64_t rd64(const uint8_t *p) { return (uint64_t)rd32(p) | (uint64_t)rd32(p + 4) << 32; }
 
 #ifndef SES_VERIFY_BUNDLED
-#define SES_VERIFY_BUNDLED 1
+#define SES_VERIFY_BUNDLED 0
 #endif
 
 /* ---- SHA-256 (FIPS 180-4). Written for this file and dedicated to the public domain (CC0). ---- */
