@@ -263,4 +263,13 @@ class StateTest {
         assertEquals(2, runs)
     }
 
+    @Test fun aCycleInDeclaredFacetDepsFailsInCreate() {
+        val p = Facet.first("p", 0); val q = Facet.first("q", 0)
+        val e = assertFailsWith<IllegalArgumentException> {
+            EditorState.create(extensions = extensionOf(p.compute(FacetDep.facet(q)) { 0 }, q.compute(FacetDep.facet(p)) { 0 }))
+        }
+        val message = e.message.orEmpty()
+        assertTrue("Facet(p)" in message && "Facet(q)" in message, message)
+    }
+
 }

@@ -195,7 +195,24 @@ internal class Configuration(
             val fields = ordered.filterIsInstance<StateField<*>>()
             val providers = LinkedHashMap<Facet<*, *>, MutableList<FacetProvider<*>>>()
             for (p in ordered.filterIsInstance<FacetProvider<*>>()) providers.getOrPut(p.facet) { ArrayList() } += p
+            checkDepCycles(providers)
             return Configuration(root, fields, providers, compartments)
+        }
+
+        /** Declared [FacetDep.facet] edges must not form a cycle; caught here, when configuring. */
+        private fun checkDepCycles(providers: Map<Facet<*, *>, List<FacetProvider<*>>>) {
+            val done = HashSet<Facet<*, *>>()
+            val path = ArrayList<Facet<*, *>>()
+            fun visit(f: Facet<*, *>) {
+                if (f in done) return
+                val at = path.indexOf(f)
+                require(at < 0) { "facet dependency cycle: " + (path.subList(at, path.size) + f).joinToString(" -> ") }
+                path += f
+                for (p in providers[f].orEmpty()) for (d in p.deps) if (d is FacetDep.OfFacet) visit(d.facet)
+                path.removeAt(path.size - 1)
+                done += f
+            }
+            providers.keys.forEach { visit(it) }
         }
     }
 }
