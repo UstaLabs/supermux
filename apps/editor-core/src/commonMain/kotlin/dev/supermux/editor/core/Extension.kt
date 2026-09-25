@@ -126,6 +126,9 @@ internal class Configuration(
             val occurrences = ArrayList<Pair<Extension, Precedence>>()
             val best = HashMap<Extension, Precedence>()
             val provided = HashMap<StateField<*>, Extension?>() // provide() runs once per field
+            // What a field provides is walked once per precedence, so a field that provides itself
+            // (or two that provide each other) cannot recurse forever.
+            val walked = HashSet<Pair<StateField<*>, Precedence>>()
             val compartments = LinkedHashMap<Compartment, Extension>()
 
             fun visit(e: Extension, prec: Precedence) {
@@ -141,7 +144,7 @@ internal class Configuration(
                         occurrences += e to prec
                         val b = best[e]
                         if (b == null || prec < b) best[e] = prec
-                        if (e is StateField<*>) provided.getOrPut(e) { e.provided() }?.let { visit(it, prec) }
+                        if (e is StateField<*> && walked.add(e to prec)) provided.getOrPut(e) { e.provided() }?.let { visit(it, prec) }
                     }
                 }
             }

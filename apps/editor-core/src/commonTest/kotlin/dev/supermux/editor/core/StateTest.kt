@@ -151,4 +151,21 @@ class StateTest {
         assertEquals("ab", s1.facet(docText))
         assertEquals("xbc", s1.update(ChangeSpec(2, 2, "c")).state.facet(docText))
     }
+
+    @Test fun fieldsThatProvideThemselvesOrEachOtherResolve() {
+        lateinit var self: StateField<Int>
+        self = StateField("self", { 0 }, { v, _ -> v }, provide = { f -> extensionOf(f, words.of("self")) })
+        val s = EditorState.create(extensions = self)
+        assertEquals(0, s.field(self))
+        assertEquals(listOf("self"), s.facet(words))
+
+        lateinit var one: StateField<Int>
+        lateinit var two: StateField<Int>
+        one = StateField("one", { 1 }, { v, _ -> v }, provide = { two })
+        two = StateField("two", { 2 }, { v, _ -> v }, provide = { one })
+        val t = EditorState.create(extensions = one)
+        assertEquals(1, t.field(one))
+        assertEquals(2, t.field(two))
+    }
+
 }
