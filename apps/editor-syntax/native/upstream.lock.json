@@ -4,5 +4,11 @@
     "tag": "v0.25.10",
     "commit": "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406",
     "why": "matches web-tree-sitter 0.25.10 (the web backend) so every client parses with the same core"
+  },
+  "zlib": {
+    "url": "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz",
+    "version": "1.3.1",
+    "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+    "why": "compiled into the Linux and Windows libraries (Apple and Android link the system -lz)"
   }
 }

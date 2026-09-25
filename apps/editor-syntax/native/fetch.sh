@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# fetch.sh: tree-sitter at the locked commit, and every grammar tarball at its locked sha256, into build/.
-# Idempotent; refuses a tarball whose sha256 differs from native/grammars.lock.json.
+# fetch.sh: tree-sitter at the locked commit, zlib and every grammar tarball at its locked sha256, into build/.
+# Idempotent; refuses a tarball whose sha256 differs from native/upstream.lock.json / native/grammars.lock.json.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"          # apps/editor-syntax
 B="$HERE/build"; mkdir -p "$B/dl" "$B/grammars"
@@ -13,6 +13,19 @@ fi
 python3 - "$HERE" <<'PY'
 import hashlib, json, os, subprocess, sys, tarfile, urllib.request
 here = sys.argv[1]; b = os.path.join(here, "build")
+z = json.load(open(os.path.join(here, "native/upstream.lock.json")))["zlib"]
+tgz = os.path.join(b, "dl", "zlib-%s.tar.gz" % z["version"])
+if not os.path.exists(tgz):
+    urllib.request.urlretrieve(z["url"], tgz)
+sha = hashlib.sha256(open(tgz, "rb").read()).hexdigest()
+if sha != z["sha256"]:
+    sys.exit("sha256 mismatch for zlib: %s != %s" % (sha, z["sha256"]))
+if not os.path.isdir(os.path.join(b, "zlib")):
+    with tarfile.open(tgz) as t:
+        for m in t.getmembers():
+            m.name = m.name.split("/", 1)[1] if "/" in m.name else ""
+            if m.name:
+                t.extract(m, os.path.join(b, "zlib"))
 for g in json.load(open(os.path.join(here, "native/grammars.lock.json")))["grammars"]:
     if g["tables"] == "excluded":
         continue

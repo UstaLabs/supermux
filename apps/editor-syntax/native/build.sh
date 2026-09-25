@@ -1,9 +1,21 @@
 #!/usr/bin/env bash
 # build.sh gen            : transform + differential-test every locked grammar  -> build/gen/<lang>/
-#          build.sh <target> : one native library                               -> build/<target>/lib/
-#          build.sh all      : gen + every target this host can build
+#          build.sh <target> : one native library                               -> build/natives/<target>/lib/
+#          build.sh all      : gen + every target this host can build           (+ build/natives/manifest.json)
+# Targets (all built on the Mac; the Linux and Windows ones cross-compile with zig):
+#   macos-arm64 macos-x64    libsupermux_syntax_jni.dylib (ses_* + JNI; desktop JVM)
+#   linux-x64 linux-arm64    libsupermux_syntax_jni.so    (zig, glibc 2.28, zlib compiled in)
+#   windows-x64              supermux_syntax_jni.dll      (zig, mingw, zlib compiled in)
+#   ios-arm64                libsupermux_syntax.a         (cinterop)
+#   ios-simulator-arm64      libsupermux_syntax.a
+#   android-arm64            libsupermux_syntax_jni.so    (arm64-v8a)
+#   android-x64              libsupermux_syntax_jni.so    (x86_64)
+# A target links tree-sitter (lib.c), the ses_* bridge and every non-excluded grammar of
+# native/grammars.lock.json: the transformed parser_<lang>.c + scanner, plus blob_<lang>.c when bundled.
+# Prerequisite for a target: native/fetch.sh, then `build.sh gen`.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+TARGETS=(macos-arm64 macos-x64 linux-x64 linux-arm64 windows-x64 ios-arm64 ios-simulator-arm64 android-arm64 android-x64)
 gen() {
   python3 - "$HERE" <<'PY' | while IFS=$'\t' read -r lang dir; do
 import json, sys, os
@@ -16,7 +28,125 @@ PY
     "$HERE/tools/build-grammar.sh" "$lang" "$dir" || { echo "GEN FAILED: $lang $dir" >&2; exit 1; }
   done
 }
+
+# Every grammar a target links: "<lang as gen produced it>\t<grammar src dir>\t<bundled|code>".
+grammars() {
+  python3 - "$HERE" <<'PY'
+import json, os, sys
+here = sys.argv[1]
+sys.path.insert(0, os.path.join(here, "tools"))
+from sestables import LANG_FN
+for g in json.load(open(os.path.join(here, "native/grammars.lock.json")))["grammars"]:
+    if g["tables"] == "excluded":
+        continue
+    for d in g["parserDirs"]:
+        src = os.path.join(here, "build/grammars", g["lang"], d)
+        m = LANG_FN.search(open(os.path.join(src, "parser.c"), encoding="utf-8").read())
+        lang = m.group("lang")
+        if not os.path.isfile(os.path.join(here, "build/gen", lang, "parser_%s.c" % lang)):
+            sys.exit("build/gen/%s is missing: run native/build.sh gen" % lang)
+        print("%s\t%s\t%s" % (lang, src, "bundled" if g["tables"] == "bundled" else "code"))
+PY
+}
+
+build_target() {
+  local T="$1"
+  local TS="$HERE/build/tree-sitter/lib" OUT="$HERE/build/natives/$T" ZLIB="$HERE/build/zlib"
+  local OBJ="$OUT/obj"; rm -rf "$OUT"; mkdir -p "$OBJ" "$OUT/lib"
+  local NDK="${ANDROID_NDK_HOME:-$HOME/devtools/android-sdk/ndk/26.1.10909125}"
+  local NDKBIN="$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+  local JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@17}"
+  local CC=() CXX=() JI=() JNI ZSRC=0
+  case "$T" in
+    macos-arm64) CC=(clang -arch arm64 -mmacosx-version-min=12.0); JNI=1 ;;
+    macos-x64) CC=(clang -arch x86_64 -mmacosx-version-min=12.0); JNI=1 ;;
+    ios-arm64) CC=(xcrun --sdk iphoneos clang -target arm64-apple-ios15.0); JNI=0 ;;
+    ios-simulator-arm64) CC=(xcrun --sdk iphonesimulator clang -target arm64-apple-ios15.0-simulator); JNI=0 ;;
+    android-arm64) CC=("$NDKBIN/aarch64-linux-android26-clang"); JNI=1 ;;
+    android-x64) CC=("$NDKBIN/x86_64-linux-android26-clang"); JNI=1 ;;
+    linux-x64) CC=(zig cc -target x86_64-linux-gnu.2.28); CXX=(zig c++ -target x86_64-linux-gnu.2.28); JNI=1; ZSRC=1 ;;
+    linux-arm64) CC=(zig cc -target aarch64-linux-gnu.2.28); CXX=(zig c++ -target aarch64-linux-gnu.2.28); JNI=1; ZSRC=1 ;;
+    windows-x64) CC=(zig cc -target x86_64-windows-gnu); CXX=(zig c++ -target x86_64-windows-gnu); JNI=1; ZSRC=1 ;;
+    *) echo "unknown target $T" >&2; exit 2 ;;
+  esac
+  if [ ${#CXX[@]} -eq 0 ]; then CXX=("${CC[@]}"); CXX[0]="${CC[0]/%clang/clang++}"; [ "${CC[0]}" = xcrun ] && CXX=("${CC[@]}"); fi
+  case "$T" in
+    macos-*) JI=(-I"$JAVA_HOME/include" -I"$JAVA_HOME/include/darwin") ;;
+    # The Mac JDK ships only darwin's jni_md.h, and next to jni.h, where `#include "jni_md.h"` looks
+    # first: pair the JDK's jni.h with the vendored linux / win32 jni_md.h in a directory of their own.
+    linux-*|windows-*) local P=linux; [[ "$T" == windows-* ]] && P=win32
+      mkdir -p "$OUT/jni"; cp "$JAVA_HOME/include/jni.h" "$HERE/native/jni/$P/jni_md.h" "$OUT/jni/"; JI=(-I"$OUT/jni") ;;
+    *) JI=() ;;                                                        # Android: the NDK sysroot has jni.h
+  esac
+  local PIC=(-fPIC); [[ "$T" == windows-* ]] && PIC=()   # clang rejects -fPIC for Windows targets (PE code is relocatable anyway)
+  local FLAGS=(-Os ${PIC[@]+"${PIC[@]}"} -w -std=gnu11 -ffunction-sections -fdata-sections -fvisibility=hidden -DTREE_SITTER_HIDE_SYMBOLS)
+  local ZI=(); [ "$ZSRC" = 1 ] && ZI=(-I"$ZLIB")
+  objs=()
+  cc() { local out="$OBJ/$1"; shift; "${CC[@]}" "${FLAGS[@]}" "$@" -c -o "$out"; objs+=("$out"); }
+  cc lib.o -I"$TS/include" -I"$TS/src" "$TS/src/lib.c"
+  cc bridge.o -I"$TS/include" -I"$HERE/native/include" "$HERE/native/src/syntax_bridge.c"
+  cc loader.o ${ZI[@]+"${ZI[@]}"} -I"$HERE/native/include" "$HERE/native/src/ses_grammar.c"
+  [ "$JNI" = 1 ] && cc jni.o ${JI[@]+"${JI[@]}"} -I"$HERE/native/include" "$HERE/native/src/syntax_jni.c"
+  if [ "$ZSRC" = 1 ]; then  # zlib 1.3.1, statically (only inflate is reachable; gc-sections drops the rest)
+    for z in adler32 crc32 inffast inflate inftrees uncompr zutil; do cc "zlib_$z.o" -I"$ZLIB" "$ZLIB/$z.c"; done
+  fi
+  local spec=() CXXLIB=0 lang G mode W list RN sym
+  list="$(grammars)"
+  while IFS=$'\t' read -r lang G mode; do
+    W="$HERE/build/gen/$lang"
+    cc "parser_$lang.o" -I"$G" -I"$HERE/native/include" "$W/parser_$lang.c"
+    # A scanner that embeds ANOTHER grammar's scanner (vue vendors html's) would export that
+    # grammar's tree_sitter_<other>_external_scanner_* too: rename those to keep one library linkable.
+    RN=()
+    for sym in $(grep -rhoE 'tree_sitter_[A-Za-z0-9_]+_external_scanner_(create|destroy|serialize|deserialize|scan)' \
+                 --include='*.c' --include='*.cc' --include='*.h' "$G" | sort -u); do
+      case "$sym" in tree_sitter_${lang}_external_scanner_*) ;; *) RN+=("-D$sym=ses_${lang}_${sym#tree_sitter_}") ;; esac
+    done
+    if [ -f "$G/scanner.c" ]; then cc "scanner_$lang.o" ${RN[@]+"${RN[@]}"} -I"$G" "$G/scanner.c"
+    elif [ -f "$G/scanner.cc" ]; then "${CXX[@]}" -Os ${PIC[@]+"${PIC[@]}"} -w -std=c++14 -fvisibility=hidden ${RN[@]+"${RN[@]}"} -I"$G" -c "$G/scanner.cc" -o "$OBJ/scanner_$lang.o"; objs+=("$OBJ/scanner_$lang.o"); CXXLIB=1; fi
+    if [ "$mode" = bundled ]; then cc "blob_$lang.o" "$W/blob_$lang.c"; spec+=("$lang:bundled"); else spec+=("$lang"); fi
+  done <<< "$list"
+  python3 "$HERE/tools/gen-registry.py" "$OBJ/registry.c" "${spec[@]}"
+  cc registry.o -I"$HERE/native/include" "$OBJ/registry.c"
+  local LIBS=(-lz); [ "$CXXLIB" = 1 ] && LIBS+=(-lc++)
+  local LINK=("${CC[@]}"); [ "$CXXLIB" = 1 ] && LINK=("${CXX[@]}")
+  case "$T" in
+    macos-*) "${CC[@]}" -dynamiclib -Wl,-dead_strip "${objs[@]}" "${LIBS[@]}" -o "$OUT/lib/libsupermux_syntax_jni.dylib" ;;
+    ios-*) xcrun libtool -static -o "$OUT/lib/libsupermux_syntax.a" "${objs[@]}" 2>/dev/null ;;
+    android-*) [ "$CXXLIB" = 1 ] && LIBS=(-lz -static-libstdc++)
+      "${CC[@]}" -shared -Wl,--gc-sections -Wl,-z,max-page-size=16384 "${objs[@]}" "${LIBS[@]}" -o "$OUT/lib/libsupermux_syntax_jni.so"
+      "$NDKBIN/llvm-strip" --strip-unneeded "$OUT/lib/libsupermux_syntax_jni.so" ;;
+    linux-*) "${LINK[@]}" -shared -Wl,--gc-sections "${objs[@]}" -o "$OUT/lib/libsupermux_syntax_jni.so" ;;  # zig c++ links libc++ statically
+    windows-*) "${LINK[@]}" -shared "${objs[@]}" -o "$OUT/lib/supermux_syntax_jni.dll"
+      rm -f "$OUT/lib/"*.lib "$OUT/lib/"*.pdb ;;
+  esac
+  ls -l "$OUT/lib"
+  manifest
+}
+
+# build/natives/manifest.json: every library present under build/natives/<target>/lib/.
+manifest() {
+  python3 - "$HERE" <<'PY'
+import hashlib, json, os, sys
+here = sys.argv[1]; root = os.path.join(here, "build/natives")
+ts = json.load(open(os.path.join(here, "native/upstream.lock.json")))["tree-sitter"]["commit"]
+out = []
+for t in sorted(os.listdir(root)):
+    lib = os.path.join(root, t, "lib")
+    if not os.path.isdir(lib):
+        continue
+    for f in sorted(os.listdir(lib)):
+        b = open(os.path.join(lib, f), "rb").read()
+        out.append({"target": t, "file": f, "sha256": hashlib.sha256(b).hexdigest(), "size": len(b)})
+json.dump({"format": 1, "abi_version": 1, "tree_sitter_commit": ts, "libraries": out},
+          open(os.path.join(root, "manifest.json"), "w"), indent=1)
+print("manifest: %d libraries" % len(out))
+PY
+}
+
 case "${1:-}" in
   gen) gen ;;
-  *) echo "usage: build.sh gen|<target>|all" >&2; exit 2 ;;
+  all) gen; for t in "${TARGETS[@]}"; do build_target "$t"; done; cat "$HERE/build/natives/manifest.json" ;;
+  "") echo "usage: build.sh gen|<target>|all" >&2; exit 2 ;;
+  *) build_target "$1" ;;
 esac
