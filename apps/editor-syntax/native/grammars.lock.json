@@ -303,7 +303,14 @@
    "parserDirs": [
     "src"
    ],
-   "tables": "bundled"
+   "tables": "bundled",
+   "patches": [
+    {
+     "file": "native/patches/tree-sitter-swift-0.7.1.patch",
+     "sha256": "66d72ddf645543f23c56394d157923b80c579a4bff8e82c394b72e9b08bf8cff",
+     "why": "upstream memory-safety fixes after 0.7.1 (8abb3e8b3325 calloc(0), 6ab8d1d74ebd, fb63a7004f07 shifts); npm has no newer release"
+    }
+   ]
   },
   {
    "lang": "groovy",

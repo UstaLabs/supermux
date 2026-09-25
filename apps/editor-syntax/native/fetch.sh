@@ -73,11 +73,19 @@ for g in json.load(open(os.path.join(here, "native/grammars.lock.json")))["gramm
     tgz = os.path.join(b, "dl", "%s-%s.tgz" % (g["lang"], g["version"]))
     download(g["url"], tgz, g["sha256"], g["lang"])
     r = g.get("regenerate")
-    stamp = g["sha256"] + ("" if not r else " regenerate %s --abi %d" % (r["cli"], r["abi"]))
+    patches = g.get("patches", [])
+    stamp = g["sha256"] + ("" if not r else " regenerate %s --abi %d" % (r["cli"], r["abi"])) + \
+        "".join(" patch " + p["sha256"] for p in patches)
     dest = os.path.join(b, "grammars", g["lang"])
     if stamped(dest, stamp):
         continue
     tmp = extract(tgz, dest)
+    # "patches": upstream fixes the npm release lacks, applied to the extracted package (sha256-pinned).
+    for p in patches:
+        path = os.path.join(here, p["file"])
+        if sha256(path) != p["sha256"]:
+            sys.exit("%s: %s has sha256 %s, the lock says %s" % (g["lang"], p["file"], sha256(path), p["sha256"]))
+        subprocess.run(["patch", "-p1", "-s", "-d", tmp, "-i", path], check=True)
     # "regenerate": the published parser.c is for an ABI this runtime refuses. Rebuild it from the
     # package's own grammar.json with the pinned tree-sitter CLI (npx downloads that exact version
     # from npm), then insist on the parser.c sha256 recorded in the lock: a different CLI build or
