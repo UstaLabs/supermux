@@ -1400,6 +1400,8 @@ class CommandsTest {
         assertEquals(KeyChord("S"[0].lowercase()), KeyChord.parse("S", apple = true))
     }
 
+    // Superseded after review: CommandTarget is now `dispatch(spec: TransactionSpec)` (the target
+    // builds the transaction); see apps/editor-core/.../CommandsTest.kt for the current version.
     private class Target(override var state: EditorState) : CommandTarget {
         override fun dispatch(tr: Transaction) { state = tr.state }
     }

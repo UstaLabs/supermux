@@ -10,6 +10,9 @@ package dev.supermux.editor.core
  * tree-sitter's UTF-16 mode use. Lines are 0-based internally ([lineIndexAt], [lineStart]);
  * [line] returns a 1-based [Line.number] for display.
  *
+ * Positions passed in must never fall inside a surrogate pair: splitting and concatenating rely on
+ * it, and only building a rope from a string guards it.
+ *
  * Only `\n` is a line break. Hosts normalize `\r\n` to `\n` when loading a file and remember the
  * file's line ending to write it back on save.
  */
