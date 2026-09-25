@@ -112,4 +112,19 @@ class StateTest {
         }
     }
 
+    @Test fun rootAndCompartmentReconfigureInOneTransactionBothApply() {
+        val wrap = Compartment("wrap")
+        val lineWrap = Facet.first("lineWrap", false)
+        val s0 = EditorState.create("a", extensions = wrap.of(lineWrap.of(false)))
+        val newRoot = extensionOf(editCount, wrap.of(lineWrap.of(false)))
+        for (effects in listOf(
+            listOf(StateEffect.reconfigure.of(newRoot), wrap.reconfigure(lineWrap.of(true))),
+            listOf(wrap.reconfigure(lineWrap.of(true)), StateEffect.reconfigure.of(newRoot)),
+        )) {
+            val s1 = s0.update(TransactionSpec(effects = effects)).state
+            assertTrue(s1.facet(lineWrap), "compartment content")
+            assertEquals(0, s1.field(editCount), "new root")
+        }
+    }
+
 }

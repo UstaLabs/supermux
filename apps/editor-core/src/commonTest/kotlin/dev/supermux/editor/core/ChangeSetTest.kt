@@ -81,6 +81,48 @@ class ChangeSetTest {
         }
     }
 
+    /** Raw builder sequences: adjacent changes, same-position inserts, insert-before-delete. */
+    @Test fun builderSequencesRoundTrip() {
+        val rnd = Random(7)
+        repeat(1000) {
+            val doc = buildString { repeat(rnd.nextInt(0, 30)) { append("ab\nc"[rnd.nextInt(4)]) } }
+            val (cs, expected) = randomBuilderChangeSet(rnd, doc)
+            assertEquals(doc.length, cs.lengthBefore)
+            assertEquals(expected, cs.apply(doc), "apply $cs")
+            assertEquals(doc, cs.invert(Rope.of(doc)).apply(expected), "invert $cs")
+            assertEquals(doc, cs.compose(cs.invert(Rope.of(doc))).apply(doc), "compose with inverse $cs")
+            val (next, expected2) = randomBuilderChangeSet(rnd, expected)
+            assertEquals(expected2, cs.compose(next).apply(doc), "compose $cs then $next")
+            for (assoc in intArrayOf(-1, 1)) {
+                var last = -1
+                for (p in 0..doc.length) {
+                    val m = cs.mapPos(p, assoc)
+                    assertTrue(m in 0..cs.lengthAfter, "mapPos($p, $assoc)=$m for $cs")
+                    assertTrue(m >= last, "mapPos not monotonic at $p (assoc $assoc) for $cs")
+                    last = m
+                }
+            }
+        }
+    }
+
+    /** A builder-made change set over [doc] plus the text it must produce, computed independently. */
+    private fun randomBuilderChangeSet(rnd: Random, doc: String): Pair<ChangeSet, String> {
+        val b = ChangeSet.Builder()
+        val out = StringBuilder()
+        var pos = 0
+        while (pos < doc.length || rnd.nextInt(3) == 0) {
+            val left = doc.length - pos
+            when (rnd.nextInt(3)) {
+                0 -> if (left > 0) { val n = rnd.nextInt(1, left + 1).coerceAtMost(4); b.retain(n); out.append(doc, pos, pos + n); pos += n }
+                1 -> if (left > 0) { val n = rnd.nextInt(1, left + 1).coerceAtMost(4); b.delete(n); pos += n }
+                else -> { val t = "XYZ".take(rnd.nextInt(1, 4)); b.insert(t); out.append(t) }
+            }
+            if (pos == doc.length && rnd.nextInt(2) == 0) break
+        }
+        b.retain(doc.length - pos); out.append(doc, pos, doc.length)
+        return b.build() to out.toString()
+    }
+
     @Test fun mapPosMatchesAChangeByChangeModel() = repeatRandom { rnd, doc ->
         val cs = randomChangeSet(rnd, doc.length)
         for (assoc in intArrayOf(-1, 1)) for (p in 0..doc.length) {
