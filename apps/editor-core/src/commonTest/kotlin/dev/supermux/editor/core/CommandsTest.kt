@@ -2,7 +2,9 @@ package dev.supermux.editor.core
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class CommandsTest {
@@ -16,13 +18,13 @@ class CommandsTest {
     }
 
     private class Target(override var state: EditorState) : CommandTarget {
-        override fun dispatch(tr: Transaction) { state = tr.state }
+        override fun dispatch(spec: TransactionSpec) { state = state.update(spec).state }
     }
 
     @Test fun firstCommandThatHandlesTheKeyWins() {
         val log = ArrayList<String>()
         val declines = Command { log += "declines"; false }
-        val handles = Command { t -> log += "handles"; t.dispatch(t.state.update(ChangeSpec(0, 0, "!"))); true }
+        val handles = Command { t -> log += "handles"; t.dispatch(TransactionSpec(listOf(ChangeSpec(0, 0, "!")))); true }
         val never = Command { log += "never"; true }
         val target = Target(EditorState.create("x", extensions = extensionOf(
             keymapOf(KeyBinding("Mod-k", handles), KeyBinding("Mod-k", never)),
@@ -33,4 +35,5 @@ class CommandsTest {
         assertEquals("!x", target.state.doc.toString())
         assertFalse(runKey(target, KeyChord("j", ctrl = true), apple = false))
     }
+
 }

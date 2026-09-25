@@ -1,9 +1,14 @@
 package dev.supermux.editor.core
 
-/** What a command runs against: the current state, and a way to apply a transaction. */
+/**
+ * What a command runs against: the current state, and a way to ask for an update.
+ *
+ * A command hands over a [TransactionSpec], not a built transaction: the target (the view) builds
+ * the transaction from its own current state, so it stays free to filter or amend it first.
+ */
 interface CommandTarget {
     val state: EditorState
-    fun dispatch(tr: Transaction)
+    fun dispatch(spec: TransactionSpec)
 }
 
 /** An action. Returns true when it did something (so the key that triggered it is consumed). */
