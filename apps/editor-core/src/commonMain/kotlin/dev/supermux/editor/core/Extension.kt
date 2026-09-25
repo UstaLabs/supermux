@@ -35,7 +35,8 @@ object Prec {
  *
  * Output values are reused, so consumers can compare by identity to skip work: a facet fed only
  * by [of] is computed once per configuration and shared by every state using it, and when a
- * computed output [compare]s equal to the previous state's, the previous instance is kept.
+ * computed output [compare]s equal to the previous state's, the previous instance is kept. A
+ * [compute] input declared with [FacetDep]s is only recomputed when one of them changed.
  */
 class Facet<I, O> private constructor(
     val name: String,
@@ -43,7 +44,12 @@ class Facet<I, O> private constructor(
     private val combine: (List<I>) -> O,
 ) {
     fun of(value: I): Extension = FacetProvider(this, value, null)
-    fun compute(get: (EditorState) -> I): Extension = FacetProvider(this, null, get)
+    /**
+     * An input derived from the state. With [deps], [get] runs only when one of them changed since
+     * the previous state (else the previous input is reused), so [get] must read nothing else
+     * that can change. Without deps it runs for every new state.
+     */
+    fun compute(vararg deps: FacetDep, get: (EditorState) -> I): Extension = FacetProvider(this, null, get, deps.toList())
 
     /** The output when nothing provides this facet: computed once, the same instance everywhere. */
     internal val emptyValue: O by lazy { combine(emptyList()) }
@@ -51,6 +57,9 @@ class Facet<I, O> private constructor(
     @Suppress("UNCHECKED_CAST")
     internal fun combineIn(providers: List<FacetProvider<*>>, state: EditorState?): O =
         combine(providers.map { (it as FacetProvider<I>).valueIn(state) })
+
+    @Suppress("UNCHECKED_CAST")
+    internal fun combineAny(values: List<Any?>): O = combine(values as List<I>)
 
     @Suppress("UNCHECKED_CAST")
     internal fun same(a: Any?, b: Any?): Boolean = a === b || compare(a as O, b as O)
@@ -66,10 +75,27 @@ class Facet<I, O> private constructor(
     }
 }
 
+/**
+ * What a [Facet.compute] input depends on. Unchanged means: [Doc] the same rope instance,
+ * [Selection] an equal selection, [field] the same value instance, [facet] the same output instance.
+ */
+sealed class FacetDep {
+    data object Doc : FacetDep()
+    data object Selection : FacetDep()
+    internal class OfField(val field: StateField<*>) : FacetDep()
+    internal class OfFacet(val facet: Facet<*, *>) : FacetDep()
+
+    companion object {
+        fun field(f: StateField<*>): FacetDep = OfField(f)
+        fun facet(f: Facet<*, *>): FacetDep = OfFacet(f)
+    }
+}
+
 internal class FacetProvider<I>(
     val facet: Facet<I, *>,
     val static: I?,
     val dynamic: ((EditorState) -> I)?,
+    val deps: List<FacetDep> = emptyList(),
 ) : Extension {
     /** [state] may be null only for a static provider. */
     @Suppress("UNCHECKED_CAST")

@@ -213,4 +213,41 @@ class StateTest {
         assertSame(s.facet(empty), s.facet(empty))
         assertSame(s.facet(empty), s.update(ChangeSpec(0, 0, "x")).state.facet(empty))
     }
+
+    @Test fun aDocDependentProviderSkipsSelectionOnlyTransactions() {
+        var runs = 0
+        var doubleRuns = 0
+        val len = Facet.first("len", 0)
+        val double = Facet.first("double", 0)
+        val s0 = EditorState.create("abc", extensions = extensionOf(
+            len.compute(FacetDep.Doc) { runs++; it.doc.length },
+            double.compute(FacetDep.facet(len)) { doubleRuns++; it.facet(len) * 2 },
+        ))
+        assertEquals(1, runs); assertEquals(1, doubleRuns)
+        val s1 = s0.update(TransactionSpec(selection = EditorSelection.cursor(2))).state
+        assertEquals(1, runs, "doc unchanged"); assertEquals(1, doubleRuns, "len unchanged")
+        assertEquals(3, s1.facet(len)); assertEquals(6, s1.facet(double))
+        val s2 = s1.update(ChangeSpec(0, 0, "z")).state
+        assertEquals(2, runs); assertEquals(2, doubleRuns)
+        assertEquals(8, s2.facet(double))
+    }
+
+    @Test fun aFieldDependentProviderRunsOnlyWhenTheFieldChanges() {
+        var runs = 0
+        val count = Facet.first("count", -1)
+        val s0 = EditorState.create("a", extensions = extensionOf(editCount, count.compute(FacetDep.field(editCount)) { runs++; it.field(editCount) }))
+        assertEquals(1, runs)
+        val s1 = s0.update(TransactionSpec(selection = EditorSelection.cursor(1))).state
+        assertEquals(1, runs)
+        val s2 = s1.update(ChangeSpec(1, 1, "b")).state
+        assertEquals(2, runs)
+        assertEquals(1, s2.facet(count))
+    }
+
+    @Test fun aProviderWithoutDepsRunsEveryState() {
+        var runs = 0
+        val s0 = EditorState.create("a", extensions = words.compute { runs++; "w" })
+        s0.update(TransactionSpec(selection = EditorSelection.cursor(1)))
+        assertEquals(2, runs)
+    }
 }

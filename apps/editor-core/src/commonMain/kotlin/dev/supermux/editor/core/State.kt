@@ -110,9 +110,14 @@ class EditorState private constructor(
     // by [complete]; the volatile write also publishes [values] to readers on other threads.
     @Volatile private var facetValues: Map<Facet<*, *>, Any?>? = null
 
-    // Only while [complete] runs, on the building thread: the facets computed so far, so a facet
-    // read by another facet's provider is computed once.
+    // Every computed provider's input in this state, so the next state can reuse it when the
+    // provider's deps are unchanged. Written once, before [facetValues].
+    private var providerInputs: Map<FacetProvider<*>, Any?> = emptyMap()
+
+    // Only while [complete] runs, on the building thread: the facets (and provider inputs) computed
+    // so far, so a facet read by another facet's provider is computed once.
     private var building: HashMap<Facet<*, *>, Any?>? = null
+    private var buildingInputs: HashMap<FacetProvider<*>, Any?>? = null
     private var previous: EditorState? = null
 
     // The facets being computed right now, innermost last: a facet met again is a cycle.
@@ -146,10 +151,29 @@ class EditorState private constructor(
         check(f !in stack) { "facet cycle: " + (stack.subList(stack.indexOf(f), stack.size) + f).joinToString(" -> ") }
         stack += f
         try {
-            val v = f.combineIn(providers, this)
-            val b = building ?: return v // a partial state: computed, not kept
-            val before = previous?.facetValues
-            val out = if (before != null && before.containsKey(f) && f.same(before[f], v)) before[f] else v
+            val b = building ?: return f.combineIn(providers, this) // a partial state: computed, not kept
+            val inputs = buildingInputs!!
+            val prev = previous
+            val before = prev?.facetValues
+            // Same providers and every input reused: the previous output stands as it is.
+            var allReused = prev != null && prev.config === config
+            val values = ArrayList<Any?>(providers.size)
+            for (p in providers) {
+                if (p.dynamic == null) { values += p.static; continue }
+                val v = if (prev != null && p.deps.isNotEmpty() && prev.providerInputs.containsKey(p) && p.deps.all { unchanged(it, prev) }) {
+                    prev.providerInputs[p]
+                } else {
+                    allReused = false
+                    p.valueIn(this)
+                }
+                inputs[p] = v
+                values += v
+            }
+            val out = when {
+                before == null || !before.containsKey(f) -> f.combineAny(values)
+                allReused -> before[f]
+                else -> f.combineAny(values).let { v -> if (f.same(before[f], v)) before[f] else v }
+            }
             b[f] = out
             return out
         } finally {
@@ -157,13 +181,23 @@ class EditorState private constructor(
         }
     }
 
+    @Suppress("UNCHECKED_CAST")
+    private fun unchanged(dep: FacetDep, prev: EditorState): Boolean = when (dep) {
+        FacetDep.Doc -> doc === prev.doc
+        FacetDep.Selection -> selection == prev.selection
+        is FacetDep.OfField -> values.containsKey(dep.field) && prev.values.containsKey(dep.field) && values[dep.field] === prev.values[dep.field]
+        is FacetDep.OfFacet -> (dep.facet as Facet<Any?, Any?>).let { facet(it) === prev.facet(it) }
+    }
+
     /**
-     * Marks the state complete: computes every facet with providers, keeping [previous]'s instance
-     * wherever the new output compares equal to it.
+     * Marks the state complete: computes every facet with providers, reusing [previous]'s provider
+     * inputs whose deps are unchanged and its output instance wherever the new one compares equal.
      */
     private fun complete(previous: EditorState?) {
         val b = HashMap<Facet<*, *>, Any?>()
+        val inputs = HashMap<FacetProvider<*>, Any?>()
         building = b
+        buildingInputs = inputs
         this.previous = previous
         try {
             for ((f, providers) in config.providers) {
@@ -172,9 +206,11 @@ class EditorState private constructor(
             }
         } finally {
             building = null
+            buildingInputs = null
             this.previous = null
             inProgress = null
         }
+        providerInputs = inputs
         facetValues = b
     }
 
