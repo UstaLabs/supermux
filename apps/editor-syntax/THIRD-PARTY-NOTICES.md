@@ -37,7 +37,7 @@ winpthreads into the Windows DLL. **Build-time only, not linked:** the JDK's `jn
 | `@tree-sitter-grammars/tree-sitter-xml` | 0.7.0 | MIT | code |
 | `tree-sitter-vue` | 0.2.1 | MIT | code |
 | `tree-sitter-bash` | 0.25.1 | MIT | bundled |
-| `tree-sitter-kotlin` | 0.3.8 | MIT | bundled |
+| `fwcd/tree-sitter-kotlin` | git-f66d2908542e | MIT | bundled |
 | `tree-sitter-dart` | 1.0.0 | ISC | code |
 | `tree-sitter-c-sharp` | 0.23.5 | MIT | code |
 | `tree-sitter-scala` | 0.24.0 | MIT | code |
@@ -1083,7 +1083,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### tree-sitter-kotlin 0.3.8 (MIT)
+### fwcd/tree-sitter-kotlin git-f66d2908542e (MIT)
 
 ```
 The MIT License (MIT)

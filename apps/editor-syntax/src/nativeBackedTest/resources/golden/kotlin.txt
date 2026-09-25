@@ -4,9 +4,7 @@
 13-16 tok-variable	app
 18-24 tok-keyword	import
 25-31 tok-variable	kotlin
-31-32 tok-punctuation	.
 32-36 tok-variable	math
-36-37 tok-punctuation	.
 37-40 tok-function	max
 42-57 tok-comment	/** A shape. */
 58-64 tok-keyword	sealed
@@ -87,19 +85,20 @@
 337-338 tok-punctuation	)
 339-346 tok-function-builtin	println
 346-347 tok-punctuation	(
-347-350 tok-string	"${
+347-348 tok-string	"
+348-350 tok-punctuation	${
 350-351 tok-variable	s
 351-352 tok-punctuation	.
 352-356 tok-property	name
 356-357 tok-punctuation	}
-357-361 tok-string	: ${
+357-359 tok-string	: 
+359-361 tok-punctuation	${
 361-364 tok-function	max
 364-365 tok-punctuation	(
 365-366 tok-variable	s
 366-367 tok-punctuation	.
 367-371 tok-function	area
 371-374 tok-punctuation	(),
-374-375 tok-string	 
 375-378 tok-number	0.0
 378-380 tok-punctuation	)}
 380-387 tok-string	 ağ 😀"

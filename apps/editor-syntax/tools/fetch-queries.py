@@ -9,7 +9,7 @@ from native/queries.lock.json. Run on the Mac, inside apps/editor-syntax, after 
 The output is committed; this tool only has to run again when a source or a grammar is bumped.
 
 Per language and query kind, the lock lists the source files, in order (a ref, or
-{"ref": ..., "precedence": "first" | "last"} when a file does not follow its source's convention):
+{"ref": ..., "precedence": "auto" | "last"} when a file does not follow its source's convention):
   npm:<grammar>/<path>   a file inside that grammar's npm tarball (url + sha256 in grammars.lock.json)
   helix:<dir>/<file>     helix-editor/helix at the lock's commit, runtime/queries/<dir>/<file> (MPL-2.0)
   nvim:<dir>/<file>      nvim-treesitter at the lock's commit, runtime/queries/<dir>/<file> (Apache-2.0)
@@ -19,10 +19,9 @@ What the tool does to the text, all recorded in the lock's "notes":
 - `; inherits: a,b` (Helix, nvim) is replaced by those files' contents, in order, recursively.
 - Precedence: when several patterns capture one node, the LATER pattern wins, as in
   tree-sitter-highlight 0.25.10 (highlight/src/lib.rs, "set the match to it"), Helix and nvim,
-  and in our Highlighter. Some npm files are still written the other way round (specific
-  patterns first, a catch-all like `(identifier) @variable` last): their patterns are reversed.
-  An npm file's convention is read from where its catch-alls sit (see `convention`); the lock
-  can also state it per file.
+  and in our Highlighter. Some npm files put their catch-alls (`(identifier) @variable`) last,
+  written for the old earlier-wins order: in an npm highlights file ("precedence": "auto") the
+  catch-alls are hoisted to the top and every other pattern keeps its place (see `hoist`).
 - Predicates the backend does not evaluate must never ship (they would pass silently):
   `#lua-match?` / `#not-lua-match?` become `#match?` / `#not-match?` when the Lua pattern converts
   to an equivalent regex, `#contains?` becomes an escaped `#match?` alternation, `#is-not? local`
@@ -56,8 +55,6 @@ def sha256(b):
 def fetch(url, cache_name):
     os.makedirs(CACHE, exist_ok=True)
     path = os.path.join(CACHE, cache_name)
-    if os.path.exists(path + ".404"):
-        return None
     if not os.path.exists(path):
         try:
             with urllib.request.urlopen(url) as r:
@@ -65,8 +62,7 @@ def fetch(url, cache_name):
         except urllib.error.HTTPError as e:
             if e.code != 404:
                 raise
-            open(path + ".404", "w").close()
-            return None
+            return None  # never cached: a file that appears upstream later is seen on the next run
         with open(path + ".tmp", "wb") as f:
             f.write(data)
         os.replace(path + ".tmp", path)
@@ -346,29 +342,36 @@ def one_line(t, n=160):
     return t if len(t) <= n else t[:n] + " ..."
 
 
-CATCH_ALL = re.compile(r"^\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*@[A-Za-z0-9_.\-]+\s*$")
+def generic(pattern):
+    """A catch-all: a bare node, a bare token, or a [...] of only those, with its captures and no
+    predicate: `(identifier) @variable`, `"if" @keyword`, `[(true) (false)] @constant.builtin`."""
+    root = parse(pattern)
+    atoms = items(root)
+    if len(atoms) != 1:
+        return False
+    atom = atoms[0][2]
+
+    def bare(n):
+        if n.kind in ("string", "word"):
+            return True
+        return n.kind == "(" and len(n.children) == 1 and n.children[0].kind == "word"
+
+    if atom.kind == "[":
+        return all(bare(c) for c in atom.children if c.kind not in ("capture", "quant"))
+    return bare(atom)
 
 
-def convention(patterns):
-    """("first" | "last", evidence) for a file of highlights patterns. A catch-all `(T) @x` placed
-    AFTER the patterns that capture T in a context means the file expects the earlier pattern to
-    win; placed before them, the later one. No catch-all with context: "last" (tree-sitter 0.25)."""
-    before = after = 0
-    shown = []
-    for i, p in enumerate(patterns):
-        m = CATCH_ALL.match(re.sub(r";[^\n]*", "", p).strip())
-        if not m:
-            continue
-        node = re.compile(r"\(\s*%s\s*\)\s*@" % re.escape(m.group(1)))
-        b = sum(1 for q in patterns[:i] if node.search(q) and not CATCH_ALL.match(q.strip()))
-        a = sum(1 for q in patterns[i + 1:] if node.search(q) and not CATCH_ALL.match(q.strip()))
-        if a or b:
-            shown.append("(%s) catch-all after %d, before %d contextual patterns" % (m.group(1), b, a))
-        before += b
-        after += a
-    if before > after:
-        return "first", "; ".join(shown)
-    return "last", "; ".join(shown) or "no catch-all with contextual patterns"
+def hoist(patterns):
+    """(patterns, n moved): the catch-alls first, in their order, then every other pattern in its
+    order. With the later pattern winning, a catch-all placed after the specific patterns for the
+    same nodes (files written for earlier-pattern-wins) would override them all; hoisting fixes
+    exactly that and keeps the order among specific patterns (Go's @function.builtin after
+    @function) as written."""
+    g = [p for p in patterns if generic(p)]
+    rest = [p for p in patterns if not generic(p)]
+    out = g + rest
+    moved = sum(1 for i, p in enumerate(patterns) if out.index(p) != i) if out != patterns else 0
+    return out, moved
 
 
 # ----------------------------------------------------------------------- the compile check (Mac) --
@@ -494,11 +497,19 @@ def expand(sources, ref, files, seen=()):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pin", action="store_true", help="record the sha256 of every source file in the lock")
+    ap.add_argument("--check", action="store_true",
+                    help="generate into a temporary directory and fail unless it equals the committed files and notes")
     ap.add_argument("--lib", default=os.path.join(HERE, "build/natives/macos-arm64/lib/libsupermux_syntax_jni.dylib"))
     ap.add_argument("--gen", default=os.path.join(HERE, "build/gen"))
     ap.add_argument("--only", help="comma-separated languages")
     args = ap.parse_args()
+    global OUT
+    committed = OUT
+    if args.check:
+        import tempfile
+        OUT = tempfile.mkdtemp(prefix="queries-check-")
     lock = json.load(open(LOCK))
+    committed_notes = json.dumps(lock.get("notes", {}), sort_keys=True)
     sources = Sources(lock)
     oracle = Oracle(args.lib, args.gen)
     only = set(args.only.split(",")) if args.only else None
@@ -528,14 +539,13 @@ def main():
                 text = expand(sources, ref, files)
                 pats = rewrite(text, knotes, "%s (%s)" % (key, ref),
                                lock.get("unavailableInjectionLanguages", []) if kind == "injections" else ())
+                hoisted = 0
                 if kind == "highlights" and precedence == "auto":
-                    precedence, why = convention(pats)
-                    if precedence == "first":
-                        knotes.append("%s (%s): written earlier-pattern-wins (%s): patterns reversed" % (key, ref, why))
-                reverse = kind == "highlights" and precedence == "first"
-                if reverse:
-                    pats.reverse()
-                header.append((files[before:], reverse))
+                    pats, hoisted = hoist(pats)
+                    if hoisted:
+                        knotes.append("%s (%s): catch-all patterns hoisted to the top (%d patterns moved): the later pattern wins"
+                                      % (key, ref, hoisted))
+                header.append((files[before:], hoisted))
                 patterns += pats
             got = {r: h for r, h, _ in files}
             if args.pin:
@@ -560,11 +570,11 @@ def main():
             with open(path, "w") as f:
                 f.write("; editor-syntax %s query for %s. GENERATED by tools/fetch-queries.py from\n" % (kind, lang))
                 f.write("; native/queries.lock.json: do not edit. Sources, in order:\n")
-                for fs, reverse in header:
+                for fs, hoisted in header:
                     for r, h, where in fs:
                         f.write(";   %s\n" % where)
-                    if reverse:
-                        f.write(";   (patterns reversed: written for EARLIER-pattern-wins; this file gives the LATER pattern precedence)\n")
+                    if hoisted:
+                        f.write(";   (its catch-all patterns hoisted to the top: the LATER pattern wins, as in tree-sitter 0.25)\n")
                 f.write("; Each file keeps its source's licence. Rewritten and dropped patterns: the lock's notes[%s].\n\n" % json.dumps(key))
                 f.write("\n\n".join(patterns) + "\n")
             stats.append("%-18s %-10s %4d patterns (%d dropped or changed)" % (lang, kind, len(patterns), len(knotes)))
@@ -581,6 +591,21 @@ def main():
         elif src.get("licenseSha256") != sha256(data):
             sys.exit("%s: LICENSE differs from the lock (rerun with --pin and review)" % kind)
     lock["notes"] = dict(sorted(notes.items()))
+    if args.check:
+        import filecmp
+        diffs = []
+        def walk(root):
+            return sorted(os.path.relpath(os.path.join(d, f), root) for d, _, fs in os.walk(root) for f in fs if f.endswith(".scm"))
+        a, b = walk(committed), walk(OUT)
+        diffs += ["only committed: %s" % x for x in sorted(set(a) - set(b))]
+        diffs += ["only generated: %s" % x for x in sorted(set(b) - set(a))]
+        diffs += ["differs: %s" % x for x in sorted(set(a) & set(b)) if not filecmp.cmp(os.path.join(committed, x), os.path.join(OUT, x), shallow=False)]
+        if json.dumps(lock["notes"], sort_keys=True) != committed_notes:
+            diffs.append("the lock's notes differ")
+        if diffs:
+            sys.exit("fetch-queries --check: the committed queries are not a fresh generation:\n  " + "\n  ".join(diffs))
+        print("fetch-queries --check: %d query files equal a fresh generation" % len(a))
+        return
     with open(LOCK, "w") as f:
         json.dump(lock, f, indent=1, ensure_ascii=False)
         f.write("\n")

@@ -61,6 +61,17 @@
 	"->"
 ] @operator
 
+(nullable_type (quest) @operator)
+
+(string_literal
+	(interpolation_identifier_start) @punctuation.special
+  (interpolated_identifier) @variable)
+
+(string_literal
+	(interpolation_expression_start) @punctuation.special
+	(interpolated_expression) @none
+	(interpolation_expression_end) @punctuation.special)
+
 ((interpolated_identifier) @variable.builtin
 (#eq? @variable.builtin "it"))
 
@@ -147,6 +158,8 @@
 (character_literal) @constant.character
 
 (boolean_literal) @constant.builtin.boolean
+
+(null_literal) @constant.builtin
 
 (real_literal) @constant.numeric.float
 
@@ -236,6 +249,10 @@
 	(type_parameters)?
 	(simple_identifier) @function)
 
+(function_declaration
+	receiver: (receiver_type)
+	(simple_identifier) @function)
+
 (label) @label
 
 (import_header
@@ -271,6 +288,11 @@
 		(variable_declaration
 			(simple_identifier) @variable.other.member)))
   (#not-match? @variable.other.member "^[A-Z][A-Z0-9_]*$"))
+
+(property_declaration
+  receiver: (receiver_type)
+  (variable_declaration
+    (simple_identifier) @variable.other.member))
 
 (class_parameter
 	(simple_identifier) @variable.other.member)

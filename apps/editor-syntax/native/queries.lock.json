@@ -1260,6 +1260,9 @@
   }
  },
  "notes": {
+  "bash/highlights": [
+   "bash/highlights (npm:shell/queries/highlights.scm): catch-all patterns hoisted to the top (4 patterns moved): the later pattern wins"
+  ],
   "bash/injections": [
    "bash/injections (helix:bash/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
    "bash/injections (helix:bash/injections.scm): dropped pattern (injects awk, which has no grammar here): (command name: (command_name (word) @_command) argument: (raw_string) @injection.content (#match? @_command \"^[gnm]?awk$\") (#set! injection.language \"awk\"))",
@@ -1267,10 +1270,14 @@
    "bash/injections (helix:bash/injections.scm): dropped pattern (injects jq, which has no grammar here): (command name: (command_name (word) @_command (#any-of? @_command \"jq\" \"jaq\")) argument: [ (raw_string) @injection.content (string (string_content) @injection.c ..."
   ],
   "c/highlights": [
-   "c/highlights (npm:c/queries/highlights.scm): regex \"^[A-Z][A-Z\\\\d_]*$\" -> \"^[A-Z][A-Z\\\\p{Nd}_]*$\" (Rust's meaning of its classes, spelled out)"
+   "c/highlights (npm:c/queries/highlights.scm): regex \"^[A-Z][A-Z\\\\d_]*$\" -> \"^[A-Z][A-Z\\\\p{Nd}_]*$\" (Rust's meaning of its classes, spelled out)",
+   "c/highlights (npm:c/queries/highlights.scm): catch-all patterns hoisted to the top (64 patterns moved): the later pattern wins"
   ],
   "c/injections": [
    "c/injections (helix:c/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))"
+  ],
+  "c_sharp/highlights": [
+   "c_sharp/highlights (npm:csharp/queries/highlights.scm): catch-all patterns hoisted to the top (30 patterns moved): the later pattern wins"
   ],
   "c_sharp/injections": [
    "c_sharp/injections (helix:c-sharp/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
@@ -1281,18 +1288,27 @@
    "clojure/injections: nothing left, no file shipped"
   ],
   "cpp/highlights": [
-   "cpp/highlights (npm:c/queries/highlights.scm): regex \"^[A-Z][A-Z\\\\d_]*$\" -> \"^[A-Z][A-Z\\\\p{Nd}_]*$\" (Rust's meaning of its classes, spelled out)"
+   "cpp/highlights (npm:c/queries/highlights.scm): regex \"^[A-Z][A-Z\\\\d_]*$\" -> \"^[A-Z][A-Z\\\\p{Nd}_]*$\" (Rust's meaning of its classes, spelled out)",
+   "cpp/highlights (npm:c/queries/highlights.scm): catch-all patterns hoisted to the top (64 patterns moved): the later pattern wins",
+   "cpp/highlights (npm:cpp/queries/highlights.scm): catch-all patterns hoisted to the top (12 patterns moved): the later pattern wins"
+  ],
+  "css/highlights": [
+   "css/highlights (npm:css/queries/highlights.scm): catch-all patterns hoisted to the top (29 patterns moved): the later pattern wins"
   ],
   "css/injections": [
    "css/injections (helix:css/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
    "css/injections: nothing left, no file shipped"
   ],
   "dart/highlights": [
-   "dart/highlights (npm:dart/queries/highlights.scm): dropped pattern (#vim-match? is not evaluated by the backend): ((identifier) @variable.builtin (#vim-match? @variable.builtin \"^(abstract|as|covariant|deferred|dynamic|export|external|factory|Function|get|implements|import| ..."
+   "dart/highlights (npm:dart/queries/highlights.scm): dropped pattern (#vim-match? is not evaluated by the backend): ((identifier) @variable.builtin (#vim-match? @variable.builtin \"^(abstract|as|covariant|deferred|dynamic|export|external|factory|Function|get|implements|import| ...",
+   "dart/highlights (npm:dart/queries/highlights.scm): catch-all patterns hoisted to the top (45 patterns moved): the later pattern wins"
   ],
   "dart/injections": [
    "dart/injections (helix:dart/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
    "dart/injections: nothing left, no file shipped"
+  ],
+  "dtd/highlights": [
+   "dtd/highlights (npm:xml/queries/dtd/highlights.scm): catch-all patterns hoisted to the top (33 patterns moved): the later pattern wins"
   ],
   "dtd/injections": [
    "dtd/injections (helix:dtd/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
@@ -1301,6 +1317,12 @@
   "elm/folds": [
    "elm/folds (nvim:elm/folds.scm): dropped pattern (#not-has-parent? is not evaluated by the backend): ((function_call_expr) @_fn (#not-has-parent? @_fn parenthesized_expr)) @fold"
   ],
+  "elm/highlights": [
+   "elm/highlights (npm:elm/queries/highlights.scm): catch-all patterns hoisted to the top (32 patterns moved): the later pattern wins"
+  ],
+  "fsharp/highlights": [
+   "fsharp/highlights (npm:fsharp/queries/highlights.scm): catch-all patterns hoisted to the top (65 patterns moved): the later pattern wins"
+  ],
   "fsharp/injections": [
    "fsharp/injections (npm:fsharp/queries/injections.scm): dropped pattern (#offset! is not evaluated by the backend): ((block_comment_content) @injection.content (#match? @injection.content \"^\\\\*\") (#offset! @injection.content 0 1 0 0) (#set! injection.language \"markdown\"))",
    "fsharp/injections (npm:fsharp/queries/injections.scm): dropped pattern (injects comment, which has no grammar here): ((block_comment_content) @injection.content (#not-match? @injection.content \"^\\\\*\") (#set! injection.language \"comment\"))",
@@ -1308,19 +1330,22 @@
    "fsharp/injections (npm:fsharp/queries/injections.scm): dropped pattern (#offset! is not evaluated by the backend): ((xml_doc) @injection.content (#offset! @injection.content 0 3 0 0) (#set! injection.language \"xml\") (#set! injection.combined))",
    "fsharp/injections: nothing left, no file shipped"
   ],
+  "fsharp_signature/highlights": [
+   "fsharp_signature/highlights (npm:fsharp/fsharp_signature/queries/highlights.scm): catch-all patterns hoisted to the top (48 patterns moved): the later pattern wins"
+  ],
   "glsl/folds": [
    "glsl/folds: nothing left, no file shipped"
   ],
   "glsl/highlights": [
    "glsl/highlights (npm:glsl/queries/highlights.scm): regex \"^[A-Z][A-Z\\\\d_]*$\" -> \"^[A-Z][A-Z\\\\p{Nd}_]*$\" (Rust's meaning of its classes, spelled out)",
    "glsl/highlights (npm:glsl/queries/highlights.scm): (#lua-match? @variable.builtin \"^gl_\") -> (#match? @variable.builtin \"^gl_\")",
-   "glsl/highlights (npm:glsl/queries/highlights.scm): written earlier-pattern-wins ((field_identifier) catch-all after 1, before 0 contextual patterns; (identifier) catch-all after 4, before 1 contextual patterns): patterns reversed"
+   "glsl/highlights (npm:glsl/queries/highlights.scm): catch-all patterns hoisted to the top (15 patterns moved): the later pattern wins"
   ],
   "glsl/injections": [
    "glsl/injections (helix:glsl/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))"
   ],
   "go/highlights": [
-   "go/highlights (npm:go/queries/highlights.scm): written earlier-pattern-wins ((field_identifier) catch-all after 2, before 0 contextual patterns; (identifier) catch-all after 3, before 0 contextual patterns): patterns reversed"
+   "go/highlights (npm:go/queries/highlights.scm): catch-all patterns hoisted to the top (15 patterns moved): the later pattern wins"
   ],
   "go/injections": [
    "go/injections (helix:go/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
@@ -1334,16 +1359,21 @@
    "groovy/injections (helix:groovy/injections.scm): dropped pattern (injects comment, which has no grammar here): ((groovy_doc) @injection.content (#set! injection.language \"comment\"))",
    "groovy/injections: nothing left, no file shipped"
   ],
+  "haskell/highlights": [
+   "haskell/highlights (npm:haskell/queries/highlights.scm): catch-all patterns hoisted to the top (62 patterns moved): the later pattern wins"
+  ],
   "haskell/injections": [
    "haskell/injections (npm:haskell/queries/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
    "haskell/injections (npm:haskell/queries/injections.scm): dropped pattern (injects haskell_persistent, which has no grammar here): (quasiquote (quoter) @_name (#any-of? @_name \"persistUpperCase\" \"persistLowerCase\" \"persistWith\") (quasiquote_body) @injection.content (#set! injection.language ..."
   ],
   "haxe/highlights": [
+   "haxe/highlights (npm:haxe/queries/highlights.scm): catch-all patterns hoisted to the top (26 patterns moved): the later pattern wins",
    "haxe/highlights: removed alternative \"as\" (unknown node type against our grammar)",
    "haxe/highlights: dropped pattern (unknown field at 'constructor: (type_name) @constructor' against our grammar): (call_expression \"new\" @keyword constructor: (type_name) @constructor )"
   ],
   "java/highlights": [
-   "java/highlights (npm:java/queries/highlights.scm): regex \"^_*[A-Z][A-Z\\\\d_]+$\" -> \"^_*[A-Z][A-Z\\\\p{Nd}_]+$\" (Rust's meaning of its classes, spelled out)"
+   "java/highlights (npm:java/queries/highlights.scm): regex \"^_*[A-Z][A-Z\\\\d_]+$\" -> \"^_*[A-Z][A-Z\\\\p{Nd}_]+$\" (Rust's meaning of its classes, spelled out)",
+   "java/highlights (npm:java/queries/highlights.scm): catch-all patterns hoisted to the top (24 patterns moved): the later pattern wins"
   ],
   "java/injections": [
    "java/injections (helix:java/injections.scm): dropped pattern (injects comment, which has no grammar here): ([(line_comment) (block_comment)] @injection.content (#set! injection.language \"comment\"))",
@@ -1352,31 +1382,28 @@
   "javascript/highlights": [
    "javascript/highlights (npm:javascript/queries/highlights.scm): regex \"^[A-Z_][A-Z\\\\d_]+$\" -> \"^[A-Z_][A-Z\\\\p{Nd}_]+$\" (Rust's meaning of its classes, spelled out)",
    "javascript/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)",
-   "javascript/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)"
+   "javascript/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)",
+   "javascript/highlights (npm:javascript/queries/highlights.scm): catch-all patterns hoisted to the top (25 patterns moved): the later pattern wins"
   ],
   "javascript/injections": [
    "javascript/injections (npm:javascript/queries/injections.scm): dropped pattern (injects regex, which has no grammar here): ((regex_pattern) @injection.content (#set! injection.language \"regex\"))",
    "javascript/injections (npm:javascript/queries/injections.scm): dropped pattern (injects jsdoc, which has no grammar here): ((comment) @injection.content (#set! injection.language \"jsdoc\"))",
    "javascript/injections (npm:javascript/queries/injections.scm): dropped pattern (#offset! is not evaluated by the backend): (call_expression function: ((identifier) @_name (#eq? @_name \"hbs\")) arguments: ((template_string) @glimmer (#offset! @glimmer 0 1 0 -1)))"
   ],
+  "json/highlights": [
+   "json/highlights (npm:json/queries/highlights.scm): catch-all patterns hoisted to the top (6 patterns moved): the later pattern wins"
+  ],
   "json/injections": [
    "json/injections (helix:json/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
    "json/injections: nothing left, no file shipped"
   ],
   "julia/highlights": [
-   "julia/highlights (npm:julia/queries/highlights.scm): dropped pattern (#has-ancestor? is not evaluated by the backend): ((identifier) @variable.builtin (#any-of? @variable.builtin \"begin\" \"end\") (#has-ancestor? @variable.builtin index_expression))"
+   "julia/highlights (npm:julia/queries/highlights.scm): dropped pattern (#has-ancestor? is not evaluated by the backend): ((identifier) @variable.builtin (#any-of? @variable.builtin \"begin\" \"end\") (#has-ancestor? @variable.builtin index_expression))",
+   "julia/highlights (npm:julia/queries/highlights.scm): catch-all patterns hoisted to the top (69 patterns moved): the later pattern wins"
   ],
   "julia/injections": [
    "julia/injections (helix:julia/injections.scm): dropped pattern (injects comment, which has no grammar here): ( [ (line_comment) (block_comment) ] @injection.content (#set! injection.language \"comment\"))",
    "julia/injections (helix:julia/injections.scm): dropped pattern (injects regex, which has no grammar here): ( (prefixed_string_literal prefix: (identifier) @function.macro) @injection.content (#eq? @function.macro \"r\") (#set! injection.language \"regex\"))"
-  ],
-  "kotlin/highlights": [
-   "kotlin/highlights: dropped pattern (unknown node type at 'quest) @operator)' against our grammar): (nullable_type (quest) @operator)",
-   "kotlin/highlights: dropped pattern (unknown node type at 'interpolation_identifier_start) @punctua' against our grammar): (string_literal (interpolation_identifier_start) @punctuation.special (interpolated_identifier) @variable)",
-   "kotlin/highlights: dropped pattern (unknown node type at 'interpolation_expression_start) @punctua' against our grammar): (string_literal (interpolation_expression_start) @punctuation.special (interpolated_expression) @none (interpolation_expression_end) @punctuation.special)",
-   "kotlin/highlights: dropped pattern (unknown node type at 'null_literal) @constant.builtin' against our grammar): (null_literal) @constant.builtin",
-   "kotlin/highlights: dropped pattern (unknown node type at 'receiver_type)' against our grammar): (function_declaration receiver: (receiver_type) (simple_identifier) @function)",
-   "kotlin/highlights: dropped pattern (unknown node type at 'receiver_type)' against our grammar): (property_declaration receiver: (receiver_type) (variable_declaration (simple_identifier) @variable.other.member))"
   ],
   "kotlin/injections": [
    "kotlin/injections (helix:kotlin/injections.scm): dropped pattern (injects comment, which has no grammar here): ([ (line_comment) (multiline_comment) ] @injection.content (#set! injection.language \"comment\"))",
@@ -1385,28 +1412,42 @@
    "kotlin/injections (helix:kotlin/injections.scm): dropped pattern (injects regex, which has no grammar here): ((call_expression (navigation_expression ((simple_identifier) @_class (#eq? @_class \"Regex\")) (navigation_suffix ((simple_identifier) @_function (#eq? @_functio ...",
    "kotlin/injections: nothing left, no file shipped"
   ],
+  "lua/highlights": [
+   "lua/highlights (npm:lua/queries/highlights.scm): catch-all patterns hoisted to the top (36 patterns moved): the later pattern wins"
+  ],
   "markdown/folds": [
    "markdown/folds (nvim:markdown/folds.scm): removed (#trim! @fold) (it only trims a fold's trailing blank lines)",
    "markdown/folds (nvim:markdown/folds.scm): removed (#trim! @fold) (it only trims a fold's trailing blank lines)"
   ],
+  "markdown/highlights": [
+   "markdown/highlights (npm:markdown/tree-sitter-markdown/queries/highlights.scm): catch-all patterns hoisted to the top (11 patterns moved): the later pattern wins"
+  ],
   "markdown_inline/injections": [
    "markdown_inline/injections (helix:markdown.inline/injections.scm): dropped pattern (injects latex, which has no grammar here): ((latex_block) @injection.content (#set! injection.language \"latex\") (#set! injection.include-children))"
+  ],
+  "nginx/highlights": [
+   "nginx/highlights (npm:nginx/queries/highlights.scm): catch-all patterns hoisted to the top (14 patterns moved): the later pattern wins"
   ],
   "nginx/injections": [
    "nginx/injections (npm:nginx/queries/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
    "nginx/injections: nothing left, no file shipped"
   ],
   "objc/highlights": [
-   "objc/highlights (npm:objc/queries/highlights.scm): dropped pattern (#has-ancestor? is not evaluated by the backend): ((identifier) @property (#has-ancestor? @property struct_declaration))"
+   "objc/highlights (npm:objc/queries/highlights.scm): dropped pattern (#has-ancestor? is not evaluated by the backend): ((identifier) @property (#has-ancestor? @property struct_declaration))",
+   "objc/highlights (npm:objc/queries/highlights.scm): catch-all patterns hoisted to the top (41 patterns moved): the later pattern wins"
   ],
   "objc/injections": [
    "objc/injections: nothing left, no file shipped"
+  ],
+  "ocaml/highlights": [
+   "ocaml/highlights (npm:ocaml/queries/highlights.scm): catch-all patterns hoisted to the top (38 patterns moved): the later pattern wins"
   ],
   "ocaml/injections": [
    "ocaml/injections (helix:ocaml/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
    "ocaml/injections: nothing left, no file shipped"
   ],
   "ocaml_interface/highlights": [
+   "ocaml_interface/highlights (npm:ocaml/queries/highlights.scm): catch-all patterns hoisted to the top (38 patterns moved): the later pattern wins",
    "ocaml_interface/highlights: removed alternative (shebang) (unknown node type against our grammar)"
   ],
   "ocaml_interface/injections": [
@@ -1414,10 +1455,11 @@
    "ocaml_interface/injections: nothing left, no file shipped"
   ],
   "ocaml_type/highlights": [
+   "ocaml_type/highlights (npm:ocaml/queries/highlights.scm): catch-all patterns hoisted to the top (38 patterns moved): the later pattern wins",
    "ocaml_type/highlights: removed alternative (shebang) (unknown node type against our grammar)"
   ],
   "pascal/highlights": [
-   "pascal/highlights (npm:pascal/queries/highlights.scm): written earlier-pattern-wins ((typeref) catch-all after 1, before 0 contextual patterns; (identifier) catch-all after 35, before 0 contextual patterns): patterns reversed"
+   "pascal/highlights (npm:pascal/queries/highlights.scm): catch-all patterns hoisted to the top (39 patterns moved): the later pattern wins"
   ],
   "pascal/injections": [
    "pascal/injections (helix:pascal/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
@@ -1425,28 +1467,37 @@
   ],
   "perl/highlights": [
    "perl/highlights (npm:perl/queries/highlights.scm): (#lua-match? @preproc \"^#!/\") -> (#match? @preproc \"^#!/\")",
-   "perl/highlights (npm:perl/queries/highlights.scm): regex \"^((ENV|ARGV|INC|ARGVOUT|SIG|STDIN|STDOUT|STDERR)|[_ab]|\\\\W|\\\\d+|\\\\^.*)$\" -> \"^((ENV|ARGV|INC|ARGVOUT|SIG|STDIN|STDOUT|STDERR)|[_ab]|[^\\\\p{L}\\\\p{M}\\\\p{Nd}\\\\p{Pc}]|\\\\p{Nd}+|\\\\^.*)$\" (Rust's meaning of its classes, spelled out)"
+   "perl/highlights (npm:perl/queries/highlights.scm): regex \"^((ENV|ARGV|INC|ARGVOUT|SIG|STDIN|STDOUT|STDERR)|[_ab]|\\\\W|\\\\d+|\\\\^.*)$\" -> \"^((ENV|ARGV|INC|ARGVOUT|SIG|STDIN|STDOUT|STDERR)|[_ab]|[^\\\\p{L}\\\\p{M}\\\\p{Nd}\\\\p{Pc}]|\\\\p{Nd}+|\\\\^.*)$\" (Rust's meaning of its classes, spelled out)",
+   "perl/highlights (npm:perl/queries/highlights.scm): catch-all patterns hoisted to the top (64 patterns moved): the later pattern wins"
   ],
   "perl/injections": [
    "perl/injections (npm:perl/queries/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
    "perl/injections (npm:perl/queries/injections.scm): dropped pattern (injects pod, which has no grammar here): ((pod) @injection.content (#set! injection.language \"pod\"))"
   ],
   "php/highlights": [
-   "php/highlights (npm:php/queries/highlights.scm): regex \"^_?[A-Z][A-Z\\\\d_]+$\" -> \"^_?[A-Z][A-Z\\\\p{Nd}_]+$\" (Rust's meaning of its classes, spelled out)"
+   "php/highlights (npm:php/queries/highlights.scm): regex \"^_?[A-Z][A-Z\\\\d_]+$\" -> \"^_?[A-Z][A-Z\\\\p{Nd}_]+$\" (Rust's meaning of its classes, spelled out)",
+   "php/highlights (npm:php/queries/highlights.scm): catch-all patterns hoisted to the top (38 patterns moved): the later pattern wins"
   ],
   "php/injections": [
    "php/injections (npm:php/queries/injections.scm): dropped pattern (injects phpdoc, which has no grammar here): ((comment) @injection.content (#set! injection.language \"phpdoc\"))"
   ],
   "php_only/highlights": [
-   "php_only/highlights (npm:php/queries/highlights.scm): regex \"^_?[A-Z][A-Z\\\\d_]+$\" -> \"^_?[A-Z][A-Z\\\\p{Nd}_]+$\" (Rust's meaning of its classes, spelled out)"
+   "php_only/highlights (npm:php/queries/highlights.scm): regex \"^_?[A-Z][A-Z\\\\d_]+$\" -> \"^_?[A-Z][A-Z\\\\p{Nd}_]+$\" (Rust's meaning of its classes, spelled out)",
+   "php_only/highlights (npm:php/queries/highlights.scm): catch-all patterns hoisted to the top (38 patterns moved): the later pattern wins"
   ],
   "php_only/injections": [
    "php_only/injections (npm:php/queries/injections.scm): dropped pattern (injects phpdoc, which has no grammar here): ((comment) @injection.content (#set! injection.language \"phpdoc\"))"
+  ],
+  "python/highlights": [
+   "python/highlights (npm:python/queries/highlights.scm): catch-all patterns hoisted to the top (18 patterns moved): the later pattern wins"
   ],
   "python/injections": [
    "python/injections (helix:python/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
    "python/injections (helix:python/injections.scm): dropped pattern (injects regex, which has no grammar here): (call function: (attribute object: (identifier) @_module (#eq? @_module \"re\") attribute: (identifier) @_function (#any-of? @_function \"compile\" \"search\" \"match\" ...",
    "python/injections: nothing left, no file shipped"
+  ],
+  "r/highlights": [
+   "r/highlights (npm:r/queries/highlights.scm): catch-all patterns hoisted to the top (22 patterns moved): the later pattern wins"
   ],
   "r/injections": [
    "r/injections (helix:r/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
@@ -1454,7 +1505,8 @@
   ],
   "ruby/highlights": [
    "ruby/highlights (npm:ruby/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)",
-   "ruby/highlights (npm:ruby/queries/highlights.scm): regex \"^[A-Z\\\\d_]+$\" -> \"^[A-Z\\\\p{Nd}_]+$\" (Rust's meaning of its classes, spelled out)"
+   "ruby/highlights (npm:ruby/queries/highlights.scm): regex \"^[A-Z\\\\d_]+$\" -> \"^[A-Z\\\\p{Nd}_]+$\" (Rust's meaning of its classes, spelled out)",
+   "ruby/highlights (npm:ruby/queries/highlights.scm): catch-all patterns hoisted to the top (39 patterns moved): the later pattern wins"
   ],
   "ruby/injections": [
    "ruby/injections (helix:ruby/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
@@ -1462,23 +1514,33 @@
    "ruby/injections (helix:ruby/injections.scm): dropped pattern (injects erb, which has no grammar here): ((heredoc_body (heredoc_content) @injection.content (heredoc_end) @name (#set! injection.language \"erb\")) (#eq? @name \"ERB\"))"
   ],
   "rust/highlights": [
-   "rust/highlights (npm:rust/queries/highlights.scm): regex \"^[A-Z][A-Z\\\\d_]+$'\" -> \"^[A-Z][A-Z\\\\p{Nd}_]+$'\" (Rust's meaning of its classes, spelled out)"
+   "rust/highlights (npm:rust/queries/highlights.scm): regex \"^[A-Z][A-Z\\\\d_]+$'\" -> \"^[A-Z][A-Z\\\\p{Nd}_]+$'\" (Rust's meaning of its classes, spelled out)",
+   "rust/highlights (npm:rust/queries/highlights.scm): catch-all patterns hoisted to the top (91 patterns moved): the later pattern wins"
   ],
   "scala/highlights": [
-   "scala/highlights (npm:scala/queries/highlights.scm): written earlier-pattern-wins ((type_identifier) catch-all after 0, before 1 contextual patterns; (operator_identifier) catch-all after 4, before 0 contextual patterns): patterns reversed"
+   "scala/highlights (npm:scala/queries/highlights.scm): catch-all patterns hoisted to the top (77 patterns moved): the later pattern wins"
   ],
   "scala/injections": [
    "scala/injections (helix:scala/injections.scm): dropped pattern (injects comment, which has no grammar here): ([(comment) (block_comment)] @injection.content (#set! injection.language \"comment\"))"
+  ],
+  "sql/highlights": [
+   "sql/highlights (npm:sql/queries/highlights.scm): catch-all patterns hoisted to the top (24 patterns moved): the later pattern wins"
   ],
   "sql/injections": [
    "sql/injections (nvim:sql/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
    "sql/injections (nvim:sql/injections.scm): dropped pattern (injects comment, which has no grammar here): ((marginalia) @injection.content (#set! injection.language \"comment\"))",
    "sql/injections: nothing left, no file shipped"
   ],
+  "swift/highlights": [
+   "swift/highlights (npm:swift/queries/highlights.scm): catch-all patterns hoisted to the top (61 patterns moved): the later pattern wins"
+  ],
   "swift/injections": [
    "swift/injections (npm:swift/queries/injections.scm): dropped pattern (injects regex, which has no grammar here): ((regex_literal) @injection.content (#set! injection.language \"regex\"))",
    "swift/injections (npm:swift/queries/injections.scm): dropped pattern (injects comment, which has no grammar here): ([ (comment) (multiline_comment) ] @injection.content (#set! injection.language \"comment\"))",
    "swift/injections: nothing left, no file shipped"
+  ],
+  "toml/highlights": [
+   "toml/highlights (npm:toml/queries/highlights.scm): catch-all patterns hoisted to the top (10 patterns moved): the later pattern wins"
   ],
   "toml/injections": [
    "toml/injections (helix:toml/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
@@ -1487,7 +1549,9 @@
   "tsx/highlights": [
    "tsx/highlights (npm:javascript/queries/highlights.scm): regex \"^[A-Z_][A-Z\\\\d_]+$\" -> \"^[A-Z_][A-Z\\\\p{Nd}_]+$\" (Rust's meaning of its classes, spelled out)",
    "tsx/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)",
-   "tsx/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)"
+   "tsx/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)",
+   "tsx/highlights (npm:javascript/queries/highlights.scm): catch-all patterns hoisted to the top (25 patterns moved): the later pattern wins",
+   "tsx/highlights (npm:typescript/queries/highlights.scm): catch-all patterns hoisted to the top (5 patterns moved): the later pattern wins"
   ],
   "tsx/injections": [
    "tsx/injections (npm:javascript/queries/injections.scm): dropped pattern (injects regex, which has no grammar here): ((regex_pattern) @injection.content (#set! injection.language \"regex\"))",
@@ -1497,7 +1561,9 @@
   "typescript/highlights": [
    "typescript/highlights (npm:javascript/queries/highlights.scm): regex \"^[A-Z_][A-Z\\\\d_]+$\" -> \"^[A-Z_][A-Z\\\\p{Nd}_]+$\" (Rust's meaning of its classes, spelled out)",
    "typescript/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)",
-   "typescript/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)"
+   "typescript/highlights (npm:javascript/queries/highlights.scm): removed (#is-not? local) (locals are not tracked; it only narrows the match)",
+   "typescript/highlights (npm:javascript/queries/highlights.scm): catch-all patterns hoisted to the top (25 patterns moved): the later pattern wins",
+   "typescript/highlights (npm:typescript/queries/highlights.scm): catch-all patterns hoisted to the top (5 patterns moved): the later pattern wins"
   ],
   "typescript/injections": [
    "typescript/injections (npm:javascript/queries/injections.scm): dropped pattern (injects regex, which has no grammar here): ((regex_pattern) @injection.content (#set! injection.language \"regex\"))",
@@ -1507,9 +1573,18 @@
   "vue/injections": [
    "vue/injections (helix:vue/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))"
   ],
+  "wat/highlights": [
+   "wat/highlights (npm:wast/queries/highlights.scm): catch-all patterns hoisted to the top (13 patterns moved): the later pattern wins"
+  ],
+  "xml/highlights": [
+   "xml/highlights (npm:xml/queries/xml/highlights.scm): catch-all patterns hoisted to the top (46 patterns moved): the later pattern wins"
+  ],
   "xml/injections": [
    "xml/injections (helix:xml/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))",
    "xml/injections: nothing left, no file shipped"
+  ],
+  "yaml/highlights": [
+   "yaml/highlights (npm:yaml/queries/highlights.scm): catch-all patterns hoisted to the top (7 patterns moved): the later pattern wins"
   ],
   "yaml/injections": [
    "yaml/injections (helix:yaml/injections.scm): dropped pattern (injects comment, which has no grammar here): ((comment) @injection.content (#set! injection.language \"comment\"))"

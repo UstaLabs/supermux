@@ -1,8 +1,8 @@
-1-5 tok-string	"ağ"
+1-5 tok-string-special	"ağ"
 8-9 tok-number	1
 11-15 tok-constant-builtin	true
 17-21 tok-constant-builtin	null
-24-29 tok-string	"e😀"
+24-29 tok-string-special	"e😀"
 31-33 tok-string	"x
 33-35 tok-escape	\\n
 35-36 tok-string	"

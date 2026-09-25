@@ -37,7 +37,43 @@ class HighlighterTest {
                 assertTrue(m.classes.single() in TokenClasses.ALL, "$name: $m")
             }
             assertGolden("$name.txt", dumpSpans(spans, text))
+            goldenUpdateDir()?.let { writeTextFile("$it/samples/$name.txt", text) } // for tools/highlight-oracle.py
         }
+    }
+
+    private fun classOf(lang: String, text: String, token: String, nth: Int = 0): String? {
+        var at = text.indexOf(token)
+        repeat(nth) { at = text.indexOf(token, at + 1) }
+        return classAt(highlight(backend, lang, text), at)
+    }
+
+    /** Files mixing orders (catch-alls hoisted, specific patterns kept as written): the specific capture wins. */
+    @Test fun specificPatternsWinInHoistedFiles() {
+        val go = HighlightSamples.GO
+        assertEquals("tok-function-builtin", classOf("go", go, "len("))
+        assertEquals("tok-function-builtin", classOf("go", go, "println("))
+        assertEquals("tok-function-builtin", classOf("go", go, "make("))
+        assertEquals("tok-method", classOf("go", go, "Println"))
+        assertEquals("tok-function", classOf("go", go, "main()"))
+        assertEquals("tok-keyword", classOf("go", go, "func"))
+        val scala = HighlightSamples.SCALA
+        assertEquals("tok-keyword", classOf("scala", scala, "object"))
+        assertEquals("tok-type", classOf("scala", scala, "Point"))
+        assertEquals("tok-method", classOf("scala", scala, "norm"))
+        val glsl = HighlightSamples.GLSL
+        assertEquals("tok-type", classOf("glsl", glsl, "vec3"))
+        assertEquals("tok-variable-builtin", classOf("glsl", glsl, "gl_FragCoord"))
+        val pascal = HighlightSamples.PASCAL
+        assertEquals("tok-keyword", classOf("pascal", pascal, "begin"))
+        assertEquals("tok-string", classOf("pascal", pascal, "'Hello '"))
+    }
+
+    /** fwcd's grammar at Helix's commit: the patterns M2b first dropped are back. */
+    @Test fun kotlinNullAndInterpolation() {
+        val text = "fun String?.f(x: Int?) = if (x == null) \"${'$'}this ${'$'}{x}\" else null\n"
+        assertEquals("tok-constant-builtin", classOf("kotlin", text, "null"))
+        assertEquals("tok-operator", classOf("kotlin", text, "?.f") ?: classOf("kotlin", text, "?"))
+        assertEquals("tok-punctuation", classOf("kotlin", text, "${'$'}{"))
     }
 
     @Test fun injectedSpansWinOverHost() {
@@ -55,7 +91,7 @@ class HighlighterTest {
         val text = "Text\n\n```python\ndef f(): pass\n```\n\n~~~kotlin\nval x = 1\n~~~\n"
         Highlighter(backend, "markdown").use { h ->
             h.parse(ChunkedSource(text), text.length, null).use { doc ->
-                assertTrue("1:python" in doc.injections && "1:kotlin" in doc.injections, doc.injections.toString())
+                assertTrue(doc.injections.any { it.startsWith("1:python@") } && doc.injections.any { it.startsWith("1:kotlin@") }, doc.injections.toString())
                 val spans = h.spans(doc, 0, text.length, ChunkedSource(text))
                 assertEquals("tok-keyword", classAt(spans, text.indexOf("def")))
                 assertEquals("tok-keyword", classAt(spans, text.indexOf("val")))
@@ -67,7 +103,7 @@ class HighlighterTest {
         val text = "```foobar\nfun main() {}\n```\n"
         Highlighter(backend, "markdown").use { h ->
             h.parse(ChunkedSource(text), text.length, null).use { doc ->
-                assertTrue(doc.injections.none { it.endsWith("foobar") || it.endsWith("kotlin") }, doc.injections.toString())
+                assertTrue(doc.injections.none { ":foobar@" in it || ":kotlin@" in it }, doc.injections.toString())
                 assertTrue(classAt(h.spans(doc, 0, text.length, ChunkedSource(text)), text.indexOf("fun")) != "tok-keyword")
             }
         }

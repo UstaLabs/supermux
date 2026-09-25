@@ -223,16 +223,16 @@
   },
   {
    "lang": "kotlin",
-   "package": "tree-sitter-kotlin",
-   "version": "0.3.8",
-   "url": "https://registry.npmjs.org/tree-sitter-kotlin/-/tree-sitter-kotlin-0.3.8.tgz",
-   "sha256": "e2da896c8316af1d491afc69b49173da97373bb757d07f11c455a0963c62e6b0",
+   "package": "fwcd/tree-sitter-kotlin",
+   "version": "git-f66d2908542e",
+   "url": "https://codeload.github.com/fwcd/tree-sitter-kotlin/tar.gz/f66d2908542e93c0204c6c241f794afe4e9cd5d1",
+   "sha256": "d5449d701d40883d989454c3cd772d84ef90865c98e8e699e37cf535f9a1b95f",
    "license": "MIT",
    "parserDirs": [
     "src"
    ],
    "tables": "bundled",
-   "note": "fwcd's grammar (M2b): the one Helix, nvim-treesitter and its own queries/highlights.scm target. @tree-sitter-grammars/tree-sitter-kotlin 1.1.0 (M2a) is a rewrite with other node names and no query set anywhere."
+   "note": "git: fwcd's grammar at the commit Helix pins (2026-05-01), which Helix's kotlin queries target; its src/parser.c is committed (ABI 14), so no regeneration. npm tree-sitter-kotlin 0.3.8 is older (no null_literal, no interpolation start tokens, no receiver_type) and @tree-sitter-grammars/tree-sitter-kotlin 1.1.0 (M2a) a rewrite with other node names."
   },
   {
    "lang": "dart",
