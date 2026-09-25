@@ -14,6 +14,8 @@ import dev.supermux.editor.core.StateField
 import dev.supermux.editor.core.Transaction
 import dev.supermux.editor.core.decorationsFacet
 import dev.supermux.editor.core.extensionOf
+import kotlin.concurrent.atomics.AtomicLong
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 /**
  * The worker's answer for one document version: token spans (and folds) for UTF-16 [start, end)
@@ -27,6 +29,8 @@ class SyntaxSpansUpdate(
     val spans: RangeSet<Decoration>,
     val folds: IntArray,
     val syntaxOff: Boolean = false,
+    /** The [SyntaxSnapshot.epoch] it was computed for; an update for another field instance is ignored (-1: any). */
+    val epoch: Long = -1,
 )
 
 /** One doc-changing transaction: [changes] turned version `version - 1` into [version]. */
@@ -34,6 +38,11 @@ class VersionedChanges(val version: Long, val changes: ChangeSet)
 
 /** What the syntax worker needs from one state. Plain data: safe to hand to another thread. */
 class SyntaxSnapshot(
+    /**
+     * Unique per syntax field instance (each [EditorState.create] makes a new one): a replaced
+     * state starts at version 0 again, so a version alone does not identify a text.
+     */
+    val epoch: Long,
     /** Null: plain text, nothing to parse. */
     val language: String?,
     val doc: Rope,
@@ -47,6 +56,7 @@ class SyntaxSnapshot(
 
 /** The syntax field's value: data only (no native handle ever sits in an EditorState). */
 internal class SyntaxValue(
+    val epoch: Long,
     val language: String?,
     val version: Long,
     val spans: RangeSet<Decoration>,
@@ -54,11 +64,14 @@ internal class SyntaxValue(
     val viewport: IntRange,
     val log: List<VersionedChanges>,
     val syntaxOff: Boolean,
+    /** The version of the last update applied: an older one arriving later is ignored (FIFO guard). */
+    val lastUpdate: Long = -1,
 ) {
     fun copy(
         version: Long = this.version, spans: RangeSet<Decoration> = this.spans, folds: IntArray = this.folds,
         viewport: IntRange = this.viewport, log: List<VersionedChanges> = this.log, syntaxOff: Boolean = this.syntaxOff,
-    ) = SyntaxValue(language, version, spans, folds, viewport, log, syntaxOff)
+        lastUpdate: Long = this.lastUpdate,
+    ) = SyntaxValue(epoch, language, version, spans, folds, viewport, log, syntaxOff, lastUpdate)
 }
 
 /**
@@ -82,8 +95,17 @@ object Syntax {
 
     /** What the worker needs from a state; null when the state has no syntax extension. */
     fun snapshot(state: EditorState): SyntaxSnapshot? = state.fieldOrNull(field)?.let { v ->
-        SyntaxSnapshot(v.language, state.doc, v.version, v.viewport, v.log, v.syntaxOff)
+        SyntaxSnapshot(v.epoch, v.language, state.doc, v.version, v.viewport, v.log, v.syntaxOff)
     }
+
+    /** Doc changes' inserted text kept in the log at most (then the oldest entries go). */
+    const val LOG_MAX_INSERTED = 1 shl 20
+
+    /** Spans are kept within this many screens (the viewport's length) around the viewport. */
+    const val KEEP_SCREENS = 2
+
+    @OptIn(ExperimentalAtomicApi::class)
+    private val epochs = AtomicLong(0)
 
     /** The fold ranges known for [state], packed UTF-16 [start, end)*. */
     fun folds(state: EditorState): IntArray = state.fieldOrNull(field)?.folds ?: IntArray(0)
@@ -97,7 +119,7 @@ object Syntax {
 
     internal val field: StateField<SyntaxValue> = StateField(
         name = "syntax",
-        create = { st -> SyntaxValue(st.facet(languageFacet), 0, EMPTY, IntArray(0), IntRange.EMPTY, emptyList(), false) },
+        create = { st -> SyntaxValue(nextEpoch(), st.facet(languageFacet), 0, EMPTY, IntArray(0), IntRange.EMPTY, emptyList(), false) },
         update = ::update,
         provide = { f -> decorationsFacet.compute(FacetDep.field(f)) { st -> st.field(f).spans } },
     )
@@ -106,13 +128,13 @@ object Syntax {
         var v = value
         // A new language (a compartment reconfigure): start over, and bump the version so the worker notices.
         val lang = tr.state.facet(languageFacet)
-        if (lang != v.language) v = SyntaxValue(lang, v.version + 1, EMPTY, IntArray(0), v.viewport, emptyList(), false)
+        if (lang != v.language) v = SyntaxValue(v.epoch, lang, v.version + 1, EMPTY, IntArray(0), v.viewport, emptyList(), false)
         // Worker updates are in the coordinates of their own version, at most the start state's.
         for (e in tr.effects) e.valueIf(spans)?.let { v = applyUpdate(v, it) }
         if (tr.docChanged) {
             val c = tr.changes
             val version = v.version + 1
-            val log = (v.log + VersionedChanges(version, c)).takeLast(LOG_SIZE)
+            val log = capLog((v.log + VersionedChanges(version, c)).takeLast(LOG_SIZE))
             v = v.copy(
                 version = version, spans = v.spans.map(c), folds = mapFolds(v.folds, c),
                 viewport = mapViewport(v.viewport, c), log = log,
@@ -123,8 +145,10 @@ object Syntax {
     }
 
     private fun applyUpdate(v: SyntaxValue, u: SyntaxSpansUpdate): SyntaxValue {
+        if (u.epoch >= 0 && u.epoch != v.epoch) return v // computed for another state's text
         if (u.version > v.version) return v // from a version this state never had
-        if (u.syntaxOff) return v.copy(spans = EMPTY, folds = IntArray(0), syntaxOff = true)
+        if (u.version < v.lastUpdate) return v // overtaken: a newer update is already in
+        if (u.syntaxOff) return v.copy(spans = EMPTY, folds = IntArray(0), syntaxOff = true, lastUpdate = u.version)
         var spans = u.spans
         var folds = u.folds
         var start = u.start
@@ -139,13 +163,40 @@ object Syntax {
             start = c.mapPos(start, 1)
             end = maxOf(start, c.mapPos(end, -1))
         }
-        return v.copy(spans = replaceIn(v.spans, spans, start, end), folds = replaceFolds(v.folds, folds, start, end))
+        // Keep only a window around the viewport (or the update, before the viewport is known), so
+        // mapping the spans through every keystroke stays cheap on the UI thread.
+        val (ks, ke) = if (v.viewport.isEmpty()) start to end else {
+            val len = v.viewport.last + 1 - v.viewport.first
+            v.viewport.first - KEEP_SCREENS * len to v.viewport.last + 1 + KEEP_SCREENS * len
+        }
+        return v.copy(spans = replaceIn(v.spans, spans, start, end, ks, ke), folds = replaceFolds(v.folds, folds, start, end), lastUpdate = u.version)
     }
 
-    /** [old] outside [start, end) (a span crossing an edge keeps its outside part) plus [new] inside. */
-    private fun replaceIn(old: RangeSet<Decoration>, new: RangeSet<Decoration>, start: Int, end: Int): RangeSet<Decoration> {
+    @OptIn(ExperimentalAtomicApi::class)
+    private fun nextEpoch(): Long = epochs.addAndFetch(1)
+
+    /** Drop the oldest log entries while their inserted text exceeds [LOG_MAX_INSERTED] (a big paste). */
+    private fun capLog(log: List<VersionedChanges>): List<VersionedChanges> {
+        var total = 0L
+        var keepFrom = log.size
+        for (i in log.indices.reversed()) {
+            total += log[i].changes.iterChanges().sumOf { it.inserted.length.toLong() }
+            if (total > LOG_MAX_INSERTED && keepFrom < log.size) break
+            keepFrom = i
+        }
+        return if (keepFrom == 0) log else log.subList(keepFrom, log.size).toList()
+    }
+
+    /**
+     * [old] outside [start, end) (a span crossing an edge keeps its outside part) plus [new] inside,
+     * all within [keepFrom, keepTo).
+     */
+    private fun replaceIn(
+        old: RangeSet<Decoration>, new: RangeSet<Decoration>, start: Int, end: Int, keepFrom: Int, keepTo: Int,
+    ): RangeSet<Decoration> {
         val out = ArrayList<Ranged<Decoration>>(old.size + new.size)
         for (r in old) {
+            if (r.to <= keepFrom || r.from >= keepTo) continue
             if (r.to <= start || r.from >= end) { out += r; continue }
             if (r.from < start) out += Ranged(r.from, start, r.value)
             if (r.to > end) out += Ranged(end, r.to, r.value)

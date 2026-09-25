@@ -15,11 +15,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.concurrent.Volatile
 
 /** When a document is plain text instead: too big, a line too long, or a parse too slow. */
 data class SyntaxLimits(
-    /** Per parse of each layer; hitting it turns syntax off for the document. */
-    val parseTimeoutMicros: Long = 200_000,
+    /** A parse runs in slices this long; between slices a newer snapshot cancels it (and it restarts on that one). */
+    val parseSliceMicros: Long = 50_000,
+    /** One document version's whole parse (every layer) may take this long; beyond it, syntax is off. */
+    val parseBudgetMicros: Long = 10_000_000,
     /** UTF-16 units (5 MiB). */
     val maxDocumentLength: Int = 5 * 1024 * 1024,
     val maxLineLength: Int = 20_000,
@@ -31,11 +34,13 @@ data class SyntaxLimits(
  * The background syntax loop for one document. The host calls [onState] after every transaction
  * (cheap, never blocks); the worker, on its own single-threaded dispatcher, brings its parse up to
  * date with the edits since its last parse, highlights the viewport plus one screen above and
- * below, and [dispatch]es a [Syntax.spans] effect (from the worker's thread: the host hops to its
- * UI thread itself).
+ * below, and [dispatch]es a [Syntax.spans] effect from the worker's thread.
  *
- * The worker owns every native object (parsers, trees, queries) and frees them all when its scope
- * is cancelled or [close] is called.
+ * The host must deliver those dispatches to the state IN ORDER (FIFO, e.g. by posting each to its
+ * UI thread's queue); the field also ignores an update older than one it already applied.
+ *
+ * The worker owns every native object (parsers, trees; the queries are the backend's) and frees
+ * them all when its scope is cancelled or [close] is called.
  */
 class SyntaxWorker(
     private val backend: SyntaxBackend,
@@ -48,11 +53,29 @@ class SyntaxWorker(
     private val inbox = Channel<Pair<Long, SyntaxSnapshot>>(Channel.CONFLATED)
     private val posted = MutableStateFlow(0L)
     private val done = MutableStateFlow(0L)
-    private val job: Job = scope.launch(dispatcher) { loop() }
+    private val job: Job = scope.launch(dispatcher) { loop() }.also { j ->
+        // cancelled before it ever ran (so no finally ran): idle() must still return
+        j.invokeOnCompletion { done.value = Long.MAX_VALUE }
+    }
 
     /** The last failure of the loop (it carries on with the next snapshot), for diagnostics. */
-    var lastError: Throwable? = null
+    @Volatile var lastError: Throwable? = null
         private set
+
+    /** Parses abandoned for a newer snapshot (tests). */
+    @Volatile internal var restarts = 0
+        private set
+
+    /** Milliseconds per step of the last cycle (diagnostics, benchmarks). */
+    val lastCycle: MutableMap<String, Double> = LinkedHashMap()
+
+    private inline fun <T> step(name: String, block: () -> T): T {
+        val t = kotlin.time.TimeSource.Monotonic.markNow()
+        try { return block() } finally { lastCycle[name] = t.elapsedNow().inWholeNanoseconds / 1e6 }
+    }
+
+    /** Called between two parse slices, on the worker's thread (tests). */
+    internal var onSlice: (() -> Unit)? = null
 
     fun onState(state: EditorState) {
         val snapshot = Syntax.snapshot(state) ?: return
@@ -61,10 +84,10 @@ class SyntaxWorker(
         inbox.trySend(seq to snapshot)
     }
 
-    /** Suspends until every state posted so far has been handled (tests and benchmarks). */
+    /** Suspends until every state posted so far has been handled, or the worker stopped (tests, benchmarks). */
     suspend fun idle() {
         val target = posted.value
-        done.first { it >= target || job.isCompleted }
+        done.first { it >= target }
     }
 
     /** Stop and free every native handle (asynchronously, on the worker's thread; [join] waits). */
@@ -77,64 +100,100 @@ class SyntaxWorker(
 
     // ------------------------------------------------------------------ worker thread only --
 
+    private var epoch = -1L
     private var language: String? = null
     private var highlighter: Highlighter? = null
     private var parsed: ParsedDocument? = null
+    /** The text [parsed]'s trees carry every edit up to (they may still need a reparse: [stale]). */
     private var parsedDoc: Rope? = null
     private var parsedVersion = -1L
-    private var sent: Pair<Long, IntRange>? = null
+    private var stale = false
+    private var sent: Triple<Long, Long, IntRange>? = null
     private var off = false
+    private var longLine: Pair<Long, Boolean>? = null // (version, answer) for this epoch
 
     private suspend fun loop() {
         try {
             for ((seq, snapshot) in inbox) {
                 try {
-                    process(snapshot)
+                    process(snapshot, seq)
                 } catch (e: CancellationException) {
                     throw e
+                } catch (e: ParseCancelled) {
+                    restarts++ // the newer snapshot is already in the inbox
                 } catch (e: Throwable) {
                     lastError = e
-                    reset()
+                    resetParse()
                 }
                 done.value = seq
             }
         } finally {
             reset() // on the worker's thread, cancelled or not: every native handle goes
+            done.value = Long.MAX_VALUE
         }
     }
 
-    private fun reset() {
+    private fun resetParse() {
         parsed?.close()
         parsed = null
         parsedDoc = null
         parsedVersion = -1
-        highlighter?.close()
-        highlighter = null
+        stale = false
         sent = null
     }
 
-    private fun process(s: SyntaxSnapshot) {
-        if (s.language != language) {
+    private fun reset() {
+        resetParse()
+        highlighter?.close()
+        highlighter = null
+        longLine = null
+    }
+
+    private suspend fun process(s: SyntaxSnapshot, seq: Long) {
+        if (s.epoch != epoch || s.language != language) {
+            // another document (a replaced state starts at version 0 again), or another language
             reset()
+            epoch = s.epoch
             language = s.language
             off = false
         }
         val lang = language ?: return
         if (s.syntaxOff) { off = true; return }
         if (off) return
-        if (sent == s.version to s.viewport) return // nothing new (e.g. the state our own update made)
-        if (s.doc.length > limits.maxDocumentLength || hasLongLine(s)) return turnOff(s)
+        if (sent == Triple(s.epoch, s.version, s.viewport) && parsedDoc === s.doc) return // nothing new
+        if (s.doc.length > limits.maxDocumentLength || step("longLines") { hasLongLine(s) }) return turnOff(s)
 
-        val h = highlighter ?: Highlighter(backend, lang, registry).also {
-            it.timeoutMicros = limits.parseTimeoutMicros
-            highlighter = it
+        val h = highlighter ?: run {
+            try {
+                backend.ensureLanguage(lang)
+            } catch (e: SyntaxException) {
+                lastError = e
+                return turnOff(s) // the document's own grammar is unavailable: plain text for good
+            }
+            Highlighter(backend, lang, registry).also {
+                it.sliceMicros = limits.parseSliceMicros
+                it.budgetMicros = limits.parseBudgetMicros
+                it.onSlice = { onSlice?.invoke() }
+                highlighter = it
+            }
         }
-        val text = TextSource { i -> if (i >= s.doc.length) "" else s.doc.chunkAt(i) }
-        if (parsed == null || parsedVersion != s.version) {
-            val previous = parsed?.takeIf { applyEdits(it, s) }
-            if (previous == null) { parsed?.close(); parsed = null }
+        val text = RopeText(s.doc)
+        // Bring the trees up to this version: the logged edits, or (another text at the same version,
+        // a gap in the log) a parse from scratch.
+        val cur = parsed
+        if (cur != null && (s.version != parsedVersion || s.doc !== parsedDoc)) {
+            if (s.version > parsedVersion && step("edits") { applyEdits(cur, s) }) {
+                parsedDoc = s.doc
+                parsedVersion = s.version
+                stale = true
+            } else {
+                resetParse()
+            }
+        }
+        val cancel = { posted.value > seq }
+        while (parsed == null || stale) {
             val next = try {
-                h.parse(text, s.doc.length, previous)
+                step("parse") { h.parse(text, s.doc.length, parsed, text, cancel) }
             } catch (e: SyntaxException) {
                 if (e.status != SyntaxStatus.TIMEOUT) throw e
                 return turnOff(s)
@@ -143,6 +202,14 @@ class SyntaxWorker(
             parsed = next
             parsedDoc = s.doc
             parsedVersion = s.version
+            stale = false
+            // injected languages met before they were loaded: load them, then parse again (no edits)
+            val pending = h.pendingLanguages.toList()
+            h.pendingLanguages.clear()
+            for (l in pending) {
+                try { backend.ensureLanguage(l) } catch (e: SyntaxException) { h.failedLanguages += l; lastError = e }
+            }
+            if (pending.any { it !in h.failedLanguages }) stale = true
         }
         val doc = parsed!!
         val vs = if (s.viewport.isEmpty()) 0 else s.viewport.first
@@ -150,10 +217,10 @@ class SyntaxWorker(
         val screen = maxOf(0, ve - vs)
         val start = maxOf(0, minOf(vs, s.doc.length) - screen)
         val end = minOf(s.doc.length, ve + screen)
-        val spans = RangeSet.of(h.spans(doc, start, end, text))
-        val folds = h.folds(doc, start, end, text)
-        sent = s.version to s.viewport
-        dispatch(TransactionSpec(effects = listOf(Syntax.spans.of(SyntaxSpansUpdate(s.version, start, end, spans, folds)))))
+        val spans = step("spans") { RangeSet.of(h.spans(doc, start, end, text)) }
+        val folds = step("folds") { h.folds(doc, start, end, text) }
+        sent = Triple(s.epoch, s.version, s.viewport)
+        dispatch(TransactionSpec(effects = listOf(Syntax.spans.of(SyntaxSpansUpdate(s.version, start, end, spans, folds, epoch = s.epoch)))))
     }
 
     /**
@@ -173,32 +240,37 @@ class SyntaxWorker(
         return true
     }
 
+    /** Cached per version: a viewport-only snapshot does not rescan. */
     private fun hasLongLine(s: SyntaxSnapshot): Boolean {
+        longLine?.let { (v, answer) -> if (v == s.version) return answer }
         val doc = s.doc
-        if (doc.length <= limits.maxLineLength) return false
-        // Checked fully the first time; after that only the lines the edits since touched.
-        val from = parsedDoc
-        val later = s.log.filter { it.version > parsedVersion }
-        val lines: List<IntRange> = if (from == null || later.isEmpty() || later.size.toLong() != s.version - parsedVersion) {
-            listOf(0 until doc.lineCount)
-        } else {
-            // every edit since, in the final document's coordinates
-            val all = later.drop(1).fold(later[0].changes) { acc, v -> acc.compose(v.changes) }
-            all.iterChanges().map { doc.lineIndexAt(it.fromB)..doc.lineIndexAt(it.toB) }
+        val answer = if (doc.length <= limits.maxLineLength) false else {
+            // Checked fully the first time; after that only the lines the edits since touched.
+            val known = longLine
+            val later = s.log.filter { known != null && it.version > known.first }
+            val lines: List<IntRange> = if (known == null || known.second || later.isEmpty() || later.size.toLong() != s.version - known.first) {
+                listOf(0 until doc.lineCount)
+            } else {
+                val all = later.drop(1).fold(later[0].changes) { acc, v -> acc.compose(v.changes) }
+                all.iterChanges().map { doc.lineIndexAt(it.fromB)..doc.lineIndexAt(it.toB) }
+            }
+            lines.any { r ->
+                r.any { i ->
+                    val start = doc.lineStart(i)
+                    val end = if (i + 1 < doc.lineCount) doc.lineStart(i + 1) - 1 else doc.length
+                    end - start > limits.maxLineLength
+                }
+            }
         }
-        for (i in lines.flatten()) {
-            val start = doc.lineStart(i)
-            val end = if (i + 1 < doc.lineCount) doc.lineStart(i + 1) - 1 else doc.length
-            if (end - start > limits.maxLineLength) return true
-        }
-        return false
+        longLine = s.version to answer
+        return answer
     }
 
     private fun turnOff(s: SyntaxSnapshot) {
         off = true
         reset()
         dispatch(TransactionSpec(effects = listOf(Syntax.spans.of(
-            SyntaxSpansUpdate(s.version, 0, s.doc.length, RangeSet.empty(), IntArray(0), syntaxOff = true),
+            SyntaxSpansUpdate(s.version, 0, s.doc.length, RangeSet.empty(), IntArray(0), syntaxOff = true, epoch = s.epoch),
         ))))
     }
 

@@ -26,7 +26,7 @@ import kotlin.test.assertTrue
  * posted there too, and the host calls [SyntaxWorker.onState] after every transaction.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-private class Host(
+internal class Host(
     text: String,
     language: String?,
     backend: SyntaxBackend,
@@ -37,6 +37,7 @@ private class Host(
     var state: EditorState = EditorState.create(text, extensions = Syntax.extension(language))
         private set
     val worker = SyntaxWorker(backend, LanguageRegistry.default, scope, { spec -> scope.launch(ui) { apply(spec) } }, limits)
+    fun state(text: String, language: String?) = EditorState.create(text, extensions = Syntax.extension(language))
 
     private fun apply(spec: TransactionSpec) {
         state = state.update(spec).state
@@ -44,6 +45,9 @@ private class Host(
     }
 
     suspend fun dispatch(spec: TransactionSpec) = withContext(ui) { apply(spec) }
+
+    /** The host swaps in another state (another file opened in this editor): a new field instance, version 0 again. */
+    suspend fun replace(next: EditorState) = withContext(ui) { state = next; worker.onState(next) }
     suspend fun viewport(r: IntRange) = dispatch(TransactionSpec(effects = listOf(Syntax.setViewport.of(r))))
 
     /** Until the worker is idle and its last update has been applied. */
@@ -169,7 +173,7 @@ class SyntaxWorkerTest {
 
     @Test
     fun timeoutTurnsSyntaxOff() = runBlocking {
-        val host = Host(HighlightSamples.KOTLIN.repeat(300), "kotlin", backend, SyntaxLimits(parseTimeoutMicros = 1))
+        val host = Host(HighlightSamples.kotlinLines(3000), "kotlin", backend, SyntaxLimits(parseSliceMicros = 100, parseBudgetMicros = 1))
         try {
             host.viewport(0 until 1000)
             host.settle()
@@ -270,5 +274,176 @@ class SyntaxWorkerTest {
         } finally {
             host.close()
         }
+    }
+
+    /** A replaced state (version 0 again, other text) must never get the old document's spans. */
+    @Test
+    fun aReplacedStateIsParsedAgain() = runBlocking {
+        val host = Host(HighlightSamples.KOTLIN, "kotlin", backend)
+        try {
+            host.viewport(0 until 100_000)
+            host.settle()
+            val other = "fun other() {\n    val z = \"zz\"\n}\n"
+            val next = host.state(other, "kotlin")
+            assertEquals(0L, Syntax.snapshot(next)!!.version)
+            host.replace(next)
+            host.settle()
+            assertTrue(host.spans.isEmpty || host.spans.last().to <= other.length)
+            // no viewport yet in the new state: the default one covers this small file
+            assertEquals(fresh("kotlin", other), host.spans)
+            // and a viewport change on it paints the new text too
+            host.viewport(0 until other.length)
+            host.settle()
+            assertEquals(fresh("kotlin", other), host.spans)
+            assertNull(host.worker.lastError)
+        } finally {
+            host.close()
+        }
+    }
+
+    /** An update computed for another state (another epoch) is ignored by this one. */
+    @Test
+    fun anUpdateForAnotherEpochIsIgnored() {
+        val a = EditorState.create("fun a() {}\n", extensions = Syntax.extension("kotlin"))
+        val b = EditorState.create("fun a() {}\n", extensions = Syntax.extension("kotlin"))
+        val epochA = Syntax.snapshot(a)!!.epoch
+        assertTrue(epochA != Syntax.snapshot(b)!!.epoch)
+        val u = SyntaxSpansUpdate(0, 0, 11, fresh("kotlin", "fun a() {}\n"), IntArray(0), epoch = epochA)
+        assertTrue(b.update(TransactionSpec(effects = listOf(Syntax.spans.of(u)))).state.field(Syntax.field).spans.isEmpty)
+        assertFalse(a.update(TransactionSpec(effects = listOf(Syntax.spans.of(u)))).state.field(Syntax.field).spans.isEmpty)
+    }
+
+    /** An update older than one already applied is ignored (dispatches arriving out of order). */
+    @Test
+    fun anOlderUpdateIsIgnored() {
+        var st = EditorState.create("val a = 1\n", extensions = Syntax.extension("kotlin"))
+        val u0 = SyntaxSpansUpdate(0, 0, 10, fresh("kotlin", "val a = 1\n"), IntArray(0))
+        st = st.update(ChangeSpec(0, 0, "val b = 2\n")).state
+        val t1 = st.doc.toString()
+        val u1 = SyntaxSpansUpdate(1, 0, t1.length, fresh("kotlin", t1), IntArray(0))
+        st = st.update(TransactionSpec(effects = listOf(Syntax.spans.of(u1)))).state
+        val after1 = st.field(Syntax.field).spans
+        st = st.update(TransactionSpec(effects = listOf(Syntax.spans.of(u0)))).state
+        assertEquals(after1, st.field(Syntax.field).spans)
+    }
+
+    /** A backend that has [missing] never, and [late] only after ensureLanguage. */
+    private class PartialBackend(val base: NativeBackend, val missing: Set<String>, val late: Set<String>) : SyntaxBackend by base {
+        val loaded = HashSet<String>()
+        override fun isReady(language: String) = language !in missing && (language !in late || language in loaded) && base.isReady(language)
+        override suspend fun ensureLanguage(language: String) {
+            if (language in missing) throw SyntaxException("no tables for $language: resource editor-syntax/tables/$language.sesz is missing", SyntaxStatus.NO_TABLES)
+            base.ensureLanguage(language)
+            loaded += language
+        }
+    }
+
+    @Test
+    fun aHostLanguageWithoutTablesIsPlainText() = runBlocking {
+        val host = Host("def f(): pass\n", "python", PartialBackend(backend, setOf("python"), emptySet()))
+        try {
+            host.viewport(0 until 100)
+            host.settle()
+            assertTrue(Syntax.isOff(host.state))
+            assertTrue(host.spans.isEmpty)
+            assertEquals(SyntaxStatus.NO_TABLES, (host.worker.lastError as SyntaxException).status)
+            // it does not retry on every keystroke: still off, and no new attempt
+            host.dispatch(TransactionSpec(listOf(ChangeSpec(0, 0, "# x\n"))))
+            host.settle()
+            assertTrue(Syntax.isOff(host.state))
+        } finally {
+            host.close()
+        }
+    }
+
+    @Test
+    fun anInjectionWithoutTablesIsSkippedAndTheRestHighlighted() = runBlocking {
+        val text = "# Title\n\n```python\ndef f(): pass\n```\n\n```kotlin\nfun g() = 1\n```\n"
+        val host = Host(text, "markdown", PartialBackend(backend, setOf("python"), emptySet()))
+        try {
+            host.viewport(0 until 1000)
+            host.settle()
+            assertFalse(Syntax.isOff(host.state))
+            val kw = host.spans.firstOrNull { it.from == text.indexOf("fun") }
+            assertEquals(setOf("tok-keyword"), (kw?.value as dev.supermux.editor.core.Decoration.Mark?)?.classes, "kotlin is still coloured")
+            assertTrue(host.spans.none { it.from == text.indexOf("def") && (it.value as dev.supermux.editor.core.Decoration.Mark).classes == setOf("tok-keyword") })
+            assertEquals(SyntaxStatus.NO_TABLES, (host.worker.lastError as SyntaxException).status)
+        } finally {
+            host.close()
+        }
+    }
+
+    @Test
+    fun anInjectionLoadedLaterIsParsedWhenReady() = runBlocking {
+        val text = "```python\ndef f(): pass\n```\n"
+        val host = Host(text, "markdown", PartialBackend(backend, emptySet(), setOf("python")))
+        try {
+            host.viewport(0 until 1000)
+            host.settle()
+            val kw = host.spans.firstOrNull { it.from == text.indexOf("def") }
+            assertEquals(setOf("tok-keyword"), (kw?.value as dev.supermux.editor.core.Decoration.Mark?)?.classes, "python arrived later")
+            assertNull(host.worker.lastError)
+        } finally {
+            host.close()
+        }
+    }
+
+    /** A parse far longer than one slice still finishes (it resumes slice after slice). */
+    @Test
+    fun aSlowFullParseStillFinishes() = runBlocking {
+        val text = HighlightSamples.kotlinLines(2000)
+        val host = Host(text, "kotlin", backend, SyntaxLimits(parseSliceMicros = 200))
+        try {
+            host.viewport(0 until text.length)
+            host.settle()
+            assertFalse(Syntax.isOff(host.state))
+            assertEquals(fresh("kotlin", text), host.spans)
+        } finally {
+            host.close()
+        }
+    }
+
+    /** A newer snapshot arriving during a sliced parse cancels it, and the newer one is parsed instead. */
+    @Test
+    fun aNewerSnapshotRestartsASlicedParse() = runBlocking {
+        val text = HighlightSamples.kotlinLines(2000)
+        val host = Host(text, "kotlin", backend, SyntaxLimits(parseSliceMicros = 200))
+        try {
+            var typed = false
+            host.worker.onSlice = {
+                if (!typed) {
+                    typed = true
+                    host.scope.launch(host.ui) { host.dispatch(TransactionSpec(listOf(ChangeSpec(0, 0, "// typed\n")))) }
+                }
+            }
+            host.viewport(0 until 1_000_000)
+            host.settle()
+            assertTrue(typed)
+            assertTrue(host.worker.restarts >= 1, "restarts ${host.worker.restarts}")
+            assertEquals(fresh("kotlin", host.state.doc.toString()), host.spans)
+            assertNull(host.worker.lastError)
+        } finally {
+            host.close()
+        }
+    }
+
+    @Test
+    fun idleReturnsOnceTheWorkerIsClosed() = runBlocking {
+        val host = Host("val a = 1\n", "kotlin", backend)
+        host.worker.close()
+        host.worker.join()
+        host.worker.onState(host.state)
+        kotlinx.coroutines.withTimeout(5_000) { host.worker.idle() }
+        host.scope.cancel()
+    }
+
+    /** A big paste does not stay in the change log for 64 more edits. */
+    @Test
+    fun theChangeLogKeepsAtMostAMegabyteOfInsertedText() {
+        var st = EditorState.create("", extensions = Syntax.extension("kotlin"))
+        st = st.update(ChangeSpec(0, 0, "x".repeat(Syntax.LOG_MAX_INSERTED))).state
+        st = st.update(ChangeSpec(0, 0, "y")).state
+        val log = Syntax.snapshot(st)!!.log
+        assertEquals(listOf(2L), log.map { it.version })
     }
 }
