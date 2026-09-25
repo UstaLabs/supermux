@@ -81,6 +81,30 @@ class ChangeSetTest {
         }
     }
 
+    @Test fun mapPosMatchesAChangeByChangeModel() = repeatRandom { rnd, doc ->
+        val cs = randomChangeSet(rnd, doc.length)
+        for (assoc in intArrayOf(-1, 1)) for (p in 0..doc.length) {
+            assertEquals(modelMapPos(cs, p, assoc), cs.mapPos(p, assoc), "mapPos($p, $assoc) for $cs")
+        }
+    }
+
+    /** mapPos's documented rules, applied change by change over [ChangeSet.iterChanges]. */
+    private fun modelMapPos(cs: ChangeSet, pos: Int, assoc: Int): Int {
+        var delta = 0
+        for (c in cs.iterChanges()) {
+            if (pos < c.fromA) break
+            val insLen = c.toB - c.fromB
+            if (c.fromA == c.toA) {
+                if (pos == c.fromA) return if (assoc < 0) pos + delta else pos + delta + insLen
+            } else {
+                if (pos == c.fromA) return pos + delta
+                if (pos < c.toA) return if (assoc < 0) c.fromB else c.toB
+            }
+            delta += insLen - (c.toA - c.fromA)
+        }
+        return pos + delta
+    }
+
     private fun repeatRandom(block: (Random, String) -> Unit) {
         val rnd = Random(42)
         repeat(500) {

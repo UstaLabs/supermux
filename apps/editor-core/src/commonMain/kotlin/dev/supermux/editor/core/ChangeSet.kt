@@ -114,19 +114,35 @@ class ChangeSet internal constructor(internal val ops: List<Op>) {
      */
     fun mapPos(pos: Int, assoc: Int = -1): Int {
         require(pos in 0..lengthBefore) { "mapPos($pos) out of bounds for length $lengthBefore" }
-        var delta = 0
-        for (c in iterChanges()) {
-            if (pos < c.fromA) break
-            val insLen = c.toB - c.fromB
-            if (c.fromA == c.toA) {
-                if (pos == c.fromA) return if (assoc < 0) pos + delta else pos + delta + insLen
-            } else {
-                if (pos == c.fromA) return pos + delta
-                if (pos < c.toA) return if (assoc < 0) c.fromB else c.toB
+        // Walks the ops directly (no Change list): this runs for every cursor and decoration per edit.
+        var a = 0; var b = 0 // the current position in the old and the new document
+        var i = 0
+        while (i < ops.size) {
+            val op = ops[i]
+            if (op is Op.Retain) {
+                if (pos < a + op.n) return b + (pos - a)
+                a += op.n; b += op.n; i++
+                continue
             }
-            delta += insLen - (c.toA - c.fromA)
+            // One change: the run of delete/insert ops up to the next retain, [a, toA) -> [b, toB).
+            var toA = a; var toB = b
+            while (i < ops.size) {
+                when (val o = ops[i]) {
+                    is Op.Delete -> toA += o.n
+                    is Op.Insert -> toB += o.text.length
+                    is Op.Retain -> break
+                }
+                i++
+            }
+            if (toA == a) {
+                if (pos == a) return if (assoc < 0) b else toB
+            } else {
+                if (pos == a) return b
+                if (pos < toA) return if (assoc < 0) b else toB
+            }
+            a = toA; b = toB
         }
-        return pos + delta
+        return b + (pos - a)
     }
 
     /** True when [pos] lies strictly inside a deleted range (its text is gone on both sides). */

@@ -46,11 +46,28 @@ data class Ranged<T>(val from: Int, val to: Int, val value: T) {
  * point strictly inside a deletion (a point exactly at its edge maps by its side); marks grow or
  * not at their edges according to their inclusive flags.
  */
-class RangeSet<T> private constructor(val ranges: List<Ranged<T>>) {
+class RangeSet<T> private constructor(internal val ranges: List<Ranged<T>>) : Iterable<Ranged<T>> {
+    // The longest range's length: [between] never needs to look further back than this.
+    private val maxLength = ranges.maxOfOrNull { it.to - it.from } ?: 0
+
     val size: Int get() = ranges.size
+    val isEmpty: Boolean get() = ranges.isEmpty()
+    override fun iterator(): Iterator<Ranged<T>> = ranges.iterator()
 
     /** Every range overlapping [from, to]; point ranges at the edges count. */
-    fun between(from: Int, to: Int): List<Ranged<T>> = ranges.filter { it.to >= from && it.from <= to }
+    fun between(from: Int, to: Int): List<Ranged<T>> {
+        // An overlapping range ends at or after [from], so it starts at or after from - maxLength.
+        var lo = 0; var hi = ranges.size
+        val start = from - maxLength
+        while (lo < hi) { val mid = (lo + hi) ushr 1; if (ranges[mid].from < start) lo = mid + 1 else hi = mid }
+        val out = ArrayList<Ranged<T>>()
+        for (i in lo until ranges.size) {
+            val r = ranges[i]
+            if (r.from > to) break
+            if (r.to >= from) out += r
+        }
+        return out
+    }
 
     fun map(changes: ChangeSet): RangeSet<T> {
         if (changes.isEmpty) return this

@@ -1,5 +1,6 @@
 package dev.supermux.editor.core
 
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -50,5 +51,23 @@ class RangeSetTest {
         val set = RangeSet.of(listOf(Ranged(0, 2, mark), Ranged(4, 6, mark), Ranged(9, 9, mark)))
         assertEquals(2, set.between(2, 4).size)
         assertEquals(1, set.between(9, 20).size)
+    }
+
+    @Test fun betweenMatchesAFullScan() {
+        val rnd = Random(3)
+        repeat(200) {
+            val ranges = List(rnd.nextInt(0, 40)) {
+                val from = rnd.nextInt(0, 100)
+                Ranged(from, from + if (rnd.nextInt(5) == 0) rnd.nextInt(0, 60) else rnd.nextInt(0, 4), mark)
+            }
+            val set = RangeSet.of(ranges)
+            assertEquals(ranges.size, set.size)
+            assertEquals(ranges.isEmpty(), set.isEmpty)
+            assertEquals(set.ranges, set.toList())
+            repeat(20) {
+                val from = rnd.nextInt(-5, 110); val to = from + rnd.nextInt(0, 20)
+                assertEquals(set.ranges.filter { it.to >= from && it.from <= to }, set.between(from, to), "between($from, $to)")
+            }
+        }
     }
 }
