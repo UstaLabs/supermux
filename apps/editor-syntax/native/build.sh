@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# build.sh gen            : transform + differential-test every locked grammar  -> build/gen/<lang>/
+# build.sh gen            : transform + differential-test every locked grammar  -> build/gen/<lang>/, then ctest
+#          build.sh ctest    : the C ABI tests (native/tests/bridge_test.c) under ASan + UBSan
 #          build.sh <target> : one native library                               -> build/natives/<target>/lib/
 #          build.sh all      : gen + every target this host can build           (+ build/natives/manifest.json)
 # Targets (all built on the Mac; the Linux and Windows ones cross-compile with zig):
@@ -27,6 +28,32 @@ for g in json.load(open(os.path.join(here, "native/grammars.lock.json")))["gramm
 PY
     "$HERE/tools/build-grammar.sh" "$lang" "$dir" || { echo "GEN FAILED: $lang $dir" >&2; exit 1; }
   done
+  echo "UBSan reports in the difftests: $(cat "$HERE"/build/gen/*/difftest.log | grep -c 'runtime error:' || true)"
+  ctest
+}
+
+# The C ABI tests, host-built with ASan + UBSan (every sanitizer report is fatal), against the
+# generated javascript and json grammars (bundled tables) of build/gen.
+ctest() {
+  local TS="$HERE/build/tree-sitter/lib" G="$HERE/build/gen" W="$HERE/build/ctest" o objs=()
+  local SAN=(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g)
+  local CC=(clang -O1 -w -std=gnu11 "${SAN[@]}")
+  rm -rf "$W"; mkdir -p "$W"
+  c() { o="$W/$1"; shift; "${CC[@]}" "$@" -c -o "$o"; objs+=("$o"); }
+  c lib.o -I"$TS/include" -I"$TS/src" "$TS/src/lib.c"
+  c bridge.o -I"$TS/include" -I"$HERE/native/include" "$HERE/native/src/syntax_bridge.c"
+  c loader.o -I"$HERE/native/include" "$HERE/native/src/ses_grammar.c"
+  c test.o -I"$HERE/native/include" "$HERE/native/tests/bridge_test.c"
+  for lang in javascript json; do
+    local src; src="$(dirname "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['parser_c'])" "$G/$lang/$lang.plan.json")")"
+    c "parser_$lang.o" -I"$src" -I"$HERE/native/include" "$G/$lang/parser_$lang.c"
+    c "blob_$lang.o" "$G/$lang/blob_$lang.c"
+    if [ -f "$src/scanner.c" ]; then c "scanner_$lang.o" -I"$src" "$src/scanner.c"; fi
+  done
+  python3 "$HERE/tools/gen-registry.py" "$W/registry.c" javascript:bundled json:bundled
+  c registry.o -I"$HERE/native/include" "$W/registry.c"
+  "${CC[@]}" "${objs[@]}" -lz -o "$W/bridge_test"
+  "$W/bridge_test" "$G"
 }
 
 # Every grammar a target links: "<lang as gen produced it>\t<grammar src dir>\t<bundled|code>".
@@ -146,7 +173,8 @@ PY
 
 case "${1:-}" in
   gen) gen ;;
+  ctest) ctest ;;
   all) gen; for t in "${TARGETS[@]}"; do build_target "$t"; done; cat "$HERE/build/natives/manifest.json" ;;
-  "") echo "usage: build.sh gen|<target>|all" >&2; exit 2 ;;
+  "") echo "usage: build.sh gen|ctest|<target>|all" >&2; exit 2 ;;
   *) build_target "$1" ;;
 esac
