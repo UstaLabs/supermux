@@ -2,6 +2,7 @@ package dev.supermux.editor.core
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class SelectionTest {
     @Test fun rangesAreSortedAndOverlapsMerged() {
@@ -13,6 +14,11 @@ class SelectionTest {
         assertEquals(2, EditorSelection.create(listOf(SelectionRange(0, 3), SelectionRange(3, 6))).ranges.size)
         assertEquals(1, EditorSelection.create(listOf(SelectionRange(0, 3), SelectionRange(3))).ranges.size)
         assertEquals(1, EditorSelection.create(listOf(SelectionRange(4), SelectionRange(4))).ranges.size)
+    }
+
+    @Test fun negativePositionsAreRejected() {
+        assertFailsWith<IllegalArgumentException> { SelectionRange(-1) }
+        assertFailsWith<IllegalArgumentException> { SelectionRange(0, -2) }
     }
 
     @Test fun selectionFollowsEdits() {

@@ -2,6 +2,8 @@ package dev.supermux.editor.core
 
 /** One selection range. [anchor] stays put while extending; [head] is where the cursor is drawn. */
 data class SelectionRange(val anchor: Int, val head: Int = anchor) {
+    init { require(anchor >= 0 && head >= 0) { "negative selection position $anchor-$head" } }
+
     val from: Int get() = minOf(anchor, head)
     val to: Int get() = maxOf(anchor, head)
     val empty: Boolean get() = anchor == head

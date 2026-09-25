@@ -2,8 +2,10 @@ package dev.supermux.editor.core
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class StateTest {
@@ -98,4 +100,11 @@ class StateTest {
         val w = words.of("once")
         assertEquals(listOf("once"), EditorState.create(extensions = extensionOf(w, w)).facet(words))
     }
+
+    @Test fun changesAndAChangeSetTogetherAreRejected() {
+        assertFailsWith<IllegalArgumentException> {
+            TransactionSpec(changes = listOf(ChangeSpec(0)), changeSet = ChangeSet.empty(0))
+        }
+    }
+
 }

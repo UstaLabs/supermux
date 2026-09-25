@@ -35,8 +35,8 @@ class AnnotationType<T>(val name: String) {
 class Annotation<T> internal constructor(val type: AnnotationType<T>, val value: T)
 
 /**
- * What a caller asks for. [changes] (or a prebuilt [changeSet]) are in the coordinates of the
- * CURRENT document; [selection], when given, is in the coordinates of the NEW one.
+ * What a caller asks for. [changes] (or a prebuilt [changeSet], never both) are in the coordinates
+ * of the CURRENT document; [selection], when given, is in the coordinates of the NEW one.
  *
  * [userEvent] names where the change came from, dot-separated from general to specific:
  * `input`, `input.ime`, `paste`, `undo`, `redo`, `disk`, `lsp`, `command`, and later `agent`.
@@ -49,7 +49,9 @@ data class TransactionSpec(
     val annotations: List<Annotation<*>> = emptyList(),
     val userEvent: String? = null,
     val scrollIntoView: Boolean = false,
-)
+) {
+    init { require(changes.isEmpty() || changeSet == null) { "give either changes or a changeSet, not both" } }
+}
 
 /** One applied update: the old state, what changed, and the resulting [state]. Plain data. */
 class Transaction internal constructor(
