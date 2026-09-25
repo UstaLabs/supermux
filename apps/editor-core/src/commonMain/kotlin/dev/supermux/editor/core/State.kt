@@ -197,6 +197,7 @@ class EditorState private constructor(
             e.valueIf(StateEffect.compartmentReconfigure)?.let { (c, ext) -> compartments = compartments + (c to ext); reconfigured = true }
         }
         val newConfig = if (reconfigured) Configuration.resolve(root, compartments) else config
+        if (reconfigured) facetValues?.let { newConfig.reuseStaticValues(it) }
         tr.reconfigured = reconfigured
 
         val next = EditorState(tr.newDoc, selection, newConfig)

@@ -191,6 +191,22 @@ class StateTest {
         assertEquals(2, t.field(two))
     }
 
+    @Test fun anEqualStaticFacetKeepsItsInstanceThroughAReconfigure() {
+        var compares = 0
+        val counted = Facet.define<String, List<String>>("counted", compare = { x, y -> compares++; x == y }) { it }
+        val slot = Compartment("slot")
+        // Records what a field sees while the state is still being built.
+        val seen = StateField<List<String>>("seen", { it.facet(counted) }, { _, tr -> tr.state.facet(counted) })
+        val s0 = EditorState.create(extensions = extensionOf(slot.of(counted.of("a")), seen))
+        val s1 = s0.update(TransactionSpec(effects = listOf(slot.reconfigure(counted.of("a"))))).state
+        assertSame(s0.facet(counted), s1.facet(counted))
+        assertSame(s1.facet(counted), s1.field(seen))
+        val before = compares
+        val s2 = s1.update(ChangeSpec(0, 0, "x")).state
+        assertSame(s1.facet(counted), s2.facet(counted))
+        assertEquals(before, compares, "an unchanged configuration never deep-compares static values")
+    }
+
     @Test fun aFacetWithoutProvidersReturnsOneInstance() {
         val empty = Facet.list<String>("empty")
         val s = EditorState.create()

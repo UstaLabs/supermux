@@ -118,8 +118,17 @@ internal class Configuration(
     val compartments: Map<Compartment, Extension>,
 ) {
     /** The output of every facet whose providers are all static: computed once, shared by every state. */
-    val staticValues: Map<Facet<*, *>, Any?> = buildMap {
+    val staticValues: Map<Facet<*, *>, Any?> get() = statics
+    private val statics = HashMap<Facet<*, *>, Any?>().apply {
         for ((f, ps) in providers) if (ps.all { it.dynamic == null }) put(f, f.combineIn(ps, null))
+    }
+
+    /**
+     * After a reconfigure: adopt [old]'s instance for every static output that compares equal to
+     * it, so identity survives the reconfigure. Called before any state uses this configuration.
+     */
+    fun reuseStaticValues(old: Map<Facet<*, *>, Any?>) {
+        for ((f, v) in statics) if (old.containsKey(f)) { val o = old[f]; if (o !== v && f.same(o, v)) statics[f] = o }
     }
 
     companion object {
