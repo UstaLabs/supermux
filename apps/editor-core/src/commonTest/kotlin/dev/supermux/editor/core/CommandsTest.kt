@@ -36,4 +36,18 @@ class CommandsTest {
         assertFalse(runKey(target, KeyChord("j", ctrl = true), apple = false))
     }
 
+    @Test fun aMalformedBindingFailsWhenRegisteredAndLeavesOthersAlone() {
+        val ok = Command { true }
+        val e = assertFailsWith<IllegalArgumentException> { keymapOf(KeyBinding("Mod-k", ok), KeyBinding("Hyper-k", ok)) }
+        assertTrue("Hyper-k" in e.message.orEmpty(), e.message)
+        val target = Target(EditorState.create(extensions = keymapOf(KeyBinding("Mod-k", ok))))
+        assertTrue(runKey(target, KeyChord("k", meta = true), apple = true))
+    }
+
+    @Test fun bindingsAreParsedOnceForBothPlatforms() {
+        val b = KeyBinding("Mod-Shift-z", Command { true })
+        assertEquals(KeyChord("z", meta = true, shift = true), b.chord(apple = true))
+        assertEquals(KeyChord("z", ctrl = true, shift = true), b.chord(apple = false))
+        assertSame(b.chord(apple = true), b.chord(apple = true))
+    }
 }

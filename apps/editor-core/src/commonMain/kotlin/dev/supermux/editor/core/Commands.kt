@@ -50,14 +50,27 @@ data class KeyChord(
                 "Meta", "Cmd" -> meta = true
                 else -> throw IllegalArgumentException("unknown modifier '$m' in '$spec'")
             }
+            require(rest.isNotEmpty()) { "no key in '$spec'" }
             val key = if (rest.length == 1) rest.lowercase() else rest
             return KeyChord(key, ctrl, alt, shift, meta)
         }
     }
 }
 
-/** One keymap entry, as a plugin declares it. */
-data class KeyBinding(val key: String, val command: Command)
+/**
+ * One keymap entry, as a plugin declares it.
+ *
+ * [key] is parsed here, once, for both platforms: a malformed spec throws
+ * [IllegalArgumentException] when the binding is created (so at [keymapOf]), never on a keystroke,
+ * and cannot break other bindings.
+ */
+data class KeyBinding(val key: String, val command: Command) {
+    private val appleChord = KeyChord.parse(key, apple = true)
+    private val otherChord = KeyChord.parse(key, apple = false)
+
+    /** The chord this binding matches on an Apple platform ([apple]) or elsewhere. */
+    fun chord(apple: Boolean): KeyChord = if (apple) appleChord else otherChord
+}
 
 /** Every plugin's key bindings, highest precedence first. The surface tries them in order. */
 val keymapFacet: Facet<List<KeyBinding>, List<KeyBinding>> = Facet.define("keymap") { it.flatten() }
@@ -73,7 +86,7 @@ fun keymapOf(vararg bindings: KeyBinding): Extension = keymapFacet.of(bindings.t
  */
 fun runKey(target: CommandTarget, chord: KeyChord, apple: Boolean): Boolean {
     for (b in target.state.facet(keymapFacet)) {
-        if (KeyChord.parse(b.key, apple) == chord && b.command.run(target)) return true
+        if (b.chord(apple) == chord && b.command.run(target)) return true
     }
     return false
 }
