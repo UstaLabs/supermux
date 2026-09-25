@@ -33,11 +33,11 @@ class KtsHighlighter : SpikeHighlighter {
                 if (end < text.length && text[end - 1].isHighSurrogate()) end-- // never split a pair
                 val chunk = text.substring(i, end)
                 when (ktsEncoding) {
-                    KtsEncoding.MODIFIED_UTF8 -> chunk
+                    KtsEncoding.MODIFIED_UTF8, KtsEncoding.UTF8 -> chunk
                     // Kotlin/Native reports chunk.length (UTF-16 units) as the byte count but copies
                     // chunk's UTF-8 bytes. Pad with ASCII so length == its UTF-8 size of the real
                     // chunk: tree-sitter then reads exactly the real bytes and never the padding.
-                    KtsEncoding.UTF8 -> chunk.padEnd(map.at(end) - map.at(i), ' ')
+                    KtsEncoding.UTF8_LENGTH_IN_UNITS -> chunk.padEnd(map.at(end) - map.at(i), ' ')
                 }
             }
         }
