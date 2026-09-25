@@ -22,7 +22,7 @@ class RobustnessTest {
         val before = Ses.debugLiveTrees()
         assertFailsWith<Boom> { p.parse(throwingSource(failAt = 100)) }
         assertEquals(before, Ses.debugLiveTrees(), "the partial tree leaked")
-        p.parse(doc).use { assertFalse(it.hasError) } // the parser still works
+        p.parse(SAMPLE).use { assertFalse(it.hasError) } // the parser still works
         assertEquals(before, Ses.debugLiveTrees())
     }
 
