@@ -77,7 +77,7 @@
   "**" @operator) @constant.builtin
 
 ((constant) @constant
- (#match? @constant "^[A-Z\\d_]+$"))
+ (#match? @constant "^[A-Z\\p{Nd}_]+$"))
 
 [
   (self)

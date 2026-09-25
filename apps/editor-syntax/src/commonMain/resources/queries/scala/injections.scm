@@ -3,9 +3,6 @@
 ;   helix-editor/helix@079a789e8cb0 runtime/queries/scala/injections.scm (MPL-2.0)
 ; Each file keeps its source's licence. Rewritten and dropped patterns: the lock's notes["scala/injections"].
 
-([(comment) (block_comment)] @injection.content
- (#set! injection.language "comment"))
-
 (interpolated_string_expression 
   interpolator: 
     ((identifier) @interpolator 

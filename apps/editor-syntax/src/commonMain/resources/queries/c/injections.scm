@@ -3,9 +3,6 @@
 ;   helix-editor/helix@079a789e8cb0 runtime/queries/c/injections.scm (MPL-2.0)
 ; Each file keeps its source's licence. Rewritten and dropped patterns: the lock's notes["c/injections"].
 
-((comment) @injection.content
- (#set! injection.language "comment"))
-
 ((preproc_arg) @injection.content
  (#set! injection.language "c")
  (#set! injection.include-children))

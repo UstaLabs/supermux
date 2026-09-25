@@ -4,9 +4,6 @@
 ;   tree-sitter-php@0.24.2 queries/injections-text.scm (MIT)
 ; Each file keeps its source's licence. Rewritten and dropped patterns: the lock's notes["php/injections"].
 
-((comment) @injection.content
-  (#set! injection.language "phpdoc"))
-
 (heredoc
   (heredoc_body) @injection.content
   (heredoc_end) @injection.language)

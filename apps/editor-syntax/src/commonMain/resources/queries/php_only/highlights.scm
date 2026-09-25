@@ -122,7 +122,7 @@
 ])
 
 ((name) @constant
- (#match? @constant "^_?[A-Z][A-Z\\d_]+$"))
+ (#match? @constant "^_?[A-Z][A-Z\\p{Nd}_]+$"))
 
 ((name) @constant.builtin
  (#match? @constant.builtin "^__[A-Z][A-Z\d_]+__$"))

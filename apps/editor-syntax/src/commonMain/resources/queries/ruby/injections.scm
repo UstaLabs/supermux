@@ -3,28 +3,11 @@
 ;   helix-editor/helix@079a789e8cb0 runtime/queries/ruby/injections.scm (MPL-2.0)
 ; Each file keeps its source's licence. Rewritten and dropped patterns: the lock's notes["ruby/injections"].
 
-((comment) @injection.content
- (#set! injection.language "comment"))
-
 ((heredoc_body 
   (heredoc_content) @injection.content
   (heredoc_end) @name
   (#set! injection.language "sql")) 
  (#eq? @name "SQL"))
-
-((heredoc_body
-  (heredoc_content) @injection.content
-  (heredoc_end) @name
-  (#set! injection.language "graphql"))
- (#any-of? @name
-       "GQL"
-       "GRAPHQL"))
-
-((heredoc_body
-  (heredoc_content) @injection.content
-  (heredoc_end) @name
-  (#set! injection.language "erb"))
- (#eq? @name "ERB"))
 
 (subshell
   (string_content) @injection.content

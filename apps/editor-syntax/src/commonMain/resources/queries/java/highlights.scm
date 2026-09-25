@@ -60,7 +60,7 @@
 ] @type.builtin
 
 ((identifier) @constant
- (#match? @constant "^_*[A-Z][A-Z\\d_]+$"))
+ (#match? @constant "^_*[A-Z][A-Z\\p{Nd}_]+$"))
 
 (this) @variable.builtin
 

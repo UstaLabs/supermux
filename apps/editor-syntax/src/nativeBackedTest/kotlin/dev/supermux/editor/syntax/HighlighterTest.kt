@@ -118,4 +118,56 @@ class HighlighterTest {
             }
         }
     }
+
+    /** Edit [start] step by step, reparsing incrementally; after each step the spans equal a fresh highlight. */
+    private fun replay(lang: String, start: String, steps: List<(String) -> Triple<Int, Int, String>>) {
+        Highlighter(backend, lang).use { h ->
+            var text = start
+            var doc = h.parse(ChunkedSource(text), text.length, null)
+            try {
+                for ((k, step) in steps.withIndex()) {
+                    val (from, to, insert) = step(text)
+                    val cs = dev.supermux.editor.core.ChangeSet.of(text.length, dev.supermux.editor.core.ChangeSpec(from, to, insert))
+                    val next = cs.apply(text)
+                    textEditsFor(cs, dev.supermux.editor.core.Rope.of(text), dev.supermux.editor.core.Rope.of(next)).forEach { doc.edit(it) }
+                    val nd = h.parse(ChunkedSource(next), next.length, doc)
+                    doc.close()
+                    doc = nd
+                    text = next
+                    assertEquals(
+                        dumpSpans(highlight(backend, lang, text), text),
+                        dumpSpans(h.spans(doc, 0, text.length, ChunkedSource(text)), text),
+                        "$lang step $k: ${text.replace("\n", "\\n")}",
+                    )
+                }
+            } finally {
+                doc.close()
+            }
+        }
+    }
+
+    private fun replace(what: String, with: String, nth: Int = 0): (String) -> Triple<Int, Int, String> = { t ->
+        var at = t.indexOf(what)
+        repeat(nth) { at = t.indexOf(what, at + 1) }
+        check(at >= 0) { "no $what in $t" }
+        Triple(at, at + what.length, with)
+    }
+
+    @Test fun incrementalInjectionsMatchAFreshParse() {
+        replay(
+            "markdown", HighlightSamples.MARKDOWN,
+            listOf(
+                replace("```kotlin", "```python"), // the fence's language changes
+                { t -> Triple(t.length, t.length, "\n```js\nlet a = 1\n```\n") }, // a new fence
+                replace("```\n", ""), // the first fence's end goes: the rest of the file is its content
+                replace("fun main", "fun mai"),
+                { t -> val at = t.indexOf("println"); Triple(at, at, "```\n") }, // a closing fence typed back
+            ),
+        )
+        replay(
+            "html", HighlightSamples.HTML,
+            listOf(replace("<script>", "<scripx>"), replace("<scripx>", "<script>"), replace("color: red", "color: blue; margin: 0")),
+        )
+        replay("vue", HighlightSamples.VUE, listOf(replace("lang=\"ts\"", "lang=\"js\""), replace("as string", ""), replace("{{ msg }}", "{{ msg + 1 }}")))
+    }
 }

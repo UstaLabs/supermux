@@ -10,7 +10,7 @@
 (field_identifier) @property
 
 ((identifier) @constant
- (#match? @constant "^[A-Z][A-Z\\d_]+$'"))
+ (#match? @constant "^[A-Z][A-Z\\p{Nd}_]+$'"))
 
 ((identifier) @constructor
  (#match? @constructor "^[A-Z]"))

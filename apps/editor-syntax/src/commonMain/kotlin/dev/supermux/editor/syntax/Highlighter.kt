@@ -10,6 +10,10 @@ import dev.supermux.editor.core.Ranged
 class ParsedDocument internal constructor(internal val layers: List<Layer>, val length: Int) : AutoCloseable {
     private var closed = false
 
+    /** Text edited since this parse, in the current coordinates ([start, end]*): injections are re-found there. */
+    internal var edited: IntArray = IntArray(0)
+        private set
+
     val language: String get() = layers[0].language
 
     /** The injected layers as "depth:language", in parse order (host excluded). */
@@ -18,16 +22,16 @@ class ParsedDocument internal constructor(internal val layers: List<Layer>, val 
     /** Record one edit in every tree (host and injections), before the next [Highlighter.parse]. */
     fun edit(e: TextEdit) {
         check(!closed) { "document closed" }
-        val delta = e.newEnd - e.oldEnd
         for (l in layers) {
             l.tree.edit(e)
-            if (l.ranges.isNotEmpty()) {
-                l.ranges = IntArray(l.ranges.size) { i ->
-                    val p = l.ranges[i]
-                    when { p < e.start -> p; p >= e.oldEnd -> p + delta; else -> e.start }
-                }
+            l.ranges = mapRanges(l.ranges, e)
+            for (site in l.sites) {
+                site.ranges = mapRanges(site.ranges, e)
+                site.extentStart = mapPos(site.extentStart, e)
+                site.extentEnd = mapPos(site.extentEnd, e)
             }
         }
+        edited = mapRanges(edited, e) + intArrayOf(e.start, e.newEnd)
     }
 
     override fun close() {
@@ -35,11 +39,17 @@ class ParsedDocument internal constructor(internal val layers: List<Layer>, val 
         closed = true
         for (l in layers) l.tree.close()
     }
+
+    internal companion object {
+        fun mapPos(p: Int, e: TextEdit): Int = when { p < e.start -> p; p >= e.oldEnd -> p + e.newEnd - e.oldEnd; else -> e.start }
+        fun mapRanges(r: IntArray, e: TextEdit): IntArray = if (r.isEmpty()) r else IntArray(r.size) { mapPos(r[it], e) }
+    }
 }
 
 /**
  * A parse tree over part of the document: the host (depth 0, the whole document, [ranges] empty)
- * or an injection (its included UTF-16 [ranges], packed [start, end]*).
+ * or an injection (its included UTF-16 [ranges], packed [start, end]*). [sites] are the
+ * injections found in it, kept so the next parse only looks again where something changed.
  */
 internal class Layer(
     val language: String,
@@ -49,12 +59,18 @@ internal class Layer(
     val pattern: Int,
     val parentLanguage: String?,
 ) {
+    var sites: List<Site> = emptyList()
+
     fun key() = layerKey(depth, parentLanguage, language, pattern, ranges.firstOrNull() ?: 0)
+}
+
+/** One injection found in a layer: its language, content ranges, and the extent of its match. */
+internal class Site(val pattern: Int, val language: String, var ranges: IntArray, var extentStart: Int, var extentEnd: Int) {
+    fun sameAs(o: Site) = pattern == o.pattern && language == o.language && ranges.contentEquals(o.ranges)
 }
 
 /** Reuse key of a layer across parses: where it is (depth, parent, pattern, first range start), not what it holds. */
 internal fun layerKey(depth: Int, parent: String?, language: String, pattern: Int, start: Int) = "$depth:$parent>$language#$pattern@$start"
-
 
 /**
  * Parses a document (with its injections) and answers spans and folds for a range. Owns a parser
@@ -93,10 +109,15 @@ class Highlighter(
         host.setIncludedRanges(IntArray(0), text)
         val layers = ArrayList<Layer>()
         try {
-            layers += Layer(language, host.parse(text, previous?.layers?.get(0)?.tree), IntArray(0), 0, -1, null)
+            val oldHost = previous?.layers?.get(0)
+            layers += Layer(language, host.parse(text, oldHost?.tree), IntArray(0), 0, -1, null)
             val old = previous?.layers?.drop(1)?.associateBy { it.key() } ?: emptyMap()
+            // new layer -> the old layer it was parsed from (its sites say where the injections were)
+            val from = HashMap<Layer, Layer>()
+            if (oldHost != null) from[layers[0]] = oldHost
+            val edited = previous?.edited ?: IntArray(0)
             var i = 0
-            while (i < layers.size) { inject(layers[i], text, length, old, layers); i++ }
+            while (i < layers.size) { inject(layers[i], from[layers[i]], edited, text, length, old, from, layers); i++ }
         } catch (t: Throwable) {
             layers.forEach { it.tree.close() }
             throw t
@@ -116,18 +137,39 @@ class Highlighter(
             val q = query(layer.language, QueryKind.HIGHLIGHTS) ?: continue
             val cls = classes(layer.language, q)
             val c = q.captures(layer.tree, s, e, text)
-            // the last capture (latest pattern) of each node range
-            val winner = HashMap<Long, Int>()
-            for (i in 0 until c.size) {
-                if (cls[c.capture(i)] == SKIP || c.end(i) <= c.start(i)) continue
-                val k = c.start(i).toLong() shl 32 or c.end(i).toLong()
-                val prev = winner[k]
-                if (prev == null || c.pattern(i) >= c.pattern(prev)) winner[k] = i
+            // Sort the drawable captures by (start, end descending, pattern): outer nodes first, and
+            // for one node range its captures in pattern order, the last of which wins.
+            val idx = (0 until c.size).filter { cls[c.capture(it)] != SKIP && c.end(it) > c.start(it) }
+                .sortedWith(compareBy<Int>({ c.start(it) }, { -c.end(it) }, { c.pattern(it) }, { it }))
+            // One sweep with a stack of the open (enclosing) nodes: every unit is painted once, by
+            // the innermost node covering it (nodes of one tree nest). `@none` paints "no colour".
+            val stackEnd = IntArray(idx.size)
+            val stackCls = IntArray(idx.size)
+            var depth = 0
+            var pos = s
+            fun emit(to: Int) {
+                val upTo = minOf(to, e)
+                if (depth > 0 && upTo > pos) paintRange(paint, s, pos, upTo, maxOf(-1, stackCls[depth - 1]), layer.ranges)
+                if (upTo > pos) pos = upTo
             }
-            // outer nodes first, so inner ones paint over them
-            val order = winner.values.sortedByDescending { c.end(it) - c.start(it) }
-            // `@none` wins like any capture and clears the colour under it
-            for (i in order) paintRange(paint, s, maxOf(s, c.start(i)), minOf(e, c.end(i)), maxOf(-1, cls[c.capture(i)]), layer.ranges)
+            var k = 0
+            while (k < idx.size) {
+                val i = idx[k]
+                // the same node range again: only its last (latest pattern) capture counts
+                var j = k
+                while (j + 1 < idx.size && c.start(idx[j + 1]) == c.start(i) && c.end(idx[j + 1]) == c.end(i)) j++
+                val w = idx[j]
+                val start = maxOf(s, c.start(w))
+                while (depth > 0 && stackEnd[depth - 1] <= start) { emit(stackEnd[depth - 1]); depth-- }
+                emit(start)
+                pos = maxOf(pos, start)
+                val end = if (depth > 0) minOf(c.end(w), stackEnd[depth - 1]) else c.end(w)
+                stackEnd[depth] = end
+                stackCls[depth] = cls[c.capture(w)]
+                depth++
+                k = j + 1
+            }
+            while (depth > 0) { emit(stackEnd[depth - 1]); depth-- }
         }
         val out = ArrayList<Ranged<Decoration>>()
         var i = 0
@@ -145,7 +187,7 @@ class Highlighter(
     fun folds(doc: ParsedDocument, start: Int, end: Int, text: TextSource): IntArray {
         val s = maxOf(0, start)
         val e = minOf(doc.length, end)
-        val found = sortedSetOf<Long>()
+        val found = HashSet<Long>()
         for (layer in doc.layers) {
             if (layer.ranges.isNotEmpty() && !intersects(layer.ranges, s, e)) continue
             val q = query(layer.language, QueryKind.FOLDS) ?: continue
@@ -156,9 +198,8 @@ class Highlighter(
                 if (c.capture(i) == fold && c.end(i) > c.start(i)) found += c.start(i).toLong() shl 32 or c.end(i).toLong()
             }
         }
-        val out = IntArray(found.size * 2)
-        found.forEachIndexed { i, v -> out[2 * i] = (v ushr 32).toInt(); out[2 * i + 1] = v.toInt() }
-        return out
+        val sorted = found.sorted()
+        return IntArray(sorted.size * 2) { i -> if (i % 2 == 0) (sorted[i / 2] ushr 32).toInt() else sorted[i / 2].toInt() }
     }
 
     override fun close() {
@@ -187,41 +228,90 @@ class Highlighter(
         )
     }
 
-    private class Pending(val language: String, val pattern: Int, val ranges: ArrayList<Int> = ArrayList())
+    private val hasCombined = HashMap<String, Boolean>()
 
-    /** Find [parent]'s injections, parse each (reusing [old]'s layer at the same place), append to [out]. */
-    private fun inject(parent: Layer, text: TextSource, length: Int, old: Map<String, Layer>, out: MutableList<Layer>) {
+    /** Does [q] (the injections of [lang]) combine matches? Those need the whole document every time. */
+    private fun combines(lang: String, q: QueryHandle): Boolean = hasCombined.getOrPut(lang) {
+        (0 until q.patternCount).any { settingsOf(lang, q, it).combined }
+    }
+
+    /**
+     * Find [parent]'s injections and parse each, appending the layers to [out]. With [old] (the
+     * layer [parent] was reparsed from) only the ranges that changed are searched again: where the
+     * new tree differs from the old one, and the text [edited] since; the other injection sites
+     * are kept. A layer is reused from [oldLayers] by where it is ([Layer.key]).
+     */
+    private fun inject(
+        parent: Layer, old: Layer?, edited: IntArray, text: TextSource, length: Int,
+        oldLayers: Map<String, Layer>, from: MutableMap<Layer, Layer>, out: MutableList<Layer>,
+    ) {
         if (parent.depth >= maxDepth) return
         val q = query(parent.language, QueryKind.INJECTIONS) ?: return
+        val start = parent.ranges.firstOrNull() ?: 0
+        val end = parent.ranges.lastOrNull() ?: length
+        val sites: List<Site> = if (old == null || combines(parent.language, q)) {
+            findSites(parent, q, intArrayOf(start, end), text)
+        } else {
+            // the edited text widened by one unit each side: a deletion is empty, and an edit right
+            // at a node's edge can change the match of the node next to it
+            val around = IntArray(edited.size) { i -> if (i % 2 == 0) maxOf(0, edited[i] - 1) else edited[i] + 1 }
+            val changed = normalize((old.tree.changedRanges(parent.tree) + around).toList())
+            val kept = old.sites.filter { s -> !touches(changed, s.extentStart, s.extentEnd) }
+            val found = findSites(parent, q, clip(changed, intArrayOf(start, end)), text)
+            (kept + found.filter { f -> kept.none { it.sameAs(f) } }).sortedBy { it.ranges[0] }
+        }
+        parent.sites = sites
+        for (site in sites) {
+            val ranges = clip(site.ranges, parent.ranges)
+            if (ranges.isEmpty()) continue
+            backend.ensureLanguage(site.language)
+            val parser = parser(site.language)
+            parser.setIncludedRanges(ranges, text)
+            val reuse = oldLayers[layerKey(parent.depth + 1, parent.language, site.language, site.pattern, ranges[0])]
+            val layer = Layer(site.language, parser.parse(text, reuse?.tree), ranges, parent.depth + 1, site.pattern, parent.language)
+            if (reuse != null) from[layer] = reuse
+            out += layer
+        }
+    }
+
+    private class Pending(val language: String, val pattern: Int, val ranges: ArrayList<Int> = ArrayList()) {
+        var extentStart = Int.MAX_VALUE
+        var extentEnd = 0
+    }
+
+    /** The injection sites of [parent] whose matches intersect [where] ([start, end]*). */
+    private fun findSites(parent: Layer, q: QueryHandle, where: IntArray, text: TextSource): List<Site> {
         val content = q.captureNames.indexOf("injection.content")
-        if (content < 0) return
+        if (content < 0 || where.isEmpty()) return emptyList()
         val langCapture = q.captureNames.indexOf("injection.language")
         val fileCapture = q.captureNames.indexOf("injection.filename")
-        val from = parent.ranges.firstOrNull() ?: 0
-        val to = parent.ranges.lastOrNull() ?: length
         val separate = ArrayList<Pending>()
         val combined = LinkedHashMap<String, Pending>()
-        for (m in q.matches(parent.tree, from, to, text, content).toList()) {
-            val st = settingsOf(parent.language, q, m.pattern)
-            var lang: String? = st.language?.let { registry.aliasFor(it) }
-            if (st.self) lang = parent.language
-            if (st.parent) lang = parent.parentLanguage ?: parent.language
-            m.captures.firstOrNull { it.index == langCapture }?.let { lang = registry.aliasFor(slice(text, it.start, it.end)) }
-            m.captures.firstOrNull { it.index == fileCapture }?.let { lang = registry.forFile(slice(text, it.start, it.end)) }
-            val l = lang ?: continue
-            if (l !in backend.languages) continue
-            if (registry.query(l, QueryKind.HIGHLIGHTS) == null && registry.query(l, QueryKind.INJECTIONS) == null) continue
-            val target = if (st.combined) combined.getOrPut("${m.pattern}/$l") { Pending(l, m.pattern) } else Pending(l, m.pattern).also { separate += it }
-            for (c in m.captures) if (c.index == content) contentRanges(c, st, target.ranges)
+        val seen = HashSet<String>()
+        for (w in where.indices step 2) {
+            for (m in q.matches(parent.tree, where[w], where[w + 1], text, content).toList()) {
+                val st = settingsOf(parent.language, q, m.pattern)
+                var lang: String? = st.language?.let { registry.aliasFor(it) }
+                if (st.self) lang = parent.language
+                if (st.parent) lang = parent.parentLanguage ?: parent.language
+                m.captures.firstOrNull { it.index == langCapture }?.let { lang = registry.aliasFor(slice(text, it.start, it.end)) }
+                m.captures.firstOrNull { it.index == fileCapture }?.let { lang = registry.forFile(slice(text, it.start, it.end)) }
+                val l = lang ?: continue
+                if (l !in backend.languages) continue
+                if (registry.query(l, QueryKind.HIGHLIGHTS) == null && registry.query(l, QueryKind.INJECTIONS) == null) continue
+                // a match found again from a second changed range
+                if (!st.combined && !seen.add("${m.pattern}/" + m.captures.joinToString(",") { "${it.start}-${it.end}" })) continue
+                val target = if (st.combined) combined.getOrPut("${m.pattern}/$l") { Pending(l, m.pattern) } else Pending(l, m.pattern).also { separate += it }
+                for (c in m.captures) {
+                    target.extentStart = minOf(target.extentStart, c.start)
+                    target.extentEnd = maxOf(target.extentEnd, c.end)
+                    if (c.index == content) contentRanges(c, st, target.ranges)
+                }
+            }
         }
-        for (p in separate + combined.values) {
-            val ranges = clip(normalize(p.ranges), parent.ranges)
-            if (ranges.isEmpty()) continue
-            backend.ensureLanguage(p.language)
-            val parser = parser(p.language)
-            parser.setIncludedRanges(ranges, text)
-            val reuse = old[layerKey(parent.depth + 1, parent.language, p.language, p.pattern, ranges[0])]
-            out += Layer(p.language, parser.parse(text, reuse?.tree), ranges, parent.depth + 1, p.pattern, parent.language)
+        return (separate + combined.values).mapNotNull { p ->
+            val ranges = normalize(p.ranges)
+            if (ranges.isEmpty()) null else Site(p.pattern, p.language, ranges, p.extentStart, p.extentEnd)
         }
     }
 
@@ -277,6 +367,12 @@ class Highlighter(
                 sb.append(chunk, 0, minOf(chunk.length, end - start - sb.length))
             }
             return sb.toString()
+        }
+
+        /** Does [s, e] touch (overlap or abut) any of [ranges]? */
+        fun touches(ranges: IntArray, s: Int, e: Int): Boolean {
+            for (i in ranges.indices step 2) if (ranges[i] <= e && ranges[i + 1] >= s) return true
+            return false
         }
 
         fun intersects(ranges: IntArray, s: Int, e: Int): Boolean {

@@ -40,6 +40,3 @@
       (quoted_attribute_value (attribute_value) @injection.language)))
    (raw_text) @injection.content)
  (#eq? @_attr_name "lang"))
-
-((comment) @injection.content
- (#set! injection.language "comment"))

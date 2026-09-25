@@ -103,6 +103,24 @@ internal object HighlightSamples {
         |</style>
         |""".trimMargin()
 
+    /**
+     * A valid Kotlin file of at least [lines] lines: one package / import header, then the sample's
+     * declarations again and again (renamed, so it stays one well-formed file).
+     */
+    fun kotlinLines(lines: Int): String {
+        val body = KOTLIN.substring(KOTLIN.indexOf("/** A shape. */"))
+        val per = body.count { it == '\n' }
+        return buildString {
+            append("package demo.app\n\nimport kotlin.math.max\n\n")
+            var i = 0
+            while (i * per < lines) {
+                append(body.replace("Shape", "Shape$i").replace("fun main", "fun main$i"))
+                append('\n')
+                i++
+            }
+        }
+    }
+
     /** name -> (language, text) */
     val ALL = linkedMapOf(
         "json" to ("json" to SAMPLE),

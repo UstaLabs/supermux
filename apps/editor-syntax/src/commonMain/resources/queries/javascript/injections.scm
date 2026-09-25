@@ -12,9 +12,3 @@
   arguments: (template_string (string_fragment) @injection.content)
   (#set! injection.combined)
   (#set! injection.include-children))
-
-((regex_pattern) @injection.content
- (#set! injection.language "regex"))
-
-((comment) @injection.content
- (#set! injection.language "jsdoc"))

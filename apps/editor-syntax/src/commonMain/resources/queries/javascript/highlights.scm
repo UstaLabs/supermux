@@ -50,7 +50,7 @@
     (shorthand_property_identifier)
     (shorthand_property_identifier_pattern)
  ] @constant
- (#match? @constant "^[A-Z_][A-Z\\d_]+$"))
+ (#match? @constant "^[A-Z_][A-Z\\p{Nd}_]+$"))
 
 ((identifier) @variable.builtin
  (#match? @variable.builtin "^(arguments|module|console|window|document)$")

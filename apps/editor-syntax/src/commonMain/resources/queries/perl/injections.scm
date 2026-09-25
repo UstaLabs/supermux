@@ -3,12 +3,6 @@
 ;   tree-sitter-perl@2.0.0 queries/injections.scm (MIT)
 ; Each file keeps its source's licence. Rewritten and dropped patterns: the lock's notes["perl/injections"].
 
-((comment) @injection.content
- (#set! injection.language "comment"))
-
-((pod) @injection.content
- (#set! injection.language "pod"))
-
 ((substitution_regexp
   (replacement) @injection.content
   (substitution_regexp_modifiers) @_modifiers)

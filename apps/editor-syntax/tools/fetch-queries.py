@@ -29,6 +29,8 @@ What the tool does to the text, all recorded in the lock's "notes":
   and `#trim!` are removed (the one only narrows a match, the other only trims a fold's
   trailing blank lines), and every other pattern using an unknown predicate or
   directive (`#is? local`, `#has-ancestor?`, `#kind-eq?`, `#offset!`, ...) is dropped.
+- An injection into a language the lock lists as unavailable (no grammar here: comment, regex,
+  jsdoc, ...) is dropped: it could never be drawn and would only cost query time.
 - The queries are then compiled against OUR grammar versions (the macOS library): a node, field or
   token our grammar lacks drops that alternative of a `[...]` list, or else the whole pattern.
 """
@@ -239,18 +241,45 @@ def lua_to_regex(p):
     return None if in_class else "".join(out)
 
 
-# Rust regex syntax that Kotlin's Regex (java.util.regex on the JVM and Android, Kotlin/Native's
-# own engine on iOS) reads differently: POSIX classes inside brackets.
-POSIX = {"alpha": "\\p{Alpha}", "digit": "0-9", "alnum": "\\p{Alnum}", "upper": "\\p{Upper}", "lower": "\\p{Lower}",
-         "space": "\\s", "punct": "\\p{Punct}", "xdigit": "0-9A-Fa-f", "word": "\\w"}
+# Rust regex syntax that Kotlin's Regex reads differently. Kotlin's Regex is java.util.regex on the JVM
+# (ASCII \\w \\d \\s \\b), ICU on Android (Unicode classes) and Kotlin/Native's own engine on iOS; the
+# queries are written for Rust's regex crate, where \\w and \\d are Unicode and POSIX classes ASCII.
+# Spell those out so every platform agrees with Rust: [:alpha:] -> A-Za-z, \\w -> [\\p{L}\\p{M}\\p{Nd}\\p{Pc}].
+POSIX = {"alpha": "A-Za-z", "digit": "0-9", "alnum": "A-Za-z0-9", "upper": "A-Z", "lower": "a-z",
+         "space": " \\t\\n\\r\\f\\x0B", "punct": "!-/:-@\\[-`{-~", "xdigit": "0-9A-Fa-f", "word": "A-Za-z0-9_"}
+WORD = "\\p{L}\\p{M}\\p{Nd}\\p{Pc}"
 
 
 def rust_to_kotlin_regex(r):
-    return re.sub(r"\[:([a-z]+):\]", lambda m: POSIX.get(m.group(1), m.group(0)), r)
+    out, i, depth = [], 0, 0
+    while i < len(r):
+        c = r[i]
+        if c == "\\" and i + 1 < len(r):
+            n = r[i + 1]
+            if n == "w": out.append(WORD if depth else "[" + WORD + "]")
+            elif n == "W" and not depth: out.append("[^" + WORD + "]")
+            elif n == "d": out.append("\\p{Nd}")
+            elif n == "D" and not depth: out.append("\\P{Nd}")
+            else: out.append(r[i:i + 2])
+            i += 2
+            continue
+        if c == "[":
+            m = re.match(r"\[:([a-z]+):\]", r[i:])
+            if depth and m and m.group(1) in POSIX:
+                out.append(POSIX[m.group(1)])
+                i += len(m.group(0))
+                continue
+            depth += 1
+        elif c == "]" and depth:
+            depth -= 1
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
-def rewrite(src, notes, where):
-    """Rewrite or drop the patterns of [src] whose predicates the backend does not evaluate."""
+def rewrite(src, notes, where, unavailable=()):
+    """Rewrite or drop the patterns of [src] whose predicates the backend does not evaluate, and
+    injections into a language listed in [unavailable] (no grammar here: they would only cost)."""
     root = parse(src)
     patterns = []
     for s, e, atom in items(root):
@@ -259,6 +288,11 @@ def rewrite(src, notes, where):
         drop = None
         for g, name, args in predicates(atom):
             gs = src[g.start:g.end]
+            if name == "set!" and unavailable:
+                vals = [unquote(a.text) if a.kind == "string" else a.text for a in args if a.kind in ("string", "word")]
+                if len(vals) >= 2 and vals[0] == "injection.language" and vals[1] in unavailable:
+                    drop = "injects %s, which has no grammar here" % vals[1]
+                    break
             if name in SUPPORTED:
                 if name.endswith("match?"):
                     for a in args:
@@ -267,7 +301,7 @@ def rewrite(src, notes, where):
                             k = rust_to_kotlin_regex(r)
                             if k != r:
                                 edits.append((a.start, a.end, quote(k)))
-                                notes.append("%s: regex %s -> %s (POSIX class)" % (where, quote(r), quote(k)))
+                                notes.append("%s: regex %s -> %s (Rust's meaning of its classes, spelled out)" % (where, quote(r), quote(k)))
                 continue
             if name in ("lua-match?", "not-lua-match?"):
                 strs = [a for a in args if a.kind == "string"]
@@ -492,7 +526,8 @@ def main():
                     item.get("precedence", lock["sources"][src_kind]["precedence"])
                 before = len(files)
                 text = expand(sources, ref, files)
-                pats = rewrite(text, knotes, "%s (%s)" % (key, ref))
+                pats = rewrite(text, knotes, "%s (%s)" % (key, ref),
+                               lock.get("unavailableInjectionLanguages", []) if kind == "injections" else ())
                 if kind == "highlights" and precedence == "auto":
                     precedence, why = convention(pats)
                     if precedence == "first":
@@ -510,10 +545,17 @@ def main():
                          % (key, entry.get("files"), got))
             n0 = len(patterns)
             patterns = fit(oracle, lang, patterns, knotes, key)
+            if not patterns:
+                knotes.append("%s: nothing left, no file shipped" % key)
             if knotes:
                 notes[key] = knotes
             else:
                 notes.pop(key, None)
+            if not patterns:
+                if os.path.exists(path):
+                    os.remove(path)
+                stats.append("%-18s %-10s    - (every pattern dropped)" % (lang, kind))
+                continue
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as f:
                 f.write("; editor-syntax %s query for %s. GENERATED by tools/fetch-queries.py from\n" % (kind, lang))

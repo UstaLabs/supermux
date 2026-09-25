@@ -3,9 +3,6 @@
 ;   helix-editor/helix@079a789e8cb0 runtime/queries/go/injections.scm (MPL-2.0)
 ; Each file keeps its source's licence. Rewritten and dropped patterns: the lock's notes["go/injections"].
 
-((comment) @injection.content
- (#set! injection.language "comment"))
-
 (source_file
   (comment) @injection.content . (comment)* . [
     (package_clause) ; `package`
@@ -30,47 +27,3 @@
 ((comment) @injection.content
  (#match? @injection.content "^//go:generate")
  (#set! injection.language "bash"))
-
-(call_expression
-  (selector_expression) @_function
-  (#any-of? @_function "regexp.Match" "regexp.MatchReader" "regexp.MatchString" "regexp.Compile" "regexp.CompilePOSIX" "regexp.MustCompile" "regexp.MustCompilePOSIX")
-  (argument_list
-    .
-    [
-      (raw_string_literal (raw_string_literal_content) @injection.content)
-      (interpreted_string_literal (interpreted_string_literal_content) @injection.content)
-    ]
-    (#set! injection.language "regex")))
-
-((call_expression
-  function: (selector_expression
-    operand: (identifier) @_module
-    field: (field_identifier) @_func)
-  arguments: (argument_list
-    . (interpreted_string_literal) @injection.content))
-  (#eq? @_module "fmt")
-  (#any-of? @_func "Printf" "Sprintf" "Scanf" "Errorf")
-  (#set! injection.language "go-format-string"))
-
-((call_expression
-  function: (selector_expression
-    operand: (identifier) @_module
-    field: (field_identifier) @_func)
-  arguments: (argument_list
-    ; [(identifier) (interpreted_string_literal)]
-    (_)
-    ; (identifier)
-    .
-    (interpreted_string_literal) @injection.content))
-  (#eq? @_module "fmt")
-  (#any-of? @_func "Fprintf" "Fscanf" "Sscanf")
-  (#set! injection.language "go-format-string"))
-
-((call_expression
-  function: (selector_expression
-    operand: (identifier)
-    field: (field_identifier) @_func)
-  arguments: (argument_list
-    . (interpreted_string_literal) @injection.content))
-  (#any-of? @_func "Printf" "Fatalf" "Panicf")
-  (#set! injection.language "go-format-string"))

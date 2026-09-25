@@ -97,6 +97,9 @@ kotlin {
         tasks.named(interop.interopProcessingTaskName) { inputs.files(File(nativeBuildDir, "$dir/lib/libsupermux_syntax.a")) }
         target.binaries.all { linkerOpts("-lz") }
     }
+    // An optimised test binary for the simulator's performance numbers (the default test binary is a
+    // debug build): link with linkPerfReleaseTestIosSimulatorArm64, run it with `xcrun simctl spawn`.
+    iosSimulatorArm64().binaries.test("perf", listOf(org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType.RELEASE))
 
     sourceSets {
         commonMain.dependencies {

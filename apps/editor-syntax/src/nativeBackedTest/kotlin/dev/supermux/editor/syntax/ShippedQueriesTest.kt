@@ -31,11 +31,9 @@ class ShippedQueriesTest {
     }
 
     @Test fun staticInjectionLanguagesResolve() {
-        // Named in shipped injections, no grammar here: the injection is skipped (reviewed).
-        val unavailable = setOf(
-            "comment", "regex", "jsdoc", "phpdoc", "go-format-string", "pod", "latex", "jq", "haskell_persistent",
-            "graphql", "erb", "awk",
-        )
+        // tools/fetch-queries.py drops injections into languages with no grammar here (the lock's
+        // unavailableInjectionLanguages): every one that ships must resolve.
+        val unavailable = emptySet<String>()
         for (key in BundledQueries.keys.filter { it.endsWith("/injections") }) {
             val (lang, _) = key.split('/')
             for ((name, args) in QueryText.predicates(registry.query(lang, QueryKind.INJECTIONS)!!)) {
@@ -75,7 +73,7 @@ class ShippedQueriesTest {
         val regexes = BundledQueries.keys.flatMap { key ->
             val (lang, kind) = key.split('/')
             QueryText.regexes(registry.query(lang, QueryKind.entries.first { it.file == kind })!!)
-        }.toSortedSet()
+        }.toSet().sorted()
         assertTrue(regexes.size > 50, "${regexes.size} regexes")
         val failed = ArrayList<String>()
         val table = regexes.joinToString("\n", postfix = "\n") { r ->
@@ -89,6 +87,19 @@ class ShippedQueriesTest {
             r.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t") + "\t" + bits
         }
         assertTrue(failed.isEmpty(), failed.joinToString("\n"))
+        // Name every regex and sample that differs from the JVM before the whole-file comparison.
+        if (goldenUpdateDir() == null) {
+            val golden = testResource("golden/regexes.txt").decodeToString().lines().filter { it.isNotEmpty() }
+                .associate { it.substringBeforeLast('\t') to it.substringAfterLast('\t') }
+            val diffs = table.lines().filter { it.isNotEmpty() }.mapNotNull { line ->
+                val key = line.substringBeforeLast('\t')
+                val bits = line.substringAfterLast('\t')
+                val want = golden[key] ?: return@mapNotNull "/$key/: not in the golden file"
+                if (want == bits) null else "/$key/: " + bits.indices.filter { bits[it] != want[it] }
+                    .joinToString { "\"${REGEX_SAMPLES[it]}\" JVM=${want[it]} here=${bits[it]}" }
+            }
+            assertTrue(diffs.isEmpty(), "regexes that behave differently here than on the JVM:\n" + diffs.joinToString("\n"))
+        }
         assertGolden("regexes.txt", table)
     }
 }

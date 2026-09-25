@@ -21,23 +21,10 @@
 
 (
   [
-    (line_comment) 
-    (block_comment)
-  ] @injection.content
-  (#set! injection.language "comment"))
-
-(
-  [
     (command_literal)
     (prefixed_command_literal)
   ] @injection.content
   (#set! injection.language "bash"))
-
-(
-  (prefixed_string_literal
-    prefix: (identifier) @function.macro) @injection.content
-  (#eq? @function.macro "r")
-  (#set! injection.language "regex"))
 
 (
   (prefixed_string_literal

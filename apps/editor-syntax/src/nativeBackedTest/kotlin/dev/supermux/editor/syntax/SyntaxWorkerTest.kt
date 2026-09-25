@@ -240,4 +240,35 @@ class SyntaxWorkerTest {
             host.close()
         }
     }
+
+    /** The same with Markdown: fences (injections) opened, closed and renamed while the worker races. */
+    @Test
+    fun randomEditSoakWithInjections() = runBlocking {
+        val r = Random(4242)
+        val pieces = listOf("```kotlin\n", "```\n", "~~~python\n", "fun f() = 1\n", "def g(): pass\n", "# H\n", "*x*", "`", "\n", " ", "<b>", "ağ")
+        val host = Host(HighlightSamples.MARKDOWN, "markdown", backend)
+        try {
+            host.viewport(0 until 100_000)
+            repeat(200) {
+                val doc = host.state.doc.toString()
+                val from = r.nextInt(doc.length + 1).let { if (it in 1 until doc.length && doc[it - 1].isHighSurrogate()) it - 1 else it }
+                val spec = if (r.nextInt(3) == 0 && doc.length > 20) {
+                    var to = minOf(doc.length, from + r.nextInt(1, 8))
+                    if (to in 1 until doc.length && doc[to - 1].isHighSurrogate()) to--
+                    ChangeSpec(from, to, "")
+                } else {
+                    ChangeSpec(from, from, pieces[r.nextInt(pieces.size)])
+                }
+                host.dispatch(TransactionSpec(listOf(spec)))
+                if (r.nextInt(8) == 0) host.worker.idle()
+            }
+            host.dispatch(TransactionSpec(effects = listOf(Syntax.setViewport.of(0 until host.state.doc.length))))
+            host.settle()
+            val final = host.state.doc.toString()
+            assertEquals(fresh("markdown", final), host.spans)
+            assertNull(host.worker.lastError)
+        } finally {
+            host.close()
+        }
+    }
 }

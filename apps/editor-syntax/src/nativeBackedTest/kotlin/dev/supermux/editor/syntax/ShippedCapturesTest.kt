@@ -8,15 +8,15 @@ class ShippedCapturesTest {
     @Test fun everyShippedCaptureMapsOrIsIgnoredOnPurpose() {
         val backend = testBackend()
         val registry = LanguageRegistry.default
-        val names = sortedMapOf<String, MutableSet<String>>()
+        val names = HashMap<String, MutableSet<String>>()
         for (lang in registry.languages) {
             val text = registry.query(lang, QueryKind.HIGHLIGHTS) ?: continue
             backend.ensureLanguage(lang)
-            backend.newQuery(lang, text).use { q -> q.captureNames.forEach { names.getOrPut(it) { sortedSetOf() } += lang } }
+            backend.newQuery(lang, text).use { q -> q.captureNames.forEach { names.getOrPut(it) { HashSet() } += lang } }
         }
         val unmapped = names.filterKeys { tokenClassFor(it) == null && !it.startsWith("_") && it !in IGNORED }
         assertTrue(unmapped.isEmpty(), "captures with no token class and not in IGNORED:\n" +
-            unmapped.entries.joinToString("\n") { (n, l) -> "  $n  ($l)" })
+            unmapped.entries.sortedBy { it.key }.joinToString("\n") { (n, l) -> "  $n  (${l.sorted()})" })
         println("ShippedCaptures: ${names.size} capture names, ${names.keys.count { tokenClassFor(it) != null }} drawn")
     }
 

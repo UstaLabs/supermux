@@ -132,7 +132,7 @@
 
 (
   [(varname) (filehandle)] @variable.builtin
-  (#match? @variable.builtin "^((ENV|ARGV|INC|ARGVOUT|SIG|STDIN|STDOUT|STDERR)|[_ab]|\\W|\\d+|\\^.*)$")
+  (#match? @variable.builtin "^((ENV|ARGV|INC|ARGVOUT|SIG|STDIN|STDOUT|STDERR)|[_ab]|[^\\p{L}\\p{M}\\p{Nd}\\p{Pc}]|\\p{Nd}+|\\^.*)$")
 )
 
 (filehandle (varname)) @variable

@@ -7,9 +7,6 @@
   (quoter) @injection.language
   (quasiquote_body) @injection.content)
 
-((comment) @injection.content
-  (#set! injection.language "comment"))
-
 (quasiquote
   (quoter) @_name
   (#any-of? @_name "cassius" "lucius")
@@ -50,9 +47,3 @@
   (quoter) @injection.language
   (#eq? @injection.language "sql")
   (quasiquote_body) @injection.content)
-
-(quasiquote
-  (quoter) @_name
-  (#any-of? @_name "persistUpperCase" "persistLowerCase" "persistWith")
-  (quasiquote_body) @injection.content
-  (#set! injection.language "haskell_persistent"))

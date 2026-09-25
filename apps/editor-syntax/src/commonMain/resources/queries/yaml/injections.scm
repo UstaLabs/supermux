@@ -3,9 +3,6 @@
 ;   helix-editor/helix@079a789e8cb0 runtime/queries/yaml/injections.scm (MPL-2.0)
 ; Each file keeps its source's licence. Rewritten and dropped patterns: the lock's notes["yaml/injections"].
 
-((comment) @injection.content
- (#set! injection.language "comment"))
-
 (block_mapping_pair
   key: (flow_node) @_run (#any-of? @_run "run" "command" "commands")
   value: (flow_node
