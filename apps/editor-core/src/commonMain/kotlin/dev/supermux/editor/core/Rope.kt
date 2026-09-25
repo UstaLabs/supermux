@@ -67,8 +67,41 @@ class Rope private constructor(private val root: RopeNode) {
     }
 
     override fun toString(): String = slice()
-    override fun equals(other: Any?): Boolean = other is Rope && other.length == length && other.toString() == toString()
-    override fun hashCode(): Int = toString().hashCode()
+
+    /** Content equality, chunk by chunk: never builds either text as one string. */
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is Rope) return false
+        if (other.root === root) return true
+        if (other.length != length) return false
+        if (hash != 0 && other.hash != 0 && hash != other.hash) return false
+        val a = LeafCursor(root); val b = LeafCursor(other.root)
+        var ta = ""; var ia = 0
+        var tb = ""; var ib = 0
+        var left = length
+        while (left > 0) {
+            if (ia == ta.length) { ta = a.next()!!; ia = 0 }
+            if (ib == tb.length) { tb = b.next()!!; ib = 0 }
+            val n = minOf(ta.length - ia, tb.length - ib, left)
+            if (!ta.regionMatches(ia, tb, ib, n)) return false
+            ia += n; ib += n; left -= n
+        }
+        return true
+    }
+
+    // Content hash (String.hashCode's formula), computed on first use. A racing second computation
+    // just writes the same value again.
+    private var hash = 0
+
+    override fun hashCode(): Int {
+        var h = hash
+        if (h == 0 && length > 0) {
+            val c = LeafCursor(root)
+            while (true) { val t = c.next() ?: break; for (ch in t) h = 31 * h + ch.code }
+            hash = h
+        }
+        return h
+    }
 
     internal val depth: Int get() = root.depth
 
@@ -141,6 +174,21 @@ internal sealed class RopeNode {
             }
 
         private fun log2Ceil(n: Int): Int = if (n <= 1) 0 else 32 - (n - 1).countLeadingZeroBits()
+    }
+}
+
+/** Walks a tree's non-empty leaves left to right. */
+private class LeafCursor(root: RopeNode) {
+    private val stack = ArrayList<RopeNode>().apply { add(root) }
+
+    fun next(): String? {
+        while (stack.isNotEmpty()) {
+            when (val n = stack.removeAt(stack.size - 1)) {
+                is RopeLeaf -> if (n.text.isNotEmpty()) return n.text
+                is RopeBranch -> { stack += n.right; stack += n.left }
+            }
+        }
+        return null
     }
 }
 

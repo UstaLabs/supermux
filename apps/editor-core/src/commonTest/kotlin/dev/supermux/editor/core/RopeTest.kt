@@ -3,6 +3,8 @@ package dev.supermux.editor.core
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class RopeTest {
@@ -72,6 +74,20 @@ class RopeTest {
         assertEquals(model, rope.toString())
         // Lazy rebalancing keeps the tree shallow.
         assertTrue(rope.depth <= 8 + 2 * 32, "depth ${rope.depth}")
+    }
+
+    @Test fun equalTextWithDifferentTreeShapesIsEqual() {
+        val text = buildString { repeat(3000) { append("line $it\n") } }
+        val a = Rope.of(text)
+        // Built by many small edits, so its chunk boundaries differ from a's.
+        var b = Rope.EMPTY
+        var i = 0
+        while (i < text.length) { val n = minOf(text.length - i, 37 + i % 700); b = b.replace(b.length, b.length, text.substring(i, i + n)); i += n }
+        assertEquals(a, b)
+        assertEquals(a.hashCode(), b.hashCode())
+        assertEquals(a.hashCode(), a.hashCode())
+        assertNotEquals(a, a.replace(5000, 5001, "#"))
+        assertNotEquals(a, Rope.of(text.dropLast(1)))
     }
 
     @Test fun bigDocumentStaysShallow() {
