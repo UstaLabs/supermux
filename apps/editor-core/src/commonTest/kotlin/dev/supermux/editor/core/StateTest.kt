@@ -152,6 +152,29 @@ class StateTest {
         assertEquals("xbc", s1.update(ChangeSpec(2, 2, "c")).state.facet(docText))
     }
 
+    @Test fun nestedComputedFacetsRunOncePerState() {
+        var cRuns = 0
+        val a = Facet.first("a", 0); val b = Facet.first("b", 0); val c = Facet.first("c", 0)
+        val s0 = EditorState.create("x", extensions = extensionOf(
+            a.compute { it.facet(b) + it.facet(c) },
+            b.compute { it.facet(c) + 1 },
+            c.compute { cRuns++; it.doc.length },
+        ))
+        assertEquals(1, cRuns)
+        assertEquals(3, s0.facet(a))
+        s0.update(ChangeSpec(1, 1, "y"))
+        assertEquals(2, cRuns)
+    }
+
+    @Test fun aFacetCycleFailsWithAClearError() {
+        val p = Facet.first("p", 0); val q = Facet.first("q", 0)
+        val e = assertFailsWith<IllegalStateException> {
+            EditorState.create(extensions = extensionOf(p.compute { it.facet(q) }, q.compute { it.facet(p) }))
+        }
+        val message = e.message.orEmpty()
+        assertTrue("Facet(p)" in message && "Facet(q)" in message, message)
+    }
+
     @Test fun fieldsThatProvideThemselvesOrEachOtherResolve() {
         lateinit var self: StateField<Int>
         self = StateField("self", { 0 }, { v, _ -> v }, provide = { f -> extensionOf(f, words.of("self")) })

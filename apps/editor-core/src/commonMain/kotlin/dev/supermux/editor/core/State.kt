@@ -110,6 +110,14 @@ class EditorState private constructor(
     // by [complete]; the volatile write also publishes [values] to readers on other threads.
     @Volatile private var facetValues: Map<Facet<*, *>, Any?>? = null
 
+    // Only while [complete] runs, on the building thread: the facets computed so far, so a facet
+    // read by another facet's provider is computed once.
+    private var building: HashMap<Facet<*, *>, Any?>? = null
+    private var previous: EditorState? = null
+
+    // The facets being computed right now, innermost last: a facet met again is a cycle.
+    private var inProgress: ArrayList<Facet<*, *>>? = null
+
     @Suppress("UNCHECKED_CAST")
     fun <V> field(f: StateField<V>): V {
         val values = fieldValues()
@@ -126,10 +134,27 @@ class EditorState private constructor(
     @Suppress("UNCHECKED_CAST")
     fun <I, O> facet(f: Facet<I, O>): O {
         val done = facetValues
-        if (done != null && done.containsKey(f)) return done[f] as O
+        if (done != null) return if (done.containsKey(f)) done[f] as O else f.emptyValue
         if (config.staticValues.containsKey(f)) return config.staticValues[f] as O
         val providers = config.providers[f] ?: return f.emptyValue
-        return f.combineIn(providers, this)
+        building?.let { if (it.containsKey(f)) return it[f] as O }
+        return computeFacet(f, providers) as O
+    }
+
+    private fun computeFacet(f: Facet<*, *>, providers: List<FacetProvider<*>>): Any? {
+        val stack = inProgress ?: ArrayList<Facet<*, *>>().also { inProgress = it }
+        check(f !in stack) { "facet cycle: " + (stack.subList(stack.indexOf(f), stack.size) + f).joinToString(" -> ") }
+        stack += f
+        try {
+            val v = f.combineIn(providers, this)
+            val b = building ?: return v // a partial state: computed, not kept
+            val before = previous?.facetValues
+            val out = if (before != null && before.containsKey(f) && f.same(before[f], v)) before[f] else v
+            b[f] = out
+            return out
+        } finally {
+            stack.removeAt(stack.size - 1)
+        }
     }
 
     /**
@@ -137,17 +162,20 @@ class EditorState private constructor(
      * wherever the new output compares equal to it.
      */
     private fun complete(previous: EditorState?) {
-        val before = previous?.facetValues
-        val out = HashMap<Facet<*, *>, Any?>()
-        for ((f, providers) in config.providers) {
-            var v = if (config.staticValues.containsKey(f)) config.staticValues[f] else f.combineIn(providers, this)
-            if (before != null && before.containsKey(f)) {
-                val old = before[f]
-                if (old !== v && f.same(old, v)) v = old
+        val b = HashMap<Facet<*, *>, Any?>()
+        building = b
+        this.previous = previous
+        try {
+            for ((f, providers) in config.providers) {
+                if (b.containsKey(f)) continue
+                if (config.staticValues.containsKey(f)) b[f] = config.staticValues[f] else computeFacet(f, providers)
             }
-            out[f] = v
+        } finally {
+            building = null
+            this.previous = null
+            inProgress = null
         }
-        facetValues = out
+        facetValues = b
     }
 
     fun sliceDoc(from: Int = 0, to: Int = doc.length): String = doc.slice(from, to)
