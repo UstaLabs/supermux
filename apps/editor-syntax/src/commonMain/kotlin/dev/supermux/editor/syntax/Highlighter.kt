@@ -2,13 +2,31 @@ package dev.supermux.editor.syntax
 
 import dev.supermux.editor.core.Decoration
 import dev.supermux.editor.core.Ranged
+import kotlin.time.TimeSource
+
+/**
+ * The edits made since a highlighter's layers were parsed, in order, shared by every document of
+ * one [Highlighter]. A layer's tree is brought up to date lazily ([Layer.tree]): a Markdown file
+ * has thousands of layers and one keystroke touches one of them, so the others are neither edited
+ * (a JNI call each) nor copied.
+ */
+internal class EditLog {
+    var base = 0L // absolute index of edits[0]
+    val edits = ArrayList<TextEdit>()
+    val end: Long get() = base + edits.size
+}
 
 /**
  * One parse of one document version, including injected sub-trees. Owned by the worker: it
- * holds native trees, so it never goes into an EditorState. [close] frees every tree.
+ * holds native trees, so it never goes into an EditorState. [close] frees every tree it still owns.
  */
-class ParsedDocument internal constructor(internal val layers: List<Layer>, val length: Int) : AutoCloseable {
+class ParsedDocument internal constructor(internal val layers: List<Layer>, val length: Int, internal val log: EditLog) : AutoCloseable {
     private var closed = false
+
+    init {
+        // a layer handed on from the previous parse belongs to this document now
+        for (l in layers) l.owner = this
+    }
 
     /** Text edited since this parse, in the current coordinates ([start, end]*): injections are re-found there. */
     internal var edited: IntArray = IntArray(0)
@@ -16,31 +34,60 @@ class ParsedDocument internal constructor(internal val layers: List<Layer>, val 
 
     val language: String get() = layers[0].language
 
-    /** The injected layers as "depth:language", in parse order (host excluded). */
-    val injections: List<String> get() = layers.drop(1).map { "${it.depth}:${it.language}" }
+    /** The injected layers as "depth:language@start", in paint order (host excluded). */
+    val injections: List<String> get() = paintOrder().drop(1).map { "${it.depth}:${it.language}@${it.ranges.firstOrNull() ?: 0}" }
+
+    /** Every layer (host first) with its ranges: equal for equal parses (the replay tests compare them). */
+    val layerSignature: List<String>
+        get() = paintOrder().map { "${it.depth}:${it.parentLanguage}>${it.language}#${it.pattern}${it.ranges.toList()}" }
+
+    private var order: List<Layer>? = null
+
+    /** Host first, then by (depth, first range start, language): paint order must not depend on how a layer was found. */
+    internal fun paintOrder(): List<Layer> = order ?: run {
+        // the parse's breadth-first order usually is that order already: check in O(n) before sorting
+        val sorted = (1 until layers.size).all { layerOrder(layers[it - 1], layers[it]) <= 0 }
+        (if (sorted) layers else layers.sortedWith(::layerOrder)).also { order = it }
+    }
 
     /** Record one edit in every tree (host and injections), before the next [Highlighter.parse]. */
     fun edit(e: TextEdit) {
         check(!closed) { "document closed" }
+        log.edits += e
         for (l in layers) {
-            l.tree.edit(e)
-            l.ranges = mapRanges(l.ranges, e)
-            for (site in l.sites) {
-                site.ranges = mapRanges(site.ranges, e)
-                site.extentStart = mapPos(site.extentStart, e)
-                site.extentEnd = mapPos(site.extentEnd, e)
+            val r = l.ranges
+            // a layer whose text the edit touches must be reparsed; the others stay valid as they are
+            if (r.isEmpty() || Highlighter.touches(r, e.start, e.oldEnd)) l.dirty = true
+            l.clean = false
+            if (r.isNotEmpty() && r[r.size - 1] < e.start) continue // wholly before the edit: nothing moves
+            l.ranges = mapRanges(r, e)
+            for (site in l.sites) for (part in site.parts) {
+                if (part.extentEnd < e.start) continue
+                part.ranges = mapRanges(part.ranges, e)
+                part.extentStart = mapPos(part.extentStart, e)
+                part.extentEnd = mapPos(part.extentEnd, e)
             }
         }
         edited = mapRanges(edited, e) + intArrayOf(e.start, e.newEnd)
+        order = null
     }
 
     override fun close() {
         if (closed) return
         closed = true
-        for (l in layers) l.tree.close()
+        for (l in layers) if (l.owner === this) l.close()
     }
 
     internal companion object {
+        fun layerOrder(a: Layer, b: Layer): Int {
+            if (a.depth != b.depth) return a.depth.compareTo(b.depth)
+            val sa = a.ranges.firstOrNull() ?: 0
+            val sb = b.ranges.firstOrNull() ?: 0
+            if (sa != sb) return sa.compareTo(sb)
+            val l = a.language.compareTo(b.language)
+            return if (l != 0) l else a.pattern.compareTo(b.pattern)
+        }
+
         fun mapPos(p: Int, e: TextEdit): Int = when { p < e.start -> p; p >= e.oldEnd -> p + e.newEnd - e.oldEnd; else -> e.start }
         fun mapRanges(r: IntArray, e: TextEdit): IntArray = if (r.isEmpty()) r else IntArray(r.size) { mapPos(r[it], e) }
     }
@@ -53,35 +100,77 @@ class ParsedDocument internal constructor(internal val layers: List<Layer>, val 
  */
 internal class Layer(
     val language: String,
-    val tree: TreeHandle,
+    private val handle: TreeHandle,
     var ranges: IntArray,
     val depth: Int,
     val pattern: Int,
     val parentLanguage: String?,
+    private val log: EditLog,
+    /** How many edits of [log] (absolute) [handle] carries. */
+    private var applied: Long = log.end,
 ) {
     var sites: List<Site> = emptyList()
+    /** An edit touched this layer's text since it was parsed (set by [ParsedDocument.edit]). */
+    var dirty = false
+    /** The document that frees this tree: a layer handed on unchanged moves to the next parse's document. */
+    var owner: ParsedDocument? = null
+    /** This layer is the previous parse's, handed on unchanged (same object, same tree). */
+    var clean = false
 
-    fun key() = layerKey(depth, parentLanguage, language, pattern, ranges.firstOrNull() ?: 0)
+    /** The tree, with every logged edit applied. */
+    val tree: TreeHandle get() {
+        while (applied < log.end) { handle.edit(log.edits[(applied - log.base).toInt()]); applied++ }
+        return handle
+    }
+
+    fun key() = LayerKey(depth, parentLanguage, language, pattern, ranges.firstOrNull() ?: 0)
+    fun close() = handle.close()
 }
 
-/** One injection found in a layer: its language, content ranges, and the extent of its match. */
-internal class Site(val pattern: Int, val language: String, var ranges: IntArray, var extentStart: Int, var extentEnd: Int) {
-    fun sameAs(o: Site) = pattern == o.pattern && language == o.language && ranges.contentEquals(o.ranges)
+/** One match of an injection pattern: the content ranges it contributes and the extent of its captures. */
+internal class Part(var extentStart: Int, var extentEnd: Int, var ranges: IntArray) {
+    fun sameAs(o: Part) = extentStart == o.extentStart && extentEnd == o.extentEnd && ranges.contentEquals(o.ranges)
 }
 
-/** Reuse key of a layer across parses: where it is (depth, parent, pattern, first range start), not what it holds. */
-internal fun layerKey(depth: Int, parent: String?, language: String, pattern: Int, start: Int) = "$depth:$parent>$language#$pattern@$start"
+/** An injection found in a layer: one part, or every part of an `injection.combined` pattern. */
+internal class Site(val pattern: Int, val language: String, val combined: Boolean, val parts: MutableList<Part>) {
+    /** The layer last parsed (or handed on) for this site: a kept site finds its old tree here. */
+    var layer: Layer? = null
+    fun ranges(): IntArray = if (parts.size == 1) parts[0].ranges else Highlighter.normalize(parts.flatMap { it.ranges.asList() })
+    /** Where the site starts: cached by [merge] (a combined site has hundreds of parts, and sorting compares it often). */
+    var start: Int = 0
+    fun computeStart(): Int = (if (parts.size == 1) parts[0].ranges.firstOrNull() ?: Int.MAX_VALUE
+        else parts.minOfOrNull { it.ranges.firstOrNull() ?: Int.MAX_VALUE } ?: 0).also { start = it }
+}
+
+/** Where a layer is (depth, parent, language, pattern, first range start), not what it holds: its reuse key across parses. */
+internal data class LayerKey(val depth: Int, val parent: String?, val language: String, val pattern: Int, val start: Int)
+
+internal class LazyLayers(private val previous: ParsedDocument?) {
+    private val map: Map<LayerKey, Layer> by lazy {
+        HashMap<LayerKey, Layer>().also { m -> previous?.layers?.forEach { if (it.depth > 0) m[it.key()] = it } }
+    }
+    operator fun get(k: LayerKey): Layer? = if (previous == null) null else map[k]
+}
+
+/** [Highlighter.parse] was abandoned because a newer snapshot is waiting. */
+class ParseCancelled : Exception("parse cancelled: a newer snapshot is waiting")
 
 /**
  * Parses a document (with its injections) and answers spans and folds for a range. Owns a parser
- * per language and compiled queries; not thread-safe (the syntax worker's thread only).
+ * per language; its queries are the backend's shared ones. Not thread-safe (the syntax worker's
+ * thread only).
  *
  * Priority, flattened into non-overlapping marks:
- * - an injected layer's span wins over the host span it overlaps (deeper layers paint last);
+ * - an injected layer's span wins over the host span it overlaps; layers paint in the order
+ *   (depth, first range start, language), so the result never depends on how a layer was found;
  * - within a layer, a node captured by several patterns takes the LATEST pattern's capture, as
- *   tree-sitter-highlight 0.25 does (and Helix and nvim-treesitter; tools/fetch-queries.py
- *   reverses the few query files written the other way round), and an inner node wins over the
- *   outer one it sits in.
+ *   tree-sitter-highlight 0.25 does (and Helix and nvim-treesitter), and an inner node wins over
+ *   the outer one it sits in; `@none` clears.
+ *
+ * A reparse re-finds injections only where the tree changed or the text was edited, reuses a
+ * layer's tree incrementally when its ranges are unchanged, and does not reparse a layer at all
+ * when no edit touched it.
  */
 class Highlighter(
     private val backend: SyntaxBackend,
@@ -91,38 +180,102 @@ class Highlighter(
     private val maxDepth: Int = 3,
 ) : AutoCloseable {
     private val parsers = HashMap<String, ParserHandle>()
-    private val queries = HashMap<String, QueryHandle?>()
+    private val editLog = EditLog()
+    private var previousDoc: ParsedDocument? = null
     private val injectionSettings = HashMap<String, InjectionSettings>()
     private val classIndex = HashMap<String, IntArray>()
 
-    /** Per parse of each layer; 0 = none. A parse over it throws SyntaxException(TIMEOUT). */
-    var timeoutMicros: Long = 0
-        set(value) { field = value; parsers.values.forEach { it.setTimeoutMicros(value) } }
+    /** Each parse runs in slices this long (0: one go), checking [parse]'s `cancel` between them. */
+    var sliceMicros: Long = 0
+    /** A whole [parse] (every layer) may take this long; beyond it SyntaxException(TIMEOUT). 0: no limit. */
+    var budgetMicros: Long = 0
+    /** Called between two parse slices (tests). */
+    internal var onSlice: (() -> Unit)? = null
+    /** Diagnostics (once per document for each kind). */
+    var log: (String) -> Unit = { println("editor-syntax: $it") }
+    private var loggedMatchLimit = false
 
-    init {
-        backend.ensureLanguage(language)
+    /** Nanoseconds per phase of the last [parse] (diagnostics, benchmarks). */
+    val phases: MutableMap<String, Long> = LinkedHashMap()
+    private inline fun <T> phase(name: String, block: () -> T): T {
+        val t = TimeSource.Monotonic.markNow()
+        try { return block() } finally { phases[name] = (phases[name] ?: 0L) + t.elapsedNow().inWholeNanoseconds }
     }
 
-    /** Parse [text] ([length] units), reusing [previous] if given, which must already carry the edits. */
-    fun parse(text: TextSource, length: Int, previous: ParsedDocument?): ParsedDocument {
+    /** Injected languages met while not [SyntaxBackend.isReady]: the worker loads them and parses again. */
+    val pendingLanguages: MutableSet<String> = HashSet()
+    /** Injected languages that failed to load: skipped for good in this document. */
+    val failedLanguages: MutableSet<String> = HashSet()
+
+    init {
+        check(backend.isReady(language)) { "$language is not loaded: await backend.ensureLanguage first" }
+    }
+
+    /**
+     * Parse [text] ([length] units; [points] gives rows and columns), reusing [previous] if given,
+     * which must already carry the edits. [cancel] is asked between parse slices: true throws
+     * [ParseCancelled]. Over [budgetMicros] throws SyntaxException(TIMEOUT).
+     */
+    fun parse(
+        text: TextSource, length: Int, previous: ParsedDocument?,
+        points: PointSource = LineTable(text, length), cancel: () -> Boolean = { false },
+    ): ParsedDocument {
+        val started = TimeSource.Monotonic.markNow()
+        phases.clear()
+        previousDoc = previous
+        val slicer = Slicer(started, cancel)
         val host = parser(language)
-        host.setIncludedRanges(IntArray(0), text)
+        host.setIncludedRanges(IntArray(0), points)
         val layers = ArrayList<Layer>()
         try {
+            check(previous == null || previous.log === editLog) { "previous is another highlighter's document" }
             val oldHost = previous?.layers?.get(0)
-            layers += Layer(language, host.parse(text, oldHost?.tree), IntArray(0), 0, -1, null)
-            val old = previous?.layers?.drop(1)?.associateBy { it.key() } ?: emptyMap()
-            // new layer -> the old layer it was parsed from (its sites say where the injections were)
+            layers += Layer(language, phase("host") { slicer.parse(host, text, oldHost?.tree) }, IntArray(0), 0, -1, null, editLog)
+            // old layers by where they are, for re-found sites (a kept site knows its layer); built on first use
+            val old = LazyLayers(previous)
+            // new layer -> the old layer it came from (its sites say where the injections were)
             val from = HashMap<Layer, Layer>()
             if (oldHost != null) from[layers[0]] = oldHost
             val edited = previous?.edited ?: IntArray(0)
             var i = 0
-            while (i < layers.size) { inject(layers[i], from[layers[i]], edited, text, length, old, from, layers); i++ }
+            while (i < layers.size) {
+                val l = layers[i]
+                // a layer handed on unchanged with no injections of its own has nothing to do
+                if (!(l.clean && l.sites.isEmpty())) inject(l, if (l.clean) l else from[l], edited, text, points, length, old, from, layers, slicer)
+                i++
+            }
         } catch (t: Throwable) {
-            layers.forEach { it.tree.close() }
+            for (l in layers) if (!l.clean) l.close() // a handed-on layer still belongs to [previous]
             throw t
         }
-        return ParsedDocument(layers, length)
+        // Trees handed on keep their place in the log; once it is long, bring every tree up to date and start over.
+        if (editLog.edits.size > 512) {
+            layers.forEach { it.tree }
+            editLog.base = editLog.end
+            editLog.edits.clear()
+        }
+        return ParsedDocument(layers, length, editLog)
+    }
+
+    /** Time slices over one [parse] call: resumes a timed-out parse until done, cancelled or over budget. */
+    private inner class Slicer(private val started: TimeSource.Monotonic.ValueTimeMark, private val cancel: () -> Boolean) {
+        fun parse(p: ParserHandle, text: TextSource, old: TreeHandle?): TreeHandle {
+            val slice = if (sliceMicros > 0) sliceMicros else budgetMicros
+            p.setTimeoutMicros(slice)
+            while (true) {
+                try {
+                    return p.parse(text, old)
+                } catch (e: SyntaxException) {
+                    if (e.status != SyntaxStatus.TIMEOUT) { p.reset(); throw e }
+                    if (cancel()) { p.reset(); throw ParseCancelled() }
+                    if (budgetMicros > 0 && started.elapsedNow().inWholeMicroseconds > budgetMicros) {
+                        p.reset()
+                        throw SyntaxException("parse over its ${budgetMicros / 1000} ms budget", SyntaxStatus.TIMEOUT)
+                    }
+                    onSlice?.invoke()
+                }
+            }
+        }
     }
 
     /** Spans in [start, end): sorted, non-overlapping after priority resolution, each a token class. */
@@ -131,12 +284,11 @@ class Highlighter(
         val e = minOf(doc.length, end)
         if (e <= s) return emptyList()
         val paint = IntArray(e - s) { -1 }
-        // host first, then deeper layers: a later paint wins
-        for (layer in doc.layers.sortedBy { it.depth }) {
+        for (layer in doc.paintOrder()) { // a later paint wins
             if (layer.ranges.isNotEmpty() && !intersects(layer.ranges, s, e)) continue
             val q = query(layer.language, QueryKind.HIGHLIGHTS) ?: continue
             val cls = classes(layer.language, q)
-            val c = q.captures(layer.tree, s, e, text)
+            val c = captures(q, layer.tree, s, e, text)
             // Sort the drawable captures by (start, end descending, pattern): outer nodes first, and
             // for one node range its captures in pattern order, the last of which wins.
             val idx = (0 until c.size).filter { cls[c.capture(it)] != SKIP && c.end(it) > c.start(it) }
@@ -155,16 +307,14 @@ class Highlighter(
             var k = 0
             while (k < idx.size) {
                 val i = idx[k]
-                // the same node range again: only its last (latest pattern) capture counts
-                var j = k
+                var j = k // the same node range again: only its last (latest pattern) capture counts
                 while (j + 1 < idx.size && c.start(idx[j + 1]) == c.start(i) && c.end(idx[j + 1]) == c.end(i)) j++
                 val w = idx[j]
-                val start = maxOf(s, c.start(w))
-                while (depth > 0 && stackEnd[depth - 1] <= start) { emit(stackEnd[depth - 1]); depth-- }
-                emit(start)
-                pos = maxOf(pos, start)
-                val end = if (depth > 0) minOf(c.end(w), stackEnd[depth - 1]) else c.end(w)
-                stackEnd[depth] = end
+                val st = maxOf(s, c.start(w))
+                while (depth > 0 && stackEnd[depth - 1] <= st) { emit(stackEnd[depth - 1]); depth-- }
+                emit(st)
+                pos = maxOf(pos, st)
+                stackEnd[depth] = if (depth > 0) minOf(c.end(w), stackEnd[depth - 1]) else c.end(w)
                 stackCls[depth] = cls[c.capture(w)]
                 depth++
                 k = j + 1
@@ -193,7 +343,7 @@ class Highlighter(
             val q = query(layer.language, QueryKind.FOLDS) ?: continue
             val fold = q.captureNames.indexOf("fold")
             if (fold < 0) continue
-            val c = q.captures(layer.tree, s, maxOf(s, e), text)
+            val c = captures(q, layer.tree, s, maxOf(s, e), text)
             for (i in 0 until c.size) {
                 if (c.capture(i) == fold && c.end(i) > c.start(i)) found += c.start(i).toLong() shl 32 or c.end(i).toLong()
             }
@@ -205,8 +355,23 @@ class Highlighter(
     override fun close() {
         parsers.values.forEach { it.close() }
         parsers.clear()
-        queries.values.forEach { it?.close() }
-        queries.clear()
+    }
+
+    /**
+     * Captures of [s, e); when the cursor dropped matches (its match limit), again in 4096-unit
+     * windows, where far fewer matches are in progress at once.
+     */
+    private fun captures(q: QueryHandle, tree: TreeHandle, s: Int, e: Int, text: TextSource): Captures {
+        val c = q.captures(tree, s, e, text)
+        if (!c.exceededMatchLimit || e - s <= WINDOW) return c
+        if (!loggedMatchLimit) { loggedMatchLimit = true; log("query match limit exceeded in $language; querying in ${WINDOW}-unit windows") }
+        val parts = ArrayList<IntArray>()
+        var a = s
+        while (a < e) { val b = minOf(e, a + WINDOW); parts += q.captures(tree, a, b, text).ints; a = b }
+        val all = IntArray(parts.sumOf { it.size })
+        var o = 0
+        for (p in parts) { p.copyInto(all, o); o += p.size }
+        return Captures(all, false)
     }
 
     // ------------------------------------------------------------------------------ injections --
@@ -228,68 +393,123 @@ class Highlighter(
         )
     }
 
-    private val hasCombined = HashMap<String, Boolean>()
-
-    /** Does [q] (the injections of [lang]) combine matches? Those need the whole document every time. */
-    private fun combines(lang: String, q: QueryHandle): Boolean = hasCombined.getOrPut(lang) {
-        (0 until q.patternCount).any { settingsOf(lang, q, it).combined }
-    }
-
     /**
      * Find [parent]'s injections and parse each, appending the layers to [out]. With [old] (the
-     * layer [parent] was reparsed from) only the ranges that changed are searched again: where the
-     * new tree differs from the old one, and the text [edited] since; the other injection sites
-     * are kept. A layer is reused from [oldLayers] by where it is ([Layer.key]).
+     * layer [parent] came from): a clean parent keeps every site; otherwise the parts whose
+     * extent touches the changed ranges (tree changes + edited text) are dropped, and the query
+     * runs again over those ranges together with the dropped parts' extents, so nothing next to
+     * an edit is lost. A layer's tree is copied when nothing it covers changed, reparsed
+     * incrementally when its ranges are the same, and parsed afresh otherwise.
      */
     private fun inject(
-        parent: Layer, old: Layer?, edited: IntArray, text: TextSource, length: Int,
-        oldLayers: Map<String, Layer>, from: MutableMap<Layer, Layer>, out: MutableList<Layer>,
+        parent: Layer, old: Layer?, edited: IntArray, text: TextSource, points: PointSource, length: Int,
+        oldLayers: LazyLayers, from: MutableMap<Layer, Layer>, out: MutableList<Layer>, slicer: Slicer,
     ) {
         if (parent.depth >= maxDepth) return
         val q = query(parent.language, QueryKind.INJECTIONS) ?: return
         val start = parent.ranges.firstOrNull() ?: 0
         val end = parent.ranges.lastOrNull() ?: length
-        val sites: List<Site> = if (old == null || combines(parent.language, q)) {
-            findSites(parent, q, intArrayOf(start, end), text)
-        } else {
-            // the edited text widened by one unit each side: a deletion is empty, and an edit right
-            // at a node's edge can change the match of the node next to it
-            val around = IntArray(edited.size) { i -> if (i % 2 == 0) maxOf(0, edited[i] - 1) else edited[i] + 1 }
-            val changed = normalize((old.tree.changedRanges(parent.tree) + around).toList())
-            val kept = old.sites.filter { s -> !touches(changed, s.extentStart, s.extentEnd) }
-            val found = findSites(parent, q, clip(changed, intArrayOf(start, end)), text)
-            (kept + found.filter { f -> kept.none { it.sameAs(f) } }).sortedBy { it.ranges[0] }
-        }
+        val sites: List<Site> = phase("sites") { when {
+            old == null -> merge(emptyList(), findParts(parent, q, intArrayOf(start, end), text))
+            parent.clean -> old.sites
+            else -> {
+                val around = IntArray(edited.size) { i -> if (i % 2 == 0) maxOf(0, edited[i] - 1) else edited[i] + 1 }
+                val changed = phase("s.changed") { normalize((old.tree.changedRanges(parent.tree) + around).toList()) }
+                val dropped = ArrayList<Int>()
+                val kept = phase("s.kept") { old.sites.map { site ->
+                    if (site.parts.none { touches(changed, it.extentStart, it.extentEnd) }) return@map site // untouched: as it is
+                    val (stay, go) = site.parts.partition { !touches(changed, it.extentStart, it.extentEnd) }
+                    go.forEach { dropped += it.extentStart; dropped += it.extentEnd }
+                    Site(site.pattern, site.language, site.combined, stay.toMutableList())
+                } }
+                val region = clip(normalize((changed.toList() + dropped)), intArrayOf(start, end))
+                val found = phase("s.find") { findParts(parent, q, region, text) }
+                phase("s.merge") { merge(kept, found) }
+            }
+        } }
         parent.sites = sites
-        for (site in sites) {
-            val ranges = clip(site.ranges, parent.ranges)
+        phase("layers") { for (site in sites) {
+            if (site.language in failedLanguages) continue
+            if (!isReady(site.language)) { pendingLanguages += site.language; continue }
+            val ranges = clip(site.ranges(), parent.ranges)
             if (ranges.isEmpty()) continue
-            backend.ensureLanguage(site.language)
-            val parser = parser(site.language)
-            parser.setIncludedRanges(ranges, text)
-            val reuse = oldLayers[layerKey(parent.depth + 1, parent.language, site.language, site.pattern, ranges[0])]
-            val layer = Layer(site.language, parser.parse(text, reuse?.tree), ranges, parent.depth + 1, site.pattern, parent.language)
-            if (reuse != null) from[layer] = reuse
+            val prev = (site.layer ?: oldLayers[LayerKey(parent.depth + 1, parent.language, site.language, site.pattern, ranges[0])])
+                ?.takeIf { it.ranges.contentEquals(ranges) && it.owner === previousDoc && it.depth == parent.depth + 1 }
+            val layer = if (prev != null && !prev.dirty) {
+                prev.also { it.clean = true } // handed on as it is
+            } else {
+                val parser = parser(site.language)
+                parser.setIncludedRanges(ranges, points)
+                phase("layerParse") { Layer(site.language, slicer.parse(parser, text, prev?.tree), ranges, parent.depth + 1, site.pattern, parent.language, editLog) }
+            }
+            if (prev != null && !layer.clean) from[layer] = prev
+            site.layer = layer
             out += layer
+        } }
+    }
+
+    private class Found(val pattern: Int, val language: String, val combined: Boolean, val part: Part)
+
+    /**
+     * Kept sites plus newly found parts: a combined part joins its (pattern, language) site; equal
+     * parts are one. The kept sites are in order already; the few new ones are merged in.
+     */
+    private fun merge(kept: List<Site>, found: List<Found>): List<Site> {
+        val sites = kept.filter { it.parts.isNotEmpty() || it.combined }.toMutableList()
+        val fresh = ArrayList<Site>()
+        var reorder = false
+        for (f in found) {
+            if (f.combined) {
+                val site = sites.firstOrNull { it.combined && it.pattern == f.pattern && it.language == f.language }
+                    ?: fresh.firstOrNull { it.combined && it.pattern == f.pattern && it.language == f.language }
+                    ?: Site(f.pattern, f.language, true, ArrayList()).also { fresh += it }
+                if (site.parts.none { it.sameAs(f.part) }) { site.parts += f.part; reorder = true }
+            } else if (fresh.none { it.pattern == f.pattern && it.language == f.language && it.parts[0].sameAs(f.part) } &&
+                sites.none { !it.combined && it.pattern == f.pattern && it.language == f.language && it.parts.firstOrNull()?.sameAs(f.part) == true }
+            ) {
+                fresh += Site(f.pattern, f.language, false, mutableListOf(f.part))
+            }
         }
+        for (s in sites) if (s.parts.size > 1) s.parts.sortBy { it.extentStart }
+        for (s in fresh) if (s.parts.size > 1) s.parts.sortBy { it.extentStart }
+        val live = sites.filter { s -> s.parts.any { it.ranges.isNotEmpty() } }
+        val add = fresh.filter { s -> s.parts.any { it.ranges.isNotEmpty() } }.toMutableList()
+        for (x in live) x.computeStart()
+        for (x in add) x.computeStart()
+        add.sortWith(::siteOrder)
+        // merge two sorted lists; a combined site that gained a part may have moved: then sort all
+        val out = ArrayList<Site>(live.size + add.size)
+        var i = 0
+        var j = 0
+        while (i < live.size || j < add.size) {
+            out += if (j >= add.size || (i < live.size && siteOrder(live[i], add[j]) <= 0)) live[i++] else add[j++]
+        }
+        if (reorder || (1 until out.size).any { siteOrder(out[it - 1], out[it]) > 0 }) out.sortWith(::siteOrder)
+        return out
     }
 
-    private class Pending(val language: String, val pattern: Int, val ranges: ArrayList<Int> = ArrayList()) {
-        var extentStart = Int.MAX_VALUE
-        var extentEnd = 0
+    private fun siteOrder(a: Site, b: Site): Int {
+        val sa = a.start
+        val sb = b.start
+        if (sa != sb) return sa.compareTo(sb)
+        val l = a.language.compareTo(b.language)
+        return if (l != 0) l else a.pattern.compareTo(b.pattern)
     }
 
-    /** The injection sites of [parent] whose matches intersect [where] ([start, end]*). */
-    private fun findSites(parent: Layer, q: QueryHandle, where: IntArray, text: TextSource): List<Site> {
+    /** The injection matches of [parent] intersecting [where] ([start, end]*), one part each. */
+    private fun findParts(parent: Layer, q: QueryHandle, where: IntArray, text: TextSource): List<Found> {
         val content = q.captureNames.indexOf("injection.content")
         if (content < 0 || where.isEmpty()) return emptyList()
         val langCapture = q.captureNames.indexOf("injection.language")
         val fileCapture = q.captureNames.indexOf("injection.filename")
-        val separate = ArrayList<Pending>()
-        val combined = LinkedHashMap<String, Pending>()
+        val out = ArrayList<Found>()
         val seen = HashSet<String>()
         for (w in where.indices step 2) {
-            for (m in q.matches(parent.tree, where[w], where[w + 1], text, content).toList()) {
+            val m0 = q.matches(parent.tree, where[w], where[w + 1], text, content)
+            if (m0.exceededMatchLimit && !loggedMatchLimit) { loggedMatchLimit = true; log("injection query match limit exceeded in ${parent.language}") }
+            for (m in m0.toList()) {
+                // a match found again from a second range
+                if (!seen.add("${m.pattern}/" + m.captures.joinToString(",") { "${it.start}-${it.end}-${it.index}" })) continue
                 val st = settingsOf(parent.language, q, m.pattern)
                 var lang: String? = st.language?.let { registry.aliasFor(it) }
                 if (st.self) lang = parent.language
@@ -299,20 +519,17 @@ class Highlighter(
                 val l = lang ?: continue
                 if (l !in backend.languages) continue
                 if (registry.query(l, QueryKind.HIGHLIGHTS) == null && registry.query(l, QueryKind.INJECTIONS) == null) continue
-                // a match found again from a second changed range
-                if (!st.combined && !seen.add("${m.pattern}/" + m.captures.joinToString(",") { "${it.start}-${it.end}" })) continue
-                val target = if (st.combined) combined.getOrPut("${m.pattern}/$l") { Pending(l, m.pattern) } else Pending(l, m.pattern).also { separate += it }
+                val ranges = ArrayList<Int>()
+                var es = Int.MAX_VALUE
+                var ee = 0
                 for (c in m.captures) {
-                    target.extentStart = minOf(target.extentStart, c.start)
-                    target.extentEnd = maxOf(target.extentEnd, c.end)
-                    if (c.index == content) contentRanges(c, st, target.ranges)
+                    es = minOf(es, c.start); ee = maxOf(ee, c.end)
+                    if (c.index == content) contentRanges(c, st, ranges)
                 }
+                out += Found(m.pattern, l, st.combined, Part(es, ee, normalize(ranges)))
             }
         }
-        return (separate + combined.values).mapNotNull { p ->
-            val ranges = normalize(p.ranges)
-            if (ranges.isEmpty()) null else Site(p.pattern, p.language, ranges, p.extentStart, p.extentEnd)
-        }
+        return out
     }
 
     /** A content node's ranges: whole, or minus its children (all, or the named ones only). */
@@ -329,19 +546,21 @@ class Highlighter(
 
     // ------------------------------------------------------------------------------ helpers --
 
-    private fun parser(lang: String): ParserHandle = parsers.getOrPut(lang) {
-        backend.ensureLanguage(lang)
-        backend.newParser(lang).also { if (timeoutMicros > 0) it.setTimeoutMicros(timeoutMicros) }
+    private fun parser(lang: String): ParserHandle = parsers.getOrPut(lang) { backend.newParser(lang) }
+
+    private val queries = QueryKind.entries.associateWith { HashMap<String, QueryHandle?>() }
+
+    /** The backend's shared query, looked up once per (language, kind) here (the backend keys by the whole text). */
+    private fun query(lang: String, kind: QueryKind): QueryHandle? {
+        val m = queries.getValue(kind)
+        if (m.containsKey(lang)) return m[lang]
+        return registry.query(lang, kind)?.let { backend.sharedQuery(lang, it) }.also { m[lang] = it }
     }
 
-    private fun query(lang: String, kind: QueryKind): QueryHandle? {
-        val key = "$lang/${kind.file}"
-        if (key in queries) return queries[key]
-        val text = registry.query(lang, kind)
-        val q = text?.let { backend.ensureLanguage(lang); backend.newQuery(lang, it) }
-        queries[key] = q
-        return q
-    }
+    private val ready = HashSet<String>()
+
+    /** [SyntaxBackend.isReady], remembered once true (native asks the library each time). */
+    private fun isReady(lang: String): Boolean = lang in ready || backend.isReady(lang).also { if (it) ready += lang }
 
     /** Token class index (into [TokenClasses.ALL]) per capture of [q]; [NONE] = `@none`, [SKIP] = not drawn. */
     private fun classes(lang: String, q: QueryHandle): IntArray = classIndex.getOrPut(lang) {
@@ -351,11 +570,12 @@ class Highlighter(
         }
     }
 
-    private companion object {
+    internal companion object {
         /** `@none`: an explicit "no colour" that wins over an outer node's colour. */
         const val NONE = -1
         /** Not drawn and not competing (`@spell`, `_helper`, unknown names). */
         const val SKIP = -2
+        const val WINDOW = 4096
 
         val MARKS: List<Decoration.Mark> = TokenClasses.ALL.map { Decoration.Mark(setOf(it), inclusiveStart = false, inclusiveEnd = false) }
 
@@ -395,21 +615,33 @@ class Highlighter(
         fun clip(r: IntArray, parent: IntArray): IntArray {
             if (parent.isEmpty()) return r
             val out = ArrayList<Int>()
-            for (i in r.indices step 2) for (j in parent.indices step 2) {
-                val a = maxOf(r[i], parent[j])
-                val b = minOf(r[i + 1], parent[j + 1])
-                if (b > a) { out += a; out += b }
+            var j = 0
+            for (i in r.indices step 2) {
+                while (j < parent.size && parent[j + 1] <= r[i]) j += 2
+                var k = j
+                while (k < parent.size && parent[k] < r[i + 1]) {
+                    val a = maxOf(r[i], parent[k])
+                    val b = minOf(r[i + 1], parent[k + 1])
+                    if (b > a) { out += a; out += b }
+                    k += 2
+                }
             }
             return out.toIntArray()
         }
 
-        /** Paint class [k] over [from, to) (absolute), only inside [ranges] when there are any. */
+        /** Paint class [k] over [from, to) (absolute), only inside [ranges] (sorted) when there are any. */
         fun paintRange(paint: IntArray, base: Int, from: Int, to: Int, k: Int, ranges: IntArray) {
             if (ranges.isEmpty()) { for (p in from until to) paint[p - base] = k; return }
-            for (i in ranges.indices step 2) {
+            // the first range ending after [from]: binary search over the sorted pairs
+            var lo = 0
+            var hi = ranges.size / 2
+            while (lo < hi) { val mid = (lo + hi) ushr 1; if (ranges[2 * mid + 1] <= from) lo = mid + 1 else hi = mid }
+            var i = 2 * lo
+            while (i < ranges.size && ranges[i] < to) {
                 val a = maxOf(from, ranges[i])
                 val b = minOf(to, ranges[i + 1])
                 for (p in a until b) paint[p - base] = k
+                i += 2
             }
         }
     }

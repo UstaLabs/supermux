@@ -10,7 +10,7 @@ class DesktopLoadTest {
         assertTrue(System.getProperty("editor.syntax.lib") == null, "run through jvmResourceLoadTest")
         assertTrue("json" in SyntaxLanguages.names())
         // A code-only grammar's tables come from the jar's resources, as for any consumer.
-        NativeBackend().apply { ensureLanguage("haskell") }.newParser("haskell").use { p ->
+        NativeBackend().apply { ensureLanguageNow("haskell") }.newParser("haskell").use { p ->
             p.parse(ChunkedSource("main = print 1\n"), null).use { assertTrue(!it.hasError) }
         }
         // ...through the content-addressed cache (macOS: ~/Library/Caches/supermux/natives/<sha256>/).

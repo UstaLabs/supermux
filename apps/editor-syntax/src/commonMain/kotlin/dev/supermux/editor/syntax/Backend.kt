@@ -11,26 +11,49 @@ interface SyntaxBackend {
     /** Language ids this backend can parse right now or after [ensureLanguage]. */
     val languages: Set<String>
 
-    /**
-     * Make [language] usable: its tables are bundled, or provided now from the app's resources.
-     * Idempotent. Throws [SyntaxException] (NO_TABLES naming the missing resource, UNKNOWN_LANGUAGE).
-     */
-    fun ensureLanguage(language: String)
+    /** Can [language] be parsed right now, without [ensureLanguage]? Never blocks. */
+    fun isReady(language: String): Boolean
 
+    /**
+     * Make [language] usable: native provides a code-only grammar's tables from the app's
+     * resources; the web (M2c) fetches a .wasm. Idempotent; may suspend for I/O. Throws
+     * [SyntaxException] (NO_TABLES naming the missing resource, UNKNOWN_LANGUAGE).
+     */
+    suspend fun ensureLanguage(language: String)
+
+    /** A parser for a ready language (see [isReady]). */
     fun newParser(language: String): ParserHandle
+
+    /** A query the caller owns (and closes). */
     fun newQuery(language: String, source: String): QueryHandle
+
+    /**
+     * The compiled query for [source], shared by every document and thread of this backend
+     * (compiling kotlin's highlights costs ~35 ms). Owned by the backend: never close it.
+     */
+    fun sharedQuery(language: String, source: String): QueryHandle
 }
 
 interface ParserHandle : AutoCloseable {
     val language: String
 
-    /** Restrict the next parses to these UTF-16 ranges ([start,end]* packed); empty = whole document. */
-    fun setIncludedRanges(ranges: IntArray, text: TextSource)
+    /**
+     * Restrict the next parses to these UTF-16 ranges ([start,end]* packed); empty = whole document.
+     * [points] gives each boundary's row and column (the host's line index; nothing walks the text).
+     */
+    fun setIncludedRanges(ranges: IntArray, points: PointSource)
 
     fun setTimeoutMicros(micros: Long)
 
-    /** Parse; [old] must already carry every edit since it was produced. Throws SyntaxException(TIMEOUT). */
+    /**
+     * Parse; [old] must already carry every edit since it was produced. Throws
+     * SyntaxException(TIMEOUT) when the timeout hits: the next call with the same text and old
+     * tree then RESUMES the parse (time slices); call [reset] before parsing anything else.
+     */
     fun parse(text: TextSource, old: TreeHandle?): TreeHandle
+
+    /** Discard a timed-out parse (see [parse]). */
+    fun reset()
 }
 
 interface TreeHandle : AutoCloseable {

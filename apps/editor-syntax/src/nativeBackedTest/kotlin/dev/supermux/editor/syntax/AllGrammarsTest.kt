@@ -12,7 +12,7 @@ class AllGrammarsTest {
         assertTrue(names.size >= 40, "only ${names.size} grammars compiled in: $names")
         val codeOnly = names.filter { !SyntaxLanguages.hasTables(it) }
         for (n in names) {
-            backend.ensureLanguage(n)
+            backend.ensureLanguageNow(n)
             assertTrue(SyntaxLanguages.hasTables(n), n)
             backend.newParser(n).use { p -> p.parse(ChunkedSource("x = 1\n"), null).close() }
         }
@@ -23,13 +23,13 @@ class AllGrammarsTest {
         // Only meaningful while some code-only grammar is still unloaded in this process (jvmTest
         // forks per class; on a device another test class may have loaded them all already).
         val unloaded = SyntaxLanguages.names().firstOrNull { !SyntaxLanguages.hasTables(it) } ?: return
-        val e = runCatching { NativeBackend(tables = { null }).ensureLanguage(unloaded) }.exceptionOrNull() as SyntaxException
+        val e = runCatching { NativeBackend(tables = { null }).ensureLanguageNow(unloaded) }.exceptionOrNull() as SyntaxException
         assertEquals(SyntaxStatus.NO_TABLES, e.status)
         assertTrue("editor-syntax/tables/$unloaded.sesz" in e.message!!, e.message)
     }
 
     @Test fun anUnknownLanguageIsRefused() {
-        val e = runCatching { testBackend().ensureLanguage("cobol") }.exceptionOrNull() as SyntaxException
+        val e = runCatching { testBackend().ensureLanguageNow("cobol") }.exceptionOrNull() as SyntaxException
         assertEquals(SyntaxStatus.UNKNOWN_LANGUAGE, e.status)
     }
 }

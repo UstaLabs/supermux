@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 
 /** The M0 golden contract again, through the platform-free [SyntaxBackend] interface. */
 class NativeBackendTest {
-    private val backend: SyntaxBackend = NativeBackend()
+    private val backend = NativeBackend()
 
     private fun spans(q: QueryHandle, t: TreeHandle, text: String): List<String> {
         val c = q.captures(t, 0, text.length, ChunkedSource(text, 3))
@@ -19,7 +19,7 @@ class NativeBackendTest {
     @Test
     fun goldenSpansThroughTheBackend() {
         assertTrue("json" in backend.languages && "kotlin" in backend.languages)
-        backend.ensureLanguage("json")
+        backend.ensureLanguageNow("json")
         backend.newParser("json").use { p ->
             assertEquals("json", p.language)
             p.parse(ChunkedSource(SAMPLE, 3), null).use { t ->
@@ -59,7 +59,7 @@ class NativeBackendTest {
             assertEquals(listOf(PatternSetting(PatternSetting.Kind.SET, null, "injection.language", "js")), q.settings(0))
         }
         backend.newParser("javascript").use { p ->
-            p.setIncludedRanges(intArrayOf(17, 27), ChunkedSource(doc))
+            p.setIncludedRanges(intArrayOf(17, 27), LineTable(ChunkedSource(doc), doc.length))
             p.parse(ChunkedSource(doc), null).use { t ->
                 assertFalse(t.hasError)
                 backend.newQuery("javascript", "\"let\" @k").use { q ->

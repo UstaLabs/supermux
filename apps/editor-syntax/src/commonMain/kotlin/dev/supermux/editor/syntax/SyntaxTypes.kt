@@ -84,3 +84,52 @@ class Matches(val ints: IntArray, val exceededMatchLimit: Boolean) {
         return out
     }
 }
+
+/**
+ * The (row, UTF-16 column) of a document index, packed as `row shl 32 or column`. Included ranges
+ * need the points of their boundaries; the host knows its lines (a Rope answers in O(log n)), so
+ * no backend ever walks the text for them.
+ */
+fun interface PointSource {
+    fun pointAt(index: Int): Long
+
+    companion object {
+        fun row(p: Long): Int = (p ushr 32).toInt()
+        fun column(p: Long): Int = p.toInt()
+        fun of(row: Int, column: Int): Long = row.toLong() shl 32 or (column.toLong() and 0xFFFFFFFFL)
+    }
+}
+
+/** A [PointSource] for any [TextSource]: the line starts, found in ONE scan on first use. */
+class LineTable(private val text: TextSource, private val length: Int) : PointSource {
+    private val starts: IntArray by lazy {
+        val out = ArrayList<Int>().apply { add(0) }
+        var i = 0
+        while (i < length) {
+            val chunk = text.chunkAt(i)
+            if (chunk.isEmpty()) break
+            val n = minOf(chunk.length, length - i)
+            for (k in 0 until n) if (chunk[k] == '\n') out += i + k + 1
+            i += n
+        }
+        out.toIntArray()
+    }
+
+    override fun pointAt(index: Int): Long {
+        val s = starts
+        var lo = 0
+        var hi = s.size - 1
+        while (lo < hi) { val mid = (lo + hi + 1) ushr 1; if (s[mid] <= index) lo = mid else hi = mid - 1 }
+        return PointSource.of(lo, index - s[lo])
+    }
+}
+
+/** A document's text and points from an editor-core [dev.supermux.editor.core.Rope] (immutable, any thread). */
+class RopeText(val rope: dev.supermux.editor.core.Rope) : TextSource, PointSource {
+    override fun chunkAt(index: Int): CharSequence = if (index >= rope.length) "" else rope.chunkAt(index)
+    override fun pointAt(index: Int): Long {
+        val i = minOf(index, rope.length)
+        val row = rope.lineIndexAt(i)
+        return PointSource.of(row, i - rope.lineStart(row))
+    }
+}

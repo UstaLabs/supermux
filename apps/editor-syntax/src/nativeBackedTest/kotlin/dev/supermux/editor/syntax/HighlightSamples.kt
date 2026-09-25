@@ -121,6 +121,66 @@ internal object HighlightSamples {
         }
     }
 
+    val PHP = """
+        |<html>
+        |<body>
+        |<?php
+        |namespace App;
+        |
+        |function greet(string ${'$'}name): string {
+        |    return "Hello, " . ${'$'}name;
+        |}
+        |?>
+        |<p class="x"><?= greet("ağ") ?></p>
+        |<script>let n = 1;</script>
+        |</body>
+        |</html>
+        |""".trimMargin()
+
+    val GO = """
+        |package main
+        |
+        |import "fmt"
+        |
+        |func main() {
+        |    xs := make([]int, 0, 4)
+        |    xs = append(xs, len("ağ"))
+        |    fmt.Println(xs, cap(xs))
+        |    println("done")
+        |}
+        |""".trimMargin()
+
+    val SCALA = """
+        |package demo
+        |
+        |object Main extends App {
+        |  case class Point(x: Int, y: Int)
+        |  val p = Point(1, 2)
+        |  def norm(q: Point): Double = math.sqrt(q.x * q.x + q.y * q.y)
+        |  println(s"norm = ${'$'}{norm(p)}")
+        |}
+        |""".trimMargin()
+
+    val GLSL = """
+        |#version 330 core
+        |uniform vec3 color;
+        |out vec4 fragColor;
+        |void main() {
+        |    float a = clamp(gl_FragCoord.x / 100.0, 0.0, 1.0);
+        |    fragColor = vec4(color * a, 1.0);
+        |}
+        |""".trimMargin()
+
+    val PASCAL = """
+        |program Hello;
+        |var
+        |  i: Integer;
+        |begin
+        |  for i := 1 to 3 do
+        |    WriteLn('Hello ', i);
+        |end.
+        |""".trimMargin()
+
     /** name -> (language, text) */
     val ALL = linkedMapOf(
         "json" to ("json" to SAMPLE),
@@ -131,5 +191,46 @@ internal object HighlightSamples {
         "markdown" to ("markdown" to MARKDOWN),
         "html" to ("html" to HTML),
         "vue" to ("vue" to VUE),
+        "php" to ("php" to PHP),
+        "go" to ("go" to GO),
+        "scala" to ("scala" to SCALA),
+        "glsl" to ("glsl" to GLSL),
+        "pascal" to ("pascal" to PASCAL),
     )
+
+    /** Big documents for the performance numbers: [unit] repeated to at least [lines] lines. */
+    fun repeatTo(unit: String, lines: Int, header: String = "", footer: String = ""): String {
+        val per = maxOf(1, unit.count { it == '\n' })
+        return header + unit.repeat((lines + per - 1) / per) + footer
+    }
+
+    val MARKDOWN_UNIT = """
+        |## Section
+        |
+        |A paragraph with *emphasis*, `code` and a [link](https://example.com), ağ 😀.
+        |Another line of the same paragraph.
+        |
+        |- item one
+        |- item **two**
+        |
+        |```kotlin
+        |fun f(x: Int) = x + 1
+        |```
+        |
+        |<div class="note">html block</div>
+        |
+        |""".trimMargin()
+
+    val VUE_SCRIPT_UNIT = """
+        |export function f(x: number): string {
+        |  const s = "ağ" + x
+        |  return s.repeat(2) // twice
+        |}
+        |""".trimMargin()
+
+    val PHP_UNIT = """
+        |function f(array ${'$'}xs): int {
+        |    return count(${'$'}xs) + strlen("ağ");
+        |}
+        |""".trimMargin()
 }

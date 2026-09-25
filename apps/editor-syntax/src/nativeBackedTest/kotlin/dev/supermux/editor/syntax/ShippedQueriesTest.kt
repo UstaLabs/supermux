@@ -20,7 +20,7 @@ class ShippedQueriesTest {
         for (key in BundledQueries.keys) {
             val (lang, kind) = key.split('/')
             val text = registry.query(lang, QueryKind.entries.first { it.file == kind })!!
-            backend.ensureLanguage(lang)
+            backend.ensureLanguageNow(lang)
             SyntaxQuery(lang, text).use { q ->
                 assertEquals(0, q.flags and 1, "$key uses #lua-match?")
                 assertTrue(q.patternCount > 0 || text.lines().none { it.isNotBlank() && !it.startsWith(";") }, key)
@@ -50,7 +50,7 @@ class ShippedQueriesTest {
 
     @Test fun kotlinHasHighlights() {
         val src = "package demo\n\nfun main(args: Array<String>) {\n    val greeting = \"hello\"\n    println(greeting)\n}\n"
-        backend.ensureLanguage("kotlin")
+        backend.ensureLanguageNow("kotlin")
         SyntaxParser("kotlin").use { p ->
             p.parse(src).use { t ->
                 SyntaxQuery("kotlin", registry.query("kotlin", QueryKind.HIGHLIGHTS)!!).use { q ->

@@ -11,7 +11,7 @@ class ShippedCapturesTest {
         val names = HashMap<String, MutableSet<String>>()
         for (lang in registry.languages) {
             val text = registry.query(lang, QueryKind.HIGHLIGHTS) ?: continue
-            backend.ensureLanguage(lang)
+            backend.ensureLanguageNow(lang)
             backend.newQuery(lang, text).use { q -> q.captureNames.forEach { names.getOrPut(it) { HashSet() } += lang } }
         }
         val unmapped = names.filterKeys { tokenClassFor(it) == null && !it.startsWith("_") && it !in IGNORED }
