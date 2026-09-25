@@ -127,4 +127,28 @@ class StateTest {
         }
     }
 
+    @Test fun staticFacetValuesAreSharedAcrossStates() {
+        val s0 = EditorState.create("a", extensions = extensionOf(words.of("w"), editCount))
+        val s1 = s0.update(ChangeSpec(1, 1, "b")).state
+        assertSame(s0.facet(words), s1.facet(words))
+    }
+
+    @Test fun unchangedDynamicFacetValuesAreReused() {
+        val s0 = EditorState.create("a", extensions = words.compute { st -> if (st.doc.length > 3) "long" else "short" })
+        val s1 = s0.update(ChangeSpec(1, 1, "b")).state
+        assertEquals(listOf("short"), s1.facet(words))
+        assertSame(s0.facet(words), s1.facet(words))
+        val s2 = s1.update(ChangeSpec(2, 2, "cde")).state
+        assertEquals(listOf("long"), s2.facet(words))
+    }
+
+    @Test fun aCustomCompareDecidesWhenAFacetValueIsReused() {
+        // Compares only the length, so a same-length edit keeps the old value.
+        val docText = Facet.define<String, String>("docText", compare = { a, b -> a.length == b.length }) { it.joinToString("") }
+        val s0 = EditorState.create("ab", extensions = docText.compute { it.doc.toString() })
+        val s1 = s0.update(ChangeSpec(0, 1, "x")).state
+        assertSame(s0.facet(docText), s1.facet(docText))
+        assertEquals("ab", s1.facet(docText))
+        assertEquals("xbc", s1.update(ChangeSpec(2, 2, "c")).state.facet(docText))
+    }
 }

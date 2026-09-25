@@ -1,5 +1,7 @@
 package dev.supermux.editor.core
 
+import kotlin.concurrent.Volatile
+
 /** A typed message a transaction carries to plugins ("fold lines 10–20", "set diagnostics"). */
 class StateEffectType<T>(val name: String, private val mapper: ((T, ChangeSet) -> T?)? = null) {
     fun of(value: T): StateEffect<T> = StateEffect(this, value)
@@ -91,34 +93,60 @@ class Transaction internal constructor(
 /**
  * The whole editor state as ONE immutable value: the document, the selection and every plugin's
  * field. The only way to get a new one is [update].
+ *
+ * A completed state (one returned by [create] or [update]) is safe to read from any thread: every
+ * facet with providers is computed eagerly when the state completes, so reads never mutate it.
  */
 class EditorState private constructor(
     val doc: Rope,
     val selection: EditorSelection,
     internal val config: Configuration,
 ) {
+    // Filled while the state is being built, never changed after [complete].
     private val values = HashMap<StateField<*>, Any?>()
-    private val facetCache = HashMap<Facet<*, *>, Any?>()
-    // False while fields are still being created/updated: a facet read then may see a partial
-    // state, so it is computed but not cached. A field may read static facets and EARLIER fields.
-    private var complete = false
+
+    // Null while fields are still being created/updated: a facet read then may see a partial state,
+    // so it is computed but not kept (a field may read static facets and EARLIER fields). Set once,
+    // by [complete]; the volatile write also publishes [values] to readers on other threads.
+    @Volatile private var facetValues: Map<Facet<*, *>, Any?>? = null
 
     @Suppress("UNCHECKED_CAST")
     fun <V> field(f: StateField<V>): V {
+        val values = fieldValues()
         require(values.containsKey(f)) { "$f is not part of this state's configuration" }
         return values[f] as V
     }
 
     @Suppress("UNCHECKED_CAST")
-    fun <V> fieldOrNull(f: StateField<V>): V? = values[f] as V?
+    fun <V> fieldOrNull(f: StateField<V>): V? = fieldValues()[f] as V?
+
+    // Reads the volatile first, so a completed state's field values are visible on this thread.
+    private fun fieldValues(): Map<StateField<*>, Any?> { facetValues; return values }
 
     @Suppress("UNCHECKED_CAST")
     fun <I, O> facet(f: Facet<I, O>): O {
-        if (facetCache.containsKey(f)) return facetCache[f] as O
-        val providers = config.providers[f].orEmpty()
-        val value = f.combineValues(providers.map { (it as FacetProvider<I>).valueIn(this) })
-        if (complete) facetCache[f] = value
-        return value
+        val done = facetValues
+        if (done != null && done.containsKey(f)) return done[f] as O
+        if (config.staticValues.containsKey(f)) return config.staticValues[f] as O
+        return f.combineIn(config.providers[f].orEmpty(), this)
+    }
+
+    /**
+     * Marks the state complete: computes every facet with providers, keeping [previous]'s instance
+     * wherever the new output compares equal to it.
+     */
+    private fun complete(previous: EditorState?) {
+        val before = previous?.facetValues
+        val out = HashMap<Facet<*, *>, Any?>()
+        for ((f, providers) in config.providers) {
+            var v = if (config.staticValues.containsKey(f)) config.staticValues[f] else f.combineIn(providers, this)
+            if (before != null && before.containsKey(f)) {
+                val old = before[f]
+                if (old !== v && f.same(old, v)) v = old
+            }
+            out[f] = v
+        }
+        facetValues = out
     }
 
     fun sliceDoc(from: Int = 0, to: Int = doc.length): String = doc.slice(from, to)
@@ -147,7 +175,7 @@ class EditorState private constructor(
         for (f in newConfig.fields) {
             next.values[f] = if (values.containsKey(f)) f.updateWith(values[f], tr) else f.createIn(next)
         }
-        next.complete = true
+        next.complete(this)
         return tr
     }
 
@@ -168,7 +196,7 @@ class EditorState private constructor(
             sel.ranges.forEach { require(it.to <= rope.length) { "selection $it beyond doc length ${rope.length}" } }
             val state = EditorState(rope, sel, Configuration.resolve(extensions, emptyMap()))
             for (f in state.config.fields) state.values[f] = f.createIn(state)
-            state.complete = true
+            state.complete(null)
             return state
         }
     }

@@ -32,18 +32,34 @@ object Prec {
  * the highest-precedence tab size or falls back to 4. Inputs are either static ([of]) or derived
  * from the state ([compute]), which is how a plugin turns its own state field into, say,
  * decorations.
+ *
+ * Output values are reused, so consumers can compare by identity to skip work: a facet fed only
+ * by [of] is computed once per configuration and shared by every state using it, and when a
+ * computed output [compare]s equal to the previous state's, the previous instance is kept.
  */
-class Facet<I, O> private constructor(val name: String, private val combine: (List<I>) -> O) {
+class Facet<I, O> private constructor(
+    val name: String,
+    private val compare: (O, O) -> Boolean,
+    private val combine: (List<I>) -> O,
+) {
     fun of(value: I): Extension = FacetProvider(this, value, null)
     fun compute(get: (EditorState) -> I): Extension = FacetProvider(this, null, get)
 
-    internal fun combineValues(values: List<I>): O = combine(values)
+    @Suppress("UNCHECKED_CAST")
+    internal fun combineIn(providers: List<FacetProvider<*>>, state: EditorState?): O =
+        combine(providers.map { (it as FacetProvider<I>).valueIn(state) })
+
+    @Suppress("UNCHECKED_CAST")
+    internal fun same(a: Any?, b: Any?): Boolean = a === b || compare(a as O, b as O)
+
     override fun toString() = "Facet($name)"
 
     companion object {
-        fun <I, O> define(name: String, combine: (List<I>) -> O): Facet<I, O> = Facet(name, combine)
-        fun <T> list(name: String): Facet<T, List<T>> = Facet(name) { it }
-        fun <T> first(name: String, default: T): Facet<T, T> = Facet(name) { it.firstOrNull() ?: default }
+        /** [compare] decides when a recomputed output counts as unchanged (default: `==`). */
+        fun <I, O> define(name: String, compare: (O, O) -> Boolean = { a, b -> a == b }, combine: (List<I>) -> O): Facet<I, O> =
+            Facet(name, compare, combine)
+        fun <T> list(name: String): Facet<T, List<T>> = Facet(name, { a, b -> a == b }) { it }
+        fun <T> first(name: String, default: T): Facet<T, T> = Facet(name, { a, b -> a == b }) { it.firstOrNull() ?: default }
     }
 }
 
@@ -52,8 +68,9 @@ internal class FacetProvider<I>(
     val static: I?,
     val dynamic: ((EditorState) -> I)?,
 ) : Extension {
+    /** [state] may be null only for a static provider. */
     @Suppress("UNCHECKED_CAST")
-    fun valueIn(state: EditorState): I = if (dynamic != null) dynamic.invoke(state) else static as I
+    fun valueIn(state: EditorState?): I = if (dynamic != null) dynamic.invoke(state!!) else static as I
 }
 
 /**
@@ -97,6 +114,11 @@ internal class Configuration(
     val providers: Map<Facet<*, *>, List<FacetProvider<*>>>,
     val compartments: Map<Compartment, Extension>,
 ) {
+    /** The output of every facet whose providers are all static: computed once, shared by every state. */
+    val staticValues: Map<Facet<*, *>, Any?> = buildMap {
+        for ((f, ps) in providers) if (ps.all { it.dynamic == null }) put(f, f.combineIn(ps, null))
+    }
+
     companion object {
         fun resolve(root: Extension, compartmentContent: Map<Compartment, Extension>): Configuration {
             // Every occurrence of a field or provider in tree order, and the highest precedence each
