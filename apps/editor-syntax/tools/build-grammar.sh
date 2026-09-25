@@ -22,10 +22,10 @@ python3 "$HERE/tools/gen-registry.py" "$W/registry.c" "$LANG_NAME"
 clang -O1 -w -std=gnu11 -DLANG="$LANG_NAME" -I"$TS/include" -I"$TS/src" -I"$HERE/native/include" \
   "$HERE/native/tests/difftest.c" "$HERE/native/src/syntax_bridge.c" "$HERE/native/src/ses_grammar.c" "$W/registry.c" \
   "$HERE/build/gen/libts.o" "$W/orig.o" "$W/xform.o" ${SCAN[@]+"${SCAN[@]}"} ${CXX_LINK[@]+"${CXX_LINK[@]}"} -lz -o "$W/difftest"
-# Inputs: the package's own test corpus and examples when the npm tarball ships them (most do not),
+# Inputs: the package's own test corpus (test/corpus or corpus) and examples when the npm tarball ships them (most do not),
 # plus the M0 golden sample (native/tests/inputs), so every grammar sees at least one input.
 G="$HERE/build/grammars/$PKG"
-INP="$W/inputs"; python3 "$HERE/tools/make-inputs.py" "$INP" $(ls -d "$G/test/corpus" "$G/examples" 2>/dev/null) \
+INP="$W/inputs"; python3 "$HERE/tools/make-inputs.py" "$INP" $(ls -d "$G/test/corpus" "$G/corpus" "$G/examples" 2>/dev/null) \
   "$HERE/native/tests/inputs" > /dev/null
 [ -n "$(ls -A "$INP")" ] || { echo "no difftest inputs for $LANG_NAME" >&2; exit 1; }
 "$W/difftest" "$W/$LANG_NAME.sesz" "$INP"/* | tee "$W/difftest.log"

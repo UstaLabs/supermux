@@ -202,9 +202,19 @@ androidComponents {
 
 // jvmTest loads the Mac's freshly built library directly; jvmResourceLoadTest (below) proves the
 // packaged-resource path instead.
-tasks.named<Test>("jvmTest") {
+val jvmTest = tasks.named<Test>("jvmTest") {
     systemProperty("editor.syntax.lib", File(nativeBuildDir, "macos-arm64/lib/libsupermux_syntax_jni.dylib").absolutePath)
+    filter { excludeTestsMatching("dev.supermux.editor.syntax.DesktopLoadTest") }
     testLogging { showStandardStreams = true; events("passed", "failed"); exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
+}
+tasks.register<Test>("jvmResourceLoadTest") {
+    group = "verification"
+    description = "Load the desktop JNI library the way a consumer does: from the staged jar resources (no editor.syntax.lib)."
+    testClassesDirs = jvmTest.get().testClassesDirs
+    classpath = jvmTest.get().classpath
+    useJUnit()
+    filter { includeTestsMatching("dev.supermux.editor.syntax.DesktopLoadTest") }
+    testLogging { events("passed", "failed"); exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
 }
 
 // Android host unit tests would run on the desktop JVM through System.loadLibrary, which can only

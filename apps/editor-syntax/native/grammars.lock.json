@@ -403,8 +403,12 @@
    "parserDirs": [
     "src"
    ],
-   "tables": "excluded",
-   "note": "ABI 9 - regenerate from grammar.json with tree-sitter-cli, or replace"
+   "tables": "code",
+   "note": "the npm parser.c is ABI 9 (runtime 0.25 needs 13-15): fetch.sh regenerates it from the package grammar.json",
+   "regenerate": {
+    "cli": "tree-sitter-cli@0.25.10",
+    "abi": 14
+   }
   },
   {
    "lang": "elm",

@@ -37,11 +37,21 @@ for g in json.load(open(os.path.join(here, "native/grammars.lock.json")))["gramm
         sys.exit("sha256 mismatch for %s: %s != %s" % (g["lang"], sha, g["sha256"]))
     dest = os.path.join(b, "grammars", g["lang"])
     if not os.path.isdir(dest):
-        os.makedirs(dest)
+        tmp = dest + ".tmp"
+        subprocess.run(["rm", "-rf", tmp], check=True)
+        os.makedirs(tmp)
         with tarfile.open(tgz) as t:
             for m in t.getmembers():
                 m.name = m.name.split("/", 1)[1] if "/" in m.name else ""
                 if m.name:
-                    t.extract(m, dest)
+                    t.extract(m, tmp)
+        # "regenerate": the published parser.c is for an ABI this runtime refuses; rebuild it from the
+        # package's own grammar.json with the pinned tree-sitter CLI (the difftest then checks the result).
+        r = g.get("regenerate")
+        if r:
+            for d in g["parserDirs"]:
+                subprocess.run(["npx", "-y", r["cli"], "generate", "--abi", str(r["abi"]), "src/grammar.json"],
+                               cwd=os.path.dirname(os.path.join(tmp, d)), check=True)
+        os.rename(tmp, dest)
 print("fetched")
 PY
