@@ -116,9 +116,10 @@ class SesBindingTest {
     @Test
     fun changedRangesAreUtf16() = SesHighlighter("json").use { h ->
         h.parse(SAMPLE)
-        h.edit(24, 29, "\"k\"") // replace the key "e😀" (24..29) with "k"
+        h.edit(17, 21, "\"😀\"") // null (17..21) -> a string of the same 4 units: the node type changed
         val r = h.lastChangedRanges
-        assertTrue(r.isEmpty() || (r[0] >= 0 && r.last() <= h.source.length), r.toList().toString())
+        assertTrue(r.isNotEmpty() && r.size % 2 == 0, r.toList().toString())
+        assertTrue(r[0] <= 17 && r.toList().chunked(2).any { it[1] >= 21 } && r.last() <= h.source.length, r.toList().toString())
         h.edit(8, 9, "[2]") // number -> array: a structural change must be reported
         val r2 = h.lastChangedRanges
         assertTrue(r2.isNotEmpty() && r2[0] <= 8 && r2[1] >= 11, r2.toList().toString())
@@ -137,19 +138,33 @@ class SesBindingTest {
     }
 
     @Test
-    fun fsharpTablesInflateOnFirstUse() {
+    fun providedTablesOfACodeOnlyGrammarInflateOnFirstUse() {
+        val blob = testResource("sesz/fsharp.sesz")
         val t0 = kotlin.time.TimeSource.Monotonic.markNow()
+        SyntaxLanguages.provideTables("fsharp", blob) // SHA-256 of the whole blob + a copy
+        val provideMs = t0.elapsedNow().inWholeMicroseconds / 1000.0
+        assertTrue(SyntaxLanguages.hasTables("fsharp"))
+        val t1 = kotlin.time.TimeSource.Monotonic.markNow()
         SyntaxLanguages.load("fsharp")
-        val loadMs = t0.elapsedNow().inWholeMicroseconds / 1000.0
+        val loadMs = t1.elapsedNow().inWholeMicroseconds / 1000.0
         SyntaxParser("fsharp").use { p ->
-            val t1 = kotlin.time.TimeSource.Monotonic.markNow()
+            val t2 = kotlin.time.TimeSource.Monotonic.markNow()
             p.parse(FSHARP_SAMPLE).use { t ->
-                val parseMs = t1.elapsedNow().inWholeMicroseconds / 1000.0
-                println("SES fsharp first-use load=${loadMs}ms parse=${parseMs}ms units=${FSHARP_SAMPLE.length}")
+                val parseMs = t2.elapsedNow().inWholeMicroseconds / 1000.0
+                println("SES fsharp provide(sha256+copy)=${provideMs}ms load=${loadMs}ms parse=${parseMs}ms blob=${blob.size}B units=${FSHARP_SAMPLE.length}")
                 assertFalse(t.hasError, t.sexp().take(400))
                 assertTrue(t.sexp().startsWith("(file (named_module"), t.sexp().take(200))
             }
         }
+    }
+
+    @Test
+    fun alteredTablesAreRefused() {
+        // Valid header, valid zlib, one payload byte changed: only the SHA-256 can tell.
+        val e = assertFailsWith<SyntaxException> {
+            SyntaxLanguages.provideTables("fsharp", testResource("sesz/fsharp-tampered.sesz"))
+        }
+        assertEquals(SyntaxStatus.BAD_TABLES, e.status)
     }
 }
 

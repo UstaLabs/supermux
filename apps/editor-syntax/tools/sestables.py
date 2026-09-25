@@ -34,6 +34,7 @@ Raw payload ("SEST", little-endian):
 Compressed file (".sesz"):
   0 char[4] "SESZ"  4 u32 format=1  8 u32 raw_size  12 u32 z_size  16 u64 content_hash  24 zlib stream
 """
+import hashlib
 import json
 import os
 import re
@@ -116,7 +117,7 @@ def analyse(src):
         end = find_block_end(src, t.end() - 1)
         assert src[end] == ';', t.group('name')
         tables[t.group('name')] = dict(name=t.group('name'), type=t.group('type').strip(),
-                                       start=t.start(), end=end + 1)
+                                       dims=t.group('dims'), start=t.start(), end=end + 1)
 
     kept, moved = [], []   # moved: (c lvalue under the language, table name)
 
@@ -167,7 +168,7 @@ def analyse(src):
             order.append(tn)
     return dict(lang=lang, abi=abi, fn_start=fn_start, fn_end=fn_end, head=m.group('head'),
                 kept=kept, moved=final_moved,
-                tables=[dict(name=tn, type=tables[tn]['type'],
+                tables=[dict(name=tn, type=tables[tn]['type'], dims=tables[tn]['dims'],
                              kind=KIND_STRINGS if re.search(r'\bchar\b', tables[tn]['type']) else KIND_BYTES,
                              start=tables[tn]['start'], end=tables[tn]['end']) for tn in order])
 
@@ -269,6 +270,12 @@ def cmd_emit(workdir, lang):
         last = e
     out.append(src[last:plan['fn_start']])
     specs = ',\n  '.join('{%d, %d, %d}' % (k, len(d), c) for k, d, c, _ in recs)
+    # The blob's bytes were laid out by the HOST compiler: the target must agree on every byte table's
+    # size (first dimension = the row count the dump saw, the rest as declared).
+    asserts = '\n'.join('_Static_assert(sizeof(%s[%d]%s) == %d, "%s: layout differs from the host that generated its tables");'
+                        % (t['type'], r[2], ''.join(re.findall(r'\[[^\]]*\]', t['dims'])[1:]), len(r[1]), t['name'])
+                        for t, r in zip(plan['tables'], recs) if r[0] == KIND_BYTES and len(r[1]))
+    sha = hashlib.sha256(sesz).digest()
     fills = '\n'.join('  ses_language.%s = ses_tables_at(t, %d);' % (field, [x['name'] for x in plan['tables']].index(tn))
                       for field, tn in plan['moved'])
     out.append('''#include "ses_grammar.h"
@@ -286,8 +293,13 @@ static const ses_table_spec ses_specs[%d] = {
   %s
 };
 
+%s
+
+static const uint8_t ses_sesz_sha256[32] = {%s};
+
 static ses_grammar ses_desc = {
-  "%s", LANGUAGE_VERSION, 0x%016xULL, %d, ses_specs, ses_fill, &ses_language, NULL,
+  .name = "%s", .abi = LANGUAGE_VERSION, .hash = 0x%016xULL, .table_count = %d, .specs = ses_specs,
+  .fill = ses_fill, .language = &ses_language, .sha256 = ses_sesz_sha256,
 };
 
 ses_grammar *ses_grammar_%s(void) { return &ses_desc; }
@@ -295,10 +307,11 @@ ses_grammar *ses_grammar_%s(void) { return &ses_desc; }
 %s{
   return (const TSLanguage *)ses_grammar_language(&ses_desc);
 }
-''' % (',\n    '.join(plan['kept']), fills, n, specs, lang, h, n, lang, plan['head']))
+''' % (',\n    '.join(plan['kept']), fills, n, specs, asserts, ','.join(str(b) for b in sha), lang, h, n, lang,
+       plan['head']))
     out.append(src[plan['fn_end']:])
     open(os.path.join(workdir, 'parser_%s.c' % lang), 'w').write(''.join(out))
-    manifest = dict(lang=lang, abi=plan['abi'], hash='%016x' % h, raw_size=len(payload), z_size=len(sesz),
+    manifest = dict(lang=lang, abi=plan['abi'], hash='%016x' % h, sha256=sha.hex(), raw_size=len(payload), z_size=len(sesz),
                     tables=[dict(name=t['name'], kind=t['kind'], size=len(r[1]), count=r[2])
                             for t, r in zip(plan['tables'], recs)])
     json.dump(manifest, open(os.path.join(workdir, '%s.tables.json' % lang), 'w'), indent=1)

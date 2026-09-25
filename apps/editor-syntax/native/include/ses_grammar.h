@@ -35,6 +35,7 @@ typedef struct ses_grammar {
   void *language;         /* the grammar's static, non-const TSLanguage */
   void *_Atomic loaded;   /* NULL until filled; then == language (release/acquire) */
   int32_t status;         /* last load failure (SES_ERR_*), 0 if none; guarded by the loader lock */
+  const uint8_t *sha256;  /* SHA-256 of the whole .sesz file this code was generated with */
 } ses_grammar;
 
 /**

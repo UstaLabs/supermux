@@ -6,8 +6,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <zlib.h>
 
+#include "ses_registry.h"
 #include "supermux_syntax.h"
+
+static const char *gen_dir;
 
 static int failures;
 #define CHECK(name, cond, ...)                                  \
@@ -108,8 +113,75 @@ static void pattern_settings(void) {
   ses_query_free(q);
 }
 
+static uint8_t *slurp(const char *path, size_t *len) {
+  FILE *f = fopen(path, "rb");
+  if (!f) return NULL;
+  fseek(f, 0, SEEK_END);
+  long n = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  uint8_t *b = malloc(n ? (size_t)n : 1);
+  *len = fread(b, 1, (size_t)n, f);
+  fclose(f);
+  return b;
+}
+
+static void sha256_vector(void) {
+  static const uint8_t abc[32] = {0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+                                  0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad};
+  uint8_t d[32];
+  ses_sha256((const uint8_t *)"abc", 3, d);
+  CHECK("sha256(abc)", memcmp(d, abc, 32) == 0, "wrong digest");
+}
+
+/* The cost of the first-load check on the largest blob (the bundled-blob check must stay < 5 ms). */
+static void sha256_cost(void) {
+  char path[4096];
+  snprintf(path, sizeof path, "%s/fsharp/fsharp.sesz", gen_dir);
+  size_t n;
+  uint8_t *b = slurp(path, &n);
+  if (!b) { printf("skip sha256 cost: no %s\n", path); return; }
+  uint8_t d[32];
+  struct timespec t0, t1;
+  double best = 1e9;
+  for (int i = 0; i < 5; i++) {
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    ses_sha256(b, n, d);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
+    if (ms < best) best = ms;
+  }
+  printf("SHA256 fsharp.sesz: %zu bytes in %.2f ms (best of 5; this build is sanitized, so slower than a release)\n", n, best);
+  free(b);
+}
+
+/* A blob with a valid header and valid zlib whose CONTENT changed is refused; the original is not. */
+static void tampered_blob(void) {
+  char path[4096];
+  snprintf(path, sizeof path, "%s/json/json.sesz", gen_dir);
+  size_t n;
+  uint8_t *z = slurp(path, &n);
+  CHECK("json.sesz readable", z != NULL, "%s", path);
+  if (!z) return;
+  uLongf raw_size = (uLongf)(z[8] | z[9] << 8 | z[10] << 16 | (uint32_t)z[11] << 24), got = raw_size;
+  uint8_t *raw = malloc(raw_size);
+  int ok = uncompress(raw, &got, z + 24, (uLong)(n - 24)) == Z_OK && got == raw_size;
+  raw[raw_size / 2] ^= 0x5A; /* inside the table data, past every header */
+  uLongf zl = compressBound(raw_size);
+  uint8_t *t = malloc(24 + zl);
+  memcpy(t, z, 24);
+  ok = ok && compress2(t + 24, &zl, raw, raw_size, 9) == Z_OK;
+  t[12] = (uint8_t)zl; t[13] = (uint8_t)(zl >> 8); t[14] = (uint8_t)(zl >> 16); t[15] = (uint8_t)(zl >> 24);
+  CHECK("tampered blob built", ok, "zlib");
+  CHECK("tampered content is refused", ses_language_provide_tables("json", t, 24 + zl) == SES_ERR_BAD_TABLES, "accepted");
+  CHECK("the original is accepted", ses_language_provide_tables("json", z, n) == SES_OK, "refused");
+  free(t); free(raw); free(z);
+}
+
 int main(int argc, char **argv) {
-  (void)argc; (void)argv;
+  gen_dir = argc > 1 ? argv[1] : "build/gen";
+  sha256_vector();
+  sha256_cost();
+  tampered_blob();
   empty_any_of_values();
   any_of_with_captures();
   match_callback();

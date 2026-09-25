@@ -24,5 +24,7 @@ int32_t ses_tables_provide(ses_grammar *grammar, const uint8_t *sesz, size_t len
 int ses_tables_available(ses_grammar *grammar, const ses_registry_entry *entry);
 /** Why the last load of [grammar] failed (SES_ERR_*), 0 if it did not. */
 int32_t ses_grammar_status(ses_grammar *grammar);
+/** SHA-256 of [len] bytes into out[32]. */
+void ses_sha256(const uint8_t *data, size_t len, uint8_t out[32]);
 
 #endif

@@ -390,8 +390,7 @@
     "fsharp/src",
     "fsharp_signature/src"
    ],
-   "tables": "bundled",
-   "note": "not core, bundled anyway: the largest grammar (835 KB blob), SesBindingTest checks its first-use inflate on every platform"
+   "tables": "code"
   },
   {
    "lang": "clojure",
