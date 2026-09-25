@@ -42,8 +42,9 @@ data class Ranged<T>(val from: Int, val to: Int, val value: T) {
 /**
  * An immutable, sorted set of ranged values that moves through edits.
  *
- * Sorted by (from, to). A range entirely inside deleted text disappears when mapped; marks grow
- * or not at their edges according to their inclusive flags.
+ * Sorted by (from, to). A range entirely inside deleted text disappears when mapped, and so does a
+ * point strictly inside a deletion (a point exactly at its edge maps by its side); marks grow or
+ * not at their edges according to their inclusive flags.
  */
 class RangeSet<T> private constructor(val ranges: List<Ranged<T>>) {
     val size: Int get() = ranges.size
@@ -56,6 +57,7 @@ class RangeSet<T> private constructor(val ranges: List<Ranged<T>>) {
         val out = ArrayList<Ranged<T>>(ranges.size)
         for (r in ranges) {
             val v = r.value
+            if (r.from == r.to && changes.deletesAround(r.from)) continue
             val (startAssoc, endAssoc) = if (v is Decoration.Mark) {
                 (if (v.inclusiveStart) -1 else 1) to (if (v.inclusiveEnd) 1 else -1)
             } else if (r.from == r.to) {

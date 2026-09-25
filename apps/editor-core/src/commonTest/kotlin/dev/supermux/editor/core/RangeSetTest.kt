@@ -33,6 +33,19 @@ class RangeSetTest {
         assertEquals(listOf(Ranged(3, 3, before), Ranged(5, 5, after)), mapped)
     }
 
+    @Test fun pointDecorationsInsideADeletionAreDropped() {
+        val line = Decoration.LineStyle(setOf("l"))
+        val set = RangeSet.of(listOf(Ranged(0, 0, line), Ranged(4, 4, line), Ranged(8, 8, line)))
+        assertEquals(listOf(Ranged(0, 0, line)), set.map(ChangeSet.of(12, ChangeSpec(3, 11))).ranges)
+    }
+
+    @Test fun widgetsAtADeletionBoundaryKeepTheirSideMapping() {
+        val before = Decoration.InlineWidget(WidgetKey("w", "a"), side = -1)
+        val after = Decoration.InlineWidget(WidgetKey("w", "b"), side = 1)
+        val set = RangeSet.of(listOf(Ranged(3, 3, after), Ranged(11, 11, before)))
+        assertEquals(listOf(Ranged(3, 3, after), Ranged(3, 3, before)), set.map(ChangeSet.of(12, ChangeSpec(3, 11))).ranges)
+    }
+
     @Test fun betweenFindsOverlapsIncludingEdges() {
         val set = RangeSet.of(listOf(Ranged(0, 2, mark), Ranged(4, 6, mark), Ranged(9, 9, mark)))
         assertEquals(2, set.between(2, 4).size)

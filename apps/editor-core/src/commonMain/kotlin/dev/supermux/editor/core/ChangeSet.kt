@@ -129,6 +129,19 @@ class ChangeSet internal constructor(internal val ops: List<Op>) {
         return pos + delta
     }
 
+    /** True when [pos] lies strictly inside a deleted range (its text is gone on both sides). */
+    internal fun deletesAround(pos: Int): Boolean {
+        var a = 0
+        for (i in ops.indices) {
+            when (val op = ops[i]) {
+                is Op.Retain -> { a += op.n; if (a >= pos) return false }
+                is Op.Delete -> { if (pos < a + op.n) return pos > a; a += op.n }
+                is Op.Insert -> Unit
+            }
+        }
+        return false
+    }
+
     override fun equals(other: Any?) = other is ChangeSet && other.ops == ops
     override fun hashCode() = ops.hashCode()
     override fun toString() = ops.joinToString(" ") {
