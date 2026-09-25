@@ -106,7 +106,8 @@ build_target() {
     *) JI=() ;;                                                        # Android: the NDK sysroot has jni.h
   esac
   local PIC=(-fPIC); [[ "$T" == windows-* ]] && PIC=()   # clang rejects -fPIC for Windows targets (PE code is relocatable anyway)
-  local FLAGS=(-Os ${PIC[@]+"${PIC[@]}"} -w -std=gnu11 -ffunction-sections -fdata-sections -fvisibility=hidden -DTREE_SITTER_HIDE_SYMBOLS)
+  # -DNDEBUG like tree-sitter's release builds: an internal assert() must never abort the app.
+  local FLAGS=(-Os ${PIC[@]+"${PIC[@]}"} -w -std=gnu11 -ffunction-sections -fdata-sections -fvisibility=hidden -DNDEBUG -DTREE_SITTER_HIDE_SYMBOLS)
   local ZI=(); [ "$ZSRC" = 1 ] && ZI=(-I"$ZLIB")
   objs=()
   cc() { local out="$OBJ/$1"; shift; "${CC[@]}" "${FLAGS[@]}" "$@" -c -o "$out"; objs+=("$out"); }
@@ -130,25 +131,74 @@ build_target() {
       case "$sym" in tree_sitter_${lang}_external_scanner_*) ;; *) RN+=("-D$sym=ses_${lang}_${sym#tree_sitter_}") ;; esac
     done
     if [ -f "$G/scanner.c" ]; then cc "scanner_$lang.o" ${RN[@]+"${RN[@]}"} -I"$G" "$G/scanner.c"
-    elif [ -f "$G/scanner.cc" ]; then "${CXX[@]}" -Os ${PIC[@]+"${PIC[@]}"} -w -std=c++14 -fvisibility=hidden ${RN[@]+"${RN[@]}"} -I"$G" -c "$G/scanner.cc" -o "$OBJ/scanner_$lang.o"; objs+=("$OBJ/scanner_$lang.o"); CXXLIB=1; fi
+    elif [ -f "$G/scanner.cc" ]; then "${CXX[@]}" -Os ${PIC[@]+"${PIC[@]}"} -w -std=c++14 -fvisibility=hidden -DNDEBUG ${RN[@]+"${RN[@]}"} -I"$G" -c "$G/scanner.cc" -o "$OBJ/scanner_$lang.o"; objs+=("$OBJ/scanner_$lang.o"); CXXLIB=1; fi
     if [ "$mode" = bundled ]; then cc "blob_$lang.o" "$W/blob_$lang.c"; spec+=("$lang:bundled"); else spec+=("$lang"); fi
   done <<< "$list"
   python3 "$HERE/tools/gen-registry.py" "$OBJ/registry.c" "${spec[@]}"
   cc registry.o -I"$HERE/native/include" "$OBJ/registry.c"
   local LIBS=(-lz); [ "$CXXLIB" = 1 ] && LIBS+=(-lc++)
   local LINK=("${CC[@]}"); [ "$CXXLIB" = 1 ] && LINK=("${CXX[@]}")
+  # Export ONLY the JNI entry points and the ses_* ABI. Above all, a statically linked libc++ must
+  # never be exported, or it could interpose on another library's C++ runtime in the same process.
+  printf '_Java_*\n_ses_*\n' > "$OBJ/exports.txt"                                  # Mach-O
+  printf '{\n  global: Java_*; ses_*;\n  local: *;\n};\n' > "$OBJ/exports.map"         # ELF version script
+  local ELF_EXPORTS=(-Wl,--version-script="$OBJ/exports.map" -Wl,--exclude-libs,ALL)
+  # PE: only dllexport'ed symbols are exported: the JNI functions, and each grammar's TS_PUBLIC
+  # tree_sitter_<lang>(), which --exclude-symbols drops.
+  local PE_EXCLUDE; PE_EXCLUDE="$(printf 'tree_sitter_%s,' "${spec[@]%%:*}")"
   case "$T" in
-    macos-*) "${CC[@]}" -dynamiclib -Wl,-dead_strip "${objs[@]}" "${LIBS[@]}" -o "$OUT/lib/libsupermux_syntax_jni.dylib" ;;
+    macos-*) "${CC[@]}" -dynamiclib -Wl,-dead_strip -Wl,-exported_symbols_list,"$OBJ/exports.txt" "${objs[@]}" "${LIBS[@]}" \
+      -o "$OUT/lib/libsupermux_syntax_jni.dylib" ;;
     ios-*) xcrun libtool -static -o "$OUT/lib/libsupermux_syntax.a" "${objs[@]}" 2>/dev/null ;;
     android-*) [ "$CXXLIB" = 1 ] && LIBS=(-lz -static-libstdc++)
-      "${LINK[@]}" -shared -Wl,--gc-sections -Wl,-z,max-page-size=16384 "${objs[@]}" "${LIBS[@]}" -o "$OUT/lib/libsupermux_syntax_jni.so"
+      "${LINK[@]}" -shared -Wl,--gc-sections -Wl,-z,max-page-size=16384 "${ELF_EXPORTS[@]}" "${objs[@]}" "${LIBS[@]}" \
+        -o "$OUT/lib/libsupermux_syntax_jni.so"
       "$NDKBIN/llvm-strip" --strip-unneeded "$OUT/lib/libsupermux_syntax_jni.so" ;;
-    linux-*) "${LINK[@]}" -shared -Wl,--gc-sections "${objs[@]}" -o "$OUT/lib/libsupermux_syntax_jni.so" ;;  # zig c++ links libc++ statically
-    windows-*) "${LINK[@]}" -shared "${objs[@]}" -o "$OUT/lib/supermux_syntax_jni.dll"
+    linux-*) "${LINK[@]}" -shared -Wl,--gc-sections "${ELF_EXPORTS[@]}" "${objs[@]}" -o "$OUT/lib/libsupermux_syntax_jni.so" ;;  # zig c++ links libc++ statically
+    windows-*) "${LINK[@]}" -shared -Wl,--exclude-symbols,"${PE_EXCLUDE%,}" "${objs[@]}" -o "$OUT/lib/supermux_syntax_jni.dll"
       rm -f "$OUT/lib/"*.lib "$OUT/lib/"*.pdb ;;
   esac
+  check_exports "$T" "$OUT/lib"
   ls -l "$OUT/lib"
   manifest
+}
+
+# Fail unless a shared library exports exactly Java_* and ses_* (PE: Java_* only; SES_API is not
+# dllexport there).
+check_exports() {
+  local T="$1" bad NDKBIN
+  NDKBIN="${ANDROID_NDK_HOME:-$HOME/devtools/android-sdk/ndk/26.1.10909125}/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+  case "$T" in
+    macos-*) bad="$(nm -gU "$2/libsupermux_syntax_jni.dylib" | awk '{print $3}' | grep -vE '^_(Java_|ses_)' || true)" ;;
+    linux-*|android-*) bad="$("$NDKBIN/llvm-nm" -D --defined-only "$2/libsupermux_syntax_jni.so" | awk '{print $3}' | grep -vE '^(Java_|ses_)' || true)" ;;
+    windows-*) bad="$(python3 - "$2/supermux_syntax_jni.dll" <<'PY'
+import struct, sys
+d = open(sys.argv[1], "rb").read()
+pe = struct.unpack_from("<I", d, 0x3C)[0]
+nsec, optsz = struct.unpack_from("<H", d, pe + 6)[0], struct.unpack_from("<H", d, pe + 20)[0]
+opt = pe + 24
+dd = opt + (112 if struct.unpack_from("<H", d, opt)[0] == 0x20B else 96)
+exp_rva = struct.unpack_from("<I", d, dd)[0]
+secs = [struct.unpack_from("<8sIIII", d, opt + optsz + 40 * i)[1:] for i in range(nsec)]
+def off(rva):
+    for vs, va, rs, ra in secs:
+        if va <= rva < va + max(vs, rs):
+            return rva - va + ra
+def cstr(rva):
+    o = off(rva); return d[o:d.index(b"\0", o)].decode()
+if exp_rva:
+    e = off(exp_rva)
+    n, names = struct.unpack_from("<I", d, e + 24)[0], struct.unpack_from("<I", d, e + 32)[0]
+    for i in range(n):
+        s = cstr(struct.unpack_from("<I", d, off(names) + 4 * i)[0])
+        if not s.startswith("Java_"):
+            print(s)
+PY
+)" ;;
+    *) return 0 ;;
+  esac
+  if [ -n "$bad" ]; then echo "$T exports more than the ABI:" >&2; echo "$bad" | head -20 >&2; exit 1; fi
+  echo "$T: exports ok"
 }
 
 # build/natives/manifest.json: every library present under build/natives/<target>/lib/.
