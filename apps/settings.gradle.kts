@@ -47,6 +47,3 @@ include(":terminal-sample")
 // The native editor's pure-Kotlin core (rope, transactions, extensions). Depends on nothing else here,
 // like :terminal-core (docs/superpowers/specs/2026-09-25-native-editor-design.md).
 include(":editor-core")
-// THROWAWAY: the native-editor M0 risk checks (docs/superpowers/plans/2026-09-25-native-editor-m0-risk-checks.md).
-// Deleted once the results are written up; nothing may depend on it.
-include(":editor-spike")

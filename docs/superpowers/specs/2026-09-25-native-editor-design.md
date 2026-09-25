@@ -49,8 +49,9 @@ nothing but the Kotlin stdlib and coroutines.
 ## 4. editor-core
 
 ### 4.1 Text: rope
-- An immutable balanced tree of text chunks. Each branch stores its **UTF-16 length, UTF-8 byte length
-  and line count**, so offset↔line and UTF-16↔UTF-8 conversions are O(log n).
+- An immutable balanced tree of text chunks. Each branch stores its **UTF-16 length and line count**,
+  so offset↔line lookups are O(log n). *(M0 changed this: there are no UTF-8 byte counts. Byte offsets
+  are `editor-syntax`'s concern, see §5.2 and `docs/superpowers/notes/2026-09-native-editor-m0-results.md` §2.)*
 - Edits produce a new rope that shares unchanged nodes with the old one. Snapshots are free, so
   undo, background parsing and diff snapshots need no locks.
 
@@ -108,7 +109,7 @@ interface SyntaxEngine {
   fun language(id: String): SyntaxLanguage?        // lazy, may load a grammar (web: fetch .wasm)
 }
 interface SyntaxSession {                           // one per open document + language
-  fun edit(changes: ChangeSet, old: Rope, new: Rope) // tree-sitter InputEdit in UTF-8 bytes + points
+  fun edit(changes: ChangeSet, old: Rope, new: Rope) // converted to the backend's byte encoding + points
   suspend fun reparse(snapshot: Rope): SyntaxTree   // off the UI thread, time-limited
 }
 interface SyntaxTree {
@@ -132,17 +133,45 @@ interface SyntaxTree {
 - **Limits:** a parse timeout plus a file-size limit. Beyond either, the document opens as plain text
   with a visible "syntax off" note.
 
+### 5.2a Encodings (from M0)
+- **web-tree-sitter** works in UTF-16 indexes natively, with no conversion.
+- **ktreesitter 0.25.1 cannot parse UTF-16.** It always converts to UTF-8 itself: *modified* UTF-8 on the JVM,
+  standard UTF-8 on Android, and on iOS it reports the UTF-16 length as the byte count, which is a bug that
+  truncates non-ASCII text.
+- The native backend therefore parses UTF-8 through the read callback and maps byte offsets back to UTF-16
+  with a per-platform width table, only for the edited region.
+- **M2 decides** between patching ktreesitter (upstreaming the Native fix plus a raw-bytes read callback) and
+  a thin binding of our own over the tree-sitter C API, reusing terminal-core's JNI/cinterop/WASM pipeline.
+  The golden tests stay the contract either way.
+
 ### 5.3 Backends and packaging
 | Client | Backend | Grammars |
 |---|---|---|
-| Android, desktop | ktreesitter (JNI) | bundled (built via `ktreesitter-plugin`) |
-| iOS | ktreesitter (cinterop) | bundled |
+| Android, desktop | ktreesitter (JNI) + our grammar lib (JNI shim) | core set bundled; the rest on demand |
+| iOS | ktreesitter (cinterop) + our static grammar lib | core set bundled; the rest on demand |
 | Web | web-tree-sitter (official WASM) | one `.wasm` per language, fetched on first use |
+
+- No grammar artifacts are published for ktreesitter. We compile the npm packages' `parser.c`/`scanner.c`
+  ourselves on the Mac (M0 recipe: `docs/superpowers/notes/m0-artifacts/build-grammars.sh`).
+- **Size rules out bundling everything.** M0 measured about 74 MB of iOS object code and 59 MB of wasm for all
+  languages (fsharp alone is 11.5 MB).
+- **The bundled core set is decided in the M2 plan.** Roughly the languages people actually open in supermux:
+  TS/JS, Python, Kotlin, Swift, Go, Rust, Java, JSON, YAML, Markdown, HTML, CSS, shell, SQL, TOML if available.
+- Every other language is a **grammar pack**: native library + queries, or `.wasm` + queries. The broker serves
+  the packs, and the device caches them per platform and version. Until a pack arrives, the file shows as plain
+  text.
 
 ### 5.4 Languages
 Today's bundle (`apps/android/codemirror/cm6-entry.mjs`) highlights about 50 languages: 18
 first-class Lezer languages plus legacy stream modes. Target: all with a solid tree-sitter grammar.
-The plan produces the exact grammar table (source, license, query source) and the plain-text list.
+M0 inventory (`docs/superpowers/notes/m0-artifacts/grammar-inventory.tsv`):
+- 38 of 47 languages have npm grammars. Alternates exist for r, wast (wat) and vb.
+- **Missing, so plain text until sourced from git:** erlang, crystal, coffeescript, fortran, cmake,
+  dockerfile. Source cmake and dockerfile.
+- **No `highlights.scm` shipped:** vue, **kotlin**, groovy, clojure, vb. Queries must come from
+  nvim-treesitter (Apache-2.0) or Helix (MPL-2.0), and their licences recorded.
+- **No prebuilt wasm:** about 12 languages. We build those with the tree-sitter CLI plus emscripten on the Mac.
+- **Licences:** all MIT except dart (ISC).
 
 ## 6. editor-compose
 
@@ -248,7 +277,9 @@ The markdown preview is not part of the editor and is unchanged.
 
 ## 10. Milestones
 
-- **M0 Risk checks (first; stop and rethink if one fails):**
+- **M0 Risk checks: DONE 2026-09-25.** Results in `docs/superpowers/notes/2026-09-native-editor-m0-results.md`:
+  every check passed except UTF-16 on native (§5.2a) and grammar size (§5.3). Android ran on an emulator; the
+  Fold rerun moves to M5. The original checks:
   1. ktreesitter builds with our Kotlin version on the Mac for JVM, Android and iOS.
   2. web-tree-sitter runs inside the wasmJs app.
   3. An iOS prototype of the real-text hidden field (autocorrect, Turkish, dictation).
@@ -257,7 +288,7 @@ The markdown preview is not part of the editor and is unchanged.
 - **M2** editor-syntax, both backends.
 - **M3** editor-compose: desktop first, then web, Android, iOS.
 - **M4** the eight plugins.
-- **M5** `:ui` integration, then the device passes.
+- **M5** `:ui` integration, then the device passes, including the ktreesitter Android run on the real Galaxy Fold.
 - **Cutover:** the deletions in §9, in the same merge.
 
 ## 11. Testing

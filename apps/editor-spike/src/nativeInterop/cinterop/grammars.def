@@ -1,3 +1,0 @@
-package = dev.supermux.editor.spike.grammars
-headers = editor_grammars.h
-staticLibraries = libeditorgrammars.a
