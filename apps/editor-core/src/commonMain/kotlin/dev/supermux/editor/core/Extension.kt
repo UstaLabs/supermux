@@ -47,7 +47,8 @@ class Facet<I, O> private constructor(
     /**
      * An input derived from the state. With [deps], [get] runs only when one of them changed since
      * the previous state (else the previous input is reused), so [get] must read nothing else
-     * that can change. Without deps it runs for every new state.
+     * that can change. Without deps it runs for every new state. A facet read from inside a
+     * field's create/update (a state still being built) skips this reuse and calls [get].
      */
     fun compute(vararg deps: FacetDep, get: (EditorState) -> I): Extension = FacetProvider(this, null, get, deps.toList())
 
@@ -106,7 +107,8 @@ internal class FacetProvider<I>(
  * A plugin's own memory, stored in the state and updated by every transaction.
  *
  * [provide] lets the field feed facets from its value (for example decorations), so the field
- * and what it shows travel as one extension.
+ * and what it shows travel as one extension. What it returns is created again on every resolve,
+ * so after any reconfigure its computed inputs start fresh (no reuse from the previous state).
  */
 class StateField<V>(
     val name: String,
