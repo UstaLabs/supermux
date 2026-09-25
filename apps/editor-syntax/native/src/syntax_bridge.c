@@ -230,16 +230,36 @@ static uint32_t utf8_to_utf16(const char *s, uint32_t len, uint16_t *out) {
 
 static bool is(const char *a, uint32_t alen, const char *b) { return strlen(b) == alen && memcmp(a, b, alen) == 0; }
 
+#define STEP_STRING TSQueryPredicateStepTypeString
+#define STEP_CAPTURE TSQueryPredicateStepTypeCapture
+#define STEP_DONE TSQueryPredicateStepTypeDone
+
+/* The string step [id] as a UTF-16 value in the next slot. Pass 1 sized both: one slot per string
+   step and one pool unit per UTF-8 byte (UTF-16 units <= UTF-8 bytes). */
+static u16str *add_value(ses_query *q, uint32_t id, uint32_t *vc, uint32_t *pool) {
+  uint32_t l;
+  const char *v = ts_query_string_value_for_id(q->ts, id, &l);
+  u16str *slot = &q->vals[(*vc)++];
+  slot->s = q->u16_pool + *pool;
+  slot->len = utf8_to_utf16(v, l, q->u16_pool + *pool);
+  *pool += slot->len;
+  return slot;
+}
+
+/* SES_ERR_QUERY for a malformed text predicate (wrong arity, a capture where a string belongs). */
 static ses_status build_predicates(ses_query *q) {
   TSQuery *tq = q->ts;
-  uint32_t np = ts_query_pattern_count(tq), total = 0, u16_total = 0;
+  uint32_t np = ts_query_pattern_count(tq), total = 0, strings = 0, u16_total = 0;
   for (uint32_t i = 0; i < np; i++) {
     uint32_t steps;
     const TSQueryPredicateStep *s = ts_query_predicates_for_pattern(tq, i, &steps);
     for (uint32_t k = 0; k < steps; k++) {
-      if (s[k].type == TSQueryPredicateStepTypeDone) total++;
-      if (s[k].type == TSQueryPredicateStepTypeString) {
-        uint32_t l; ts_query_string_value_for_id(tq, s[k].value_id, &l); u16_total += l; /* utf16 <= utf8 bytes */
+      if (s[k].type == STEP_DONE) total++;
+      if (s[k].type == STEP_STRING) {
+        uint32_t l;
+        ts_query_string_value_for_id(tq, s[k].value_id, &l);
+        strings++;
+        u16_total += l;
       }
     }
   }
@@ -247,9 +267,8 @@ static ses_status build_predicates(ses_query *q) {
   q->pred_start = calloc(np + 1, sizeof(uint32_t));
   q->preds = calloc(total ? total : 1, sizeof(predicate));
   q->u16_pool = malloc((u16_total ? u16_total : 1) * sizeof(uint16_t));
-  u16str *vals = calloc(total + u16_total + 1, sizeof(u16str));
-  q->vals = vals;
-  if (!q->pred_start || !q->preds || !q->u16_pool || !vals) return SES_ERR_OUT_OF_MEMORY;
+  q->vals = calloc(strings + 1, sizeof(u16str));
+  if (!q->pred_start || !q->preds || !q->u16_pool || !q->vals) return SES_ERR_OUT_OF_MEMORY;
   uint32_t pc = 0, pool = 0, vc = 0;
   for (uint32_t i = 0; i < np; i++) {
     q->pred_start[i] = pc;
@@ -257,38 +276,32 @@ static ses_status build_predicates(ses_query *q) {
     const TSQueryPredicateStep *s = ts_query_predicates_for_pattern(tq, i, &steps);
     for (uint32_t k = 0; k < steps;) {
       uint32_t e = k;
-      while (e < steps && s[e].type != TSQueryPredicateStepTypeDone) e++;
-      uint32_t nl;
-      const char *name = s[k].type == TSQueryPredicateStepTypeString ? ts_query_string_value_for_id(tq, s[k].value_id, &nl) : "";
-      if (s[k].type != TSQueryPredicateStepTypeString) nl = 0;
+      while (e < steps && s[e].type != STEP_DONE) e++;
+      uint32_t n = e - k, nl = 0; /* steps of this predicate, its name included */
+      const char *name = n && s[k].type == STEP_STRING ? ts_query_string_value_for_id(tq, s[k].value_id, &nl) : "";
       predicate pr = {0};
       pr.other = -1;
-      bool keep = false;
       bool eq = is(name, nl, "eq?"), neq = is(name, nl, "not-eq?"), aeq = is(name, nl, "any-eq?"), aneq = is(name, nl, "any-not-eq?");
       bool anyof = is(name, nl, "any-of?"), nanyof = is(name, nl, "not-any-of?");
       bool match = is(name, nl, "match?") || is(name, nl, "not-match?") || is(name, nl, "any-match?") ||
                    is(name, nl, "any-not-match?") || is(name, nl, "lua-match?");
-      if ((eq || neq || aeq || aneq) && e - k == 3 && s[k + 1].type == TSQueryPredicateStepTypeCapture) {
+      if (eq || neq || aeq || aneq) {
+        if (n != 3 || s[k + 1].type != STEP_CAPTURE) return SES_ERR_QUERY;
         pr.op = P_EQ; pr.positive = eq || aeq; pr.match_all = eq || neq; pr.capture = s[k + 1].value_id;
-        if (s[k + 2].type == TSQueryPredicateStepTypeCapture) pr.other = (int32_t)s[k + 2].value_id;
-        else {
-          uint32_t l; const char *v = ts_query_string_value_for_id(tq, s[k + 2].value_id, &l);
-          vals[vc].s = q->u16_pool + pool; vals[vc].len = utf8_to_utf16(v, l, q->u16_pool + pool); pool += vals[vc].len;
-          pr.values = &vals[vc++]; pr.value_count = 1;
-        }
-        keep = true;
-      } else if ((anyof || nanyof) && e - k >= 2 && s[k + 1].type == TSQueryPredicateStepTypeCapture) {
-        pr.op = P_ANY_OF; pr.positive = anyof; pr.capture = s[k + 1].value_id; pr.values = &vals[vc];
-        for (uint32_t j = k + 2; j < e; j++) {
-          uint32_t l; const char *v = ts_query_string_value_for_id(tq, s[j].value_id, &l);
-          vals[vc].s = q->u16_pool + pool; vals[vc].len = utf8_to_utf16(v, l, q->u16_pool + pool); pool += vals[vc].len; vc++;
-        }
-        pr.value_count = e - k - 2;
-        keep = true;
+        if (s[k + 2].type == STEP_CAPTURE) pr.other = (int32_t)s[k + 2].value_id;
+        else { pr.values = add_value(q, s[k + 2].value_id, &vc, &pool); pr.value_count = 1; }
+        q->preds[pc++] = pr;
+      } else if (anyof || nanyof) {
+        if (n < 2 || s[k + 1].type != STEP_CAPTURE) return SES_ERR_QUERY;
+        for (uint32_t j = k + 2; j < e; j++)
+          if (s[j].type != STEP_STRING) return SES_ERR_QUERY;
+        pr.op = P_ANY_OF; pr.positive = anyof; pr.capture = s[k + 1].value_id; pr.values = &q->vals[vc];
+        for (uint32_t j = k + 2; j < e; j++) add_value(q, s[j].value_id, &vc, &pool);
+        pr.value_count = n - 2;
+        q->preds[pc++] = pr;
       } else if (match) {
         q->flags |= 1u; /* not evaluated: see ses_query_flags */
       } /* directives (#set! #is? #offset! ...) and unknown predicates: ignored, like a filter-less engine */
-      if (keep) q->preds[pc++] = pr;
       k = e + 1;
     }
   }
@@ -312,7 +325,11 @@ ses_query *ses_query_new(const char *language, const char *src, uint32_t len, ui
   if (!q) { ts_query_delete(tq); *st = SES_ERR_OUT_OF_MEMORY; return NULL; }
   q->ts = tq;
   q->lang = l;
-  if ((*st = build_predicates(q)) != SES_OK) { ses_query_free(q); return NULL; }
+  if ((*st = build_predicates(q)) != SES_OK) {
+    if (*st == SES_ERR_QUERY) { if (err_offset) *err_offset = 0; if (err_type) *err_type = -1; }
+    ses_query_free(q);
+    return NULL;
+  }
   return q;
 }
 

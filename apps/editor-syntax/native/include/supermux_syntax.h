@@ -48,7 +48,10 @@ typedef int32_t ses_status;
 #define SES_ERR_NO_TABLES (-9)
 /** A tables blob was refused: bad magic/format, wrong grammar hash, corrupt zlib, size mismatch. */
 #define SES_ERR_BAD_TABLES (-10)
-/** ses_query_new: the query does not compile; see err_offset / err_type. */
+/**
+ * ses_query_new: the query does not compile (see err_offset / err_type), or one of its text
+ * predicates is malformed (wrong arity, a capture where a string belongs): then err_type is -1.
+ */
 #define SES_ERR_QUERY (-11)
 /** ts_parser_set_language refused the grammar (ABI outside 13..15). */
 #define SES_ERR_INCOMPATIBLE_LANGUAGE (-12)
