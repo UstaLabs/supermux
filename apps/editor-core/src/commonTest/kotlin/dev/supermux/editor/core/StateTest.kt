@@ -250,4 +250,17 @@ class StateTest {
         s0.update(TransactionSpec(selection = EditorSelection.cursor(1)))
         assertEquals(2, runs)
     }
+
+    @Test fun aFieldDepComparesBoxedValuesByEquality() {
+        var runs = 0
+        // 1000 is outside the boxing cache, so an unchanged value comes back as a new box.
+        val big = StateField<Int>("big", { 1000 }, { v, tr -> if (tr.docChanged) v + 1 else v })
+        val out = Facet.first("out", 0)
+        val s0 = EditorState.create("a", extensions = extensionOf(big, out.compute(FacetDep.field(big)) { runs++; it.field(big) }))
+        val s1 = s0.update(TransactionSpec(selection = EditorSelection.cursor(1))).state
+        assertEquals(1, runs, "unchanged value")
+        assertEquals(1001, s1.update(ChangeSpec(1, 1, "b")).state.facet(out))
+        assertEquals(2, runs)
+    }
+
 }

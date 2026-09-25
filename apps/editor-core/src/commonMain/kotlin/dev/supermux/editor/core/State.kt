@@ -185,7 +185,9 @@ class EditorState private constructor(
     private fun unchanged(dep: FacetDep, prev: EditorState): Boolean = when (dep) {
         FacetDep.Doc -> doc === prev.doc
         FacetDep.Selection -> selection == prev.selection
-        is FacetDep.OfField -> values.containsKey(dep.field) && prev.values.containsKey(dep.field) && values[dep.field] === prev.values[dep.field]
+        is FacetDep.OfField -> values.containsKey(dep.field) && prev.values.containsKey(dep.field) &&
+            // == too: an unchanged number can come back as a new box.
+            values[dep.field].let { v -> val o = prev.values[dep.field]; v === o || v == o }
         is FacetDep.OfFacet -> (dep.facet as Facet<Any?, Any?>).let { facet(it) === prev.facet(it) }
     }
 

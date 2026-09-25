@@ -77,7 +77,7 @@ class Facet<I, O> private constructor(
 
 /**
  * What a [Facet.compute] input depends on. Unchanged means: [Doc] the same rope instance,
- * [Selection] an equal selection, [field] the same value instance, [facet] the same output instance.
+ * [Selection] an equal selection, [field] an equal (==) value, [facet] the same output instance.
  */
 sealed class FacetDep {
     data object Doc : FacetDep()
