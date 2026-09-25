@@ -206,4 +206,33 @@ class HighlighterTest {
         )
         replay("vue", HighlightSamples.VUE, listOf(replace("lang=\"ts\"", "lang=\"js\""), replace("as string", ""), replace("{{ msg }}", "{{ msg + 1 }}")))
     }
+
+    private class Boom : RuntimeException("boom")
+
+    /** Something throws between two slices of a suspended parse: the next parse of other text is clean. */
+    @Test fun aThrowMidSliceLeavesTheParserClean() {
+        val big = HighlightSamples.kotlinLines(3000)
+        val small = "fun ok() = \"fine\"\n"
+        val want = dumpSpans(highlight(backend, "kotlin", small), small)
+        Highlighter(backend, "kotlin").use { h ->
+            h.sliceMicros = 100
+            // a callback between slices throws (a bug in a hook, an OOM)
+            h.onSlice = { throw Boom() }
+            kotlin.test.assertFailsWith<Boom> { h.parse(ChunkedSource(big), big.length, null) }
+            h.onSlice = null
+            h.parse(ChunkedSource(small), small.length, null).use { d ->
+                assertEquals(want, dumpSpans(h.spans(d, 0, small.length, ChunkedSource(small)), small))
+            }
+            // a TextSource that throws after the first slice
+            var reads = 0
+            var sliced = false
+            h.onSlice = { sliced = true }
+            val throwing = TextSource { i -> if (sliced && ++reads > 3) throw Boom() else ChunkedSource(big).chunkAt(i) }
+            kotlin.test.assertFailsWith<Boom> { h.parse(throwing, big.length, null) }
+            h.onSlice = null
+            h.parse(ChunkedSource(small), small.length, null).use { d ->
+                assertEquals(want, dumpSpans(h.spans(d, 0, small.length, ChunkedSource(small)), small))
+            }
+        }
+    }
 }

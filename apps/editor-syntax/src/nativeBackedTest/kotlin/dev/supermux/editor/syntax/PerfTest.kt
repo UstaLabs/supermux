@@ -32,7 +32,11 @@ internal object PerfCases {
         )
     }
     val php by lazy { "php" to HighlightSamples.repeatTo(HighlightSamples.PHP_UNIT, 10_000, "<html><body>\n<?php\n", "?>\n</body></html>\n") }
-    val all get() = listOf(kotlin, markdown, vue, php)
+    /** Markdown without headings: one flat document (tree-sitter-markdown's incremental worst case). */
+    val flatMarkdown by lazy {
+        "markdown" to HighlightSamples.repeatTo(HighlightSamples.MARKDOWN_UNIT.replace("## Section\n\n", ""), 10_000)
+    }
+    val all get() = listOf(kotlin, markdown, flatMarkdown, vue, php)
 
     class Numbers(val lines: Int, val full: Double, val incremental: Double, val view60: Double, val view180: Double, val cycle: Double) {
         override fun toString() = "lines=$lines full=${fmt(full)}ms keystroke=${fmt(incremental)}ms viewport60=${fmt(view60)}ms " +
@@ -134,9 +138,10 @@ class PerfTest {
 
     @Test
     fun documents10kLines() {
-        for ((lang, text) in PerfCases.all) {
+        for (case in PerfCases.all) {
+            val (lang, text) = case
             val n = PerfCases.measure(backend, lang, text)
-            println("PERF $lang $n")
+            println("PERF ${if (case === PerfCases.flatMarkdown) "markdown-flat" else lang} $n")
             assertTrue(n.cycle > 0)
         }
     }

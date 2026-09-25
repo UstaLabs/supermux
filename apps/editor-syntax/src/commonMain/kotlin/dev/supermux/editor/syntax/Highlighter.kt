@@ -262,18 +262,24 @@ class Highlighter(
         fun parse(p: ParserHandle, text: TextSource, old: TreeHandle?): TreeHandle {
             val slice = if (sliceMicros > 0) sliceMicros else budgetMicros
             p.setTimeoutMicros(slice)
-            while (true) {
-                try {
-                    return p.parse(text, old)
-                } catch (e: SyntaxException) {
-                    if (e.status != SyntaxStatus.TIMEOUT) { p.reset(); throw e }
-                    if (cancel()) { p.reset(); throw ParseCancelled() }
-                    if (budgetMicros > 0 && started.elapsedNow().inWholeMicroseconds > budgetMicros) {
-                        p.reset()
-                        throw SyntaxException("parse over its ${budgetMicros / 1000} ms budget", SyntaxStatus.TIMEOUT)
+            try {
+                while (true) {
+                    try {
+                        return p.parse(text, old)
+                    } catch (e: SyntaxException) {
+                        if (e.status != SyntaxStatus.TIMEOUT) throw e
+                        if (cancel()) throw ParseCancelled()
+                        if (budgetMicros > 0 && started.elapsedNow().inWholeMicroseconds > budgetMicros) {
+                            throw SyntaxException("parse over its ${budgetMicros / 1000} ms budget", SyntaxStatus.TIMEOUT)
+                        }
+                        onSlice?.invoke()
                     }
-                    onSlice?.invoke()
                 }
+            } catch (t: Throwable) {
+                // Whatever ends the loop (cancelled, over budget, a throwing TextSource or callback,
+                // out of memory), a suspended parse must not be resumed by the next parse of other text.
+                p.reset()
+                throw t
             }
         }
     }
@@ -433,8 +439,10 @@ class Highlighter(
             if (!isReady(site.language)) { pendingLanguages += site.language; continue }
             val ranges = clip(site.ranges(), parent.ranges)
             if (ranges.isEmpty()) continue
-            val prev = (site.layer ?: oldLayers[LayerKey(parent.depth + 1, parent.language, site.language, site.pattern, ranges[0])])
-                ?.takeIf { it.ranges.contentEquals(ranges) && it.owner === previousDoc && it.depth == parent.depth + 1 }
+            // the site's own last layer if it still fits, else whatever old layer sits at that place
+            val fits = { l: Layer -> l.ranges.contentEquals(ranges) && l.owner === previousDoc && l.depth == parent.depth + 1 }
+            val prev = site.layer?.takeIf(fits)
+                ?: oldLayers[LayerKey(parent.depth + 1, parent.language, site.language, site.pattern, ranges[0])]?.takeIf(fits)
             val layer = if (prev != null && !prev.dirty) {
                 prev.also { it.clean = true } // handed on as it is
             } else {

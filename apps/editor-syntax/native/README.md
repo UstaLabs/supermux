@@ -167,9 +167,15 @@ them as resources `editor-syntax/tables/<lang>.sesz` (29 blobs, 5.4 MB):
   rsync -a "$SRCROOT/../editor-syntax/build/gradle/generated/tables/editor-syntax" \
         "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/"
   ```
-  Wired: `apps/iosApp/project.yml`'s pre-build script runs
+  Wired but OFF: `apps/iosApp/project.yml` has a pre-build script that runs
   `:editor-syntax:stageTables` and copies `editor-syntax/tables/` into
-  `Supermux.app`. The iOS simulator tests get the same directory next to their
+  `Supermux.app`, gated by the build setting `SUPERMUX_EDITOR_SYNTAX_TABLES`
+  (`"NO"`). No app module links `:editor-syntax` yet, so builds skip it and do
+  not ship the 5.1 MB. **M3 turns it on** in the change that adds
+  `api(project(":editor-syntax"))` to `:ios`: set the setting to `"YES"` in
+  `project.yml` and regenerate the project. The script never fails the app
+  build: stale natives or an empty tables directory (it needs at least one
+  `.sesz`) print a warning and bundle nothing. The iOS simulator tests get the same directory next to their
   executable, which is their main bundle (`bundleTablesFor*`), and load all 29
   code-only grammars through that lookup (`MainBundleTablesTest`: ruby).
 
@@ -330,8 +336,13 @@ web backend only implements `SyntaxBackend`:
     (`Syntax.isOff`); an injected one is skipped. A language that is not loaded
     yet is skipped for one cycle, loaded (`suspend ensureLanguage`), and the
     document is parsed again.
-  - A parse runs in 50 ms slices (a newer snapshot cancels it) within a 10 s
-    budget; beyond it, syntax is off.
+  - A parse runs in 50 ms slices within a 10 s budget; beyond it, syntax is
+    off. Between slices it is abandoned only for another TEXT (epoch, version
+    or document), never for a viewport or selection change, never when it is a
+    first parse (no old tree to resume from), and only in the first half of the
+    time a full parse of the document took; otherwise it finishes and the new
+    edits apply incrementally. (Cancelling on every newer snapshot restarted a
+    60k-line file's parse forever while scrolling: 147 restarts, no spans.)
 - Queries are compiled once per backend and language (`sharedQuery`), not per
   document (kotlin's highlights cost ~35 ms to compile).
 
@@ -371,6 +382,14 @@ numbers are noisy:
 | iOS simulator, release binary | 2.2 / 5.7 / 10.1 | 4.4 / 5.1 / 10.5 | 9.3 / 11.6 / 14.7 | 5.5 / 6.7 / 11.7 |
 | iOS simulator, debug binary | 0.9 / 11.4 / 31.8 | 28.7 / 32.3 / 45.5 | 5.9 / 19.2 / 27.9 | 6.0 / 12.2 / 28.7 |
 | Android emulator, debug APK | 2.1 / 9.7 / 24.6 | 13.5 / 15.4 / 29.1 | 8.9 / 17.8 / 32.0 | 23.4 / 31.2 / 44.2 |
+
+**Known worst case: flat Markdown.** A Markdown file without headings is one
+flat sequence of blocks, and tree-sitter-markdown's incremental reparse of it
+costs 25-75 ms per keystroke on the JVM (upstream behaviour; the sectioned file
+above takes 1-10 ms, because sections bound what the block parser rescans).
+PerfTest measures both ("markdown-flat": 10k lines, 23 ms keystroke, 32 ms
+worker cycle on the Mac JVM). The worker's time slices keep the UI responsive;
+the spans just arrive later.
 
 Whole-document parse + highlight on the Mac JVM: Kotlin 164-194 ms, Markdown
 309-519 ms, Vue 214 ms, PHP 197 ms.
