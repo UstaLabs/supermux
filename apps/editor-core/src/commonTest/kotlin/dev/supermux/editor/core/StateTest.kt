@@ -272,4 +272,12 @@ class StateTest {
         assertTrue("Facet(p)" in message && "Facet(q)" in message, message)
     }
 
+    @Test fun aFacetThatLosesItsProvidersKeepsAnEqualInstance() {
+        val flat = Facet.define<List<String>, List<String>>("flat") { it.flatten() }
+        val slot = Compartment("slot")
+        val s0 = EditorState.create(extensions = slot.of(flat.of(emptyList())))
+        val s1 = s0.update(TransactionSpec(effects = listOf(slot.reconfigure(extensionOf())))).state
+        assertEquals(emptyList(), s1.facet(flat))
+        assertSame(s0.facet(flat), s1.facet(flat))
+    }
 }

@@ -193,7 +193,8 @@ class EditorState private constructor(
 
     /**
      * Marks the state complete: computes every facet with providers, reusing [previous]'s provider
-     * inputs whose deps are unchanged and its output instance wherever the new one compares equal.
+     * inputs whose deps are unchanged and its output instance wherever the new one compares equal
+     * (also to the empty value, for a facet that lost all its providers).
      */
     private fun complete(previous: EditorState?) {
         val b = HashMap<Facet<*, *>, Any?>()
@@ -205,6 +206,11 @@ class EditorState private constructor(
             for ((f, providers) in config.providers) {
                 if (b.containsKey(f)) continue
                 if (config.staticValues.containsKey(f)) b[f] = config.staticValues[f] else computeFacet(f, providers)
+            }
+            // A facet that lost all its providers keeps its previous instance if that equals the empty value.
+            val before = previous?.facetValues
+            if (before != null && previous.config !== config) {
+                for ((f, old) in before) if (!config.providers.containsKey(f) && f.same(old, f.emptyValue)) b[f] = old
             }
         } finally {
             building = null
