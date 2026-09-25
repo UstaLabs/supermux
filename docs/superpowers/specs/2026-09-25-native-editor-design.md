@@ -140,26 +140,39 @@ interface SyntaxTree {
   truncates non-ASCII text.
 - The native backend therefore parses UTF-8 through the read callback and maps byte offsets back to UTF-16
   with a per-platform width table, only for the edited region.
-- **M2 decides** between patching ktreesitter (upstreaming the Native fix plus a raw-bytes read callback) and
-  a thin binding of our own over the tree-sitter C API, reusing terminal-core's JNI/cinterop/WASM pipeline.
-  The golden tests stay the contract either way.
+- **Decided 2026-09-25: our own thin binding** over the tree-sitter C API, not ktreesitter. It follows
+  terminal-core's pattern: a C wrapper, JNI for Android and JVM, cinterop for iOS.
+  - The C core accepts `TSInputEncodingUTF16LE` directly, so **native is UTF-16 end to end, like web**, with
+    no byte tables.
+  - Web keeps web-tree-sitter.
+  - The golden tests are the contract.
 
 ### 5.3 Backends and packaging
 | Client | Backend | Grammars |
 |---|---|---|
-| Android, desktop | ktreesitter (JNI) + our grammar lib (JNI shim) | core set bundled; the rest on demand |
-| iOS | ktreesitter (cinterop) + our static grammar lib | core set bundled; the rest on demand |
+| Android, desktop | our binding (JNI) | every grammar's code built in; tables as compressed data |
+| iOS | our binding (cinterop, static) | every grammar's code built in; tables as compressed data |
 | Web | web-tree-sitter (official WASM) | one `.wasm` per language, fetched on first use |
 
 - No grammar artifacts are published for ktreesitter. We compile the npm packages' `parser.c`/`scanner.c`
   ourselves on the Mac (M0 recipe: `docs/superpowers/notes/m0-artifacts/build-grammars.sh`).
 - **Size rules out bundling everything.** M0 measured about 74 MB of iOS object code and 59 MB of wasm for all
   languages (fsharp alone is 11.5 MB).
-- **The bundled core set is decided in the M2 plan.** Roughly the languages people actually open in supermux:
-  TS/JS, Python, Kotlin, Swift, Go, Rust, Java, JSON, YAML, Markdown, HTML, CSS, shell, SQL, TOML if available.
-- Every other language is a **grammar pack**: native library + queries, or `.wasm` + queries. The broker serves
-  the packs, and the device caches them per platform and version. Until a pack arrives, the file shows as plain
-  text.
+- **Grammars are code plus data (decided 2026-09-25, option D).** A generated grammar is mostly its parse
+  tables. For fsharp, linked and stripped for iOS: 11.4 MB in total, of which 164 KB is code and 11.2 MB is
+  const tables, which gzip to 876 KB.
+  - The native build **compiles every grammar's code** (lexer + external scanner) into the binding library.
+  - It moves each grammar's **tables into a compressed data blob**. The blob is decompressed into memory the
+    first time a language is used, and the `TSLanguage`'s table pointers are filled in at load.
+  - Tables are data, not executable code, so blobs may later be downloaded on demand even on iOS and Android,
+    where both stores forbid downloading executable code. Native grammar libraries must never be downloaded.
+- **Core set** (Ahmet, 2026-09-25), with tables bundled in the app: TS/JS/TSX, Python, Kotlin, Swift, Go,
+  Rust, Java, C/C++, JSON, YAML, TOML, Markdown, HTML, CSS, shell, SQL.
+  - Every other language's code is bundled too. Its tables are bundled compressed at first; moving them to
+    on-demand download is an optimisation for later.
+  - Kotlin's highlight queries come from nvim-treesitter (Apache-2.0), because the npm package ships none.
+- **Fallback if table extraction proves unworkable** (the first M2 risk check): the broker runs web-tree-sitter
+  and streams highlight spans for non-core languages to mobile clients.
 
 ### 5.4 Languages
 Today's bundle (`apps/android/codemirror/cm6-entry.mjs`) highlights about 50 languages: 18
