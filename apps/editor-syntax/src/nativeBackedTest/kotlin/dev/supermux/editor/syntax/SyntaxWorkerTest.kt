@@ -403,9 +403,40 @@ class SyntaxWorkerTest {
         }
     }
 
-    /** A newer snapshot arriving during a sliced parse cancels it, and the newer one is parsed instead. */
+    /**
+     * A newer TEXT arriving early in a (non-first) sliced parse cancels it, and the newer one is
+     * parsed instead: here a whole-document replacement, which reparses everything, then typing.
+     */
     @Test
-    fun aNewerSnapshotRestartsASlicedParse() = runBlocking {
+    fun aNewerTextRestartsAnEarlySlicedReparse() = runBlocking {
+        val text = HighlightSamples.kotlinLines(2000)
+        val host = Host(text, "kotlin", backend, SyntaxLimits(parseSliceMicros = 200))
+        try {
+            host.viewport(0 until 1_000_000)
+            host.settle()
+            var typed = false
+            host.worker.onSlice = {
+                if (!typed) {
+                    typed = true
+                    // applied (and posted to the worker) before the next slice checks: not a race
+                    runBlocking { host.dispatch(TransactionSpec(listOf(ChangeSpec(0, 0, "// typed\n")))) }
+                }
+            }
+            val other = text.replace("Shape", "Form").replace("area", "size")
+            host.dispatch(TransactionSpec(listOf(ChangeSpec(0, host.state.doc.length, other))))
+            host.settle()
+            assertTrue(typed)
+            assertTrue(host.worker.restarts >= 1, "restarts ${host.worker.restarts}")
+            assertEquals(fresh("kotlin", host.state.doc.toString()), host.spans)
+            assertNull(host.worker.lastError)
+        } finally {
+            host.close()
+        }
+    }
+
+    /** A first parse is never abandoned (it has nothing to resume from): it finishes, then the edit applies. */
+    @Test
+    fun aFirstParseIsNeverCancelled() = runBlocking {
         val text = HighlightSamples.kotlinLines(2000)
         val host = Host(text, "kotlin", backend, SyntaxLimits(parseSliceMicros = 200))
         try {
@@ -419,9 +450,8 @@ class SyntaxWorkerTest {
             host.viewport(0 until 1_000_000)
             host.settle()
             assertTrue(typed)
-            assertTrue(host.worker.restarts >= 1, "restarts ${host.worker.restarts}")
+            assertEquals(0, host.worker.restarts)
             assertEquals(fresh("kotlin", host.state.doc.toString()), host.spans)
-            assertNull(host.worker.lastError)
         } finally {
             host.close()
         }
@@ -445,5 +475,72 @@ class SyntaxWorkerTest {
         st = st.update(ChangeSpec(0, 0, "y")).state
         val log = Syntax.snapshot(st)!!.log
         assertEquals(listOf(2L), log.map { it.version })
+    }
+
+    /** A Kotlin file whose first full parse takes more than [minMs] here (sized by timing 10k lines). */
+    private fun slowKotlin(minMs: Double = 450.0): String {
+        val probe = HighlightSamples.kotlinLines(10_000)
+        val t = Highlighter(backend, "kotlin").use { h -> ms { h.parse(RopeText(dev.supermux.editor.core.Rope.of(probe)), probe.length, null).close() } }
+        val lines = (10_000 * kotlin.math.ceil(minMs / t)).toInt().coerceIn(10_000, 60_000)
+        return HighlightSamples.kotlinLines(lines)
+    }
+
+    /** Spans in the viewport window of [host] vs a fresh parse of its text over the same window. */
+    private fun assertWindowMatchesFresh(host: Host, from: Int, to: Int) {
+        val text = host.state.doc.toString()
+        val want = Highlighter(backend, "kotlin").use { h ->
+            val r = RopeText(dev.supermux.editor.core.Rope.of(text))
+            // wider than the window: spans crossing its edges must not come out clipped
+            h.parse(r, text.length, null, r).use { d -> RangeSet.of(h.spans(d, maxOf(0, from - 2000), minOf(text.length, to + 2000), r)) }
+        }
+        assertEquals(want.between(from, to).filter { it.from >= from && it.to <= to }, host.spans.between(from, to).filter { it.from >= from && it.to <= to })
+    }
+
+    /** The surface scrolls every 15 ms during a long first parse: viewport-only snapshots never cancel it. */
+    @Test
+    fun scrollingDuringALongFirstParseStillGetsSpans() = runBlocking {
+        val text = slowKotlin()
+        val host = Host(text, "kotlin", backend)
+        try {
+            val t0 = kotlin.time.TimeSource.Monotonic.markNow()
+            var k = 0
+            while (host.spans.isEmpty && t0.elapsedNow().inWholeSeconds < 60) {
+                val at = (k++ * 997) % (text.length - 2000)
+                host.viewport(at until at + 2000)
+                kotlinx.coroutines.delay(15)
+            }
+            println("LIVELOCK scroll lines=${host.state.doc.lineCount} firstSpansAfter=${t0.elapsedNow().inWholeMilliseconds}ms scrolls=$k restarts=${host.worker.restarts}")
+            assertFalse(host.spans.isEmpty, "no spans after ${t0.elapsedNow()} of scrolling (${host.worker.restarts} restarts)")
+            assertEquals(0, host.worker.restarts, "a viewport-only snapshot cancelled the parse")
+            host.settle()
+            val vp = Syntax.snapshot(host.state)!!.viewport
+            assertWindowMatchesFresh(host, vp.first, vp.last + 1)
+        } finally {
+            host.close()
+        }
+    }
+
+    /** Typing every 120 ms during a long first parse: it finishes, then the edits apply incrementally. */
+    @Test
+    fun typingDuringALongFirstParseStillGetsSpans() = runBlocking {
+        val text = slowKotlin()
+        val host = Host(text, "kotlin", backend)
+        try {
+            host.viewport(0 until 3000)
+            val t0 = kotlin.time.TimeSource.Monotonic.markNow()
+            var k = 0
+            while ((host.spans.isEmpty || k < 5) && t0.elapsedNow().inWholeSeconds < 60) {
+                host.dispatch(TransactionSpec(listOf(ChangeSpec(0, 0, "// typed $k\n"))))
+                k++
+                kotlinx.coroutines.delay(120)
+            }
+            println("LIVELOCK type lines=${host.state.doc.lineCount} firstSpansAfter=${t0.elapsedNow().inWholeMilliseconds}ms keystrokes=$k restarts=${host.worker.restarts}")
+            assertFalse(host.spans.isEmpty, "no spans after ${t0.elapsedNow()} of typing (${host.worker.restarts} restarts)")
+            host.settle()
+            assertWindowMatchesFresh(host, 0, 3000)
+            assertNull(host.worker.lastError)
+        } finally {
+            host.close()
+        }
     }
 }

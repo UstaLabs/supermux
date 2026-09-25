@@ -77,8 +77,13 @@ class SyntaxWorker(
     /** Called between two parse slices, on the worker's thread (tests). */
     internal var onSlice: (() -> Unit)? = null
 
+    /** The newest text posted: a parse is cancelled only for another TEXT, never for a viewport or selection change. */
+    private class Latest(val epoch: Long, val version: Long, val doc: Rope)
+    @Volatile private var latest: Latest? = null
+
     fun onState(state: EditorState) {
         val snapshot = Syntax.snapshot(state) ?: return
+        latest = Latest(snapshot.epoch, snapshot.version, snapshot.doc)
         var seq = 0L
         posted.update { seq = it + 1; seq }
         inbox.trySend(seq to snapshot)
@@ -111,6 +116,8 @@ class SyntaxWorker(
     private var sent: Triple<Long, Long, IntRange>? = null
     private var off = false
     private var longLine: Pair<Long, Boolean>? = null // (version, answer) for this epoch
+    /** How long this document's last parse from scratch took (ms): what a reparse can cost at most. */
+    private var fullParseMs = 0.0
 
     private suspend fun loop() {
         try {
@@ -134,6 +141,7 @@ class SyntaxWorker(
     }
 
     private fun resetParse() {
+        fullParseMs = 0.0
         parsed?.close()
         parsed = null
         parsedDoc = null
@@ -190,14 +198,27 @@ class SyntaxWorker(
                 resetParse()
             }
         }
-        val cancel = { posted.value > seq }
         while (parsed == null || stale) {
+            // Abandon this parse only for another text, only when there is an old tree to resume
+            // the newer text from (never a first parse), and only early: past half of what a full
+            // parse of this document took, finishing and then applying the new edits is cheaper.
+            // (Cancelling on every newer snapshot restarted long parses forever while scrolling.)
+            val first = parsed == null
+            val started = kotlin.time.TimeSource.Monotonic.markNow()
+            val expected = fullParseMs
+            val cancel = cancel@{
+                if (first || expected <= 0.0) return@cancel false
+                val l = latest ?: return@cancel false
+                val newer = l.epoch != s.epoch || l.version != s.version || l.doc !== s.doc
+                newer && started.elapsedNow().inWholeMicroseconds / 1000.0 < expected / 2
+            }
             val next = try {
                 step("parse") { h.parse(text, s.doc.length, parsed, text, cancel) }
             } catch (e: SyntaxException) {
                 if (e.status != SyntaxStatus.TIMEOUT) throw e
                 return turnOff(s)
             }
+            if (first) fullParseMs = started.elapsedNow().inWholeMicroseconds / 1000.0
             parsed?.close()
             parsed = next
             parsedDoc = s.doc
