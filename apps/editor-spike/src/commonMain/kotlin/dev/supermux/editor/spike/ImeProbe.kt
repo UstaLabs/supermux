@@ -1,12 +1,17 @@
 package dev.supermux.editor.spike
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -81,10 +86,20 @@ fun ImeProbe(radius: Int = 24) {
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("DOCUMENT: " + doc.replace("\n", "⏎"))
-        Text("FIELD (base ${window.base}): ")
-        BasicTextField(field, Modifier.padding(vertical = 8.dp))
-        LazyColumn { items(log) { Text(it) } }
+    // An explicit theme + opaque surface: without one the UIKit window behind Compose is black and the
+    // default black text is invisible (the first on-device run showed a "blank" black screen).
+    MaterialTheme {
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp)) {
+                Text("DOCUMENT: " + doc.replace("\n", "⏎"))
+                Text("FIELD (base ${window.base}): tap the box below and type")
+                BasicTextField(
+                    field,
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                        .border(1.dp, MaterialTheme.colorScheme.outline).padding(8.dp),
+                )
+                LazyColumn { items(log) { Text(it) } }
+            }
+        }
     }
 }
