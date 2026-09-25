@@ -152,12 +152,12 @@ static void included_ranges(void) {
   uint32_t n = 0;
   int32_t *a = raw && ht ? caps(raw, ht, src, len, &n, NULL) : NULL;
   CHECK("html finds the script content", a && n == 4 && a[0] == 17 && a[1] == 27, "n %u", n);
-  int32_t range[2] = {a ? a[0] : 0, a ? a[1] : 0};
+  /* [start, end, startRow, startCol, endRow, endCol]: the content is on line 1, columns 8..18 */
+  uint32_t range[6] = {a ? (uint32_t)a[0] : 0, a ? (uint32_t)a[1] : 0, 1, 8, 1, 18};
   ses_free(a);
   ses_parser *jp = ses_parser_new();
   ses_parser_set_language(jp, "javascript");
-  buffer_ctx b = {src, len};
-  st = ses_parser_set_included_ranges(jp, range, 2, read_buffer, &b);
+  st = ses_parser_set_included_ranges(jp, range, 6);
   CHECK("set included ranges", st == SES_OK, "status %d", st);
   ses_tree *jt = ses_parser_parse_utf16(jp, NULL, src, len, &st);
   ses_query *prog = query("javascript", "(program) @p \"let\" @k", &st);
@@ -167,10 +167,10 @@ static void included_ranges(void) {
         a ? a[0] : -1, a ? a[1] : -1, a && n >= 8 ? a[4] : -1, a && n >= 8 ? a[5] : -1);
   CHECK("the js tree has no error", jt && !ses_tree_has_error(jt), "sexp %s", "");
   ses_free(a);
-  int32_t bad[4] = {10, 20, 5, 30};
-  CHECK("unordered ranges are refused", ses_parser_set_included_ranges(jp, bad, 4, read_buffer, &b) == SES_ERR_INVALID_ARGUMENT, "accepted");
-  CHECK("an odd count is refused", ses_parser_set_included_ranges(jp, bad, 3, read_buffer, &b) == SES_ERR_INVALID_ARGUMENT, "accepted");
-  CHECK("reset to the whole document", ses_parser_set_included_ranges(jp, NULL, 0, NULL, NULL) == SES_OK, "refused");
+  uint32_t bad[12] = {10, 20, 0, 10, 0, 20, 5, 30, 0, 5, 0, 30};
+  CHECK("unordered ranges are refused", ses_parser_set_included_ranges(jp, bad, 12) == SES_ERR_INVALID_ARGUMENT, "accepted");
+  CHECK("a count not a multiple of 6 is refused", ses_parser_set_included_ranges(jp, bad, 4) == SES_ERR_INVALID_ARGUMENT, "accepted");
+  CHECK("reset to the whole document", ses_parser_set_included_ranges(jp, NULL, 0) == SES_OK, "refused");
   ses_tree *whole = ses_parser_parse_utf16(jp, NULL, src, len, &st);
   CHECK("after the reset the whole document is javascript", whole && ses_tree_has_error(whole), "no error");
   ses_tree_free(whole);
@@ -180,27 +180,55 @@ static void included_ranges(void) {
   free(src);
 }
 
-/* The points of included ranges: a range starting on line 2 parses with the right rows. */
-static void included_range_points(void) {
-  const char *doc = "x\nyy\n  let b = 2;\n";
+/* A timed-out parse resumes on the next call; ses_parser_reset discards it instead. */
+static void resumable_parse(void) {
+  enum { N = 20000 };
+  char *doc = malloc(N * 8 + 3);
+  char *w = doc;
+  *w++ = '[';
+  for (int i = 0; i < N; i++) { if (i) *w++ = ','; w += sprintf(w, "[1,\"a\"]"); }
+  *w++ = ']';
+  *w = 0;
   uint32_t len;
   uint16_t *src = u16(doc, &len);
   ses_status st;
-  ses_parser *jp = ses_parser_new();
-  ses_parser_set_language(jp, "javascript");
-  buffer_ctx b = {src, len};
-  int32_t range[2] = {7, 18};
-  /* a 3-unit reader: boundaries are found across chunk edges */
-  small_ctx sc = {src, len};
-  st = ses_parser_set_included_ranges(jp, range, 2, read_small, &sc);
-  ses_tree *jt = st == SES_OK ? ses_parser_parse_utf16(jp, NULL, src, len, &st) : NULL;
-  char *sexp = jt ? ses_tree_root_sexp(jt) : NULL;
-  CHECK("a range after two lines parses", jt && !ses_tree_has_error(jt), "%s", sexp ? sexp : "(none)");
-  ses_free(sexp);
-  (void)b;
-  ses_tree_free(jt);
-  ses_parser_free(jp);
+  ses_parser *ref = ses_parser_new();
+  ses_parser_set_language(ref, "json");
+  ses_tree *want = ses_parser_parse_utf16(ref, NULL, src, len, &st);
+  char *want_s = ses_tree_root_sexp(want);
+  ses_parser *p = ses_parser_new();
+  ses_parser_set_language(p, "json");
+  ses_parser_set_timeout_micros(p, 200);
+  int slices = 0;
+  ses_tree *t = NULL;
+  while (!t && slices < 100000) { t = ses_parser_parse_utf16(p, NULL, src, len, &st); slices++; }
+  char *got_s = t ? ses_tree_root_sexp(t) : NULL;
+  CHECK("a parse in 200 us slices resumes to the same tree", t && slices > 1 && strcmp(want_s, got_s) == 0, "slices %d", slices);
+  ses_free(got_s);
+  ses_tree_free(t);
+  /* a cancelled parse, reset, then a different document parses from scratch */
+  st = SES_OK;
+  t = ses_parser_parse_utf16(p, NULL, src, len, &st);
+  CHECK("the first slice times out", !t && st == SES_ERR_TIMEOUT, "status %d", st);
+  ses_tree_free(t);
+  ses_parser_reset(p);
+  ses_parser_set_timeout_micros(p, 0);
+  uint32_t l2;
+  uint16_t *small = u16("{\"k\": 1}", &l2);
+  t = ses_parser_parse_utf16(p, NULL, small, l2, &st);
+  got_s = t ? ses_tree_root_sexp(t) : NULL;
+  CHECK("after a reset another document parses cleanly",
+        got_s && strcmp(got_s, "(document (object (pair key: (string (string_content)) value: (number))))") == 0,
+        "%s", got_s ? got_s : "(null)");
+  ses_free(got_s);
+  ses_tree_free(t);
+  ses_free(want_s);
+  ses_tree_free(want);
+  ses_parser_free(p);
+  ses_parser_free(ref);
+  free(small);
   free(src);
+  free(doc);
 }
 
 /* #set! with a capture where the value belongs is malformed. */
@@ -420,7 +448,7 @@ int main(int argc, char **argv) {
   match_callback();
   pattern_settings();
   included_ranges();
-  included_range_points();
+  resumable_parse();
   set_with_capture_value();
   settings_keep_capture_id();
   match_callback_once_per_match();

@@ -105,18 +105,23 @@ SES_API ses_status ses_language_load(const char *name);
 SES_API ses_parser *ses_parser_new(void);
 SES_API void ses_parser_free(ses_parser *parser);
 SES_API ses_status ses_parser_set_language(ses_parser *parser, const char *name);
-/** 0 = no limit. A parse over the limit returns NULL with SES_ERR_TIMEOUT. */
+/** 0 = no limit. A parse over the limit returns NULL with SES_ERR_TIMEOUT; see ses_parser_reset. */
 SES_API void ses_parser_set_timeout_micros(ses_parser *parser, uint64_t micros);
 /**
  * Restrict the parser's next parses to these UTF-16 ranges (injections: a <script> element's
- * content, a Markdown fence). [ranges] is a packed [start, end]* array of [count_ints] ints, sorted
- * and non-overlapping (start <= end, each start >= the previous end). tree-sitter also needs each
- * boundary's (row, column), so the document is read through [read] from index 0 up to the last
- * boundary. NULL / 0 resets to the whole document. SES_ERR_INVALID_ARGUMENT for an odd count, a
- * missing reader, or ranges that are unordered or overlap (the previous ranges then stay).
+ * content, a Markdown fence). [ranges] is a packed array of [count_ints] uint32s, 6 per range:
+ * start, end, startRow, startColumn, endRow, endColumn (rows 0-based, columns UTF-16 units from
+ * the line start: the caller knows its lines, this ABI never walks the text). Ranges are sorted and
+ * do not overlap (start <= end, each start >= the previous end). NULL / 0 resets to the whole
+ * document. SES_ERR_INVALID_ARGUMENT for a count not a multiple of 6 or unordered ranges (the
+ * previous ranges then stay).
  */
-SES_API ses_status ses_parser_set_included_ranges(ses_parser *parser, const int32_t *ranges, uint32_t count_ints,
-                                                  ses_read_fn read, void *ctx);
+SES_API ses_status ses_parser_set_included_ranges(ses_parser *parser, const uint32_t *ranges, uint32_t count_ints);
+/**
+ * Discard a parse that timed out. Without it the next ses_parser_parse RESUMES that parse (same
+ * document, same old tree: parse in time slices that way); to parse anything else, reset first.
+ */
+SES_API void ses_parser_reset(ses_parser *parser);
 
 /**
  * Parse the document read through [read]. [old_tree] (may be NULL) must already carry every edit

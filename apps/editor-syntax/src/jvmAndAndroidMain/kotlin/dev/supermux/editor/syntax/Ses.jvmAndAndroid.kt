@@ -36,9 +36,8 @@ internal actual object Ses {
     @JvmStatic actual external fun parserSetLanguage(parser: Long, name: String): Int
     @JvmStatic actual external fun parserSetTimeoutMicros(parser: Long, micros: Long)
 
-    @JvmStatic private external fun parserSetIncludedRanges(parser: Long, ranges: IntArray, source: Any): Int
-    actual fun parserSetIncludedRanges(parser: Long, ranges: IntArray, source: TextSource): Int =
-        parserSetIncludedRanges(parser, ranges, TextSourceJni(source) as Any)
+    @JvmStatic actual external fun parserSetIncludedRanges(parser: Long, ranges: IntArray): Int
+    @JvmStatic actual external fun parserReset(parser: Long)
 
     @JvmStatic private external fun parse(parser: Long, old: Long, source: Any, status: IntArray): Long
     actual fun parse(parser: Long, old: Long, source: TextSource, status: IntArray): Long =

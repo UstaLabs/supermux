@@ -172,7 +172,7 @@ ses_tree *ses_parser_parse(ses_parser *p, const ses_tree *old, ses_read_fn fn, v
   TSParseOptions opt = {.payload = &pr, .progress_callback = p->timeout_us ? on_progress : NULL};
   TSTree *t = ts_parser_parse_with_options(p->ts, old ? TREE(old) : NULL, in, opt);
   if (!t) {
-    ts_parser_reset(p->ts); /* a cancelled parse would otherwise resume on the next call */
+    /* no reset: the next call resumes this parse (time slices); ses_parser_reset discards it */
     *st = SES_ERR_TIMEOUT;
     return NULL;
   }
@@ -187,39 +187,28 @@ ses_tree *ses_parser_parse_utf16(ses_parser *p, const ses_tree *old, const uint1
   return ses_parser_parse(p, old, buffer_read, &b, st);
 }
 
-ses_status ses_parser_set_included_ranges(ses_parser *p, const int32_t *ranges, uint32_t count, ses_read_fn fn,
-                                          void *ctx) {
+void ses_parser_reset(ses_parser *p) { if (p) ts_parser_reset(p->ts); }
+
+ses_status ses_parser_set_included_ranges(ses_parser *p, const uint32_t *ranges, uint32_t count) {
   if (!p) return SES_ERR_INVALID_ARGUMENT;
   if (!ranges || count == 0) {
     ts_parser_set_included_ranges(p->ts, NULL, 0); /* the whole document */
     return SES_OK;
   }
-  if (count % 2 || !fn) return SES_ERR_INVALID_ARGUMENT;
-  for (uint32_t i = 0; i < count; i++) {
-    /* every boundary >= the previous one: start <= end, and each start >= the previous end */
-    if (ranges[i] < 0 || (i > 0 && ranges[i] < ranges[i - 1])) return SES_ERR_INVALID_ARGUMENT;
+  if (count % 6) return SES_ERR_INVALID_ARGUMENT;
+  uint32_t n = count / 6;
+  for (uint32_t i = 0; i < n; i++) {
+    const uint32_t *x = ranges + 6 * i;
+    if (x[0] > x[1] || (i > 0 && x[0] < ranges[6 * (i - 1) + 1])) return SES_ERR_INVALID_ARGUMENT;
   }
-  uint32_t n = count / 2;
   TSRange *r = calloc(n, sizeof *r);
   if (!r) return SES_ERR_OUT_OF_MEMORY;
-  /* One pass over the text up to the last boundary: the (row, UTF-16 column) of each boundary. */
-  uint32_t pos = 0, row = 0, col = 0;
-  for (uint32_t k = 0; k < count; k++) {
-    uint32_t target = (uint32_t)ranges[k];
-    while (pos < target) {
-      uint32_t cl = 0;
-      const uint16_t *c = fn(ctx, pos, &cl);
-      if (!c || cl == 0) { col += target - pos; pos = target; break; } /* past the end: same line */
-      uint32_t take = cl < target - pos ? cl : target - pos;
-      for (uint32_t i = 0; i < take; i++) {
-        if (c[i] == '\n') { row++; col = 0; }
-        else col++;
-      }
-      pos += take;
-    }
-    TSPoint pt = {row, col * 2};
-    if (k % 2 == 0) { r[k / 2].start_byte = target * 2; r[k / 2].start_point = pt; }
-    else { r[k / 2].end_byte = target * 2; r[k / 2].end_point = pt; }
+  for (uint32_t i = 0; i < n; i++) {
+    const uint32_t *x = ranges + 6 * i;
+    r[i].start_byte = x[0] * 2;
+    r[i].end_byte = x[1] * 2;
+    r[i].start_point = (TSPoint){x[2], x[3] * 2};
+    r[i].end_point = (TSPoint){x[4], x[5] * 2};
   }
   bool ok = ts_parser_set_included_ranges(p->ts, r, n);
   free(r);
@@ -732,11 +721,16 @@ ses_status ses_query_matches(const ses_query *q, const ses_tree *t, uint32_t sta
       a[n++] = (int32_t)(ts_node_end_byte(node) / 2);
       a[n++] = (int32_t)m.captures[c].index;
       a[n++] = (int32_t)k;
-      for (uint32_t i = 0; i < k; i++) {
-        TSNode ch = ts_node_child(node, i);
-        a[n++] = (int32_t)(ts_node_start_byte(ch) / 2);
-        a[n++] = (int32_t)(ts_node_end_byte(ch) / 2);
-        a[n++] = ts_node_is_named(ch) ? 1 : 0;
+      if (k) { /* a cursor walks the children in O(k); ts_node_child(i) is O(i) each */
+        TSTreeCursor tc = ts_tree_cursor_new(node);
+        bool more = ts_tree_cursor_goto_first_child(&tc);
+        for (uint32_t i = 0; i < k && more; i++, more = ts_tree_cursor_goto_next_sibling(&tc)) {
+          TSNode ch = ts_tree_cursor_current_node(&tc);
+          a[n++] = (int32_t)(ts_node_start_byte(ch) / 2);
+          a[n++] = (int32_t)(ts_node_end_byte(ch) / 2);
+          a[n++] = ts_node_is_named(ch) ? 1 : 0;
+        }
+        ts_tree_cursor_delete(&tc);
       }
     }
   }

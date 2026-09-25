@@ -176,20 +176,19 @@ SES_JNI(void, parserSetTimeoutMicros)(JNIEnv *env, jclass cls, jlong p, jlong us
   ses_parser_set_timeout_micros(P(p), (uint64_t)us);
 }
 
-/* [start, end]* UTF-16 ranges (null or empty: the whole document); source feeds the points. */
-SES_JNI(jint, parserSetIncludedRanges)(JNIEnv *env, jclass cls, jlong p, jintArray ranges, jobject source) {
+/* 6 ints per range: start, end, startRow, startCol, endRow, endCol (UTF-16); null or empty: whole document. */
+SES_JNI(jint, parserSetIncludedRanges)(JNIEnv *env, jclass cls, jlong p, jintArray ranges) {
   (void)cls;
   jsize n = ranges ? (*env)->GetArrayLength(env, ranges) : 0;
-  if (n == 0) return ses_parser_set_included_ranges(P(p), NULL, 0, NULL, NULL);
-  jreader r;
-  if (jreader_init(env, &r, source) != 0) return SES_ERR_INVALID_ARGUMENT; /* NoSuchMethodError pending */
+  if (n == 0) return ses_parser_set_included_ranges(P(p), NULL, 0);
   jint *a = (*env)->GetIntArrayElements(env, ranges, NULL);
-  if (!a) { jreader_release(&r); return SES_ERR_OUT_OF_MEMORY; }
-  jint st = ses_parser_set_included_ranges(P(p), (const int32_t *)a, (uint32_t)n, source ? jreader_read : NULL, &r);
+  if (!a) return SES_ERR_OUT_OF_MEMORY;
+  jint st = ses_parser_set_included_ranges(P(p), (const uint32_t *)a, (uint32_t)n);
   (*env)->ReleaseIntArrayElements(env, ranges, a, JNI_ABORT);
-  jreader_release(&r);
-  return st; /* a throwing source: its exception is pending and propagates */
+  return st;
 }
+
+SES_JNI(void, parserReset)(JNIEnv *env, jclass cls, jlong p) { (void)env; (void)cls; ses_parser_reset(P(p)); }
 
 /* Returns the tree (0 on failure, status in status[0]). */
 SES_JNI(jlong, parse)(JNIEnv *env, jclass cls, jlong p, jlong old, jobject source, jintArray status) {

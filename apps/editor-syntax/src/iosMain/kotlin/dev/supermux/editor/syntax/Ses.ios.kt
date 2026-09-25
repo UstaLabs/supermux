@@ -14,6 +14,7 @@ import dev.supermux.editor.syntax.cinterop.ses_parser_free
 import dev.supermux.editor.syntax.cinterop.ses_parser_new
 import dev.supermux.editor.syntax.cinterop.ses_parser_parse
 import dev.supermux.editor.syntax.cinterop.ses_parser_parse_utf16
+import dev.supermux.editor.syntax.cinterop.ses_parser_reset
 import dev.supermux.editor.syntax.cinterop.ses_parser_set_included_ranges
 import dev.supermux.editor.syntax.cinterop.ses_parser_set_language
 import dev.supermux.editor.syntax.cinterop.ses_parser_set_timeout_micros
@@ -142,14 +143,12 @@ internal actual object Ses {
     actual fun parserSetTimeoutMicros(parser: Long, micros: Long) =
         ses_parser_set_timeout_micros(parser.toCPointer(), micros.toULong())
 
-    actual fun parserSetIncludedRanges(parser: Long, ranges: IntArray, source: TextSource): Int {
-        if (ranges.isEmpty()) return ses_parser_set_included_ranges(parser.toCPointer(), null, 0u, null, null)
-        return ranges.usePinned { pinned ->
-            withReader(source, cleanup = {}) { ctx ->
-                ses_parser_set_included_ranges(parser.toCPointer(), pinned.addressOf(0), ranges.size.toUInt(), readChunk, ctx)
-            }
-        }
+    actual fun parserSetIncludedRanges(parser: Long, ranges: IntArray): Int {
+        if (ranges.isEmpty()) return ses_parser_set_included_ranges(parser.toCPointer(), null, 0u)
+        return ranges.usePinned { ses_parser_set_included_ranges(parser.toCPointer(), it.addressOf(0).reinterpret(), ranges.size.toUInt()) }
     }
+
+    actual fun parserReset(parser: Long) = ses_parser_reset(parser.toCPointer())
 
     actual fun parse(parser: Long, old: Long, source: TextSource, status: IntArray): Long = memScoped {
         val st = alloc<IntVar>()

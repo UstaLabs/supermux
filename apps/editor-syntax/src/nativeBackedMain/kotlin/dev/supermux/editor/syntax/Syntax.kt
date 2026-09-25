@@ -41,12 +41,16 @@ class SyntaxParser(val language: String) : AutoCloseable {
     fun setTimeoutMicros(micros: Long) = Ses.parserSetTimeoutMicros(live(), micros)
 
     /**
-     * Restrict the next parses to these UTF-16 ranges (packed [start, end]*, sorted, not
-     * overlapping); empty = the whole document. [text] is the document: tree-sitter needs each
-     * boundary's row and column, read from it.
+     * Restrict the next parses to these UTF-16 ranges, 6 ints each: start, end, startRow,
+     * startColumn, endRow, endColumn (sorted, not overlapping); empty = the whole document.
      */
-    fun setIncludedRanges(ranges: IntArray, text: TextSource) =
-        check(Ses.parserSetIncludedRanges(live(), ranges, text), "setIncludedRanges")
+    fun setIncludedRanges(ranges: IntArray) = check(Ses.parserSetIncludedRanges(live(), ranges), "setIncludedRanges")
+
+    /**
+     * Discard a parse that timed out. Without it the next [parse] RESUMES that parse, which is how
+     * a long parse runs in time slices (same text, same old tree); to parse anything else, reset.
+     */
+    fun reset() = Ses.parserReset(live())
 
     /** Parse, reusing [old] (which must already carry every [SyntaxTree.edit] since it was made). */
     fun parse(source: TextSource, old: SyntaxTree? = null): SyntaxTree {
@@ -200,7 +204,8 @@ internal expect object Ses {
     fun parserFree(parser: Long)
     fun parserSetLanguage(parser: Long, name: String): Int
     fun parserSetTimeoutMicros(parser: Long, micros: Long)
-    fun parserSetIncludedRanges(parser: Long, ranges: IntArray, source: TextSource): Int
+    fun parserSetIncludedRanges(parser: Long, ranges: IntArray): Int
+    fun parserReset(parser: Long)
     fun parse(parser: Long, old: Long, source: TextSource, status: IntArray): Long
     fun parseString(parser: Long, old: Long, text: String, status: IntArray): Long
     fun treeCopy(tree: Long): Long

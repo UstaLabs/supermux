@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 private class Boom : RuntimeException("boom")
 
@@ -50,6 +51,7 @@ class RobustnessTest {
             p.setTimeoutMicros(1)
             assertEquals(SyntaxStatus.TIMEOUT, assertFailsWith<SyntaxException> { p.parse(big) }.status)
             assertEquals(SyntaxStatus.TIMEOUT, assertFailsWith<SyntaxException> { p.parse(ChunkedSource(big)) }.status)
+            p.reset() // a timed-out parse would resume otherwise
             p.setTimeoutMicros(0)
             p.parse(big).use { t ->
                 assertFalse(t.hasError)
@@ -63,5 +65,26 @@ class RobustnessTest {
         val before = Ses.debugLiveTrees()
         p.parse(SAMPLE).use { t -> t.copy().use { assertEquals(before + 2, Ses.debugLiveTrees()) } }
         assertEquals(before, Ses.debugLiveTrees())
+    }
+
+    @Test
+    fun aTimedOutParseResumesInSlices() {
+        val big = buildString {
+            append('[')
+            repeat(20_000) { if (it > 0) append(",\n"); append("{\"k$it\": [1, 2.5, \"ağ 😀\", null]}") }
+            append(']')
+        }
+        SyntaxParser("json").use { p ->
+            val want = p.parse(big).use { it.sexp() }
+            p.setTimeoutMicros(500)
+            var slices = 0
+            var tree: SyntaxTree? = null
+            while (tree == null) {
+                slices++
+                tree = try { p.parse(big) } catch (e: SyntaxException) { assertEquals(SyntaxStatus.TIMEOUT, e.status); null }
+            }
+            tree.use { assertEquals(want, it.sexp()) }
+            assertTrue(slices > 1, "one slice was enough: make the document bigger")
+        }
     }
 }

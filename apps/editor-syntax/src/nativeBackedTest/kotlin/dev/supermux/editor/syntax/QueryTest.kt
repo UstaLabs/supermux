@@ -138,7 +138,8 @@ class QueryTest {
                 }
                 assertEquals(listOf(17, 27), content.take(2).toList())
                 SyntaxParser("javascript").use { jp ->
-                    jp.setIncludedRanges(intArrayOf(content[0], content[1]), ChunkedSource(doc, 3))
+                    // start, end, startRow, startColumn, endRow, endColumn: line 1, columns 8..18
+                    jp.setIncludedRanges(intArrayOf(content[0], content[1], 1, 8, 1, 18))
                     jp.parse(ChunkedSource(doc)).use { jt ->
                         assertFalse(jt.hasError, jt.sexp())
                         SyntaxQuery("javascript", "(program) @p \"let\" @k").use { q ->
@@ -148,9 +149,9 @@ class QueryTest {
                     }
                     assertEquals(
                         SyntaxStatus.INVALID_ARGUMENT,
-                        assertFailsWith<SyntaxException> { jp.setIncludedRanges(intArrayOf(10, 20, 5, 30), ChunkedSource(doc)) }.status,
+                        assertFailsWith<SyntaxException> { jp.setIncludedRanges(intArrayOf(10, 20, 0, 10, 0, 20, 5, 30, 0, 5, 0, 30)) }.status,
                     )
-                    jp.setIncludedRanges(IntArray(0), ChunkedSource(doc))
+                    jp.setIncludedRanges(IntArray(0))
                     jp.parse(doc).use { assertTrue(it.hasError, "the whole HTML document parsed as javascript") }
                 }
             }
