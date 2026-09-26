@@ -87,6 +87,25 @@ class ScrollingTest {
         assertTrue((early - atRelease) / 100f > (end - later) / 3000f, "the fling did not decay")
     }
 
+    @Test fun scrollingUpInWrapModeMovesTheTextByExactlyTheScrollDelta() {
+        // Every third line wraps into several rows: its real height is far above the estimate, and
+        // the lines above the viewport are measured only as they scroll into view.
+        val text = (0 until 600).joinToString("\n") { if (it % 3 == 0) "long line $it " + "word ".repeat(60) else "line $it" }
+        editorTest(EditorState.create(text), lineWrap = true) { f ->
+            f.controller.scroll.scrollTo(y = 1e9f) // the end, never having measured what is above
+            waitForIdle()
+            val d = 7f
+            repeat(60) { step ->
+                val ref = f.geometry.heights.lineAt(f.controller.scroll.y) + 1
+                val before = f.geometry.lineTop(ref) - f.controller.scroll.y
+                f.controller.scroll.scrollBy(0f, -d)
+                waitForIdle()
+                val after = f.geometry.lineTop(ref) - f.controller.scroll.y
+                assertEquals(before + d, after, 0.5f, "step $step: line $ref jumped by ${after - before - d} px")
+            }
+        }
+    }
+
     @Test fun anEditAboveTheViewportKeepsTheVisibleTextInPlace() = editorTest(EditorState.create(lines), lineWrap = true) { f ->
         val lh = f.geometry.layouts.lineHeightPx
         f.controller.scroll.scrollTo(y = 500 * lh)

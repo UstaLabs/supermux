@@ -352,6 +352,16 @@ internal class EditorController(val view: EditorView, private val measurer: Text
     private var anchorScrollY = 0f
     private var anchorValid = false
 
+    /**
+     * The start of a paint: when the scroll moved since the last one (a gesture, scroll-into-view),
+     * the anchor is taken again at the new position against the CURRENT estimates, before anything
+     * is measured; otherwise the last one is restored (heights or the document changed under it).
+     * Either way, measuring the lines that come into view then moves nothing on screen.
+     */
+    fun beginAnchor() {
+        if (!anchorValid || scroll.y != anchorScrollY) recordAnchor() else restoreAnchor()
+    }
+
     fun restoreAnchor() {
         if (!anchorValid || scroll.y != anchorScrollY) return
         val doc = view.state.doc
