@@ -49,3 +49,5 @@ include(":terminal-sample")
 include(":editor-core")
 // The native editor's syntax layer: tree-sitter behind an owned ses_* C ABI, grammars as code + table blobs.
 include(":editor-syntax")
+// The native editor's one Compose surface (layout, drawing, scrolling, pointer, hidden-field IME) on :editor-core.
+include(":editor-compose")
