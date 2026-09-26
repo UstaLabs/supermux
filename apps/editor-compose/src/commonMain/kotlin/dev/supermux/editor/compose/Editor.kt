@@ -4,6 +4,14 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.gestures.scrollable
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -102,6 +110,10 @@ fun Editor(
     }
 
     val layoutDirection = LocalLayoutDirection.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val scope = rememberCoroutineScope()
+    val pointer = remember(controller, scope) { EditorPointer(controller, scope) }
+    SideEffect { controller.keyboard = keyboard }
     Box(
         modifier
             .clipToBounds()
@@ -119,7 +131,13 @@ fun Editor(
                 enabled = !lineWrap,
                 reverseDirection = ScrollableDefaults.reverseDirection(layoutDirection, Orientation.Horizontal, false),
                 flingBehavior = ScrollableDefaults.flingBehavior(),
-            ),
+            )
+            .onFocusChanged { view.focused = it.hasFocus }
+            .focusRequester(controller.focusRequester)
+            .focusable()
+            // INSIDE the scrollables: this node sees the Main pass first and consumes what is a
+            // selection (mouse presses and drags), leaving a finger's drag to scroll.
+            .pointerInput(pointer) { pointer.handle(this) },
     ) {
         Canvas(Modifier.fillMaxSize()) { controller.paint(this) }
     }
@@ -142,6 +160,25 @@ internal class EditorController(val view: EditorView, private val measurer: Text
 
     /** The caret's blink phase. */
     var cursorOn: Boolean by mutableStateOf(true)
+
+    /** The surface's focus target. */
+    val focusRequester = FocusRequester()
+
+    /** The platform's soft keyboard, or null where there is none (a desktop). */
+    var keyboard: SoftwareKeyboardController? = null
+
+    /** Take the keyboard focus (a mouse click): never raises a soft keyboard. */
+    fun requestFocus(): Boolean = runCatching { focusRequester.requestFocus() }.isSuccess
+
+    /**
+     * A finger touched the text: focus AND show the soft keyboard, explicitly and every time. A
+     * field that is already focused starts no new input session, so a keyboard the user dismissed
+     * would otherwise never come back (terminal-compose's lesson).
+     */
+    fun focusFromTouch() {
+        requestFocus()
+        keyboard?.show()
+    }
 
     var theme: EditorTheme? = null
         private set
