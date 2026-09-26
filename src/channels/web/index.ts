@@ -233,7 +233,8 @@ export interface WebChannelOpts {
   staticDir?: string
   staticEmbedded?: Record<string, string>
   getSessionsSnapshot: () => SessionSnapshot[]
-  getSessionLog: (name: string) => unknown[]
+  /** Newest `limit` entries (the store's default when omitted), oldest first. */
+  getSessionLog: (name: string, limit?: number) => unknown[]
   getSessionActivity?: (name: string) => unknown[]
   getSessionBgTasks?: (name: string) => unknown[]
   setMute: (name: string, muted: boolean) => void
@@ -1275,9 +1276,22 @@ export class WebChannel implements Channel {
       const agentState: Record<string, unknown> = {}
       const commands: Record<string, unknown[]> = {}
       const commandsResolved: Record<string, boolean> = {}
+      // A client that sends `logTail` only needs the newest few entries for sessions it isn't
+      // showing (sidebar preview + unread); it lists the ones it shows in `fullLogs` and fetches
+      // the rest over GET /sessions/:id/messages when opened. A client that sends neither gets
+      // full logs. `partialLogs` names every session that may have been cut short.
+      const logTail = Number.isInteger(frame.logTail) && frame.logTail >= 1 ? frame.logTail as number : undefined
+      const fullLogs = new Set<string>(Array.isArray(frame.fullLogs) ? frame.fullLogs.filter((x: unknown) => typeof x === "string") : [])
+      const partialLogs: string[] = []
       for (const s of sessions) {
         const sessionKey = s.id ?? s.name
-        logs[sessionKey] = this.opts.getSessionLog(sessionKey)
+        if (logTail !== undefined && !fullLogs.has(sessionKey)) {
+          const tail = this.opts.getSessionLog(sessionKey, logTail)
+          logs[sessionKey] = tail
+          if (tail.length >= logTail) partialLogs.push(sessionKey)
+        } else {
+          logs[sessionKey] = this.opts.getSessionLog(sessionKey)
+        }
         activity[sessionKey] = this.opts.getSessionActivity?.(sessionKey) ?? []
         bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
@@ -1293,7 +1307,7 @@ export class WebChannel implements Channel {
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, ...(logTail !== undefined ? { partialLogs } : {}) }))
       return
     }
     if (frame.type === "ping") {

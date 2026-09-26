@@ -1521,9 +1521,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         draft_payload: s.draft_payload,
       }))
     },
-    getSessionLog: (id) => {
+    getSessionLog: (id, limit) => {
       const s = registry.get(id)
-      return messageLog.get(s?.id ?? id)
+      return messageLog.get(s?.id ?? id, limit)
     },
     getSessionActivity: (id) => {
       const s = registry.get(id)

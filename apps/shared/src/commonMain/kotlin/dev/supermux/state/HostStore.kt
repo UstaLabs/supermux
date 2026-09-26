@@ -82,6 +82,8 @@ import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.net.MoveViewBody
 import dev.supermux.net.PatchViewBody
 import kotlinx.serialization.json.JsonObject
+import kotlinx.coroutines.flow.getAndUpdate
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -175,7 +177,11 @@ class HostStore(
     internal val projectionsActive: Boolean get() = projectionJob.isActive
 
     private val http = deps.httpFactory(null)
-    val client = BrokerClient(baseUrl, token, http, onConnectionChange = onConnectionChange)
+    val client = BrokerClient(
+        baseUrl, token, http,
+        onConnectionChange = onConnectionChange,
+        subscribeFrame = { subscribeFrameJson(viewingSessionIds) },
+    )
     val api = apiOverride ?: BrokerApi(baseUrl, token, http)
 
     // CIO's default per-request timeout is 15s — too short for the mic-dictation POST (M5-1): the
@@ -422,6 +428,7 @@ class HostStore(
                 lastSentViewing = null
                 sendViewingIfChanged()
                 refreshAgentModels()
+                if (!frame.partialLogs.isNullOrEmpty()) prefetchRecentLogs()
             }
             ServerFrame.AgentModelsChanged -> refreshAgentModels()
             is ServerFrame.SessionRemoved -> {
@@ -1541,23 +1548,56 @@ class HostStore(
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         runApi("archivedLogs") { api.archivedLogs(sessionId) } ?: emptyList()
 
+    /** Sessions whose history fetch is in flight, so a chat pane and the shell asking for the same
+     *  session at once make one request. */
+    private val logFetches = MutableStateFlow<Set<String>>(emptySet())
+    private var prefetchJob: Job? = null
+
     /**
-     * Lazily fetch a session's transcript when we don't already have it. The WS Snapshot seeds
-     * [messages] for every session live at connect time, and MessageAppend keeps them current —
-     * but a session resumed from archive arrives via SessionAdded (no history), so its transcript
-     * stays empty until the next snapshot. Calling this on chat-open closes that gap. No-op when
-     * the snapshot already populated it. Web/iOS parity: ChatView.loadMessages /
-     * BrokerSession.ensureMessagesLoaded (GET /sessions/:id/messages).
+     * Fetch a session's history unless we already hold the full page ([HostState.completeLogs]).
+     * The snapshot only carries a short tail for sessions that were not on screen at connect, and
+     * a session resumed from archive arrives via SessionAdded with no history at all; opening its
+     * chat calls this. Web/iOS parity: ChatView.loadMessages / BrokerSession.ensureMessagesLoaded
+     * (GET /sessions/:id/messages).
      */
     fun ensureMessagesLoaded(sessionId: String) {
-        if (_state.value.messages[sessionId]?.isNotEmpty() == true) return
-        stateScope.launch {
-            val fetched = archivedLogs(sessionId)
-            // Re-check after the await: a live MessageAppend / optimistic send / fresh snapshot may
-            // have populated the buffer while the fetch was in flight — don't clobber it.
-            if (fetched.isNotEmpty() && _state.value.messages[sessionId]?.isNotEmpty() != true) {
-                _state.update { it.copy(messages = it.messages + (sessionId to fetched)) }
+        stateScope.launch { loadFullLog(sessionId) }
+    }
+
+    private suspend fun loadFullLog(sessionId: String) {
+        if (sessionId in _state.value.completeLogs) return
+        if (sessionId in logFetches.getAndUpdate { it + sessionId }) return
+        try {
+            val fetched = runApi("loadFullLog") { api.archivedLogs(sessionId) } ?: return
+            // Live MessageAppends / optimistic sends may have landed while the fetch was in flight.
+            _state.update {
+                it.copy(
+                    messages = it.messages + (sessionId to mergeFetchedLog(fetched, it.messages[sessionId].orEmpty())),
+                    completeLogs = it.completeLogs + sessionId,
+                )
             }
+        } finally {
+            logFetches.update { it - sessionId }
+        }
+    }
+
+    /**
+     * After a snapshot that trimmed logs, quietly load the few most recently active sessions so
+     * switching to one of them is instant. One at a time, behind whatever the UI asked for first.
+     * The most recent N overall, minus those already loaded — NOT the next N unloaded ones, or
+     * every reconnect would warm four more sessions until the whole fleet was fetched.
+     */
+    private fun prefetchRecentLogs() {
+        prefetchJob?.cancel()
+        prefetchJob = stateScope.launch {
+            delay(PREFETCH_DELAY_MS)
+            val st = _state.value
+            val recent = st.messages.entries
+                .filter { (_, log) -> log.isNotEmpty() }
+                .sortedByDescending { (_, log) -> log.last().ts }
+                .take(PREFETCH_SESSIONS)
+                .filter { (id, _) -> id !in st.completeLogs }
+            for ((id, _) in recent) loadFullLog(id)
         }
     }
 
@@ -2229,3 +2269,21 @@ class HostStore(
 internal fun resolveSpawnId(resp: SpawnResponse, sessions: List<SessionInfo>): String? =
     if (resp.id.isNotBlank()) resp.id
     else sessions.firstOrNull { it.name == resp.name }?.id
+
+/** How many recent sessions [HostStore] prefetches after a trimmed snapshot, and after how long. */
+private const val PREFETCH_SESSIONS = 4
+private const val PREFETCH_DELAY_MS = 1_000L
+
+/** Entries the snapshot carries for a session that is not on screen: its sidebar preview. */
+internal const val SNAPSHOT_LOG_TAIL = 1
+
+/**
+ * The `subscribe` frame: full logs only for the chats on screen ([fullLogs]), a
+ * [SNAPSHOT_LOG_TAIL]-entry tail for every other session. A broker that predates `logTail`
+ * ignores both fields and sends full logs.
+ */
+internal fun subscribeFrameJson(fullLogs: Collection<String>): String = buildJsonObject {
+    put("type", "subscribe")
+    put("logTail", SNAPSHOT_LOG_TAIL)
+    put("fullLogs", JsonArray(fullLogs.distinct().map(::JsonPrimitive)))
+}.toString()

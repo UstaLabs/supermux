@@ -304,6 +304,12 @@ sealed interface ServerFrame {
         val projects: List<ProjectDto> = emptyList(),
         /** workspaceId → projectId for active AND archived workspaces. Empty on older brokers. */
         val projectMembership: Map<String, String> = emptyMap(),
+        /**
+         * Sessions whose [logs] entry is only the newest few entries, because the `subscribe`
+         * asked for a `logTail` and did not list them in `fullLogs`. Null from a broker that
+         * ignores `logTail` (every log is the full page).
+         */
+        val partialLogs: List<String>? = null,
     ) : ServerFrame
 
     /**
