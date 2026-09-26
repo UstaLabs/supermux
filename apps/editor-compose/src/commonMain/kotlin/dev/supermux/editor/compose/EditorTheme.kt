@@ -40,6 +40,8 @@ data class EditorTheme(
     val lineHeightFactor: Float = 1.45f,
     /** The gutter's number for the line the main cursor is on. */
     val gutterActiveForeground: Color = foreground,
+    /** The touch selection handles (the theme's accent, like the caret, by default). */
+    val selectionHandle: Color = cursor,
 ) {
     /** The style of mark class [cls], or null when the theme does not draw it. */
     fun styleOf(cls: String): SpanStyle? = tokens[cls] ?: classStyles[cls]

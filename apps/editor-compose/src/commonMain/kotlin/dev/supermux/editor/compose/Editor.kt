@@ -150,11 +150,15 @@ fun Editor(
             // The focus TARGET is the hidden field inside (an IME only runs for a focused text
             // field); this box is its ancestor, so `hasFocus` is the surface's focus and a key
             // preview reaches the keymap before the field could insert anything.
-            .onFocusChanged { view.focused = it.hasFocus }
+            .onFocusChanged {
+                view.focused = it.hasFocus
+                if (!it.hasFocus) controller.handles = TouchHandles.NONE
+            }
             .onPreviewKeyEvent { handleEditorKey(view, it, controller.composing) }
             // INSIDE the scrollables: this node sees the Main pass first and consumes what is a
             // selection (mouse presses and drags), leaving a finger's drag to scroll.
-            .pointerInput(pointer) { pointer.handle(this) },
+            .pointerInput(pointer) { pointer.handle(this) }
+            .editorMagnifier { controller.magnifierAt },
     ) {
         val paintHook by rememberUpdatedState(onPaint)
         Canvas(Modifier.fillMaxSize()) {
@@ -199,6 +203,37 @@ internal class EditorController(val view: EditorView, private val measurer: Text
 
     /** The platform's soft keyboard, or null where there is none (a desktop). */
     var keyboard: SoftwareKeyboardController? = null
+
+    /** The touch handles shown (only a touch gesture turns them on; see [TouchHandles]). */
+    var handles: TouchHandles by mutableStateOf(TouchHandles.NONE)
+
+    /** Where a finger dragging a selection end is, for the platform magnifier (Unspecified: none). */
+    var magnifierAt: androidx.compose.ui.geometry.Offset by mutableStateOf(androidx.compose.ui.geometry.Offset.Unspecified)
+
+    /** Pixels per dp, from the last configuration. */
+    val densityValue: Float get() = density.density
+
+    /**
+     * The handles to draw and hit-test now, in surface pixels: the main range's two ends
+     * ([TouchHandles.SELECTION]) or its caret ([TouchHandles.CURSOR]); a handle whose tip is outside
+     * the viewport is left out.
+     */
+    fun handleSpots(): List<HandleSpot> {
+        val mode = handles
+        if (mode == TouchHandles.NONE || viewportSize.height <= 0f) return emptyList()
+        val main = view.state.selection.main
+        val wanted = when (mode) {
+            TouchHandles.SELECTION -> if (main.empty) return emptyList() else listOf(HandleKind.START to main.from, HandleKind.END to main.to)
+            else -> if (!main.empty) return emptyList() else listOf(HandleKind.CURSOR to main.head)
+        }
+        val out = ArrayList<HandleSpot>(2)
+        for ((kind, at) in wanted) {
+            val caret = caretRectOnScreen(at.coerceIn(0, view.state.doc.length))
+            if (caret.bottom < 0f || caret.top > viewportSize.height || caret.left < gutterWidth - 1f || caret.left > viewportSize.width) continue
+            out += EditorTouch.spot(kind, at, caret, density.density)
+        }
+        return out
+    }
 
     /** Take the keyboard focus (a mouse click): never raises a soft keyboard. */
     fun requestFocus(): Boolean = runCatching { focusRequester.requestFocus() }.isSuccess
@@ -312,6 +347,7 @@ internal class EditorController(val view: EditorView, private val measurer: Text
     // ------------------------------------------------------------------ EditorSurfaceHooks --
 
     override fun onTransaction(tr: Transaction) {
+        followHandles(tr)
         if (!tr.docChanged) return
         if (heights.lineCount == tr.startState.doc.lineCount) heights.applyChanges(tr.changes, tr.startState.doc, tr.state.doc)
         else heights.reset(tr.state.doc.lineCount)
@@ -321,7 +357,23 @@ internal class EditorController(val view: EditorView, private val measurer: Text
         anchorPos = doc.lineStart(doc.lineIndexAt(tr.changes.mapPos(anchorPos.coerceIn(0, tr.changes.lengthBefore), -1)))
     }
 
+    /**
+     * The touch handles hide on typing (the caret's), when the selection they hold collapses, and
+     * when anything but a pointer gesture sets the selection (a hardware key, a command).
+     */
+    private fun followHandles(tr: Transaction) {
+        if (handles == TouchHandles.NONE) return
+        val main = tr.state.selection.main
+        val pointer = tr.isUserEvent("select.pointer")
+        when {
+            tr.selectionSet && !pointer -> handles = TouchHandles.NONE
+            tr.docChanged && (handles == TouchHandles.CURSOR || main.empty) -> handles = TouchHandles.NONE
+            handles == TouchHandles.SELECTION && main.empty -> handles = TouchHandles.NONE
+        }
+    }
+
     override fun onStateReplaced() {
+        handles = TouchHandles.NONE
         heights.reset(view.state.doc.lineCount)
         anchorValid = false
         scroll.scrollTo(0f, 0f)

@@ -117,4 +117,7 @@ internal fun DrawScope.paintEditor(c: EditorController, theme: EditorTheme, stat
             drawText(n, color = color, topLeft = Offset(c.gutterWidth - cw - n.size.width, y))
         }
     }
+
+    // The touch handles, over everything (they hang below the text they mark).
+    if (c.handles != TouchHandles.NONE) drawHandles(c.handleSpots(), theme.selectionHandle, density)
 }

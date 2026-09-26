@@ -85,3 +85,5 @@ private fun eventCode(e: JsAny): String = js("e.code || ''")
 
 private fun eventFlags(e: JsAny): Int =
     js("(e.ctrlKey ? 1 : 0) | (e.metaKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.shiftKey ? 8 : 0) | ((e.isComposing || e.keyCode === 229) ? 16 : 0)")
+
+internal actual fun androidx.compose.ui.Modifier.editorMagnifier(center: () -> androidx.compose.ui.geometry.Offset): androidx.compose.ui.Modifier = this
