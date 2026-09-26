@@ -22,6 +22,9 @@ data class HostState(
      * ([ServerFrame.Snapshot.partialLogs]). Opening a chat outside this set fetches its history.
      */
     val completeLogs: Set<String> = emptySet(),
+    /** Sessions whose [activity] / [commands] are current, not left out of a trimmed snapshot
+     *  ([ServerFrame.Snapshot.partialExtras]). Opening a chat outside this set fetches them. */
+    val completeExtras: Set<String> = emptySet(),
     val activity: Map<String, List<ActivityEvent>> = emptyMap(),
     val agentState: Map<String, AgentStatus> = emptyMap(),
     val agentErrors: Map<String, ServerFrame.AgentError> = emptyMap(),

@@ -1,6 +1,8 @@
 package dev.supermux.state
 
+import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.ServerFrame
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -66,5 +68,48 @@ class HostReducerLogTailTest {
     @Test fun fetchedLogDropsCurrentEntriesOlderThanItsNewest() {
         // The tail entry the snapshot seeded is inside the fetched page; nothing is duplicated.
         assertEquals(listOf(e("1"), e("2")), mergeFetchedLog(listOf(e("1"), e("2")), listOf(e("2"))))
+    }
+
+    private fun act(seq: Int) = ActivityEvent(ts = "t$seq", kind = "tool", seq = seq)
+    private val cmd = SlashCommand(id = "c", family = "agent", name = "review")
+
+    @Test fun oldBrokerSnapshotMarksEveryChatsExtrasCurrent() {
+        val out = reduceHostFrame(HostState(), ServerFrame.Snapshot(logs = mapOf("a" to emptyList()), activity = mapOf("a" to listOf(act(1)))))
+        assertEquals(setOf("a"), out.completeExtras)
+    }
+
+    @Test fun trimmedExtrasAreNotCurrentButWhatWeHeldIsKeptOnScreen() {
+        val held = HostState(
+            activity = mapOf("a" to listOf(act(1))),
+            commands = mapOf("a" to listOf(cmd)),
+            commandsResolved = mapOf("a" to true),
+            completeExtras = setOf("a"),
+        )
+        val out = reduceHostFrame(
+            held,
+            ServerFrame.Snapshot(
+                logs = mapOf("a" to emptyList(), "b" to emptyList()),
+                activity = mapOf("b" to listOf(act(2))),
+                partialExtras = listOf("a"),
+            ),
+        )
+        assertEquals(setOf("b"), out.completeExtras)
+        assertEquals(listOf(act(1)), out.activity["a"])
+        assertEquals(listOf(cmd), out.commands["a"])
+        assertEquals(true, out.commandsResolved["a"])
+        assertEquals(listOf(act(2)), out.activity["b"])
+    }
+
+    @Test fun sessionRemovedForgetsCurrentExtras() {
+        val out = reduceHostFrame(HostState(completeExtras = setOf("a")), ServerFrame.SessionRemoved(id = "a"))
+        assertFalse("a" in out.completeExtras)
+    }
+
+    @Test fun fetchedActivityKeepsLiveAppendsNewerThanIt() {
+        assertEquals(
+            listOf(act(1), act(2), act(3)),
+            mergeFetchedActivity(listOf(act(1), act(2)), listOf(act(2), act(3))),
+        )
+        assertEquals(listOf(act(4)), mergeFetchedActivity(emptyList(), listOf(act(4))))
     }
 }

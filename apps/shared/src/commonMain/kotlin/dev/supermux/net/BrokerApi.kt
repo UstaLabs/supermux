@@ -2443,6 +2443,11 @@ class BrokerApi(
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         getJson("$httpBase/sessions/$sessionId/messages")
 
+    /** GET /sessions/<id>/chat-extras — an open chat's activity + slash commands, which a
+     *  `trimExtras` snapshot leaves out for chats that were not on screen. */
+    suspend fun chatExtras(sessionId: String): ChatExtras =
+        getJson("$httpBase/sessions/$sessionId/chat-extras")
+
     /** GET /projects → known project working directories (absolute paths). */
     suspend fun listProjects(): List<String> =
         getJson<ProjectsResponse>("$httpBase/projects").projects.map { it.path }
@@ -2743,3 +2748,11 @@ class BrokerApi(
     @OptIn(ExperimentalEncodingApi::class)
     private fun decodeBase64(s: String): ByteArray = Base64.decode(s)
 }
+
+/** Body of GET /sessions/<id>/chat-extras. */
+@Serializable
+data class ChatExtras(
+    val activity: List<dev.supermux.proto.ActivityEvent> = emptyList(),
+    val commands: List<dev.supermux.proto.SlashCommand> = emptyList(),
+    val commandsResolved: Boolean = false,
+)

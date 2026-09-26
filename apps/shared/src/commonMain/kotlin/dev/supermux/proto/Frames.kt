@@ -310,6 +310,11 @@ sealed interface ServerFrame {
          * ignores `logTail` (every log is the full page).
          */
         val partialLogs: List<String>? = null,
+        /**
+         * Sessions the snapshot sent without [activity] / [commands] (the `subscribe` asked for
+         * `trimExtras`); fetched on chat open. Null from a broker that ignores `trimExtras`.
+         */
+        val partialExtras: List<String>? = null,
     ) : ServerFrame
 
     /**

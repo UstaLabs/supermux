@@ -111,6 +111,7 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -428,7 +429,7 @@ class HostStore(
                 lastSentViewing = null
                 sendViewingIfChanged()
                 refreshAgentModels()
-                if (!frame.partialLogs.isNullOrEmpty()) prefetchRecentLogs()
+                if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
             }
             ServerFrame.AgentModelsChanged -> refreshAgentModels()
             is ServerFrame.SessionRemoved -> {
@@ -1548,46 +1549,74 @@ class HostStore(
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         runApi("archivedLogs") { api.archivedLogs(sessionId) } ?: emptyList()
 
-    /** Sessions whose history fetch is in flight, so a chat pane and the shell asking for the same
+    /** Sessions whose chat fetch is in flight, so a chat pane and the shell asking for the same
      *  session at once make one request. */
     private val logFetches = MutableStateFlow<Set<String>>(emptySet())
     private var prefetchJob: Job? = null
 
+    /** Holds everything an open chat shows: the full history page and its activity/commands. */
+    private fun chatLoaded(st: HostState, id: String) = id in st.completeLogs && id in st.completeExtras
+
     /**
-     * Fetch a session's history unless we already hold the full page ([HostState.completeLogs]).
-     * The snapshot only carries a short tail for sessions that were not on screen at connect, and
-     * a session resumed from archive arrives via SessionAdded with no history at all; opening its
-     * chat calls this. Web/iOS parity: ChatView.loadMessages / BrokerSession.ensureMessagesLoaded
-     * (GET /sessions/:id/messages).
+     * Fetch what a chat needs that we don't already hold: its history unless we have the full
+     * page ([HostState.completeLogs]), its activity + slash commands unless they are current
+     * ([HostState.completeExtras]). A trimmed snapshot carries neither for sessions that were not
+     * on screen at connect, and a session resumed from archive arrives via SessionAdded with no
+     * history at all; opening its chat calls this. Web/iOS parity: ChatView.loadMessages /
+     * BrokerSession.ensureMessagesLoaded (GET /sessions/:id/messages).
      */
     fun ensureMessagesLoaded(sessionId: String) {
-        stateScope.launch { loadFullLog(sessionId) }
+        stateScope.launch { loadChat(sessionId) }
     }
 
-    private suspend fun loadFullLog(sessionId: String) {
-        if (sessionId in _state.value.completeLogs) return
+    private suspend fun loadChat(sessionId: String) {
+        val st = _state.value
+        if (chatLoaded(st, sessionId)) return
         if (sessionId in logFetches.getAndUpdate { it + sessionId }) return
         try {
-            val fetched = runApi("loadFullLog") { api.archivedLogs(sessionId) } ?: return
-            // Live MessageAppends / optimistic sends may have landed while the fetch was in flight.
-            _state.update {
-                it.copy(
-                    messages = it.messages + (sessionId to mergeFetchedLog(fetched, it.messages[sessionId].orEmpty())),
-                    completeLogs = it.completeLogs + sessionId,
-                )
+            coroutineScope {
+                if (sessionId !in st.completeLogs) launch { loadFullLog(sessionId) }
+                if (sessionId !in st.completeExtras) launch { loadExtras(sessionId) }
             }
         } finally {
             logFetches.update { it - sessionId }
         }
     }
 
+    private suspend fun loadFullLog(sessionId: String) {
+        val fetched = runApi("loadFullLog") { api.archivedLogs(sessionId) } ?: return
+        // Live MessageAppends / optimistic sends may have landed while the fetch was in flight.
+        _state.update {
+            it.copy(
+                messages = it.messages + (sessionId to mergeFetchedLog(fetched, it.messages[sessionId].orEmpty())),
+                completeLogs = it.completeLogs + sessionId,
+            )
+        }
+    }
+
+    private suspend fun loadExtras(sessionId: String) {
+        val fetched = runApi("loadExtras") { api.chatExtras(sessionId) } ?: return
+        _state.update {
+            it.copy(
+                activity = it.activity +
+                    (sessionId to mergeFetchedActivity(fetched.activity, it.activity[sessionId].orEmpty())),
+                commands = it.commands + (sessionId to fetched.commands),
+                commandsResolved = it.commandsResolved + (sessionId to fetched.commandsResolved),
+                completeExtras = it.completeExtras + sessionId,
+            )
+        }
+    }
+
     /**
-     * After a snapshot that trimmed logs, quietly load the few most recently active sessions so
-     * switching to one of them is instant. One at a time, behind whatever the UI asked for first.
-     * The most recent N overall, minus those already loaded — NOT the next N unloaded ones, or
-     * every reconnect would warm four more sessions until the whole fleet was fetched.
+     * After a trimmed snapshot: reload the chats on screen whose extras it left out (opened in
+     * the moment between our `subscribe` and its answer), then quietly load the few most
+     * recently active sessions so switching to one of them is instant — one at a time, behind
+     * whatever the UI asked for first. The most recent N overall, minus those already loaded —
+     * NOT the next N unloaded ones, or every reconnect would warm four more sessions until the
+     * whole fleet was fetched.
      */
     private fun prefetchRecentLogs() {
+        for (id in viewingSessionIds) if (!chatLoaded(_state.value, id)) ensureMessagesLoaded(id)
         prefetchJob?.cancel()
         prefetchJob = stateScope.launch {
             delay(PREFETCH_DELAY_MS)
@@ -1596,8 +1625,8 @@ class HostStore(
                 .filter { (_, log) -> log.isNotEmpty() }
                 .sortedByDescending { (_, log) -> log.last().ts }
                 .take(PREFETCH_SESSIONS)
-                .filter { (id, _) -> id !in st.completeLogs }
-            for ((id, _) in recent) loadFullLog(id)
+                .filter { (id, _) -> !chatLoaded(st, id) }
+            for ((id, _) in recent) loadChat(id)
         }
     }
 
@@ -2278,12 +2307,16 @@ private const val PREFETCH_DELAY_MS = 1_000L
 internal const val SNAPSHOT_LOG_TAIL = 1
 
 /**
- * The `subscribe` frame: full logs only for the chats on screen ([fullLogs]), a
- * [SNAPSHOT_LOG_TAIL]-entry tail for every other session. A broker that predates `logTail`
- * ignores both fields and sends full logs.
+ * The `subscribe` frame: full logs, activity and slash commands only for the chats on screen
+ * ([fullLogs]); a [SNAPSHOT_LOG_TAIL]-entry tail and nothing else for every other session; and
+ * archived workspaces without their views/layout. A broker that predates these fields ignores
+ * them and sends everything.
  */
 internal fun subscribeFrameJson(fullLogs: Collection<String>): String = buildJsonObject {
     put("type", "subscribe")
     put("logTail", SNAPSHOT_LOG_TAIL)
     put("fullLogs", JsonArray(fullLogs.distinct().map(::JsonPrimitive)))
+    // Activity + slash commands only for [fullLogs] too; archived workspaces without views/layout.
+    put("trimExtras", true)
+    put("slimArchived", true)
 }.toString()

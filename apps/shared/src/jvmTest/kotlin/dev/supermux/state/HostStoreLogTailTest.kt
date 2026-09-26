@@ -47,7 +47,11 @@ class HostStoreLogTailTest {
         val engine = MockEngine { req ->
             // Only history fetches: a snapshot also refreshes the launcher's model catalog.
             if (req.url.encodedPath.startsWith("/sessions/")) fetched.add(req.url.encodedPath)
-            val body = """[{"id":"1","ts":"1","direction":"outbound"},{"id":"2","ts":"2","direction":"outbound"}]"""
+            val body = if (req.url.encodedPath.endsWith("/chat-extras")) {
+                """{"activity":[{"ts":"1","kind":"tool","seq":7}],"commands":[{"id":"c","family":"agent","name":"review"}],"commandsResolved":true}"""
+            } else {
+                """[{"id":"1","ts":"1","direction":"outbound"},{"id":"2","ts":"2","direction":"outbound"}]"""
+            }
             respond(ByteReadChannel(body), status, headersOf(HttpHeaders.ContentType, "application/json"))
         }
         val scope = TestScope(UnconfinedTestDispatcher())
@@ -132,10 +136,44 @@ class HostStoreLogTailTest {
         assertTrue(h.fetched.isEmpty(), "unexpected fetches: ${h.fetched}")
     }
 
+    @Test fun openingATrimmedChatAlsoFetchesItsActivityAndCommands() {
+        val h = harness()
+        h.app.reduce(
+            ServerFrame.Snapshot(
+                logs = mapOf("a" to listOf(e("2"))),
+                partialLogs = listOf("a"),
+                partialExtras = listOf("a"),
+            ),
+        )
+
+        h.app.ensureMessagesLoaded("a")
+        h.awaitState { "a" in it.completeLogs && "a" in it.completeExtras }
+
+        assertEquals(setOf("/sessions/a/messages", "/sessions/a/chat-extras"), h.fetched.toSet())
+        val st = h.app.state.value
+        assertEquals(listOf(7), st.activity["a"]?.map { it.seq })
+        assertEquals(listOf("review"), st.commands["a"]?.map { it.name })
+        assertEquals(true, st.commandsResolved["a"])
+    }
+
+    @Test fun aChatWithItsHistoryButNotItsExtrasFetchesOnlyTheExtras() {
+        val h = harness()
+        h.app.reduce(
+            ServerFrame.Snapshot(logs = mapOf("a" to listOf(e("2"))), partialLogs = emptyList(), partialExtras = listOf("a")),
+        )
+
+        h.app.ensureMessagesLoaded("a")
+        h.awaitState { "a" in it.completeExtras }
+
+        assertEquals(listOf("/sessions/a/chat-extras"), h.fetched.toList())
+    }
+
     @Test fun subscribeAsksForTailsExceptTheChatsOnScreen() {
         val frame = Json.parseToJsonElement(subscribeFrameJson(listOf("a", "b", "a"))).jsonObject
         assertEquals("subscribe", frame["type"]!!.jsonPrimitive.content)
         assertEquals(1, frame["logTail"]!!.jsonPrimitive.int)
         assertEquals(listOf("a", "b"), frame["fullLogs"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals("true", frame["trimExtras"]!!.jsonPrimitive.content)
+        assertEquals("true", frame["slimArchived"]!!.jsonPrimitive.content)
     }
 }

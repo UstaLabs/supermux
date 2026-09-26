@@ -1,5 +1,6 @@
 package dev.supermux.state
 
+import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ServerFrame
@@ -32,11 +33,12 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             projectCatalogKnown = catalogKnown,
             messages = snapshotMessages(state, frame),
             completeLogs = snapshotCompleteLogs(state, frame),
-            activity = frame.activity,
+            activity = frame.activity + keptExtras(state.activity, frame),
+            completeExtras = frame.partialExtras?.let { frame.logs.keys - it.toSet() } ?: frame.logs.keys,
             bgTasks = frame.bgTasks,
             agentState = frame.agentState,
-            commands = frame.commands,
-            commandsResolved = frame.commandsResolved,
+            commands = frame.commands + keptExtras(state.commands, frame),
+            commandsResolved = frame.commandsResolved + keptExtras(state.commandsResolved, frame),
             lastRead = lastRead,
             finishJobs = frame.sessions
                 .mapNotNull { s -> s.finish_job?.let { s.id to it } }
@@ -80,7 +82,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         // session (a dead badge on a live agent) until the agent next changed state.
         val hadAgent = state.agentState.containsKey(frame.id) || state.agentErrors.containsKey(frame.id)
         if (state.sessions.none { it.id == frame.id } && !state.bgTasks.containsKey(frame.id) && !hadAgent &&
-            frame.id !in state.completeLogs
+            frame.id !in state.completeLogs && frame.id !in state.completeExtras
         ) {
             state
         } else {
@@ -90,6 +92,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 agentState = state.agentState - frame.id,
                 agentErrors = state.agentErrors - frame.id,
                 completeLogs = state.completeLogs - frame.id,
+                completeExtras = state.completeExtras - frame.id,
             )
         }
     }
@@ -283,6 +286,24 @@ private fun snapshotMessages(state: HostState, frame: ServerFrame.Snapshot): Map
 private fun snapshotCompleteLogs(state: HostState, frame: ServerFrame.Snapshot): Set<String> {
     val partial = frame.partialLogs?.toSet() ?: return frame.logs.keys
     return frame.logs.filter { (id, log) -> id !in partial || keepsLoadedLog(state, id, log) }.keys
+}
+
+/**
+ * What we already held for sessions a trimmed snapshot sent without extras — shown (possibly a
+ * little stale) until the chat's own fetch replaces it, so an open chat never blanks on reconnect.
+ */
+private fun <V> keptExtras(held: Map<String, V>, frame: ServerFrame.Snapshot): Map<String, V> {
+    val trimmed = frame.partialExtras ?: return emptyMap()
+    return trimmed.filter { it in frame.logs && it in held }.associateWith { held.getValue(it) }
+}
+
+/**
+ * Fetched activity plus live `activity_append`s that landed while the fetch was in flight —
+ * those carry a higher broker `seq` than anything in the fetched list.
+ */
+fun mergeFetchedActivity(fetched: List<ActivityEvent>, current: List<ActivityEvent>): List<ActivityEvent> {
+    val newest = fetched.mapNotNull { it.seq }.maxOrNull() ?: return if (fetched.isEmpty()) current else fetched
+    return fetched + current.filter { (it.seq ?: Int.MIN_VALUE) > newest }
 }
 
 /**

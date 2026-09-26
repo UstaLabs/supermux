@@ -1283,6 +1283,11 @@ export class WebChannel implements Channel {
       const logTail = Number.isInteger(frame.logTail) && frame.logTail >= 1 ? frame.logTail as number : undefined
       const fullLogs = new Set<string>(Array.isArray(frame.fullLogs) ? frame.fullLogs.filter((x: unknown) => typeof x === "string") : [])
       const partialLogs: string[] = []
+      // `trimExtras` (with `logTail`): activity and slash commands only matter inside an open
+      // chat, so sessions outside `fullLogs` get neither; the client loads them over
+      // GET /sessions/:id/chat-extras when the chat opens. `partialExtras` names those sessions.
+      const trimExtras = logTail !== undefined && frame.trimExtras === true
+      const partialExtras: string[] = []
       for (const s of sessions) {
         const sessionKey = s.id ?? s.name
         if (logTail !== undefined && !fullLogs.has(sessionKey)) {
@@ -1292,22 +1297,32 @@ export class WebChannel implements Channel {
         } else {
           logs[sessionKey] = this.opts.getSessionLog(sessionKey)
         }
-        activity[sessionKey] = this.opts.getSessionActivity?.(sessionKey) ?? []
         bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
-        commands[sessionKey] = this.opts.getSessionCommands?.(sessionKey) ?? []
-        commandsResolved[sessionKey] = this.opts.getSessionCommandsResolved?.(sessionKey) ?? false
+        if (trimExtras && !fullLogs.has(sessionKey)) {
+          partialExtras.push(sessionKey)
+        } else {
+          activity[sessionKey] = this.opts.getSessionActivity?.(sessionKey) ?? []
+          commands[sessionKey] = this.opts.getSessionCommands?.(sessionKey) ?? []
+          commandsResolved[sessionKey] = this.opts.getSessionCommandsResolved?.(sessionKey) ?? false
+        }
       }
       const proxies = this.opts.listProxies?.() ?? []
       const displays = this.opts.listDisplays?.() ?? []
       const workspaces = this.opts.listWorkspaces?.() ?? []
-      const archivedWorkspaces = this.opts.listArchivedWorkspaces?.() ?? []
+      // `slimArchived`: an archived workspace's views and layout are only needed once it is
+      // restored, and restoring sends the full record (`workspace_added`). ~40% of the list.
+      const archivedWorkspaces = (this.opts.listArchivedWorkspaces?.() ?? []).map((w) => {
+        if (frame.slimArchived !== true) return w
+        const { views: _views, layout: _layout, ...rest } = w as Record<string, unknown>
+        return rest
+      })
       const projects = this.opts.listProjectCatalog?.() ?? []
       const projectMembership = this.opts.getProjectMembership?.() ?? {}
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, ...(logTail !== undefined ? { partialLogs } : {}) }))
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
       return
     }
     if (frame.type === "ping") {
@@ -2679,6 +2694,16 @@ export class WebChannel implements Channel {
         return { ...s, ...extras }
       })
       return this.json(enriched)
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/chat-extras$/)) {
+      // What an open chat needs beyond its messages; the snapshot leaves these out for chats
+      // that were not on screen (`trimExtras`).
+      const id = decodeURIComponent(path.split("/")[2]!)
+      return this.json({
+        activity: this.opts.getSessionActivity?.(id) ?? [],
+        commands: this.opts.getSessionCommands?.(id) ?? [],
+        commandsResolved: this.opts.getSessionCommandsResolved?.(id) ?? false,
+      })
     }
     if (method === "GET" && path.startsWith("/sessions/") && path.endsWith("/messages")) {
       const id = decodeURIComponent(path.split("/")[2]!)
