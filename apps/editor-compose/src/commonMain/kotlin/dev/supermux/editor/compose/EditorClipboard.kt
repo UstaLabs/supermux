@@ -38,8 +38,11 @@ interface EditorClipboard {
 fun rememberEditorClipboard(): EditorClipboard {
     @Suppress("DEPRECATION")
     val manager = LocalClipboardManager.current
-    return remember(manager) { ComposeEditorClipboard(manager) }
+    return remember(manager) { platformEditorClipboard(ComposeEditorClipboard(manager)) }
 }
+
+/** The platform's clipboard where Compose's is not enough (the web), else [compose]. */
+internal expect fun platformEditorClipboard(compose: EditorClipboard): EditorClipboard
 
 @Suppress("DEPRECATION")
 private class ComposeEditorClipboard(private val manager: ClipboardManager) : EditorClipboard {

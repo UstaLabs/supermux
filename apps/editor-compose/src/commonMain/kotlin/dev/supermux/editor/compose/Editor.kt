@@ -52,6 +52,20 @@ internal object EditorDefaults {
     const val BLINK_MILLIS = 530L
 }
 
+/** Whether an input session starts on any focus ([EditorController.inputOnAnyFocus]); tests switch it. */
+internal val LocalEditorInputOnAnyFocus = staticCompositionLocalOf { platformInputOnAnyFocus }
+
+/**
+ * Whether the hidden field keeps a semantics node (marked hideFromAccessibility, which Android's
+ * and the desktop's bridges honour, and which lets UI tests drive the real field through
+ * `hasSetTextAction()`), or has its semantics cleared ([platformClearsFieldSemantics]: iOS and the
+ * web ignore hideFromAccessibility and showed a second, unlabelled text element).
+ */
+internal val LocalEditorExposeField = staticCompositionLocalOf { !platformClearsFieldSemantics }
+
+/** Whether the surface's own text node is the screen reader's ([platformSurfaceText]). */
+internal val LocalEditorSurfaceText = staticCompositionLocalOf { platformSurfaceText }
+
 /** Tests turn the caret blink off, so a pixel check is not a coin toss. */
 internal val LocalEditorCursorBlink = staticCompositionLocalOf { true }
 
@@ -148,7 +162,13 @@ fun Editor(
     val keyboard = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
     val pointer = remember(controller, scope) { EditorPointer(controller, scope) }
+    val inputOnAnyFocus = LocalEditorInputOnAnyFocus.current
     SideEffect {
+        if (controller.inputOnAnyFocus != inputOnAnyFocus) {
+            controller.inputOnAnyFocus = inputOnAnyFocus
+            if (!controller.view.focused) controller.onBlur()
+        }
+        platformFieldLabel(label)
         controller.keyboard = keyboard
         view.clipboard = clipboard
         view.scope = scope
@@ -176,18 +196,19 @@ fun Editor(
             // preview reaches the keymap before the field could insert anything.
             .onFocusChanged {
                 view.focused = it.hasFocus
-                if (!it.hasFocus) { controller.handles = TouchHandles.NONE; controller.menuShown = false }
+                if (!it.hasFocus) { controller.handles = TouchHandles.NONE; controller.menuShown = false; controller.onBlur() }
             }
             .onPreviewKeyEvent { handleEditorKey(view, it, controller.composing) }
             // INSIDE the scrollables: this node sees the Main pass first and consumes what is a
             // selection (mouse presses and drags), leaving a finger's drag to scroll.
             .pointerInput(pointer) { pointer.handle(this) }
             .editorMagnifier { controller.magnifierAt }
-            .onGloballyPositioned { controller.coordinates = it }
-            .editorSemantics(controller, label, readOnly),
+            .onGloballyPositioned { controller.coordinates = it },
     ) {
         val paintHook by rememberUpdatedState(onPaint)
-        Canvas(Modifier.fillMaxSize()) {
+        // The text node is its own layout node, a child of the scroll node: sharing one node with
+        // `scrollable` made macOS map it to an AXScrollArea with no text.
+        Canvas(Modifier.fillMaxSize().then(if (LocalEditorSurfaceText.current) Modifier.editorSemantics(controller, label, readOnly) else Modifier)) {
             controller.paint(this)
             paintHook?.invoke()
         }
@@ -301,8 +322,42 @@ internal class EditorController(val view: EditorView, private val measurer: Text
      * would otherwise never come back (terminal-compose's lesson).
      */
     fun focusFromTouch() {
+        requestKeyboard()
         requestFocus()
         keyboard?.show()
+    }
+
+    /**
+     * Where an input session starts on ANY focus (desktop, web): true. The desktop has no soft
+     * keyboard and needs the session for its IME; the web needs it for its DOM text input (the
+     * TEXTAREA exists only while a session runs: without it there is no IME, no browser paste and
+     * no hardware-key fast path). On Android and iOS a session start raises the soft keyboard,
+     * so there only a touch (or `focus(showKeyboard = true)`) asks for one. Set from
+     * [LocalEditorInputOnAnyFocus].
+     */
+    var inputOnAnyFocus: Boolean = platformInputOnAnyFocus
+
+    /**
+     * The hidden field's `KeyboardOptions.showKeyboardOnFocus`. Compose's text field (ui 1.12)
+     * starts its input session on focus only when this is true, and the session is what raises the
+     * soft keyboard: `SoftwareKeyboardController.show()` alone does nothing for a
+     * `BasicTextField(TextFieldState)` (it goes to the legacy input service, which has no session).
+     * A change while focused restarts the session, so a touch flips it between `true` and `null`
+     * (both mean "show"): every tap brings back a keyboard the user dismissed. False after a blur,
+     * so a later mouse click or programmatic focus starts no session and raises nothing.
+     */
+    var keyboardOnFocus: Boolean? by mutableStateOf(platformInputOnAnyFocus)
+        private set
+
+    /** Ask for a soft keyboard now (a touch): see [keyboardOnFocus]. */
+    fun requestKeyboard() {
+        if (inputOnAnyFocus) { keyboardOnFocus = true; return }
+        keyboardOnFocus = if (keyboardOnFocus == true) null else true
+    }
+
+    /** The surface lost the focus: the next focus raises a keyboard only if a touch asks. */
+    fun onBlur() {
+        keyboardOnFocus = if (inputOnAnyFocus) true else false
     }
 
     var theme: EditorTheme? = null
@@ -542,6 +597,7 @@ internal class EditorController(val view: EditorView, private val measurer: Text
     }
 
     override fun focus(showKeyboard: Boolean): Boolean {
+        if (showKeyboard) requestKeyboard()
         val took = requestFocus()
         if (showKeyboard) keyboard?.show()
         return took

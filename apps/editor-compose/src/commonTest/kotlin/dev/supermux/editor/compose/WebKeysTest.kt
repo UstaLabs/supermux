@@ -123,3 +123,12 @@ class WebKeysTest {
         assertEquals("axb", v.state.doc.toString(), "the soft keyboard's key was typed by the fast path")
     }
 }
+
+class KeyLabelTest {
+    @Test fun modifiersAreLoggedByName() {
+        kotlin.test.assertEquals("Shift", keyLabel(androidx.compose.ui.input.key.Key.ShiftLeft))
+        kotlin.test.assertEquals("Meta", keyLabel(androidx.compose.ui.input.key.Key.MetaRight))
+        kotlin.test.assertEquals("ArrowLeft", keyLabel(androidx.compose.ui.input.key.Key.DirectionLeft))
+        kotlin.test.assertTrue(!keyLabel(androidx.compose.ui.input.key.Key.CtrlLeft).startsWith("Key code"))
+    }
+}

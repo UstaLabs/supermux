@@ -114,7 +114,11 @@ private fun PlatformMenu(c: EditorController, toolbar: TextToolbar, items: List<
     SideEffect {
         if (anchor != null) {
             val co = c.coordinates?.takeIf { it.isAttached }
-            val rect = if (co == null) anchor else Rect(co.localToRoot(anchor.topLeft), co.localToRoot(anchor.bottomRight))
+            // Down past the touch handles: iOS's edit menu goes below the rect when it likes, and
+            // must not cover them (seen on the simulator).
+            val below = if (c.handles != TouchHandles.NONE) (EditorTouch.RADIUS_DP * 2 + 4) * c.densityValue else 0f
+            val padded = Rect(anchor.left, anchor.top, anchor.right, anchor.bottom + below)
+            val rect = if (co == null) padded else Rect(co.localToRoot(padded.topLeft), co.localToRoot(padded.bottomRight))
             val key = items to rect
             if (shown[0] != key) {
                 shown[0] = key

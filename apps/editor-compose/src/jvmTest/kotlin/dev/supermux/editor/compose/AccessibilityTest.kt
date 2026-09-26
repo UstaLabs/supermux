@@ -21,7 +21,8 @@ import kotlin.test.assertTrue
 class AccessibilityTest {
     private val text = (0 until 400).joinToString("\n") { "line $it text" }
 
-    private fun androidx.compose.ui.test.ComposeUiTest.editor(): SemanticsNode = onNodeWithTag(EDITOR_TAG).fetchSemanticsNode()
+    private fun androidx.compose.ui.test.ComposeUiTest.editor(): SemanticsNode =
+        onNode(androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText) and !hasSetTextAction()).fetchSemanticsNode()
     private fun SemanticsNode.exposed(): String = assertNotNull(config.getOrNull(SemanticsProperties.EditableText)).text
 
     @Test fun theEditorIsOneEditableNodeWithTheVisibleLinesOnly() = editorTest(EditorState.create(text)) { f ->
@@ -37,9 +38,18 @@ class AccessibilityTest {
         assertFalse(exposed.lines().any { it.trim().toIntOrNull() != null }, "line numbers exposed")
     }
 
-    @Test fun theHiddenFieldIsHiddenFromScreenReaders() = editorTest(EditorState.create(text)) { _ ->
-        val field = onNode(hasSetTextAction()).fetchSemanticsNode()
-        assertTrue(field.config.contains(SemanticsProperties.HideFromAccessibility), "the IME field is visible to screen readers")
+    @Test fun theHiddenFieldIsNotInTheTreeAtAll() = editorTest(EditorState.create(text), exposeField = false) { _ ->
+        // iOS and the web ignore hideFromAccessibility: the field's semantics are cleared instead.
+        assertTrue(onAllNodes(hasSetTextAction()).fetchSemanticsNodes().isEmpty(), "the IME field is in the semantics tree")
+        val editable = onAllNodes(androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)).fetchSemanticsNodes()
+        assertEquals(1, editable.size, "exactly one editable text element")
+    }
+
+    @Test fun theTextNodeIsNotTheScrollNode() = editorTest(EditorState.create(text)) { _ ->
+        // macOS maps a node with scroll semantics to an AXScrollArea and drops its text.
+        val node = editor()
+        assertFalse(node.config.contains(SemanticsActions.ScrollBy), "the text node is the scroll node")
+        assertTrue(node.parent?.config?.contains(SemanticsActions.ScrollBy) == true, "the scroll node is not its parent")
     }
 
     @Test fun theSelectionAndACaretMoveAreExposed() = editorTest(EditorState.create(text, EditorSelection.single(2, 6))) { f ->
@@ -88,7 +98,7 @@ class AccessibilityTest {
         assertTrue(f.view.state.doc.toString().startsWith("line 0 tZ\n"), f.view.state.doc.toString().take(12))
     }
 
-    @Test fun theLabelIsTheContentDescriptionAndReadOnlyIsNotEditable() = editorTest(EditorState.create(text), readOnly = true) { _ ->
+    @Test fun theLabelIsTheContentDescriptionAndReadOnlyIsNotEditable() = editorTest(EditorState.create(text), readOnly = true, exposeField = false) { _ ->
         val node = editor()
         assertFalse(node.config.getOrNull(SemanticsProperties.IsEditable) == true)
         assertTrue(node.config.getOrNull(SemanticsActions.InsertTextAtCursor) == null, "typing offered while read-only")

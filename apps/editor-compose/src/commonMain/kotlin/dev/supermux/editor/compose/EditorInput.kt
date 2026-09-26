@@ -15,6 +15,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.key.Key
@@ -306,6 +307,22 @@ internal class FieldSync(
         return null
     }
 
+    /**
+     * The web's text insertion, taken from the browser before it edits its TEXTAREA (`beforeinput`
+     * insertText / insertReplacementText): [data] replaces the field's `[start, end)` as the DOM
+     * holds it, as if the field had made that edit (autocorrect and several cursors included).
+     * Returns what the field must now hold (always: it did not change itself).
+     */
+    fun onDomInsert(start: Int, end: Int, data: String): FieldText {
+        val f = shown ?: current()
+        val a = start.coerceIn(0, f.text.length)
+        val b = end.coerceIn(a, f.text.length)
+        val text = f.text.substring(0, a) + data + f.text.substring(b)
+        val caret = a + data.length
+        shown = FieldText(f.text, a, b) // the edit covers the DOM's selection
+        return onFieldChange(text, caret, caret, null) ?: show(current())
+    }
+
     /** After every transaction: null while the field still shows the document; else what it must show. */
     fun onStateChange(): FieldText? {
         val w = window
@@ -412,8 +429,8 @@ private val KEY_NAMES: Map<Key, String> = buildMap {
 internal fun handleEditorKey(view: EditorView, event: KeyEvent, composing: Boolean): Boolean {
     if (event.type != KeyEventType.KeyDown) return false
     val log = view.onKeyPath
-    if (composing) { log?.invoke(keyName(event.key) ?: event.key.toString(), KeyPath.IME); return false }
-    val name = keyName(event.key) ?: run { log?.invoke(event.key.toString(), KeyPath.FIELD); return false }
+    if (composing) { log?.invoke(keyLabel(event.key), KeyPath.IME); return false }
+    val name = keyName(event.key) ?: run { log?.invoke(keyLabel(event.key), KeyPath.FIELD); return false }
     val chord = KeyChord(name, ctrl = event.isCtrlPressed, alt = event.isAltPressed, shift = event.isShiftPressed, meta = event.isMetaPressed)
     val apple = isApplePlatform
     val cp = event.utf16CodePoint
@@ -484,6 +501,17 @@ internal fun runBindings(view: EditorView, chord: KeyChord, apple: Boolean, altG
     for (b in defaultBindings(apple)) if (matches(b) && b.command.run(view)) return true
     return false
 }
+
+/** A key as the debug log names it: its chord name, a modifier's name, else its code. */
+internal fun keyLabel(key: Key): String = keyName(key) ?: OTHER_KEY_LABELS[key] ?: "key 0x${key.keyCode.toString(16)}"
+
+private val OTHER_KEY_LABELS: Map<Key, String> = mapOf(
+    Key.ShiftLeft to "Shift", Key.ShiftRight to "Shift", Key.CtrlLeft to "Ctrl", Key.CtrlRight to "Ctrl",
+    Key.AltLeft to "Alt", Key.AltRight to "Alt", Key.MetaLeft to "Meta", Key.MetaRight to "Meta",
+    Key.CapsLock to "CapsLock", Key.Function to "Fn", Key.NumLock to "NumLock", Key.ScrollLock to "ScrollLock",
+    Key.Back to "Back", Key.Menu to "Menu", Key.VolumeUp to "VolumeUp", Key.VolumeDown to "VolumeDown",
+    Key.LanguageSwitch to "LanguageSwitch", Key.Unknown to "Unknown",
+)
 
 /** A key's modifier bits for [webKeyDown]. */
 internal object KeyFlags {
@@ -593,6 +621,7 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
                 pending[0]?.let { u ->
                     if (!asCharSequence().contentEquals(u.text)) replace(0, length, u.text)
                     selection = TextRange(u.selStart, u.selEnd)
+                    syncPlatformField(u)
                 }
             } finally {
                 active[0] = false
@@ -604,9 +633,12 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
         val write = { u: FieldText ->
             val (pending, active) = inEdit
             if (active[0]) pending[0] = u
-            else field.edit {
-                if (!asCharSequence().contentEquals(u.text)) replace(0, length, u.text)
-                selection = TextRange(u.selStart, u.selEnd)
+            else {
+                field.edit {
+                    if (!asCharSequence().contentEquals(u.text)) replace(0, length, u.text)
+                    selection = TextRange(u.selStart, u.selEnd)
+                }
+                if (!controller.composing) syncPlatformField(u)
             }
         }
         controller.fieldWriter = write
@@ -626,19 +658,23 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
                     if (!asCharSequence().contentEquals(u.text)) replace(0, length, u.text)
                     selection = TextRange(u.selStart, u.selEnd)
                 }
+                if (comp == null) syncPlatformField(u)
             }
             controller.composition = sync.composition
         }
     }
+    // A screen reader reads the SURFACE (its visible text, see editorSemantics): this field holds
+    // only a window of text around the caret. Cleared, not merely hidden: iOS and the web ignore
+    // hideFromAccessibility and showed it as a second, unlabelled text element. The IME does not
+    // use semantics; it stays the input target.
+    val expose = LocalEditorExposeField.current
+    Box(if (expose) Modifier.semantics { hideFromAccessibility() } else Modifier.clearAndSetSemantics { }) {
     BasicTextField(
         state = field,
         modifier = Modifier
             .offset { controller.caretRectOnScreen(controller.view.state.selection.main.head).let { IntOffset(it.left.toInt(), it.top.toInt()) } }
             .size(1.dp)
-            .focusRequester(controller.focusRequester)
-            // A screen reader reads the SURFACE (its visible text, see editorSemantics): this field
-            // holds only a window of text around the caret. It stays the IME's target.
-            .semantics { hideFromAccessibility() },
+            .focusRequester(controller.focusRequester),
         readOnly = readOnly,
         inputTransformation = transformation,
         keyboardOptions = KeyboardOptions(
@@ -646,11 +682,12 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
             capitalization = KeyboardCapitalization.None,
             keyboardType = KeyboardType.Text,
             imeAction = ImeAction.None,
-            // Only a touch raises the keyboard (focusFromTouch shows it); a host's programmatic
-            // focus, a mouse click or a tab switch never does.
-            showKeyboardOnFocus = false,
+            // Only a touch raises the keyboard on Android and iOS; a host's programmatic focus, a
+            // mouse click or a tab switch never does (see EditorController.keyboardOnFocus).
+            showKeyboardOnFocus = controller.keyboardOnFocus,
         ),
         lineLimits = TextFieldLineLimits.MultiLine(1, 1),
         decorator = { Box(Modifier.size(1.dp)) },
     )
+    }
 }

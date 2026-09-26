@@ -155,6 +155,20 @@ class FieldSyncTest {
         assertNull(h.transactions.last().annotation(EditorAnnotations.imeJoinPrevious))
     }
 
+    @Test fun aDomInsertLandsAtTheDomSelection() {
+        val h = Harness("hello world", 5)
+        h.field = h.sync.onDomInsert(5, 5, ",")
+        assertEquals("hello, world", h.doc)
+        assertEquals(6, h.head)
+        h.assertInSync()
+        // A replacement of the DOM's selection (an autocorrect): one change.
+        h.field = h.sync.onDomInsert(7, 12, "there")
+        assertEquals("hello, there", h.doc)
+        assertEquals(12, h.head)
+        assertTrue(h.transactions.all { it.isUserEvent("input") })
+        h.assertInSync()
+    }
+
     @Test fun plainTypingIsNeverJoined() {
         val h = Harness("x ", 2)
         h.field = FieldText("x a", 3, 3)

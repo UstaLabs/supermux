@@ -29,3 +29,28 @@ internal expect fun androidx.compose.ui.Modifier.editorMagnifier(center: () -> a
  * the surface draws its own (desktop, web).
  */
 internal expect val platformTextToolbarPreferred: Boolean
+
+/** [EditorController.inputOnAnyFocus]'s platform default. */
+internal expect val platformInputOnAnyFocus: Boolean
+
+/**
+ * The web only: make the browser's own text input (Compose's TEXTAREA) hold [f]'s text and
+ * selection, so IME and `insertText` land at the editor's caret, not where the DOM caret was left.
+ * Elsewhere nothing (the platform input connection follows the field state).
+ */
+internal expect fun syncPlatformField(f: FieldText)
+
+/**
+ * Where the surface's own text node is what a screen reader reads (desktop, Android, iOS). On the
+ * web the browser's focused TEXTAREA is always in the accessibility tree (Chrome refuses
+ * aria-hidden on a focused element), so it IS the editor's one text box there: labelled with the
+ * editor's label ([platformFieldLabel]), holding the lines around the caret, its selection kept on
+ * the editor's caret; the surface then exposes no second one.
+ */
+internal expect val platformSurfaceText: Boolean
+
+/** The web: the TEXTAREA's accessible name. Elsewhere nothing. */
+internal expect fun platformFieldLabel(label: String)
+
+/** iOS and the web: the hidden field's semantics are cleared, not merely hidden (see LocalEditorExposeField). */
+internal expect val platformClearsFieldSemantics: Boolean

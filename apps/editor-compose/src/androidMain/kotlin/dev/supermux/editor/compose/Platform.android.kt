@@ -11,3 +11,15 @@ internal actual fun androidx.compose.ui.Modifier.editorMagnifier(center: () -> a
     this.then(androidx.compose.ui.Modifier.magnifier(sourceCenter = { center() }))
 
 internal actual val platformTextToolbarPreferred: Boolean = true
+
+internal actual val platformInputOnAnyFocus: Boolean = false
+
+internal actual fun syncPlatformField(f: FieldText) {}
+
+internal actual fun platformEditorClipboard(compose: EditorClipboard): EditorClipboard = compose
+
+internal actual val platformSurfaceText: Boolean = true
+
+internal actual fun platformFieldLabel(label: String) {}
+
+internal actual val platformClearsFieldSemantics: Boolean = false
