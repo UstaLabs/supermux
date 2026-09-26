@@ -452,7 +452,21 @@ NativeBackend, SyntaxQuery, ...                   nativeBackedMain, unchanged
   the parse timeout: `performance.now()`). Exports: every `SES_API` function and
   `memory`, `_initialize` (a reactor: no `_start`).
 - **Threads**: none. The module is single-threaded wasm32-wasi; `ses_grammar.c`'s
-  mutex compiles to nothing under `__wasm__`.
+  mutex compiles to nothing under `__wasm__` without `_REENTRANT` (threaded wasm is an `#error`).
+- **Nothing throws into wasm.** An exception unwinding through wasm frames never
+  restores the C stack pointer, so the module would be corrupt from then on (1,055
+  throws from the read import were enough). Every import catches, records the failure
+  and answers with something the C side handles (end of text, a failed match, `EIO`);
+  after the call the Kotlin side throws `SyntaxException(CALLBACK)`. A chunk that does
+  not fit the scratch buffer is such a failure too, not the end of the text.
+- **A trap kills the runtime.** tree-sitter's default allocator `abort()`s when
+  `malloc` returns NULL (wasi-libc turns that into `unreachable`), and tree-sitter
+  cannot work with a NULL-returning allocator, so it is left as it is: any trap or
+  exception out of an export marks the runtime dead, and every later call fails at
+  once, before entering the module, with `SyntaxException(RUNTIME_DEAD)`. The syntax
+  worker then turns syntax off for its documents (`Syntax.isOff`); closing frees
+  nothing. A new runtime takes a page load (the loader keeps one per page).
+  `ses_wasm_debug_trap` exists for the tests of this.
 - **Vue's C++ scanner** compiles with `zig c++ -target wasm32-wasi -fno-exceptions`
   and links against zig's wasi libc++ with no changes: vue is fully highlighted on
   the web, like everywhere else.
@@ -462,28 +476,37 @@ NativeBackend, SyntaxQuery, ...                   nativeBackedMain, unchanged
   call per element.
 - **Tables**: bundled grammars (the core set) are inside the module. A code-only
   grammar's `<lang>.sesz` is fetched by `WasmBackend.ensureLanguage` from
-  `tablesUrl` (default: `editor-syntax/tables/` next to the wasm module) straight into
-  the module, and checked there against the SHA-256 compiled into its code, as on
-  native. `isReady` never blocks.
+  `tablesUrl` (default: `editor-syntax/tables/` next to the wasm module; 30 s timeout)
+  straight into the module, and checked there against the SHA-256 compiled into its
+  code, as on native. The fetched bytes are dropped whatever the answer: a refused blob
+  (`BAD_TABLES`) is fetched again next time. `isReady` never blocks. A second
+  `WasmBackend.load` with another module or tables URL fails and changes nothing.
 - **The worker shares the UI thread.** `SyntaxLimits.parseSliceMicros` is 8 ms on the
   web (50 ms natively), and `Highlighter.parseSuspending` gives the thread back
   (one `MessageChannel` task) between slices, before a layer's parse once a slice is
-  used up, and between finding and merging injections; the worker also yields before
-  its spans and its folds. Natively `platformSliceYield` is null and nothing changes.
-  Measured in headless Chrome on the Mac (`MainThreadTest`, a `MessageChannel`
-  ping-pong: the longest the thread was held), 10k lines:
+  used up, before a layer's injections are looked for, between injection query
+  windows (`INJECTION_WINDOW`, 32k units, on every platform: a match crossing a window
+  edge is kept once) and before merging them; the worker also yields before its spans
+  and its folds. After each yield a newer text cancels a stale parse at once. The parse
+  budget counts only the time spent working, not the time given away. Natively
+  `platformSliceYield` is null and nothing yields. Measured in headless Chrome on the
+  Mac (`MainThreadTest`, a `MessageChannel` ping-pong: the longest the thread was held),
+  10k lines:
 
-  | | first parse, longest hold | keystroke cycles, longest hold |
-  |---|---|---|
-  | Kotlin (asserted: <= 16 ms) | 9.1 ms (18.3 ms when the code itself is not compiled yet) | 4.5 ms |
-  | Markdown | 39.2 ms | 10.1 ms |
-  | Vue | 26.0 ms | 10.5 ms |
-  | PHP | 31.7 ms | 12.0 ms |
+  | | first parse (asserted <= 16 ms) | keystrokes (asserted <= 16 ms) | cold, fresh instance | cold page |
+  |---|---|---|---|---|
+  | Kotlin | 8.9 ms | 9.1 ms | 65.5 ms | 116.3 ms |
+  | Markdown | 9.4 ms | 10.1 ms | 68.4 ms | 69.4 ms |
+  | Vue | 8.1 ms | 10.5 ms | 26.5 ms | 28.5 ms |
+  | PHP | 8.8 ms | 11.6 ms | 34.0 ms | 35.5 ms |
 
-  **Over 16 ms, not yet fixed:** Markdown's, Vue's and PHP's first parse run the
-  host's injection query over the whole document in one C call (Markdown: 46 ms
-  alone). Splitting it into windows is future work; M2c found and fixed Markdown's 334 ms merge of 3.5k
-  injection sites (now hashed, on every platform) and a 25 ms long-line scan.
+  "Cold, fresh instance": a new wasm instance and backend, nothing warmed (the browser
+  has compiled the code already). "Cold page": that test alone in a fresh page. **Still
+  over 16 ms, cold only:** the longest hold is the first `spans`, which compiles the
+  language's highlights query: one `ts_query_new` call (Kotlin's: about 60 ms here) that
+  cannot be sliced, plus, in a cold page, the browser compiling the code on first use.
+  Compiling the queries ahead of the first document (while idle) would move it off
+  the first parse; not done yet.
 - **Memory**: wasm memory only grows. The Node test, which loads every bundled
   grammar and parses a 2 MB JSON document, ends at 273 MiB.
 
