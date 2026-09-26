@@ -56,6 +56,40 @@ class EditorView(initial: EditorState) : CommandTarget {
      */
     var readOnly: Boolean = false
 
+    /**
+     * The zoomed font size in sp, or null for the theme's own ([EditorTheme.fontSizeSp]). The zoom
+     * keys (`Mod +` / `Mod −` / `Mod 0`) and a two-finger pinch set it, within [EditorZoom.MIN] and
+     * [EditorZoom.MAX]; `Editor(onFontSize = …)` hears every change so the host can keep it. A host
+     * restoring a kept size sets it here.
+     */
+    var fontSize: Float? by mutableStateOf(null)
+
+    /** The theme's size (set by the surface): what [fontSize] null means, and `Mod 0` goes back to. */
+    internal var baseFontSize: Float = EditorZoom.DEFAULT
+
+    /** `Editor(onFontSize = …)`. */
+    internal var onFontSize: ((Float) -> Unit)? = null
+
+    /** The size the surface draws with now. */
+    val effectiveFontSize: Float get() = fontSize ?: baseFontSize
+
+    /**
+     * Zoom to [size] sp (clamped to [EditorZoom.MIN]..[EditorZoom.MAX]); [report] tells the host
+     * (a pinch reports once, when the fingers lift). Returns the size now shown.
+     */
+    fun zoomTo(size: Float, report: Boolean = true): Float {
+        val s = size.coerceIn(EditorZoom.MIN, EditorZoom.MAX)
+        if (s != effectiveFontSize) fontSize = s
+        if (report) onFontSize?.invoke(s)
+        return s
+    }
+
+    /** Back to the theme's size (`Mod 0`). */
+    fun resetZoom() {
+        fontSize = null
+        onFontSize?.invoke(baseFontSize)
+    }
+
     /** Where copy and cut put text and paste takes it from; set by the surface (`Editor(clipboard = …)`). */
     internal var clipboard: EditorClipboard? = null
 
@@ -262,3 +296,11 @@ fun rememberEditorView(initial: () -> EditorState): EditorView = remember { Edit
 /** `\r\n` and a lone `\r` as `\n`: the only line break inside the editor. */
 internal fun normalizeLineBreaks(text: String): String =
     if (text.indexOf('\r') < 0) text else text.replace("\r\n", "\n").replace('\r', '\n')
+
+/** The font zoom's limits (sp; a density-independent pixel, so "px" in the web editor's terms). */
+object EditorZoom {
+    const val MIN = 10f
+    const val MAX = 24f
+    /** [EditorTheme.fontSizeSp]'s default. */
+    const val DEFAULT = 13f
+}

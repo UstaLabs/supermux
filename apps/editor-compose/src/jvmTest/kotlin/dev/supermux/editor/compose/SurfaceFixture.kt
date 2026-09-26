@@ -47,6 +47,7 @@ internal fun editorTest(
     onViewport: (IntRange) -> Unit = {},
     onPaint: (() -> Unit)? = null,
     platformMenu: Boolean = false,
+    onFontSize: (Float) -> Unit = {},
     toolbar: androidx.compose.ui.platform.TextToolbar? = null,
     body: ComposeUiTest.(SurfaceFixture) -> Unit,
 ) = runComposeUiTest {
@@ -76,6 +77,7 @@ internal fun editorTest(
                     onViewport = onViewport,
                     onPaint = onPaint,
                     clipboard = clipboard,
+                    onFontSize = onFontSize,
                 )
             }
         }

@@ -60,6 +60,24 @@ object DefaultCommands {
     val selectPageUp = Command { t -> vertical(t, -1, extend = true, page = true) }
     val selectPageDown = Command { t -> vertical(t, 1, extend = true, page = true) }
 
+    /** One size up (`Mod +`), from a pinched size to the next whole one; at most [EditorZoom.MAX]. */
+    val zoomIn = Command { t ->
+        (t as? EditorView)?.let { it.zoomTo(kotlin.math.floor(it.effectiveFontSize + 0.001f) + 1f) }
+        true
+    }
+
+    /** One size down (`Mod −`); at least [EditorZoom.MIN]. */
+    val zoomOut = Command { t ->
+        (t as? EditorView)?.let { it.zoomTo(kotlin.math.ceil(it.effectiveFontSize - 0.001f) - 1f) }
+        true
+    }
+
+    /** The theme's size again (`Mod 0`). */
+    val zoomReset = Command { t ->
+        (t as? EditorView)?.resetZoom()
+        true
+    }
+
     val selectAll = Command { t ->
         t.dispatch(TransactionSpec(selection = EditorSelection.single(0, t.state.doc.length), userEvent = "select"))
         true
@@ -338,6 +356,15 @@ private fun buildDefaultBindings(apple: Boolean): List<KeyBinding> {
     bind("Shift-Enter", c.insertNewline)
     bind("Tab", c.insertTab)
     bind("Mod-a", c.selectAll)
+    // Font zoom: "=" is the "+" key without Shift on most layouts; "+" is a key of its own on others
+    // and on the number pad.
+    bind("Mod-=", c.zoomIn)
+    bind("Mod-Shift-=", c.zoomIn)
+    bind("Mod-+", c.zoomIn)
+    bind("Mod-Shift-+", c.zoomIn)
+    bind("Mod--", c.zoomOut)
+    bind("Mod-Shift--", c.zoomOut)
+    bind("Mod-0", c.zoomReset)
     // The editor's own clipboard commands: the hidden field would copy, cut and paste only its window.
     bind("Mod-c", c.copy)
     bind("Mod-x", c.cut)

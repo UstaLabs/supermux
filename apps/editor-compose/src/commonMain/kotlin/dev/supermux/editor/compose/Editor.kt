@@ -69,6 +69,8 @@ internal val LocalEditorCursorBlink = staticCompositionLocalOf { true }
  * @param clipboard where copy/cut put text and paste takes it from (the platform's by default).
  * @param onPaint called at the end of every paint of the surface (frame-time and edit-to-paint
  *   measurements). It runs inside the draw pass: keep it to taking a timestamp.
+ * @param onFontSize the font size (sp) after every zoom (`Mod +`/`Mod −`/`Mod 0`, a pinch once the
+ *   fingers lift), for the host to keep per app; give it back through [EditorView.fontSize].
  */
 @Composable
 fun Editor(
@@ -82,14 +84,21 @@ fun Editor(
     onPaint: (() -> Unit)? = null,
     clipboard: EditorClipboard = rememberEditorClipboard(),
     scrollState: EditorScrollState = view.defaultScrollState,
+    onFontSize: (Float) -> Unit = {},
 ) {
     // cacheSize = 0: the surface keeps its own bounded caches (LineLayouts).
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val density = LocalDensity.current
     val controller = remember(view, measurer, scrollState) { EditorController(view, measurer, scrollState) }
+    // The zoom is the view's (snapshot state): a change recomposes this with the theme at that size.
+    val zoomed = view.fontSize
+    val shownTheme = if (zoomed == null || zoomed == theme.fontSizeSp) theme else remember(theme, zoomed) { theme.copy(fontSizeSp = zoomed) }
+    val reportFontSize by rememberUpdatedState(onFontSize)
     SideEffect {
         view.readOnly = readOnly
-        controller.configure(theme, density, lineWrap, showLineNumbers)
+        view.baseFontSize = theme.fontSizeSp
+        view.onFontSize = { reportFontSize(it) }
+        controller.configure(shownTheme, density, lineWrap, showLineNumbers)
     }
     DisposableEffect(view, controller) {
         view.surface = controller
@@ -178,7 +187,7 @@ fun Editor(
             paintHook?.invoke()
         }
         EditorInputField(controller, readOnly)
-        EditorSelectionMenu(controller, readOnly, clipboard, theme)
+        EditorSelectionMenu(controller, readOnly, clipboard, shownTheme)
     }
 }
 
@@ -316,6 +325,13 @@ internal class EditorController(val view: EditorView, private val measurer: Text
     fun configure(theme: EditorTheme, density: Density, lineWrap: Boolean, showLineNumbers: Boolean) {
         val changed = theme != this.theme || density != this.density || lineWrap != this.lineWrap || showLineNumbers != this.showLineNumbers
         if (!changed) return
+        // A new font size (a zoom): the line at the top stays at the top, the same fraction of a
+        // line into it (anchored to the visible top line, not to a pixel offset).
+        val zoom = this.theme != null && theme.fontSizeSp != this.theme?.fontSizeSp && viewportSize.height > 0f &&
+            heights.lineCount == view.state.doc.lineCount && !scroll.shared
+        val keep = if (zoom) scrollPosition() else null
+        val oldLine = layouts.lineHeightPx
+        val oldCell = layouts.charWidthPx
         this.theme = theme
         this.density = density
         this.lineWrap = lineWrap
@@ -323,6 +339,11 @@ internal class EditorController(val view: EditorView, private val measurer: Text
         numberLayouts.clear()
         numberStyle = TextStyle(fontFamily = theme.fontFamily, fontSize = theme.fontSizeSp.sp, fontFeatureSettings = "liga 0, calt 0")
         relayout()
+        if (keep != null && oldLine > 0f) {
+            val lineRatio = layouts.lineHeightPx / oldLine
+            val cellRatio = if (oldCell > 0f) layouts.charWidthPx / oldCell else 1f
+            restoreScroll(EditorScrollPosition(keep.anchor, keep.offsetPx * lineRatio, keep.x * cellRatio))
+        }
     }
 
     /** Apply the current configuration and size to the layouts; a new geometry when it changed. */
@@ -502,7 +523,13 @@ internal class EditorController(val view: EditorView, private val measurer: Text
         view.pendingScroll = null
         val line = doc.lineIndexAt(position.anchor.coerceIn(0, doc.length))
         scroll.scrollTo(position.x, (heights.topD(line) + position.offsetPx).toFloat())
-        anchorValid = false
+        // The position IS the anchor: a line measured before the next paint (the hidden field lays
+        // out the caret's line while it is placed) moves the scroll with it instead of shifting
+        // the text under a stale pixel offset.
+        anchorPos = doc.lineStart(line)
+        anchorDelta = position.offsetPx
+        anchorScrollY = scroll.y
+        anchorValid = true
     }
 
     override fun focus(showKeyboard: Boolean): Boolean {

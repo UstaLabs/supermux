@@ -370,6 +370,7 @@ private val KEY_NAMES: Map<Key, String> = buildMap {
     put(Key.Minus, "-"); put(Key.Equals, "="); put(Key.LeftBracket, "["); put(Key.RightBracket, "]")
     put(Key.Backslash, "\\"); put(Key.Semicolon, ";"); put(Key.Apostrophe, "'"); put(Key.Grave, "`")
     put(Key.Comma, ","); put(Key.Period, "."); put(Key.Slash, "/")
+    put(Key.Plus, "+"); put(Key.NumPadAdd, "+"); put(Key.NumPadSubtract, "-")
 }
 
 /**
@@ -474,7 +475,7 @@ internal fun domKeyName(code: String): String? = when {
 private val DOM_KEY_NAMES = mapOf(
     "Space" to "Space", "Minus" to "-", "Equal" to "=", "BracketLeft" to "[", "BracketRight" to "]",
     "Backslash" to "\\", "Semicolon" to ";", "Quote" to "'", "Backquote" to "`", "Comma" to ",",
-    "Period" to ".", "Slash" to "/",
+    "Period" to ".", "Slash" to "/", "NumpadAdd" to "+", "NumpadSubtract" to "-",
 )
 
 // Never the hidden field's: its history and its clipboard know only its window. (The clipboard chords

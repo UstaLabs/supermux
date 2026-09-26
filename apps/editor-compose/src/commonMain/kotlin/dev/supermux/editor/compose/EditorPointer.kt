@@ -53,9 +53,13 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         var moved = false
     }
 
+    /** Two fingers zooming: their ids, how far apart they started, and the size then. */
+    private class Pinch(val a: Long, val b: Long, val startDistance: Float, val startSize: Float)
+
     private var drag: Drag? = null
     private var touch: TouchPress? = null
     private var handleDrag: HandleDrag? = null
+    private var pinch: Pinch? = null
     private var lastPointer = Offset.Zero
     private var autoScroll: Job? = null
     private var lastClickTime = 0L
@@ -80,6 +84,7 @@ internal class EditorPointer(private val c: EditorController, private val scope:
                     val c0 = event.changes.firstOrNull { it.id.value == pending.id }
                     if (c0 != null && c0.uptimeMillis - pending.downTime >= longPress && (c0.previousPosition - pending.down).getDistance() <= slop) fireLongPress(pending)
                 }
+                if (pinchStep(event)) continue
                 when (event.type) {
                     PointerEventType.Press -> onPress(event, doubleTap, slop)
                     // Leaving the surface mid-drag arrives as Exit (and coming back as Enter): still
@@ -90,6 +95,47 @@ internal class EditorPointer(private val c: EditorController, private val scope:
                 }
             }
         }
+    }
+
+    /**
+     * A two-finger pinch zooms the font (continuously, the host hears the size when the fingers
+     * lift). Starts when a second finger lands while no handle is held; while it lasts, every
+     * change is consumed, so the scrollable does not scroll and no tap or long press fires.
+     * Returns true when [event] was the pinch's.
+     */
+    private fun pinchStep(event: PointerEvent): Boolean {
+        val fingers = event.changes.filter { it.type != PointerType.Mouse && it.pressed }
+        val p = pinch
+        if (p == null) {
+            if (fingers.size < 2 || handleDrag != null) return false
+            val (a, b) = fingers[0] to fingers[1]
+            val d = (a.position - b.position).getDistance()
+            if (d < 1f) return false
+            pinch = Pinch(a.id.value, b.id.value, d, c.view.effectiveFontSize)
+            touch = null
+            drag = null
+            stopAutoScroll()
+            c.menuShown = false
+            event.changes.forEach { it.consume() }
+            return true
+        }
+        val a = fingers.firstOrNull { it.id.value == p.a }
+        val b = fingers.firstOrNull { it.id.value == p.b }
+        if (a == null || b == null) {
+            // A finger lifted: the pinch is over (the other finger does nothing until it lifts too).
+            if (fingers.isEmpty()) {
+                pinch = null
+                c.view.zoomTo(c.view.effectiveFontSize)
+            }
+            event.changes.forEach { it.consume() }
+            return true
+        }
+        val d = (a.position - b.position).getDistance()
+        // Quarter steps: a relayout per quarter point, not per pixel of finger travel.
+        val size = kotlin.math.round(p.startSize * d / p.startDistance * 4f) / 4f
+        c.view.zoomTo(size, report = false)
+        event.changes.forEach { it.consume() }
+        return true
     }
 
     private var eventTime = 0L
