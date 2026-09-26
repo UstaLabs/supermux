@@ -63,6 +63,7 @@ internal val LocalEditorCursorBlink = staticCompositionLocalOf { true }
  * @param readOnly no user edits (see [EditorView.readOnly]); the selection still moves.
  * @param onViewport the UTF-16 range the surface lays out, at most once per frame: a syntax host
  *   dispatches it as `Syntax.setViewport`.
+ * @param scrollState the scroll position; the view's own by default, or one shared by several editors.
  * @param clipboard where copy/cut put text and paste takes it from (the platform's by default).
  * @param onPaint called at the end of every paint of the surface (frame-time and edit-to-paint
  *   measurements). It runs inside the draw pass: keep it to taking a timestamp.
@@ -78,11 +79,12 @@ fun Editor(
     onViewport: (IntRange) -> Unit = {},
     onPaint: (() -> Unit)? = null,
     clipboard: EditorClipboard = rememberEditorClipboard(),
+    scrollState: EditorScrollState = view.defaultScrollState,
 ) {
     // cacheSize = 0: the surface keeps its own bounded caches (LineLayouts).
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val density = LocalDensity.current
-    val controller = remember(view, measurer) { EditorController(view, measurer) }
+    val controller = remember(view, measurer, scrollState) { EditorController(view, measurer, scrollState) }
     SideEffect {
         view.readOnly = readOnly
         controller.configure(theme, density, lineWrap, showLineNumbers)
@@ -90,8 +92,11 @@ fun Editor(
     DisposableEffect(view, controller) {
         view.surface = controller
         view.geometry = controller.geometry
+        view.scrollState = scrollState
+        scrollState.surfaces += controller
         val removeFastTyping = installFastTyping(view, controller)
         onDispose {
+            scrollState.surfaces -= controller
             removeFastTyping?.invoke()
             if (view.surface === controller) {
                 view.surface = null
@@ -166,14 +171,13 @@ fun Editor(
  * transaction ([EditorSurfaceHooks]).
  */
 @Stable
-internal class EditorController(val view: EditorView, private val measurer: TextMeasurer) : EditorSurfaceHooks {
+internal class EditorController(val view: EditorView, private val measurer: TextMeasurer, val scroll: EditorScrollState) : EditorSurfaceHooks {
     val layouts = LineLayouts(measurer)
     private var heights = HeightMap(view.state.doc.lineCount, layouts.lineHeightPx)
 
     var geometry: Geometry = Geometry({ view.state }, heights, layouts)
         private set
 
-    val scroll = EditorScroll(maxX = ::maxScrollX, maxY = ::maxScrollY)
 
     /** The caret's blink phase. */
     var cursorOn: Boolean by mutableStateOf(true)
@@ -299,8 +303,8 @@ internal class EditorController(val view: EditorView, private val measurer: Text
     /** The caret rect at [offset] in the surface's own pixels (a test hook, and the IME's anchor). */
     fun caretRectOnScreen(offset: Int): Rect = geometry.rectFor(offset).translate(textLeft - scroll.x, -scroll.y)
 
-    private fun maxScrollY(): Float = heights.totalHeight - viewportSize.height
-    private fun maxScrollX(): Float = if (lineWrap) 0f else layouts.maxLineWidth + layouts.charWidthPx * 2 - (viewportSize.width - textLeft)
+    internal fun maxScrollY(): Float = heights.totalHeight - viewportSize.height
+    internal fun maxScrollX(): Float = if (lineWrap) 0f else layouts.maxLineWidth + layouts.charWidthPx * 2 - (viewportSize.width - textLeft)
 
     // ------------------------------------------------------------------ EditorSurfaceHooks --
 
@@ -359,11 +363,12 @@ internal class EditorController(val view: EditorView, private val measurer: Text
      * Either way, measuring the lines that come into view then moves nothing on screen.
      */
     fun beginAnchor() {
+        view.pendingScroll?.let { restoreScroll(it) }
         if (!anchorValid || scroll.y != anchorScrollY) recordAnchor() else restoreAnchor()
     }
 
     fun restoreAnchor() {
-        if (!anchorValid || scroll.y != anchorScrollY) return
+        if (!anchorValid || scroll.y != anchorScrollY || scroll.shared) return
         val doc = view.state.doc
         if (heights.lineCount != doc.lineCount) return
         val line = doc.lineIndexAt(anchorPos.coerceIn(0, doc.length))
@@ -385,6 +390,30 @@ internal class EditorController(val view: EditorView, private val measurer: Text
     override fun scrollBy(dy: Float) {
         scroll.scrollBy(0f, dy)
     }
+
+    override fun scrollPosition(): EditorScrollPosition {
+        val doc = view.state.doc
+        if (heights.lineCount != doc.lineCount) return EditorScrollPosition(0)
+        val line = heights.lineAt(scroll.y)
+        return EditorScrollPosition(doc.lineStart(line), scroll.y - heights.top(line), scroll.x)
+    }
+
+    override fun restoreScroll(position: EditorScrollPosition) {
+        val doc = view.state.doc
+        if (viewportSize.height <= 0f || heights.lineCount != doc.lineCount) { view.pendingScroll = position; return }
+        view.pendingScroll = null
+        val line = doc.lineIndexAt(position.anchor.coerceIn(0, doc.length))
+        scroll.scrollTo(position.x, (heights.topD(line) + position.offsetPx).toFloat())
+        anchorValid = false
+    }
+
+    override fun focus(showKeyboard: Boolean): Boolean {
+        val took = requestFocus()
+        if (showKeyboard) keyboard?.show()
+        return took
+    }
+
+    override fun coordsAtPos(offset: Int): Rect = caretRectOnScreen(offset.coerceIn(0, view.state.doc.length))
 
     private fun digits(lines: Int): Int = maxOf(2, lines.toString().length)
 }

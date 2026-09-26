@@ -119,6 +119,40 @@ class EditorView(initial: EditorState) : CommandTarget {
         return TransactionSpec(changeSet = changes, selection = EditorSelection.create(next, sel.mainIndex), scrollIntoView = true, userEvent = userEvent) to changes
     }
 
+    private val ownScroll = EditorScrollState()
+
+    /** The scroll state the surface uses: this view's own, or the one passed to `Editor(scrollState = …)`. */
+    var scrollState: EditorScrollState = ownScroll
+        internal set
+
+    /** The default for `Editor(scrollState)`. */
+    internal val defaultScrollState: EditorScrollState get() = ownScroll
+
+    /** A position given before the surface could apply it (not composed yet). */
+    internal var pendingScroll: EditorScrollPosition? = null
+
+    /** Where the view is scrolled, by document position (save it with a tab, restore it later). */
+    val scrollPosition: EditorScrollPosition
+        get() = surface?.scrollPosition() ?: pendingScroll ?: EditorScrollPosition(0)
+
+    /** Scroll back to [position]; before the first paint, it is applied then. */
+    fun restoreScroll(position: EditorScrollPosition) {
+        val s = surface
+        if (s == null) pendingScroll = position else s.restoreScroll(position)
+    }
+
+    /**
+     * Take the keyboard focus; [showKeyboard] also raises a soft keyboard (a host focusing an editor
+     * on its own must not). False while nothing shows this view.
+     */
+    fun focus(showKeyboard: Boolean = false): Boolean = surface?.focus(showKeyboard) ?: false
+
+    /**
+     * The caret rect at [offset] in the surface's own pixels (for a popup, a completion list), or
+     * null while nothing shows this view.
+     */
+    fun coordsAtPos(offset: Int): androidx.compose.ui.geometry.Rect? = surface?.coordsAtPos(offset)
+
     /** The surface's geometry once it is composed; vertical moves and page moves need it. */
     internal var geometry: Geometry? = null
 
@@ -183,6 +217,11 @@ internal interface EditorSurfaceHooks {
 
     /** The viewport's height in pixels. */
     val viewportHeightPx: Float
+
+    fun scrollPosition(): EditorScrollPosition
+    fun restoreScroll(position: EditorScrollPosition)
+    fun focus(showKeyboard: Boolean): Boolean
+    fun coordsAtPos(offset: Int): androidx.compose.ui.geometry.Rect
 }
 
 /** An [EditorView] that lives as long as the composition; [initial] runs once. */
