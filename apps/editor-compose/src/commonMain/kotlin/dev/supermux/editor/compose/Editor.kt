@@ -4,10 +4,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.gestures.scrollable
-import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
@@ -132,14 +131,17 @@ fun Editor(
                 reverseDirection = ScrollableDefaults.reverseDirection(layoutDirection, Orientation.Horizontal, false),
                 flingBehavior = ScrollableDefaults.flingBehavior(),
             )
+            // The focus TARGET is the hidden field inside (an IME only runs for a focused text
+            // field); this box is its ancestor, so `hasFocus` is the surface's focus and a key
+            // preview reaches the keymap before the field could insert anything.
             .onFocusChanged { view.focused = it.hasFocus }
-            .focusRequester(controller.focusRequester)
-            .focusable()
+            .onPreviewKeyEvent { handleEditorKey(view, it, controller.composing) }
             // INSIDE the scrollables: this node sees the Main pass first and consumes what is a
             // selection (mouse presses and drags), leaving a finger's drag to scroll.
             .pointerInput(pointer) { pointer.handle(this) },
     ) {
         Canvas(Modifier.fillMaxSize()) { controller.paint(this) }
+        EditorInputField(controller, readOnly)
     }
 }
 
@@ -161,8 +163,20 @@ internal class EditorController(val view: EditorView, private val measurer: Text
     /** The caret's blink phase. */
     var cursorOn: Boolean by mutableStateOf(true)
 
-    /** The surface's focus target. */
+    /** The surface's focus target (the hidden field). */
     val focusRequester = FocusRequester()
+
+    /** The hidden field and the document, in step (see [FieldSync]). */
+    val fieldSync = FieldSync(view)
+
+    /** Writes into the hidden field while it is composed. */
+    var fieldWriter: ((FieldText) -> Unit)? = null
+
+    /** True while the IME composes: every key is the IME's then. */
+    var composing = false
+
+    /** The document range the IME is composing, underlined by the painter. */
+    var composition: IntRange? by mutableStateOf(null)
 
     /** The platform's soft keyboard, or null where there is none (a desktop). */
     var keyboard: SoftwareKeyboardController? = null
@@ -288,6 +302,8 @@ internal class EditorController(val view: EditorView, private val measurer: Text
         heights.reset(view.state.doc.lineCount)
         anchorValid = false
         scroll.scrollTo(0f, 0f)
+        fieldWriter?.invoke(fieldSync.rewindow())
+        composition = null
     }
 
     /** The least scrolling that shows the main cursor with a margin (a line, four cells). */

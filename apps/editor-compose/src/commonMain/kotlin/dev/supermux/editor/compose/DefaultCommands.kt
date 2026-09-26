@@ -238,7 +238,15 @@ object DefaultCommands {
  * Home/End (smart Home), Mod-Home/Mod-End, PageUp/PageDown, Shift to extend, Backspace/Delete,
  * Enter, Tab and Mod-a.
  */
-fun defaultKeymap(apple: Boolean = isApplePlatform): Extension {
+fun defaultKeymap(apple: Boolean = isApplePlatform): Extension = keymapOf(*defaultBindings(apple).toTypedArray())
+
+private val appleBindings by lazy { buildDefaultBindings(true) }
+private val otherBindings by lazy { buildDefaultBindings(false) }
+
+/** [defaultKeymap]'s bindings; the surface also falls back to them for a state without a keymap. */
+internal fun defaultBindings(apple: Boolean): List<KeyBinding> = if (apple) appleBindings else otherBindings
+
+private fun buildDefaultBindings(apple: Boolean): List<KeyBinding> {
     val c = DefaultCommands
     val b = ArrayList<KeyBinding>()
     fun bind(key: String, cmd: Command) { b += KeyBinding(key, cmd) }
@@ -274,5 +282,5 @@ fun defaultKeymap(apple: Boolean = isApplePlatform): Extension {
     bind("Shift-Enter", c.insertNewline)
     bind("Tab", c.insertTab)
     bind("Mod-a", c.selectAll)
-    return keymapOf(*b.toTypedArray())
+    return b
 }

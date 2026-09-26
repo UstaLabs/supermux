@@ -7,6 +7,8 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.text.drawText
 import dev.supermux.editor.core.Decoration
 import dev.supermux.editor.core.EditorState
+import dev.supermux.editor.core.RangeSet
+import dev.supermux.editor.core.Ranged
 import dev.supermux.editor.core.SelectionRange
 import dev.supermux.editor.core.decorationsFacet
 
@@ -21,6 +23,10 @@ import dev.supermux.editor.core.decorationsFacet
 internal fun DrawScope.paintEditor(c: EditorController, theme: EditorTheme, state: EditorState, focused: Boolean, cursorOn: Boolean) {
     val g = c.geometry
     val doc = state.doc
+    // The IME's composing text: underlined, on top of the state's own decorations.
+    val composing = c.composition
+    g.extraMarks = if (composing == null || composing.isEmpty() || composing.last >= doc.length) null
+    else RangeSet.of(listOf(Ranged(composing.first, composing.last + 1, Decoration.Mark(setOf(EditorTheme.COMPOSITION_CLASS)))))
     val height = size.height
     val overscan = EditorDefaults.OVERSCAN_LINES
 
