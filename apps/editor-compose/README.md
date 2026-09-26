@@ -40,6 +40,17 @@ DefaultCommands       movement, selection, insert/delete/newline/tab, select all
 | `EditorInput.kt` | the windowed hidden field (`FieldWindow`, `diffField`, `FieldSync`), hardware keys, web fast typing |
 | `DefaultCommands.kt`, `TextBoundaries.kt`, `EditorFacets.kt` | commands, grapheme/word rules, `tabSizeFacet` / `indentUnitFacet` |
 
+**Public API for hosts.** `EditorView.typeText(text, userEvent)` is the one entry point for typed
+text (the hidden field, the web's key path and `DefaultCommands.insertText` all use it); plugins
+hook it through `inputHandlerFacet` (CM6's inputHandler: given the main range and the text, dispatch
+something else and return true), asked for plain typing only, never while composing, never for a
+paste. `paste(text)` distributes one line per cursor when the counts match. `scrollPosition` /
+`restoreScroll` save and restore by document position (applied at the first paint when given
+earlier). `focus(showKeyboard = false)`: a host's focus never raises a soft keyboard.
+`coordsAtPos(offset)` gives the caret rect in the surface, for popups. `EditorScrollState` can be
+passed to several `Editor`s to scroll them together (clamped to the largest; anchoring is off while
+shared): the seam M3c's linked views align lines on.
+
 **Coordinates.** Offsets are UTF-16 (as everywhere in the editor). Geometry works in *content*
 coordinates (x from the text area's left edge, y from the document top); the surface adds the
 gutter and the scroll.
@@ -52,6 +63,13 @@ frame. The viewport reported through `onViewport` / `view.viewport` is those lin
 **Scroll anchoring.** The first visible line is the anchor: when heights change above it (a wrapped
 line measured for the first time, an edit above the viewport such as a disk reload), the scroll
 follows it so the text on screen stays put. A gesture or scroll-into-view since the last paint wins.
+
+**Huge lines.** A line longer than 10,000 units (minified code, a 1 MB JSON line) is never laid out,
+sliced or hashed whole: it is cut into pieces at grapheme boundaries, laid out only where they are
+looked at. Without wrapping, 2,048-unit pieces sit at their NOMINAL x (units x cell width: exact
+inside a piece; wide characters and tabs make later pieces start slightly off); with wrapping, rows
+of as many units as cells fit the width (the line's height is known without shaping; a wide
+character may overhang). A keystroke on a 1 MB line takes ~6 ms to its frame.
 
 **Keep the cursor visible.** A transaction with `scrollIntoView` (every default command, every
 typed character) scrolls the least needed to show the main cursor with a margin of a line
@@ -96,6 +114,16 @@ dictation and CJK composition work; the design passed all 8 checks on an iPhone 
   no longer shows the document's text at its window or the caret left it, and re-windowed when the
   caret comes within 32 units of an edge with more document beyond it, never while composing. So a
   held Backspace walks past the window's start instead of being eaten (M0 checklist step 3).
+- Every field edit at the main range (typing, Backspace, autocorrect, each composition step) is
+  made relative to EVERY range, as CM6 does: the diff is clamped to cover the field's previous
+  selection and the caret, so typing over a selection wider than the window replaces all of it, and
+  repeated characters cannot misplace a Backspace. The window never holds another range, so the other
+  cursors' typing never forces a rewrite mid-composition. An edit away from the caret (an
+  autocorrect of an earlier word) is applied once, every range kept.
+- A huge edit (a paste of 200k units into the field) re-windows at once.
+- **An external change while the IME composes** (a disk reload, the syntax worker never: it only adds
+  decorations) that touches the window rewrites the field: the composition ends there, the platform
+  IME commits or abandons its preedit, and the text already typed stays in the document.
 - `readOnly` makes the field read-only and drops user edits in the view (`input*`, `delete*`,
   `paste*`, `undo`, `redo`); the selection still moves, programmatic changes still apply.
 
@@ -103,16 +131,33 @@ dictation and CJK composition work; the design passed all 8 checks on an iPhone 
 the state's keymap facet (`runKey`), then `defaultKeymap`'s bindings as the lowest-precedence
 fallback (a state needs no keymap of its own; a plugin overrides a default by binding the same
 key). Unbound keys reach the field, which is where typed characters come from. While the IME
-composes, every key is the IME's. The field's own undo/redo chords are swallowed (its history knows
-only its window). **On the web**, a plain printable key is typed by the surface inside the DOM key
-event itself and the event cancelled, because Compose for the web handles queued input only at the
-next animation frame, after that frame drew (two frames of latency otherwise). IME composition,
-Ctrl/Meta chords, Alt outside Apple platforms, dead keys and bound chords still go the ordinary way.
+composes, every key is the IME's. The field's own undo/redo and clipboard chords are swallowed (its
+history and clipboard know only its window): **copy, cut and paste are the editor's commands**
+(Mod-c/x/v), through an `EditorClipboard` (`Editor(clipboard = …)`, the platform's by default):
+copy puts every range on the clipboard, one line per range. Off Apple, Ctrl+Alt+<character> (AltGr
+on Windows) matches only a binding that names `Ctrl-Alt`, never `Mod-Alt`.
+
+**On the web**, Compose handles queued DOM input only at the next animation frame, after that frame
+drew: a key it handles is painted two frames late. So while an editor is composed, a capture-phase
+DOM keydown listener serves hardware keys inside the event itself and cancels them: bound chords run
+their command (Backspace, Enter, arrows, Tab, plugins' bindings), plain characters are typed; Mod-c/x/v
+are hidden from Compose and served by the browser's copy/cut/paste events (synchronous clipboardData,
+the whole selection, no permission prompt). Only for a HARDWARE keyboard aimed at Compose's own
+textarea: never after a touch or pen pointer, and on a touch-capable device only once a physical-key
+keydown (a non-empty `code`) has been seen, because iOS Safari's soft keyboard sends real key values
+and must keep going through the field for autocorrect and predictions. That is a heuristic. IME
+composition, unbound shortcuts and dead keys go the ordinary way.
 
 **Focus rules** (the terminal's): a **touch** takes focus AND raises the soft keyboard, every time
 (a field that is already focused starts no new input session, so a keyboard the user dismissed
 would never come back); a **mouse click** takes focus and never raises a keyboard; nothing raises
-the keyboard when an editor merely appears.
+the keyboard when an editor merely appears or a host focuses it (`showKeyboardOnFocus = false`).
+
+**Grapheme limits.** `TextBoundaries` follows the parts of UAX #29 an editor meets (combining marks,
+ZWJ sequences, flags, emoji modifiers), not all of it: Indic conjuncts (GB9c: consonant + virama +
+consonant in Devanagari and others) are not joined, so the caret can stop inside a conjunct and a
+Backspace takes one piece of it. The painter still writes the scroll position during draw when the
+anchor moves it (measuring happens there); a pre-draw measuring phase would move that out.
 
 **Pointer.** Mouse: click places the caret, Shift-click extends, drag selects with auto-scroll
 past an edge, double click selects a word, triple click a line, Alt-drag makes one range per line.
@@ -126,11 +171,12 @@ Asserted on the desktop JVM by `:editor-sample:jvmTest` (a real `ImageComposeSce
 Skia raster, syntax on, best of 3 on a shared Mac), and measured in the real desktop window and in
 Chrome by the sample's in-app benchmark (`-Psample.bench=true`, `:editor-sample:webBench`):
 
-| | target | JVM scene | desktop window | Chrome |
+| | target | JVM (harness / scene) | desktop window | Chrome |
 |---|---|---|---|---|
-| keystroke -> painted frame (10k lines, p95) | <= 16 ms | 11-14 ms | key event -> paint 17.8 ms (vsync wait + 2.7 ms work) | key event -> paint 19.6 ms (vsync wait + 2.3 ms work) |
+| keystroke -> painted frame (10k lines, syntax on, p95) | <= 16 ms | 11.3 ms through the real field; syntax settle frame 7.5 ms | key event -> paint 17.8 ms (vsync wait + 2.7 ms work) | key event -> paint: x 18.2, Backspace 18.2, Enter 18.0, arrows 18.2-19.7 ms (vsync wait + ~2.5 ms work) |
+| keystroke on a 1 MB single line (p95) | <= 16 ms | 6.0 ms | | |
 | scroll frame (10k lines, p95) | <= 16 ms | 9.5-12 ms | 3.3 ms work, no dropped frame | 2.5 ms work, no dropped frame |
-| 10 MB file -> first frame | < 1 s | 41-51 ms | | |
+| 10 MB file -> first frame | < 1 s | 41-54 ms | | |
 
 On a 60 Hz display a key event waits up to one frame for the next vsync; the edit is always painted
 in the next frame. The web cold start is asserted by `:editor-sample:webColdStartTest`.
@@ -146,8 +192,7 @@ composition is tested at `FieldSync`; real-device IME checks are M3b's.
 
 ## Not here yet
 
-M3b: selection handles, the copy/paste menu, the clipboard (until then Mod-c/x/v are the hidden
-field's own and act on its window only: a paste arrives as typed input, a copy of a selection wider
-than the window is cut short), pinch and Mod +/-/0 zoom, accessibility semantics, the device IME
+M3b: selection handles, the copy/paste menu (the commands exist: `DefaultCommands.copy/cut/paste`),
+pinch and Mod +/-/0 zoom, accessibility semantics, the device IME
 pass. M3c: gutter markers, block widgets (`HeightMap.setBlockHeight` exists), inline widgets,
 `Replace` (folds), panels, linked views, device performance (120 Hz iPad).
