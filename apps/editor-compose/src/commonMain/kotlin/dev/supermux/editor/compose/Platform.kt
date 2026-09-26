@@ -23,3 +23,9 @@ internal expect fun installFastTyping(view: EditorView, controller: EditorContro
  * and desktop and web have no fingers to hide the text.
  */
 internal expect fun androidx.compose.ui.Modifier.editorMagnifier(center: () -> androidx.compose.ui.geometry.Offset): androidx.compose.ui.Modifier
+
+/**
+ * True where the platform's text toolbar is the touch selection menu (Android, iOS); false where
+ * the surface draws its own (desktop, web).
+ */
+internal expect val platformTextToolbarPreferred: Boolean

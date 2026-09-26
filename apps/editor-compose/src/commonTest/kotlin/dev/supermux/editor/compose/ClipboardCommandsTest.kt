@@ -15,6 +15,7 @@ import kotlin.test.assertTrue
 internal class FakeClipboard(var text: String? = null) : EditorClipboard {
     override fun write(text: String) { this.text = text }
     override suspend fun read(): String? = text
+    override fun hasText(): Boolean = text != null
 }
 
 class ClipboardCommandsTest {

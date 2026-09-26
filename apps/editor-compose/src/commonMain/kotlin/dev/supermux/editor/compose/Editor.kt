@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.editor.core.Transaction
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
+import androidx.compose.ui.layout.onGloballyPositioned
 
 /** Tunables of the surface. */
 internal object EditorDefaults {
@@ -107,6 +109,15 @@ fun Editor(
     val reportViewport by rememberUpdatedState(onViewport)
     LaunchedEffect(view) { view.viewport.collect { if (!it.isEmpty()) reportViewport(it) } }
 
+    // The selection menu hides while the view scrolls and comes back once it settles.
+    LaunchedEffect(controller) {
+        snapshotFlow { controller.scroll.x to controller.scroll.y }.drop(1).collectLatest {
+            controller.scrolling = true
+            delay(EditorMenu.SCROLL_SETTLE_MILLIS)
+            controller.scrolling = false
+        }
+    }
+
     val blink = LocalEditorCursorBlink.current
     LaunchedEffect(view, controller, blink) {
         // Restarted by every selection change: the caret stays solid while the user types or moves.
@@ -152,13 +163,14 @@ fun Editor(
             // preview reaches the keymap before the field could insert anything.
             .onFocusChanged {
                 view.focused = it.hasFocus
-                if (!it.hasFocus) controller.handles = TouchHandles.NONE
+                if (!it.hasFocus) { controller.handles = TouchHandles.NONE; controller.menuShown = false }
             }
             .onPreviewKeyEvent { handleEditorKey(view, it, controller.composing) }
             // INSIDE the scrollables: this node sees the Main pass first and consumes what is a
             // selection (mouse presses and drags), leaving a finger's drag to scroll.
             .pointerInput(pointer) { pointer.handle(this) }
-            .editorMagnifier { controller.magnifierAt },
+            .editorMagnifier { controller.magnifierAt }
+            .onGloballyPositioned { controller.coordinates = it },
     ) {
         val paintHook by rememberUpdatedState(onPaint)
         Canvas(Modifier.fillMaxSize()) {
@@ -166,6 +178,7 @@ fun Editor(
             paintHook?.invoke()
         }
         EditorInputField(controller, readOnly)
+        EditorSelectionMenu(controller, readOnly, clipboard, theme)
     }
 }
 
@@ -206,6 +219,32 @@ internal class EditorController(val view: EditorView, private val measurer: Text
 
     /** The touch handles shown (only a touch gesture turns them on; see [TouchHandles]). */
     var handles: TouchHandles by mutableStateOf(TouchHandles.NONE)
+
+    /**
+     * The selection menu (Cut, Copy, Paste, Select All) was asked for: after a long press, a tap in
+     * the selection or on the caret's handle, the end of a handle drag. It is hidden while
+     * [menuHeld] (a handle is being dragged) or [scrolling], and reappears after.
+     */
+    var menuShown: Boolean by mutableStateOf(false)
+    var menuHeld: Boolean by mutableStateOf(false)
+    var scrolling: Boolean by mutableStateOf(false)
+
+    /** The surface's layout coordinates (the platform toolbar wants root coordinates). */
+    var coordinates: androidx.compose.ui.layout.LayoutCoordinates? = null
+
+    /**
+     * Where the menu points, in surface pixels: the main range's rows (their full width when it
+     * spans rows) or the caret, limited to the viewport.
+     */
+    fun menuAnchor(): Rect {
+        val main = view.state.selection.main
+        val a = caretRectOnScreen(main.from)
+        val b = if (main.empty) a else caretRectOnScreen(main.to)
+        val sameRow = kotlin.math.abs(a.top - b.top) < 0.5f
+        val left = if (sameRow) minOf(a.left, b.left) else textLeft
+        val right = if (sameRow) maxOf(a.left, b.left) else viewportSize.width
+        return Rect(left, a.top.coerceIn(0f, viewportSize.height), right, b.bottom.coerceIn(0f, viewportSize.height))
+    }
 
     /** Where a finger dragging a selection end is, for the platform magnifier (Unspecified: none). */
     var magnifierAt: androidx.compose.ui.geometry.Offset by mutableStateOf(androidx.compose.ui.geometry.Offset.Unspecified)
@@ -362,9 +401,11 @@ internal class EditorController(val view: EditorView, private val measurer: Text
      * when anything but a pointer gesture sets the selection (a hardware key, a command).
      */
     private fun followHandles(tr: Transaction) {
+        val pointer = tr.isUserEvent("select.pointer")
+        // The menu acts on what it was shown for: an edit or a selection made elsewhere hides it.
+        if (menuShown && (tr.docChanged || (tr.selectionSet && !pointer))) menuShown = false
         if (handles == TouchHandles.NONE) return
         val main = tr.state.selection.main
-        val pointer = tr.isUserEvent("select.pointer")
         when {
             tr.selectionSet && !pointer -> handles = TouchHandles.NONE
             tr.docChanged && (handles == TouchHandles.CURSOR || main.empty) -> handles = TouchHandles.NONE
@@ -374,6 +415,7 @@ internal class EditorController(val view: EditorView, private val measurer: Text
 
     override fun onStateReplaced() {
         handles = TouchHandles.NONE
+        menuShown = false
         heights.reset(view.state.doc.lineCount)
         anchorValid = false
         scroll.scrollTo(0f, 0f)

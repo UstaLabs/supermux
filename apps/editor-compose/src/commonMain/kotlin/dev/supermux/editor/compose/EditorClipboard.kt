@@ -24,6 +24,13 @@ interface EditorClipboard {
 
     /** The clipboard's text, or null when it holds none. */
     suspend fun read(): String?
+
+    /**
+     * True when there is text to paste, WITHOUT reading it (the touch menu shows Paste only then;
+     * on iOS reading the clipboard is what asks the user for permission, asking whether it has
+     * text is not). A clipboard that cannot tell says true.
+     */
+    fun hasText(): Boolean = true
 }
 
 /** The host platform's clipboard. */
@@ -38,6 +45,7 @@ fun rememberEditorClipboard(): EditorClipboard {
 private class ComposeEditorClipboard(private val manager: ClipboardManager) : EditorClipboard {
     override fun write(text: String) = manager.setText(AnnotatedString(text))
     override suspend fun read(): String? = manager.getText()?.text?.takeIf { it.isNotEmpty() }
+    override fun hasText(): Boolean = manager.hasText()
 }
 
 /**

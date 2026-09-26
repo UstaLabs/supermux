@@ -46,6 +46,8 @@ internal fun editorTest(
     theme: ((EditorTheme) -> EditorTheme)? = null,
     onViewport: (IntRange) -> Unit = {},
     onPaint: (() -> Unit)? = null,
+    platformMenu: Boolean = false,
+    toolbar: androidx.compose.ui.platform.TextToolbar? = null,
     body: ComposeUiTest.(SurfaceFixture) -> Unit,
 ) = runComposeUiTest {
     val view = EditorView(state)
@@ -58,6 +60,8 @@ internal fun editorTest(
             LocalSoftwareKeyboardController provides keyboard,
             // A blinking cursor would make every pixel test a coin toss.
             LocalEditorCursorBlink provides false,
+            LocalEditorPlatformMenu provides platformMenu,
+            androidx.compose.ui.platform.LocalTextToolbar provides (toolbar ?: androidx.compose.ui.platform.LocalTextToolbar.current),
         ) {
             val base = EditorTheme.default()
             val t = theme?.invoke(base) ?: base

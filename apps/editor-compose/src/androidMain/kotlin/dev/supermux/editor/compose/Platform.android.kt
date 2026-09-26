@@ -9,3 +9,5 @@ internal actual fun installFastTyping(view: EditorView, controller: EditorContro
 
 internal actual fun androidx.compose.ui.Modifier.editorMagnifier(center: () -> androidx.compose.ui.geometry.Offset): androidx.compose.ui.Modifier =
     this.then(androidx.compose.ui.Modifier.magnifier(sourceCenter = { center() }))
+
+internal actual val platformTextToolbarPreferred: Boolean = true

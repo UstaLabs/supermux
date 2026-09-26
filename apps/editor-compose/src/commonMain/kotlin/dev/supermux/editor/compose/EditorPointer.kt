@@ -112,6 +112,7 @@ internal class EditorPointer(private val c: EditorController, private val scope:
                 val main = c.view.state.selection.main
                 val fixed = when (spot.kind) { HandleKind.START -> main.to; HandleKind.END -> main.from; HandleKind.CURSOR -> -1 }
                 handleDrag = HandleDrag(change.id.value, spot.kind, fixed, change.position - spot.tip, change.position)
+                c.menuHeld = true
                 touch = null
                 change.consume()
                 return
@@ -121,6 +122,7 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         }
         if (!event.buttons.isPrimaryPressed) return
         c.handles = TouchHandles.NONE
+        c.menuShown = false
         c.requestFocus()
         val pos = change.position
         lastPointer = pos
@@ -257,11 +259,15 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         return c.geometry.selectionRects(main, q.y - 1f, q.y + 1f).any { it.contains(q) }
     }
 
-    // Hooks for the selection menu (M3b task 2).
-    private fun onTapInSelection() {}
-    private fun onCaretPlaced() {}
-    private fun onLongPressReleased() {}
-    private fun onHandleReleased(moved: Boolean) {}
+    // The selection menu: a tap in the selection toggles it; a new caret hides it; it appears when
+    // a long press or a handle drag ends (a tap on a handle toggles it).
+    private fun onTapInSelection() { c.menuShown = !c.menuShown }
+    private fun onCaretPlaced() { c.menuShown = false }
+    private fun onLongPressReleased() { c.menuShown = true }
+    private fun onHandleReleased(moved: Boolean) {
+        c.menuHeld = false
+        c.menuShown = if (moved) true else !c.menuShown
+    }
 
     private fun fireLongPress(t: TouchPress) {
         t.longPressed = true
@@ -270,6 +276,7 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         val r = SelectionRange(w.first, w.last + 1)
         select(EditorSelection.single(r.anchor, r.head))
         c.handles = TouchHandles.SELECTION
+        c.menuShown = false
         // Keep the finger down and drag: the selection grows by words from the pressed one.
         drag = Drag(Mode.WORD, r, contentOf(t.down))
         lastPointer = t.down
