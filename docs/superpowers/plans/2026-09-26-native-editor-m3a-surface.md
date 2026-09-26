@@ -251,6 +251,12 @@ class HeightMap(lineCount: Int, estimatedLineHeight: Float) {
 
   Report the numbers. If a target is missed, find the cause before claiming done.
 - **The web page:** the wasmJs sample must also run in Chrome on the Mac. Report the frame times.
+- **Web cold start** (from the M2c review): the first highlights-query compile for a language is one
+  uninterruptible call, 26–116 ms, and it happens when a file of that language is first opened. Start compiling the
+  document's language (plus Markdown's usual injection languages) through `backend.sharedQuery` right after
+  `WasmBackend.load()` / when the editor mounts, before the first paint. Add a cold-page test in headless Chrome that
+  reports, and asserts, a ceiling for the longest main-thread hold from page load to the first coloured frame. Pick
+  the ceiling from the measurement, so a regression is caught.
 - **Show Ahmet.** Leave `:editor-sample:run` open on the Mac and report it in the final message, so it can be looked at
   on the Mac screen. Also build the wasm page and state where it's served, so it can be exposed with a supermux link.
 - [ ] Commit: `feat(editor-sample): try the native editor (desktop + web)`.
