@@ -134,7 +134,9 @@ interface SyntaxTree {
   with a visible "syntax off" note.
 
 ### 5.2a Encodings (from M0)
-- **web-tree-sitter** works in UTF-16 indexes natively, with no conversion.
+- **Web (decided 2026-09-26):** the same `ses_*` binding, tree-sitter and grammar code compiled to one wasm32
+  module, not web-tree-sitter. The result is one engine, the same patched grammars, and the same predicates on
+  all four clients, with regexes going through Kotlin's `Regex`. That gives identical colours by construction.
 - **ktreesitter 0.25.1 cannot parse UTF-16.** It always converts to UTF-8 itself: *modified* UTF-8 on the JVM,
   standard UTF-8 on Android, and on iOS it reports the UTF-16 length as the byte count, which is a bug that
   truncates non-ASCII text.
@@ -152,7 +154,7 @@ interface SyntaxTree {
 |---|---|---|
 | Android, desktop | our binding (JNI) | every grammar's code built in; tables as compressed data |
 | iOS | our binding (cinterop, static) | every grammar's code built in; tables as compressed data |
-| Web | web-tree-sitter (official WASM) | one `.wasm` per language, fetched on first use |
+| Web | **our binding compiled to wasm32** (decided 2026-09-26; replaces web-tree-sitter) | every grammar's code in the module; tables fetched on first use |
 
 - No grammar artifacts are published for ktreesitter. We compile the npm packages' `parser.c`/`scanner.c`
   ourselves on the Mac (M0 recipe: `docs/superpowers/notes/m0-artifacts/build-grammars.sh`).
