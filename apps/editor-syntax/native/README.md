@@ -5,8 +5,8 @@ v0.25.10 behind an owned C ABI ([`include/supermux_syntax.h`](include/supermux_s
 with every grammar's code compiled in and its parse tables moved into
 compressed blobs. The Kotlin bindings call only `ses_*`: JNI on Android and the
 desktop JVM ([`src/syntax_jni.c`](src/syntax_jni.c)), cinterop on iOS
-(`../src/nativeInterop/cinterop/syntax.def`). The web client uses web-tree-sitter
-instead (M2b) and never sees this code.
+(`../src/nativeInterop/cinterop/syntax.def`). The web client runs this same C,
+compiled to one wasm32 module (M2c, see [Web](#web-m2c)).
 
 Everything is UTF-16 code units end to end. tree-sitter parses with
 `TSInputEncodingUTF16LE`, so a byte offset is exactly 2 x the UTF-16 index.
@@ -25,7 +25,8 @@ native/fetch.sh          # tree-sitter @ locked commit, zlib 1.3.1, every gramma
 native/build.sh gen      # per grammar: extract tables + differential test (ASan + UBSan), then ctest      -> build/gen/<lang>/
 native/build.sh ctest    # the C ABI tests (tests/bridge_test.c) under ASan + UBSan                         -> build/ctest/
 native/build.sh <target> # one library                                                                     -> build/natives/<target>/lib/
-native/build.sh all      # gen + all nine targets + build/natives/manifest.json
+native/build.sh all      # gen + all ten targets + build/natives/manifest.json
+native/wasm/build.sh --test  # the wasm32 target, then its Node tests (native/wasm/test.mjs)
 ```
 
 1. **fetch** clones tree-sitter at the commit in `upstream.lock.json` and
@@ -83,6 +84,7 @@ native/build.sh all      # gen + all nine targets + build/natives/manifest.json
 | `windows-x64` | `zig cc -target x86_64-windows-gnu`, zlib compiled in | `supermux_syntax_jni.dll` |
 | `ios-arm64`, `ios-simulator-arm64` | Xcode clang + libtool | `libsupermux_syntax.a` (static, for cinterop) |
 | `android-arm64`, `android-x64` | NDK 26.1 clang, API 26, 16 KB pages, stripped | `libsupermux_syntax_jni.so` |
+| `wasm32` | `zig cc` / `zig c++ -fno-exceptions`, `-target wasm32-wasi`, reactor, zlib compiled in | `supermux-syntax.wasm` |
 
 Apple and Android link the system `-lz`. The Linux and Windows cross-builds need
 zig on the Mac: `brew install zig`. `build/natives/manifest.json` records the
@@ -99,8 +101,8 @@ run `:editor-syntax:jvmTest` and `jvmResourceLoadTest` there.
 
 ## Lock files
 
-- `upstream.lock.json`: the tree-sitter repository, tag and commit, and zlib's
-  URL and sha256. The pin is v0.25.10 because it matches web-tree-sitter 0.25.10,
+- `upstream.lock.json`: the tree-sitter repository, tag and commit, zlib's
+  URL and sha256, and the zig version the wasm32 target insists on. The pin is v0.25.10 because it matches web-tree-sitter 0.25.10,
   so every client parses with the same core.
 - `grammars.lock.json`: for each grammar, its npm package, version, tarball URL
   and sha256, licence, the parser directories inside the tarball, and `tables`:
@@ -346,23 +348,9 @@ web backend only implements `SyntaxBackend`:
 - Queries are compiled once per backend and language (`sharedQuery`), not per
   document (kotlin's highlights cost ~35 ms to compile).
 
-### What M2c (web) must handle
+### On the web
 
-- `SyntaxBackend.ensureLanguage` suspends: fetch the grammar's `.wasm` there.
-  `isReady` must answer without blocking; the worker loads what is missing.
-- `SyntaxSnapshot` holds a Rope and ChangeSets, which cannot cross to a Web
-  Worker. Either run the worker loop on the main thread in time slices (the
-  sliced parse already yields between slices), or serialise the document and
-  the edits for a worker.
-- web-tree-sitter evaluates `#match?` itself with `new RegExp(pattern)`, no `u`
-  flag. The tool rewrites `\d` -> `\p{Nd}` and `\w` -> `[\p{L}...]` in 12
-  files (Rust's meaning), which needs the `u` flag. Either evaluate the
-  `#match?` family through our own matcher (as the native side does), or keep a
-  web variant of each rewritten regex.
-- Paint order is (depth, first range start, language); layers found
-  incrementally must equal a fresh parse (`InjectionReplayTest`); the golden
-  span files are the contract, and `golden/oracle/` checks them against
-  tree-sitter's own highlighter.
+See [Web (M2c)](#web-m2c): the web runs this layer unchanged, over the same C.
 
 ### Performance
 
@@ -382,6 +370,7 @@ numbers are noisy:
 | iOS simulator, release binary | 2.2 / 5.7 / 10.1 | 4.4 / 5.1 / 10.5 | 9.3 / 11.6 / 14.7 | 5.5 / 6.7 / 11.7 |
 | iOS simulator, debug binary | 0.9 / 11.4 / 31.8 | 28.7 / 32.3 / 45.5 | 5.9 / 19.2 / 27.9 | 6.0 / 12.2 / 28.7 |
 | Android emulator, debug APK | 2.1 / 9.7 / 24.6 | 13.5 / 15.4 / 29.1 | 8.9 / 17.8 / 32.0 | 23.4 / 31.2 / 44.2 |
+| Web: headless Chrome 153 on the Mac, wasm (2026-09-26) | 0.9 / 3.7 / 5.7 | 4.6 / 5.6 / 7.7 | 9.7 / 12.5 / 15.0 | 14.7 / 16.7 / 19.1 |
 
 **Known worst case: flat Markdown.** A Markdown file without headings is one
 flat sequence of blocks, and tree-sitter-markdown's incremental reparse of it
@@ -392,7 +381,10 @@ worker cycle on the Mac JVM). The worker's time slices keep the UI responsive;
 the spans just arrive later.
 
 Whole-document parse + highlight on the Mac JVM: Kotlin 164-194 ms, Markdown
-309-519 ms, Vue 214 ms, PHP 197 ms.
+309-519 ms (270 ms since M2c hashed the injection merge), Vue 214 ms, PHP 197 ms.
+On the web: Kotlin 272 ms, Markdown 333 ms, Vue 264 ms, PHP 236 ms; flat Markdown
+34 ms per keystroke, 44 ms per worker cycle. The web's worker runs on the UI thread,
+so what matters there is how long it holds it: see [Web (M2c)](#web-m2c).
 
 UI thread (at 70k possible spans, the field keeps a window around the
 viewport): a keystroke's span mapping 0.09 ms and an update's replace 0.05 ms
@@ -420,11 +412,117 @@ What mattered:
 - A benchmark file must be valid: repeated `package`/`import` headers made
   every parse error recovery.
 
+## Web (M2c)
+
+The browser runs the same `ses_*` binding as every native target: tree-sitter, the
+bridge, the tables loader, zlib and every grammar's code, compiled by zig into
+**one wasm32-wasi module** (`build/natives/wasm32/lib/supermux-syntax.wasm`,
+`native/build.sh wasm32` or `native/wasm/build.sh --test`). Nothing above the C is
+web-specific either: `wasmJs` is a target of the `nativeBacked` source set, so
+`NativeBackend`, `SyntaxQuery`, the Kotlin `Regex` evaluation of the `#match?`
+family, `Highlighter`, `SyntaxWorker` and `Syntax` are the code the JVM runs. The
+same golden files pass on all four platforms (JVM, iOS simulator, Android
+emulator, headless Chrome), the regex golden included: Kotlin/Wasm's `Regex` gives
+the same results for every shipped regex as JVM, Android and iOS do. There is no
+web variant of any query.
+
+```
+Highlighter / SyntaxWorker / Syntax               commonMain, unchanged
+NativeBackend, SyntaxQuery, ...                   nativeBackedMain, unchanged
+  WasmBackend (loading) + Ses.wasmJs.kt           wasmJsMain: the actual of the ses_* ABI
+    syntax-loader.mjs                             instantiate, copies, the two host callbacks
+      supermux-syntax.wasm                        imports: 4 WASI functions + env.ses_host_read / ses_host_match
+```
+
+- **Size**: 7,454,854 bytes, 2,687,736 gzipped (`gzip -9`), with the bundled
+  grammars' tables inside, as on native. `manifest.json` records both (`size`,
+  `gzip_size`). The 29 code-only grammars' tables (5.4 MB) are fetched on first
+  use, see below.
+- **Callbacks** never enter the wasm function table: [`src/syntax_wasm.c`](src/syntax_wasm.c)
+  holds fixed trampolines (`ses_wasm_parser_parse`, `ses_wasm_query_captures`,
+  `ses_wasm_query_matches`) whose C callbacks call two imports with a host context id;
+  Kotlin maps the id to its `TextSource` / regex matcher (0 = none, a NULL callback).
+  A chunk is written as UTF-16 into one grow-only buffer (`ses_wasm_scratch`). A throwing
+  source or matcher is caught in Kotlin and rethrown after the C call returns, as on iOS.
+- **Imports**, exactly (checked by `native/wasm/test.mjs` against
+  `native/wasm/expected-imports.json`, and by the loader, which refuses any other):
+  `env.ses_host_read`, `env.ses_host_match`, and `wasi_snapshot_preview1.fd_write`,
+  `fd_seek`, `fd_close` (wasi-libc's stdio, reached only by tree-sitter's debug
+  printing: `fd_write` goes to the console) and `clock_time_get` (`clock_gettime`,
+  the parse timeout: `performance.now()`). Exports: every `SES_API` function and
+  `memory`, `_initialize` (a reactor: no `_start`).
+- **Threads**: none. The module is single-threaded wasm32-wasi; `ses_grammar.c`'s
+  mutex compiles to nothing under `__wasm__`.
+- **Vue's C++ scanner** compiles with `zig c++ -target wasm32-wasi -fno-exceptions`
+  and links against zig's wasi libc++ with no changes: vue is fully highlighted on
+  the web, like everywhere else.
+- **Crossing the boundary**: every value is a number or a string. Byte buffers cross
+  as latin1 strings and int arrays as strings of two UTF-16 units per int, because
+  Kotlin/Wasm converts a whole string in one copy, while a typed array costs one JS
+  call per element.
+- **Tables**: bundled grammars (the core set) are inside the module. A code-only
+  grammar's `<lang>.sesz` is fetched by `WasmBackend.ensureLanguage` from
+  `tablesUrl` (default: `editor-syntax/tables/` next to the wasm module) straight into
+  the module, and checked there against the SHA-256 compiled into its code, as on
+  native. `isReady` never blocks.
+- **The worker shares the UI thread.** `SyntaxLimits.parseSliceMicros` is 8 ms on the
+  web (50 ms natively), and `Highlighter.parseSuspending` gives the thread back
+  (one `MessageChannel` task) between slices, before a layer's parse once a slice is
+  used up, and between finding and merging injections; the worker also yields before
+  its spans and its folds. Natively `platformSliceYield` is null and nothing changes.
+  Measured in headless Chrome on the Mac (`MainThreadTest`, a `MessageChannel`
+  ping-pong: the longest the thread was held), 10k lines:
+
+  | | first parse, longest hold | keystroke cycles, longest hold |
+  |---|---|---|
+  | Kotlin (asserted: <= 16 ms) | 9.1 ms (18.3 ms when the code itself is not compiled yet) | 4.5 ms |
+  | Markdown | 39.2 ms | 10.1 ms |
+  | Vue | 26.0 ms | 10.5 ms |
+  | PHP | 31.7 ms | 12.0 ms |
+
+  **Over 16 ms, not yet fixed:** Markdown's, Vue's and PHP's first parse run the
+  host's injection query over the whole document in one C call (Markdown: 46 ms
+  alone). Splitting it into windows is future work; M2c found and fixed Markdown's 334 ms merge of 3.5k
+  injection sites (now hashed, on every platform) and a 25 ms long-line scan.
+- **Memory**: wasm memory only grows. The Node test, which loads every bundled
+  grammar and parses a 2 MB JSON document, ends at 273 MiB.
+
+### Serving it (what M5 does)
+
+The Kotlin/Wasm toolchain does not copy a dependency klib's resources next to the
+consumer's module, exactly as for terminal-core: **`:web` must re-export
+`syntax-loader.mjs` and `supermux-syntax.wasm` as its own wasmJs resources**,
+copied from `:editor-syntax:stageWasmResources`
+(`build/gradle/generated/wasmResources/supermux-syntax.wasm`, verified against the
+manifest) and `src/wasmJsMain/resources/syntax-loader.mjs`, like
+`stageTerminalWasmAssets` in `apps/web/build.gradle.kts`. webpack then emits the
+wasm from the loader's `new URL("./supermux-syntax.wasm", import.meta.url)` and
+`stageForBroker` content-hashes it with the other assets, so the default URL is right.
+
+The tables are fetched by name, so they cannot be content-hashed: serve
+`:editor-syntax:stageTables`' `editor-syntax/tables/*.sesz` (29 files, 5.4 MB,
+checked against the manifest) from the broker's static directory at a fixed path,
+and pass that directory to `WasmBackend.load(tablesUrl = ...)`. They are data: the
+module refuses any blob whose SHA-256 is not the one its code was generated with, so
+a long cache lifetime is safe as long as the path changes with the grammar versions
+(for example `/assets/editor-syntax/tables/<manifest sha>/`). Serve the wasm with
+gzip or brotli; the loader compiles from bytes (`WebAssembly.compile`), so the MIME
+type does not matter, but `application/wasm` would allow a later switch to
+`compileStreaming`.
+
+The browser tests (`:editor-syntax:wasmJsBrowserTest`, Karma and headless Chrome)
+serve the same files: `karma.config.d/syntax-wasm.js` serves the goldens and tables,
+and `syntax-test-setup.mjs` fetches them before any test runs, so the shared tests
+read their resources synchronously, as on the JVM. `CHROME_BIN` defaults to the
+Mac's Google Chrome.
+
 ## Licences
 
 - tree-sitter: MIT; the ICU headers it vendors under `lib/src/unicode/`: the
   Unicode/ICU licence.
-- zlib: the zlib licence. It is compiled into the Linux and Windows libraries.
+- zlib: the zlib licence. It is compiled into the Linux, Windows and wasm libraries.
+- wasi-libc (the wasm module): MIT, with BSD-2-Clause (cloudlibc), MIT (musl) and
+  CC0 (dlmalloc) parts; the texts are in `native/licenses/wasi-libc*`.
 - Grammars: each grammar's licence is in `grammars.lock.json`; all are MIT
   except dart (ISC) and clojure (sogaiu's, CC0-1.0).
 - Queries: each shipped query file names its sources and their licences in its

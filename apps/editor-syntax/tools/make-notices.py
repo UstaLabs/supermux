@@ -14,20 +14,22 @@ w = out.append
 w('# Third-party notices: `dev.supermux.editor:editor-syntax`\n')
 w('editor-syntax itself is MIT licensed, like the rest of this repository. Its native libraries additionally')
 w('**contain compiled third-party code**: the tree-sitter runtime, every grammar listed below (its generated')
-w('parser and external scanner; for bundled grammars also its parse tables, compressed), and, in the Linux and')
-w('Windows libraries only, zlib. This file lists what is inside the libraries built from the pinned sources')
+w('parser and external scanner; for bundled grammars also its parse tables, compressed), and, in the Linux,')
+w('Windows and wasm libraries only, zlib. This file lists what is inside the libraries built from the pinned sources')
 w('(`native/upstream.lock.json`, `native/grammars.lock.json`) and reproduces the required notices.\n')
 w('Which artifacts: every `libsupermux_syntax*.{so,dylib,dll,a}` that `native/build.sh` produces, the Android')
-w('`jni/<abi>/libsupermux_syntax_jni.so`, and the JVM jar\'s `dev/supermux/editor/syntax/natives/<target>/` resources.\n')
+w('`jni/<abi>/libsupermux_syntax_jni.so`, the JVM jar\'s `dev/supermux/editor/syntax/natives/<target>/` resources, and')
+w('the web\'s `supermux-syntax.wasm` (the wasmJs artifact\'s resource).\n')
 w('Also linked, from the toolchain: LLVM libc++ (Apache-2.0 with LLVM exceptions) statically into the Android,')
-w('Linux and Windows libraries, for tree-sitter-vue\'s C++ scanner; zig\'s mingw-w64 CRT startup objects and')
-w('winpthreads into the Windows DLL. **Build-time only, not linked:** the JDK\'s `jni.h` and the vendored `native/jni/*/jni_md.h`')
+w('Linux, Windows and wasm libraries, for tree-sitter-vue\'s C++ scanner; zig\'s mingw-w64 CRT startup objects and')
+w('winpthreads into the Windows DLL; zig\'s wasi-libc into the wasm module. **Build-time only, not linked:** the JDK\'s `jni.h` and the vendored `native/jni/*/jni_md.h`')
 w('(GPLv2 with the Classpath exception), the Android NDK, zig, and tree-sitter-cli (used to regenerate clojure).\n')
 w('| component | version | licence | tables |')
 w('|---|---|---|---|')
 w('| tree-sitter (`lib/`) | %s (`%s`) | MIT | |' % (up['tree-sitter']['tag'], up['tree-sitter']['commit']))
 w('| ICU data in tree-sitter `lib/src/unicode/` | (vendored by tree-sitter) | Unicode-3.0 / ICU | |')
-w('| zlib | %s | Zlib | (Linux and Windows only) |' % up['zlib']['version'])
+w('| zlib | %s | Zlib | (Linux, Windows and wasm only) |' % up['zlib']['version'])
+w('| wasi-libc (zig %s) | bundled with zig | MIT (of Apache-2.0 / Apache-2.0 WITH LLVM-exception / MIT); parts BSD-2-Clause, MIT, CC0 | (wasm only) |' % up['zig']['version'])
 for g in lock:
     if g['tables'] == 'excluded': continue
     w('| `%s` | %s | %s | %s |' % (g['package'], g['version'], g['license'], g['tables']))
@@ -43,6 +45,12 @@ w('## mingw-w64 winpthreads and runtime (Windows DLL only)\n\n`zig cc -target x8
   'COPYING there) and `libc/mingw/COPYING`.\n\n```\n%s\n```\n\n```\n%s\n```\n'
   % (open(os.path.join(here, 'native/licenses/winpthreads.COPYING')).read().strip(),
      open(os.path.join(here, 'native/licenses/mingw-w64.COPYING')).read().strip()))
+L = lambda n: open(os.path.join(here, 'native/licenses', n)).read().strip()
+w('## wasi-libc (wasm module only)\n\n`zig cc -target wasm32-wasi` links zig %s\'s bundled wasi-libc statically: '
+  'malloc (dlmalloc, CC0), string and stdio functions (musl), clock_gettime (cloudlibc). Its licence summary, the MIT '
+  'licence chosen of its three, and the notices of the parts linked: cloudlibc\'s BSD-2-Clause and musl\'s COPYRIGHT.'
+  '\n\n```\n%s\n```\n\n```\n%s\n```\n\n```\n%s\n```\n\n```\n%s\n```\n'
+  % (up['zig']['version'], L('wasi-libc.LICENSE'), L('wasi-libc.LICENSE-MIT'), L('wasi-libc-cloudlibc.LICENSE'), L('wasi-libc-musl.COPYRIGHT')))
 z = lic(os.path.join(b, 'zlib'))
 w('## zlib: Zlib licence\n\n<https://zlib.net>, version %s.\n\n```\n%s\n```\n' % (up['zlib']['version'], z))
 w('## Grammars\n')

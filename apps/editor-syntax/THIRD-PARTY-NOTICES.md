@@ -2,23 +2,25 @@
 
 editor-syntax itself is MIT licensed, like the rest of this repository. Its native libraries additionally
 **contain compiled third-party code**: the tree-sitter runtime, every grammar listed below (its generated
-parser and external scanner; for bundled grammars also its parse tables, compressed), and, in the Linux and
-Windows libraries only, zlib. This file lists what is inside the libraries built from the pinned sources
+parser and external scanner; for bundled grammars also its parse tables, compressed), and, in the Linux,
+Windows and wasm libraries only, zlib. This file lists what is inside the libraries built from the pinned sources
 (`native/upstream.lock.json`, `native/grammars.lock.json`) and reproduces the required notices.
 
 Which artifacts: every `libsupermux_syntax*.{so,dylib,dll,a}` that `native/build.sh` produces, the Android
-`jni/<abi>/libsupermux_syntax_jni.so`, and the JVM jar's `dev/supermux/editor/syntax/natives/<target>/` resources.
+`jni/<abi>/libsupermux_syntax_jni.so`, the JVM jar's `dev/supermux/editor/syntax/natives/<target>/` resources, and
+the web's `supermux-syntax.wasm` (the wasmJs artifact's resource).
 
 Also linked, from the toolchain: LLVM libc++ (Apache-2.0 with LLVM exceptions) statically into the Android,
-Linux and Windows libraries, for tree-sitter-vue's C++ scanner; zig's mingw-w64 CRT startup objects and
-winpthreads into the Windows DLL. **Build-time only, not linked:** the JDK's `jni.h` and the vendored `native/jni/*/jni_md.h`
+Linux, Windows and wasm libraries, for tree-sitter-vue's C++ scanner; zig's mingw-w64 CRT startup objects and
+winpthreads into the Windows DLL; zig's wasi-libc into the wasm module. **Build-time only, not linked:** the JDK's `jni.h` and the vendored `native/jni/*/jni_md.h`
 (GPLv2 with the Classpath exception), the Android NDK, zig, and tree-sitter-cli (used to regenerate clojure).
 
 | component | version | licence | tables |
 |---|---|---|---|
 | tree-sitter (`lib/`) | v0.25.10 (`da6fe9beb4f7f67beb75914ca8e0d48ae48d6406`) | MIT | |
 | ICU data in tree-sitter `lib/src/unicode/` | (vendored by tree-sitter) | Unicode-3.0 / ICU | |
-| zlib | 1.3.1 | Zlib | (Linux and Windows only) |
+| zlib | 1.3.1 | Zlib | (Linux, Windows and wasm only) |
+| wasi-libc (zig 0.16.0) | bundled with zig | MIT (of Apache-2.0 / Apache-2.0 WITH LLVM-exception / MIT); parts BSD-2-Clause, MIT, CC0 | (wasm only) |
 | `tree-sitter-javascript` | 0.25.0 | MIT | bundled |
 | `tree-sitter-typescript` | 0.23.2 | MIT | bundled |
 | `tree-sitter-python` | 0.25.0 | MIT | bundled |
@@ -584,6 +586,276 @@ OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
 LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+## wasi-libc (wasm module only)
+
+`zig cc -target wasm32-wasi` links zig 0.16.0's bundled wasi-libc statically: malloc (dlmalloc, CC0), string and stdio functions (musl), clock_gettime (cloudlibc). Its licence summary, the MIT licence chosen of its three, and the notices of the parts linked: cloudlibc's BSD-2-Clause and musl's COPYRIGHT.
+
+```
+wasi-libc as a whole is multi-licensed under the
+Apache License v2.0 with LLVM Exceptions, the Apache License v2.0, and
+the MIT License. See the LICENSE-APACHE-LLVM, LICENSE-APACHE and LICENSE-MIT
+files, respectively, for details.
+
+Portions of this software are derived from third-party works covered by
+their own licenses:
+
+dlmalloc/                     - CC0; see the notice in malloc.c for details
+emmalloc/                     - MIT; see the notice in emmalloc.c for details
+libc-bottom-half/cloudlibc/   - BSD-2-Clause; see the LICENSE file for details
+libc-top-half/musl/           - MIT; see the COPYRIGHT file for details
+
+wasi-libc's changes to these files are multi-licensed under the
+Apache License v2.0 with LLVM Exceptions, the Apache License v2.0,
+the MIT License, and the original licenses of the third-party works.
+```
+
+```
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
+```
+Copyright (c) 2015-2017 Nuxi (https://nuxi.nl/) and contributors.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
+```
+
+```
+musl as a whole is licensed under the following standard MIT license:
+
+----------------------------------------------------------------------
+Copyright © 2005-2020 Rich Felker, et al.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+----------------------------------------------------------------------
+
+Authors/contributors include:
+
+A. Wilcox
+Ada Worcester
+Alex Dowad
+Alex Suykov
+Alexander Monakov
+Andre McCurdy
+Andrew Kelley
+Anthony G. Basile
+Aric Belsito
+Arvid Picciani
+Bartosz Brachaczek
+Benjamin Peterson
+Bobby Bingham
+Boris Brezillon
+Brent Cook
+Chris Spiegel
+Clément Vasseur
+Daniel Micay
+Daniel Sabogal
+Daurnimator
+David Carlier
+David Edelsohn
+Denys Vlasenko
+Dmitry Ivanov
+Dmitry V. Levin
+Drew DeVault
+Emil Renner Berthing
+Fangrui Song
+Felix Fietkau
+Felix Janda
+Gianluca Anzolin
+Hauke Mehrtens
+He X
+Hiltjo Posthuma
+Isaac Dunham
+Jaydeep Patil
+Jens Gustedt
+Jeremy Huntwork
+Jo-Philipp Wich
+Joakim Sindholt
+John Spencer
+Julien Ramseier
+Justin Cormack
+Kaarle Ritvanen
+Khem Raj
+Kylie McClain
+Leah Neukirchen
+Luca Barbato
+Luka Perkov
+M Farkas-Dyck (Strake)
+Mahesh Bodapati
+Markus Wichmann
+Masanori Ogino
+Michael Clark
+Michael Forney
+Mikhail Kremnyov
+Natanael Copa
+Nicholas J. Kain
+orc
+Pascal Cuoq
+Patrick Oppenlander
+Petr Hosek
+Petr Skocik
+Pierre Carrier
+Reini Urban
+Rich Felker
+Richard Pennington
+Ryan Fairfax
+Samuel Holland
+Segev Finer
+Shiz
+sin
+Solar Designer
+Stefan Kristiansson
+Stefan O'Rear
+Szabolcs Nagy
+Timo Teräs
+Trutz Behn
+Valentin Ochs
+Will Dietz
+William Haddon
+William Pitcock
+
+Portions of this software are derived from third-party works licensed
+under terms compatible with the above MIT license:
+
+The TRE regular expression implementation (src/regex/reg* and
+src/regex/tre*) is Copyright © 2001-2008 Ville Laurikari and licensed
+under a 2-clause BSD license (license text in the source files). The
+included version has been heavily modified by Rich Felker in 2012, in
+the interests of size, simplicity, and namespace cleanliness.
+
+Much of the math library code (src/math/* and src/complex/*) is
+Copyright © 1993,2004 Sun Microsystems or
+Copyright © 2003-2011 David Schultz or
+Copyright © 2003-2009 Steven G. Kargl or
+Copyright © 2003-2009 Bruce D. Evans or
+Copyright © 2008 Stephen L. Moshier or
+Copyright © 2017-2018 Arm Limited
+and labelled as such in comments in the individual source files. All
+have been licensed under extremely permissive terms.
+
+The ARM memcpy code (src/string/arm/memcpy.S) is Copyright © 2008
+The Android Open Source Project and is licensed under a two-clause BSD
+license. It was taken from Bionic libc, used on Android.
+
+The AArch64 memcpy and memset code (src/string/aarch64/*) are
+Copyright © 1999-2019, Arm Limited.
+
+The implementation of DES for crypt (src/crypt/crypt_des.c) is
+Copyright © 1994 David Burren. It is licensed under a BSD license.
+
+The implementation of blowfish crypt (src/crypt/crypt_blowfish.c) was
+originally written by Solar Designer and placed into the public
+domain. The code also comes with a fallback permissive license for use
+in jurisdictions that may not recognize the public domain.
+
+The smoothsort implementation (src/stdlib/qsort.c) is Copyright © 2011
+Valentin Ochs and is licensed under an MIT-style license.
+
+The x86_64 port was written by Nicholas J. Kain and is licensed under
+the standard MIT terms.
+
+The mips and microblaze ports were originally written by Richard
+Pennington for use in the ellcc project. The original code was adapted
+by Rich Felker for build system and code conventions during upstream
+integration. It is licensed under the standard MIT terms.
+
+The mips64 port was contributed by Imagination Technologies and is
+licensed under the standard MIT terms.
+
+The powerpc port was also originally written by Richard Pennington,
+and later supplemented and integrated by John Spencer. It is licensed
+under the standard MIT terms.
+
+All other files which have no copyright comments are original works
+produced specifically for use as part of this library, written either
+by Rich Felker, the main author of the library, or by one or more
+contibutors listed above. Details on authorship of individual files
+can be found in the git version control history of the project. The
+omission of copyright and license comments in each file is in the
+interest of source tree size.
+
+In addition, permission is hereby granted for all public header files
+(include/* and arch/*/bits/*) and crt files intended to be linked into
+applications (crt/*, ldso/dlstart.c, and arch/*/crt_arch.h) to omit
+the copyright notice and permission notice otherwise required by the
+license, and to use these files without any requirement of
+attribution. These files include substantial contributions from:
+
+Bobby Bingham
+John Spencer
+Nicholas J. Kain
+Rich Felker
+Richard Pennington
+Stefan Kristiansson
+Szabolcs Nagy
+
+all of whom have explicitly granted such permission.
+
+This file previously contained text expressing a belief that most of
+the files covered by the above exception were sufficiently trivial not
+to be subject to copyright, resulting in confusion over whether it
+negated the permissions granted in the license. In the spirit of
+permissive licensing, and of not having licensing issues being an
+obstacle to adoption, that text has been removed.
 ```
 
 ## zlib: Zlib licence
