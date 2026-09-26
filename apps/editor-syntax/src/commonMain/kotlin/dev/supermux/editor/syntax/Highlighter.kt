@@ -289,18 +289,30 @@ class Highlighter(
         private val yielder: (suspend () -> Unit)?,
     ) {
         private var lastYield = TimeSource.Monotonic.markNow()
+        /** Time spent given away: the budget counts only the time spent working. */
+        private var yielded = kotlin.time.Duration.ZERO
 
         private fun left(): Long = sliceMicros - lastYield.elapsedNow().inWholeMicroseconds
 
+        /** Microseconds of work since the parse started (not the time other tasks ran during yields). */
+        private fun worked(): Long = (started.elapsedNow() - yielded).inWholeMicroseconds
+
         private suspend fun giveAway(y: suspend () -> Unit) {
+            val t = TimeSource.Monotonic.markNow()
             y()
+            yielded += t.elapsedNow()
             lastYield = TimeSource.Monotonic.markNow()
+            // a newer text may have arrived while the thread was away: stop a stale parse at once
+            if (cancel()) throw ParseCancelled()
         }
 
-        /** Between two steps that are not parses (finding injections, merging them): yield if the slice is used up. */
+        /**
+         * Between two steps that are not parses (injection query windows, merging): the next step
+         * cannot be interrupted, so yield once half of the slice is used.
+         */
         suspend fun checkpoint() {
             val y = if (sliceMicros > 0) yielder else null
-            if (y != null && left() <= 0) giveAway(y)
+            if (y != null && left() < sliceMicros / 2) giveAway(y)
         }
 
         suspend fun parse(p: ParserHandle, text: TextSource, old: TreeHandle?): TreeHandle {
@@ -315,7 +327,7 @@ class Highlighter(
                     } catch (e: SyntaxException) {
                         if (e.status != SyntaxStatus.TIMEOUT) throw e
                         if (cancel()) throw ParseCancelled()
-                        if (budgetMicros > 0 && started.elapsedNow().inWholeMicroseconds > budgetMicros) {
+                        if (budgetMicros > 0 && worked() > budgetMicros) {
                             throw SyntaxException("parse over its ${budgetMicros / 1000} ms budget", SyntaxStatus.TIMEOUT)
                         }
                         onSlice?.invoke()
@@ -465,9 +477,10 @@ class Highlighter(
         val q = query(parent.language, QueryKind.INJECTIONS) ?: return
         val start = parent.ranges.firstOrNull() ?: 0
         val end = parent.ranges.lastOrNull() ?: length
+        if (!parent.clean) slicer.checkpoint() // the parse before, then changed ranges + a query: both uninterruptible
         val sites: List<Site> = phase("sites") { when {
             old == null -> {
-                val found = phase("s.find") { findParts(parent, q, intArrayOf(start, end), text) }
+                val found = phase("s.find") { findParts(parent, q, intArrayOf(start, end), text, slicer) }
                 slicer.checkpoint()
                 phase("s.merge") { merge(emptyList(), found) }
             }
@@ -483,7 +496,7 @@ class Highlighter(
                     Site(site.pattern, site.language, site.combined, stay.toMutableList())
                 } }
                 val region = clip(normalize((changed.toList() + dropped)), intArrayOf(start, end))
-                val found = phase("s.find") { findParts(parent, q, region, text) }
+                val found = phase("s.find") { findParts(parent, q, region, text, slicer) }
                 slicer.checkpoint()
                 phase("s.merge") { merge(kept, found) }
             }
@@ -572,36 +585,54 @@ class Highlighter(
     }
 
     /** The injection matches of [parent] intersecting [where] ([start, end]*), one part each. */
-    private fun findParts(parent: Layer, q: QueryHandle, where: IntArray, text: TextSource): List<Found> {
+    /** A match by its pattern and its captures' (start, end, index): found again from another range or window. */
+    private data class MatchKey(val pattern: Int, val captures: List<Int>)
+
+    /**
+     * The injection matches of [parent] intersecting [where] ([start, end]*), one part each. Each
+     * range is queried in windows of [INJECTION_WINDOW] units, with a [Slicer.checkpoint] between
+     * them: one query over a whole 10k-line Markdown file held the web's UI thread for 46 ms. A
+     * match crossing a window edge is found from both windows and kept once.
+     */
+    private suspend fun findParts(parent: Layer, q: QueryHandle, where: IntArray, text: TextSource, slicer: Slicer): List<Found> {
         val content = q.captureNames.indexOf("injection.content")
         if (content < 0 || where.isEmpty()) return emptyList()
         val langCapture = q.captureNames.indexOf("injection.language")
         val fileCapture = q.captureNames.indexOf("injection.filename")
         val out = ArrayList<Found>()
-        val seen = HashSet<String>()
+        val seen = HashSet<MatchKey>()
         for (w in where.indices step 2) {
-            val m0 = q.matches(parent.tree, where[w], where[w + 1], text, content)
-            if (m0.exceededMatchLimit && !loggedMatchLimit) { loggedMatchLimit = true; log("injection query match limit exceeded in ${parent.language}") }
-            for (m in m0.toList()) {
-                // a match found again from a second range
-                if (!seen.add("${m.pattern}/" + m.captures.joinToString(",") { "${it.start}-${it.end}-${it.index}" })) continue
-                val st = settingsOf(parent.language, q, m.pattern)
-                var lang: String? = st.language?.let { registry.aliasFor(it) }
-                if (st.self) lang = parent.language
-                if (st.parent) lang = parent.parentLanguage ?: parent.language
-                m.captures.firstOrNull { it.index == langCapture }?.let { lang = registry.aliasFor(slice(text, it.start, it.end)) }
-                m.captures.firstOrNull { it.index == fileCapture }?.let { lang = registry.forFile(slice(text, it.start, it.end)) }
-                val l = lang ?: continue
-                if (l !in backend.languages) continue
-                if (registry.query(l, QueryKind.HIGHLIGHTS) == null && registry.query(l, QueryKind.INJECTIONS) == null) continue
-                val ranges = ArrayList<Int>()
-                var es = Int.MAX_VALUE
-                var ee = 0
-                for (c in m.captures) {
-                    es = minOf(es, c.start); ee = maxOf(ee, c.end)
-                    if (c.index == content) contentRanges(c, st, ranges)
+            var from = where[w]
+            while (true) {
+                val to = minOf(where[w + 1], from + INJECTION_WINDOW)
+                val m0 = q.matches(parent.tree, from, to, text, content)
+                if (m0.exceededMatchLimit && !loggedMatchLimit) { loggedMatchLimit = true; log("injection query match limit exceeded in ${parent.language}") }
+                for (m in m0.toList()) {
+                    // a match found again from a second range or window
+                    val key = IntArray(3 * m.captures.size)
+                    m.captures.forEachIndexed { i, c -> key[3 * i] = c.start; key[3 * i + 1] = c.end; key[3 * i + 2] = c.index }
+                    if (!seen.add(MatchKey(m.pattern, key.asList()))) continue
+                    val st = settingsOf(parent.language, q, m.pattern)
+                    var lang: String? = st.language?.let { registry.aliasFor(it) }
+                    if (st.self) lang = parent.language
+                    if (st.parent) lang = parent.parentLanguage ?: parent.language
+                    m.captures.firstOrNull { it.index == langCapture }?.let { lang = registry.aliasFor(slice(text, it.start, it.end)) }
+                    m.captures.firstOrNull { it.index == fileCapture }?.let { lang = registry.forFile(slice(text, it.start, it.end)) }
+                    val l = lang ?: continue
+                    if (l !in backend.languages) continue
+                    if (registry.query(l, QueryKind.HIGHLIGHTS) == null && registry.query(l, QueryKind.INJECTIONS) == null) continue
+                    val ranges = ArrayList<Int>()
+                    var es = Int.MAX_VALUE
+                    var ee = 0
+                    for (c in m.captures) {
+                        es = minOf(es, c.start); ee = maxOf(ee, c.end)
+                        if (c.index == content) contentRanges(c, st, ranges)
+                    }
+                    out += Found(m.pattern, l, st.combined, Part(es, ee, normalize(ranges)))
                 }
-                out += Found(m.pattern, l, st.combined, Part(es, ee, normalize(ranges)))
+                if (to >= where[w + 1]) break
+                from = to
+                slicer.checkpoint()
             }
         }
         return out
@@ -658,6 +689,8 @@ class Highlighter(
         /** Not drawn and not competing (`@spell`, `_helper`, unknown names). */
         const val SKIP = -2
         const val WINDOW = 4096
+        /** Units per injection query ([findParts]): about 2k lines of Markdown. */
+        const val INJECTION_WINDOW = 32_768
 
         val MARKS: List<Decoration.Mark> = TokenClasses.ALL.map { Decoration.Mark(setOf(it), inclusiveStart = false, inclusiveEnd = false) }
 
