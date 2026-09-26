@@ -53,3 +53,5 @@ include(":editor-syntax")
 include(":editor-compose")
 // Try the native editor (desktop window + web page) and measure it: depends on :editor-compose and :editor-syntax only.
 include(":editor-sample")
+// The native editor's first plugin: closing brackets and Enter between braces (spec: editor-plugins/*).
+include(":editor-plugins:basics")

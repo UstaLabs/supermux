@@ -274,8 +274,9 @@ internal class FieldSync(
         val clampedTo = main.to.coerceIn(w.base, w.end)
         val event = if (composition != null || wasComposing) "input.ime" else "input"
         if (composition == null && !wasComposing && e.insert == "\n" && e.from == e.to && from == main.head && main.empty) {
-            // A soft Return: the editor's newline (it keeps the indentation), at every cursor.
-            DefaultCommands.insertNewline.run(view)
+            // A soft Return is the Enter key: the keymap's binding (a plugin's Enter between braces),
+            // else the editor's newline (it keeps the indentation), at every cursor.
+            if (!runBindings(view, KeyChord("Enter"), isApplePlatform)) DefaultCommands.insertNewline.run(view)
             return null // the listener has re-synced the field
         }
         if (atMain && from <= clampedFrom && to >= clampedTo) {

@@ -7,6 +7,8 @@ import dev.supermux.editor.compose.Editor
 import dev.supermux.editor.compose.EditorTheme
 import dev.supermux.editor.compose.EditorView
 import dev.supermux.editor.core.EditorState
+import dev.supermux.editor.core.extensionOf
+import dev.supermux.editor.plugins.basics.basics
 import dev.supermux.editor.core.TransactionSpec
 import dev.supermux.editor.sample.resources.Res
 import dev.supermux.editor.syntax.LanguageRegistry
@@ -118,7 +120,7 @@ class SampleSession(
     scope: CoroutineScope,
     hop: (() -> Unit) -> Unit,
 ) : AutoCloseable {
-    val view = EditorView(EditorState.create(text, extensions = Syntax.extension(language)))
+    val view = EditorView(EditorState.create(text, extensions = extensionOf(Syntax.extension(language), basics())))
     val worker = SyntaxWorker(backend, registry, scope, dispatch = { spec -> hop { view.dispatch(spec) } })
     private val removeListener = view.addListener { worker.onState(it.state) }
 

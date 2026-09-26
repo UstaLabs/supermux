@@ -56,8 +56,8 @@ class WindowDiffTest {
 }
 
 class FieldSyncTest {
-    private class Harness(text: String, cursor: Int, radius: Int = 20, margin: Int = 4) {
-        val view = EditorView(EditorState.create(text, EditorSelection.cursor(cursor)))
+    private class Harness(text: String, cursor: Int, radius: Int = 20, margin: Int = 4, ext: dev.supermux.editor.core.Extension? = null) {
+        val view = EditorView(if (ext == null) EditorState.create(text, EditorSelection.cursor(cursor)) else EditorState.create(text, EditorSelection.cursor(cursor), ext))
         val sync = FieldSync(view, radius, margin)
         /** What the platform field holds right now. */
         var field: FieldText = sync.initialField()
@@ -153,6 +153,28 @@ class FieldSyncTest {
         // Only once: a third step is an ordinary composition step.
         h.sync.onFieldChange("x かな", 4, 4, 2..3, deferRewindow = true)
         assertNull(h.transactions.last().annotation(EditorAnnotations.imeJoinPrevious))
+    }
+
+    @Test fun aSoftReturnRunsTheKeymapsEnter() {
+        var ran = 0
+        val enter = dev.supermux.editor.core.keymapOf(dev.supermux.editor.core.KeyBinding("Enter", dev.supermux.editor.core.Command { t ->
+            ran++
+            t.dispatch(dev.supermux.editor.core.TransactionSpec(changes = listOf(dev.supermux.editor.core.ChangeSpec(t.state.selection.main.head, t.state.selection.main.head, "\n>>")), userEvent = "input"))
+            true
+        }))
+        val h = Harness("ab", 1, ext = enter)
+        h.type("\n")
+        assertEquals(1, ran, "a soft Return did not run the Enter binding")
+        assertEquals("a\n>>b", h.doc)
+    }
+
+    @Test fun aSoftBackspaceAsksTheInputHandlers() {
+        val calls = ArrayList<Triple<Int, Int, String>>()
+        val handler = inputHandlerFacet.of(InputHandler { _, from, to, text -> calls += Triple(from, to, text); false })
+        val h = Harness("x()", 2, ext = handler)
+        h.backspace()
+        assertEquals(listOf(Triple(1, 2, "")), calls, "a soft Backspace is not offered to the input handlers as (head-1, head, \"\")")
+        assertEquals("x)", h.doc)
     }
 
     @Test fun aDomInsertLandsAtTheDomSelection() {
