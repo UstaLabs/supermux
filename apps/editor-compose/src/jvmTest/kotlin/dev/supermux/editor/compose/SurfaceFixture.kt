@@ -1,0 +1,77 @@
+package dev.supermux.editor.compose
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.ComposeUiTest
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.unit.dp
+import dev.supermux.editor.core.EditorState
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.test.assertNotNull
+
+internal const val EDITOR_TAG = "editor"
+
+/** The soft keyboard, counted instead of raised (the desktop has none). */
+internal class RecordingKeyboard : SoftwareKeyboardController {
+    val shows = AtomicInteger()
+    val hides = AtomicInteger()
+    override fun show() { shows.incrementAndGet() }
+    override fun hide() { hides.incrementAndGet() }
+}
+
+/** One live [Editor] in the desktop harness, plus what a test needs to poke at it. */
+internal class SurfaceFixture(val view: EditorView, val keyboard: RecordingKeyboard) {
+    val controller: EditorController get() = assertNotNull(view.surface as? EditorController, "the surface is not composed")
+    val geometry: Geometry get() = controller.geometry
+    var theme: EditorTheme? = null
+}
+
+@OptIn(ExperimentalTestApi::class)
+internal fun editorTest(
+    state: EditorState,
+    widthDp: Int = 400,
+    heightDp: Int = 300,
+    lineWrap: Boolean = false,
+    readOnly: Boolean = false,
+    theme: ((EditorTheme) -> EditorTheme)? = null,
+    onViewport: (IntRange) -> Unit = {},
+    body: ComposeUiTest.(SurfaceFixture) -> Unit,
+) = runComposeUiTest {
+    val view = EditorView(state)
+    val keyboard = RecordingKeyboard()
+    val fixture = SurfaceFixture(view, keyboard)
+    var wrap by mutableStateOf(lineWrap)
+    setContent {
+        CompositionLocalProvider(
+            LocalSoftwareKeyboardController provides keyboard,
+            // A blinking cursor would make every pixel test a coin toss.
+            LocalEditorCursorBlink provides false,
+        ) {
+            val base = EditorTheme.default()
+            val t = theme?.invoke(base) ?: base
+            fixture.theme = t
+            Box(Modifier.size(widthDp.dp, heightDp.dp)) {
+                Editor(
+                    view = view,
+                    modifier = Modifier.fillMaxSize().testTag(EDITOR_TAG),
+                    theme = t,
+                    lineWrap = wrap,
+                    readOnly = readOnly,
+                    onViewport = onViewport,
+                )
+            }
+        }
+    }
+    waitForIdle()
+    body(fixture)
+}

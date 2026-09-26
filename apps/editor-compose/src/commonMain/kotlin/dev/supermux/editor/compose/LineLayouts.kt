@@ -90,6 +90,10 @@ class LineLayouts(
 
     val size: Int get() = cache.size
 
+    /** Bumped whenever [configure] dropped every layout: heights measured before it are stale. */
+    var generation: Int = 0
+        private set
+
     /** Set the configuration; a different one clears every cached layout. Cheap when unchanged. */
     fun configure(theme: EditorTheme, density: Density, wrapWidthPx: Int?, tabSize: Int = 4) {
         val sig = LayoutSignature(
@@ -105,6 +109,7 @@ class LineLayouts(
         cache.clear()
         resolved.clear()
         maxLineWidth = 0f
+        generation++
         fontSizePx = with(density) { theme.fontSizeSp.sp.toPx() }
         lineHeightPx = kotlin.math.round(fontSizePx * theme.lineHeightFactor).coerceAtLeast(1f)
         style = TextStyle(
