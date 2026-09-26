@@ -11,7 +11,7 @@ internal expect fun detectApplePlatform(): Boolean
 
 
 /**
- * The web's fast path for typing (see [fastTypeKey]); elsewhere null. Installed while an editor is
+ * The web's key path (see [webKeyDown]) and its clipboard events; elsewhere null. Installed while an editor is
  * composed; returns the function that removes it.
  */
 internal expect fun installFastTyping(view: EditorView, controller: EditorController): (() -> Unit)?

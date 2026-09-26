@@ -24,6 +24,8 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.utf16CodePoint
+import dev.supermux.editor.core.KeyBinding
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -373,12 +375,26 @@ internal fun handleEditorKey(view: EditorView, event: KeyEvent, composing: Boole
     val name = keyName(event.key) ?: return false
     val chord = KeyChord(name, ctrl = event.isCtrlPressed, alt = event.isAltPressed, shift = event.isShiftPressed, meta = event.isMetaPressed)
     val apple = isApplePlatform
-    if (runKey(view, chord, apple)) return true
-    for (b in defaultBindings(apple)) if (b.chord(apple) == chord && b.command.run(view)) return true
+    val cp = event.utf16CodePoint
+    if (runBindings(view, chord, apple, altGrChar = cp >= 0x20 && cp != 0x7F && cp != 0xFFFF)) return true
     return swallowedChords(apple).contains(chord)
 }
 
-/** A key's modifier bits for [fastTypeKey]. */
+/**
+ * The state's keymap, then [defaultBindings]: the first binding for [chord] whose command returns
+ * true. [altGrChar]: the key typed a character. Windows reports AltGr as Ctrl+Alt, so off Apple a
+ * Ctrl+Alt chord that typed a character matches only a binding that names `Ctrl-Alt` explicitly,
+ * never a `Mod-Alt` one (which would eat the `@` of a German layout).
+ */
+internal fun runBindings(view: EditorView, chord: KeyChord, apple: Boolean, altGrChar: Boolean = false): Boolean {
+    val altGr = !apple && altGrChar && chord.ctrl && chord.alt
+    fun matches(b: KeyBinding) = b.chord(apple) == chord && (!altGr || b.key.contains("Ctrl"))
+    for (b in view.state.facet(keymapFacet)) if (matches(b) && b.command.run(view)) return true
+    for (b in defaultBindings(apple)) if (matches(b) && b.command.run(view)) return true
+    return false
+}
+
+/** A key's modifier bits for [webKeyDown]. */
 internal object KeyFlags {
     const val CTRL = 1
     const val META = 2
@@ -388,27 +404,52 @@ internal object KeyFlags {
     const val COMPOSING = 16
 }
 
+/** What the web's DOM key-down listener does with a key ([webKeyDown]). */
+internal object WebKey {
+    /** Not the surface's: Compose for the web sees it as usual. */
+    const val PASS = 0
+    /** Done here, in the DOM event: the event is cancelled (preventDefault) and stopped. */
+    const val HANDLED = 1
+    /** Mod-c/x/v: hidden from Compose (stopped) but not cancelled, so the browser raises its
+     * copy/cut/paste event, which the surface serves with the whole selection. */
+    const val BROWSER = 2
+}
+
 /**
- * The web's fast path for a DOM key-down ([installFastTyping]): true when it typed [key] into
- * [view] itself. Only a plain printable character, typed into the focused, editable view, with no
- * composition in progress, no Ctrl/Meta (and no Alt outside Apple platforms, where Alt is a
- * shortcut modifier rather than a character layer), and no key binding for that chord (a
- * plugin's binding runs through the ordinary key path instead). A dead key reports "Dead", a
- * named key its name: neither is one character, so both go the ordinary way too.
+ * The web's key path ([installFastTyping]): Compose for the web handles DOM input at the next
+ * animation frame, after that frame drew, so a key it handles is painted two frames late. A
+ * hardware key the surface can serve is therefore served inside the DOM event itself:
+ * - a chord bound in the state's keymap or [defaultBindings] (Backspace, Enter, arrows, Tab,
+ *   Mod-a, a plugin's binding) runs its command;
+ * - Mod-c / Mod-x / Mod-v go to the browser's clipboard events ([WebKey.BROWSER]);
+ * - a plain printable character (no Ctrl/Meta, no Alt off Apple, where Alt is a shortcut modifier
+ *   rather than a character layer) is typed through [EditorView.typeText].
+ * Never while an IME composes, never for a view without focus, and typing never into a read-only
+ * one. A dead key reports "Dead" and goes the ordinary way.
  */
-internal fun fastTypeKey(view: EditorView, composing: Boolean, key: String, code: String, flags: Int, apple: Boolean = isApplePlatform): Boolean {
-    if (!view.focused || view.readOnly || composing || flags and KeyFlags.COMPOSING != 0) return false
-    if (flags and (KeyFlags.CTRL or KeyFlags.META) != 0) return false
+internal fun webKeyDown(view: EditorView, composing: Boolean, key: String, code: String, flags: Int, apple: Boolean = isApplePlatform): Int {
+    if (!view.focused || composing || flags and KeyFlags.COMPOSING != 0) return WebKey.PASS
+    val ctrl = flags and KeyFlags.CTRL != 0
+    val meta = flags and KeyFlags.META != 0
     val alt = flags and KeyFlags.ALT != 0
-    if (alt && !apple) return false
+    val shift = flags and KeyFlags.SHIFT != 0
     val single = key.length == 1 || (key.length == 2 && key[0].isHighSurrogate() && key[1].isLowSurrogate())
-    if (!single || key[0].code < 0x20 || key[0].code == 0x7F) return false
-    domKeyName(code)?.let { name ->
-        val chord = KeyChord(name, alt = alt, shift = flags and KeyFlags.SHIFT != 0)
-        if (view.state.facet(keymapFacet).any { it.chord(apple) == chord }) return false
-        if (defaultBindings(apple).any { it.chord(apple) == chord }) return false
+    val printable = single && key[0].code >= 0x20 && key[0].code != 0x7F
+    val name = domKeyName(code) ?: when {
+        key == " " -> "Space"
+        printable -> key.lowercase()
+        key.length > 1 && key != "Dead" && key != "Unidentified" && key != "Process" -> key
+        else -> null
     }
-    return DefaultCommands.insertText(key).run(view)
+    val mod = if (apple) meta else ctrl
+    if (name != null && mod && !alt && (name == "c" || name == "x" || name == "v")) return WebKey.BROWSER
+    if (name != null) {
+        val chord = KeyChord(name, ctrl = ctrl, alt = alt, shift = shift, meta = meta)
+        if (runBindings(view, chord, apple, altGrChar = printable)) return WebKey.HANDLED
+    }
+    if (!printable || ctrl || meta || (alt && !apple) || view.readOnly) return WebKey.PASS
+    view.typeText(key)
+    return WebKey.HANDLED
 }
 
 /** A DOM `KeyboardEvent.code` as the key name [KeyChord] uses (the physical key, like [keyName]). */
@@ -511,6 +552,9 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
             capitalization = KeyboardCapitalization.None,
             keyboardType = KeyboardType.Text,
             imeAction = ImeAction.None,
+            // Only a touch raises the keyboard (focusFromTouch shows it); a host's programmatic
+            // focus, a mouse click or a tab switch never does.
+            showKeyboardOnFocus = false,
         ),
         lineLimits = TextFieldLineLimits.MultiLine(1, 1),
         decorator = { Box(Modifier.size(1.dp)) },

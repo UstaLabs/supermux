@@ -99,10 +99,13 @@ object DefaultCommands {
         val text = selectedText(t.state)
         if (text != null) {
             (t as? EditorView)?.clipboard?.write(text)
-            change(t, "delete.cut") { _, r -> if (r.empty) null else ChangeSpec(r.from, r.to) }
+            deleteSelection.run(t)
         }
         true
     }
+
+    /** Delete every non-empty range (`delete.cut`): a cut whose text the caller put on a clipboard. */
+    internal val deleteSelection = Command { t -> change(t, "delete.cut") { _, r -> if (r.empty) null else ChangeSpec(r.from, r.to) } }
 
     /** [EditorView.paste] the clipboard's text. */
     val paste = Command { t ->
@@ -115,7 +118,8 @@ object DefaultCommands {
         true
     }
 
-    private fun selectedText(st: EditorState): String? {
+    /** Every non-empty range's text, one line per range; null when all are cursors. */
+    internal fun selectedText(st: EditorState): String? {
         val parts = st.selection.ranges.filter { !it.empty }.map { st.doc.slice(it.from, it.to) }
         return if (parts.isEmpty()) null else parts.joinToString("\n")
     }
