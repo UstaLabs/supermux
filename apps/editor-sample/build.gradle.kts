@@ -1,10 +1,11 @@
 plugins {
     alias(libs.plugins.multiplatform)
+    alias(libs.plugins.android.application)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.compose.compiler)
 }
 
-// editor-sample: try the native editor (desktop window + a web page) and measure it.
+// editor-sample: try the native editor (desktop window, web page, Android app, iOS app) and measure it.
 //
 // It depends on :editor-compose and :editor-syntax and on NOTHING else of supermux, like
 // :terminal-sample: it opens a bundled real Kotlin file (apps/shared/.../HostStore.kt, 2,231
@@ -15,12 +16,25 @@ plugins {
 //   ./gradlew :editor-sample:jvmTest                   # the performance targets (spec §6.6), asserted
 //   ./gradlew :editor-sample:wasmJsBrowserDistribution # the web page (build/dist/wasmJs/productionExecutable)
 //   node web-bench/run.mjs <dist dir>                  # web frame times + the cold-start ceiling (headless Chrome)
+//   ./gradlew :editor-sample:assembleDebug             # the Android app (dev.supermux.editor.sample)
+//   iosApp/device.sh <device id>                       # the iOS app, built, signed and installed ON THE MAC
 group = "dev.supermux.editor.sample"
 version = "0.1.0-dev.1"
 
 kotlin {
     jvmToolchain(17)
     jvm()
+    androidTarget()
+    // The iOS app (iosApp/project.yml) links EditorSample.framework: dynamic, like the main app's
+    // SupermuxKit, so the syntax binding's static archive is linked into it once, and embedded and
+    // signed by :editor-sample:embedAndSignAppleFrameworkForXcode (which also copies the Compose
+    // resources, the fonts and sample files, into the app bundle).
+    listOf(iosArm64(), iosSimulatorArm64()).forEach { target ->
+        target.binaries.framework {
+            baseName = "EditorSample"
+            isStatic = false
+        }
+    }
     @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
     wasmJs {
         browser {
@@ -46,6 +60,9 @@ kotlin {
             implementation(compose.desktop.currentOs)
             implementation(libs.coroutines.swing)
         }
+        androidMain.dependencies {
+            implementation(libs.androidx.activity.compose)
+        }
         jvmTest.dependencies {
             @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
             implementation(compose.desktop.uiTestJUnit4)
@@ -60,6 +77,33 @@ kotlin {
 compose.resources {
     packageOfResClass = "dev.supermux.editor.sample.resources"
     generateResClass = always
+}
+
+android {
+    namespace = "dev.supermux.editor.sample"
+    compileSdk = libs.versions.androidCompileSdk.get().toInt()
+    defaultConfig {
+        // Its own id: installing the sample never touches another dev.supermux app.
+        applicationId = "dev.supermux.editor.sample"
+        minSdk = libs.versions.androidMinSdk.get().toInt()
+        targetSdk = libs.versions.androidTargetSdk.get().toInt()
+        versionCode = 1
+        versionName = version.toString()
+    }
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            // Debug-signed: this APK is never distributed.
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+    packaging {
+        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
 }
 
 // ---------------------------------------------------------------- browser assets --------------

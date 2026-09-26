@@ -28,8 +28,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.editor.compose.EditorAnnotations
 import dev.supermux.editor.compose.EditorTheme
+import dev.supermux.editor.compose.EditorZoom
+import dev.supermux.editor.compose.KeyPath
+import dev.supermux.editor.compose.WebKeyboard
 import dev.supermux.editor.compose.packagedEditorFontFamily
+import dev.supermux.editor.core.Transaction
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.mutableStateListOf
 import dev.supermux.editor.core.ChangeSpec
 import dev.supermux.editor.core.Decoration
 import dev.supermux.editor.core.EditorSelection
@@ -75,6 +88,11 @@ fun SampleApp(
     var file by remember { mutableStateOf(if (bench != null) SampleFile.KOTLIN_10K else initialFile) }
     var dark by remember { mutableStateOf(true) }
     var wrap by remember { mutableStateOf(false) }
+    var readOnly by remember { mutableStateOf(false) }
+    var settings by remember { mutableStateOf(false) }
+    var fontSize by remember { mutableStateOf(EditorZoom.DEFAULT) }
+    var webKeyboard by remember { mutableStateOf(WebKeyboard.AUTO) }
+    val inputLog = remember { InputLog() }
     val stats = remember { FrameStats() }
     val scope = rememberCoroutineScope()
 
@@ -121,21 +139,30 @@ fun SampleApp(
     val theme = remember(font, dark) { if (dark) EditorTheme.dark(font) else EditorTheme.light(font) }
     val chrome = if (dark) Color(0xFF151713) else Color(0xFFE9EAE4)
     val ink = if (dark) Color(0xFFD8DED3) else Color(0xFF1F221C)
-    Column(Modifier.fillMaxSize().background(theme.background)) {
+    // The input log hears every transaction and (while it is shown) every key's path.
+    if (session != null) {
+        DisposableEffect(session, inputLog.enabled) {
+            val view = session.view
+            val remove = if (inputLog.enabled) view.addListener { inputLog.transaction(it) } else ({})
+            view.onKeyPath = if (inputLog.enabled) { k, p -> inputLog.key(k, p) } else null
+            onDispose { remove(); view.onKeyPath = null }
+        }
+        LaunchedEffect(session, webKeyboard) { session.view.webKeyboard = webKeyboard }
+    }
+    Column(Modifier.fillMaxSize().background(theme.background).windowInsetsPadding(WindowInsets.safeDrawing)) {
         Row(
-            Modifier.fillMaxWidth().background(chrome).padding(horizontal = 8.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().background(chrome).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Chip("settings", settings, ink) { settings = !settings }
             for (f in SampleFile.entries) Chip(f.label, f == file, ink) { file = f }
-            Chip(if (wrap) "wrap: on" else "wrap: off", wrap, ink) { wrap = !wrap }
-            Chip(if (dark) "dark" else "light", false, ink) { dark = !dark }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
                 failure != null -> Message("could not start: $failure", ink)
                 session == null -> Message("loading…", ink)
-                else -> SampleEditorPane(session, theme, wrap, stats)
+                else -> SampleEditorPane(session, theme, wrap, stats, readOnly = readOnly, onFontSize = { fontSize = it })
             }
             val status = session?.let { s ->
                 val st = s.view.state
@@ -147,8 +174,111 @@ fun SampleApp(
                 Modifier.align(Alignment.BottomEnd).padding(8.dp).clip(RoundedCornerShape(4.dp)).background(chrome.copy(alpha = 0.9f)).padding(6.dp),
                 style = TextStyle(color = ink, fontSize = 11.sp, fontFamily = font),
             )
+            if (inputLog.enabled) {
+                // Draws only: no pointer input, so the text under it stays tappable.
+                BasicText(
+                    inputLog.lines.joinToString("\n").ifEmpty { "input log: type something" },
+                    Modifier.align(Alignment.TopEnd).padding(8.dp).widthIn(max = 320.dp).clip(RoundedCornerShape(4.dp))
+                        .background(chrome.copy(alpha = 0.85f)).padding(6.dp),
+                    style = TextStyle(color = ink, fontSize = 10.sp, fontFamily = font),
+                )
+            }
+        }
+        if (settings) {
+            SettingsSheet(
+                chrome = chrome, ink = ink,
+                wrap = wrap, onWrap = { wrap = it },
+                dark = dark, onDark = { dark = it },
+                readOnly = readOnly, onReadOnly = { readOnly = it },
+                fontSize = session?.view?.effectiveFontSize ?: fontSize,
+                onZoom = { step -> session?.view?.let { v -> if (step == 0) v.resetZoom() else v.zoomTo(v.effectiveFontSize + step) } },
+                logOn = inputLog.enabled, onLog = { inputLog.enabled = it; inputLog.clear() },
+                webKeyboard = webKeyboard, onWebKeyboard = { webKeyboard = it },
+                onAddCursor = { session?.view?.let { addCursorBelow(it) } },
+                onSingleCursor = { session?.view?.let { v -> v.dispatch(TransactionSpec(selection = EditorSelection.single(v.state.selection.main.anchor, v.state.selection.main.head), userEvent = "select")) } },
+                onClose = { settings = false },
+            )
         }
     }
+}
+
+/** The settings sheet: the editor's options and the device pass's debug tools. */
+@Composable
+private fun SettingsSheet(
+    chrome: Color, ink: Color,
+    wrap: Boolean, onWrap: (Boolean) -> Unit,
+    dark: Boolean, onDark: (Boolean) -> Unit,
+    readOnly: Boolean, onReadOnly: (Boolean) -> Unit,
+    fontSize: Float, onZoom: (Int) -> Unit,
+    logOn: Boolean, onLog: (Boolean) -> Unit,
+    webKeyboard: WebKeyboard, onWebKeyboard: (WebKeyboard) -> Unit,
+    onAddCursor: () -> Unit, onSingleCursor: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth().background(chrome).padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        @Composable
+        fun Line(content: @Composable () -> Unit) = Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) { content() }
+        Line {
+            Chip(if (wrap) "wrap: on" else "wrap: off", wrap, ink) { onWrap(!wrap) }
+            Chip(if (dark) "theme: dark" else "theme: light", false, ink) { onDark(!dark) }
+            Chip(if (readOnly) "read-only: on" else "read-only: off", readOnly, ink) { onReadOnly(!readOnly) }
+        }
+        Line {
+            BasicText("font ${FrameStats.fmt(fontSize.toDouble())}", style = TextStyle(color = ink, fontSize = 12.sp))
+            Chip("A−", false, ink) { onZoom(-1) }
+            Chip("A+", false, ink) { onZoom(1) }
+            Chip("reset", false, ink) { onZoom(0) }
+        }
+        Line {
+            Chip(if (logOn) "debug input log: on" else "debug input log: off", logOn, ink) { onLog(!logOn) }
+            Chip("keys (web): ${webKeyboard.name.lowercase()}", webKeyboard != WebKeyboard.AUTO, ink) {
+                onWebKeyboard(WebKeyboard.entries[(webKeyboard.ordinal + 1) % WebKeyboard.entries.size])
+            }
+        }
+        Line {
+            Chip("add cursor below", false, ink, onAddCursor)
+            Chip("single cursor", false, ink, onSingleCursor)
+            Chip("close", false, ink, onClose)
+        }
+    }
+}
+
+/**
+ * The debug input log: each transaction's userEvent (with what it changed) and, while it is on,
+ * the path every key took (`EditorView.onKeyPath`), newest last.
+ */
+@Stable
+class InputLog(private val capacity: Int = 14) {
+    var enabled: Boolean by mutableStateOf(false)
+    val lines = mutableStateListOf<String>()
+
+    fun clear() = lines.clear()
+
+    private fun add(line: String) {
+        lines += line
+        while (lines.size > capacity) lines.removeAt(0)
+    }
+
+    fun transaction(tr: Transaction) {
+        if (!tr.docChanged && !tr.selectionSet) return
+        val event = tr.annotation(Transaction.userEvent) ?: "-"
+        val join = if (tr.annotation(EditorAnnotations.imeJoinPrevious) == true) " (joins the previous)" else ""
+        val what = if (tr.docChanged) {
+            var ins = 0; var del = 0
+            for (c in tr.changes.iterChanges()) { ins += c.toB - c.fromB; del += c.toA - c.fromA }
+            " +$ins −$del"
+        } else " select ${tr.state.selection.ranges.size}x"
+        add("tx $event$what$join")
+    }
+
+    fun key(key: String, path: KeyPath) = add("key $key → ${path.label}")
 }
 
 @Composable

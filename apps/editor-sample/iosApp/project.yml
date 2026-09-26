@@ -1,0 +1,72 @@
+# The iOS host of :editor-sample (the native editor's sample): `xcodegen generate`, then build with
+# device.sh (on the Mac: signing, install and launch on a paired device).
+name: EditorSample
+options:
+  bundleIdPrefix: dev.supermux.editor
+  deploymentTarget: { iOS: "17.0" }
+settings:
+  base:
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+targets:
+  # Not "EditorSample": the app's own Swift module would shadow the framework's in `import EditorSample`.
+  EditorSampleApp:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: editor-sample
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        # Compose's PlistSanityCheck aborts at launch without it (M0).
+        CADisableMinimumFrameDurationOnPhone: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.editor.sample
+        TARGETED_DEVICE_FAMILY: "1,2"
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        # This app links :editor-syntax, so its code-only grammars need their tables in the bundle
+        # (apps/editor-syntax/native/README.md, "Tables resources"). Only this app turns it on.
+        SUPERMUX_EDITOR_SYNTAX_TABLES: "YES"
+        FRAMEWORK_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/../build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+        OTHER_LDFLAGS: [$(inherited), -framework, EditorSample]
+        LD_RUNPATH_SEARCH_PATHS: [$(inherited), "@executable_path/Frameworks"]
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        # The paid team the Supermux app uses; automatic provisioning covers this bundle id.
+        DEVELOPMENT_TEAM: "57L7J9XA89"
+        ENABLE_DEBUG_DYLIB: NO
+        # The framework is rebuilt by the pre-build script; an explicit-module scan can cache the
+        # previous build's module instead (seen once as "cannot find 'SampleViewControllerKt'").
+        SWIFT_ENABLE_EXPLICIT_MODULES: NO
+    preBuildScripts:
+      - name: Build EditorSample.framework (embed and sign)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          if [ -f "$HOME/ios-build-env.sh" ]; then . "$HOME/ios-build-env.sh"; fi
+          export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)}"
+          cd "$SRCROOT/../.."
+          # --no-daemon: a daemon started over SSH loses the signing keychain (the skill's lesson).
+          # Also copies the Compose resources (fonts, sample files) into the app bundle.
+          ./gradlew --no-daemon :editor-sample:embedAndSignAppleFrameworkForXcode
+      - name: Copy the native editor's grammar tables
+        basedOnDependencyAnalysis: false
+        script: |
+          if [ "${SUPERMUX_EDITOR_SYNTAX_TABLES:-NO}" != "YES" ]; then echo "editor-syntax tables: skipped"; exit 0; fi
+          if [ -f "$HOME/ios-build-env.sh" ]; then . "$HOME/ios-build-env.sh"; fi
+          export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)}"
+          cd "$SRCROOT/../.."
+          ./gradlew --no-daemon :editor-syntax:stageTables || { echo "warning: :editor-syntax:stageTables failed: no grammar tables bundled"; exit 0; }
+          TABLES="$SRCROOT/../../editor-syntax/build/gradle/generated/tables/editor-syntax"
+          if ! ls "$TABLES/tables"/*.sesz >/dev/null 2>&1; then echo "warning: no $TABLES/tables/*.sesz: no grammar tables bundled"; exit 0; fi
+          DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/editor-syntax"
+          mkdir -p "$DEST"
+          rsync -a --delete "$TABLES/" "$DEST/" || echo "warning: copying the grammar tables failed"
