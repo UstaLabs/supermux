@@ -180,4 +180,41 @@ class TouchHandlesTest {
         val want = f.theme!!.selectionHandle
         assertTrue(abs(px.red - want.red) < 0.06f && abs(px.green - want.green) < 0.06f && abs(px.blue - want.blue) < 0.06f, "handle pixel $px, want $want")
     }
+
+    @Test fun aDoubleTapSelectsTheWordWithHandlesAndMenuATripleTapTheLine() = editorTest(EditorState.create(text)) { f ->
+        val line = f.view.state.doc.lineStart(2)
+        val p = f.at(line + 12) // inside "some"
+        onNodeWithTag(EDITOR_TAG).performTouchInput { click(p) }
+        waitForIdle()
+        assertEquals(EditorSelection.cursor(line + 12), f.view.state.selection, "the first tap does not place the caret at once")
+        onNodeWithTag(EDITOR_TAG).performTouchInput { advanceEventTime(80); click(p) }
+        waitForIdle()
+        assertEquals(SelectionRange(line + 11, line + 15), f.view.state.selection.main)
+        assertEquals(TouchHandles.SELECTION, f.controller.handles)
+        assertTrue(f.controller.menuShown, "no menu after a double tap")
+        assertTrue(f.keyboard.shows.get() >= 1)
+        onNodeWithTag(EDITOR_TAG).performTouchInput { advanceEventTime(80); click(p) }
+        waitForIdle()
+        assertEquals(SelectionRange(line, f.view.state.doc.lineStart(3)), f.view.state.selection.main, "a triple tap does not select the line")
+    }
+
+    @Test fun twoSlowTapsAreTwoSingleTaps() = editorTest(EditorState.create(text)) { f ->
+        val line = f.view.state.doc.lineStart(2)
+        val p = f.at(line + 12)
+        onNodeWithTag(EDITOR_TAG).performTouchInput { click(p) }
+        waitForIdle()
+        onNodeWithTag(EDITOR_TAG).performTouchInput { advanceEventTime(viewConfiguration.doubleTapTimeoutMillis + 200); click(p) }
+        waitForIdle()
+        assertEquals(EditorSelection.cursor(line + 12), f.view.state.selection)
+        assertEquals(TouchHandles.CURSOR, f.controller.handles)
+    }
+
+    @Test fun twoTapsFarApartAreTwoSingleTaps() = editorTest(EditorState.create(text)) { f ->
+        val a = f.view.state.doc.lineStart(2) + 12
+        val b = f.view.state.doc.lineStart(6) + 3
+        onNodeWithTag(EDITOR_TAG).performTouchInput { click(f.at(a)) }
+        onNodeWithTag(EDITOR_TAG).performTouchInput { advanceEventTime(80); click(f.at(b)) }
+        waitForIdle()
+        assertEquals(EditorSelection.cursor(b), f.view.state.selection)
+    }
 }

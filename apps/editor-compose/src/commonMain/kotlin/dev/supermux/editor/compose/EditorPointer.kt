@@ -29,7 +29,8 @@ import kotlin.math.abs
  *
  * **Touch:** a tap places the cursor, takes focus AND raises the soft keyboard (every time: the user
  * may have dismissed it while the field kept focus, terminal-compose's lesson) and shows the
- * caret's handle; a long press selects a word and shows two handles (keep the finger down and drag
+ * caret's handle; a double tap selects the word under the finger (a triple tap its line), with both
+ * handles and the menu, the first tap's caret placed at once; a long press selects a word and shows two handles (keep the finger down and drag
  * to extend it by words); a tap inside that selection keeps it, a tap outside collapses it; a
  * finger on a handle drags that end (the other stays), snapping to caret positions and
  * auto-scrolling at an edge. Any other drag scrolls and never selects: its moves are left to
@@ -56,6 +57,12 @@ internal class EditorPointer(private val c: EditorController, private val scope:
     /** Two fingers zooming: their ids, how far apart they started, and the size then. */
     private class Pinch(val a: Long, val b: Long, val startDistance: Float, val startSize: Float)
 
+    private var taps = 0
+    private var lastTapTime = Long.MIN_VALUE / 2
+    private var lastTapPos = Offset.Zero
+    private var doubleTapMillis = 300L
+    private var slopPx = 8f
+
     private var drag: Drag? = null
     private var touch: TouchPress? = null
     private var handleDrag: HandleDrag? = null
@@ -70,6 +77,8 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         val longPress = viewConfiguration.longPressTimeoutMillis
         val doubleTap = viewConfiguration.doubleTapTimeoutMillis
         val slop = viewConfiguration.touchSlop
+        doubleTapMillis = doubleTap
+        slopPx = slop
         awaitPointerEventScope {
             while (true) {
                 val pending = touch?.takeIf { !it.moved && !it.longPressed }
@@ -152,7 +161,11 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         val change = event.changes.firstOrNull { it.pressed } ?: return
         eventTime = change.uptimeMillis
         if (change.type != PointerType.Mouse) {
-            val spot = if (c.handles != TouchHandles.NONE) EditorTouch.hit(c.handleSpots(), change.position) else null
+            // A tap continuing a double tap is the text's, even over a handle's target: after a
+            // double tap (the triple tap), or above the handle's tip (on the text row itself).
+            val tapping = change.uptimeMillis - lastTapTime <= doubleTapMillis && (change.position - lastTapPos).getDistance() <= slopPx * 3
+            val spot = (if (c.handles != TouchHandles.NONE) EditorTouch.hit(c.handleSpots(), change.position) else null)
+                ?.takeUnless { tapping && (taps >= 2 || change.position.y < it.tip.y) }
             if (spot != null) {
                 // A handle is the surface's own chrome: the finger drags it, it never scrolls.
                 val main = c.view.state.selection.main
@@ -269,7 +282,7 @@ internal class EditorPointer(private val c: EditorController, private val scope:
                 onLongPressReleased()
                 return
             }
-            if (!t.moved) onTap(change.position)
+            if (!t.moved) onTap(change.position, change.uptimeMillis)
             return
         }
         if (drag != null) change.consume()
@@ -286,8 +299,23 @@ internal class EditorPointer(private val c: EditorController, private val scope:
      * A finger tapped the text: inside the selection the touch handles hold, the selection stays;
      * anywhere else the caret goes there, with its own handle.
      */
-    private fun onTap(p: Offset) {
+    private fun onTap(p: Offset, time: Long) {
         c.focusFromTouch()
+        // Taps close in time and place count up: the first places the caret AT ONCE (a single tap
+        // never waits for a second), the second upgrades it to the word, the third to the line.
+        taps = if (time - lastTapTime <= doubleTapMillis && (p - lastTapPos).getDistance() <= slopPx * 3) taps % 3 + 1 else 1
+        lastTapTime = time
+        lastTapPos = p
+        if (taps == 2 || taps == 3) {
+            val at = offsetAt(p)
+            val r = if (taps == 2) TextBoundaries.wordAt(c.view.state.doc, at).let { SelectionRange(it.first, it.last + 1) } else lineRange(at)
+            if (!r.empty) {
+                select(EditorSelection.single(r.anchor, r.head))
+                c.handles = TouchHandles.SELECTION
+                c.menuShown = true
+                return
+            }
+        }
         val main = c.view.state.selection.main
         if (c.handles == TouchHandles.SELECTION && !main.empty && insideSelection(p)) {
             onTapInSelection()
@@ -317,6 +345,7 @@ internal class EditorPointer(private val c: EditorController, private val scope:
 
     private fun fireLongPress(t: TouchPress) {
         t.longPressed = true
+        taps = 0
         c.focusFromTouch()
         val w = TextBoundaries.wordAt(c.view.state.doc, offsetAt(t.down))
         val r = SelectionRange(w.first, w.last + 1)
