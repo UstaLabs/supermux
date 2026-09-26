@@ -48,6 +48,17 @@ class EditorSurfaceTest {
         }
     }
 
+    @Test fun everyRepaintIsReportedToTheHost() {
+        var paints = 0
+        editorTest(EditorState.create("abc"), onPaint = { paints++ }) { f ->
+            val before = paints
+            assertTrue(before > 0, "the first paint was not reported")
+            f.view.dispatch(dev.supermux.editor.core.TransactionSpec(changes = listOf(dev.supermux.editor.core.ChangeSpec(3, 3, "d"))))
+            waitForIdle()
+            assertTrue(paints > before, "the repaint after an edit was not reported")
+        }
+    }
+
     @Test fun theCursorIsPaintedInTheCursorColour() = editorTest(EditorState.create("hello world\nsecond", EditorSelection.cursor(6))) { f ->
         f.view.focused = true
         waitForIdle()

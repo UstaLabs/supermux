@@ -8,3 +8,10 @@ package dev.supermux.editor.compose
 val isApplePlatform: Boolean by lazy { detectApplePlatform() }
 
 internal expect fun detectApplePlatform(): Boolean
+
+
+/**
+ * The web's fast path for typing (see [fastTypeKey]); elsewhere null. Installed while an editor is
+ * composed; returns the function that removes it.
+ */
+internal expect fun installFastTyping(view: EditorView, controller: EditorController): (() -> Unit)?

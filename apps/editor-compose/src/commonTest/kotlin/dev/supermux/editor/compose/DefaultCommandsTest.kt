@@ -145,6 +145,11 @@ class DefaultCommandsTest {
         assertEquals("\t|x", tabs.marked())
     }
 
+    @Test fun insertTextTypesOverEveryRange() {
+        check("a|b\nc[d]e", DefaultCommands.insertText("ş"), "aş|b\ncş|e")
+        check("|", DefaultCommands.insertText("😀"), "😀|")
+    }
+
     @Test fun commandsNameTheirUserEvents() {
         val v = view("a|b")
         val seen = ArrayList<Transaction>()

@@ -189,6 +189,36 @@ class FieldSyncTest {
         assertEquals(h.sync.window.base + 2, h.head)
     }
 
+    @Test fun theInputEventPathAppliesTheEditAtOnceAndTheCommitPathFinishesIt() {
+        // The field's input transformation (inside the input event) reports each edit first: the
+        // document changes at once, and nothing re-windows there (the composition is unknown).
+        val text = (0 until 30).joinToString("") { "word$it " }
+        val h = Harness(text, 200)
+        repeat(12) {
+            val f = h.field
+            val t = f.text.removeRange(f.selStart - 1, f.selStart)
+            assertNull(h.sync.onFieldChange(t, f.selStart - 1, f.selStart - 1, null, deferRewindow = true), "re-windowed inside the input event")
+            h.field = FieldText(t, f.selStart - 1, f.selStart - 1)
+        }
+        assertEquals(text.removeRange(188, 200), h.doc, "the document changed at once")
+        h.assertInSync()
+        // The committed state follows: near the window's start now, so it re-windows there.
+        val f = h.field
+        h.sync.onFieldChange(f.text, f.selStart, f.selEnd, null)?.let { h.field = it }
+        h.assertInSync()
+        assertTrue(h.field.selStart >= 4, "still at the window's edge after the commit")
+    }
+
+    @Test fun aCompositionStartedInTheInputEventIsLabelledOnceItIsKnown() {
+        val h = Harness("x ", 2)
+        h.sync.onFieldChange("x に", 3, 3, null, deferRewindow = true)
+        h.sync.onFieldChange("x に", 3, 3, 2..2)
+        assertEquals(2 until 3, h.sync.composition)
+        h.sync.onFieldChange("x 日本", 4, 4, 2..2, deferRewindow = true)
+        assertEquals("x 日本", h.doc)
+        assertTrue(h.transactions.last().isUserEvent("input.ime"), "an edit while composing is input.ime")
+    }
+
     @Test fun readOnlyIgnoresTheFieldAndPutsItBack() {
         val h = Harness("abc", 3)
         h.view.readOnly = true

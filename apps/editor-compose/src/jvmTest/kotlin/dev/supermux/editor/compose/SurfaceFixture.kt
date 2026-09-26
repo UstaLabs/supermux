@@ -45,6 +45,7 @@ internal fun editorTest(
     readOnly: Boolean = false,
     theme: ((EditorTheme) -> EditorTheme)? = null,
     onViewport: (IntRange) -> Unit = {},
+    onPaint: (() -> Unit)? = null,
     body: ComposeUiTest.(SurfaceFixture) -> Unit,
 ) = runComposeUiTest {
     val view = EditorView(state)
@@ -68,6 +69,7 @@ internal fun editorTest(
                     lineWrap = wrap,
                     readOnly = readOnly,
                     onViewport = onViewport,
+                    onPaint = onPaint,
                 )
             }
         }

@@ -91,6 +91,9 @@ object DefaultCommands {
         }
     }
 
+    /** Type [text] over every range (a cursor gets it inserted), as keyboard input (`input`). */
+    fun insertText(text: String): Command = Command { t -> change(t, "input") { _, r -> ChangeSpec(r.from, r.to, text) } }
+
     val deleteBackward = Command { t ->
         change(t, "delete.backward") { st, r ->
             if (!r.empty) ChangeSpec(r.from, r.to)

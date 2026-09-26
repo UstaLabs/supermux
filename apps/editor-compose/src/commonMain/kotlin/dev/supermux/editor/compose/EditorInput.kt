@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
@@ -35,6 +36,7 @@ import dev.supermux.editor.core.KeyChord
 import dev.supermux.editor.core.Rope
 import dev.supermux.editor.core.SelectionRange
 import dev.supermux.editor.core.TransactionSpec
+import dev.supermux.editor.core.keymapFacet
 import dev.supermux.editor.core.runKey
 
 // ---------------------------------------------------------------------- the pure part --------
@@ -137,6 +139,12 @@ data class FieldText(val text: String, val selStart: Int, val selEnd: Int)
  *   beyond it, but never while the IME is composing (rewriting the field mid-composition breaks
  *   it): so Backspace at the window's start re-windows instead of being eaten (M0 checklist step 3).
  *
+ * The surface calls [onFieldChange] twice per user edit: synchronously from the field's input
+ * transformation (`deferRewindow`: the document changes inside the input event, so the edit is
+ * painted in the very next frame; the composition is not known there), and again from the field's
+ * state once the edit is committed, where the composition IS known (the underline, IME caret moves,
+ * and re-windowing happen there).
+ *
  * A non-null return is what the platform field must now hold.
  */
 internal class FieldSync(
@@ -167,13 +175,22 @@ internal class FieldSync(
         return FieldText(w.text, (main.anchor - w.base).coerceIn(0, w.text.length), (main.head - w.base).coerceIn(0, w.text.length))
     }
 
-    fun onFieldChange(text: String, selStart: Int, selEnd: Int, composition: IntRange?): FieldText? {
+    fun onFieldChange(text: String, selStart: Int, selEnd: Int, composition: IntRange?, deferRewindow: Boolean = false): FieldText? {
+        if (!deferRewindow) return apply(text, selStart, selEnd, composition, false)
+        deferring = true
+        try { return apply(text, selStart, selEnd, composition, true) } finally { deferring = false }
+    }
+
+    /** True while an input event's edit is applied: no re-windowing at an edge then. */
+    private var deferring = false
+
+    private fun apply(text: String, selStart: Int, selEnd: Int, composition: IntRange?, deferRewindow: Boolean): FieldText? {
         val before = shown
         shown = FieldText(text, selStart, selEnd)
         if (view.readOnly) return if (text != window.text) show(current()) else null
         val wasComposing = this.composition != null
         val w = window
-        this.composition = composition?.let { (w.base + it.first) until (w.base + it.last + 1) }
+        if (!deferRewindow) this.composition = composition?.let { (w.base + it.first) until (w.base + it.last + 1) }
         if (text == w.text) {
             // Only the caret moved (an IME cursor gesture): follow it, unless mid-composition. The
             // echo of a selection this class wrote (clamped to the window) is not a move.
@@ -185,6 +202,8 @@ internal class FieldSync(
                     if (sel.to <= st.doc.length) view.dispatch(TransactionSpec(selection = EditorSelection.single(sel.anchor, sel.head), userEvent = "select"))
                 }
             }
+            // The edit was applied from the input transformation; now the composition is known.
+            if (!deferRewindow && composition == null && nearEdge()) return rewindow()
             return null
         }
         if (!docMatches(w)) return rewindow()
@@ -226,7 +245,7 @@ internal class FieldSync(
                     selection = EditorSelection.single(w.base + selStart, w.base + selEnd),
                     scrollIntoView = true, userEvent = event,
                 ))
-                if (composition == null && nearEdge()) return rewindow()
+                if (!deferRewindow && composition == null && nearEdge()) return rewindow()
                 return null
             }
         }
@@ -240,7 +259,7 @@ internal class FieldSync(
         val main = view.state.selection.main
         val inside = main.from >= w.base && main.to <= w.end
         if (!docMatches(w) || !inside) return rewindow()
-        if (composition == null && nearEdge()) return rewindow()
+        if (composition == null && !deferring && nearEdge()) return rewindow()
         val now = current()
         return if (now == shown) null else show(now)
     }
@@ -316,6 +335,52 @@ internal fun handleEditorKey(view: EditorView, event: KeyEvent, composing: Boole
     return swallowedChords(apple).contains(chord)
 }
 
+/** A key's modifier bits for [fastTypeKey]. */
+internal object KeyFlags {
+    const val CTRL = 1
+    const val META = 2
+    const val ALT = 4
+    const val SHIFT = 8
+    /** The IME is composing (`isComposing`, or the key code 229 browsers use for it). */
+    const val COMPOSING = 16
+}
+
+/**
+ * The web's fast path for a DOM key-down ([installFastTyping]): true when it typed [key] into
+ * [view] itself. Only a plain printable character, typed into the focused, editable view, with no
+ * composition in progress, no Ctrl/Meta (and no Alt outside Apple platforms, where Alt is a
+ * shortcut modifier rather than a character layer), and no key binding for that chord (a
+ * plugin's binding runs through the ordinary key path instead). A dead key reports "Dead", a
+ * named key its name: neither is one character, so both go the ordinary way too.
+ */
+internal fun fastTypeKey(view: EditorView, composing: Boolean, key: String, code: String, flags: Int, apple: Boolean = isApplePlatform): Boolean {
+    if (!view.focused || view.readOnly || composing || flags and KeyFlags.COMPOSING != 0) return false
+    if (flags and (KeyFlags.CTRL or KeyFlags.META) != 0) return false
+    val alt = flags and KeyFlags.ALT != 0
+    if (alt && !apple) return false
+    val single = key.length == 1 || (key.length == 2 && key[0].isHighSurrogate() && key[1].isLowSurrogate())
+    if (!single || key[0].code < 0x20 || key[0].code == 0x7F) return false
+    domKeyName(code)?.let { name ->
+        val chord = KeyChord(name, alt = alt, shift = flags and KeyFlags.SHIFT != 0)
+        if (view.state.facet(keymapFacet).any { it.chord(apple) == chord }) return false
+        if (defaultBindings(apple).any { it.chord(apple) == chord }) return false
+    }
+    return DefaultCommands.insertText(key).run(view)
+}
+
+/** A DOM `KeyboardEvent.code` as the key name [KeyChord] uses (the physical key, like [keyName]). */
+internal fun domKeyName(code: String): String? = when {
+    code.startsWith("Key") && code.length == 4 -> code.substring(3).lowercase()
+    code.startsWith("Digit") && code.length == 6 -> code.substring(5)
+    else -> DOM_KEY_NAMES[code]
+}
+
+private val DOM_KEY_NAMES = mapOf(
+    "Space" to "Space", "Minus" to "-", "Equal" to "=", "BracketLeft" to "[", "BracketRight" to "]",
+    "Backslash" to "\\", "Semicolon" to ";", "Quote" to "'", "Backquote" to "`", "Comma" to ",",
+    "Period" to ".", "Slash" to "/",
+)
+
 private val swallowedApple = listOf("Mod-z", "Mod-Shift-z", "Mod-y").map { KeyChord.parse(it, true) }.toSet()
 private val swallowedOther = listOf("Mod-z", "Mod-Shift-z", "Mod-y").map { KeyChord.parse(it, false) }.toSet()
 private fun swallowedChords(apple: Boolean) = if (apple) swallowedApple else swallowedOther
@@ -334,9 +399,33 @@ private fun swallowedChords(apple: Boolean) = if (apple) swallowedApple else swa
 internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
     val sync = controller.fieldSync
     val field = remember(sync) { sync.initialField().let { TextFieldState(it.text, TextRange(it.selStart, it.selEnd)) } }
+    // While the input transformation runs, the field cannot be edited: a write is kept for it to apply.
+    val inEdit = remember(sync) { arrayOfNulls<FieldText>(1) to BooleanArray(1) }
+    val transformation = remember(sync, field) {
+        InputTransformation {
+            val (pending, active) = inEdit
+            active[0] = true
+            pending[0] = null
+            try {
+                val sel = selection
+                // The user's edit reaches the document NOW, inside the input event: the next frame shows it.
+                sync.onFieldChange(asCharSequence().toString(), sel.start, sel.end, field.composition?.let { it.min until it.max }, deferRewindow = true)
+                    ?.let { pending[0] = it }
+                pending[0]?.let { u ->
+                    if (!asCharSequence().contentEquals(u.text)) replace(0, length, u.text)
+                    selection = TextRange(u.selStart, u.selEnd)
+                }
+            } finally {
+                active[0] = false
+                pending[0] = null
+            }
+        }
+    }
     DisposableEffect(sync, field) {
         val write = { u: FieldText ->
-            field.edit {
+            val (pending, active) = inEdit
+            if (active[0]) pending[0] = u
+            else field.edit {
                 if (!asCharSequence().contentEquals(u.text)) replace(0, length, u.text)
                 selection = TextRange(u.selStart, u.selEnd)
             }
@@ -369,6 +458,7 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
             .size(1.dp)
             .focusRequester(controller.focusRequester),
         readOnly = readOnly,
+        inputTransformation = transformation,
         keyboardOptions = KeyboardOptions(
             // Code, not prose: nothing is capitalized, and Return is a line break, not an action.
             capitalization = KeyboardCapitalization.None,

@@ -51,3 +51,5 @@ include(":editor-core")
 include(":editor-syntax")
 // The native editor's one Compose surface (layout, drawing, scrolling, pointer, hidden-field IME) on :editor-core.
 include(":editor-compose")
+// Try the native editor (desktop window + web page) and measure it: depends on :editor-compose and :editor-syntax only.
+include(":editor-sample")

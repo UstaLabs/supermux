@@ -63,6 +63,8 @@ internal val LocalEditorCursorBlink = staticCompositionLocalOf { true }
  * @param readOnly no user edits (see [EditorView.readOnly]); the selection still moves.
  * @param onViewport the UTF-16 range the surface lays out, at most once per frame: a syntax host
  *   dispatches it as `Syntax.setViewport`.
+ * @param onPaint called at the end of every paint of the surface (frame-time and edit-to-paint
+ *   measurements). It runs inside the draw pass: keep it to taking a timestamp.
  */
 @Composable
 fun Editor(
@@ -73,6 +75,7 @@ fun Editor(
     showLineNumbers: Boolean = true,
     readOnly: Boolean = false,
     onViewport: (IntRange) -> Unit = {},
+    onPaint: (() -> Unit)? = null,
 ) {
     // cacheSize = 0: the surface keeps its own bounded caches (LineLayouts).
     val measurer = rememberTextMeasurer(cacheSize = 0)
@@ -85,7 +88,9 @@ fun Editor(
     DisposableEffect(view, controller) {
         view.surface = controller
         view.geometry = controller.geometry
+        val removeFastTyping = installFastTyping(view, controller)
         onDispose {
+            removeFastTyping?.invoke()
             if (view.surface === controller) {
                 view.surface = null
                 view.geometry = null
@@ -140,7 +145,11 @@ fun Editor(
             // selection (mouse presses and drags), leaving a finger's drag to scroll.
             .pointerInput(pointer) { pointer.handle(this) },
     ) {
-        Canvas(Modifier.fillMaxSize()) { controller.paint(this) }
+        val paintHook by rememberUpdatedState(onPaint)
+        Canvas(Modifier.fillMaxSize()) {
+            controller.paint(this)
+            paintHook?.invoke()
+        }
         EditorInputField(controller, readOnly)
     }
 }
