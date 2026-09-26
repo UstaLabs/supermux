@@ -66,8 +66,9 @@ follows it so the text on screen stays put. A gesture or scroll-into-view since 
 
 **Huge lines.** A line longer than 10,000 units (minified code, a 1 MB JSON line) is never laid out,
 sliced or hashed whole: it is cut into pieces at grapheme boundaries, laid out only where they are
-looked at. Without wrapping, 2,048-unit pieces sit at their NOMINAL x (units x cell width: exact
-inside a piece; wide characters and tabs make later pieces start slightly off); with wrapping, rows
+looked at. Without wrapping, 2,048-unit pieces sit side by side, each starting where the MEASURED
+widths of the pieces before it end (an unmeasured one is estimated at a piece of cells), so CJK and
+other wide text neither overlaps nor misses its clicks; with wrapping, rows
 of as many units as cells fit the width (the line's height is known without shaping; a wide
 character may overhang). A keystroke on a 1 MB line takes ~6 ms to its frame.
 
@@ -115,7 +116,9 @@ dictation and CJK composition work; the design passed all 8 checks on an iPhone 
   caret comes within 32 units of an edge with more document beyond it, never while composing. So a
   held Backspace walks past the window's start instead of being eaten (M0 checklist step 3).
 - Every field edit at the main range (typing, Backspace, autocorrect, each composition step) is
-  made relative to EVERY range, as CM6 does: the diff is clamped to cover the field's previous
+  made relative to EVERY range, as CM6 does (another range takes the edit's extension only when the
+  text around it matches what was replaced around the main range; else an insertion goes over its
+  own selection, a deletion deletes one grapheme there, a replacement replaces its own selection): the diff is clamped to cover the field's previous
   selection and the caret, so typing over a selection wider than the window replaces all of it, and
   repeated characters cannot misplace a Backspace. The window never holds another range, so the other
   cursors' typing never forces a rewrite mid-composition. An edit away from the caret (an
@@ -134,7 +137,9 @@ key). Unbound keys reach the field, which is where typed characters come from. W
 composes, every key is the IME's. The field's own undo/redo and clipboard chords are swallowed (its
 history and clipboard know only its window): **copy, cut and paste are the editor's commands**
 (Mod-c/x/v), through an `EditorClipboard` (`Editor(clipboard = …)`, the platform's by default):
-copy puts every range on the clipboard, one line per range. Off Apple, Ctrl+Alt+<character> (AltGr
+copy puts every range on the clipboard, one line per range; with nothing selected it copies
+nothing (on the web the browser's default copy runs, leaving the clipboard alone). A pasted CRLF or
+lone CR, or one arriving through the hidden field, becomes `\n`. Off Apple, Ctrl+Alt+<character> (AltGr
 on Windows) matches only a binding that names `Ctrl-Alt`, never `Mod-Alt`.
 
 **On the web**, Compose handles queued DOM input only at the next animation frame, after that frame
