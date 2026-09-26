@@ -23,6 +23,7 @@ import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
+import dev.supermux.util.StartupTrace
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.CuratorConfig
@@ -368,6 +369,7 @@ class HostStore(
     val connected: Boolean get() = client.sync.synced
 
     init {
+        StartupTrace.mark("host.init")
         attachMessageTts()
         if (connectOnInit) {
             // Guarded per-frame: one poison frame drops one update, never the whole collector.
@@ -418,7 +420,11 @@ class HostStore(
 
     /** Fold one inbound frame into HostState plus side effects. Public for reducer tests. */
     fun reduce(frame: ServerFrame) {
+        val start = StartupTrace.elapsedMs()
         _state.update { reduceHostFrame(it, frame) }
+        if (frame is ServerFrame.Snapshot) {
+            StartupTrace.mark("state.snapshot.reduced", "ms=${StartupTrace.elapsedMs() - start} sessions=${frame.sessions.size}")
+        }
         onFrameEffects(frame)
     }
 
@@ -1573,6 +1579,7 @@ class HostStore(
         val st = _state.value
         if (chatLoaded(st, sessionId)) return
         if (sessionId in logFetches.getAndUpdate { it + sessionId }) return
+        val start = StartupTrace.elapsedMs()
         try {
             coroutineScope {
                 if (sessionId !in st.completeLogs) launch { loadFullLog(sessionId) }
@@ -1580,6 +1587,7 @@ class HostStore(
             }
         } finally {
             logFetches.update { it - sessionId }
+            StartupTrace.mark("chat.loaded", "session=${sessionId.take(8)} ms=${StartupTrace.elapsedMs() - start}")
         }
     }
 

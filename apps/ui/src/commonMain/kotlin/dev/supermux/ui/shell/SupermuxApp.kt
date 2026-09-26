@@ -73,6 +73,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -289,6 +290,15 @@ fun SupermuxApp(
     val openByWorkspace = sessionListMode == SessionListMode.Workspaces
 
     val sessions by fleet.sessions.collectAsState()
+    // First frame that draws real sessions — the end of the cold-start path ([StartupTrace]) —
+    // and the frames after the next session-list changes (the cache, then the live snapshot).
+    var sessionFrames by remember { mutableStateOf(0) }
+    LaunchedEffect(sessions) {
+        if (sessions.isEmpty() || sessionFrames >= 3) return@LaunchedEffect
+        withFrameNanos { }
+        sessionFrames++
+        dev.supermux.util.StartupTrace.mark("ui.sessions.drawn", "n=$sessionFrames sessions=${sessions.size}")
+    }
     val archivedSessions by fleet.archivedSessions.collectAsState()
     val workspaces by fleet.workspaces.collectAsState()
     val archivedWorkspaces by fleet.archivedWorkspaces.collectAsState()
