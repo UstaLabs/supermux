@@ -27,7 +27,7 @@
       };
       ch.port2.postMessage(0);
       // Every key event's arrival, before Compose sees it: the benchmark's key-event-to-paint clock.
-      window.addEventListener('keydown', function () { window.__keyTs = performance.now(); window.__inKey = true; }, true);
+      window.addEventListener('keydown', function (e) { window.__keyTs = performance.now(); window.__keyKind = e.key; window.__inKey = true; }, true);
       // Bubbling, after Compose's own listener on its canvas: a change made in between was synchronous.
       window.addEventListener('keydown', function () { window.__inKey = false; }, false);
       window.__coldPhase = function (name) {

@@ -39,6 +39,9 @@ class FrameStats(private val capacity: Int = 240) {
 
     /** Key event -> the paint that shows its edit, ms (the benchmark's typing phase). */
     val inputLatencies = ArrayList<Double>()
+    /** The same, per key (`x`, `Backspace`, `Enter`, `ArrowLeft`…). */
+    val inputByKind = LinkedHashMap<String, ArrayList<Double>>()
+    private var pendingKind = ""
     /** Key event -> the document change it made, ms. */
     val inputToChange = ArrayList<Double>()
     /** Changes made synchronously inside a key event's dispatch. */
@@ -51,7 +54,7 @@ class FrameStats(private val capacity: Int = 240) {
         if (insideKeyEvent()) changesInsideKeyEvent++
         if (pendingChange < 0) pendingChange = now()
         val input = lastInputEventMs()
-        if (input > lastInputSeen) { lastInputSeen = input; pendingInput = input; inputToChange += now() - input }
+        if (input > lastInputSeen) { lastInputSeen = input; pendingInput = input; pendingKind = lastInputKind(); inputToChange += now() - input }
     }
 
     fun drawEnd() {
@@ -66,6 +69,7 @@ class FrameStats(private val capacity: Int = 240) {
         }
         if (pendingInput >= 0) {
             inputLatencies += t - pendingInput
+            inputByKind.getOrPut(pendingKind) { ArrayList() } += t - pendingInput
             pendingInput = -1.0
         }
         if (pendingChange >= 0) {

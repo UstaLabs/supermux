@@ -20,7 +20,16 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.ConcurrentLinkedQueue
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performTextInput
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -82,39 +91,85 @@ class EditorPerfTest {
     private fun p95(xs: List<Double>) = xs.sorted()[(xs.size * 95 / 100).coerceAtMost(xs.size - 1)]
     private fun fmt(d: Double) = "%.2f".format(d)
 
-    @Test fun aKeystrokeInTheMiddleOfTenThousandLinesPaintsWithin16ms() {
-        val text = SampleFiles.tenK(kotlin)
+    /**
+     * Typing through the REAL input path, in the desktop UI harness (an ImageComposeScene has no
+     * focused window, so its text field can never be focused): a click focuses the hidden field,
+     * then each character is committed into that field (`performTextInput`, what an IME or a
+     * platform key-typed event does): the field's input transformation, FieldSync's diff and
+     * re-windowing, the transaction, the frame. Timed from the input to the end of the frame that
+     * shows it; then the worker's recolouring lands, and the frame applying it (the settle frame)
+     * is timed too.
+     */
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    private fun typeThroughTheField(text: String, language: String?, line: Int, column: Int, what: String): Pair<Double, Double> {
         val runs = (1..3).map {
-            Rig(text, "kotlin", width, height).use { rig ->
-                val view = rig.session.view
-                val mid = view.state.doc.lineStart(5000) + 8
-                view.dispatch(TransactionSpec(selection = EditorSelection.cursor(mid), scrollIntoView = true))
-                repeat(20) { rig.frame() }
-                rig.settle()
-                assertTrue(rig.coloured(), "no syntax colours arrived")
-                val parses = ArrayList<Double>()
-                fun keystroke(i: Int): Double {
-                    val t0 = System.nanoTime()
-                    val at = view.state.selection.main.head
-                    val change = if (i % 8 == 7) ChangeSpec(at - 1, at) else ChangeSpec(at, at, "x")
-                    view.dispatch(TransactionSpec(changes = listOf(change), scrollIntoView = true, userEvent = "input"))
-                    rig.frame()
-                    val ms = (System.nanoTime() - t0) / 1e6
-                    // The worker's recolouring lands between keystrokes, as it does while typing.
-                    rig.settle()
-                    rig.session.worker.lastCycle["parse"]?.let { parses += it }
-                    return ms
+            var result = 0.0 to 0.0
+            androidx.compose.ui.test.runDesktopComposeUiTest(width, height) {
+                val queue = ConcurrentLinkedQueue<() -> Unit>()
+                val scope = CoroutineScope(SupervisorJob())
+                val backend = NativeBackend().also { if (language != null) it.ensureLanguageNow(language) }
+                val session = SampleSession(text, language, backend, LanguageRegistry.default, scope) { queue.add(it) }
+                try {
+                    setContent {
+                        androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides Density(2f)) {
+                            SampleEditorPane(session, EditorTheme.dark(packagedEditorFontFamily()), lineWrap = false,
+                                modifier = androidx.compose.ui.Modifier.fillMaxSize().testTag("editor"))
+                        }
+                    }
+                    fun frame(): Double {
+                        val t0 = System.nanoTime()
+                        while (true) (queue.poll() ?: break).invoke()
+                        waitForIdle()
+                        return (System.nanoTime() - t0) / 1e6
+                    }
+                    fun settle() = repeat(3) { runBlocking { session.worker.idle() }; frame() }
+                    val view = session.view
+                    val at = view.state.doc.lineStart(line) + column
+                    view.dispatch(TransactionSpec(selection = EditorSelection.cursor(at), scrollIntoView = true))
+                    frame(); settle()
+                    onNodeWithTag("editor").performMouseInput { click(assertNotNull(view.coordsAtPos(view.state.selection.main.head)).center) }
+                    frame()
+                    assertTrue(view.focused, "the click did not focus the editor")
+                    val field = onNode(hasSetTextAction())
+                    val keys = ArrayList<Double>()
+                    val settles = ArrayList<Double>()
+                    fun keystroke(i: Int) {
+                        val before = view.state.doc.length
+                        val t0 = System.nanoTime()
+                        field.performTextInput(if (i % 5 == 4) " " else "x")
+                        frame()
+                        keys += (System.nanoTime() - t0) / 1e6
+                        assertEquals(before + 1, view.state.doc.length, "keystroke $i did not reach the document")
+                        runBlocking { session.worker.idle() }
+                        settles += frame()
+                    }
+                    repeat(50) { keystroke(it) } // warm-up: JIT
+                    keys.clear(); settles.clear()
+                    repeat(200) { keystroke(it) }
+                    println("PERF $what, keystroke (field path) -> frame: p50 ${fmt(keys.sorted()[100])} p95 ${fmt(p95(keys))} max ${fmt(keys.max())} ms; syntax settle frame p50 ${fmt(settles.sorted()[100])} p95 ${fmt(p95(settles))} ms")
+                    result = p95(keys) to p95(settles)
+                } finally {
+                    session.close()
+                    scope.cancel()
                 }
-                repeat(50) { keystroke(it) } // warm-up: JIT
-                parses.clear()
-                val times = (0 until 200).map { keystroke(it) }
-                println("PERF keystroke->frame (10k lines, syntax on): p50 ${fmt(times.sorted()[100])} p95 ${fmt(p95(times))} max ${fmt(times.max())} ms; worker reparse per keystroke p50 ${fmt(parses.sorted()[parses.size / 2])} p95 ${fmt(p95(parses))} ms (off the UI thread)")
-                p95(times)
             }
+            result
         }
-        val best = runs.min()
-        println("PERF keystroke->frame p95, best of 3: ${fmt(best)} ms (runs ${runs.map(::fmt)})")
-        assertTrue(best <= 16.0, "keystroke -> frame p95 $best ms > 16 ms")
+        val key = runs.minOf { it.first }
+        val settle = runs.minOf { it.second }
+        println("PERF $what, best of 3: keystroke p95 ${fmt(key)} ms, settle frame p95 ${fmt(settle)} ms (runs ${runs.map { fmt(it.first) + "/" + fmt(it.second) }})")
+        return key to settle
+    }
+
+    @Test fun aKeystrokeInTheMiddleOfTenThousandLinesPaintsWithin16ms() {
+        val (key, settle) = typeThroughTheField(SampleFiles.tenK(kotlin), "kotlin", 5000, 8, "10k lines, syntax on")
+        assertTrue(key <= 16.0, "keystroke -> frame p95 $key ms > 16 ms")
+        assertTrue(settle <= 16.0, "syntax settle frame p95 $settle ms > 16 ms")
+    }
+
+    @Test fun aKeystrokeOnAOneMegabyteLinePaintsWithin16ms() {
+        val (key, _) = typeThroughTheField("x".repeat(1_000_000), "kotlin", 0, 500_000, "a 1 MB single line")
+        assertTrue(key <= 16.0, "keystroke -> frame p95 $key ms > 16 ms on a 1 MB line")
     }
 
     @Test fun continuousScrollingThroughTenThousandLinesKeepsFramesWithin16ms() {

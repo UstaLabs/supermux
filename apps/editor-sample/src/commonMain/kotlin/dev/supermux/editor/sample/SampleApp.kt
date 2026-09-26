@@ -104,7 +104,7 @@ fun SampleApp(
     }
     if (session != null) {
         DisposableEffect(session) {
-            val remove = session.view.addListener { if (it.docChanged) stats.changed() }
+            val remove = session.view.addListener { if (it.docChanged || it.selectionSet) stats.changed() }
             onDispose { remove(); session.close() }
         }
         LaunchedEffect(session) {
@@ -210,6 +210,7 @@ suspend fun runBench(session: SampleSession, stats: FrameStats, scrollDriver: su
     val reached = view.state.doc.lineIndexAt(view.viewport.value.first.coerceAtLeast(0))
     // Real key events through the real input path (the hidden field, its diff, the transaction).
     stats.inputLatencies.clear()
+    stats.inputByKind.clear()
     stats.inputToChange.clear()
     stats.changesInsideKeyEvent = 0
     typeDriver()
@@ -222,5 +223,8 @@ suspend fun runBench(session: SampleSession, stats: FrameStats, scrollDriver: su
         """"scrollWork":{"p50":${f(FrameStats.pct(work, 50))},"p95":${f(FrameStats.pct(work, 95))},"max":${f(work.maxOrNull() ?: 0.0)},"frames":${work.size}},""" +
         """"scrollInterval":{"p50":${f(FrameStats.pct(intervals, 50))},"p95":${f(FrameStats.pct(intervals, 95))}},"reachedLine":$reached,""" +
         """"keyEventToPaint":{"n":${input.size},"p50":${f(FrameStats.pct(input, 50))},"p95":${f(FrameStats.pct(input, 95))},"max":${f(input.maxOrNull() ?: 0.0)}},""" +
-        """"keyEventToChange":{"p50":${f(FrameStats.pct(toChange, 50))},"p95":${f(FrameStats.pct(toChange, 95))},"insideKeyEvent":${stats.changesInsideKeyEvent}}}"""
+        """"keyEventToChange":{"p50":${f(FrameStats.pct(toChange, 50))},"p95":${f(FrameStats.pct(toChange, 95))},"insideKeyEvent":${stats.changesInsideKeyEvent}},""" +
+        """"keyEventToPaintByKey":{""" + stats.inputByKind.entries.joinToString(",") { (k, v) ->
+            """"$k":{"n":${v.size},"p50":${f(FrameStats.pct(v, 50))},"p95":${f(FrameStats.pct(v, 95))},"max":${f(v.max())}}"""
+        } + "}}"
 }

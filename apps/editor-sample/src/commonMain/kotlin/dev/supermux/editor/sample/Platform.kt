@@ -8,3 +8,6 @@ expect fun lastInputEventMs(): Double
 
 /** True while a key event's DOM dispatch is running (the web; false elsewhere). */
 expect fun insideKeyEvent(): Boolean
+
+/** The key of the last key event ([lastInputEventMs]): the benchmark reports latency per key. */
+expect fun lastInputKind(): String

@@ -153,6 +153,14 @@ try {
     try {
       const page = await openPage(chrome.port, base);
       await waitFor(page, 'window.__cold', 120000);
+      if (flag('--click')) {
+        await page.value("window.__paths = []; window.addEventListener('keydown', (e) => window.__paths.push(e.composedPath().slice(0, 4).map((n) => n.tagName || n.nodeName || String(n)).join('>') + ' key=' + e.key + ' code=' + e.code), true)");
+        for (const type of ['mousePressed', 'mouseReleased']) await page.send('Input.dispatchMouseEvent', { type, x: 700, y: 300, button: 'left', clickCount: 1 });
+        await sleep(500);
+        await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'x', code: 'KeyX', text: 'x', windowsVirtualKeyCode: 88 });
+        await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'x', code: 'KeyX', windowsVirtualKeyCode: 88 });
+        await sleep(300);
+      }
       console.log(await page.value(rest[rest.length - 1]));
       page.close();
     } finally {
@@ -178,6 +186,15 @@ try {
         await sleep(30 + Math.floor(Math.random() * 50));
         await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'x', code: 'KeyX', text: 'x', unmodifiedText: 'x', windowsVirtualKeyCode: 88 });
         await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'x', code: 'KeyX', windowsVirtualKeyCode: 88 });
+      }
+      // Then the bound keys, served by the keymap inside the DOM event: 40 of each.
+      const named = [['Backspace', 8], ['Enter', 13], ['ArrowLeft', 37], ['ArrowUp', 38], ['ArrowRight', 39], ['ArrowDown', 40]];
+      for (const [key, vk] of named) {
+        for (let i = 0; i < 40; i++) {
+          await sleep(30 + Math.floor(Math.random() * 50));
+          await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode: vk, text: key === 'Enter' ? '\r' : undefined });
+          await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode: vk });
+        }
       }
       await sleep(500);
       await page.value('window.__editorTypeDone = true');

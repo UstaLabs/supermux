@@ -8,3 +8,5 @@ actual fun platformNowMs(): Double = System.nanoTime() / 1e6
 actual fun lastInputEventMs(): Double = lastKeyPostedMs
 
 actual fun insideKeyEvent(): Boolean = false
+
+actual fun lastInputKind(): String = "x"
