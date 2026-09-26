@@ -87,4 +87,39 @@ class WebKeysTest {
         assertEquals(WebKey.HANDLED, key(v, "€", "KeyE", KeyFlags.CTRL or KeyFlags.ALT))
         assertEquals(10, ran)
     }
+
+    private fun facts(key: String = "x", code: String = "KeyX", pointer: String = "", touchPoints: Int = 0, aimed: Boolean = true) =
+        WebKeyFacts(aimed, key, code, 0, pointer, touchPoints)
+
+    @Test fun theHardwareKeyboardHeuristic() {
+        val st = WebKeyboardState()
+        // A desktop: a physical key is a hardware key; a key not aimed at the field never is.
+        assertEquals(true, isHardwareKey(WebKeyboard.AUTO, facts(), st))
+        assertEquals(false, isHardwareKey(WebKeyboard.AUTO, facts(aimed = false), st))
+        // Right after a touch or a pen: the soft keyboard's.
+        assertEquals(false, isHardwareKey(WebKeyboard.AUTO, facts(pointer = "touch"), WebKeyboardState()))
+        assertEquals(false, isHardwareKey(WebKeyboard.AUTO, facts(pointer = "pen"), WebKeyboardState()))
+        // A touch device (iOS Safari) before any physical key: a soft keyboard's key without a code.
+        val phone = WebKeyboardState()
+        assertEquals(false, isHardwareKey(WebKeyboard.AUTO, facts(code = "", touchPoints = 5), phone))
+        // ...until a key with a physical code shows up (an iPad keyboard), then hardware.
+        assertEquals(true, isHardwareKey(WebKeyboard.AUTO, facts(code = "KeyA", touchPoints = 5, pointer = "mouse"), phone))
+        // Forced either way.
+        assertEquals(true, isHardwareKey(WebKeyboard.HARDWARE, facts(pointer = "touch"), WebKeyboardState()))
+        assertEquals(false, isHardwareKey(WebKeyboard.SOFT, facts(), WebKeyboardState()))
+    }
+
+    @Test fun everyKeysPathIsLogged() {
+        val v = view(text = "ab", at = 1)
+        val log = ArrayList<Pair<String, KeyPath>>()
+        v.onKeyPath = { k, p -> log += k to p }
+        val st = WebKeyboardState()
+        assertEquals(WebKey.HANDLED, webKeyPath(v, false, facts("x", "KeyX"), st, apple = false))
+        assertEquals(WebKey.BROWSER, webKeyPath(v, false, WebKeyFacts(true, "c", "KeyC", KeyFlags.CTRL, "", 0), st, apple = false))
+        assertEquals(WebKey.PASS, webKeyPath(v, false, facts("Dead", "Quote"), st, apple = false))
+        v.webKeyboard = WebKeyboard.SOFT
+        assertEquals(WebKey.PASS, webKeyPath(v, false, facts("y", "KeyY"), st, apple = false))
+        assertEquals(listOf("x" to KeyPath.WEB_FAST, "c" to KeyPath.WEB_CLIPBOARD, "Dead" to KeyPath.WEB_COMPOSE, "y" to KeyPath.WEB_SOFT), log)
+        assertEquals("axb", v.state.doc.toString(), "the soft keyboard's key was typed by the fast path")
+    }
 }

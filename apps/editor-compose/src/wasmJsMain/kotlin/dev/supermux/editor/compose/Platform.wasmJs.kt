@@ -19,29 +19,35 @@ internal actual fun detectApplePlatform(): Boolean = appleNavigator()
  * in its shadow root): a soft keyboard (iOS Safari's sends real key values) must keep going
  * through the field, or autocorrect and predictions break. The last pointer being a finger or a
  * pen, or a touch-capable device on which no physical-key keydown (a non-empty `code`) has been
- * seen yet, means "not a hardware keyboard". A heuristic by nature: documented, not certain.
+ * seen yet, means "not a hardware keyboard" ([isHardwareKey]; a heuristic by nature, so
+ * [EditorView.webKeyboard] can force it, and [EditorView.onKeyPath] reports each key's path).
  */
 internal actual fun installFastTyping(view: EditorView, controller: EditorController): (() -> Unit)? {
+    val keyboard = WebKeyboardState()
     val handle = installListeners(
-        onKey = { e -> if (!isHardwareKeyFor(e)) WebKey.PASS else webKeyDown(view, controller.composing, eventKey(e), eventCode(e), eventFlags(e)) },
+        onKey = { e ->
+            val facts = WebKeyFacts(aimedAtEditorField(e), eventKey(e), eventCode(e), eventFlags(e), lastPointerType(), maxTouchPoints())
+            webKeyPath(view, controller.composing, facts, keyboard)
+        },
         onCopy = { cut -> webClipboardText(view, cut) },
         onPaste = { text -> if (!view.focused) false else { if (!view.readOnly) view.paste(text); true } },
     )
     return { removeListeners(handle) }
 }
 
-private fun isHardwareKeyFor(e: JsAny): Boolean = js(
+/** The key-down is aimed at Compose's own text input: the TEXTAREA in the canvas's shadow root. */
+private fun aimedAtEditorField(e: JsAny): Boolean = js(
     """(() => {
       const t = e.composedPath && e.composedPath()[0];
       if (!t || t.tagName !== 'TEXTAREA') return false;
       const root = t.getRootNode();
-      if (!root || !root.querySelector || !root.querySelector('canvas')) return false;
-      if (e.code) window.__editorPhysicalKey = true;
-      if (window.__editorLastPointer === 'touch' || window.__editorLastPointer === 'pen') return false;
-      if (navigator.maxTouchPoints > 0 && !window.__editorPhysicalKey) return false;
-      return true;
+      return !!(root && root.querySelector && root.querySelector('canvas'));
     })()"""
 )
+
+private fun lastPointerType(): String = js("String(window.__editorLastPointer || '')")
+
+private fun maxTouchPoints(): Int = js("(navigator.maxTouchPoints || 0)")
 
 private fun installListeners(onKey: (JsAny) -> Int, onCopy: (Boolean) -> String?, onPaste: (String) -> Boolean): JsAny = js(
     """(() => {

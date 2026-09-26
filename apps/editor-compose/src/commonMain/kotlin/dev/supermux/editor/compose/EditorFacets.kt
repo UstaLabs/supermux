@@ -22,3 +22,14 @@ fun interface InputHandler {
 
 /** Every plugin's [InputHandler], highest precedence first; the first to return true wins. */
 val inputHandlerFacet: Facet<InputHandler, List<InputHandler>> = Facet.list("inputHandler")
+
+/** Annotations the surface puts on the transactions it makes, for plugins (history, M4) to read. */
+object EditorAnnotations {
+    /**
+     * On a composition step (`input.ime`): the transaction just before this one was the SAME
+     * composition's first character, dispatched as plain `input` because Compose tells the
+     * surface a composition started only after that first edit was applied. A history groups the
+     * two (and treats the first as IME input).
+     */
+    val imeJoinPrevious: dev.supermux.editor.core.AnnotationType<Boolean> = dev.supermux.editor.core.AnnotationType("imeJoinPrevious")
+}

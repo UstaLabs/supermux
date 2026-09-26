@@ -90,6 +90,19 @@ class EditorView(initial: EditorState) : CommandTarget {
         onFontSize?.invoke(baseFontSize)
     }
 
+    /**
+     * The web only: whether a key-down comes from a hardware keyboard (served inside the DOM event)
+     * or from a soft keyboard (left to the hidden field, for autocorrect and predictions).
+     * [WebKeyboard.AUTO] is a heuristic (see the README); a host or a debug menu can force it.
+     */
+    var webKeyboard: WebKeyboard = WebKeyboard.AUTO
+
+    /**
+     * Debug: told the path every key-down took ([KeyPath]) with its key name, so a device pass
+     * can check which keys went where. Null (the default) costs nothing.
+     */
+    var onKeyPath: ((key: String, path: KeyPath) -> Unit)? = null
+
     /** Where copy and cut put text and paste takes it from; set by the surface (`Editor(clipboard = …)`). */
     internal var clipboard: EditorClipboard? = null
 
@@ -303,4 +316,32 @@ object EditorZoom {
     const val MAX = 24f
     /** [EditorTheme.fontSizeSp]'s default. */
     const val DEFAULT = 13f
+}
+
+/** How the web tells a hardware keyboard from a soft one ([EditorView.webKeyboard]). */
+enum class WebKeyboard {
+    /** The heuristic: a hardware key is one with a physical `code`, not after a touch or pen. */
+    AUTO,
+    /** Every key aimed at the editor is a hardware key (served in the DOM event). */
+    HARDWARE,
+    /** Every key goes through the hidden field, as a soft keyboard's must. */
+    SOFT,
+}
+
+/** The path one key-down took ([EditorView.onKeyPath]). */
+enum class KeyPath(val label: String) {
+    /** Web: a bound chord or a typed character, served inside the DOM event. */
+    WEB_FAST("web: served in the DOM event"),
+    /** Web: Mod-c/x/v, left to the browser's clipboard event. */
+    WEB_CLIPBOARD("web: browser clipboard event"),
+    /** Web: taken for a soft keyboard's, left to the hidden field. */
+    WEB_SOFT("web: soft keyboard, to the field"),
+    /** Web: a hardware key the fast path does not serve, left to Compose. */
+    WEB_COMPOSE("web: to Compose"),
+    /** A key event that ran a keymap binding. */
+    KEYMAP("keymap binding"),
+    /** A key event left to the hidden field (a typed character, an unbound key). */
+    FIELD("to the field"),
+    /** A key event while the IME composes: the IME's. */
+    IME("IME composing"),
 }

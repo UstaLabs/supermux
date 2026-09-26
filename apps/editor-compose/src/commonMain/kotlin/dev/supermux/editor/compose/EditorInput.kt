@@ -206,13 +206,35 @@ internal class FieldSync(
     /** True while an input event's edit is applied: no re-windowing at an edge then. */
     private var deferring = false
 
+    /**
+     * The last edit went out from the input event as plain `input` (the composition was not known
+     * yet). When the committed field then shows a composition, that edit was its first character:
+     * [joinNext] makes the next composition step carry [EditorAnnotations.imeJoinPrevious].
+     */
+    private var lastWasDeferredInput = false
+    private var joinNext = false
+
+    /** [spec], with the join annotation when it is the step after a composition's first character. */
+    private fun joined(spec: TransactionSpec, event: String): TransactionSpec {
+        if (!joinNext || event != "input.ime") return spec
+        joinNext = false
+        return spec.copy(annotations = spec.annotations + EditorAnnotations.imeJoinPrevious.of(true))
+    }
+
     private fun apply(text: String, selStart: Int, selEnd: Int, composition: IntRange?, deferRewindow: Boolean): FieldText? {
         val before = shown
         shown = FieldText(text, selStart, selEnd)
         if (view.readOnly) return if (text != window.text) show(current()) else null
         val wasComposing = this.composition != null
         val w = window
-        if (!deferRewindow) this.composition = composition?.let { (w.base + it.first) until (w.base + it.last + 1) }
+        if (!deferRewindow) {
+            this.composition = composition?.let { (w.base + it.first) until (w.base + it.last + 1) }
+            // A composition appearing right after an edit that went out as plain input: that edit
+            // was its first character (see [joined]).
+            if (composition != null && !wasComposing && lastWasDeferredInput) joinNext = true
+            if (composition == null) joinNext = false
+            lastWasDeferredInput = false
+        }
         if (text == w.text) {
             // Only the caret moved (an IME cursor gesture): follow it, unless mid-composition. The
             // echo of a selection this class wrote (clamped to the window) is not a move.
@@ -267,14 +289,16 @@ internal class FieldSync(
             // The field now holds [text]; so does the document at the window moved through the edit
             // (the window holds no other range, so only ranges before it shift it).
             window = FieldWindow(changes.mapPos(w.base, -1), text)
-            view.dispatch(spec)
+            if (deferRewindow) lastWasDeferredInput = event == "input"
+            view.dispatch(joined(spec, event))
         } else {
             // An edit away from the main range (an IME rewriting another word): as the field made
             // it, every range kept (mapped), never collapsed.
             val changes = dev.supermux.editor.core.ChangeSet.of(st.doc.length, listOf(ChangeSpec(from, to, e.insert)))
             val next = if (sel.ranges.size == 1) EditorSelection.single(w.base + selStart, w.base + selEnd) else sel.map(changes)
             window = FieldWindow(w.base, text)
-            view.dispatch(TransactionSpec(changeSet = changes, selection = next, scrollIntoView = true, userEvent = event))
+            if (deferRewindow) lastWasDeferredInput = event == "input"
+            view.dispatch(joined(TransactionSpec(changeSet = changes, selection = next, scrollIntoView = true, userEvent = event), event))
         }
         // A huge edit (a paste) leaves a huge field: shrink it now, even inside the input event.
         if (window.text.length > 4 * radius) return rewindow()
@@ -386,13 +410,65 @@ private val KEY_NAMES: Map<Key, String> = buildMap {
  * held, and replaying it would edit the document behind the editor's back (history is M4's).
  */
 internal fun handleEditorKey(view: EditorView, event: KeyEvent, composing: Boolean): Boolean {
-    if (event.type != KeyEventType.KeyDown || composing) return false
-    val name = keyName(event.key) ?: return false
+    if (event.type != KeyEventType.KeyDown) return false
+    val log = view.onKeyPath
+    if (composing) { log?.invoke(keyName(event.key) ?: event.key.toString(), KeyPath.IME); return false }
+    val name = keyName(event.key) ?: run { log?.invoke(event.key.toString(), KeyPath.FIELD); return false }
     val chord = KeyChord(name, ctrl = event.isCtrlPressed, alt = event.isAltPressed, shift = event.isShiftPressed, meta = event.isMetaPressed)
     val apple = isApplePlatform
     val cp = event.utf16CodePoint
-    if (runBindings(view, chord, apple, altGrChar = cp >= 0x20 && cp != 0x7F && cp != 0xFFFF)) return true
-    return swallowedChords(apple).contains(chord)
+    if (runBindings(view, chord, apple, altGrChar = cp >= 0x20 && cp != 0x7F && cp != 0xFFFF)) { log?.invoke(chord.label(), KeyPath.KEYMAP); return true }
+    val swallowed = swallowedChords(apple).contains(chord)
+    log?.invoke(chord.label(), if (swallowed) KeyPath.KEYMAP else KeyPath.FIELD)
+    return swallowed
+}
+
+/** "Ctrl-Shift-ArrowLeft": a chord as a key log shows it. */
+internal fun KeyChord.label(): String = buildString {
+    if (ctrl) append("Ctrl-"); if (alt) append("Alt-"); if (shift) append("Shift-"); if (meta) append("Meta-")
+    append(key)
+}
+
+/** What the web's DOM listener knows about one key-down ([webKeyPath]). */
+internal class WebKeyFacts(
+    /** The event is aimed at Compose's own text input (the TEXTAREA in the canvas's shadow root). */
+    val aimedAtField: Boolean,
+    val key: String,
+    val code: String,
+    val flags: Int,
+    /** The last pointer's type: "mouse", "touch", "pen", or "" before any. */
+    val lastPointer: String,
+    /** `navigator.maxTouchPoints`. */
+    val maxTouchPoints: Int,
+)
+
+/** The web's hardware-key heuristic's memory: a physical-key keydown has been seen. */
+internal class WebKeyboardState { var physicalKeySeen = false }
+
+/**
+ * Whether [f] is a hardware key ([EditorView.webKeyboard] AUTO): a key with a physical `code`,
+ * aimed at the field, not right after a touch or pen, and on a touch-capable device only once a
+ * physical-key keydown has been seen (iOS Safari's soft keyboard sends real key values, and must
+ * keep going through the field). A heuristic: [WebKeyboard.HARDWARE] / [WebKeyboard.SOFT] force it.
+ */
+internal fun isHardwareKey(mode: WebKeyboard, f: WebKeyFacts, st: WebKeyboardState): Boolean {
+    if (!f.aimedAtField) return false
+    if (f.code.isNotEmpty()) st.physicalKeySeen = true
+    return when (mode) {
+        WebKeyboard.HARDWARE -> true
+        WebKeyboard.SOFT -> false
+        WebKeyboard.AUTO -> f.lastPointer != "touch" && f.lastPointer != "pen" && (f.maxTouchPoints <= 0 || st.physicalKeySeen)
+    }
+}
+
+/** The web's DOM keydown: decide the path ([isHardwareKey], [webKeyDown]), log it, return a [WebKey]. */
+internal fun webKeyPath(view: EditorView, composing: Boolean, f: WebKeyFacts, st: WebKeyboardState, apple: Boolean = isApplePlatform): Int {
+    if (!f.aimedAtField) return WebKey.PASS
+    val log = view.onKeyPath
+    if (!isHardwareKey(view.webKeyboard, f, st)) { log?.invoke(f.key, KeyPath.WEB_SOFT); return WebKey.PASS }
+    val r = webKeyDown(view, composing, f.key, f.code, f.flags, apple)
+    log?.invoke(f.key, when (r) { WebKey.HANDLED -> KeyPath.WEB_FAST; WebKey.BROWSER -> KeyPath.WEB_CLIPBOARD; else -> KeyPath.WEB_COMPOSE })
+    return r
 }
 
 /**

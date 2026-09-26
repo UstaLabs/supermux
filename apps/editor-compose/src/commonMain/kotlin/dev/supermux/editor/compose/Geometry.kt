@@ -154,6 +154,33 @@ class Geometry(
         return out
     }
 
+    /**
+     * The visual row holding [offset], as document offsets `start to end`: the whole line without
+     * wrapping; with wrapping, the row's first offset and its last VISIBLE one (a row broken at a
+     * space ends before the space, so a caret there stays on this row). The last row ends at the
+     * line's end. At a wrap point an offset belongs to the row it starts.
+     */
+    fun rowBounds(offset: Int): Pair<Int, Int> {
+        val doc = state().doc
+        val at = offset.coerceIn(0, doc.length)
+        val line = doc.lineIndexAt(at)
+        val from = lineFrom(line)
+        val to = lineTo(line)
+        if (isLong(line)) {
+            if (wrapCols() == 0) return from to to
+            val len = to - from
+            val k = pieceOf(from, len, at)
+            val (a, b) = pieceBounds(from, len, k)
+            return a to (if (k == pieceCount(len) - 1) to else b)
+        }
+        val layout = lineLayout(line)
+        if (layout.lineCount <= 1) return from to to
+        val row = layout.getLineForOffset(at - from)
+        val start = from + layout.getLineStart(row)
+        val end = if (row == layout.lineCount - 1) to else from + layout.getLineEnd(row, visibleEnd = true)
+        return start to maxOf(start, end)
+    }
+
     /** The lines to lay out for a viewport at [scrollY] of [viewportHeight] pixels, plus [overscan] each side. */
     fun visibleLines(scrollY: Float, viewportHeight: Float, overscan: Int): IntRange {
         val n = heights.lineCount

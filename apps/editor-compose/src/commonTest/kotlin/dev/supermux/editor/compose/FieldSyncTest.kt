@@ -132,6 +132,39 @@ class FieldSyncTest {
         h.assertInSync()
     }
 
+    @Test fun aCompositionsFirstCharacterIsJoinedToTheNextStep() {
+        val h = Harness("x ", 2)
+        // The input event: the first kana arrives before Compose reports a composition.
+        h.field = FieldText("x k", 3, 3)
+        h.sync.onFieldChange("x k", 3, 3, null, deferRewindow = true)
+        // The committed field: now it is composing "k".
+        h.sync.onFieldChange("x k", 3, 3, 2..2)
+        assertEquals(2 until 3, h.sync.composition)
+        // The next step, in its input event (the field reports the composition it had).
+        h.field = FieldText("x か", 3, 3)
+        h.sync.onFieldChange("x か", 3, 3, 2..2, deferRewindow = true)
+        h.sync.onFieldChange("x か", 3, 3, 2..2)
+        assertEquals("x か", h.doc)
+        assertEquals(2, h.transactions.size)
+        val (first, second) = h.transactions
+        assertTrue(first.isUserEvent("input") && !first.isUserEvent("input.ime"), "the first character could not be known as IME input")
+        assertTrue(second.isUserEvent("input.ime"))
+        assertEquals(true, second.annotation(EditorAnnotations.imeJoinPrevious), "the next step does not join the first")
+        // Only once: a third step is an ordinary composition step.
+        h.sync.onFieldChange("x かな", 4, 4, 2..3, deferRewindow = true)
+        assertNull(h.transactions.last().annotation(EditorAnnotations.imeJoinPrevious))
+    }
+
+    @Test fun plainTypingIsNeverJoined() {
+        val h = Harness("x ", 2)
+        h.field = FieldText("x a", 3, 3)
+        h.sync.onFieldChange("x a", 3, 3, null, deferRewindow = true)
+        h.sync.onFieldChange("x a", 3, 3, null)
+        h.field = FieldText("x ab", 4, 4)
+        h.sync.onFieldChange("x ab", 4, 4, null, deferRewindow = true)
+        assertTrue(h.transactions.none { it.annotation(EditorAnnotations.imeJoinPrevious) != null })
+    }
+
     @Test fun aCancelledCompositionLeavesNothingBehind() {
         val h = Harness("ab", 2)
         h.ime("abにほ", 4, composition = 2..3)

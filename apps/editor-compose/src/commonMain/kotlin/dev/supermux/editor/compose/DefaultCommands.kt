@@ -40,11 +40,16 @@ object DefaultCommands {
     val selectWordLeft = Command { t -> move(t, true) { st, r -> TextBoundaries.wordLeft(st.doc, r.head) } }
     val selectWordRight = Command { t -> move(t, true) { st, r -> TextBoundaries.wordRight(st.doc, r.head) } }
 
-    /** Smart Home: to the line's first non-blank character, or from there to column 0. */
-    val cursorLineStart = Command { t -> move(t, false) { st, r -> smartHome(st.doc, r.head) } }
-    val selectLineStart = Command { t -> move(t, true) { st, r -> smartHome(st.doc, r.head) } }
-    val cursorLineEnd = Command { t -> move(t, false) { st, r -> lineEnd(st.doc, r.head) } }
-    val selectLineEnd = Command { t -> move(t, true) { st, r -> lineEnd(st.doc, r.head) } }
+    /**
+     * Home: in a wrapped line, first to the start of the visual row (when not there already), then
+     * smart Home: to the line's first non-blank character, or from there to column 0.
+     */
+    val cursorLineStart = Command { t -> move(t, false) { st, r -> home(t, st.doc, r.head) } }
+    val selectLineStart = Command { t -> move(t, true) { st, r -> home(t, st.doc, r.head) } }
+
+    /** End: in a wrapped line, first to the end of the visual row, then to the line's end. */
+    val cursorLineEnd = Command { t -> move(t, false) { st, r -> end(t, st.doc, r.head) } }
+    val selectLineEnd = Command { t -> move(t, true) { st, r -> end(t, st.doc, r.head) } }
 
     val cursorDocStart = Command { t -> move(t, false) { _, _ -> 0 } }
     val cursorDocEnd = Command { t -> move(t, false) { st, _ -> st.doc.length } }
@@ -237,6 +242,22 @@ object DefaultCommands {
         )
         t.dispatch(TransactionSpec(changeSet = changes, selection = sel, scrollIntoView = true, userEvent = "input.indent"))
         return true
+    }
+
+    /** The visual row around [head], when [t] is a composed view (wrapping is the surface's). */
+    private fun row(t: CommandTarget, head: Int): Pair<Int, Int>? = (t as? EditorView)?.geometry?.rowBounds(head)
+
+    private fun home(t: CommandTarget, doc: Rope, head: Int): Int {
+        val r = row(t, head)
+        if (r != null && r.first > lineStartOf(doc, head) && head != r.first) return r.first
+        return smartHome(doc, head)
+    }
+
+    private fun end(t: CommandTarget, doc: Rope, head: Int): Int {
+        val r = row(t, head)
+        val lineEnd = lineEnd(doc, head)
+        if (r != null && r.second < lineEnd && head != r.second) return r.second
+        return lineEnd
     }
 
     private fun smartHome(doc: Rope, head: Int): Int {
