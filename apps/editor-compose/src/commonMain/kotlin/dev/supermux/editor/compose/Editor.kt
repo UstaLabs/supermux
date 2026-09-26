@@ -116,6 +116,18 @@ fun Editor(
         view.onFontSize = { reportFontSize(it) }
         controller.configure(shownTheme, density, lineWrap, showLineNumbers)
     }
+    // The surface's Compose focus, kept across views: a host showing another document gives this
+    // Editor a new view while the hidden field keeps the focus, so no focus event ever tells the
+    // new view it is focused (the caret was not painted and did not blink, typing still worked).
+    val surfaceFocus = remember { androidx.compose.runtime.mutableStateOf(false) }
+    DisposableEffect(view, controller) {
+        view.focused = surfaceFocus.value
+        // The new document's field must keep the input session the focused field had: its options
+        // say so (a session is restarted only when they ask for the keyboard, see keyboardOnFocus),
+        // or the session would stay bound to the previous document's field.
+        if (surfaceFocus.value) controller.keepInputSession()
+        onDispose { view.focused = false }
+    }
     DisposableEffect(view, controller) {
         view.surface = controller
         view.geometry = controller.geometry
@@ -195,6 +207,7 @@ fun Editor(
             // field); this box is its ancestor, so `hasFocus` is the surface's focus and a key
             // preview reaches the keymap before the field could insert anything.
             .onFocusChanged {
+                surfaceFocus.value = it.hasFocus
                 view.focused = it.hasFocus
                 if (!it.hasFocus) { controller.handles = TouchHandles.NONE; controller.menuShown = false; controller.onBlur() }
             }
@@ -365,6 +378,11 @@ internal class EditorController(val view: EditorView, private val measurer: Text
     fun requestKeyboard() {
         keyboardOnFocus = true
         keyboardRequests++
+    }
+
+    /** The surface is already focused when this controller starts (another document in the same Editor). */
+    fun keepInputSession() {
+        keyboardOnFocus = true
     }
 
     /** The surface lost the focus: the next focus raises a keyboard only if a touch asks. */
