@@ -26,7 +26,7 @@ data class LineSpan(val start: Int, val end: Int, val style: SpanStyle)
 
 /** What a line's layout depends on besides the configuration: its text and its styled spans. */
 @Immutable
-private data class LineKey(val text: String, val spans: List<LineSpan>)
+private data class LineKey(val text: String, val spans: List<LineSpan>, val noWrap: Boolean = false)
 
 /** The configuration every cached layout was measured under; a change clears the cache. */
 @Immutable
@@ -88,6 +88,12 @@ class LineLayouts(
     var maxLineWidth: Float = 0f
         private set
 
+    /** A line too long to measure whole reports its nominal width here. */
+    fun noteWidth(width: Float) { if (width > maxLineWidth) maxLineWidth = width }
+
+    /** The wrap width in pixels, or null when lines do not wrap. */
+    val wrapWidthPx: Int? get() = wrapWidth
+
     val size: Int get() = cache.size
 
     /** Bumped whenever [configure] dropped every layout: heights measured before it are stale. */
@@ -136,11 +142,22 @@ class LineLayouts(
         return layout(text, spans)
     }
 
+    /**
+     * The layout of document range [from, to) of ONE line, never wrapped: a piece of a line too long
+     * to lay out whole (see [Geometry]). Cached like a line, by the piece's own text and spans.
+     */
+    fun layoutRange(state: EditorState, from: Int, to: Int, extra: RangeSet<Decoration>? = null): TextLayoutResult {
+        val spans = ArrayList<LineSpan>()
+        for (set in state.facet(decorationsFacet)) collect(set, from, to, spans)
+        if (extra != null) collect(extra, from, to, spans)
+        return layout(state.doc.slice(from, to), spans, noWrap = true)
+    }
+
     /** The layout of [text] (one line, no line break) with [spans]. */
-    fun layout(text: String, spans: List<LineSpan>): TextLayoutResult {
-        val key = LineKey(text, spans)
+    fun layout(text: String, spans: List<LineSpan>, noWrap: Boolean = false): TextLayoutResult {
+        val key = LineKey(text, spans, noWrap)
         cache.remove(key)?.let { cache[key] = it; return it }
-        val result = measure(text, spans)
+        val result = measure(text, spans, noWrap)
         cache[key] = result
         while (cache.size > capacity) cache.remove(cache.keys.first())
         return result
@@ -170,11 +187,11 @@ class LineLayouts(
         return out
     }
 
-    private fun measure(text: String, spans: List<LineSpan>): TextLayoutResult {
+    private fun measure(text: String, spans: List<LineSpan>, noWrap: Boolean): TextLayoutResult {
         measureCount++
         val annotated = AnnotatedString(text, spanStyles = spans.map { AnnotatedString.Range(it.style, it.start, it.end) })
         val placeholders = if (text.indexOf('\t') < 0) emptyList() else tabPlaceholders(text)
-        val w = wrapWidth
+        val w = if (noWrap) null else wrapWidth
         val result = measurer.measure(
             text = annotated,
             style = style,
@@ -184,7 +201,7 @@ class LineLayouts(
             density = density,
         )
         val width = if (w != null) result.size.width.toFloat() else (0 until result.lineCount).maxOf { result.getLineRight(it) }
-        if (width > maxLineWidth) maxLineWidth = width
+        if (!noWrap && width > maxLineWidth) maxLineWidth = width
         return result
     }
 

@@ -27,6 +27,20 @@ class EditorSurfaceTest {
         assertEquals(0, f.controller.drawnLines.first)
     }
 
+    @Test fun aOneMegabyteLineCostsAFewPiecesPerFrame() = editorTest(EditorState.create("x".repeat(1_000_000), dev.supermux.editor.core.EditorSelection.cursor(500_000))) { f ->
+        f.view.dispatch(dev.supermux.editor.core.TransactionSpec(selection = dev.supermux.editor.core.EditorSelection.cursor(500_000), scrollIntoView = true))
+        waitForIdle()
+        val before = f.geometry.layouts.measureCount
+        repeat(5) {
+            DefaultCommands.insertText("y").run(f.view)
+            waitForIdle()
+        }
+        val per = (f.geometry.layouts.measureCount - before) / 5.0
+        assertTrue(per <= 4, "$per layouts per keystroke on a 1 MB line")
+        val caret = f.controller.caretRectOnScreen(f.view.state.selection.main.head)
+        assertTrue(caret.left in 0f..400f, "the caret at 500,005 is off screen: $caret")
+    }
+
     @Test fun scrollingMovesTheDrawnLines() = editorTest(EditorState.create(tenK)) { f ->
         val lh = f.geometry.layouts.lineHeightPx
         f.controller.scroll.scrollTo(y = 5000 * lh)

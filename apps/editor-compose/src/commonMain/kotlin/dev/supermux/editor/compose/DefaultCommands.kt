@@ -67,11 +67,7 @@ object DefaultCommands {
 
     /** A line break, keeping the current line's indentation (up to the cursor). */
     val insertNewline = Command { t ->
-        change(t, "input") { st, r ->
-            val line = st.doc.lineAt(r.from)
-            val indent = line.text.takeWhile { it == ' ' || it == '\t' }.take(r.from - line.from)
-            ChangeSpec(r.from, r.to, "\n" + indent)
-        }
+        change(t, "input") { st, r -> ChangeSpec(r.from, r.to, "\n" + st.doc.slice(lineStartOf(st.doc, r.from), indentEnd(st.doc, r.from, r.from))) }
     }
 
     /**
@@ -215,9 +211,18 @@ object DefaultCommands {
     }
 
     private fun smartHome(doc: Rope, head: Int): Int {
-        val line = doc.lineAt(head)
-        val firstNonBlank = line.from + line.text.indexOfFirst { it != ' ' && it != '\t' }.let { if (it < 0) line.length else it }
-        return if (head != firstNonBlank) firstNonBlank else line.from
+        val from = lineStartOf(doc, head)
+        val firstNonBlank = indentEnd(doc, head, lineEnd(doc, head))
+        return if (head != firstNonBlank) firstNonBlank else from
+    }
+
+    private fun lineStartOf(doc: Rope, pos: Int): Int = doc.lineStart(doc.lineIndexAt(pos))
+
+    /** The end of the indentation of [pos]'s line, at most [limit]: scans only the indentation (a line may be 1 MB). */
+    private fun indentEnd(doc: Rope, pos: Int, limit: Int): Int {
+        var i = lineStartOf(doc, pos)
+        while (i < limit && (doc.charAt(i) == ' ' || doc.charAt(i) == '\t')) i++
+        return i
     }
 
     private fun lineEnd(doc: Rope, head: Int): Int {

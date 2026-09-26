@@ -35,11 +35,11 @@ internal fun DrawScope.paintEditor(c: EditorController, theme: EditorTheme, stat
     c.beginAnchor()
     c.scroll.clamp()
     val guess = g.visibleLines(c.scroll.y, height, overscan)
-    for (l in guess) g.lineLayout(l)
+    for (l in guess) g.measure(l)
     c.restoreAnchor()
     c.scroll.clamp()
     val lines = g.visibleLines(c.scroll.y, height, overscan)
-    for (l in lines) if (l !in guess) g.lineLayout(l)
+    for (l in lines) if (l !in guess) g.measure(l)
     c.drawnLines = lines
     c.recordAnchor()
     if (lines.isEmpty()) return drawRect(theme.background)
@@ -80,12 +80,20 @@ internal fun DrawScope.paintEditor(c: EditorController, theme: EditorTheme, stat
         for (r in ranges) {
             if (r.empty || r.to < viewStart || r.from > viewEnd) continue
             val clipped = SelectionRange(maxOf(r.from, viewStart), minOf(r.to, minOf(doc.length, viewEnd + 1)))
-            for (rect in g.selectionRects(clipped)) {
+            for (rect in g.selectionRects(clipped, scrollY, scrollY + height)) {
                 drawRect(theme.selection, Offset(left + rect.left, rect.top - scrollY), Size(rect.width, rect.height))
             }
         }
-        // Text.
-        for (l in lines) drawText(g.lineLayout(l), topLeft = Offset(left, top(l)))
+        // Text (a long line: only its pieces in view).
+        val areaWidth = size.width - c.textLeft
+        val cellW = g.layouts.charWidthPx
+        for (l in lines) {
+            val t = top(l)
+            val lineY = g.lineTop(l)
+            for ((o, layout) in g.visiblePieces(l, scrollX - 4 * cellW, scrollX + areaWidth, scrollY - lineY, scrollY + height - lineY)) {
+                drawText(layout, topLeft = Offset(left + o.x, t + o.y))
+            }
+        }
         // Cursors.
         if (focused && cursorOn) {
             val w = maxOf(2f, 1.5f * density)

@@ -133,6 +133,45 @@ class GeometryTest {
         assertEquals(kwColor, layout.layoutInput.text.spanStyles.single().item.color)
     }
 
+    private val longLine = (0 until 30_000).joinToString("") { ('a' + it % 26).toString() }
+
+    @Test fun aHugeLineIsLaidOutOnlyWhereItIsLookedAt() = withMeasure { m ->
+        val state = EditorState.create("short\n$longLine\nend")
+        val g = m.geometry({ state })
+        val cw = g.layouts.charWidthPx
+        val base = state.doc.lineStart(1)
+        for (o in listOf(0, 1, 2047, 2048, 2049, 15_000, 29_999, 30_000)) {
+            val r = g.rectFor(base + o)
+            assertClose(o * cw, r.left, "x of $o")
+            assertEquals(base + o, g.offsetAt(r.center), "offset $o did not round-trip")
+        }
+        assertTrue(g.layouts.measureCount < 12, "${g.layouts.measureCount} layouts for a handful of lookups")
+        assertEquals(g.layouts.lineHeightPx, g.heights.height(1))
+        // A selection over the whole line is one rect, laid out at its two ends only.
+        val rects = g.selectionRects(SelectionRange(base, base + 30_000))
+        assertEquals(1, rects.size)
+        assertClose(30_000 * cw, rects[0].right, "the selection's end")
+    }
+
+    @Test fun aHugeLineWrapsIntoRowsOfWholeCells() = withMeasure { m ->
+        val state = EditorState.create("short\n$longLine\nend")
+        val cols = 100
+        val g = m.geometry({ state }, wrapWidthPx = (cols * m.layouts().charWidthPx).toInt() + 1)
+        val lh = g.layouts.lineHeightPx
+        g.measure(1)
+        assertEquals(300 * lh, g.heights.height(1), 0.5f, "30,000 units in rows of $cols")
+        val base = state.doc.lineStart(1)
+        for (o in listOf(0, 99, 100, 12_345, 29_999)) {
+            val r = g.rectFor(base + o)
+            assertClose((o / cols) * lh + g.lineTop(1), r.top, "row of $o")
+            assertEquals(base + o, g.offsetAt(r.center))
+        }
+        assertTrue(g.layouts.measureCount < 12, "${g.layouts.measureCount} rows laid out")
+        // A selection is clipped to the rows asked for.
+        val rects = g.selectionRects(SelectionRange(base, base + 30_000), yFrom = g.lineTop(1), yTo = g.lineTop(1) + 10 * lh)
+        assertTrue(rects.size in 10..12, "${rects.size} rects (the 10 rows asked for, a row of margin each side)")
+    }
+
     private fun assertClose(expected: Float, actual: Float, what: String) =
         assertTrue(abs(expected - actual) < 0.75f, "$what: expected $expected, got $actual")
 }

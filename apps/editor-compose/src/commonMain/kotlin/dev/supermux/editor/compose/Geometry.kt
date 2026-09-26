@@ -7,6 +7,7 @@ import dev.supermux.editor.core.Decoration
 import dev.supermux.editor.core.EditorState
 import dev.supermux.editor.core.RangeSet
 import dev.supermux.editor.core.SelectionRange
+import kotlin.math.ceil
 
 /**
  * Document offsets <-> positions, in CONTENT coordinates: x from the left edge of the text area,
@@ -18,6 +19,14 @@ import dev.supermux.editor.core.SelectionRange
  *
  * Positions snap to what Compose's layout reports as caret positions, so a caret never lands inside
  * a surrogate pair or a grapheme cluster.
+ *
+ * **Lines longer than [LONG_LINE] units** (minified files, a 1 MB JSON line) are never laid out,
+ * sliced or hashed whole: a keystroke on one would cost ~100 ms. Such a line is cut into pieces
+ * (at grapheme boundaries) laid out one by one, only where they are looked at:
+ * - without wrapping, pieces of [PIECE] units at their NOMINAL x (units x cell width; wide
+ *   characters and tabs inside a piece are exact, piece starts are not);
+ * - with wrapping, rows of as many units as cells fit the width, so the line's height is known
+ *   without shaping anything (a wide character may overhang its row).
  */
 class Geometry(
     private val state: () -> EditorState,
@@ -27,7 +36,16 @@ class Geometry(
     /** Marks the surface adds on top of the state's decorations (the IME composition underline). */
     var extraMarks: RangeSet<Decoration>? = null
 
-    /** [line]'s layout; records its measured height. */
+    private fun lineFrom(line: Int) = state().doc.lineStart(line)
+    private fun lineTo(line: Int): Int {
+        val doc = state().doc
+        return if (line + 1 < doc.lineCount) doc.lineStart(line + 1) - 1 else doc.length
+    }
+
+    /** True when [line] is too long to lay out whole. */
+    fun isLong(line: Int): Boolean = lineTo(line) - lineFrom(line) > LONG_LINE
+
+    /** [line]'s layout (a line of at most [LONG_LINE] units); records its measured height. */
     fun lineLayout(line: Int): TextLayoutResult {
         val st = state()
         if (heights.lineCount != st.doc.lineCount) heights.reset(st.doc.lineCount)
@@ -36,13 +54,49 @@ class Geometry(
         return layout
     }
 
+    /** Measure [line] (short: its layout; long: its rows, without shaping) and record its height. */
+    fun measure(line: Int) {
+        if (!isLong(line)) { lineLayout(line); return }
+        val st = state()
+        if (heights.lineCount != st.doc.lineCount) heights.reset(st.doc.lineCount)
+        val len = lineTo(line) - lineFrom(line)
+        val cols = wrapCols()
+        heights.setMeasured(line, if (cols > 0) pieceCount(len) * layouts.lineHeightPx else layouts.lineHeightPx)
+        if (cols == 0) layouts.noteWidth(len * layouts.charWidthPx)
+    }
+
     /** Where [line]'s text starts (below any block widget above it). */
     fun lineTop(line: Int): Float = heights.top(line) + heights.blockAbove(line)
+
+    /**
+     * The layouts to draw for [line] and where (line-local: from the line's text top-left), limited
+     * to line-local x in [xFrom, xTo] and y in [yFrom, yTo] for a long line. A short line is one
+     * layout at (0, 0).
+     */
+    fun visiblePieces(line: Int, xFrom: Float, xTo: Float, yFrom: Float, yTo: Float): List<Pair<Offset, TextLayoutResult>> {
+        if (!isLong(line)) return listOf(Offset.Zero to lineLayout(line))
+        measure(line)
+        val from = lineFrom(line)
+        val len = lineTo(line) - from
+        val n = pieceCount(len)
+        val (k0, k1) = if (wrapCols() > 0) {
+            val lh = layouts.lineHeightPx
+            (yFrom / lh).toInt().coerceIn(0, n - 1) to (yTo / lh).toInt().coerceIn(0, n - 1)
+        } else {
+            val span = PIECE * layouts.charWidthPx
+            ((xFrom / span).toInt() - 1).coerceIn(0, n - 1) to ((xTo / span).toInt() + 1).coerceIn(0, n - 1)
+        }
+        return (k0..k1).map { k ->
+            val (a, b) = pieceBounds(from, len, k)
+            pieceOrigin(from, k, a) to layouts.layoutRange(state(), a, b, extraMarks)
+        }
+    }
 
     /** The document offset nearest to content position [position]. */
     fun offsetAt(position: Offset): Int {
         val doc = state().doc
         val line = heights.lineAt(position.y)
+        if (isLong(line)) return longOffsetAt(line, position)
         val layout = lineLayout(line)
         val top = lineTop(line)
         val h = layout.multiParagraph.height
@@ -55,6 +109,7 @@ class Geometry(
     fun rectFor(offset: Int): Rect {
         val doc = state().doc
         val line = doc.lineIndexAt(offset)
+        if (isLong(line)) return longRectFor(line, offset)
         val layout = lineLayout(line)
         val r = layout.getCursorRect(offset - doc.lineStart(line))
         val top = lineTop(line)
@@ -63,9 +118,10 @@ class Geometry(
 
     /**
      * The rects [range] covers, one per visual row it touches (all its lines, wrapped rows
-     * included). A row whose line break is selected reaches one cell past its text.
+     * included), limited to content y in [yFrom, yTo]. A row whose line break is selected reaches
+     * one cell past its text.
      */
-    fun selectionRects(range: SelectionRange): List<Rect> {
+    fun selectionRects(range: SelectionRange, yFrom: Float = Float.NEGATIVE_INFINITY, yTo: Float = Float.POSITIVE_INFINITY): List<Rect> {
         if (range.empty) return emptyList()
         val doc = state().doc
         val out = ArrayList<Rect>()
@@ -73,12 +129,13 @@ class Geometry(
         val last = doc.lineIndexAt(range.to)
         for (line in first..last) {
             val lineFrom = doc.lineStart(line)
-            val lineTo = if (line + 1 < doc.lineCount) doc.lineStart(line + 1) - 1 else doc.length
+            val lineTo = lineTo(line)
+            val includesBreak = range.to > lineTo
+            if (isLong(line)) { longSelection(line, lineFrom, lineTo, range, includesBreak, yFrom, yTo, out); continue }
             val layout = lineLayout(line)
             val top = lineTop(line)
             val s = maxOf(range.from, lineFrom) - lineFrom
             val e = minOf(range.to, lineTo) - lineFrom
-            val includesBreak = range.to > lineTo
             val rows = layout.lineCount
             for (row in 0 until rows) {
                 val rs = layout.getLineStart(row)
@@ -103,5 +160,106 @@ class Geometry(
         val first = maxOf(0, heights.lineAt(scrollY) - overscan)
         val last = minOf(n - 1, heights.lineAt(scrollY + maxOf(0f, viewportHeight)) + overscan)
         return first..last
+    }
+
+    // ------------------------------------------------------------------ long lines --
+
+    /** Units per row while wrapping (0: not wrapping). */
+    private fun wrapCols(): Int = layouts.wrapWidthPx?.let { maxOf(1, (it / layouts.charWidthPx).toInt()) } ?: 0
+
+    private fun pieceSize(): Int = wrapCols().takeIf { it > 0 } ?: PIECE
+
+    private fun pieceCount(len: Int): Int = maxOf(1, ceil(len.toDouble() / pieceSize()).toInt())
+
+    /** Piece [k]'s document range, its edges moved back to grapheme boundaries. */
+    private fun pieceBounds(from: Int, len: Int, k: Int): Pair<Int, Int> {
+        val size = pieceSize()
+        val n = pieceCount(len)
+        val doc = state().doc
+        fun edge(i: Int): Int = when {
+            i <= 0 -> from
+            i >= n -> from + len
+            else -> TextBoundaries.snap(doc, from + i * size)
+        }
+        return edge(k) to edge(k + 1)
+    }
+
+    /** The piece holding [offset] (at a piece edge: the piece it starts). */
+    private fun pieceOf(from: Int, len: Int, offset: Int): Int {
+        val n = pieceCount(len)
+        var k = ((offset - from) / pieceSize()).coerceIn(0, n - 1)
+        val (a, b) = pieceBounds(from, len, k)
+        if (offset < a && k > 0) k--
+        else if (offset >= b && k < n - 1) k++
+        return k
+    }
+
+    private fun pieceOrigin(from: Int, k: Int, start: Int): Offset =
+        if (wrapCols() > 0) Offset(0f, k * layouts.lineHeightPx) else Offset((start - from) * layouts.charWidthPx, 0f)
+
+    private fun longRectFor(line: Int, offset: Int): Rect {
+        measure(line)
+        val from = lineFrom(line)
+        val len = lineTo(line) - from
+        val k = pieceOf(from, len, offset)
+        val (a, b) = pieceBounds(from, len, k)
+        val o = pieceOrigin(from, k, a)
+        val r = layouts.layoutRange(state(), a, b, extraMarks).getCursorRect(offset - a)
+        val top = lineTop(line) + o.y
+        return Rect(o.x + r.left, top + r.top, o.x + r.left, top + r.bottom)
+    }
+
+    private fun longOffsetAt(line: Int, position: Offset): Int {
+        measure(line)
+        val from = lineFrom(line)
+        val len = lineTo(line) - from
+        val n = pieceCount(len)
+        val lh = layouts.lineHeightPx
+        val localY = position.y - lineTop(line)
+        val k = if (wrapCols() > 0) (localY / lh).toInt().coerceIn(0, n - 1)
+        else (position.x / (PIECE * layouts.charWidthPx)).toInt().coerceIn(0, n - 1)
+        val (a, b) = pieceBounds(from, len, k)
+        val o = pieceOrigin(from, k, a)
+        val layout = layouts.layoutRange(state(), a, b, extraMarks)
+        val local = layout.getOffsetForPosition(Offset(position.x - o.x, (localY - o.y).coerceIn(0f, lh - 0.01f)))
+        return a + local
+    }
+
+    private fun longSelection(
+        line: Int, lineFrom: Int, lineTo: Int, range: SelectionRange, includesBreak: Boolean,
+        yFrom: Float, yTo: Float, out: MutableList<Rect>,
+    ) {
+        val s = maxOf(range.from, lineFrom)
+        val e = minOf(range.to, lineTo)
+        val cw = layouts.charWidthPx
+        val lh = layouts.lineHeightPx
+        val top = lineTop(line)
+        val start = rectFor(s)
+        val end = rectFor(e)
+        val extra = if (includesBreak) cw else 0f
+        if (wrapCols() == 0) {
+            out += Rect(start.left, top, maxOf(start.left, end.left + extra), top + lh)
+            return
+        }
+        // One rect per row, only the rows in [yFrom, yTo].
+        val rowOf = { r: Rect -> ((r.top - top) / lh).toInt() }
+        val r0 = rowOf(start)
+        val r1 = rowOf(end)
+        val rowWidth = wrapCols() * cw
+        val first = maxOf(r0, ((yFrom - top) / lh).toInt() - 1)
+        val last = minOf(r1, ((yTo - top) / lh).toInt() + 1)
+        for (row in first..last) {
+            val left = if (row == r0) start.left else 0f
+            val right = if (row == r1) end.left + extra else rowWidth
+            out += Rect(left, top + row * lh, maxOf(left, right), top + (row + 1) * lh)
+        }
+    }
+
+    companion object {
+        /** Longer lines (UTF-16 units) are laid out in pieces, never whole. */
+        const val LONG_LINE = 10_000
+
+        /** A long line's piece without wrapping, in units. */
+        const val PIECE = 2048
     }
 }
