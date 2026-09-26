@@ -44,6 +44,7 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
+        wasmJsMain { languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop") }
         jvmTest.dependencies {
             // The surface tests drive the REAL composable through Compose's desktop test harness
             // (a real Skia canvas and a real TextMeasurer).
