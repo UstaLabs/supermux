@@ -12,7 +12,6 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlin.random.Random
 import kotlin.test.Test
@@ -36,15 +35,16 @@ internal class Host(
     val scope = CoroutineScope(SupervisorJob())
     var state: EditorState = EditorState.create(text, extensions = Syntax.extension(language))
         private set
-    val worker = SyntaxWorker(backend, LanguageRegistry.default, scope, { spec -> scope.launch(ui) { apply(spec) } }, limits)
+    val worker = SyntaxWorker(backend, LanguageRegistry.default, scope, { spec -> scope.launch(ui) { applyNow(spec) } }, limits)
     fun state(text: String, language: String?) = EditorState.create(text, extensions = Syntax.extension(language))
 
-    private fun apply(spec: TransactionSpec) {
+    /** Apply [spec] on the calling thread (the UI dispatcher's, or the web's only one: [dispatchNow]). */
+    internal fun applyNow(spec: TransactionSpec) {
         state = state.update(spec).state
         worker.onState(state)
     }
 
-    suspend fun dispatch(spec: TransactionSpec) = withContext(ui) { apply(spec) }
+    suspend fun dispatch(spec: TransactionSpec) = withContext(ui) { applyNow(spec) }
 
     /** The host swaps in another state (another file opened in this editor): a new field instance, version 0 again. */
     suspend fun replace(next: EditorState) = withContext(ui) { state = next; worker.onState(next) }
@@ -73,7 +73,7 @@ class SyntaxWorkerTest {
     private fun fresh(lang: String, text: String): RangeSet<Decoration> = RangeSet.of(highlight(backend, lang, text))
 
     @Test
-    fun typingMapsSpansImmediatelyThenReplacesThem() = runBlocking {
+    fun typingMapsSpansImmediatelyThenReplacesThem() = runSuspendTest {
         val text = HighlightSamples.KOTLIN
         val host = Host(text, "kotlin", backend)
         try {
@@ -134,7 +134,7 @@ class SyntaxWorkerTest {
     }
 
     @Test
-    fun viewportChangeRequestsNewSpans() = runBlocking {
+    fun viewportChangeRequestsNewSpans() = runSuspendTest {
         val text = HighlightSamples.KOTLIN.repeat(200)
         val host = Host(text, "kotlin", backend)
         try {
@@ -155,7 +155,7 @@ class SyntaxWorkerTest {
     }
 
     @Test
-    fun hugeDocumentIsPlainText() = runBlocking {
+    fun hugeDocumentIsPlainText() = runSuspendTest {
         val huge = Host("a".repeat(5 * 1024 * 1024 + 1), "kotlin", backend)
         val longLine = Host("fun main() {}\n" + "x".repeat(20_001) + "\n", "kotlin", backend)
         try {
@@ -172,7 +172,7 @@ class SyntaxWorkerTest {
     }
 
     @Test
-    fun timeoutTurnsSyntaxOff() = runBlocking {
+    fun timeoutTurnsSyntaxOff() = runSuspendTest {
         val host = Host(HighlightSamples.kotlinLines(3000), "kotlin", backend, SyntaxLimits(parseSliceMicros = 100, parseBudgetMicros = 1))
         try {
             host.viewport(0 until 1000)
@@ -189,7 +189,7 @@ class SyntaxWorkerTest {
     }
 
     @Test
-    fun closeFreesEveryTree() = runBlocking {
+    fun closeFreesEveryTree() = runSuspendTest {
         val before = Ses.debugLiveTrees()
         val host = Host(HighlightSamples.MARKDOWN + HighlightSamples.KOTLIN, "markdown", backend)
         host.viewport(0 until 2000)
@@ -202,7 +202,7 @@ class SyntaxWorkerTest {
     }
 
     @Test
-    fun plainTextParsesNothing() = runBlocking {
+    fun plainTextParsesNothing() = runSuspendTest {
         val host = Host("fun main() {}\n", null, backend)
         try {
             host.viewport(0 until 100)
@@ -216,7 +216,7 @@ class SyntaxWorkerTest {
 
     /** 300 random edits while the worker races; once idle, the spans equal a fresh highlight. */
     @Test
-    fun randomEditSoak() = runBlocking {
+    fun randomEditSoak() = runSuspendTest {
         val r = Random(20260926)
         val pieces = listOf("val x = 1\n", "fun f(a: Int) = a\n", "\"str\"", "// c\n", "{", "}", " ", "\n", "ağ😀", "class K", "(", ")")
         val host = Host(HighlightSamples.KOTLIN, "kotlin", backend)
@@ -247,7 +247,7 @@ class SyntaxWorkerTest {
 
     /** The same with Markdown: fences (injections) opened, closed and renamed while the worker races. */
     @Test
-    fun randomEditSoakWithInjections() = runBlocking {
+    fun randomEditSoakWithInjections() = runSuspendTest {
         val r = Random(4242)
         val pieces = listOf("```kotlin\n", "```\n", "~~~python\n", "fun f() = 1\n", "def g(): pass\n", "# H\n", "*x*", "`", "\n", " ", "<b>", "ağ")
         val host = Host(HighlightSamples.MARKDOWN, "markdown", backend)
@@ -278,7 +278,7 @@ class SyntaxWorkerTest {
 
     /** A replaced state (version 0 again, other text) must never get the old document's spans. */
     @Test
-    fun aReplacedStateIsParsedAgain() = runBlocking {
+    fun aReplacedStateIsParsedAgain() = runSuspendTest {
         val host = Host(HighlightSamples.KOTLIN, "kotlin", backend)
         try {
             host.viewport(0 until 100_000)
@@ -339,7 +339,7 @@ class SyntaxWorkerTest {
     }
 
     @Test
-    fun aHostLanguageWithoutTablesIsPlainText() = runBlocking {
+    fun aHostLanguageWithoutTablesIsPlainText() = runSuspendTest {
         val host = Host("def f(): pass\n", "python", PartialBackend(backend, setOf("python"), emptySet()))
         try {
             host.viewport(0 until 100)
@@ -357,7 +357,7 @@ class SyntaxWorkerTest {
     }
 
     @Test
-    fun anInjectionWithoutTablesIsSkippedAndTheRestHighlighted() = runBlocking {
+    fun anInjectionWithoutTablesIsSkippedAndTheRestHighlighted() = runSuspendTest {
         val text = "# Title\n\n```python\ndef f(): pass\n```\n\n```kotlin\nfun g() = 1\n```\n"
         val host = Host(text, "markdown", PartialBackend(backend, setOf("python"), emptySet()))
         try {
@@ -374,7 +374,7 @@ class SyntaxWorkerTest {
     }
 
     @Test
-    fun anInjectionLoadedLaterIsParsedWhenReady() = runBlocking {
+    fun anInjectionLoadedLaterIsParsedWhenReady() = runSuspendTest {
         val text = "```python\ndef f(): pass\n```\n"
         val host = Host(text, "markdown", PartialBackend(backend, emptySet(), setOf("python")))
         try {
@@ -390,7 +390,7 @@ class SyntaxWorkerTest {
 
     /** A parse far longer than one slice still finishes (it resumes slice after slice). */
     @Test
-    fun aSlowFullParseStillFinishes() = runBlocking {
+    fun aSlowFullParseStillFinishes() = runSuspendTest {
         val text = HighlightSamples.kotlinLines(2000)
         val host = Host(text, "kotlin", backend, SyntaxLimits(parseSliceMicros = 200))
         try {
@@ -408,7 +408,7 @@ class SyntaxWorkerTest {
      * parsed instead: here a whole-document replacement, which reparses everything, then typing.
      */
     @Test
-    fun aNewerTextRestartsAnEarlySlicedReparse() = runBlocking {
+    fun aNewerTextRestartsAnEarlySlicedReparse() = runSuspendTest {
         val text = HighlightSamples.kotlinLines(2000)
         val host = Host(text, "kotlin", backend, SyntaxLimits(parseSliceMicros = 200))
         try {
@@ -419,7 +419,7 @@ class SyntaxWorkerTest {
                 if (!typed) {
                     typed = true
                     // applied (and posted to the worker) before the next slice checks: not a race
-                    runBlocking { host.dispatch(TransactionSpec(listOf(ChangeSpec(0, 0, "// typed\n")))) }
+                    dispatchNow(host, TransactionSpec(listOf(ChangeSpec(0, 0, "// typed\n"))))
                 }
             }
             val other = text.replace("Shape", "Form").replace("area", "size")
@@ -436,7 +436,7 @@ class SyntaxWorkerTest {
 
     /** A first parse is never abandoned (it has nothing to resume from): it finishes, then the edit applies. */
     @Test
-    fun aFirstParseIsNeverCancelled() = runBlocking {
+    fun aFirstParseIsNeverCancelled() = runSuspendTest {
         val text = HighlightSamples.kotlinLines(2000)
         val host = Host(text, "kotlin", backend, SyntaxLimits(parseSliceMicros = 200))
         try {
@@ -458,7 +458,7 @@ class SyntaxWorkerTest {
     }
 
     @Test
-    fun idleReturnsOnceTheWorkerIsClosed() = runBlocking {
+    fun idleReturnsOnceTheWorkerIsClosed() = runSuspendTest {
         val host = Host("val a = 1\n", "kotlin", backend)
         host.worker.close()
         host.worker.join()
@@ -498,7 +498,7 @@ class SyntaxWorkerTest {
 
     /** The surface scrolls every 15 ms during a long first parse: viewport-only snapshots never cancel it. */
     @Test
-    fun scrollingDuringALongFirstParseStillGetsSpans() = runBlocking {
+    fun scrollingDuringALongFirstParseStillGetsSpans() = runSuspendTest {
         val text = slowKotlin()
         val host = Host(text, "kotlin", backend)
         try {
@@ -522,7 +522,7 @@ class SyntaxWorkerTest {
 
     /** Typing every 120 ms during a long first parse: it finishes, then the edits apply incrementally. */
     @Test
-    fun typingDuringALongFirstParseStillGetsSpans() = runBlocking {
+    fun typingDuringALongFirstParseStillGetsSpans() = runSuspendTest {
         val text = slowKotlin()
         val host = Host(text, "kotlin", backend)
         try {

@@ -6,7 +6,6 @@ import dev.supermux.editor.core.EditorState
 import dev.supermux.editor.core.RangeSet
 import dev.supermux.editor.core.Rope
 import dev.supermux.editor.core.TransactionSpec
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.time.TimeSource
@@ -44,7 +43,7 @@ internal object PerfCases {
     }
 
     /** Highlighter-level times, then the worker's whole cycle (edit -> spans applied) for one keystroke in the middle. */
-    fun measure(backend: NativeBackend, lang: String, text: String): Numbers {
+    suspend fun measure(backend: NativeBackend, lang: String, text: String): Numbers {
         var rope = Rope.of(text)
         val lines = rope.lineCount
         val full = ArrayList<Double>()
@@ -78,7 +77,7 @@ internal object PerfCases {
             }
             doc?.close()
         }
-        val cycle = runBlocking {
+        val cycle = run {
             val host = Host(text, lang, backend)
             try {
                 val r = Rope.of(text)
@@ -137,7 +136,7 @@ class PerfTest {
     private val backend = testBackend()
 
     @Test
-    fun documents10kLines() {
+    fun documents10kLines() = runSuspendTest {
         for (case in PerfCases.all) {
             val (lang, text) = case
             val n = PerfCases.measure(backend, lang, text)

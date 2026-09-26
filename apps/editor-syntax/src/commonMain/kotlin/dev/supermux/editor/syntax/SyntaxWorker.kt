@@ -19,8 +19,12 @@ import kotlin.concurrent.Volatile
 
 /** When a document is plain text instead: too big, a line too long, or a parse too slow. */
 data class SyntaxLimits(
-    /** A parse runs in slices this long; between slices a newer snapshot cancels it (and it restarts on that one). */
-    val parseSliceMicros: Long = 50_000,
+    /**
+     * A parse runs in slices this long; between slices a newer snapshot may cancel it (and it
+     * restarts on that one). 50 ms natively (the worker has its own thread); 8 ms on the web, where
+     * the worker shares the UI thread and gives it back between slices ([platformSliceYield]).
+     */
+    val parseSliceMicros: Long = PLATFORM_PARSE_SLICE_MICROS,
     /** One document version's whole parse (every layer) may take this long; beyond it, syntax is off. */
     val parseBudgetMicros: Long = 10_000_000,
     /** UTF-16 units (5 MiB). */
@@ -182,6 +186,7 @@ class SyntaxWorker(
                 it.sliceMicros = limits.parseSliceMicros
                 it.budgetMicros = limits.parseBudgetMicros
                 it.onSlice = { onSlice?.invoke() }
+                it.yieldBetweenSlices = platformSliceYield
                 highlighter = it
             }
         }
@@ -213,7 +218,7 @@ class SyntaxWorker(
                 newer && started.elapsedNow().inWholeMicroseconds / 1000.0 < expected / 2
             }
             val next = try {
-                step("parse") { h.parse(text, s.doc.length, parsed, text, cancel) }
+                step("parse") { h.parseSuspending(text, s.doc.length, parsed, text, cancel) }
             } catch (e: SyntaxException) {
                 if (e.status != SyntaxStatus.TIMEOUT) throw e
                 return turnOff(s)
@@ -233,12 +238,15 @@ class SyntaxWorker(
             if (pending.any { it !in h.failedLanguages }) stale = true
         }
         val doc = parsed!!
+        // The web's worker shares the UI thread: a new task for the spans, and another for the folds.
+        platformSliceYield?.invoke()
         val vs = if (s.viewport.isEmpty()) 0 else s.viewport.first
         val ve = if (s.viewport.isEmpty()) limits.defaultViewportLength else s.viewport.last + 1
         val screen = maxOf(0, ve - vs)
         val start = maxOf(0, minOf(vs, s.doc.length) - screen)
         val end = minOf(s.doc.length, ve + screen)
         val spans = step("spans") { RangeSet.of(h.spans(doc, start, end, text)) }
+        platformSliceYield?.invoke()
         val folds = step("folds") { h.folds(doc, start, end, text) }
         sent = Triple(s.epoch, s.version, s.viewport)
         dispatch(TransactionSpec(effects = listOf(Syntax.spans.of(SyntaxSpansUpdate(s.version, start, end, spans, folds, epoch = s.epoch)))))
@@ -269,22 +277,37 @@ class SyntaxWorker(
             // Checked fully the first time; after that only the lines the edits since touched.
             val known = longLine
             val later = s.log.filter { known != null && it.version > known.first }
-            val lines: List<IntRange> = if (known == null || known.second || later.isEmpty() || later.size.toLong() != s.version - known.first) {
-                listOf(0 until doc.lineCount)
+            if (known == null || known.second || later.isEmpty() || later.size.toLong() != s.version - known.first) {
+                anyLineLongerThan(doc, limits.maxLineLength)
             } else {
                 val all = later.drop(1).fold(later[0].changes) { acc, v -> acc.compose(v.changes) }
-                all.iterChanges().map { doc.lineIndexAt(it.fromB)..doc.lineIndexAt(it.toB) }
-            }
-            lines.any { r ->
-                r.any { i ->
-                    val start = doc.lineStart(i)
-                    val end = if (i + 1 < doc.lineCount) doc.lineStart(i + 1) - 1 else doc.length
-                    end - start > limits.maxLineLength
+                val lines = all.iterChanges().map { doc.lineIndexAt(it.fromB)..doc.lineIndexAt(it.toB) }
+                lines.any { r ->
+                    r.any { i ->
+                        val start = doc.lineStart(i)
+                        val end = if (i + 1 < doc.lineCount) doc.lineStart(i + 1) - 1 else doc.length
+                        end - start > limits.maxLineLength
+                    }
                 }
             }
         }
         longLine = s.version to answer
         return answer
+    }
+
+    /**
+     * Is any line longer than [limit] units? One pass over the chunks: asking the rope for every
+     * line's start costs a scan of its leaf each (25 ms for 10k lines in the browser).
+     */
+    private fun anyLineLongerThan(doc: Rope, limit: Int): Boolean {
+        var run = 0
+        var i = 0
+        while (i < doc.length) {
+            val c = doc.chunkAt(i)
+            for (k in 0 until c.length) if (c[k] == '\n') run = 0 else if (++run > limit) return true
+            i += c.length
+        }
+        return false
     }
 
     private fun turnOff(s: SyntaxSnapshot) {

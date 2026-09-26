@@ -1,5 +1,6 @@
 package dev.supermux.editor.syntax
 
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
@@ -11,7 +12,7 @@ class BudgetTest {
     private val backend = testBackend()
 
     private fun best(case: Pair<String, String>): PerfCases.Numbers =
-        List(3) { PerfCases.measure(backend, case.first, case.second) }.minBy { it.cycle }
+        List(3) { runBlocking { PerfCases.measure(backend, case.first, case.second) } }.minBy { it.cycle }
 
     @Test fun markdownKeystrokeWorkerCycleUnder20ms() {
         val n = best(PerfCases.markdown)

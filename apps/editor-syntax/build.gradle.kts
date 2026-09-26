@@ -13,7 +13,8 @@ plugins {
 // editor-syntax: the native editor's syntax layer. tree-sitter v0.25.10 behind an owned `ses_*` C ABI
 // (native/include/supermux_syntax.h), every grammar's CODE compiled into one native library per
 // platform and its parse TABLES moved into compressed blobs (native/README.md). JNI on Android and
-// the desktop JVM (jvmAndAndroidMain), cinterop on iOS (src/nativeInterop/cinterop/syntax.def).
+// the desktop JVM (jvmAndAndroidMain), cinterop on iOS (src/nativeInterop/cinterop/syntax.def), and
+// on the web the same C compiled to one wasm32 module behind a small JS loader (wasmJsMain).
 // Everything is UTF-16 code units end to end: no offset conversion anywhere on the Kotlin side.
 // Spec: docs/superpowers/specs/2026-09-25-native-editor-design.md §5.
 //
@@ -64,8 +65,8 @@ kotlin {
     jvmToolchain(17)
 
     // Default hierarchy plus `nativeBacked` (everything backed by the ses_* library: jvm, android,
-    // ios) and inside it `jvmAndAndroid` (the shared JNI binding). commonMain holds only the
-    // platform-free types, so a web backend (M2b) can sit beside nativeBacked.
+    // ios, and since M2c the web, where the same C runs as wasm) and inside it `jvmAndAndroid` (the
+    // shared JNI binding). commonMain holds only the platform-free types.
     @OptIn(org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi::class)
     applyDefaultHierarchyTemplate {
         common {
@@ -75,6 +76,7 @@ kotlin {
                     withAndroidTarget()
                 }
                 group("ios") { withIos() }
+                withWasmJs()
             }
         }
     }
@@ -100,6 +102,16 @@ kotlin {
     // An optimised test binary for the simulator's performance numbers (the default test binary is a
     // debug build): link with linkPerfReleaseTestIosSimulatorArm64, run it with `xcrun simctl spawn`.
     iosSimulatorArm64().binaries.test("perf", listOf(org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType.RELEASE))
+    // The web: build/natives/wasm32/lib/supermux-syntax.wasm (native/wasm/build.sh) + syntax-loader.mjs.
+    // wasmJsBrowserTest runs the nativeBacked tests in headless Chrome through Karma against the real
+    // module (karma.config.d/syntax-wasm.js serves the goldens and tables); CHROME_BIN must point at
+    // a WasmGC-capable Chrome (the Mac's Google Chrome is used when present).
+    @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
+    wasmJs {
+        browser {
+            testTask { useKarma { useChromeHeadless() } }
+        }
+    }
 
     sourceSets {
         commonMain.dependencies {
@@ -107,8 +119,12 @@ kotlin {
             implementation(libs.coroutines.core) // the background syntax worker
         }
         commonTest.dependencies {
+            // NO kotlinx-coroutines-test: its 1.9.0 wasm-js klib does not link against the Kotlin
+            // 2.4.10 stdlib; the suspending tests use runSuspendTest (TestSupport.kt).
             implementation(kotlin("test"))
         }
+        wasmJsMain { languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop") }
+        wasmJsTest { languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop") }
         val androidInstrumentedTest by getting {
             dependencies {
                 implementation("androidx.test:runner:1.6.2")
@@ -405,6 +421,67 @@ androidComponents {
             test.sources.resources?.addStaticSourceDirectory(file("src/nativeBackedTest/resources").absolutePath)
         }
     }
+}
+
+// ---------------------------------------------------------------- web (wasm) ----------------
+
+// build/natives/wasm32/lib/supermux-syntax.wasm, checked against build/natives/manifest.json, as a
+// wasmJsMain resource next to syntax-loader.mjs (src/wasmJsMain/resources): Kotlin/Wasm puts both
+// beside the compiled module, where the loader's default `new URL("./supermux-syntax.wasm",
+// import.meta.url)` resolves and a bundler emits it as an asset. The code-only grammars' tables
+// are NOT packed into the klib: a host serves stageTables' editor-syntax/tables/ (native/README.md).
+val stageWasmResources by tasks.registering {
+    description = "Stage the verified supermux-syntax.wasm as a wasmJsMain resource."
+    val root = nativeBuildDir
+    val outDir = layout.buildDirectory.dir("generated/wasmResources")
+    inputs.files(File(root, "wasm32/lib/supermux-syntax.wasm"), File(root, "manifest.json"))
+    outputs.dir(outDir)
+    doLast {
+        val out = outDir.get().asFile
+        out.deleteRecursively()
+        out.mkdirs()
+        val found = verifiedNativeLib(root, "wasm32", "supermux-syntax.wasm")
+        if (found == null) logger.warn("editor-syntax: no supermux-syntax.wasm (build with native/wasm/build.sh): the web backend cannot load")
+        else found.first.copyTo(File(out, "supermux-syntax.wasm"), overwrite = true)
+    }
+}
+kotlin.sourceSets.getByName("wasmJsMain").resources.srcDir(stageWasmResources)
+
+// The browser tests read their resources synchronously, like the JVM's class loader does: the
+// test setup module (syntax-test-setup.mjs) fetches every file listed in syntax-test-resources.json
+// before any test runs. They are the goldens (src/nativeBackedTest/resources), the test tables
+// (sesz/) and the app's tables (editor-syntax/tables/), served by Karma under /base/kotlin/.
+val stageWasmTestResources by tasks.registering {
+    description = "Stage the browser tests' resources and their index."
+    // nativeBackedTest's own resources reach wasmJsTest through the source-set hierarchy: indexed, not copied.
+    val inherited = layout.projectDirectory.dir("src/nativeBackedTest/resources").asFile
+    val sources = listOf(stageTestTables.get().outputDir.get().asFile, stageTables.get().outputDir.get().asFile)
+    dependsOn(stageTestTables, stageTables)
+    inputs.files(sources + inherited)
+    val outDir = layout.buildDirectory.dir("generated/wasmTestResources")
+    outputs.dir(outDir)
+    doLast {
+        val out = outDir.get().asFile
+        out.deleteRecursively()
+        out.mkdirs()
+        val paths = sortedSetOf<String>()
+        for (src in sources + inherited) {
+            if (!src.isDirectory) continue
+            src.walkTopDown().filter { it.isFile }.forEach { f ->
+                val rel = f.relativeTo(src).invariantSeparatorsPath
+                if (src != inherited) f.copyTo(File(out, rel), overwrite = true)
+                paths += rel
+            }
+        }
+        File(out, "syntax-test-resources.json").writeText(groovy.json.JsonOutput.toJson(paths.toList()))
+    }
+}
+kotlin.sourceSets.getByName("wasmJsTest").resources.srcDir(stageWasmTestResources)
+
+tasks.withType<org.jetbrains.kotlin.gradle.targets.js.testing.KotlinJsTest>().configureEach {
+    val mac = File("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    if (System.getenv("CHROME_BIN") == null && mac.canExecute()) environment("CHROME_BIN", mac.absolutePath)
+    testLogging { showStandardStreams = true; events("passed", "failed"); exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
 }
 
 // ---------------------------------------------------------------- tests ---------------------

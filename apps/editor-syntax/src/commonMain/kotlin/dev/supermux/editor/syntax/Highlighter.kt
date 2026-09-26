@@ -2,6 +2,9 @@ package dev.supermux.editor.syntax
 
 import dev.supermux.editor.core.Decoration
 import dev.supermux.editor.core.Ranged
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.startCoroutine
 import kotlin.time.TimeSource
 
 /**
@@ -191,6 +194,13 @@ class Highlighter(
     var budgetMicros: Long = 0
     /** Called between two parse slices (tests). */
     internal var onSlice: (() -> Unit)? = null
+    /**
+     * Where the syntax worker shares the UI thread (the web: [platformSliceYield]), [parseSuspending]
+     * calls this between slices and before a layer's parse once a slice's time is used up, so no
+     * run of parsing holds the thread for more than about [sliceMicros]. null: never (the native
+     * worker has a thread of its own). [parse] never yields.
+     */
+    var yieldBetweenSlices: (suspend () -> Unit)? = null
     /** Diagnostics (once per document for each kind). */
     var log: (String) -> Unit = { println("editor-syntax: $it") }
     private var loggedMatchLimit = false
@@ -219,11 +229,22 @@ class Highlighter(
     fun parse(
         text: TextSource, length: Int, previous: ParsedDocument?,
         points: PointSource = LineTable(text, length), cancel: () -> Boolean = { false },
+    ): ParsedDocument = runNow { parse(text, length, previous, points, cancel, null) }
+
+    /** [parse], giving the thread away between slices through [yieldBetweenSlices] (the worker's). */
+    suspend fun parseSuspending(
+        text: TextSource, length: Int, previous: ParsedDocument?,
+        points: PointSource = LineTable(text, length), cancel: () -> Boolean = { false },
+    ): ParsedDocument = parse(text, length, previous, points, cancel, yieldBetweenSlices)
+
+    private suspend fun parse(
+        text: TextSource, length: Int, previous: ParsedDocument?, points: PointSource, cancel: () -> Boolean,
+        yielder: (suspend () -> Unit)?,
     ): ParsedDocument {
         val started = TimeSource.Monotonic.markNow()
         phases.clear()
         previousDoc = previous
-        val slicer = Slicer(started, cancel)
+        val slicer = Slicer(started, cancel, yielder)
         val host = parser(language)
         host.setIncludedRanges(IntArray(0), points)
         val layers = ArrayList<Layer>()
@@ -257,12 +278,31 @@ class Highlighter(
         return ParsedDocument(layers, length, editLog)
     }
 
-    /** Time slices over one [parse] call: resumes a timed-out parse until done, cancelled or over budget. */
-    private inner class Slicer(private val started: TimeSource.Monotonic.ValueTimeMark, private val cancel: () -> Boolean) {
-        fun parse(p: ParserHandle, text: TextSource, old: TreeHandle?): TreeHandle {
+    /**
+     * Time slices over one [parse] call: resumes a timed-out parse until done, cancelled or over
+     * budget. With a [yielder], a slice is measured from the last yield, across layers: a layer's
+     * parse gets only what is left of the slice, and the thread is given away when it is used up.
+     */
+    private inner class Slicer(
+        private val started: TimeSource.Monotonic.ValueTimeMark,
+        private val cancel: () -> Boolean,
+        private val yielder: (suspend () -> Unit)?,
+    ) {
+        private var lastYield = TimeSource.Monotonic.markNow()
+
+        private fun left(): Long = sliceMicros - lastYield.elapsedNow().inWholeMicroseconds
+
+        private suspend fun giveAway(y: suspend () -> Unit) {
+            y()
+            lastYield = TimeSource.Monotonic.markNow()
+        }
+
+        suspend fun parse(p: ParserHandle, text: TextSource, old: TreeHandle?): TreeHandle {
             val slice = if (sliceMicros > 0) sliceMicros else budgetMicros
-            p.setTimeoutMicros(slice)
+            val y = if (sliceMicros > 0) yielder else null
             try {
+                if (y != null && left() < sliceMicros / 4) giveAway(y)
+                p.setTimeoutMicros(if (y != null) maxOf(1L, left()) else slice)
                 while (true) {
                     try {
                         return p.parse(text, old)
@@ -273,6 +313,10 @@ class Highlighter(
                             throw SyntaxException("parse over its ${budgetMicros / 1000} ms budget", SyntaxStatus.TIMEOUT)
                         }
                         onSlice?.invoke()
+                        if (y != null) {
+                            giveAway(y)
+                            p.setTimeoutMicros(slice)
+                        }
                     }
                 }
             } catch (t: Throwable) {
@@ -407,7 +451,7 @@ class Highlighter(
      * an edit is lost. A layer's tree is copied when nothing it covers changed, reparsed
      * incrementally when its ranges are the same, and parsed afresh otherwise.
      */
-    private fun inject(
+    private suspend fun inject(
         parent: Layer, old: Layer?, edited: IntArray, text: TextSource, points: PointSource, length: Int,
         oldLayers: LazyLayers, from: MutableMap<Layer, Layer>, out: MutableList<Layer>, slicer: Slicer,
     ) {
@@ -579,6 +623,13 @@ class Highlighter(
     }
 
     internal companion object {
+        /** Run [block] to completion on this thread; it must not suspend (a [parse] never yields). */
+        fun <T> runNow(block: suspend () -> T): T {
+            var result: Result<T>? = null
+            block.startCoroutine(Continuation(EmptyCoroutineContext) { result = it })
+            return (result ?: error("a synchronous parse suspended")).getOrThrow()
+        }
+
         /** `@none`: an explicit "no colour" that wins over an outer node's colour. */
         const val NONE = -1
         /** Not drawn and not competing (`@spell`, `_helper`, unknown names). */

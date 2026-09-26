@@ -463,6 +463,7 @@ export function tablesUrl(lang) {
 const resources = new Map(); // path -> Uint8Array
 
 export function hasResource(path) { return resources.has(path); }
+export function dropResource(path) { resources.delete(path); }
 export function putResource(path, bytes) { resources.set(path, bytes); }
 /** The resource's bytes as a latin1 string, or null. */
 export function resourceLatin1(path) {
