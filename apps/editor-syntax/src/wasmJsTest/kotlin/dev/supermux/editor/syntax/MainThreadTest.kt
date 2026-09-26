@@ -67,4 +67,15 @@ class MainThreadTest {
         assertTrue(first.max <= 16.0, "kotlin first parse held the thread ${fmt(first.max)} ms")
         assertTrue(typing.max <= 16.0, "kotlin keystroke cycle held the thread ${fmt(typing.max)} ms")
     }
+
+    /** Reported, not asserted (M2c has no web budget beyond Kotlin's first parse): the README table. */
+    @Test fun otherDocumentsHoldTheThread() = runSuspendTest {
+        warm("markdown", HighlightSamples.MARKDOWN + HighlightSamples.KOTLIN)
+        warm("vue", HighlightSamples.repeatTo(HighlightSamples.VUE_SCRIPT_UNIT, 20, "<script lang=\"ts\">\n", "</script>\n<style>\n.a{}\n</style>\n"))
+        warm("php", HighlightSamples.repeatTo(HighlightSamples.PHP_UNIT, 20, "<html><body>\n<?php\n", "?>\n</body></html>\n"))
+        for ((lang, text) in listOf(PerfCases.markdown, PerfCases.vue, PerfCases.php)) {
+            val (first, typing) = firstParse(lang, text)
+            println("MAINTHREAD $lang first parse ${first.show()}; 10 keystrokes ${typing.show()}")
+        }
+    }
 }

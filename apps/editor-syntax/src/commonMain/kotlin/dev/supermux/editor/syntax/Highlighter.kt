@@ -297,6 +297,12 @@ class Highlighter(
             lastYield = TimeSource.Monotonic.markNow()
         }
 
+        /** Between two steps that are not parses (finding injections, merging them): yield if the slice is used up. */
+        suspend fun checkpoint() {
+            val y = if (sliceMicros > 0) yielder else null
+            if (y != null && left() <= 0) giveAway(y)
+        }
+
         suspend fun parse(p: ParserHandle, text: TextSource, old: TreeHandle?): TreeHandle {
             val slice = if (sliceMicros > 0) sliceMicros else budgetMicros
             val y = if (sliceMicros > 0) yielder else null
@@ -460,7 +466,11 @@ class Highlighter(
         val start = parent.ranges.firstOrNull() ?: 0
         val end = parent.ranges.lastOrNull() ?: length
         val sites: List<Site> = phase("sites") { when {
-            old == null -> merge(emptyList(), findParts(parent, q, intArrayOf(start, end), text))
+            old == null -> {
+                val found = phase("s.find") { findParts(parent, q, intArrayOf(start, end), text) }
+                slicer.checkpoint()
+                phase("s.merge") { merge(emptyList(), found) }
+            }
             parent.clean -> old.sites
             else -> {
                 val around = IntArray(edited.size) { i -> if (i % 2 == 0) maxOf(0, edited[i] - 1) else edited[i] + 1 }
@@ -474,10 +484,12 @@ class Highlighter(
                 } }
                 val region = clip(normalize((changed.toList() + dropped)), intArrayOf(start, end))
                 val found = phase("s.find") { findParts(parent, q, region, text) }
+                slicer.checkpoint()
                 phase("s.merge") { merge(kept, found) }
             }
         } }
         parent.sites = sites
+        slicer.checkpoint()
         phase("layers") { for (site in sites) {
             if (site.language in failedLanguages) continue
             if (!isReady(site.language)) { pendingLanguages += site.language; continue }
@@ -502,23 +514,34 @@ class Highlighter(
 
     private class Found(val pattern: Int, val language: String, val combined: Boolean, val part: Part)
 
+    /** What [Part.sameAs] compares, hashable. */
+    private data class PartKey(val extentStart: Int, val extentEnd: Int, val ranges: List<Int>) {
+        constructor(p: Part) : this(p.extentStart, p.extentEnd, p.ranges.asList())
+    }
+
     /**
      * Kept sites plus newly found parts: a combined part joins its (pattern, language) site; equal
-     * parts are one. The kept sites are in order already; the few new ones are merged in.
+     * parts are one. The kept sites are in order already; the few new ones are merged in. Lookups
+     * are hashed: a first parse of a Markdown file finds thousands of parts (a pairwise search
+     * took 90 ms for 3.5k in the browser).
      */
     private fun merge(kept: List<Site>, found: List<Found>): List<Site> {
         val sites = kept.filter { it.parts.isNotEmpty() || it.combined }.toMutableList()
         val fresh = ArrayList<Site>()
         var reorder = false
+        // the first combined site per (pattern, language), kept ones first; a pattern is combined or not
+        val combined = HashMap<Pair<Int, String>, Site>()
+        for (x in sites) if (x.combined) combined.getOrPut(x.pattern to x.language) { x }
+        val partsOf = HashMap<Site, HashSet<PartKey>>()
+        // the (pattern, language, first part) of every single site, kept or new
+        val singles = HashSet<Triple<Int, String, PartKey>>()
+        for (x in sites) if (!x.combined) x.parts.firstOrNull()?.let { singles += Triple(x.pattern, x.language, PartKey(it)) }
         for (f in found) {
+            val key = PartKey(f.part)
             if (f.combined) {
-                val site = sites.firstOrNull { it.combined && it.pattern == f.pattern && it.language == f.language }
-                    ?: fresh.firstOrNull { it.combined && it.pattern == f.pattern && it.language == f.language }
-                    ?: Site(f.pattern, f.language, true, ArrayList()).also { fresh += it }
-                if (site.parts.none { it.sameAs(f.part) }) { site.parts += f.part; reorder = true }
-            } else if (fresh.none { it.pattern == f.pattern && it.language == f.language && it.parts[0].sameAs(f.part) } &&
-                sites.none { !it.combined && it.pattern == f.pattern && it.language == f.language && it.parts.firstOrNull()?.sameAs(f.part) == true }
-            ) {
+                val site = combined.getOrPut(f.pattern to f.language) { Site(f.pattern, f.language, true, ArrayList()).also { fresh += it } }
+                if (partsOf.getOrPut(site) { site.parts.mapTo(HashSet()) { PartKey(it) } }.add(key)) { site.parts += f.part; reorder = true }
+            } else if (singles.add(Triple(f.pattern, f.language, key))) {
                 fresh += Site(f.pattern, f.language, false, mutableListOf(f.part))
             }
         }
