@@ -24,14 +24,18 @@ internal fun DrawScope.paintEditor(c: EditorController, theme: EditorTheme, stat
     val height = size.height
     val overscan = EditorDefaults.OVERSCAN_LINES
 
-    // Lay out what is visible, then look again: measured heights may have moved lines in or out.
+    // Lay out what is visible, then look again: measured heights may have moved lines in or out
+    // (and the anchor keeps the text on screen where it was).
+    c.restoreAnchor()
     c.scroll.clamp()
     val guess = g.visibleLines(c.scroll.y, height, overscan)
     for (l in guess) g.lineLayout(l)
+    c.restoreAnchor()
     c.scroll.clamp()
     val lines = g.visibleLines(c.scroll.y, height, overscan)
     for (l in lines) if (l !in guess) g.lineLayout(l)
     c.drawnLines = lines
+    c.recordAnchor()
     if (lines.isEmpty()) return drawRect(theme.background)
 
     val viewStart = doc.lineStart(lines.first)

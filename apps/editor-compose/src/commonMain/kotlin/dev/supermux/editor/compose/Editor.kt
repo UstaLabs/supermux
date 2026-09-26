@@ -1,6 +1,9 @@
 package dev.supermux.editor.compose
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.ScrollableDefaults
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -20,6 +23,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
@@ -97,7 +101,26 @@ fun Editor(
         }
     }
 
-    Box(modifier.clipToBounds()) {
+    val layoutDirection = LocalLayoutDirection.current
+    Box(
+        modifier
+            .clipToBounds()
+            // `scrollable`, not a hand-rolled drag detector: it normalizes wheel notches and
+            // trackpad deltas into pixels, tracks release velocity and runs the fling's decay.
+            .scrollable(
+                state = controller.scroll.vertical,
+                orientation = Orientation.Vertical,
+                reverseDirection = ScrollableDefaults.reverseDirection(layoutDirection, Orientation.Vertical, false),
+                flingBehavior = ScrollableDefaults.flingBehavior(),
+            )
+            .scrollable(
+                state = controller.scroll.horizontal,
+                orientation = Orientation.Horizontal,
+                enabled = !lineWrap,
+                reverseDirection = ScrollableDefaults.reverseDirection(layoutDirection, Orientation.Horizontal, false),
+                flingBehavior = ScrollableDefaults.flingBehavior(),
+            ),
+    ) {
         Canvas(Modifier.fillMaxSize()) { controller.paint(this) }
     }
 }
@@ -219,14 +242,67 @@ internal class EditorController(val view: EditorView, private val measurer: Text
         if (!tr.docChanged) return
         if (heights.lineCount == tr.startState.doc.lineCount) heights.applyChanges(tr.changes, tr.startState.doc, tr.state.doc)
         else heights.reset(tr.state.doc.lineCount)
+        // The anchor follows its text: an edit above the viewport does not move what is shown.
+        val doc = tr.state.doc
+        anchorPos = doc.lineStart(doc.lineIndexAt(tr.changes.mapPos(anchorPos.coerceIn(0, tr.changes.lengthBefore), -1)))
     }
 
     override fun onStateReplaced() {
         heights.reset(view.state.doc.lineCount)
+        anchorValid = false
         scroll.scrollTo(0f, 0f)
     }
 
-    override fun scrollIntoView() {}
+    /** The least scrolling that shows the main cursor with a margin (a line, four cells). */
+    override fun scrollIntoView() {
+        if (viewportSize.height <= 0f) return
+        val r = geometry.rectFor(view.state.selection.main.head)
+        val lh = layouts.lineHeightPx
+        val my = minOf(lh, viewportSize.height / 4)
+        var y = scroll.y
+        if (r.top - my < y) y = r.top - my
+        else if (r.bottom + my > y + viewportSize.height) y = r.bottom + my - viewportSize.height
+        var x = scroll.x
+        if (!lineWrap) {
+            val area = viewportSize.width - textLeft
+            val mx = minOf(4 * layouts.charWidthPx, area / 4)
+            if (r.left - mx < x) x = r.left - mx
+            else if (r.left + mx > x + area) x = r.left + mx - area
+        }
+        scroll.scrollTo(x, y)
+    }
+
+    // ------------------------------------------------------------------ scroll anchoring --
+    //
+    // The first visible line is the anchor: when heights change above it (a wrapped line measured
+    // for the first time, an edit above the viewport), the scroll position follows it so the text on
+    // screen stays put. Only while nothing else moved the scroll since the last paint: a gesture or
+    // scrollIntoView wins.
+
+    private var anchorPos = 0
+    private var anchorDelta = 0f
+    private var anchorScrollY = 0f
+    private var anchorValid = false
+
+    fun restoreAnchor() {
+        if (!anchorValid || scroll.y != anchorScrollY) return
+        val doc = view.state.doc
+        if (heights.lineCount != doc.lineCount) return
+        val line = doc.lineIndexAt(anchorPos.coerceIn(0, doc.length))
+        val want = (heights.topD(line) + anchorDelta).toFloat()
+        if (kotlin.math.abs(want - scroll.y) > 0.01f) scroll.scrollTo(y = want)
+        anchorScrollY = scroll.y
+    }
+
+    fun recordAnchor() {
+        val doc = view.state.doc
+        if (heights.lineCount != doc.lineCount) return
+        val line = heights.lineAt(scroll.y)
+        anchorPos = doc.lineStart(line)
+        anchorDelta = scroll.y - heights.top(line)
+        anchorScrollY = scroll.y
+        anchorValid = true
+    }
 
     override fun scrollBy(dy: Float) {
         scroll.scrollBy(0f, dy)

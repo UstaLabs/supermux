@@ -1,5 +1,6 @@
 package dev.supermux.editor.compose
 
+import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -12,6 +13,11 @@ import androidx.compose.runtime.setValue
  *
  * [maxX] / [maxY] are asked of the surface on every move, so a document that grew or shrank
  * clamps the next scroll without any bookkeeping here.
+ *
+ * Gestures arrive through [vertical] / [horizontal], driven by `Modifier.scrollable`: it is where
+ * Compose turns a platform wheel notch or a trackpad delta into pixels, tracks a finger's release
+ * velocity and runs the fling's decay (terminal-compose's ScrollController lesson). A boundary
+ * consumes less than it was given, which is what stops a fling there.
  */
 @Stable
 internal class EditorScroll(
@@ -40,4 +46,10 @@ internal class EditorScroll(
 
     /** Back inside the bounds (the document shrank, the viewport grew). */
     fun clamp() = scrollTo(x, y)
+
+    /** Positive deltas scroll toward the end of the document. */
+    val vertical: ScrollableState = ScrollableState { d -> scrollBy(0f, d).second }
+
+    /** Positive deltas scroll toward the end of the lines. */
+    val horizontal: ScrollableState = ScrollableState { d -> scrollBy(d, 0f).first }
 }
