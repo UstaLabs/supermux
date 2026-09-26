@@ -69,6 +69,7 @@ fun isColoured(state: EditorState): Boolean = state.facet(decorationsFacet).any 
  *   input over the DevTools protocol).
  * @param typeDriver clicks into the text and types 200 characters with real key events at a human
  *   pace, for the benchmark's key-event-to-paint latency.
+ * @param onView each opened document's view (the web page's test hooks read it).
  * @param onPhase startup milestones ("backend", "precompiled", "editor", "coloured") for the web's
  *   cold-start measurement.
  */
@@ -80,6 +81,7 @@ fun SampleApp(
     scrollDriver: suspend () -> Unit = {},
     typeDriver: suspend () -> Unit = {},
     onPhase: (String) -> Unit = {},
+    onView: (dev.supermux.editor.compose.EditorView) -> Unit = {},
 ) {
     val registry = LanguageRegistry.default
     var backend by remember { mutableStateOf<SyntaxBackend?>(null) }
@@ -93,6 +95,10 @@ fun SampleApp(
     var fontSize by remember { mutableStateOf(EditorZoom.DEFAULT) }
     var webKeyboard by remember { mutableStateOf(WebKeyboard.AUTO) }
     val inputLog = remember { InputLog() }
+    DisposableEffect(Unit) {
+        sampleFileOpener = { file = it }
+        onDispose { sampleFileOpener = null }
+    }
     val stats = remember { FrameStats() }
     val scope = rememberCoroutineScope()
 
@@ -126,6 +132,7 @@ fun SampleApp(
             onDispose { remove(); session.close() }
         }
         LaunchedEffect(session) {
+            onView(session.view)
             onPhase("editor")
             snapshotFlow { isColoured(session.view.state) }.first { it }
             withFrameNanos { }
@@ -358,3 +365,6 @@ suspend fun runBench(session: SampleSession, stats: FrameStats, scrollDriver: su
             """"$k":{"n":${v.size},"p50":${f(FrameStats.pct(v, 50))},"p95":${f(FrameStats.pct(v, 95))},"max":${f(v.max())}}"""
         } + "}}"
 }
+
+/** Opens another sample file in the running app (the web page's test hook). */
+var sampleFileOpener: ((SampleFile) -> Unit)? = null

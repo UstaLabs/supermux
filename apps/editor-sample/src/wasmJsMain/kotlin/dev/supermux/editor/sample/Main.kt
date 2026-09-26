@@ -32,6 +32,14 @@ fun main() {
                 while (!typeDone()) withFrameNanos { }
             },
             onPhase = ::phase,
+            onView = { v ->
+                // Test hooks (web-bench/input-check.mjs): the document, the main selection, the file.
+                publishHooks(
+                    doc = { v.state.doc.toString() },
+                    sel = { v.state.selection.main.let { "${it.anchor},${it.head}" } },
+                    open = { name -> SampleFile.entries.firstOrNull { it.name == name }?.let { sampleFileOpener?.invoke(it) }; Unit },
+                )
+            },
         )
     }
 }
@@ -47,3 +55,7 @@ private fun scrollDone(): Boolean = js("window.__editorScrollDone === true")
 private fun setTypeReady() { js("window.__editorTypeReady = true") }
 
 private fun typeDone(): Boolean = js("window.__editorTypeDone === true")
+
+private fun publishHooks(doc: () -> String, sel: () -> String, open: (String) -> Unit) {
+    js("{ window.__editorDoc = doc; window.__editorSel = sel; window.__editorOpen = open; }")
+}

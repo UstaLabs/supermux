@@ -173,6 +173,15 @@ tasks.register<Exec>("webColdStartTest") {
     commandLine("node", "web-bench/run.mjs", "cold", webDist.get().asFile.absolutePath, "--runs", "5", "--ceiling", "300", "--syntax-ceiling", "200")
 }
 
+/** The web text-input path (TEXTAREA on focus, insertText/IME at the caret, paste, one a11y text box), in Chrome. */
+tasks.register<Exec>("webInputTest") {
+    group = "verification"
+    description = "Assert the web text input: the DOM field, IME/insertText at the caret, paste, the accessibility tree (headless Chrome)"
+    dependsOn("wasmJsBrowserDistribution")
+    workingDir = projectDir
+    commandLine("node", "web-bench/run.mjs", "input", webDist.get().asFile.absolutePath)
+}
+
 /** The in-page benchmark (keystrokes and wheel scrolling on the 10k-line file) in Chrome. */
 tasks.register<Exec>("webBench") {
     group = "verification"
