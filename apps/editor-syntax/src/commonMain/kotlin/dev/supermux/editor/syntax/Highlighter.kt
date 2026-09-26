@@ -201,6 +201,8 @@ class Highlighter(
      * worker has a thread of its own). [parse] never yields.
      */
     var yieldBetweenSlices: (suspend () -> Unit)? = null
+    /** Units per injection query window ([findParts]); tests vary it to check the window edges. */
+    internal var injectionWindow: Int = INJECTION_WINDOW
     /** Diagnostics (once per document for each kind). */
     var log: (String) -> Unit = { println("editor-syntax: $it") }
     private var loggedMatchLimit = false
@@ -590,7 +592,7 @@ class Highlighter(
 
     /**
      * The injection matches of [parent] intersecting [where] ([start, end]*), one part each. Each
-     * range is queried in windows of [INJECTION_WINDOW] units, with a [Slicer.checkpoint] between
+     * range is queried in windows of [injectionWindow] units, with a [Slicer.checkpoint] between
      * them: one query over a whole 10k-line Markdown file held the web's UI thread for 46 ms. A
      * match crossing a window edge is found from both windows and kept once.
      */
@@ -604,7 +606,7 @@ class Highlighter(
         for (w in where.indices step 2) {
             var from = where[w]
             while (true) {
-                val to = minOf(where[w + 1], from + INJECTION_WINDOW)
+                val to = if (where[w + 1] - from <= injectionWindow) where[w + 1] else from + injectionWindow
                 val m0 = q.matches(parent.tree, from, to, text, content)
                 if (m0.exceededMatchLimit && !loggedMatchLimit) { loggedMatchLimit = true; log("injection query match limit exceeded in ${parent.language}") }
                 for (m in m0.toList()) {

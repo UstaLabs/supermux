@@ -290,7 +290,10 @@ export class SyntaxRuntime {
   dead() { return this.#dead; }
   /** The failure an import recorded during the last call (then cleared), or null. */
   takeHostFailure() { const f = this.#holder.failure; this.#holder.failure = null; return f; }
-  /** Tests: trap inside the module (what an out-of-memory abort() does). */
+  /**
+   * TEST-ONLY: trap inside the module (what an out-of-memory abort() does) through the test-only
+   * export ses_wasm_debug_trap. Never call it from production code: the runtime is dead after it.
+   */
   debugTrap() { this.#x.ses_wasm_debug_trap(); }
 
   status() { return this.#status; }
@@ -442,7 +445,12 @@ function imports(module, holder) {
       const s = host.read(ctx, index);
       const n = s == null ? 0 : s.length;
       if (n === 0) return 0;
-      const p = holder.x.ses_wasm_scratch(n); // may grow memory: views after it
+      // May grow memory: views after it. If it TRAPS, the guarded export marks the runtime dead and
+      // throws; guard() below turns that into a recorded failure and 0, so the outer C code (the
+      // parse that called this import) runs on briefly with an end of text, and when it returns the
+      // outer export's wrapper sees the runtime dead and throws RuntimeDeadError: nothing it
+      // produced is used.
+      const p = holder.x.ses_wasm_scratch(n);
       if (!p) { fail(`out of memory for a ${n}-unit text chunk`); return 0; }
       const u = new Uint16Array(holder.x.memory.buffer, p, n);
       for (let i = 0; i < n; i++) u[i] = s.charCodeAt(i);
@@ -533,7 +541,10 @@ function tablesDirectory() {
   return base.endsWith('/') ? base : base + '/';
 }
 
-/** Tests: make [rt] the process-wide runtime (a fresh instance, or one to kill); returns the previous one. */
+/**
+ * TEST-ONLY: make [rt] the process-wide runtime (a fresh instance, or one to kill); returns the
+ * previous one. Handles do not know their runtime: never swap with live handles (see withFreshRuntime).
+ */
 export function useRuntimeForTests(rt) { const prev = current; current = rt; return prev; }
 
 export function currentRuntime() { return current; }

@@ -92,9 +92,10 @@ class SyntaxWorkerTest {
                 val tr = host.state.update(spec)
                 before.map(tr.changes)
             }
-            host.dispatch(spec)
-            // right after the transaction: the old spans, shifted (no gap)
-            assertEquals(mapped, host.spans)
+            // right after the transaction: the old spans, shifted (no gap). Read on the UI dispatcher in
+            // the same turn: the worker's update is posted there too, so it cannot land in between.
+            val right = withContext(host.ui) { host.applyNow(spec); host.spans }
+            assertEquals(mapped, right)
             // once the worker ran: exactly a fresh highlight of the new text
             host.settle()
             val next = text.replaceRange(at, at, insert)

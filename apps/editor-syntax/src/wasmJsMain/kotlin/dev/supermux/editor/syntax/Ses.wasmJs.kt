@@ -54,7 +54,7 @@ internal external interface SyntaxRuntime : JsAny {
     fun dead(): String?
     /** The failure an import recorded during the last reader / matcher call, then cleared; or null. */
     fun takeHostFailure(): String?
-    /** Tests: trap inside the module. */
+    /** TEST-ONLY: trap inside the module (ses_wasm_debug_trap); the runtime is dead after it. */
     fun debugTrap()
 }
 
@@ -150,10 +150,18 @@ internal actual object Ses {
         }
     }
 
-    /** Freeing into a dead runtime frees nothing (its memory is gone with it): never throw from a close(). */
+    /**
+     * Freeing into a dead runtime frees nothing (its memory is gone with it): a close() never throws,
+     * not even when the runtime dies during this very free.
+     */
     private inline fun release(block: (SyntaxRuntime) -> Unit) {
         val r = syntaxRuntime()
-        if (r.dead() == null) call(block)
+        if (r.dead() != null) return
+        try {
+            call(block)
+        } catch (e: SyntaxException) {
+            if (e.status != SyntaxStatus.RUNTIME_DEAD) throw e
+        }
     }
 
     /** An import failed (the loader recorded it instead of throwing into wasm): surface it now. */

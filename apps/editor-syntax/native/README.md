@@ -466,7 +466,10 @@ NativeBackend, SyntaxQuery, ...                   nativeBackedMain, unchanged
   once, before entering the module, with `SyntaxException(RUNTIME_DEAD)`. The syntax
   worker then turns syntax off for its documents (`Syntax.isOff`); closing frees
   nothing. A new runtime takes a page load (the loader keeps one per page).
-  `ses_wasm_debug_trap` exists for the tests of this.
+  **Test-only hooks:** `ses_wasm_debug_trap` (an export that traps) and the loader's
+  `useRuntimeForTests` exist for the tests of this; production code never calls them.
+  The trap export stays in the shipped module rather than a second, test-only build of
+  it, and does nothing unless called.
 - **Vue's C++ scanner** compiles with `zig c++ -target wasm32-wasi -fno-exceptions`
   and links against zig's wasi libc++ with no changes: vue is fully highlighted on
   the web, like everywhere else.

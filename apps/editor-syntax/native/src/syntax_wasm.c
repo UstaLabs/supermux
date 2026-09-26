@@ -90,7 +90,9 @@ SES_API void *ses_wasm_malloc(uint32_t size) { return malloc(size ? size : 1); }
 SES_API void ses_wasm_free(void *p) { free(p); }
 
 /**
- * Trap, as an out-of-memory abort() inside tree-sitter does (its allocator traps rather than return
- * NULL, which tree-sitter cannot handle). For the tests of the loader's dead-runtime handling only.
+ * TEST-ONLY. Trap, as an out-of-memory abort() inside tree-sitter does (its allocator traps rather
+ * than return NULL, which tree-sitter cannot handle), for the tests of the loader's dead-runtime
+ * handling. It stays in the one shipped module (a separate test build of the whole module would
+ * double the wasm build) and is harmless unless called: nothing outside the tests calls it.
  */
 SES_API void ses_wasm_debug_trap(void) { __builtin_trap(); }

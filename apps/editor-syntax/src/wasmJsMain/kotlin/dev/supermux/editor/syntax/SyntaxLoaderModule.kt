@@ -49,6 +49,6 @@ internal external fun loaderNextTask(): Promise<JsAny?>
 @JsName("loadRuntime")
 internal external fun loaderLoadRuntime(url: String?): Promise<SyntaxRuntime>
 
-/** Tests: make [rt] the process-wide runtime; returns the previous one. */
+/** TEST-ONLY (the browser tests' withFreshRuntime): make [rt] the process-wide runtime; returns the previous one. */
 @JsName("useRuntimeForTests")
 internal external fun loaderUseRuntimeForTests(rt: SyntaxRuntime?): SyntaxRuntime?
