@@ -225,3 +225,6 @@ internal actual fun platformFieldLabel(label: String) {
 }
 
 internal actual val platformClearsFieldSemantics: Boolean = true
+
+@androidx.compose.runtime.Composable
+internal actual fun rememberPlatformKeyboardShow(): (() -> Unit)? = null

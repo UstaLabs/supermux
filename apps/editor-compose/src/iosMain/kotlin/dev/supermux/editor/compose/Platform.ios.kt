@@ -20,3 +20,14 @@ internal actual val platformSurfaceText: Boolean = true
 internal actual fun platformFieldLabel(label: String) {}
 
 internal actual val platformClearsFieldSemantics: Boolean = true
+
+/**
+ * iOS: Compose's `SoftwareKeyboardController.show()` makes the input view first responder, but only
+ * while an input session exists; at the tap itself it does not yet (the session starts once the
+ * field has recomposed with the touch's options), so the keyboard is asked for again here, after.
+ */
+@androidx.compose.runtime.Composable
+internal actual fun rememberPlatformKeyboardShow(): (() -> Unit)? {
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    return androidx.compose.runtime.remember(keyboard) { { keyboard?.show(); Unit } }
+}

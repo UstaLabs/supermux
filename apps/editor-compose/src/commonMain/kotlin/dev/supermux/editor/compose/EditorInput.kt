@@ -13,6 +13,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -662,6 +663,24 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
             }
             controller.composition = sync.composition
         }
+    }
+    // A touch's keyboard request: once the field is focused and has its session, ask the platform
+    // too (the session raises the keyboard only when it starts; a dismissed one needs asking).
+    val showKeyboard = rememberPlatformKeyboardShow()
+    val request = controller.keyboardRequests
+    LaunchedEffect(request) {
+        if (request == 0) return@LaunchedEffect
+        if (controller.focusAfterRequest) {
+            // This composition carries showKeyboardOnFocus = true: now the focus starts the session.
+            controller.focusAfterRequest = false
+            controller.requestFocus()
+        }
+        if (showKeyboard == null) return@LaunchedEffect
+        kotlinx.coroutines.withTimeoutOrNull(1000) { snapshotFlow { controller.view.focused }.first { it } } ?: return@LaunchedEffect
+        // Two frames for the session to exist, then ask the platform (a dismissed keyboard).
+        androidx.compose.runtime.withFrameNanos { }
+        androidx.compose.runtime.withFrameNanos { }
+        showKeyboard()
     }
     // A screen reader reads the SURFACE (its visible text, see editorSemantics): this field holds
     // only a window of text around the caret. Cleared, not merely hidden: iOS and the web ignore

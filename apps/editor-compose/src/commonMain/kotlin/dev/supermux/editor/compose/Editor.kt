@@ -323,9 +323,16 @@ internal class EditorController(val view: EditorView, private val measurer: Text
      */
     fun focusFromTouch() {
         requestKeyboard()
-        requestFocus()
+        // Not focused yet where only a touch starts a session: the focus is taken one frame later
+        // (EditorInputField), once the field carries showKeyboardOnFocus = true, so the session
+        // starts inside the focus change itself; started later from a recomposition, iOS never
+        // made its input view first responder (no keyboard on the first tap).
+        if (inputOnAnyFocus || view.focused) requestFocus() else focusAfterRequest = true
         keyboard?.show()
     }
+
+    /** A touch's focus waits for the field's new options (see [focusFromTouch]). */
+    var focusAfterRequest = false
 
     /**
      * Where an input session starts on ANY focus (desktop, web): true. The desktop has no soft
@@ -339,25 +346,30 @@ internal class EditorController(val view: EditorView, private val measurer: Text
 
     /**
      * The hidden field's `KeyboardOptions.showKeyboardOnFocus`. Compose's text field (ui 1.12)
-     * starts its input session on focus only when this is true, and the session is what raises the
-     * soft keyboard: `SoftwareKeyboardController.show()` alone does nothing for a
-     * `BasicTextField(TextFieldState)` (it goes to the legacy input service, which has no session).
-     * A change while focused restarts the session, so a touch flips it between `true` and `null`
-     * (both mean "show"): every tap brings back a keyboard the user dismissed. False after a blur,
-     * so a later mouse click or programmatic focus starts no session and raises nothing.
+     * starts its input session on focus only when this is true, and starting the session is what
+     * raises the soft keyboard: `SoftwareKeyboardController.show()` at the tap does nothing for a
+     * `BasicTextField(TextFieldState)` (no session yet). A change while focused starts the session.
+     * False after a blur, so a later mouse click or programmatic focus starts none and raises nothing.
      */
-    var keyboardOnFocus: Boolean? by mutableStateOf(platformInputOnAnyFocus)
+    var keyboardOnFocus: Boolean by mutableStateOf(platformInputOnAnyFocus)
+        private set
+
+    /**
+     * Counts the keyboard requests (every touch): once the session exists, each one asks the
+     * platform again (`rememberPlatformKeyboardShow`), so a keyboard the user dismissed comes back.
+     */
+    var keyboardRequests: Int by mutableStateOf(0)
         private set
 
     /** Ask for a soft keyboard now (a touch): see [keyboardOnFocus]. */
     fun requestKeyboard() {
-        if (inputOnAnyFocus) { keyboardOnFocus = true; return }
-        keyboardOnFocus = if (keyboardOnFocus == true) null else true
+        keyboardOnFocus = true
+        keyboardRequests++
     }
 
     /** The surface lost the focus: the next focus raises a keyboard only if a touch asks. */
     fun onBlur() {
-        keyboardOnFocus = if (inputOnAnyFocus) true else false
+        keyboardOnFocus = inputOnAnyFocus
     }
 
     var theme: EditorTheme? = null
@@ -597,10 +609,8 @@ internal class EditorController(val view: EditorView, private val measurer: Text
     }
 
     override fun focus(showKeyboard: Boolean): Boolean {
-        if (showKeyboard) requestKeyboard()
-        val took = requestFocus()
-        if (showKeyboard) keyboard?.show()
-        return took
+        if (showKeyboard) { focusFromTouch(); return true }
+        return requestFocus()
     }
 
     override fun coordsAtPos(offset: Int): Rect = caretRectOnScreen(offset.coerceIn(0, view.state.doc.length))

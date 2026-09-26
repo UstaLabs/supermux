@@ -23,3 +23,15 @@ internal actual val platformSurfaceText: Boolean = true
 internal actual fun platformFieldLabel(label: String) {}
 
 internal actual val platformClearsFieldSemantics: Boolean = false
+
+@androidx.compose.runtime.Composable
+internal actual fun rememberPlatformKeyboardShow(): (() -> Unit)? {
+    val view = androidx.compose.ui.platform.LocalView.current
+    return androidx.compose.runtime.remember(view) {
+        {
+            val imm = view.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+            imm?.showSoftInput(view, 0)
+            Unit
+        }
+    }
+}

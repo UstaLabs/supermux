@@ -9,7 +9,6 @@ import androidx.compose.ui.test.performTouchInput
 import dev.supermux.editor.core.EditorState
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
@@ -40,14 +39,12 @@ class KeyboardRequestTest {
     @Test fun everyTapRequestsItAgain() = editorTest(EditorState.create(text), inputOnAnyFocus = false) { f ->
         onNodeWithTag(EDITOR_TAG).performTouchInput { click(f.at(12)) }
         waitForIdle()
-        val first = f.controller.keyboardOnFocus
-        assertNotEquals(false, first, "a tap did not ask for the keyboard")
+        assertEquals(true, f.controller.keyboardOnFocus, "a tap did not ask for the keyboard")
+        val first = f.controller.keyboardRequests
         onNodeWithTag(EDITOR_TAG).performTouchInput { click(f.at(30)) }
         waitForIdle()
-        val second = f.controller.keyboardOnFocus
-        assertNotEquals(false, second)
-        // A different value restarts the field's input session: a dismissed keyboard comes back.
-        assertNotEquals(first, second, "a second tap would not restart the input session")
+        // Each tap asks again: a keyboard the user dismissed comes back.
+        assertTrue(f.controller.keyboardRequests > first, "a second tap did not ask again")
     }
 
     @Test fun aFingerScrollDoesNotRequestIt() = editorTest(EditorState.create(text), inputOnAnyFocus = false) { f ->

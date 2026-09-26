@@ -54,3 +54,13 @@ internal expect fun platformFieldLabel(label: String)
 
 /** iOS and the web: the hidden field's semantics are cleared, not merely hidden (see LocalEditorExposeField). */
 internal expect val platformClearsFieldSemantics: Boolean
+
+/**
+ * Android: show the soft keyboard for the focused Compose view (`InputMethodManager.showSoftInput`).
+ * Restarting the field's input session re-shows it only on the FIRST focus (Android shows an
+ * editor's keyboard when a touch focuses it); after the user dismissed it, a later tap needs an
+ * explicit request. iOS: the input view becomes first responder only through
+ * `SoftwareKeyboardController.show()` while a session exists. Elsewhere null.
+ */
+@androidx.compose.runtime.Composable
+internal expect fun rememberPlatformKeyboardShow(): (() -> Unit)?
