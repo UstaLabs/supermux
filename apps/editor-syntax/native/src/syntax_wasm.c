@@ -18,6 +18,13 @@
 
 #include "supermux_syntax.h"
 
+#if !defined(__wasm__) || defined(_REENTRANT)
+#error "syntax_wasm.c is for single-threaded wasm32-wasi only (one scratch buffer, no locks)"
+#endif
+
+/* Largest chunk the scratch buffer holds: its byte size must fit a 32-bit size_t with room to spare. */
+#define SCRATCH_MAX_UNITS (UINT32_C(1) << 29)
+
 #define IMPORT(name) __attribute__((import_module("env"), import_name(name)))
 
 /* Write the document's UTF-16 text from [index] into ses_wasm_scratch(n) and return n (0: end). */
@@ -30,9 +37,10 @@ static uint32_t g_scratch_cap;
 
 /** A buffer of at least [units] UTF-16 units for the host to write a chunk into; NULL when out of memory. */
 SES_API uint16_t *ses_wasm_scratch(uint32_t units) {
+  if (units > SCRATCH_MAX_UNITS) return NULL;
   if (!g_scratch || units > g_scratch_cap) {
     uint32_t cap = g_scratch_cap ? g_scratch_cap : 4096;
-    while (cap < units) cap = cap >= 0x40000000u ? units : cap * 2;
+    while (cap < units) cap = cap >= SCRATCH_MAX_UNITS / 2 ? SCRATCH_MAX_UNITS : cap * 2;
     uint16_t *b = realloc(g_scratch, (size_t)cap * sizeof(uint16_t));
     if (!b) return NULL;
     g_scratch = b;
@@ -80,3 +88,9 @@ SES_API ses_status ses_wasm_query_matches(const ses_query *query, const ses_tree
 /** malloc / free for the host (buffers it passes in: names, query source, tables blobs, ranges). */
 SES_API void *ses_wasm_malloc(uint32_t size) { return malloc(size ? size : 1); }
 SES_API void ses_wasm_free(void *p) { free(p); }
+
+/**
+ * Trap, as an out-of-memory abort() inside tree-sitter does (its allocator traps rather than return
+ * NULL, which tree-sitter cannot handle). For the tests of the loader's dead-runtime handling only.
+ */
+SES_API void ses_wasm_debug_trap(void) { __builtin_trap(); }

@@ -135,6 +135,8 @@ class SyntaxWorker(
                 } catch (e: Throwable) {
                     lastError = e
                     resetParse()
+                    // the web's wasm runtime died (a trap): nothing can be parsed until a page load
+                    if ((e as? SyntaxException)?.status == SyntaxStatus.RUNTIME_DEAD) turnOff(snapshot)
                 }
                 done.value = seq
             }

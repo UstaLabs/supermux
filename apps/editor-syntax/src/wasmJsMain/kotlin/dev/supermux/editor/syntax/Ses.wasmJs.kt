@@ -49,6 +49,13 @@ internal external interface SyntaxRuntime : JsAny {
 
     fun debugLiveTrees(): Long
     fun memoryBytes(): Double
+
+    /** Why the runtime died (it then refuses every call), or null. */
+    fun dead(): String?
+    /** The failure an import recorded during the last reader / matcher call, then cleared; or null. */
+    fun takeHostFailure(): String?
+    /** Tests: trap inside the module. */
+    fun debugTrap()
 }
 
 /** The pull reader behind one host context: a throwing source ends the text, and the call rethrows. */
@@ -121,7 +128,38 @@ internal fun syntaxRuntime(): SyntaxRuntime = loaderCurrentRuntime()
 
 /** The ses_* ABI over supermux-syntax.wasm: the same C as the native actuals, the same Kotlin above it. */
 internal actual object Ses {
-    private val rt: SyntaxRuntime get() = syntaxRuntime().also { Hosts.ensure() }
+    private fun dead(why: String) =
+        SyntaxException("the syntax wasm runtime is dead ($why); a page load gets a new one", SyntaxStatus.RUNTIME_DEAD)
+
+    /** A living runtime: a dead one fails here, before any call. */
+    private val rt: SyntaxRuntime get() {
+        val r = syntaxRuntime()
+        Hosts.ensure()
+        r.dead()?.let { throw dead(it) }
+        return r
+    }
+
+    /** One call into the module: dying during it (a trap, the loader's RuntimeDeadError) becomes RUNTIME_DEAD. */
+    private inline fun <T> call(block: (SyntaxRuntime) -> T): T {
+        val r = rt
+        try {
+            return block(r)
+        } catch (e: Throwable) {
+            if (e !is SyntaxException) r.dead()?.let { throw dead(it) }
+            throw e
+        }
+    }
+
+    /** Freeing into a dead runtime frees nothing (its memory is gone with it): never throw from a close(). */
+    private inline fun release(block: (SyntaxRuntime) -> Unit) {
+        val r = syntaxRuntime()
+        if (r.dead() == null) call(block)
+    }
+
+    /** An import failed (the loader recorded it instead of throwing into wasm): surface it now. */
+    private fun checkHost(r: SyntaxRuntime) {
+        r.takeHostFailure()?.let { throw SyntaxException("a host callback failed: $it", SyntaxStatus.CALLBACK) }
+    }
 
     private inline fun <R> withReader(source: TextSource?, cleanup: (R) -> Unit, block: (Int) -> R): R {
         if (source == null) return block(0)
@@ -145,75 +183,74 @@ internal actual object Ses {
         try { return block(id, m) } finally { Hosts.matchers.remove(id) }
     }
 
-    actual fun abiVersion(): Int = rt.abiVersion()
-    actual fun languageCount(): Int = rt.languageCount()
-    actual fun languageName(index: Int): String = rt.languageName(index) ?: ""
-    actual fun languageHasTables(name: String): Int = rt.languageHasTables(name)
+    actual fun abiVersion(): Int = call { it.abiVersion() }
+    actual fun languageCount(): Int = call { it.languageCount() }
+    actual fun languageName(index: Int): String = call { it.languageName(index) ?: "" }
+    actual fun languageHasTables(name: String): Int = call { it.languageHasTables(name) }
     actual fun provideTables(name: String, bytes: ByteArray): Int =
-        if (bytes.isEmpty()) SyntaxStatus.BAD_TABLES else rt.provideTables(name, bytes.toLatin1())
-    actual fun languageLoad(name: String): Int = rt.languageLoad(name)
+        if (bytes.isEmpty()) SyntaxStatus.BAD_TABLES else call { it.provideTables(name, bytes.toLatin1()) }
+    actual fun languageLoad(name: String): Int = call { it.languageLoad(name) }
 
-    actual fun parserNew(): Long = rt.parserNew().toLong()
-    actual fun parserFree(parser: Long) = rt.parserFree(parser.toInt())
-    actual fun parserSetLanguage(parser: Long, name: String): Int = rt.parserSetLanguage(parser.toInt(), name)
-    actual fun parserSetTimeoutMicros(parser: Long, micros: Long) = rt.parserSetTimeoutMicros(parser.toInt(), micros)
+    actual fun parserNew(): Long = call { it.parserNew().toLong() }
+    actual fun parserFree(parser: Long) = release { it.parserFree(parser.toInt()) }
+    actual fun parserSetLanguage(parser: Long, name: String): Int = call { it.parserSetLanguage(parser.toInt(), name) }
+    actual fun parserSetTimeoutMicros(parser: Long, micros: Long) = call { it.parserSetTimeoutMicros(parser.toInt(), micros) }
     actual fun parserSetIncludedRanges(parser: Long, ranges: IntArray): Int =
-        rt.parserSetIncludedRanges(parser.toInt(), if (ranges.isEmpty()) null else ranges.packInts())
-    actual fun parserReset(parser: Long) = rt.parserReset(parser.toInt())
+        call { it.parserSetIncludedRanges(parser.toInt(), if (ranges.isEmpty()) null else ranges.packInts()) }
+    actual fun parserReset(parser: Long) = release { it.parserReset(parser.toInt()) }
 
-    actual fun parse(parser: Long, old: Long, source: TextSource, status: IntArray): Long {
-        val r = rt
+    actual fun parse(parser: Long, old: Long, source: TextSource, status: IntArray): Long = call { r ->
         val t = withReader(source, cleanup = { if (it != 0) r.treeFree(it) }) { ctx ->
             r.parse(parser.toInt(), old.toInt(), ctx).also { status[0] = r.status() }
         }
-        return t.toLong()
+        checkHost(r)
+        t.toLong()
     }
 
-    actual fun parseString(parser: Long, old: Long, text: String, status: IntArray): Long {
-        val r = rt
+    actual fun parseString(parser: Long, old: Long, text: String, status: IntArray): Long = call { r ->
         val t = r.parseString(parser.toInt(), old.toInt(), text)
         status[0] = r.status()
-        return t.toLong()
+        t.toLong()
     }
 
-    actual fun treeCopy(tree: Long): Long = rt.treeCopy(tree.toInt()).toLong()
-    actual fun treeFree(tree: Long) = rt.treeFree(tree.toInt())
+    actual fun treeCopy(tree: Long): Long = call { it.treeCopy(tree.toInt()).toLong() }
+    actual fun treeFree(tree: Long) = release { it.treeFree(tree.toInt()) }
     actual fun treeEdit(tree: Long, start: Int, oldEnd: Int, newEnd: Int, sr: Int, sc: Int, oer: Int, oec: Int, ner: Int, nec: Int) =
-        rt.treeEdit(tree.toInt(), start, oldEnd, newEnd, sr, sc, oer, oec, ner, nec)
-    actual fun treeSexp(tree: Long): String = rt.treeSexp(tree.toInt())
-    actual fun treeHasError(tree: Long): Boolean = rt.treeHasError(tree.toInt())
-    actual fun treeChangedRanges(old: Long, new: Long): IntArray {
-        val r = rt
+        call { it.treeEdit(tree.toInt(), start, oldEnd, newEnd, sr, sc, oer, oec, ner, nec) }
+    actual fun treeSexp(tree: Long): String = call { it.treeSexp(tree.toInt()) }
+    actual fun treeHasError(tree: Long): Boolean = call { it.treeHasError(tree.toInt()) }
+    actual fun treeChangedRanges(old: Long, new: Long): IntArray = call { r ->
         val packed = r.treeChangedRanges(old.toInt(), new.toInt())
         check(r.status(), "changedRanges")
-        return packed!!.unpackInts()
+        packed!!.unpackInts()
     }
 
-    actual fun queryNew(language: String, utf8: ByteArray, err: IntArray): Long {
-        val r = rt
-        // the loader encodes the text as UTF-8 again: the same bytes (it was a Kotlin String)
+    actual fun queryNew(language: String, utf8: ByteArray, err: IntArray): Long = call { r ->
+        // [utf8] is SyntaxQuery's encodeToByteArray(): valid UTF-8 always (a lone surrogate became
+        // U+FFFD), so decoding it and the loader's TextEncoder give back exactly these bytes, and
+        // the error offsets are offsets into them. Arbitrary bytes would not survive this.
         val q = r.queryNew(language, utf8.decodeToString())
         err[0] = r.status(); err[1] = r.errOffset(); err[2] = r.errType()
-        return q.toLong()
+        q.toLong()
     }
 
-    actual fun queryFree(query: Long) = rt.queryFree(query.toInt())
-    actual fun queryCaptureCount(query: Long): Int = rt.queryCaptureCount(query.toInt())
-    actual fun queryCaptureName(query: Long, index: Int): ByteArray = rt.queryCaptureName(query.toInt(), index).latin1Bytes()
-    actual fun queryFlags(query: Long): Int = rt.queryFlags(query.toInt())
-    actual fun queryPatternCount(query: Long): Int = rt.queryPatternCount(query.toInt())
-    actual fun queryRegexCount(query: Long): Int = rt.queryRegexCount(query.toInt())
-    actual fun queryRegex(query: Long, id: Int): ByteArray = rt.queryRegex(query.toInt(), id).latin1Bytes()
-    actual fun queryPatternSettings(query: Long, pattern: Int): ByteArray = rt.queryPatternSettings(query.toInt(), pattern).latin1Bytes()
+    actual fun queryFree(query: Long) = release { it.queryFree(query.toInt()) }
+    actual fun queryCaptureCount(query: Long): Int = call { it.queryCaptureCount(query.toInt()) }
+    actual fun queryCaptureName(query: Long, index: Int): ByteArray = call { it.queryCaptureName(query.toInt(), index).latin1Bytes() }
+    actual fun queryFlags(query: Long): Int = call { it.queryFlags(query.toInt()) }
+    actual fun queryPatternCount(query: Long): Int = call { it.queryPatternCount(query.toInt()) }
+    actual fun queryRegexCount(query: Long): Int = call { it.queryRegexCount(query.toInt()) }
+    actual fun queryRegex(query: Long, id: Int): ByteArray = call { it.queryRegex(query.toInt(), id).latin1Bytes() }
+    actual fun queryPatternSettings(query: Long, pattern: Int): ByteArray = call { it.queryPatternSettings(query.toInt(), pattern).latin1Bytes() }
 
     actual fun queryMatches(
         query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?, childrenOf: Int, flags: IntArray,
-    ): IntArray {
-        val r = rt
-        return withMatcher(match) { mid, matcher ->
-            // the loader already freed the C buffer, whatever happened
+    ): IntArray = call { r ->
+        withMatcher(match) { mid, matcher ->
+            // the loader has freed the C buffer, whatever happened
             val packed = withReader(source, cleanup = {}) { rid -> r.queryMatches(query.toInt(), tree.toInt(), start, end, rid, mid, childrenOf) }
             matcher?.failure?.let { throw it }
+            checkHost(r)
             check(r.status(), "queryMatches")
             flags[0] = r.exceeded()
             packed!!.unpackInts()
@@ -222,16 +259,16 @@ internal actual object Ses {
 
     actual fun queryCaptures(
         query: Long, tree: Long, start: Int, end: Int, source: TextSource?, match: RegexMatcher?, flags: IntArray,
-    ): IntArray {
-        val r = rt
-        return withMatcher(match) { mid, matcher ->
+    ): IntArray = call { r ->
+        withMatcher(match) { mid, matcher ->
             val packed = withReader(source, cleanup = {}) { rid -> r.queryCaptures(query.toInt(), tree.toInt(), start, end, rid, mid) }
             matcher?.failure?.let { throw it } // SES_ERR_CALLBACK: the C side freed its buffer already
+            checkHost(r)
             check(r.status(), "queryCaptures")
             flags[0] = r.exceeded()
             packed!!.unpackInts()
         }
     }
 
-    actual fun debugLiveTrees(): Long = rt.debugLiveTrees()
+    actual fun debugLiveTrees(): Long = call { it.debugLiveTrees() }
 }

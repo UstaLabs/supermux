@@ -33,10 +33,12 @@ typedef struct provided {
   struct provided *next;
 } provided;
 
-#ifdef __wasm__
+#if defined(__wasm__) && !defined(_REENTRANT)
 /* wasm32-wasi is built single-threaded (no shared memory): there is nothing to lock. */
 #define LOCK() ((void)0)
 #define UNLOCK() ((void)0)
+#elif defined(__wasm__)
+#error "threaded wasm (wasm32-wasi-threads) is not supported: the loader lock and syntax_wasm.c assume one thread"
 #else
 #include <pthread.h>
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;

@@ -8,7 +8,7 @@ import { initialize, putResource } from './syntax-loader.mjs';
 const BASE = '/base/kotlin/'; // karma.config.d/syntax-wasm.js serves the staged resources here
 
 async function setup() {
-  await initialize();
+  await initialize(null, BASE + 'editor-syntax/tables/');
   const list = await (await fetch(BASE + 'syntax-test-resources.json')).json();
   await Promise.all(list.map(async (p) => {
     const r = await fetch(BASE + p);

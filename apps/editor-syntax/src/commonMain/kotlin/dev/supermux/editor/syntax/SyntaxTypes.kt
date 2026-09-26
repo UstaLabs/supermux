@@ -26,6 +26,14 @@ object SyntaxStatus {
     const val QUERY = -11
     const val INCOMPATIBLE_LANGUAGE = -12
     const val TIMEOUT = -13
+    /** A host callback (text reader, regex matcher) failed; its own error is reported with it. */
+    const val CALLBACK = -14
+    /**
+     * Web only: the wasm runtime trapped (tree-sitter aborts on out of memory) or an exception
+     * escaped from it, and it refuses every call from then on. The worker turns syntax off; a new
+     * runtime needs a page load.
+     */
+    const val RUNTIME_DEAD = -20
 }
 
 /**

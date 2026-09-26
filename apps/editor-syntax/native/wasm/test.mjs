@@ -8,11 +8,15 @@
 // - a #match? predicate goes through the match trampoline; an #eq? one through the reader;
 // - an incremental edit shifts the later spans; a sliced (timed-out) parse resumes to the same tree;
 // - a code-only grammar's tables are provided and parse; a tampered blob is refused;
-// - every tree is freed (ses_debug_live_trees back to 0).
+// - every tree is freed (ses_debug_live_trees back to 0);
+// - imports that throw thousands of times never corrupt the module (nothing throws into wasm);
+// - a trap marks the runtime dead: later calls fail at once, a fresh instance works;
+// - the loader's error paths: a corrupt module, an ABI mismatch, a refused re-initialize.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { loadRuntime, setHost } from '../../src/wasmJsMain/resources/syntax-loader.mjs';
+import { initialize, loadRuntime, setHost, tablesUrl, RuntimeDeadError } from '../../src/wasmJsMain/resources/syntax-loader.mjs';
 
 const [wasmPath, genDir] = process.argv.slice(2);
 
@@ -176,8 +180,69 @@ for (const n of names.filter((n) => rt.languageHasTables(n) === 1)) {
 }
 console.log('bundled grammars parse: ok');
 
+// imports that throw: recorded, answered (end of text / failed match), never thrown into wasm
+const readHost = (ctx, index) => { const t = texts.get(ctx); return index >= t.text.length ? null : t.text.slice(index, index + t.chunk); };
+const matchHost = (ctx, id, text) => (regexes.get(ctx)[id].test(text) ? 1 : 0);
+setHost(() => { throw new Error('boom read'); }, matchHost);
+for (let i = 0; i < 2000; i++) {
+  assert.equal(rt.parse(p, 0, 1), 0);
+  assert.equal(rt.status(), -14, 'SES_ERR_CALLBACK');
+  assert.match(rt.takeHostFailure(), /boom read/);
+}
+setHost(readHost, () => { throw new Error('boom match'); });
+const mq = query('json', '((string) @s (#match? @s "a"))');
+const tm = parse(p, 0, 1);
+regexes.set(3, mq.re);
+for (let i = 0; i < 2000; i++) {
+  assert.equal(rt.queryCaptures(mq.q, tm, 0, SAMPLE.length, 1, 3), null);
+  assert.equal(rt.status(), -14);
+  assert.match(rt.takeHostFailure(), /boom match/);
+}
+setHost(readHost, matchHost);
+rt.treeFree(tm);
+rt.queryFree(mq.q);
+const again = parse(p, 0, 1);
+assert.deepEqual(spans(jq, again, SAMPLE.length, 1, 0), GOLDEN, 'the module still works after 4000 import failures');
+rt.treeFree(again);
+assert.equal(rt.dead(), null);
+console.log('throwing imports: ok (2000 reads, 2000 matches, then the M0 golden again)');
+
 rt.queryFree(jq.q);
 rt.parserFree(p);
 assert.equal(rt.debugLiveTrees(), base, 'every tree freed');
 console.log(`live trees back to ${base}: ok; memory ${(rt.memoryBytes() / 1048576).toFixed(1)} MiB`);
+
+// a trap (what tree-sitter's out-of-memory abort() does) marks the runtime dead
+const doomed = await loadRuntime(pathToFileURL(wasmPath).href);
+assert.throws(() => doomed.debugTrap(), RuntimeDeadError);
+assert.match(doomed.dead(), /ses_wasm_debug_trap/);
+assert.throws(() => doomed.parserNew(), (e) => e instanceof RuntimeDeadError && e.reason === 'RUNTIME_DEAD');
+const fresh = await loadRuntime(pathToFileURL(wasmPath).href);
+const fp = fresh.parserNew();
+assert.equal(fresh.parserSetLanguage(fp, 'json'), 0);
+const ft = fresh.parse(fp, 0, 1);
+assert.ok(ft && fresh.dead() === null, 'a fresh instance works');
+fresh.treeFree(ft); fresh.parserFree(fp);
+console.log('trap: ok (dead, later calls refused, a fresh instance works)');
+
+// the loader's error paths
+const dir = mkdtempSync(`${tmpdir()}/ses-wasm-`);
+writeFileSync(`${dir}/corrupt.wasm`, 'this is not wasm');
+await assert.rejects(loadRuntime(pathToFileURL(`${dir}/corrupt.wasm`).href), (e) => e.reason === 'CORRUPT_BINARY');
+writeFileSync(`${dir}/empty.wasm`, Buffer.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0])); // a valid module with no exports
+await assert.rejects(loadRuntime(pathToFileURL(`${dir}/empty.wasm`).href), (e) => e.reason === 'ABI_MISMATCH');
+await assert.rejects(loadRuntime(pathToFileURL(`${dir}/missing.wasm`).href), (e) => e.reason === 'MISSING_BINARY');
+console.log('load errors: ok (corrupt, ABI mismatch, missing)');
+
+// initialize: a failed first load leaves nothing configured; a refused call changes nothing
+const good = pathToFileURL(wasmPath).href;
+await assert.rejects(initialize(pathToFileURL(`${dir}/missing.wasm`).href, 'https://example.test/a/'));
+const r1 = await initialize(good, 'https://example.test/tables/');
+assert.equal(tablesUrl('ruby'), 'https://example.test/tables/ruby.sesz');
+await assert.rejects(initialize(good, 'https://example.test/other/'), /already served/);
+await assert.rejects(initialize(pathToFileURL(`${dir}/empty.wasm`).href), /already loaded/);
+assert.equal(tablesUrl('ruby'), 'https://example.test/tables/ruby.sesz', 'a refused initialize changed nothing');
+assert.equal(await initialize(good), r1);
+assert.equal(await initialize(good, 'https://example.test/tables/'), r1);
+console.log('initialize: ok (a refused call changes nothing)');
 console.log('wasm module tests: PASSED');

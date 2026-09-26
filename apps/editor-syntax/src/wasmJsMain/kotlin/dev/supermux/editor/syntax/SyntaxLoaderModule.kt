@@ -23,6 +23,9 @@ internal external fun loaderSetHost(read: (Int, Int) -> String?, match: (Int, In
 @JsName("tablesUrl")
 internal external fun loaderTablesUrl(lang: String): String
 
+@JsName("dropResource")
+internal external fun loaderDropResource(path: String)
+
 @JsName("hasResource")
 internal external fun loaderHasResource(path: String): Boolean
 
@@ -41,3 +44,11 @@ internal external fun loaderFetchResource(path: String, url: String): Promise<Js
 /** Resolves in a new task (MessageChannel): input, rendering and timers already queued run first. */
 @JsName("nextTask")
 internal external fun loaderNextTask(): Promise<JsAny?>
+
+/** A NEW runtime (its own instance and memory), independent of [loaderInitialize]. */
+@JsName("loadRuntime")
+internal external fun loaderLoadRuntime(url: String?): Promise<SyntaxRuntime>
+
+/** Tests: make [rt] the process-wide runtime; returns the previous one. */
+@JsName("useRuntimeForTests")
+internal external fun loaderUseRuntimeForTests(rt: SyntaxRuntime?): SyntaxRuntime?

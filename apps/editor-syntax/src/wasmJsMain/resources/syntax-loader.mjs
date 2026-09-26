@@ -16,6 +16,12 @@
 //   array element by element costs one JS call per element.
 // - Views of `memory.buffer` are re-acquired after every call that can allocate: a grown memory
 //   detaches the old ArrayBuffer.
+// - NOTHING may throw into wasm: an exception unwinding through wasm frames never restores the C
+//   stack pointer (__stack_pointer), so the module is corrupt from then on. Every import catches,
+//   records the failure (takeHostFailure) and returns a value the C side handles (end of text, a
+//   failed match). A trap (tree-sitter's allocator abort()s on out of memory; wasi-libc turns that
+//   into `unreachable`) or any exception out of an export marks the runtime DEAD: every later call
+//   throws a RuntimeDeadError at once, before entering the module.
 
 export const ABI_VERSION = 3;
 
@@ -25,6 +31,15 @@ export const Reason = Object.freeze({
   ABI_MISMATCH: 'ABI_MISMATCH',
   INITIALIZATION_FAILED: 'INITIALIZATION_FAILED',
 });
+
+/** Thrown by every call into a runtime that trapped or saw an exception escape (see dead()). */
+export class RuntimeDeadError extends Error {
+  constructor(message) {
+    super(`the syntax wasm runtime is dead: ${message}`);
+    this.name = 'RuntimeDeadError';
+    this.reason = 'RUNTIME_DEAD';
+  }
+}
 
 export class SyntaxLoadError extends Error {
   constructor(reason, message, cause) {
@@ -56,12 +71,16 @@ function resolveUrl(url, what) {
   return resolved.href;
 }
 
+const FETCH_TIMEOUT_MS = 30000;
+
 async function fetchBytes(url) {
   if (url.startsWith('file:')) { // Node (the build's tests): no fetch() for file URLs
     const { readFile } = await import(/* webpackIgnore: true */ 'node:fs/promises');
     return new Uint8Array(await readFile(new URL(url)));
   }
-  const response = await fetch(url, { credentials: 'same-origin' });
+  // a hung server must not hang ensureLanguage forever
+  const signal = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(FETCH_TIMEOUT_MS) : undefined;
+  const response = await fetch(url, { credentials: 'same-origin', signal });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return new Uint8Array(await response.arrayBuffer());
 }
@@ -174,6 +193,8 @@ const REQUIRED_EXPORTS = [
   'ses_query_pattern_settings', 'ses_debug_live_trees',
 ];
 
+const describe = (e) => String((e && e.message) || e);
+
 /**
  * One instance of the module. Pointers are wasm32 addresses (i32 numbers, 0 = NULL). Out-values
  * of the last call (status, error offset/type, match-limit flag) are read with the getters below.
@@ -185,11 +206,32 @@ export class SyntaxRuntime {
   #exceeded = 0;
   #errOffset = 0;
   #errType = 0;
+  #dead = null;  // why the runtime died, or null
+  #holder;       // shared with the imports: { x, failure }
 
-  constructor(instance) {
-    const x = instance.exports;
-    const missing = REQUIRED_EXPORTS.filter((n) => !(n in x));
+  constructor(instance, holder = { x: instance.exports, failure: null }) {
+    const raw = instance.exports;
+    const missing = REQUIRED_EXPORTS.filter((n) => !(n in raw));
     if (missing.length) throw new SyntaxLoadError(Reason.ABI_MISMATCH, `wasm module lacks exports: ${missing.join(', ')}`);
+    // Every export behind the dead-runtime guard (the imports call x.ses_wasm_scratch through it too).
+    const x = { memory: raw.memory };
+    for (const [name, f] of Object.entries(raw)) {
+      if (typeof f !== 'function') continue;
+      x[name] = (...args) => {
+        if (this.#dead !== null) throw new RuntimeDeadError(this.#dead);
+        let r;
+        try {
+          r = f(...args);
+        } catch (e) {
+          if (this.#dead === null) this.#dead = `${name}: ${describe(e)}`;
+          throw new RuntimeDeadError(this.#dead);
+        }
+        if (this.#dead !== null) throw new RuntimeDeadError(this.#dead); // a nested call died
+        return r;
+      };
+    }
+    holder.x = x;
+    this.#holder = holder;
     x._initialize();
     const abi = x.ses_abi_version() >>> 0;
     if (abi !== ABI_VERSION) {
@@ -244,6 +286,13 @@ export class SyntaxRuntime {
 
   #bytesAt(p, n) { return p ? unitsToString(new Uint8Array(this.#x.memory.buffer, p, n)) : ''; }
 
+  /** Why the runtime died (a trap, an escaped exception), or null while it is alive. */
+  dead() { return this.#dead; }
+  /** The failure an import recorded during the last call (then cleared), or null. */
+  takeHostFailure() { const f = this.#holder.failure; this.#holder.failure = null; return f; }
+  /** Tests: trap inside the module (what an out-of-memory abort() does). */
+  debugTrap() { this.#x.ses_wasm_debug_trap(); }
+
   status() { return this.#status; }
   exceeded() { return this.#exceeded; }
   errOffset() { return this.#errOffset; }
@@ -274,8 +323,14 @@ export class SyntaxRuntime {
 
   /** Parse through the host reader [ctx]; the tree (0 on failure, see status()). */
   parse(p, old, ctx) {
+    this.#holder.failure = null;
     const t = this.#x.ses_wasm_parser_parse(p, old, ctx, this.#out);
     this.#status = this.#dv().getInt32(this.#out, true);
+    if (this.#holder.failure !== null) { // the reader failed: the C side saw the end of the text
+      if (t) this.#x.ses_tree_free(t);
+      this.#status = -14; // SES_ERR_CALLBACK
+      return 0;
+    }
     return t;
   }
 
@@ -337,16 +392,25 @@ export class SyntaxRuntime {
   /** Packed [start, end, capture, pattern]* ints, or null with status() set; exceeded() the match-limit flag. */
   queryCaptures(q, t, start, end, readCtx, matchCtx) {
     const o = this.#out;
+    this.#holder.failure = null;
     this.#status = this.#x.ses_wasm_query_captures(q, t, start, end, readCtx, matchCtx, o + 4, o + 8, o + 12);
     this.#exceeded = this.#dv().getInt32(o + 12, true);
-    return this.#status === 0 ? this.#takeInts() : null;
+    return this.#queryResult();
   }
 
   queryMatches(q, t, start, end, readCtx, matchCtx, childrenOf) {
     const o = this.#out;
+    this.#holder.failure = null;
     this.#status = this.#x.ses_wasm_query_matches(q, t, start, end, readCtx, matchCtx, childrenOf, o + 4, o + 8, o + 12);
     this.#exceeded = this.#dv().getInt32(o + 12, true);
-    return this.#status === 0 ? this.#takeInts() : null;
+    return this.#queryResult();
+  }
+
+  #queryResult() {
+    const ints = this.#status === 0 ? this.#takeInts() : null; // always frees the C buffer
+    if (this.#holder.failure === null) return ints;
+    this.#status = -14; // SES_ERR_CALLBACK: a reader or matcher import failed
+    return null;
   }
 
   /** A BigInt (Kotlin Long). */
@@ -371,29 +435,39 @@ function imports(module, holder) {
   const mem = () => holder.x.memory;
   const shim = wasi(mem);
   const needed = WebAssembly.Module.imports(module);
+  const fail = (why) => { if (holder.failure === null) holder.failure = why; };
   const env = {
     ses_host_read(ctx, index) {
-      const s = host.read ? host.read(ctx, index) : null;
+      if (!host.read) { fail('no host reader registered (setHost)'); return 0; }
+      const s = host.read(ctx, index);
       const n = s == null ? 0 : s.length;
       if (n === 0) return 0;
       const p = holder.x.ses_wasm_scratch(n); // may grow memory: views after it
-      if (!p) return 0;
+      if (!p) { fail(`out of memory for a ${n}-unit text chunk`); return 0; }
       const u = new Uint16Array(holder.x.memory.buffer, p, n);
       for (let i = 0; i < n; i++) u[i] = s.charCodeAt(i);
       return n;
     },
     ses_host_match(ctx, id, p, n) {
-      if (!host.match) return -1;
+      if (!host.match) { fail('no host matcher registered (setHost)'); return -1; }
       const text = n ? unitsToString(new Uint16Array(holder.x.memory.buffer, p, n)) : '';
-      return host.match(ctx, id, text);
+      const r = host.match(ctx, id, text);
+      if (r !== 0 && r !== 1) { fail(`the matcher returned ${r}`); return -1; }
+      return r;
     },
   };
+  // Never throw into wasm (module comment): a failure is recorded and answered with [onError].
+  const guard = (name, f, onError) => (...args) => {
+    try { return f(...args); } catch (e) { fail(`${name}: ${describe(e)}`); return onError; }
+  };
+  const ERRNO_IO = 29;
   const out = { env: {}, wasi_snapshot_preview1: {} };
   const missing = [];
   for (const imp of needed) {
     const table = imp.module === 'env' ? env : imp.module === 'wasi_snapshot_preview1' ? shim : null;
     if (imp.kind !== 'function' || !table || !(imp.name in table)) { missing.push(`${imp.module}.${imp.name}`); continue; }
-    out[imp.module][imp.name] = table[imp.name];
+    const onError = imp.module === 'env' ? (imp.name === 'ses_host_match' ? -1 : 0) : ERRNO_IO;
+    out[imp.module][imp.name] = guard(imp.name, table[imp.name], onError);
   }
   if (missing.length) throw new SyntaxLoadError(Reason.ABI_MISMATCH, `wasm module needs unknown imports: ${missing.join(', ')}`);
   return out;
@@ -402,7 +476,7 @@ function imports(module, holder) {
 /** Compile (cached) + instantiate a NEW runtime for [url] (null: the package default). */
 export async function loadRuntime(url) {
   const module = await compileModule(url);
-  const holder = { x: null };
+  const holder = { x: null, failure: null };
   let instance;
   try {
     instance = await WebAssembly.instantiate(module, imports(module, holder));
@@ -411,8 +485,7 @@ export async function loadRuntime(url) {
     const reason = e instanceof WebAssembly.LinkError ? Reason.ABI_MISMATCH : Reason.INITIALIZATION_FAILED;
     throw new SyntaxLoadError(reason, `instantiating the syntax wasm module failed: ${e && e.message}`, e);
   }
-  holder.x = instance.exports;
-  return new SyntaxRuntime(instance);
+  return new SyntaxRuntime(instance, holder);
 }
 
 // ------------------------------------------------------------------ singleton ----
@@ -428,33 +501,46 @@ let tablesBase = null;
  * next to the wasm module). A second call with a different module URL is rejected.
  */
 export function initialize(url, tablesUrl) {
-  let resolved;
+  let resolved, tables = null;
   try {
     resolved = resolveUrl(url == null ? defaultWasmUrl() : url, 'wasm');
-    if (tablesUrl != null) tablesBase = resolveUrl(tablesUrl, 'tables');
+    if (tablesUrl != null) tables = resolveUrl(tablesUrl, 'tables');
   } catch (e) {
     return Promise.reject(e);
   }
-  if (configuredUrl !== null && resolved !== configuredUrl) {
-    return Promise.reject(new SyntaxLoadError(Reason.INITIALIZATION_FAILED,
-      `the syntax runtime is already loaded from ${configuredUrl}; refusing ${resolved}`));
+  if (configuredUrl !== null) { // loaded or loading: the same configuration, or nothing changes
+    if (resolved !== configuredUrl) {
+      return Promise.reject(new SyntaxLoadError(Reason.INITIALIZATION_FAILED,
+        `the syntax runtime is already loaded from ${configuredUrl}; refusing ${resolved}`));
+    }
+    if (tables !== null && tables !== tablesDirectory()) {
+      return Promise.reject(new SyntaxLoadError(Reason.INITIALIZATION_FAILED,
+        `the syntax tables are already served from ${tablesDirectory()}; refusing ${tables}`));
+    }
+    return current ? Promise.resolve(current) : pending;
   }
-  if (current) return Promise.resolve(current);
-  if (pending) return pending;
-  configuredUrl = resolved;
+  configuredUrl = resolved; // accepted: only now does the configuration change
+  tablesBase = tables;
   pending = loadRuntime(resolved).then(
     (rt) => { current = rt; pending = null; return rt; },
-    (e) => { pending = null; configuredUrl = null; throw e; },
+    (e) => { pending = null; configuredUrl = null; tablesBase = null; throw e; },
   );
   return pending;
 }
+
+function tablesDirectory() {
+  const base = tablesBase ?? new URL('editor-syntax/tables/', configuredUrl ?? defaultWasmUrl()).href;
+  return base.endsWith('/') ? base : base + '/';
+}
+
+/** Tests: make [rt] the process-wide runtime (a fresh instance, or one to kill); returns the previous one. */
+export function useRuntimeForTests(rt) { const prev = current; current = rt; return prev; }
 
 export function currentRuntime() { return current; }
 
 /** Where <lang>.sesz is fetched from. */
 export function tablesUrl(lang) {
-  const base = tablesBase ?? new URL('editor-syntax/tables/', configuredUrl ?? defaultWasmUrl()).href;
-  return new URL(`${lang}.sesz`, base.endsWith('/') ? base : base + '/').href;
+  return new URL(`${lang}.sesz`, tablesDirectory()).href;
 }
 
 // ------------------------------------------------------------------ resources ----
