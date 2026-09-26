@@ -22,7 +22,7 @@ class AccessibilityTest {
     private val text = (0 until 400).joinToString("\n") { "line $it text" }
 
     private fun androidx.compose.ui.test.ComposeUiTest.editor(): SemanticsNode =
-        onNode(androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText) and !hasSetTextAction()).fetchSemanticsNode()
+        onNode(androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText) and androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(SemanticsProperties.ContentDescription)).fetchSemanticsNode()
     private fun SemanticsNode.exposed(): String = assertNotNull(config.getOrNull(SemanticsProperties.EditableText)).text
 
     @Test fun theEditorIsOneEditableNodeWithTheVisibleLinesOnly() = editorTest(EditorState.create(text)) { f ->
@@ -40,9 +40,19 @@ class AccessibilityTest {
 
     @Test fun theHiddenFieldIsNotInTheTreeAtAll() = editorTest(EditorState.create(text), exposeField = false) { _ ->
         // iOS and the web ignore hideFromAccessibility: the field's semantics are cleared instead.
-        assertTrue(onAllNodes(hasSetTextAction()).fetchSemanticsNodes().isEmpty(), "the IME field is in the semantics tree")
+        assertTrue(onAllNodes(hasSetTextAction() and !androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(SemanticsProperties.ContentDescription)).fetchSemanticsNodes().isEmpty(), "the IME field is in the semantics tree")
         val editable = onAllNodes(androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)).fetchSemanticsNodes()
         assertEquals(1, editable.size, "exactly one editable text element")
+    }
+
+    @Test fun setTextReplacesWhatChangedInTheExposedLines() = editorTest(EditorState.create(text)) { f ->
+        val node = editor()
+        val exposed = node.exposed()
+        val action = assertNotNull(node.config.getOrNull(SemanticsActions.SetText)?.action, "no SetText: macOS shows no text field")
+        runOnUiThread { action(androidx.compose.ui.text.AnnotatedString(exposed.replaceFirst("line 2 text", "line 2 TEXT"))) }
+        waitForIdle()
+        assertTrue(f.view.state.doc.toString().contains("line 2 TEXT\nline 3 text"), "SetText did not edit the document")
+        assertTrue(f.view.state.doc.lineCount == 400, "SetText replaced more than it changed")
     }
 
     @Test fun theTextNodeIsNotTheScrollNode() = editorTest(EditorState.create(text)) { _ ->

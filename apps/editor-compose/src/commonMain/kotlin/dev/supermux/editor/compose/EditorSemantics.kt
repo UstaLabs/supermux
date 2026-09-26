@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.pasteText
 import androidx.compose.ui.semantics.requestFocus
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setSelection
+import androidx.compose.ui.semantics.setText
 import androidx.compose.ui.semantics.textSelectionRange
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
@@ -211,6 +212,17 @@ private class EditorSemanticsNode(private var e: EditorSemanticsElement) : Modif
         }
         copyText(EditorSemantics.COPY) { DefaultCommands.copy.run(view) }
         if (!e.readOnly) {
+            // A text field for the platforms (macOS maps a node with SetText to an AXTextArea whose
+            // value is its text; without it VoiceOver got a static text holding only the label).
+            // Setting the text replaces what changed in the exposed lines, mapped to the document.
+            setText { replacement ->
+                val tx = text()
+                val edit = diffField(tx.text, replacement.text) ?: return@setText true
+                val from = tx.toDoc(edit.from)
+                val to = tx.toDoc(edit.to)
+                view.dispatch(TransactionSpec(changes = listOf(dev.supermux.editor.core.ChangeSpec(from, maxOf(from, to), edit.insert)), scrollIntoView = true, userEvent = "input"))
+                true
+            }
             insertTextAtCursor { typed -> view.typeText(typed.text) }
             cutText(EditorSemantics.CUT) { DefaultCommands.cut.run(view) }
             pasteText(EditorSemantics.PASTE) { DefaultCommands.paste.run(view) }

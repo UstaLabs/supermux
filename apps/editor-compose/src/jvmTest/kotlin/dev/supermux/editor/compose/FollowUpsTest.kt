@@ -52,11 +52,11 @@ class FollowUpsTest {
     @Test fun theKeyPathOfEveryKeyIsLogged() = editorTest(EditorState.create("abc", EditorSelection.cursor(1))) { f ->
         val log = ArrayList<Pair<String, KeyPath>>()
         f.view.onKeyPath = { k, p -> log += k to p }
-        onNode(hasSetTextAction()).requestFocus()
+        onNode(hasEditorField()).requestFocus()
         waitForIdle()
-        onNode(hasSetTextAction()).performKeyInput { pressKey(Key.DirectionRight) }
+        onNode(hasEditorField()).performKeyInput { pressKey(Key.DirectionRight) }
         waitForIdle()
-        onNode(hasSetTextAction()).performKeyInput { pressKey(Key.Q) }
+        onNode(hasEditorField()).performKeyInput { pressKey(Key.Q) }
         waitForIdle()
         assertEquals("ArrowRight" to KeyPath.KEYMAP, log.first())
         assertTrue(log.any { it.second == KeyPath.FIELD }, "an unbound letter was not logged as the field's: $log")

@@ -27,7 +27,7 @@ import kotlin.test.assertTrue
  */
 @OptIn(ExperimentalTestApi::class)
 class TextInputTest {
-    private fun androidx.compose.ui.test.ComposeUiTest.field() = onNode(hasSetTextAction())
+    private fun androidx.compose.ui.test.ComposeUiTest.field() = onNode(hasEditorField())
 
     private fun androidx.compose.ui.test.ComposeUiTest.focus() {
         field().requestFocus()

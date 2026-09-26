@@ -24,14 +24,14 @@ class ZoomTest {
     private val mod = if (isApplePlatform) Key.MetaLeft else Key.CtrlLeft
 
     private fun androidx.compose.ui.test.ComposeUiTest.chord(key: Key) {
-        onNode(hasSetTextAction()).performKeyInput { withKeyDown(mod) { pressKey(key) } }
+        onNode(hasEditorField()).performKeyInput { withKeyDown(mod) { pressKey(key) } }
         waitForIdle()
     }
 
     @Test fun theKeysStepOneSizeAndStayWithinTheLimits() {
         val reported = ArrayList<Float>()
         editorTest(EditorState.create(text), onFontSize = { reported += it }) { f ->
-            onNode(hasSetTextAction()).requestFocus()
+            onNode(hasEditorField()).requestFocus()
             waitForIdle()
             assertEquals(EditorZoom.DEFAULT, f.view.effectiveFontSize)
             chord(Key.Equals)

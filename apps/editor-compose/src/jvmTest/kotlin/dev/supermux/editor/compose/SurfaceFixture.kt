@@ -89,3 +89,7 @@ internal fun editorTest(
     waitForIdle()
     body(fixture)
 }
+
+/** The hidden input field (the surface's own text node has SetText too, and a content description). */
+internal fun hasEditorField(): androidx.compose.ui.test.SemanticsMatcher =
+    androidx.compose.ui.test.hasSetTextAction() and !androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)

@@ -130,7 +130,7 @@ class EditorPerfTest {
                     onNodeWithTag("editor").performMouseInput { click(assertNotNull(view.coordsAtPos(view.state.selection.main.head)).center) }
                     frame()
                     assertTrue(view.focused, "the click did not focus the editor")
-                    val field = onNode(hasSetTextAction())
+                    val field = onNode(hasSetTextAction() and !androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription))
                     val keys = ArrayList<Double>()
                     val settles = ArrayList<Double>()
                     fun keystroke(i: Int) {
