@@ -23,8 +23,10 @@ import kotlin.math.ceil
  * **Lines longer than [LONG_LINE] units** (minified files, a 1 MB JSON line) are never laid out,
  * sliced or hashed whole: a keystroke on one would cost ~100 ms. Such a line is cut into pieces
  * (at grapheme boundaries) laid out one by one, only where they are looked at:
- * - without wrapping, pieces of [PIECE] units at their NOMINAL x (units x cell width; wide
- *   characters and tabs inside a piece are exact, piece starts are not);
+ * - without wrapping, pieces of [PIECE] units side by side: each starts where the previous one's
+ *   MEASURED width ends (an unmeasured one is estimated at [PIECE] cells), so CJK and other wide
+ *   text neither overlaps nor misses its clicks; the widths are remembered per line and dropped
+ *   from an edit onwards ([onChanges]);
  * - with wrapping, rows of as many units as cells fit the width, so the line's height is known
  *   without shaping anything (a wide character may overhang its row).
  */
@@ -83,12 +85,11 @@ class Geometry(
             val lh = layouts.lineHeightPx
             (yFrom / lh).toInt().coerceIn(0, n - 1) to (yTo / lh).toInt().coerceIn(0, n - 1)
         } else {
-            val span = PIECE * layouts.charWidthPx
-            ((xFrom / span).toInt() - 1).coerceIn(0, n - 1) to ((xTo / span).toInt() + 1).coerceIn(0, n - 1)
+            (pieceAtX(from, n, xFrom) - 1).coerceIn(0, n - 1) to (pieceAtX(from, n, xTo) + 1).coerceIn(0, n - 1)
         }
         return (k0..k1).map { k ->
             val (a, b) = pieceBounds(from, len, k)
-            pieceOrigin(from, k, a) to layouts.layoutRange(state(), a, b, extraMarks)
+            pieceOrigin(from, k, a) to pieceLayout(from, k, a, b)
         }
     }
 
@@ -194,8 +195,58 @@ class Geometry(
         return k
     }
 
-    private fun pieceOrigin(from: Int, k: Int, start: Int): Offset =
-        if (wrapCols() > 0) Offset(0f, k * layouts.lineHeightPx) else Offset((start - from) * layouts.charWidthPx, 0f)
+    private fun pieceOrigin(from: Int, k: Int, @Suppress("UNUSED_PARAMETER") start: Int): Offset =
+        if (wrapCols() > 0) Offset(0f, k * layouts.lineHeightPx) else Offset(originX(from, k), 0f)
+
+    /** Measured widths of unwrapped long lines' pieces, by the line's start offset: piece -> width. */
+    private val pieceWidths = HashMap<Int, HashMap<Int, Float>>()
+
+    /** Piece [k]'s layout, its width remembered for the running sum of origins. */
+    private fun pieceLayout(from: Int, k: Int, a: Int, b: Int): TextLayoutResult {
+        val layout = layouts.layoutRange(state(), a, b, extraMarks)
+        if (wrapCols() == 0) pieceWidths.getOrPut(from) { HashMap() }[k] = layout.multiParagraph.maxIntrinsicWidth
+        return layout
+    }
+
+    private fun widthOf(from: Int, k: Int): Float = pieceWidths[from]?.get(k) ?: (PIECE * layouts.charWidthPx)
+
+    /** Where piece [k] starts: the pieces before it laid side by side. */
+    private fun originX(from: Int, k: Int): Float {
+        var x = 0f
+        for (i in 0 until k) x += widthOf(from, i)
+        return x
+    }
+
+    /** The piece under line-local [x] (unwrapped). */
+    private fun pieceAtX(from: Int, n: Int, x: Float): Int {
+        var acc = 0f
+        for (k in 0 until n) {
+            acc += widthOf(from, k)
+            if (x < acc) return k
+        }
+        return n - 1
+    }
+
+    /**
+     * Follow an edit: a long line's remembered piece widths move with its start, and only the
+     * pieces before the edit's first change in it stay (the others' boundaries moved).
+     */
+    fun onChanges(changes: dev.supermux.editor.core.ChangeSet) {
+        if (pieceWidths.isEmpty() || changes.isEmpty) return
+        val edits = changes.iterChanges()
+        val next = HashMap<Int, HashMap<Int, Float>>()
+        for ((start, widths) in pieceWidths) {
+            if (edits.any { it.fromA < start && it.toA > start }) continue // its start was deleted
+            val firstInside = edits.firstOrNull { it.toA >= start }?.fromA
+            val keep = if (firstInside == null) widths else {
+                val kEdit = (firstInside - start) / PIECE
+                HashMap(widths.filterKeys { it < kEdit })
+            }
+            if (keep.isNotEmpty()) next[changes.mapPos(start, -1)] = keep
+        }
+        pieceWidths.clear()
+        pieceWidths.putAll(next)
+    }
 
     private fun longRectFor(line: Int, offset: Int): Rect {
         measure(line)
@@ -204,7 +255,7 @@ class Geometry(
         val k = pieceOf(from, len, offset)
         val (a, b) = pieceBounds(from, len, k)
         val o = pieceOrigin(from, k, a)
-        val r = layouts.layoutRange(state(), a, b, extraMarks).getCursorRect(offset - a)
+        val r = pieceLayout(from, k, a, b).getCursorRect(offset - a)
         val top = lineTop(line) + o.y
         return Rect(o.x + r.left, top + r.top, o.x + r.left, top + r.bottom)
     }
@@ -216,11 +267,10 @@ class Geometry(
         val n = pieceCount(len)
         val lh = layouts.lineHeightPx
         val localY = position.y - lineTop(line)
-        val k = if (wrapCols() > 0) (localY / lh).toInt().coerceIn(0, n - 1)
-        else (position.x / (PIECE * layouts.charWidthPx)).toInt().coerceIn(0, n - 1)
+        val k = if (wrapCols() > 0) (localY / lh).toInt().coerceIn(0, n - 1) else pieceAtX(from, n, position.x)
         val (a, b) = pieceBounds(from, len, k)
         val o = pieceOrigin(from, k, a)
-        val layout = layouts.layoutRange(state(), a, b, extraMarks)
+        val layout = pieceLayout(from, k, a, b)
         val local = layout.getOffsetForPosition(Offset(position.x - o.x, (localY - o.y).coerceIn(0f, lh - 0.01f)))
         return a + local
     }

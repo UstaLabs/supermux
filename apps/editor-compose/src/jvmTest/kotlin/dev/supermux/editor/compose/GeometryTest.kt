@@ -142,7 +142,8 @@ class GeometryTest {
         val base = state.doc.lineStart(1)
         for (o in listOf(0, 1, 2047, 2048, 2049, 15_000, 29_999, 30_000)) {
             val r = g.rectFor(base + o)
-            assertClose(o * cw, r.left, "x of $o")
+            // Pieces sit where the measured widths before them end: within a cell of nominal.
+            assertTrue(kotlin.math.abs(o * cw - r.left) < cw, "x of $o: ${r.left}, nominal ${o * cw}")
             assertEquals(base + o, g.offsetAt(r.center), "offset $o did not round-trip")
         }
         assertTrue(g.layouts.measureCount < 12, "${g.layouts.measureCount} layouts for a handful of lookups")
@@ -150,7 +151,7 @@ class GeometryTest {
         // A selection over the whole line is one rect, laid out at its two ends only.
         val rects = g.selectionRects(SelectionRange(base, base + 30_000))
         assertEquals(1, rects.size)
-        assertClose(30_000 * cw, rects[0].right, "the selection's end")
+        assertTrue(kotlin.math.abs(30_000 * cw - rects[0].right) < cw, "the selection's end: ${rects[0].right}")
     }
 
     @Test fun aHugeLineWrapsIntoRowsOfWholeCells() = withMeasure { m ->
@@ -170,6 +171,27 @@ class GeometryTest {
         // A selection is clipped to the rows asked for.
         val rects = g.selectionRects(SelectionRange(base, base + 30_000), yFrom = g.lineTop(1), yTo = g.lineTop(1) + 10 * lh)
         assertTrue(rects.size in 10..12, "${rects.size} rects (the 10 rows asked for, a row of margin each side)")
+    }
+
+    @Test fun wideCharactersInAHugeLineNeitherOverlapNorMissTheirClicks() = withMeasure { m ->
+        val cjk = "日本語のテキスト、漢字かな交じり文。"
+        val line = buildString { while (length < 1_000_000) append(cjk) }
+        val state = EditorState.create(line)
+        val g = m.geometry({ state })
+        val from = 500_000
+        var misses = 0
+        for (o in from until from + 12_000) {
+            if (state.doc.charAt(o).isLowSurrogate()) continue
+            if (g.offsetAt(g.rectFor(o).center) != o) misses++
+        }
+        assertEquals(0, misses, "click round trips that missed")
+        // Consecutive offsets never go left: the pieces are laid side by side, never over each other.
+        var x = g.rectFor(from).left
+        for (o in from + 1..from + 12_000) {
+            val nx = g.rectFor(o).left
+            assertTrue(nx >= x - 0.01f, "offset $o at $nx is left of ${o - 1} at $x: pieces overlap")
+            x = nx
+        }
     }
 
     private fun assertClose(expected: Float, actual: Float, what: String) =

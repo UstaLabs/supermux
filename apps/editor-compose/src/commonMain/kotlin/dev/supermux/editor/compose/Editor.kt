@@ -315,6 +315,7 @@ internal class EditorController(val view: EditorView, private val measurer: Text
         if (!tr.docChanged) return
         if (heights.lineCount == tr.startState.doc.lineCount) heights.applyChanges(tr.changes, tr.startState.doc, tr.state.doc)
         else heights.reset(tr.state.doc.lineCount)
+        geometry.onChanges(tr.changes)
         // The anchor follows its text: an edit above the viewport does not move what is shown.
         val doc = tr.state.doc
         anchorPos = doc.lineStart(doc.lineIndexAt(tr.changes.mapPos(anchorPos.coerceIn(0, tr.changes.lengthBefore), -1)))
