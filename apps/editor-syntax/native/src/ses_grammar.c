@@ -11,7 +11,6 @@
  * it on. A failed load is remembered: the same blob is never inflated twice, and only a newly provided
  * blob is tried again.
  */
-#include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,8 +33,17 @@ typedef struct provided {
   struct provided *next;
 } provided;
 
+#ifdef __wasm__
+/* wasm32-wasi is built single-threaded (no shared memory): there is nothing to lock. */
+#define LOCK() ((void)0)
+#define UNLOCK() ((void)0)
+#else
+#include <pthread.h>
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static provided *g_provided; /* guarded by g_lock */
+#define LOCK() pthread_mutex_lock(&g_lock)
+#define UNLOCK() pthread_mutex_unlock(&g_lock)
+#endif
+static provided *g_provided; /* guarded by LOCK() */
 
 static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
@@ -202,7 +210,7 @@ static const ses_registry_entry *entry_for(ses_grammar *g) {
 const void *ses_grammar_language(ses_grammar *g) {
   void *lang = atomic_load_explicit(&g->loaded, memory_order_acquire);
   if (lang) return lang;
-  pthread_mutex_lock(&g_lock);
+  LOCK();
   lang = atomic_load_explicit(&g->loaded, memory_order_relaxed);
   if (!lang) {
     provided *p = find_provided(g);
@@ -219,7 +227,7 @@ const void *ses_grammar_language(ses_grammar *g) {
     }
     lang = atomic_load_explicit(&g->loaded, memory_order_relaxed);
   }
-  pthread_mutex_unlock(&g_lock);
+  UNLOCK();
   return lang;
 }
 
@@ -232,9 +240,9 @@ int32_t ses_tables_provide(ses_grammar *g, const uint8_t *z, size_t len) {
   int32_t st = check_sesz(g, copy, len);
   if (st) { free(copy); return st; }
   if (!sha_matches(g, copy, len)) { free(copy); return SES_ERR_BAD_TABLES; } /* before anything is accepted */
-  pthread_mutex_lock(&g_lock);
+  LOCK();
   if (atomic_load_explicit(&g->loaded, memory_order_relaxed)) { /* already loaded: nothing to do */
-    pthread_mutex_unlock(&g_lock);
+    UNLOCK();
     free(copy);
     return SES_OK;
   }
@@ -242,27 +250,27 @@ int32_t ses_tables_provide(ses_grammar *g, const uint8_t *z, size_t len) {
   if (p) { free(p->bytes); }
   else {
     p = calloc(1, sizeof *p);
-    if (!p) { pthread_mutex_unlock(&g_lock); free(copy); return SES_ERR_OUT_OF_MEMORY; }
+    if (!p) { UNLOCK(); free(copy); return SES_ERR_OUT_OF_MEMORY; }
     p->grammar = g; p->next = g_provided; g_provided = p;
   }
   p->bytes = copy; p->len = len;
   g->status = 0; /* a new blob: try loading again */
-  pthread_mutex_unlock(&g_lock);
+  UNLOCK();
   return SES_OK;
 }
 
 int ses_tables_available(ses_grammar *g, const ses_registry_entry *e) {
   if (atomic_load_explicit(&g->loaded, memory_order_acquire)) return 1;
   if (e && e->blob) return 1;
-  pthread_mutex_lock(&g_lock);
+  LOCK();
   int r = find_provided(g) != NULL;
-  pthread_mutex_unlock(&g_lock);
+  UNLOCK();
   return r;
 }
 
 int32_t ses_grammar_status(ses_grammar *g) {
-  pthread_mutex_lock(&g_lock);
+  LOCK();
   int32_t st = g->status;
-  pthread_mutex_unlock(&g_lock);
+  UNLOCK();
   return st;
 }

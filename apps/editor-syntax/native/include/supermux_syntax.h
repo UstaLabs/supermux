@@ -2,8 +2,8 @@
  * supermux editor-syntax: the owned C ABI over the tree-sitter C runtime (pinned v0.25.10) and the
  * compiled-in grammars (code) whose parse tables live in compressed blobs (data).
  *
- * The ONLY native surface the Kotlin bindings (JNI on Android/JVM, cinterop on iOS) call. Web uses
- * web-tree-sitter and never sees this.
+ * The ONLY native surface the Kotlin bindings call: JNI on Android/JVM, cinterop on iOS, and on the
+ * web this same C compiled to wasm32 (callbacks through the trampolines of src/syntax_wasm.c).
  *
  * UNITS: every offset, length, column and range in this ABI is in UTF-16 code units. Documents are
  * parsed with TSInputEncodingUTF16LE, so tree-sitter's byte offset is exactly 2 x the UTF-16 index

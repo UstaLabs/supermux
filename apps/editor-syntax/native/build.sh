@@ -12,12 +12,14 @@
 #   ios-simulator-arm64      libsupermux_syntax.a
 #   android-arm64            libsupermux_syntax_jni.so    (arm64-v8a)
 #   android-x64              libsupermux_syntax_jni.so    (x86_64)
+#   wasm32                   supermux-syntax.wasm         (zig, wasm32-wasi reactor, zlib compiled in; the web client)
+#                            native/wasm/build.sh --test builds it and runs the Node tests.
 # A target links tree-sitter (lib.c), the ses_* bridge and every non-excluded grammar of
 # native/grammars.lock.json: the transformed parser_<lang>.c + scanner, plus blob_<lang>.c when bundled.
 # Prerequisite for a target: native/fetch.sh, then `build.sh gen`.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-TARGETS=(macos-arm64 macos-x64 linux-x64 linux-arm64 windows-x64 ios-arm64 ios-simulator-arm64 android-arm64 android-x64)
+TARGETS=(macos-arm64 macos-x64 linux-x64 linux-arm64 windows-x64 ios-arm64 ios-simulator-arm64 android-arm64 android-x64 wasm32)
 gen() {
   python3 - "$HERE" <<'PY' | while IFS=$'\t' read -r lang dir; do
 import json, sys, os
@@ -95,6 +97,10 @@ build_target() {
     linux-x64) CC=(zig cc -target x86_64-linux-gnu.2.28); CXX=(zig c++ -target x86_64-linux-gnu.2.28); JNI=1; ZSRC=1 ;;
     linux-arm64) CC=(zig cc -target aarch64-linux-gnu.2.28); CXX=(zig c++ -target aarch64-linux-gnu.2.28); JNI=1; ZSRC=1 ;;
     windows-x64) CC=(zig cc -target x86_64-windows-gnu); CXX=(zig c++ -target x86_64-windows-gnu); JNI=1; ZSRC=1 ;;
+    # Single-threaded wasm32-wasi (zig bundles wasi-libc and a wasi libc++); no C++ exceptions.
+    wasm32) local zv; zv="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['zig']['version'])" "$HERE/native/upstream.lock.json")"
+      [ "$(zig version)" = "$zv" ] || { echo "wasm32 needs zig $zv (upstream.lock.json), found $(zig version)" >&2; exit 1; }
+      CC=(zig cc -target wasm32-wasi); CXX=(zig c++ -target wasm32-wasi -fno-exceptions); JNI=0; ZSRC=1 ;;
     *) echo "unknown target $T" >&2; exit 2 ;;
   esac
   if [ ${#CXX[@]} -eq 0 ]; then CXX=("${CC[@]}"); CXX[0]="${CC[0]/%clang/clang++}"; [ "${CC[0]}" = xcrun ] && CXX=("${CC[@]}"); fi
@@ -106,7 +112,7 @@ build_target() {
       mkdir -p "$OUT/jni"; cp "$JAVA_HOME/include/jni.h" "$HERE/native/jni/$P/jni_md.h" "$OUT/jni/"; JI=(-I"$OUT/jni") ;;
     *) JI=() ;;                                                        # Android: the NDK sysroot has jni.h
   esac
-  local PIC=(-fPIC); [[ "$T" == windows-* ]] && PIC=()   # clang rejects -fPIC for Windows targets (PE code is relocatable anyway)
+  local PIC=(-fPIC); [[ "$T" == windows-* || "$T" == wasm32 ]] && PIC=()   # clang rejects -fPIC for Windows targets (PE code is relocatable anyway)
   # -DNDEBUG like tree-sitter's release builds: an internal assert() must never abort the app.
   local FLAGS=(-Os ${PIC[@]+"${PIC[@]}"} -w -std=gnu11 -ffunction-sections -fdata-sections -fvisibility=hidden -DNDEBUG -DTREE_SITTER_HIDE_SYMBOLS)
   local ZI=(); [ "$ZSRC" = 1 ] && ZI=(-I"$ZLIB")
@@ -116,6 +122,7 @@ build_target() {
   cc bridge.o -I"$TS/include" -I"$HERE/native/include" "$HERE/native/src/syntax_bridge.c"
   cc loader.o ${ZI[@]+"${ZI[@]}"} -I"$HERE/native/include" "$HERE/native/src/ses_grammar.c"
   [ "$JNI" = 1 ] && cc jni.o ${JI[@]+"${JI[@]}"} -I"$HERE/native/include" "$HERE/native/src/syntax_jni.c"
+  [ "$T" = wasm32 ] && cc wasm.o -I"$HERE/native/include" "$HERE/native/src/syntax_wasm.c"
   if [ "$ZSRC" = 1 ]; then  # zlib 1.3.1, statically (only inflate is reachable; gc-sections drops the rest)
     for z in adler32 crc32 inffast inflate inftrees uncompr zutil; do cc "zlib_$z.o" -I"$ZLIB" "$ZLIB/$z.c"; done
   fi
@@ -158,6 +165,15 @@ build_target() {
     linux-*) "${LINK[@]}" -shared -Wl,--gc-sections "${ELF_EXPORTS[@]}" "${objs[@]}" -o "$OUT/lib/libsupermux_syntax_jni.so" ;;  # zig c++ links libc++ statically
     windows-*) "${LINK[@]}" -shared "${objs[@]}" -o "$OUT/lib/supermux_syntax_jni.dll"
       rm -f "$OUT/lib/"*.lib "$OUT/lib/"*.pdb ;;
+    wasm32)
+      # A reactor (no _start; _initialize runs the constructors) exporting exactly the ses_* ABI
+      # (every SES_API function of the header and of syntax_wasm.c) and its memory.
+      local WEXP=()
+      for sym in $(sed -nE 's/^SES_API [^(]*[ *](ses_[a-z0-9_]+)\(.*/\1/p' "$HERE/native/include/supermux_syntax.h" "$HERE/native/src/syntax_wasm.c" | sort -u); do
+        WEXP+=("-Wl,--export=$sym")
+      done
+      "${LINK[@]}" -mexec-model=reactor -Wl,--gc-sections -Wl,-z,stack-size=1048576 -Wl,--strip-all \
+        "${WEXP[@]}" "${objs[@]}" -o "$OUT/lib/supermux-syntax.wasm" ;;
   esac
   check_exports "$T" "$OUT/lib"
   ls -l "$OUT/lib"
@@ -172,6 +188,7 @@ check_exports() {
   case "$T" in
     macos-*) bad="$(nm -gU "$2/libsupermux_syntax_jni.dylib" | awk '{print $3}' | grep -vE '^_(Java_|ses_)' || true)" ;;
     linux-*|android-*) bad="$("$NDKBIN/llvm-nm" -D --defined-only "$2/libsupermux_syntax_jni.so" | awk '{print $3}' | grep -vE '^(Java_|ses_)' || true)" ;;
+    wasm32) bad="$(python3 "$HERE/native/wasm/wasm-info.py" exports "$2/supermux-syntax.wasm" | grep -vE '^(ses_[a-z0-9_]+|memory|_initialize)$' || true)" ;;
     windows-*) bad="$(python3 - "$2/supermux_syntax_jni.dll" <<'PY'
 import struct, sys
 d = open(sys.argv[1], "rb").read()
@@ -214,7 +231,11 @@ from sestables import LANG_FN
 ts = json.load(open(os.path.join(here, "native/upstream.lock.json")))["tree-sitter"]["commit"]
 def entry(path, **kw):
     b = open(path, "rb").read()
-    return dict(kw, sha256=hashlib.sha256(b).hexdigest(), size=len(b))
+    e = dict(kw, sha256=hashlib.sha256(b).hexdigest(), size=len(b))
+    if path.endswith(".wasm"):  # what a browser downloads (gzip -9, as a static server would serve it)
+        import gzip
+        e["gzip_size"] = len(gzip.compress(b, 9, mtime=0))
+    return e
 out = []
 for t in sorted(os.listdir(root)):
     lib = os.path.join(root, t, "lib")

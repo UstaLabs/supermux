@@ -10,5 +10,15 @@
     "version": "1.3.1",
     "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
     "why": "compiled into the Linux and Windows libraries (Apple and Android link the system -lz)"
+  },
+  "zig": {
+    "version": "0.16.0",
+    "targets": [
+      "wasm32-wasi",
+      "linux-x64",
+      "linux-arm64",
+      "windows-x64"
+    ],
+    "why": "builds the web module (zig cc/c++ -target wasm32-wasi: its bundled wasi-libc and wasi libc++) and the Linux/Windows cross builds; native/build.sh wasm32 refuses another version"
   }
 }
