@@ -69,6 +69,7 @@ internal val LocalEditorCursorBlink = staticCompositionLocalOf { true }
  * @param clipboard where copy/cut put text and paste takes it from (the platform's by default).
  * @param onPaint called at the end of every paint of the surface (frame-time and edit-to-paint
  *   measurements). It runs inside the draw pass: keep it to taking a timestamp.
+ * @param label what a screen reader calls this editor (its content description).
  * @param onFontSize the font size (sp) after every zoom (`Mod +`/`Mod −`/`Mod 0`, a pinch once the
  *   fingers lift), for the host to keep per app; give it back through [EditorView.fontSize].
  */
@@ -85,6 +86,7 @@ fun Editor(
     clipboard: EditorClipboard = rememberEditorClipboard(),
     scrollState: EditorScrollState = view.defaultScrollState,
     onFontSize: (Float) -> Unit = {},
+    label: String = EditorSemantics.LABEL,
 ) {
     // cacheSize = 0: the surface keeps its own bounded caches (LineLayouts).
     val measurer = rememberTextMeasurer(cacheSize = 0)
@@ -106,7 +108,9 @@ fun Editor(
         view.scrollState = scrollState
         scrollState.surfaces += controller
         val removeFastTyping = installFastTyping(view, controller)
+        val removeAnnouncer = view.addListener { controller.announcer.follow(it) }
         onDispose {
+            removeAnnouncer()
             scrollState.surfaces -= controller
             removeFastTyping?.invoke()
             if (view.surface === controller) {
@@ -179,7 +183,8 @@ fun Editor(
             // selection (mouse presses and drags), leaving a finger's drag to scroll.
             .pointerInput(pointer) { pointer.handle(this) }
             .editorMagnifier { controller.magnifierAt }
-            .onGloballyPositioned { controller.coordinates = it },
+            .onGloballyPositioned { controller.coordinates = it }
+            .editorSemantics(controller, label, readOnly),
     ) {
         val paintHook by rememberUpdatedState(onPaint)
         Canvas(Modifier.fillMaxSize()) {
@@ -188,6 +193,7 @@ fun Editor(
         }
         EditorInputField(controller, readOnly)
         EditorSelectionMenu(controller, readOnly, clipboard, shownTheme)
+        LineAnnouncement(controller.announcer)
     }
 }
 
@@ -225,6 +231,9 @@ internal class EditorController(val view: EditorView, private val measurer: Text
 
     /** The platform's soft keyboard, or null where there is none (a desktop). */
     var keyboard: SoftwareKeyboardController? = null
+
+    /** Says the caret's new line to a screen reader. */
+    val announcer = LineAnnouncer()
 
     /** The touch handles shown (only a touch gesture turns them on; see [TouchHandles]). */
     var handles: TouchHandles by mutableStateOf(TouchHandles.NONE)

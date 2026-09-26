@@ -15,6 +15,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -557,7 +559,10 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
         modifier = Modifier
             .offset { controller.caretRectOnScreen(controller.view.state.selection.main.head).let { IntOffset(it.left.toInt(), it.top.toInt()) } }
             .size(1.dp)
-            .focusRequester(controller.focusRequester),
+            .focusRequester(controller.focusRequester)
+            // A screen reader reads the SURFACE (its visible text, see editorSemantics): this field
+            // holds only a window of text around the caret. It stays the IME's target.
+            .semantics { hideFromAccessibility() },
         readOnly = readOnly,
         inputTransformation = transformation,
         keyboardOptions = KeyboardOptions(
