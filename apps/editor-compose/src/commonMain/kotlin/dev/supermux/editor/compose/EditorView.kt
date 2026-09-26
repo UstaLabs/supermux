@@ -110,9 +110,9 @@ class EditorView(initial: EditorState) : CommandTarget {
         // The main range takes the edit with its extension. Another range takes the SAME extension
         // only when the text around it is the text replaced around the main range (CM6); else a
         // pure insertion goes over its own selection, a pure deletion deletes one grapheme there
-        // (or its selection), and a replacement replaces only its own selection. So a soft
-        // Backspace of an emoji never deletes two letters elsewhere, and an autocorrect at the
-        // main cursor never rewrites another cursor's word.
+        // (or its selection), and a replacement (autocorrect) leaves that range untouched. So a
+        // soft Backspace of an emoji never deletes two letters elsewhere, and an autocorrect at
+        // the main cursor never rewrites or inserts into another cursor's text.
         val doc = st.doc
         val mainFrom = (main.from - before).coerceAtLeast(0)
         val mainTo = (main.to + after).coerceAtMost(doc.length)
@@ -130,10 +130,11 @@ class EditorView(initial: EditorState) : CommandTarget {
                     Triple(ChangeSpec(TextBoundaries.prevGrapheme(doc, r.head), r.head), 0, 0)
                 text.isEmpty() && r.empty && after > 0 ->
                     Triple(ChangeSpec(r.head, TextBoundaries.nextGrapheme(doc, r.head)), 0, 0)
+                text.isNotEmpty() && (before > 0 || after > 0) -> null // a replacement that does not apply here
                 else -> Triple(ChangeSpec(r.from, r.to, text), text.length, text.length)
             }
         }
-        val specs = placed.map { it.first }
+        val specs = placed.mapNotNull { it?.first }
         val merged = ArrayList<ChangeSpec>()
         for (sp in specs.sortedWith(compareBy({ it.from }, { it.to }))) {
             val last = merged.lastOrNull()
@@ -141,9 +142,10 @@ class EditorView(initial: EditorState) : CommandTarget {
             else merged += sp
         }
         val changes = ChangeSet.of(st.doc.length, merged)
-        val next = placed.map { (sp, anchor, head) ->
-            val start = changes.mapPos(sp.from, -1)
-            SelectionRange(start + anchor, start + head)
+        val next = sel.ranges.mapIndexed { i, r ->
+            val p = placed[i] ?: return@mapIndexed r.map(changes) // untouched: only moved by the others' edits
+            val start = changes.mapPos(p.first.from, -1)
+            SelectionRange(start + p.second, start + p.third)
         }
         return TransactionSpec(changeSet = changes, selection = EditorSelection.create(next, sel.mainIndex), scrollIntoView = true, userEvent = userEvent) to changes
     }

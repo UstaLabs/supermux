@@ -118,7 +118,7 @@ dictation and CJK composition work; the design passed all 8 checks on an iPhone 
 - Every field edit at the main range (typing, Backspace, autocorrect, each composition step) is
   made relative to EVERY range, as CM6 does (another range takes the edit's extension only when the
   text around it matches what was replaced around the main range; else an insertion goes over its
-  own selection, a deletion deletes one grapheme there, a replacement replaces its own selection): the diff is clamped to cover the field's previous
+  own selection, a deletion deletes one grapheme there, a replacement leaves that range untouched): the diff is clamped to cover the field's previous
   selection and the caret, so typing over a selection wider than the window replaces all of it, and
   repeated characters cannot misplace a Backspace. The window never holds another range, so the other
   cursors' typing never forces a rewrite mid-composition. An edit away from the caret (an

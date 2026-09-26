@@ -312,9 +312,10 @@ class FieldSyncTest {
         val f = h.field
         h.ime(f.text.replaceFirst("teh", "the "), 4)
         assertEquals("the ", h.doc.lines()[0])
-        // Its text before the cursor is not "eh": the replacement goes over its own (empty)
-        // selection only, never over "bc".
-        assertEquals("abche ", h.doc.lines()[1])
+        // Its text before the cursor is not "eh": CM6 leaves that cursor untouched.
+        assertEquals("abc", h.doc.lines()[1])
+        assertEquals(2, h.view.state.selection.ranges.size, "the other cursor was dropped")
+        assertEquals(h.doc.length, h.view.state.selection.ranges[1].head, "the other cursor moved")
     }
 
     @Test fun carriageReturnsFromTheFieldBecomeLineFeeds() {
