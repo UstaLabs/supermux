@@ -106,6 +106,24 @@ class ScrollingTest {
         }
     }
 
+    @Test fun aWiderGutterKeepsTheMeasuredWrappedHeights() {
+        // 99 lines -> 100: the gutter grows a digit and the wrap width shrinks by a cell.
+        val text = (0 until 99).joinToString("\n") { if (it == 0) "long " + "word ".repeat(80) else "line $it" }
+        editorTest(EditorState.create(text), lineWrap = true) { f ->
+            val lh = f.geometry.layouts.lineHeightPx
+            val wrapped = f.geometry.heights.height(0)
+            assertTrue(wrapped > 2 * lh, "line 0 wraps")
+            // The caret away from line 0 too (the hidden field sits at the caret and would measure it).
+            f.view.dispatch(TransactionSpec(selection = EditorSelection.cursor(f.view.state.doc.length)))
+            f.controller.scroll.scrollTo(y = 1e9f)
+            waitForIdle()
+            f.view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(f.view.state.doc.length, f.view.state.doc.length, "\nline 99"))))
+            waitForIdle()
+            assertEquals(100, f.view.state.doc.lineCount)
+            assertTrue(f.geometry.heights.height(0) > 2 * lh, "the off-screen wrapped line fell back to a one-row estimate")
+        }
+    }
+
     @Test fun anEditAboveTheViewportKeepsTheVisibleTextInPlace() = editorTest(EditorState.create(lines), lineWrap = true) { f ->
         val lh = f.geometry.layouts.lineHeightPx
         f.controller.scroll.scrollTo(y = 500 * lh)

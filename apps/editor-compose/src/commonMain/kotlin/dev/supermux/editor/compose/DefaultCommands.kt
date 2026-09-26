@@ -152,6 +152,13 @@ object DefaultCommands {
         }
     }
 
+    val deleteWordForward = Command { t ->
+        change(t, "delete.forward") { st, r ->
+            if (!r.empty) ChangeSpec(r.from, r.to)
+            else TextBoundaries.wordRight(st.doc, r.head).let { if (it == r.head) null else ChangeSpec(r.head, it) }
+        }
+    }
+
     // ------------------------------------------------------------------ helpers --
 
     private fun move(t: CommandTarget, extend: Boolean, to: (EditorState, SelectionRange) -> Int): Boolean {
@@ -320,7 +327,9 @@ private fun buildDefaultBindings(apple: Boolean): List<KeyBinding> {
         pair("Mod-ArrowLeft", c.cursorWordLeft, c.selectWordLeft)
         pair("Mod-ArrowRight", c.cursorWordRight, c.selectWordRight)
         bind("Mod-Backspace", c.deleteWordBackward)
+        bind("Mod-Delete", c.deleteWordForward)
     }
+    if (apple) bind("Alt-Delete", c.deleteWordForward)
     bind("Alt-Backspace", c.deleteWordBackward)
     bind("Backspace", c.deleteBackward)
     bind("Shift-Backspace", c.deleteBackward)

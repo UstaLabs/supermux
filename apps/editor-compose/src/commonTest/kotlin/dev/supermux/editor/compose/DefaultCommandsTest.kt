@@ -145,6 +145,16 @@ class DefaultCommandsTest {
         assertEquals("\t|x", tabs.marked())
     }
 
+    @Test fun deleteWordForwardAndItsKeys() {
+        check("one| two three", DefaultCommands.deleteWordForward, "one| three")
+        check("|abc def", DefaultCommands.deleteWordForward, "| def")
+        check("abc|", DefaultCommands.deleteWordForward, "abc|")
+        for ((apple, spec) in listOf(false to "Mod-Delete", true to "Alt-Delete")) {
+            val chord = KeyChord.parse(spec, apple)
+            assertTrue(defaultBindings(apple).any { it.chord(apple) == chord && it.command === DefaultCommands.deleteWordForward }, "$spec (apple=$apple)")
+        }
+    }
+
     @Test fun insertTextTypesOverEveryRange() {
         check("a|b\nc[d]e", DefaultCommands.insertText("ş"), "aş|b\ncş|e")
         check("|", DefaultCommands.insertText("😀"), "😀|")

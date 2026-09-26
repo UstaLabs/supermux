@@ -267,16 +267,19 @@ internal class EditorController(val view: EditorView, private val measurer: Text
             val w = if (lineWrap && viewportSize.width > 0f) (viewportSize.width - textLeft - layouts.charWidthPx / 2).toInt() else null
             layouts.configure(theme, density, w, view.state.facet(tabSizeFacet))
         }
-        if (layouts.generation != heightsGeneration) {
-            heightsGeneration = layouts.generation
-            // Everything was measured under another configuration: back to estimates.
+        // Measured heights stay valid only for the line height and wrap mode they were measured
+        // with. A new wrap WIDTH (the gutter grew a digit, the window was resized) keeps them as
+        // estimates: they are re-measured as they come into view, without a jump to one-row guesses.
+        val key = layouts.lineHeightPx to lineWrap
+        if (key != heightsKey) {
+            heightsKey = key
             heights = HeightMap(view.state.doc.lineCount, layouts.lineHeightPx)
             geometry = Geometry({ view.state }, heights, layouts)
             if (view.surface === this) view.geometry = geometry
         }
     }
 
-    private var heightsGeneration = -1
+    private var heightsKey: Pair<Float, Boolean>? = null
     private var lastSize = Size.Zero
     private var lastDigits = 0
 
