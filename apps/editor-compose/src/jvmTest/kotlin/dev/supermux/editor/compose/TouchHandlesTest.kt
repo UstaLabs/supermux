@@ -217,4 +217,19 @@ class TouchHandlesTest {
         waitForIdle()
         assertEquals(EditorSelection.cursor(b), f.view.state.selection)
     }
+
+    @Test fun aFingerOnTheTextRowAboveTheCaretHandleIsNotTheHandle() = editorTest(EditorState.create(text)) { f ->
+        val at = f.view.state.doc.lineStart(3) + 6
+        onNodeWithTag(EDITOR_TAG).performTouchInput { click(f.at(at)) }
+        waitForIdle()
+        val spot = f.controller.handleSpots().single()
+        // The text row right above the tip is inside the handle's 48 dp target, but it is text:
+        // a slow second tap there moves the caret, it does not open the handle's menu.
+        val onRow = Offset(spot.tip.x + f.controller.layouts.charWidthPx * 2, spot.tip.y - 3f)
+        assertTrue(spot.touch.contains(onRow))
+        onNodeWithTag(EDITOR_TAG).performTouchInput { advanceEventTime(1000); click(onRow) }
+        waitForIdle()
+        assertEquals(EditorSelection.cursor(at + 2), f.view.state.selection)
+        assertTrue(!f.controller.menuShown)
+    }
 }

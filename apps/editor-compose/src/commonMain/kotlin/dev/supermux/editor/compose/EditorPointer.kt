@@ -161,11 +161,12 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         val change = event.changes.firstOrNull { it.pressed } ?: return
         eventTime = change.uptimeMillis
         if (change.type != PointerType.Mouse) {
-            // A tap continuing a double tap is the text's, even over a handle's target: after a
-            // double tap (the triple tap), or above the handle's tip (on the text row itself).
+            // A handle hangs BELOW its tip: a finger above the tip is on the text row, aiming at the
+            // text (a second tap on a word, however slow), never the handle whose target reaches up
+            // there. A tap continuing a double tap (the triple tap) is the text's too.
             val tapping = change.uptimeMillis - lastTapTime <= doubleTapMillis && (change.position - lastTapPos).getDistance() <= slopPx * 3
             val spot = (if (c.handles != TouchHandles.NONE) EditorTouch.hit(c.handleSpots(), change.position) else null)
-                ?.takeUnless { tapping && (taps >= 2 || change.position.y < it.tip.y) }
+                ?.takeUnless { change.position.y < it.tip.y || (tapping && taps >= 2) }
             if (spot != null) {
                 // A handle is the surface's own chrome: the finger drags it, it never scrolls.
                 val main = c.view.state.selection.main
