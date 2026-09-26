@@ -11,6 +11,10 @@ import dev.supermux.editor.core.EditorSelection
 import dev.supermux.editor.core.EditorState
 import dev.supermux.editor.core.Transaction
 import dev.supermux.editor.core.TransactionSpec
+import dev.supermux.editor.core.ChangeSet
+import dev.supermux.editor.core.ChangeSpec
+import dev.supermux.editor.core.SelectionRange
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -51,6 +55,27 @@ class EditorView(initial: EditorState) : CommandTarget {
      * selection still moves. Set by the surface from `Editor(readOnly = ...)`.
      */
     var readOnly: Boolean = false
+
+    /** Where copy and cut put text and paste takes it from; set by the surface (`Editor(clipboard = …)`). */
+    internal var clipboard: EditorClipboard? = null
+
+    /** A scope on the UI thread for work a command cannot finish at once (reading the clipboard). */
+    internal var scope: CoroutineScope? = null
+
+    /**
+     * Paste [text] (userEvent `paste`): with as many cursors as [text] has lines, one line at each
+     * cursor (CM6's behaviour for a multi-cursor copy); otherwise all of [text] at every cursor.
+     */
+    fun paste(text: String) {
+        if (text.isEmpty()) return
+        val st = state
+        val ranges = st.selection.ranges
+        val lines = text.split('\n')
+        val specs = ranges.mapIndexed { i, r -> ChangeSpec(r.from, r.to, if (ranges.size > 1 && lines.size == ranges.size) lines[i] else text) }
+        val changes = ChangeSet.of(st.doc.length, specs)
+        val next = ranges.map { SelectionRange(changes.mapPos(it.to, 1)) }
+        dispatch(TransactionSpec(changeSet = changes, selection = EditorSelection.create(next, st.selection.mainIndex), scrollIntoView = true, userEvent = "paste"))
+    }
 
     /** The surface's geometry once it is composed; vertical moves and page moves need it. */
     internal var geometry: Geometry? = null

@@ -381,8 +381,12 @@ private val DOM_KEY_NAMES = mapOf(
     "Period" to ".", "Slash" to "/",
 )
 
-private val swallowedApple = listOf("Mod-z", "Mod-Shift-z", "Mod-y").map { KeyChord.parse(it, true) }.toSet()
-private val swallowedOther = listOf("Mod-z", "Mod-Shift-z", "Mod-y").map { KeyChord.parse(it, false) }.toSet()
+// Never the hidden field's: its history and its clipboard know only its window. (The clipboard chords
+// are bound in defaultBindings; they are listed here too, so a binding that declines them still
+// keeps them from the field.)
+private val SWALLOWED = listOf("Mod-z", "Mod-Shift-z", "Mod-y", "Mod-c", "Mod-x", "Mod-v", "Mod-Shift-v")
+private val swallowedApple = SWALLOWED.map { KeyChord.parse(it, true) }.toSet()
+private val swallowedOther = SWALLOWED.map { KeyChord.parse(it, false) }.toSet()
 private fun swallowedChords(apple: Boolean) = if (apple) swallowedApple else swallowedOther
 
 // ---------------------------------------------------------------------- the field --------

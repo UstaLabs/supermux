@@ -30,7 +30,7 @@ internal class RecordingKeyboard : SoftwareKeyboardController {
 }
 
 /** One live [Editor] in the desktop harness, plus what a test needs to poke at it. */
-internal class SurfaceFixture(val view: EditorView, val keyboard: RecordingKeyboard) {
+internal class SurfaceFixture(val view: EditorView, val keyboard: RecordingKeyboard, val clipboard: FakeClipboard) {
     val controller: EditorController get() = assertNotNull(view.surface as? EditorController, "the surface is not composed")
     val geometry: Geometry get() = controller.geometry
     var theme: EditorTheme? = null
@@ -50,7 +50,8 @@ internal fun editorTest(
 ) = runComposeUiTest {
     val view = EditorView(state)
     val keyboard = RecordingKeyboard()
-    val fixture = SurfaceFixture(view, keyboard)
+    val clipboard = FakeClipboard()
+    val fixture = SurfaceFixture(view, keyboard, clipboard)
     var wrap by mutableStateOf(lineWrap)
     setContent {
         CompositionLocalProvider(
@@ -70,6 +71,7 @@ internal fun editorTest(
                     readOnly = readOnly,
                     onViewport = onViewport,
                     onPaint = onPaint,
+                    clipboard = clipboard,
                 )
             }
         }

@@ -63,6 +63,7 @@ internal val LocalEditorCursorBlink = staticCompositionLocalOf { true }
  * @param readOnly no user edits (see [EditorView.readOnly]); the selection still moves.
  * @param onViewport the UTF-16 range the surface lays out, at most once per frame: a syntax host
  *   dispatches it as `Syntax.setViewport`.
+ * @param clipboard where copy/cut put text and paste takes it from (the platform's by default).
  * @param onPaint called at the end of every paint of the surface (frame-time and edit-to-paint
  *   measurements). It runs inside the draw pass: keep it to taking a timestamp.
  */
@@ -76,6 +77,7 @@ fun Editor(
     readOnly: Boolean = false,
     onViewport: (IntRange) -> Unit = {},
     onPaint: (() -> Unit)? = null,
+    clipboard: EditorClipboard = rememberEditorClipboard(),
 ) {
     // cacheSize = 0: the surface keeps its own bounded caches (LineLayouts).
     val measurer = rememberTextMeasurer(cacheSize = 0)
@@ -117,7 +119,11 @@ fun Editor(
     val keyboard = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
     val pointer = remember(controller, scope) { EditorPointer(controller, scope) }
-    SideEffect { controller.keyboard = keyboard }
+    SideEffect {
+        controller.keyboard = keyboard
+        view.clipboard = clipboard
+        view.scope = scope
+    }
     Box(
         modifier
             .clipToBounds()

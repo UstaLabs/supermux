@@ -13,6 +13,7 @@ import dev.supermux.editor.core.Rope
 import dev.supermux.editor.core.SelectionRange
 import dev.supermux.editor.core.TransactionSpec
 import dev.supermux.editor.core.keymapOf
+import kotlinx.coroutines.launch
 
 /**
  * The editing commands every editor needs, as plain [Command]s over a [CommandTarget].
@@ -89,6 +90,38 @@ object DefaultCommands {
         } else {
             indentLines(t, unit)
         }
+    }
+
+    /** Copy every non-empty range, one line per range (nothing when all are cursors). */
+    val copy = Command { t ->
+        selectedText(t.state)?.let { (t as? EditorView)?.clipboard?.write(it) }
+        true
+    }
+
+    /** [copy], then delete what was copied (`delete.cut`). */
+    val cut = Command { t ->
+        val text = selectedText(t.state)
+        if (text != null) {
+            (t as? EditorView)?.clipboard?.write(text)
+            change(t, "delete.cut") { _, r -> if (r.empty) null else ChangeSpec(r.from, r.to) }
+        }
+        true
+    }
+
+    /** [EditorView.paste] the clipboard's text. */
+    val paste = Command { t ->
+        val view = t as? EditorView
+        val clip = view?.clipboard
+        val scope = view?.scope
+        if (view != null && clip != null && scope != null && !view.readOnly) {
+            scope.launch { clip.read()?.let { view.paste(it) } }
+        }
+        true
+    }
+
+    private fun selectedText(st: EditorState): String? {
+        val parts = st.selection.ranges.filter { !it.empty }.map { st.doc.slice(it.from, it.to) }
+        return if (parts.isEmpty()) null else parts.joinToString("\n")
     }
 
     /** Type [text] over every range (a cursor gets it inserted), as keyboard input (`input`). */
@@ -285,5 +318,9 @@ private fun buildDefaultBindings(apple: Boolean): List<KeyBinding> {
     bind("Shift-Enter", c.insertNewline)
     bind("Tab", c.insertTab)
     bind("Mod-a", c.selectAll)
+    // The editor's own clipboard commands: the hidden field would copy, cut and paste only its window.
+    bind("Mod-c", c.copy)
+    bind("Mod-x", c.cut)
+    bind("Mod-v", c.paste)
     return b
 }

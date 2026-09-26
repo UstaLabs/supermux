@@ -99,6 +99,20 @@ class TextInputTest {
         assertEquals("x", f.view.state.doc.toString())
     }
 
+    @Test fun selectAllCutAndPasteMoveTheWholeDocumentNotTheFieldsWindow() = editorTest(EditorState.create((0 until 300).joinToString("\n") { "line $it" })) { f ->
+        val text = f.view.state.doc.toString()
+        focus()
+        val mod = if (isApplePlatform) Key.MetaLeft else Key.CtrlLeft
+        field().performKeyInput { withKeyDown(mod) { pressKey(Key.A) } }
+        field().performKeyInput { withKeyDown(mod) { pressKey(Key.X) } }
+        waitForIdle()
+        assertEquals(text, f.clipboard.text, "cut copied only the field's window")
+        assertEquals("", f.view.state.doc.toString())
+        field().performKeyInput { withKeyDown(mod) { pressKey(Key.V) } }
+        waitForIdle()
+        assertEquals(text, f.view.state.doc.toString(), "paste did not restore the document")
+    }
+
     @Test fun theFieldHoldsAWindowOfTheRealTextAroundTheCaret() = editorTest(EditorState.create("one two three\nfour", EditorSelection.cursor(8))) { f ->
         focus()
         val config = field().fetchSemanticsNode().config
