@@ -39,3 +39,17 @@ private class ComposeEditorClipboard(private val manager: ClipboardManager) : Ed
     override fun write(text: String) = manager.setText(AnnotatedString(text))
     override suspend fun read(): String? = manager.getText()?.text?.takeIf { it.isNotEmpty() }
 }
+
+/**
+ * What the web's copy/cut event puts on the clipboard for [view]: the whole selection (one line per
+ * range; a cut then deletes it), or null to let the browser do its default. Null when [view] is
+ * not focused, and when nothing is selected: the browser's own copy then runs and, with no text
+ * selected in its field, leaves the clipboard as it was (a VS Code-style "copy the line" is a
+ * deliberate later choice, not a side effect).
+ */
+internal fun webClipboardText(view: EditorView, cut: Boolean): String? {
+    if (!view.focused) return null
+    val text = DefaultCommands.selectedText(view.state) ?: return null
+    if (cut && !view.readOnly) DefaultCommands.deleteSelection.run(view)
+    return text
+}

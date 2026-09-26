@@ -183,7 +183,19 @@ internal class FieldSync(
         return FieldText(w.text, (main.anchor - w.base).coerceIn(0, w.text.length), (main.head - w.base).coerceIn(0, w.text.length))
     }
 
-    fun onFieldChange(text: String, selStart: Int, selEnd: Int, composition: IntRange?, deferRewindow: Boolean = false): FieldText? {
+    fun onFieldChange(rawText: String, rawSelStart: Int, rawSelEnd: Int, composition: IntRange?, deferRewindow: Boolean = false): FieldText? {
+        // A pasted or dictated CR (a CRLF, a lone CR) arrives as \n: the editor's only line break.
+        // The field is then rewritten to what the document holds.
+        if (rawText.indexOf('\r') >= 0) {
+            val text = normalizeLineBreaks(rawText)
+            val a = normalizeLineBreaks(rawText.substring(0, rawSelStart.coerceIn(0, rawText.length))).length
+            val b = normalizeLineBreaks(rawText.substring(0, rawSelEnd.coerceIn(0, rawText.length))).length
+            val r = onFieldChange(text, a, b, composition, deferRewindow)
+            return r ?: rewindow() ?: show(current())
+        }
+        val text = rawText
+        val selStart = rawSelStart
+        val selEnd = rawSelEnd
         if (!deferRewindow) return apply(text, selStart, selEnd, composition, false)
         deferring = true
         try { return apply(text, selStart, selEnd, composition, true) } finally { deferring = false }

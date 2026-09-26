@@ -66,7 +66,10 @@ class EditorView(initial: EditorState) : CommandTarget {
      * Paste [text] (userEvent `paste`): with as many cursors as [text] has lines, one line at each
      * cursor (CM6's behaviour for a multi-cursor copy); otherwise all of [text] at every cursor.
      */
-    fun paste(text: String) {
+    fun paste(pasted: String) {
+        // Line breaks are \n inside the editor (hosts convert on load and save): a pasted CRLF or
+        // a lone CR becomes \n before anything counts lines.
+        val text = normalizeLineBreaks(pasted)
         if (text.isEmpty()) return
         val st = state
         val ranges = st.selection.ranges
@@ -104,7 +107,33 @@ class EditorView(initial: EditorState) : CommandTarget {
             val to = (main.to + after).coerceAtMost(st.doc.length)
             for (h in st.facet(inputHandlerFacet)) if (h.handle(this, from, to, text)) return null
         }
-        val specs = sel.ranges.map { ChangeSpec((it.from - before).coerceAtLeast(0), (it.to + after).coerceAtMost(st.doc.length), text) }
+        // The main range takes the edit with its extension. Another range takes the SAME extension
+        // only when the text around it is the text replaced around the main range (CM6); else a
+        // pure insertion goes over its own selection, a pure deletion deletes one grapheme there
+        // (or its selection), and a replacement replaces only its own selection. So a soft
+        // Backspace of an emoji never deletes two letters elsewhere, and an autocorrect at the
+        // main cursor never rewrites another cursor's word.
+        val doc = st.doc
+        val mainFrom = (main.from - before).coerceAtLeast(0)
+        val mainTo = (main.to + after).coerceAtMost(doc.length)
+        val replacedBefore = doc.slice(mainFrom, main.from)
+        val replacedAfter = doc.slice(main.to, mainTo)
+        // Each range's change, and where its new selection sits inside the inserted text.
+        val placed = sel.ranges.map { r ->
+            val f = r.from - replacedBefore.length
+            val t = r.to + replacedAfter.length
+            when {
+                r === main -> Triple(ChangeSpec(mainFrom, mainTo, text), anchorInText, headInText)
+                f >= 0 && t <= doc.length && doc.slice(f, r.from) == replacedBefore && doc.slice(r.to, t) == replacedAfter ->
+                    Triple(ChangeSpec(f, t, text), anchorInText, headInText)
+                text.isEmpty() && r.empty && before > 0 ->
+                    Triple(ChangeSpec(TextBoundaries.prevGrapheme(doc, r.head), r.head), 0, 0)
+                text.isEmpty() && r.empty && after > 0 ->
+                    Triple(ChangeSpec(r.head, TextBoundaries.nextGrapheme(doc, r.head)), 0, 0)
+                else -> Triple(ChangeSpec(r.from, r.to, text), text.length, text.length)
+            }
+        }
+        val specs = placed.map { it.first }
         val merged = ArrayList<ChangeSpec>()
         for (sp in specs.sortedWith(compareBy({ it.from }, { it.to }))) {
             val last = merged.lastOrNull()
@@ -112,9 +141,9 @@ class EditorView(initial: EditorState) : CommandTarget {
             else merged += sp
         }
         val changes = ChangeSet.of(st.doc.length, merged)
-        val next = specs.map { sp ->
+        val next = placed.map { (sp, anchor, head) ->
             val start = changes.mapPos(sp.from, -1)
-            SelectionRange(start + anchorInText, start + headInText)
+            SelectionRange(start + anchor, start + head)
         }
         return TransactionSpec(changeSet = changes, selection = EditorSelection.create(next, sel.mainIndex), scrollIntoView = true, userEvent = userEvent) to changes
     }
@@ -227,3 +256,7 @@ internal interface EditorSurfaceHooks {
 /** An [EditorView] that lives as long as the composition; [initial] runs once. */
 @Composable
 fun rememberEditorView(initial: () -> EditorState): EditorView = remember { EditorView(initial()) }
+
+/** `\r\n` and a lone `\r` as `\n`: the only line break inside the editor. */
+internal fun normalizeLineBreaks(text: String): String =
+    if (text.indexOf('\r') < 0) text else text.replace("\r\n", "\n").replace('\r', '\n')

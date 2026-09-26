@@ -66,6 +66,24 @@ class ClipboardCommandsTest {
         }
     }
 
+    @Test fun pastedCarriageReturnsBecomeLineFeeds() {
+        val v = view("", EditorSelection.cursor(0), FakeClipboard())
+        v.paste("a\r\nb\rc")
+        assertEquals("a\nb\nc", v.state.doc.toString())
+        // And the line count seen by the one-line-per-cursor rule is the normalized one.
+        val w = view("[]\n[]", EditorSelection.create(listOf(SelectionRange(1), SelectionRange(4))), FakeClipboard())
+        w.paste("x\r\ny")
+        assertEquals("[x]\n[y]", w.state.doc.toString())
+    }
+
+    @Test fun theWebsCopyWithNothingSelectedLeavesTheClipboardAlone() {
+        val v = view("abc", EditorSelection.cursor(1), FakeClipboard()).also { it.focused = true }
+        assertEquals(null, webClipboardText(v, cut = false), "the browser's own copy must run (and copy nothing)")
+        val w = view("abc", EditorSelection.single(0, 2), FakeClipboard()).also { it.focused = true }
+        assertEquals("ab", webClipboardText(w, cut = true))
+        assertEquals("c", w.state.doc.toString())
+    }
+
     @Test fun readOnlyCopiesButNeverCutsOrPastes() {
         val clip = FakeClipboard()
         val v = view("abc", EditorSelection.single(0, 3), clip).also { it.readOnly = true }

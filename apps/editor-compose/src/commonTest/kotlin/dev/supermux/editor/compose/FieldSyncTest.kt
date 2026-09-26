@@ -285,6 +285,46 @@ class FieldSyncTest {
         h.assertInSync()
     }
 
+    private fun Harness.cursors(vararg at: Int) =
+        view.dispatch(dev.supermux.editor.core.TransactionSpec(selection = EditorSelection.create(at.map { SelectionRange(it) }, 0)))
+
+    @Test fun aSoftBackspaceNeverSplitsAnotherCursorsEmoji() {
+        // Main after "a", another after "😀": each deletes its own grapheme.
+        val h = Harness("a\n😀", 1)
+        h.cursors(1, 4)
+        h.backspace()
+        assertEquals("\n", h.doc)
+        assertTrue(h.doc.none { it.isSurrogate() }, "a lone surrogate was left")
+    }
+
+    @Test fun aSoftBackspaceOfAnEmojiDeletesOneCharacterAtAnotherCursor() {
+        // Main after "😀" (the field deletes two units), another after "ab": only "b" goes there.
+        val h = Harness("😀\nab", 2)
+        h.cursors(2, 5)
+        val f = h.field
+        h.ime(f.text.removeRange(f.selStart - 2, f.selStart), f.selStart - 2)
+        assertEquals("\na", h.doc)
+    }
+
+    @Test fun anAutocorrectAtTheMainCursorDoesNotRewriteAnotherCursorsText() {
+        val h = Harness("teh\nabc", 3)
+        h.cursors(3, 7)
+        val f = h.field
+        h.ime(f.text.replaceFirst("teh", "the "), 4)
+        assertEquals("the ", h.doc.lines()[0])
+        // Its text before the cursor is not "eh": the replacement goes over its own (empty)
+        // selection only, never over "bc".
+        assertEquals("abche ", h.doc.lines()[1])
+    }
+
+    @Test fun carriageReturnsFromTheFieldBecomeLineFeeds() {
+        val h = Harness("ab", 1)
+        h.type("x\r\ny\rz")
+        assertEquals("ax\ny\nzb", h.doc)
+        h.assertInSync()
+        assertTrue('\r' !in h.field.text, "the field kept a carriage return")
+    }
+
     @Test fun readOnlyIgnoresTheFieldAndPutsItBack() {
         val h = Harness("abc", 3)
         h.view.readOnly = true

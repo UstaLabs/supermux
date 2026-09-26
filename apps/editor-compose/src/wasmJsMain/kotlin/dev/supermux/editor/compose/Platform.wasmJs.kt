@@ -24,13 +24,7 @@ internal actual fun detectApplePlatform(): Boolean = appleNavigator()
 internal actual fun installFastTyping(view: EditorView, controller: EditorController): (() -> Unit)? {
     val handle = installListeners(
         onKey = { e -> if (!isHardwareKeyFor(e)) WebKey.PASS else webKeyDown(view, controller.composing, eventKey(e), eventCode(e), eventFlags(e)) },
-        onCopy = { cut ->
-            if (!view.focused) null else {
-                val text = DefaultCommands.selectedText(view.state)
-                if (text != null && cut) DefaultCommands.deleteSelection.run(view)
-                text ?: ""
-            }
-        },
+        onCopy = { cut -> webClipboardText(view, cut) },
         onPaste = { text -> if (!view.focused) false else { if (!view.readOnly) view.paste(text); true } },
     )
     return { removeListeners(handle) }
