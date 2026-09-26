@@ -52,18 +52,24 @@ import dev.supermux.editor.core.runKey
 data class FieldEdit(val from: Int, val to: Int, val insert: String)
 
 /**
- * The smallest single replacement turning [before] into [after]. When repeated characters make the
- * split ambiguous, the common prefix is capped at the caret, so the edit lands where the user typed.
+ * The smallest single replacement turning [before] into [after] that COVERS the field's previous
+ * selection [selFrom, selTo): the common prefix stops at [selFrom] and the common suffix at
+ * [selTo] (for a caret, at the caret in both directions). Without the clamp, typing a selection's
+ * own first character over it ("abc" selected, type "a") looks like deleting "bc", and repeated
+ * characters ("    " -> "   ") make the split ambiguous. [newCaret] (the field's caret after the
+ * edit, -1: unknown) clamps both sides the same way in the new text, so a Backspace in repeated
+ * spaces deletes the space BEFORE the caret (CM6's preferred-position diff). The defaults clamp nothing.
  */
-fun diffField(before: String, after: String, cursorAfter: Int = after.length): FieldEdit? {
+fun diffField(before: String, after: String, selFrom: Int = before.length, selTo: Int = 0, newCaret: Int = -1): FieldEdit? {
     if (before == after) return null
-    val maxPrefix = minOf(before.length, after.length)
+    var maxPrefix = minOf(before.length, after.length, selFrom.coerceAtLeast(0))
+    if (newCaret >= 0) maxPrefix = minOf(maxPrefix, newCaret)
     var p = 0
     while (p < maxPrefix && before[p] == after[p]) p++
-    val growth = after.length - before.length
-    if (growth > 0) p = minOf(p, maxOf(0, cursorAfter - growth))
+    var maxSuffix = minOf(before.length - p, after.length - p, (before.length - selTo).coerceAtLeast(0))
+    if (newCaret >= 0) maxSuffix = minOf(maxSuffix, (after.length - newCaret).coerceAtLeast(0))
     var s = 0
-    while (s < before.length - p && s < after.length - p && before[before.length - 1 - s] == after[after.length - 1 - s]) s++
+    while (s < maxSuffix && before[before.length - 1 - s] == after[after.length - 1 - s]) s++
     return FieldEdit(p, before.length - s, after.substring(p, after.length - s))
 }
 
@@ -207,7 +213,18 @@ internal class FieldSync(
             return null
         }
         if (!docMatches(w)) return rewindow()
-        val e = diffField(w.text, text, selEnd) ?: return null
+        // The field's selection before this edit: the edit must cover it.
+        val prev = before ?: current()
+        val prevFrom = minOf(prev.selStart, prev.selEnd)
+        val prevTo = maxOf(prev.selStart, prev.selEnd)
+        val raw = diffField(w.text, text) ?: return null
+        val clamped = diffField(w.text, text, prevFrom, prevTo, selEnd)!!
+        // Typing over a selection replaced it: the edit covers it. At a caret, the edit is the
+        // caret's only when covering the caret did not make it bigger (an autocorrect of an earlier
+        // word is not an edit at every cursor).
+        val atMain = prevFrom < prevTo ||
+            (clamped.to - clamped.from == raw.to - raw.from && clamped.insert.length == raw.insert.length)
+        val e = if (atMain) clamped else raw
         val from = w.base + e.from
         val to = w.base + e.to
         val st = view.state
@@ -216,40 +233,36 @@ internal class FieldSync(
         val clampedFrom = main.from.coerceIn(w.base, w.end)
         val clampedTo = main.to.coerceIn(w.base, w.end)
         val event = if (composition != null || wasComposing) "input.ime" else "input"
-        when {
+        if (composition == null && !wasComposing && e.insert == "\n" && e.from == e.to && from == main.head && main.empty) {
             // A soft Return: the editor's newline (it keeps the indentation), at every cursor.
-            composition == null && !wasComposing && e.insert == "\n" && e.from == e.to && from == main.head && main.empty ->
-                DefaultCommands.insertNewline.run(view)
-            // Several cursors: typing at the main one types at all of them.
-            sel.ranges.size > 1 && from == clampedFrom && to == clampedTo && composition == null -> {
-                val specs = sel.ranges.map { ChangeSpec(it.from, it.to, e.insert) }
-                val changes = dev.supermux.editor.core.ChangeSet.of(st.doc.length, specs)
-                val next = sel.ranges.map { SelectionRange(changes.mapPos(it.to, 1)) }
-                view.dispatch(TransactionSpec(changeSet = changes, selection = EditorSelection.create(next, sel.mainIndex), scrollIntoView = true, userEvent = event))
-            }
-            // Several cursors, a soft Backspace at the main one: at all of them.
-            sel.ranges.size > 1 && e.insert.isEmpty() && main.empty && to == main.head && composition == null ->
-                DefaultCommands.deleteBackward.run(view)
-            // Typing over a selection that reaches past the window replaces all of it.
-            !main.empty && from == clampedFrom && to == clampedTo && (main.from < w.base || main.to > w.end) ->
-                view.dispatch(TransactionSpec(
-                    changes = listOf(ChangeSpec(main.from, main.to, e.insert)),
-                    selection = EditorSelection.cursor(main.from + e.insert.length),
-                    scrollIntoView = true, userEvent = event,
-                ))
-            else -> {
-                // The ordinary case: the field's edit, and the field's caret.
-                window = FieldWindow(w.base, text)
-                view.dispatch(TransactionSpec(
-                    changes = listOf(ChangeSpec(from, to, e.insert)),
-                    selection = EditorSelection.single(w.base + selStart, w.base + selEnd),
-                    scrollIntoView = true, userEvent = event,
-                ))
-                if (!deferRewindow && composition == null && nearEdge()) return rewindow()
-                return null
-            }
+            DefaultCommands.insertNewline.run(view)
+            return null // the listener has re-synced the field
         }
-        // A command ran instead of the field's own edit: the listener has re-synced the field.
+        if (atMain && from <= clampedFrom && to >= clampedTo) {
+            // The edit covers the main range (typing, Backspace, autocorrect, a composition step):
+            // the same edit, relative to EVERY range (CM6). A selection wider than the window is
+            // replaced whole: its clamped part was the field's selection.
+            val before0 = clampedFrom - from
+            val after0 = to - clampedTo
+            val anchor = (selStart - e.from).coerceIn(0, e.insert.length)
+            val head = (selEnd - e.from).coerceIn(0, e.insert.length)
+            val typed = view.typeSpec(e.insert, event, before0, after0, anchor, head) ?: return null // an input handler took it
+            val (spec, changes) = typed
+            // The field now holds [text]; so does the document at the window moved through the edit
+            // (the window holds no other range, so only ranges before it shift it).
+            window = FieldWindow(changes.mapPos(w.base, -1), text)
+            view.dispatch(spec)
+        } else {
+            // An edit away from the main range (an IME rewriting another word): as the field made
+            // it, every range kept (mapped), never collapsed.
+            val changes = dev.supermux.editor.core.ChangeSet.of(st.doc.length, listOf(ChangeSpec(from, to, e.insert)))
+            val next = if (sel.ranges.size == 1) EditorSelection.single(w.base + selStart, w.base + selEnd) else sel.map(changes)
+            window = FieldWindow(w.base, text)
+            view.dispatch(TransactionSpec(changeSet = changes, selection = next, scrollIntoView = true, userEvent = event))
+        }
+        // A huge edit (a paste) leaves a huge field: shrink it now, even inside the input event.
+        if (window.text.length > 4 * radius) return rewindow()
+        if (!deferRewindow && composition == null && nearEdge()) return rewindow()
         return null
     }
 
@@ -258,20 +271,50 @@ internal class FieldSync(
         val w = window
         val main = view.state.selection.main
         val inside = main.from >= w.base && main.to <= w.end
-        if (!docMatches(w) || !inside) return rewindow()
+        if (!docMatches(w) || !inside || holdsAnotherRange(w)) return rewindow()
         if (composition == null && !deferring && nearEdge()) return rewindow()
         val now = current()
         return if (now == shown) null else show(now)
     }
 
-    /** Rebuild the window around the main cursor (the composition is gone with the old text). */
-    fun rewindow(): FieldText {
-        window = window()
+    /**
+     * Rebuild the window around the main cursor (the composition is gone with the old text); null
+     * when that changes nothing (the field already shows it).
+     */
+    fun rewindow(): FieldText? {
+        val next = window()
+        if (next == window && current() == shown) return null
+        window = next
         composition = null
         return show(current())
     }
 
-    private fun window(): FieldWindow = FieldWindow.around(view.state.doc, view.state.selection.main.head, radius)
+    /**
+     * About [radius] around the main cursor, but holding no OTHER range: typing at several cursors
+     * then changes the field's text only where the field itself changed it, so the field stays in
+     * step (and an IME's composition survives) while the other cursors type too.
+     */
+    private fun window(): FieldWindow {
+        val st = view.state
+        val main = st.selection.main
+        val w = FieldWindow.around(st.doc, main.head, radius)
+        var start = w.base
+        var end = w.end
+        for (r in st.selection.ranges) {
+            if (r === main) continue
+            if (r.to <= main.from) start = maxOf(start, r.to)
+            if (r.from >= main.to) end = minOf(end, r.from)
+        }
+        return if (start == w.base && end == w.end) w else FieldWindow(start, st.doc.slice(start, end))
+    }
+
+    /** True when a range other than the main one lies inside [w] (the selection changed shape). */
+    private fun holdsAnotherRange(w: FieldWindow): Boolean {
+        val sel = view.state.selection
+        if (sel.ranges.size == 1) return false
+        val main = sel.main
+        return sel.ranges.any { it !== main && it.to > w.base && it.from < w.end }
+    }
 
     private fun docMatches(w: FieldWindow): Boolean {
         val doc = view.state.doc

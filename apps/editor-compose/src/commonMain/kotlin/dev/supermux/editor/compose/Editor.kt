@@ -317,7 +317,7 @@ internal class EditorController(val view: EditorView, private val measurer: Text
         heights.reset(view.state.doc.lineCount)
         anchorValid = false
         scroll.scrollTo(0f, 0f)
-        fieldWriter?.invoke(fieldSync.rewindow())
+        fieldSync.rewindow()?.let { fieldWriter?.invoke(it) }
         composition = null
     }
 

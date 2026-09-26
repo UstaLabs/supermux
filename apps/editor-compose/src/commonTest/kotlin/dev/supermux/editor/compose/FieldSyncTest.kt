@@ -23,8 +23,16 @@ class WindowDiffTest {
     @Test fun deleteAtStart() = assertEquals(FieldEdit(0, 1, ""), diffField("ab", "b"))
     @Test fun identical() = assertNull(diffField("ab", "ab"))
     @Test fun repeatedCharsPreferTheCursorSide() =
-        // "aa" -> "aaa" with the cursor at 3 is an insert AT 2, not at 0.
-        assertEquals(FieldEdit(2, 2, "a"), diffField("aa", "aaa", cursorAfter = 3))
+        // "aa" -> "aaa" with the caret at 2 is an insert AT 2, not at 0.
+        assertEquals(FieldEdit(2, 2, "a"), diffField("aa", "aaa", 2, 2))
+
+    @Test fun theEditAlwaysCoversThePreviousSelection() {
+        // Typing the selection's own first character over it: the whole selection is replaced.
+        assertEquals(FieldEdit(0, 5, "a"), diffField("abcde", "a", 0, 5))
+        assertEquals(FieldEdit(0, 3, "f"), diffField("foo foo", "f foo", 0, 3))
+        // A Backspace in indentation (repeated spaces) deletes just before the caret.
+        assertEquals(FieldEdit(3, 4, ""), diffField("    x", "   x", 4, 4))
+    }
 
     @Test fun windowMapsBackToDocument() {
         val doc = Rope.of("0123456789abcdef")
@@ -217,6 +225,64 @@ class FieldSyncTest {
         h.sync.onFieldChange("x 日本", 4, 4, 2..2, deferRewindow = true)
         assertEquals("x 日本", h.doc)
         assertTrue(h.transactions.last().isUserEvent("input.ime"), "an edit while composing is input.ime")
+    }
+
+    @Test fun selectAllThenTypingTheWindowsFirstCharacterReplacesEverything() {
+        val text = (0 until 50).joinToString("\n") { "line $it" }
+        val h = Harness(text, 0)
+        DefaultCommands.selectAll.run(h.view)
+        val first = h.field.text.substring(0, 1)
+        h.type(first)
+        assertEquals(first, h.doc, "the selection was not replaced whole")
+        h.assertInSync()
+    }
+
+    @Test fun typingOverSeveralSelectionsReplacesEachOne() {
+        val h = Harness("foo foo foo", 0)
+        h.view.dispatch(dev.supermux.editor.core.TransactionSpec(selection = EditorSelection.create(listOf(SelectionRange(0, 3), SelectionRange(4, 7), SelectionRange(8, 11)))))
+        h.type("f")
+        assertEquals("f f f", h.doc)
+        assertEquals(listOf(1, 3, 5), h.view.state.selection.ranges.map { it.head })
+    }
+
+    @Test fun softBackspaceInsideIndentationAtSeveralCursors() {
+        val h = Harness("        a\n        b", 4)
+        h.view.dispatch(dev.supermux.editor.core.TransactionSpec(selection = EditorSelection.create(listOf(SelectionRange(4), SelectionRange(14)))))
+        h.backspace()
+        assertEquals("       a\n       b", h.doc)
+        assertEquals(listOf(3, 12), h.view.state.selection.ranges.map { it.head })
+    }
+
+    @Test fun composingAtSeveralCursorsKeepsEveryCursor() {
+        // Gboard composes nearly every word: the composition must happen at every cursor.
+        val h = Harness("a\nb\nc", 1)
+        h.view.dispatch(dev.supermux.editor.core.TransactionSpec(selection = EditorSelection.create(listOf(SelectionRange(1), SelectionRange(3), SelectionRange(5)))))
+        val f = h.field
+        val at = f.selStart
+        h.ime(f.text.substring(0, at) + "に" + f.text.substring(at), at + 1, composition = at..at)
+        h.ime(f.text.substring(0, at) + "日本" + f.text.substring(at), at + 2, composition = at..at + 1)
+        h.ime(f.text.substring(0, at) + "日本" + f.text.substring(at), at + 2, composition = null)
+        assertEquals("a日本\nb日本\nc日本", h.doc)
+        assertEquals(3, h.view.state.selection.ranges.size, "the cursors collapsed")
+        assertTrue(h.transactions.filter { it.docChanged }.all { it.isUserEvent("input.ime") })
+    }
+
+    @Test fun anEditAwayFromTheCaretNeverCollapsesTheCursors() {
+        val h = Harness("teh cat\nx\ny", 7)
+        h.view.dispatch(dev.supermux.editor.core.TransactionSpec(selection = EditorSelection.create(listOf(SelectionRange(7), SelectionRange(9)), 0)))
+        // Autocorrect rewrites a word the caret is not next to.
+        val f = h.field
+        h.ime(f.text.replaceFirst("teh", "the"), f.selStart)
+        assertEquals("the cat\nx\ny", h.doc)
+        assertEquals(2, h.view.state.selection.ranges.size)
+    }
+
+    @Test fun theWindowShrinksAfterAHugeEdit() {
+        val h = Harness("ab", 1)
+        h.sync.onFieldChange("a" + "x".repeat(5000) + "b", 5001, 5001, null, deferRewindow = true)?.let { h.field = it }
+        assertEquals(5002, h.doc.length)
+        assertTrue(h.field.text.length <= 4 * 20, "a ${h.field.text.length}-unit field after a paste")
+        h.assertInSync()
     }
 
     @Test fun readOnlyIgnoresTheFieldAndPutsItBack() {

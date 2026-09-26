@@ -77,6 +77,48 @@ class EditorView(initial: EditorState) : CommandTarget {
         dispatch(TransactionSpec(changeSet = changes, selection = EditorSelection.create(next, st.selection.mainIndex), scrollIntoView = true, userEvent = "paste"))
     }
 
+    /**
+     * THE entry point for typed text (the hidden field, the web's key path, [DefaultCommands.insertText]
+     * all come here): [text] replaces every selection range, and the cursors land after it. For
+     * plain typing (`input`) the [inputHandlerFacet] handlers are asked first. Returns true when
+     * something was dispatched.
+     */
+    fun typeText(text: String, userEvent: String = "input"): Boolean {
+        val spec = typeSpec(text, userEvent, 0, 0, text.length, text.length) ?: return true
+        dispatch(spec.first)
+        return true
+    }
+
+    /**
+     * The transaction typing [text] makes: each range [from - before, to + after) becomes [text],
+     * with the new range at [anchorInText]..[headInText] inside it. Null when an input handler took
+     * the text over (it dispatched its own). The change set is returned too, so the hidden field
+     * can follow its window through it before listeners run.
+     */
+    internal fun typeSpec(text: String, userEvent: String, before: Int, after: Int, anchorInText: Int, headInText: Int): Pair<TransactionSpec, ChangeSet>? {
+        val st = state
+        val sel = st.selection
+        val main = sel.main
+        if (userEvent == "input" && !readOnly) {
+            val from = (main.from - before).coerceAtLeast(0)
+            val to = (main.to + after).coerceAtMost(st.doc.length)
+            for (h in st.facet(inputHandlerFacet)) if (h.handle(this, from, to, text)) return null
+        }
+        val specs = sel.ranges.map { ChangeSpec((it.from - before).coerceAtLeast(0), (it.to + after).coerceAtMost(st.doc.length), text) }
+        val merged = ArrayList<ChangeSpec>()
+        for (sp in specs.sortedWith(compareBy({ it.from }, { it.to }))) {
+            val last = merged.lastOrNull()
+            if (last != null && sp.from < last.to) merged[merged.size - 1] = ChangeSpec(last.from, maxOf(last.to, sp.to), last.insert)
+            else merged += sp
+        }
+        val changes = ChangeSet.of(st.doc.length, merged)
+        val next = specs.map { sp ->
+            val start = changes.mapPos(sp.from, -1)
+            SelectionRange(start + anchorInText, start + headInText)
+        }
+        return TransactionSpec(changeSet = changes, selection = EditorSelection.create(next, sel.mainIndex), scrollIntoView = true, userEvent = userEvent) to changes
+    }
+
     /** The surface's geometry once it is composed; vertical moves and page moves need it. */
     internal var geometry: Geometry? = null
 
