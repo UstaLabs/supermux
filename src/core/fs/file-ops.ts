@@ -1,4 +1,5 @@
-import { readFile, writeFile, rename, mkdir, open, lstat, stat, realpath, rm } from "fs/promises"
+import { readFile, writeFile, rename, mkdir, open, lstat, stat, realpath, rm, unlink } from "fs/promises"
+import { randomBytes } from "crypto"
 import { homedir } from "os"
 import { basename, dirname, join } from "path"
 import { FsError, toFsError } from "./errors"
@@ -12,6 +13,7 @@ export async function readText(path: string): Promise<string> {
   try {
     const s = await stat(path)
     if (s.isDirectory()) throw new FsError("EISDIR", `is a directory: ${path}`)
+    if (!s.isFile()) throw new FsError("EINVAL", `not a regular file: ${path}`)
     if (s.size > MAX_READ_BYTES) throw new FsError("TOO_LARGE", `File too large (${s.size} bytes); limit is 1MB`)
     buf = await readFile(path)
   } catch (e) {
@@ -23,12 +25,17 @@ export async function readText(path: string): Promise<string> {
 }
 
 export async function writeText(path: string, text: string): Promise<{ size: number; mtime: number }> {
+  const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`
   try {
     await mkdir(dirname(path), { recursive: true })
-    const tmp = `${path}.tmp`
     const buf = Buffer.from(text, "utf-8")
-    await writeFile(tmp, buf)
-    await rename(tmp, path)
+    try {
+      await writeFile(tmp, buf)
+      await rename(tmp, path)
+    } catch (e) {
+      await unlink(tmp).catch(() => {})
+      throw e
+    }
     const s = await stat(path)
     return { size: buf.length, mtime: Math.round(s.mtimeMs) }
   } catch (e) {
@@ -107,17 +114,29 @@ async function uniqueName(dir: string, name: string): Promise<string> {
   }
 }
 
+/** RFC 3986 percent-encoding for the freedesktop trashinfo Path= field. */
+function encodeTrashPath(path: string): string {
+  return encodeURI(path).replace(/#/g, "%23").replace(/\?/g, "%3F")
+}
+
+/** Local-time YYYY-MM-DDThh:mm:ss (no timezone), per the freedesktop trash spec. */
+function localDeletionDate(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 async function moveToTrash(path: string, opts: OpOptions): Promise<void> {
   const platform = opts.platform ?? process.platform
   const trash = opts.trashDir ?? defaultTrashDir(platform)
   const filesDir = platform === "darwin" ? trash : join(trash, "files")
   await mkdir(filesDir, { recursive: true })
   const name = await uniqueName(filesDir, basename(path))
+  const infoPath = join(trash, "info", `${name}.trashinfo`)
   if (platform !== "darwin") {
     const infoDir = join(trash, "info")
     await mkdir(infoDir, { recursive: true })
-    const date = new Date().toISOString().slice(0, 19)
-    await writeFile(join(infoDir, `${name}.trashinfo`), `[Trash Info]\nPath=${encodeURI(path)}\nDeletionDate=${date}\n`)
+    await writeFile(infoPath, `[Trash Info]\nPath=${encodeTrashPath(path)}\nDeletionDate=${localDeletionDate()}\n`)
   }
   try {
     await rename(path, join(filesDir, name))
@@ -125,9 +144,13 @@ async function moveToTrash(path: string, opts: OpOptions): Promise<void> {
     if ((e as { code?: string }).code === "EXDEV") {
       // The trash is on another filesystem; the app already confirmed, so delete for real.
       await rm(path, { recursive: true, force: true })
-      if (platform !== "darwin") await rm(join(trash, "info", `${name}.trashinfo`), { force: true })
+      if (platform !== "darwin") await rm(infoPath, { force: true })
       return
     }
+    // Any other failure means the file never made it to the trash; remove the
+    // now-untracked info record so the spec's "info first" ordering never
+    // leaves a dangling .trashinfo behind.
+    if (platform !== "darwin") await unlink(infoPath).catch(() => {})
     throw e
   }
 }
