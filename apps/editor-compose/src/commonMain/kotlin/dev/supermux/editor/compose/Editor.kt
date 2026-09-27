@@ -26,6 +26,10 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import dev.supermux.editor.core.panelsFacet
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.size
@@ -217,8 +221,14 @@ fun Editor(
         view.clipboard = clipboard
         view.scope = scope
     }
+    // Panels (a search bar) above and below, outside the scrolling area: the surface takes the rest.
+    // One Column always, so a panel coming or going never rebuilds the surface.
+    // Derived: a keystroke recomposes nothing here, only a change of the panels does.
+    val panels by remember(view) { androidx.compose.runtime.derivedStateOf { view.state.facet(panelsFacet) } }
+    Column(modifier) {
+    for (p in panels) if (p.top) androidx.compose.runtime.key(p) { EditorPanel(controller, p, widgets) }
     Box(
-        modifier
+        Modifier.weight(1f).fillMaxWidth()
             .clipToBounds()
             // `scrollable`, not a hand-rolled drag detector: it normalizes wheel notches and
             // trackpad deltas into pixels, tracks release velocity and runs the fling's decay.
@@ -307,6 +317,23 @@ fun Editor(
         }
         SubcomposeLayout(Modifier.fillMaxSize(), policy)
     }
+    for (p in panels) if (!p.top) androidx.compose.runtime.key(p) { EditorPanel(controller, p, widgets) }
+    }
+}
+
+/**
+ * A panel strip: the registry's `panel:<id>` content, full width, its own height. Its input and
+ * focus are its own (the search field); Escape inside it gives the focus back to the editor.
+ */
+@Composable
+private fun androidx.compose.foundation.layout.ColumnScope.EditorPanel(c: EditorController, panel: dev.supermux.editor.core.Panel, widgets: WidgetRegistry) {
+    val key = dev.supermux.editor.core.WidgetKey("panel:" + panel.id, panel.id)
+    val content = widgets.content(key.type) ?: return
+    Box(
+        Modifier.fillMaxWidth().onPreviewKeyEvent { e ->
+            if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && e.key == androidx.compose.ui.input.key.Key.Escape) { c.requestFocus(); true } else false
+        },
+    ) { c.widgetScope.content(key) }
 }
 
 /** The surface's fixed children (see [surfaceMeasurePolicy]). */

@@ -118,3 +118,13 @@ data class GutterMarker(val column: String, val kind: String, val tooltip: Strin
 
 /** Gutter markers from every plugin, highest precedence first. */
 val gutterMarkersFacet: Facet<RangeSet<GutterMarker>, List<RangeSet<GutterMarker>>> = Facet.list("gutterMarkers")
+
+/**
+ * A strip attached to the editor, at the top or the bottom, outside its scrolling area (the search
+ * bar): DATA from a plugin; its content is the widget type `panel:<id>` in the surface's widget
+ * registry. The editor's viewport shrinks by the panels' heights.
+ */
+data class Panel(val id: String, val top: Boolean)
+
+/** Every plugin's panels, in precedence order (top ones top to bottom, then the bottom ones). */
+val panelsFacet: Facet<Panel, List<Panel>> = Facet.list("panels")
