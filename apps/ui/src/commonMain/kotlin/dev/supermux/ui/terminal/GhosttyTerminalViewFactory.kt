@@ -426,6 +426,7 @@ private class GhosttyTerminalSurface(
         }
 
         val clipboard = factory.clipboard()
+        val titleSink = LocalTerminalTitleSink.current
         var pendingLink by remember { mutableStateOf<String?>(null) }
         val bellFlash = remember { Animatable(0f) }
         val bells by relay.bells.collectAsState()
@@ -456,7 +457,10 @@ private class GhosttyTerminalSurface(
                     active = active,
                     accessories = accessories,
                     clipboard = clipboard,
-                    onTitle = { title = it },
+                    onTitle = {
+                        title = it
+                        titleSink(it)
+                    },
                     // The link's TEXT and its URI can differ (that is what OSC 8 is), so the URI
                     // itself is shown and confirmed before anything opens it.
                     onLink = { pendingLink = it },

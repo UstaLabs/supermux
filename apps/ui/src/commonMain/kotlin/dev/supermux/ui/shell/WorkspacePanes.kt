@@ -95,7 +95,7 @@ import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.toDomainOrNull
-import dev.supermux.workspace.viewTitle
+import dev.supermux.ui.terminal.liveViewTitle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
@@ -203,7 +203,7 @@ fun WorkspacePanes(
 
     PaneHost(
         layout = layout,
-        titleFor = { vid -> viewsById[vid]?.let { viewTitle(it, sessionNames::get) } ?: "view" },
+        titleFor = { vid -> viewsById[vid]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
         onCloseView = { onCloseCandidate(viewsById[it]) },
         onEdit = { edit -> layoutSync.edit(edit) },
         addSlot = { groupId ->
@@ -265,7 +265,7 @@ fun WorkspacePanes(
                         Box(Modifier.testTag("tab-move-to-window-$itemId")) {
                         DefaultTabChip(
                             itemId = itemId,
-                            title = v?.let { viewTitle(it, sessionNames::get) } ?: "view",
+                            title = v?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
                             state = tabState,
                             dot = if (v.tabUnread(tabState.selected, unreadSessions)) LocalSemantics.current.success else null,
                             labelFont = MonoFontFamily,
@@ -429,7 +429,7 @@ fun PhoneWorkspacePanes(
                 PaneTabStrip(
                     viewIds = tabs.viewIds,
                     activeViewId = tabs.selectedId ?: "",
-                    titleFor = { id -> viewsById[id]?.let { viewTitle(it, sessionNames::get) } ?: "view" },
+                    titleFor = { id -> viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
                     onSelect = { id -> app.setActiveView(current.id, id) },
                     onClose = { id -> viewsById[id]?.let { closeOrConfirm(it) } },
                     modifier = Modifier.weight(1f),
@@ -442,7 +442,7 @@ fun PhoneWorkspacePanes(
                         ) {
                             DefaultTabChip(
                                 itemId = id,
-                                title = viewsById[id]?.let { viewTitle(it, sessionNames::get) } ?: "view",
+                                title = viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
                                 state = state,
                                 dot = if (viewsById[id].tabUnread(state.selected, unreadSessions)) LocalSemantics.current.success else null,
                                 labelFont = MonoFontFamily,
