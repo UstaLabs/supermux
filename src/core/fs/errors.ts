@@ -1,4 +1,4 @@
-const KNOWN = new Set(["ENOENT", "EACCES", "EPERM", "ENOTDIR", "EISDIR", "EEXIST", "EINVAL", "ENOTEMPTY", "EXDEV"])
+const KNOWN = new Set(["ENOENT", "EACCES", "EPERM", "ENOTDIR", "EISDIR", "EEXIST", "EINVAL", "ENOTEMPTY", "EXDEV", "ELOOP", "ENAMETOOLONG", "EMFILE", "ENFILE"])
 
 export class FsError extends Error {
   constructor(readonly code: string, message: string) {
