@@ -109,6 +109,8 @@ data class AppConfigDto(
     val voiceCleanupModel: String? = null,
     /** Read-aloud backend: platform (OS TTS) | codex (ChatGPT pronunciation). null = platform. */
     val voiceTtsEngine: String? = null,
+    /** ISO-639-1 codes the user dictates in (e.g. ["tr", "en"]). null/empty = auto-detect. */
+    val voiceLanguages: List<String>? = null,
 )
 
 @Serializable
@@ -1203,6 +1205,7 @@ private data class ConfigPatchBody(
     val voiceCleanupModel: String? = null,
     val voiceCleanupEngine: String? = null,
     val voiceTtsEngine: String? = null,
+    val voiceLanguages: List<String>? = null,
     val claudeOauthToken: String? = null,
     val anthropicApiKey: String? = null,
     val codexApiKey: String? = null,
@@ -1830,6 +1833,7 @@ class BrokerApi(
         voiceCleanupModel: String? = null,
         voiceCleanupEngine: String? = null,
         voiceTtsEngine: String? = null,
+        voiceLanguages: List<String>? = null,
         claudeOauthToken: String? = null,
         anthropicApiKey: String? = null,
         codexApiKey: String? = null,
@@ -1843,6 +1847,7 @@ class BrokerApi(
             voiceCleanupModel = voiceCleanupModel,
             voiceCleanupEngine = voiceCleanupEngine,
             voiceTtsEngine = voiceTtsEngine,
+            voiceLanguages = voiceLanguages,
             claudeOauthToken = claudeOauthToken,
             anthropicApiKey = anthropicApiKey,
             codexApiKey = codexApiKey,

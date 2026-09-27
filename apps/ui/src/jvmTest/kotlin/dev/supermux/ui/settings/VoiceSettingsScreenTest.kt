@@ -192,6 +192,37 @@ class VoiceSettingsScreenTest {
         assertEquals("claude-voice", saved.get())
     }
 
+    @Test fun languages_multi_select_persists_each_toggle_and_auto_clears() = runComposeUiTest {
+        val saves = java.util.concurrent.CopyOnWriteArrayList<List<String>>()
+        voiceContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                VoiceSettingsScreen(
+                    actions = VoiceSettingsActions(
+                        loadConfig = { sampleConfig().copy(voiceLanguages = listOf("tr")) },
+                        saveVoiceLanguages = { saves.add(it); true },
+                        glossaryLoad = { emptyList() },
+                    ),
+                )
+            }
+        }
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithText("Turkish").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("voice_languages_chip").performClick()
+        waitForIdle()
+        // The menu stays open across toggles, so a mix is two taps.
+        onNodeWithTag("voice_languages_chip_option_en").performClick()
+        waitUntil(timeoutMillis = 5_000) { saves.lastOrNull() == listOf("tr", "en") }
+        onNodeWithTag("voice_languages_chip_option_auto").performClick()
+        waitUntil(timeoutMillis = 5_000) { saves.lastOrNull() == emptyList<String>() }
+        onNodeWithText("Auto-detect").assertIsDisplayed()
+    }
+
     @Test fun picking_stt_engine_failure_reverts_and_shows_error() = runComposeUiTest {
         voiceContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {

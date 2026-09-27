@@ -2246,8 +2246,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           engine: cfg.voiceSttEngine ?? VOICE_STT_ENGINE,
           // whisper-specific knobs stay on app-config until engines grow their own model fields
           model: cfg.whisperModel,
-          lang: cfg.whisperLang,
-          // claude-voice biases recognition with the voice glossary (x-config-keyterms)
+          // Single-language engines get a pin only when the user dictates in exactly one
+          // language; with several (e.g. tr + en) they auto-detect, and codex-realtime gets the
+          // whole list as a prompt hint instead.
+          lang: cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang,
+          languages: cfg.voiceLanguages,
+          // claude-voice biases recognition with the voice glossary (x-config-keyterms);
+          // codex-realtime puts it in its transcription prompt.
           keyterms: cfg.voiceCleanupGlossary,
         })
         sttMs = Date.now() - t0

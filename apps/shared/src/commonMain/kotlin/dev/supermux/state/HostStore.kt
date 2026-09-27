@@ -965,6 +965,10 @@ class HostStore(
     suspend fun saveVoiceTts(engine: String?): Boolean =
         runApi("saveVoiceTts") { api.saveConfig(voiceTtsEngine = engine); true } ?: false
 
+    /** Persist the dictation languages (empty = auto-detect). False on failure. */
+    suspend fun saveVoiceLanguages(languages: List<String>): Boolean =
+        runApi("saveVoiceLanguages") { api.saveConfig(voiceLanguages = languages); true } ?: false
+
     /** Persist cleanup engine and/or model. False on failure. */
     suspend fun saveVoiceCleanup(engine: String?, model: String?): Boolean =
         runApi("saveVoiceCleanup") {

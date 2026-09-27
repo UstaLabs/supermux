@@ -1359,6 +1359,8 @@ class FleetStore(
     // shared `VoiceSettingsScreen` uses to revert the chip and show "couldn't save".
     suspend fun saveVoiceStt(engine: String?): Boolean = activeApp()?.saveVoiceStt(engine) == true
     suspend fun saveVoiceTts(engine: String?): Boolean = activeApp()?.saveVoiceTts(engine) == true
+    suspend fun saveVoiceLanguages(languages: List<String>): Boolean =
+        activeApp()?.saveVoiceLanguages(languages) == true
     suspend fun saveVoiceCleanup(engine: String?, model: String?): Boolean =
         activeApp()?.saveVoiceCleanup(engine, model) == true
     // Agents settings mutations (cluster E2). These used to be fire-and-forget `Unit`s that
