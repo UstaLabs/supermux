@@ -20,6 +20,7 @@ class ContractTest {
             "sessions_reordered", "session_read",
             "walkthrough_updated", "review_comment",
             "worktree_sizes", "worktrees_removed", "agent_models_changed",
+            "fs_dir", "fs_gone", "fs_err",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -68,7 +69,19 @@ class ContractTest {
                 is ServerFrame.ReviewCommentFrame -> {}
                 is ServerFrame.WorktreeSizes -> {}
                 is ServerFrame.WorktreesRemoved -> {}
+                is ServerFrame.FsDir -> {}
+                is ServerFrame.FsGone -> {}
+                is ServerFrame.FsErr -> {}
             }
         }
+    }
+
+    @Test fun fs_dir_unchanged_and_client_fs_frames_round_trip() {
+        val f = json.decodeFromString<ServerFrame>("""{"type":"fs_dir","path":"/a","version":"x:1","unchanged":true}""")
+        kotlin.test.assertEquals(ServerFrame.FsDir(path = "/a", version = "x:1", unchanged = true), f)
+        val out = json.encodeToString(ClientFrame.serializer(), ClientFrame.FsSub("/a", since = "x:1"))
+        kotlin.test.assertEquals("""{"type":"fs_sub","path":"/a","since":"x:1"}""", out)
+        val un = json.encodeToString(ClientFrame.serializer(), ClientFrame.FsUnsub("/a"))
+        kotlin.test.assertEquals("""{"type":"fs_unsub","path":"/a"}""", un)
     }
 }

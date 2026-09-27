@@ -792,10 +792,13 @@ data class CreatedRepo(val repo: RemoteRepo? = null, val localPath: String = "")
 @Serializable
 data class FsEntry(
     val name: String,
-    val type: String,            // "dir" | "file"
+    val type: String,            // "dir" | "file" | "symlink" (symlink only from the host fs service)
     val size: Long = 0,
-    val modified: String? = null,
+    val modified: String? = null, // legacy routes only
     val ignored: Boolean = false,
+    val mtime: Long? = null,      // host fs service, epoch ms
+    val git: String? = null,      // "M" | "A" | "D" | "R" | "?" | "U" | "*"
+    val target: String? = null,   // symlinks: "file" | "dir"
 )
 
 @Serializable
