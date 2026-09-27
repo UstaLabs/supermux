@@ -25,6 +25,12 @@ before the cursor; a hardware Backspace is a key binding. A soft Return runs the
 binding (the field does not insert the newline itself). Only one character per commit is a bracket:
 a multi-character commit (a suggestion) is text.
 
+**Related, not here.** Indentation keys (Tab, Shift-Tab `indentLess`, `Mod-]` / `Mod-[`) are
+`DefaultCommands` in `:editor-compose`, next to Tab. Quote pairing on iOS relies on the hidden
+field's Smart Punctuation being off (editor-compose's shim): with it on, the keyboard types `“`, which
+is not a bracket. Verified on the devices in M3b: brackets and Enter between braces on the Fold,
+straight-quote pairing on the iPhone (and in `device-checks/ios-sim.sh`).
+
 **Dependencies.** `:editor-core` and `:editor-compose`, the latter only for `inputHandlerFacet`,
 `indentUnitFacet` and `DefaultCommands`: no Compose UI type is used, the plugin produces
 transactions and key bindings (data only, the sandbox-ready contract). Moving those editor-level

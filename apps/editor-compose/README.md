@@ -2,7 +2,8 @@
 
 The native editor's one surface: a Compose Multiplatform composable that draws and edits an
 `editor-core` `EditorState` on a single Canvas, for Android, the desktop JVM, iOS and the browser.
-Spec: `docs/superpowers/specs/2026-09-25-native-editor-design.md` §6. Plan: `…/plans/2026-09-26-native-editor-m3a-surface.md`.
+Spec: `docs/superpowers/specs/2026-09-25-native-editor-design.md` §6. Plans: `…/plans/2026-09-26-native-editor-m3a-surface.md`,
+`…/plans/2026-09-26-native-editor-m3b-touch-a11y-devices.md`.
 
 It depends on `:editor-core` and Compose only: no `:shared`, no `:ui`, and not `:editor-syntax`.
 Syntax colours (and any plugin's styling) arrive as editor-core decorations whose classes the
@@ -22,7 +23,7 @@ EditorView            state (Compose state), dispatch(spec), listeners, viewport
       ├ LineLayouts   TextMeasurer layouts of visible lines, LRU by (text, spans) per configuration
       ├ Geometry      offset <-> content position, caret and selection rects, visible lines
       ├ EditorScroll  x/y in pixels; ScrollableStates for Modifier.scrollable (wheel, drag, fling)
-      ├ EditorPointer click / drag / multi-click / Alt-drag column; tap, long press
+      ├ EditorPointer click / drag / multi-click / Alt-drag column; tap, double/triple tap, long press, handles, pinch
       └ FieldSync     the hidden field <-> the document (EditorInputField)
 Painter               background, current line, LineStyle backgrounds, selections, text, cursors, gutter
 DefaultCommands       movement, selection, insert/delete/newline/tab, select all; defaultKeymap()
@@ -37,6 +38,9 @@ DefaultCommands       movement, selection, insert/delete/newline/tab, select all
 | `LineLayouts.kt`, `Geometry.kt` | layout cache, tab stops, offset/position mapping |
 | `Painter.kt` | one frame |
 | `EditorScroll.kt`, `EditorPointer.kt` | scrolling, pointer gestures |
+| `EditorTouch.kt`, `EditorMenu.kt` | touch handles (geometry, drawing, hit targets), the selection menu |
+| `EditorSemantics.kt` | the accessibility node (`AccessibleText`, `LineAnnouncer`) |
+| `EditorClipboard.kt` | the clipboard seam (platform, web Clipboard API) |
 | `EditorInput.kt` | the windowed hidden field (`FieldWindow`, `diffField`, `FieldSync`), hardware keys, web fast typing |
 | `DefaultCommands.kt`, `TextBoundaries.kt`, `EditorFacets.kt` | commands, grapheme/word rules, `tabSizeFacet` / `indentUnitFacet` |
 
@@ -162,6 +166,15 @@ nothing (on the web the browser's default copy runs, leaving the clipboard alone
 lone CR, or one arriving through the hidden field, becomes `\n`. Off Apple, Ctrl+Alt+<character> (AltGr
 on Windows) matches only a binding that names `Ctrl-Alt`, never `Mod-Alt`.
 
+**The web's text input** is Compose's TEXTAREA, which exists only while an input session runs
+(any focus, see the focus rules). Compose web 1.12 (`DomInputStrategy`) needs three corrections:
+the TEXTAREA gets the focus back after a mouse press (the press focuses the canvas); plain
+`beforeinput` insertText / insertReplacementText is taken by the editor at the TEXTAREA's selection
+(`FieldSync.onDomInsert`) so the browser never edits it; and its `value` setter is wrapped to put the
+editor's selection back (Compose sets the selection only when its numbers changed, while setting
+`value` moves the DOM caret to the end, so IME text landed at the window's end). Composition stays
+Compose's. `:editor-sample:webInputTest` asserts all of it over CDP.
+
 **On the web**, Compose handles queued DOM input only at the next animation frame, after that frame
 drew: a key it handles is painted two frames late. So while an editor is composed, a capture-phase
 DOM keydown listener serves hardware keys inside the event itself and cancels them: bound chords run
@@ -170,13 +183,47 @@ are hidden from Compose and served by the browser's copy/cut/paste events (synch
 the whole selection, no permission prompt). Only for a HARDWARE keyboard aimed at Compose's own
 textarea: never after a touch or pen pointer, and on a touch-capable device only once a physical-key
 keydown (a non-empty `code`) has been seen, because iOS Safari's soft keyboard sends real key values
-and must keep going through the field for autocorrect and predictions. That is a heuristic. IME
+and must keep going through the field for autocorrect and predictions. That is a heuristic
+(`isHardwareKey`); `EditorView.webKeyboard` forces it (AUTO / HARDWARE / SOFT) and
+`EditorView.onKeyPath` reports each key's path (the sample's debug input log shows it). IME
 composition, unbound shortcuts and dead keys go the ordinary way.
 
-**Focus rules** (the terminal's): a **touch** takes focus AND raises the soft keyboard, every time
-(a field that is already focused starts no new input session, so a keyboard the user dismissed
-would never come back); a **mouse click** takes focus and never raises a keyboard; nothing raises
-the keyboard when an editor merely appears or a host focuses it (`showKeyboardOnFocus = false`).
+**Focus rules** (the terminal's): a **touch** takes focus AND raises the soft keyboard, every time;
+a **mouse click** takes focus and never raises a keyboard; nothing raises the keyboard when an editor
+merely appears or a host focuses it (`focus(showKeyboard = false)`).
+- ⚠️ With `BasicTextField(TextFieldState)` (Compose 1.12) the keyboard is the field's **input
+  session**: it starts on focus only when `KeyboardOptions.showKeyboardOnFocus` is true, and
+  `SoftwareKeyboardController.show()` does nothing until a session exists. So
+  `EditorController.keyboardOnFocus` is that option: true on desktop and web always (the desktop
+  IME and the web's TEXTAREA need a session on any focus), on Android and iOS only after a touch
+  (reset on blur).
+- A touch takes the focus **one frame later**, once the field carries the option, so the session
+  starts inside the focus change; started from a recomposition, iOS never made its input view first
+  responder. Every later tap asks the platform again once the session exists
+  (`InputMethodManager.showSoftInput` on Android, the keyboard controller on iOS), so a keyboard the
+  user dismissed comes back.
+- A host showing another document gives the SAME `Editor` a new view while the field keeps the
+  focus: the surface carries its focus to the new view and keeps the input session (without that
+  the caret vanished, and on Android/iOS typing stayed bound to the previous document's field).
+
+**The hidden field never takes a pointer.** A pointer shield (a sibling above the field, consuming
+nothing) takes every hit; the surface's own gestures (the parent's `pointerInput`) see everything.
+Without it, a long press on an empty line or a line's end on the iPhone hit the field (it sits at the
+caret, and Compose expands its touch target to 48 dp; Compose's `touchSelectionFirstPress` ignores
+consumption) and crashed in Compose's own touch selection:
+```
+kotlin.IllegalArgumentException: start and end cannot be negative. [start: -1, end: -1]
+  androidx.compose.ui.text#TextRange(kotlin.Int)
+  …TransformedTextFieldState#placeCursorBeforeCharAt(kotlin.Int)
+  …selection.moveCaretByLongPress
+  …selection.UIKitTextFieldTextDragObserver.onStart
+  …text.selection.$touchSelectionFirstPressCOROUTINE$0.invokeSuspend
+```
+The field keeps its place at the caret, where the keyboard and IME candidates anchor.
+
+**Semantics of the field.** The field holds only a window of text, so a screen reader must never see
+it: on iOS and the web (which ignore `hideFromAccessibility`) its semantics are cleared; on Android
+and the desktop it is `hideFromAccessibility` (UI tests drive it as `hasSetTextAction() and !ContentDescription`).
 
 **Grapheme limits.** `TextBoundaries` follows the parts of UAX #29 an editor meets (combining marks,
 ZWJ sequences, flags, emoji modifiers), not all of it: Indic conjuncts (GB9c: consonant + virama +
@@ -186,9 +233,67 @@ anchor moves it (measuring happens there); a pre-draw measuring phase would move
 
 **Pointer.** Mouse: click places the caret, Shift-click extends, drag selects with auto-scroll
 past an edge, double click selects a word, triple click a line, Alt-drag makes one range per line.
-Touch: a tap places the caret; a long press selects a word (handles are M3b); a drag scrolls and
-never selects. The pointer node sits inside `Modifier.scrollable` and consumes only what is a
-selection, so the scrollable normalizes wheel notches, tracks velocity and runs flings.
+The pointer node sits inside `Modifier.scrollable` and consumes only what is a selection, so the
+scrollable normalizes wheel notches, tracks velocity and runs flings.
+
+## The touch model
+
+- **Tap:** the caret, the soft keyboard, and one caret handle (a drop under the caret, dragged to
+  move it). A tap inside a selection that has handles keeps it and toggles the menu; elsewhere it
+  collapses it.
+- **Double tap:** the first tap places the caret AT ONCE (a single tap never waits for a second);
+  a second within the double-tap timeout upgrades it to the word under the finger (the word rules of
+  `TextBoundaries`, as double-click), with both handles and the menu; a third selects the line.
+- **Long press:** selects the word and shows two teardrop handles in `EditorTheme.selectionHandle`;
+  keep the finger down and drag to extend by words; the menu appears on release. Where there is no
+  word (an empty line, past a line's end, below the last line) it places the caret with its handle
+  and the menu (Paste, Select All): the "paste here" gesture.
+- **Handles:** drag one end (the other stays; snapped to caret positions, auto-scrolling at an edge);
+  touch targets are 48 dp. A handle hangs below its tip: a finger ABOVE the tip is on the text row and
+  is text, never the handle (a slow second tap on a word used to grab the caret handle). The handles
+  follow the selection through scrolling and edits, and hide on typing, a mouse click, a keyboard
+  selection or a blur. Android shows its magnifier while an end is dragged; iOS has none (Compose
+  offers no loupe there and ours is cut).
+- **A finger drag** scrolls and never selects; a **pinch** zooms (below).
+
+## The selection menu
+
+Cut, Copy, Paste, Select All, from `DefaultCommands`, near the selection (or the caret). Cut and Copy
+when something is selected, Paste only when the clipboard has text, Select All unless everything is
+selected; read-only offers only Copy and Select All. It hides while a handle is dragged or the view
+scrolls (for `EditorMenu.SCROLL_SETTLE_MILLIS`) and comes back after; typing or a new caret hides it.
+- **Android and iOS use the platform's toolbar** (`LocalTextToolbar`: Android's floating action
+  mode, iOS's `UIEditMenuInteraction`); the rect passed is padded past the handles (iOS put the menu
+  below the rect, over them). **Desktop and web draw their own** popup (Compose's toolbar there is not
+  a touch menu).
+- ⚠️ **Deciding to show Paste never reads the clipboard.** `EditorClipboard.hasText()` must not read:
+  on iOS a read of `UIPasteboard.string` shows the paste permission prompt (and Compose's
+  `ClipboardManager.hasText()` IS such a read), so iOS asks `UIPasteboard.hasStrings`. The clipboard
+  is read only when Paste is chosen. On the web Compose's clipboard reads nothing: the menu uses the
+  async Clipboard API; the keys use the browser's own copy/cut/paste events.
+
+## Zoom
+
+`Mod +` / `Mod −` / `Mod 0` (also the number pad's) step the font size one point, 10 to 24
+(`EditorZoom`), and a two-finger pinch scales it continuously. The line at the top stays at the top
+(anchored to it, a fraction of a line kept). `EditorView.fontSize` (null: the theme's size) is the
+state; `Editor(onFontSize = …)` hears every change (a pinch once the fingers lift) so the host can
+keep it per app.
+
+## Accessibility
+
+One editable text element, never the whole document: the visible lines plus the caret's line
+(`AccessibleText` maps offsets both ways; a line over 2,000 units is exposed around the caret).
+The selection is exposed and settable (move by character or word, select), typing at the caret,
+copy/cut/paste and click actions, `Editor(label = …)` as the content description, and a polite live
+region says the line a caret move lands on. Line numbers are drawn, never exposed.
+- The text node is its own layout node on the Canvas, not the scroll node: sharing a node with
+  `scrollable` made macOS show an `AXScrollArea` without text. With `SetText` it is an
+  **`AXTextField`** whose value is the exposed lines (checked in the running desktop sample's AX tree).
+- **On the web** the browser's focused TEXTAREA is always in the accessibility tree (Chrome refuses
+  `aria-hidden` on a focused element), so it IS the editor's one text box: labelled with the editor's
+  label, holding the lines around the caret with its selection on the editor's caret; the surface
+  exposes no second one there.
 
 ## Performance (spec §6.6)
 
@@ -206,18 +311,51 @@ Chrome by the sample's in-app benchmark (`-Psample.bench=true`, `:editor-sample:
 On a 60 Hz display a key event waits up to one frame for the next vsync; the edit is always painted
 in the next frame. The web cold start is asserted by `:editor-sample:webColdStartTest`.
 
+## The device pass (M3b)
+
+Ahmet on his devices, with the sample (`:editor-sample`: Android `dev.supermux.editor.sample`, iOS
+`iosApp/`, desktop, web):
+
+| Device | What he reported | Result |
+|---|---|---|
+| Galaxy Fold (Android 16) | the Android pass; the caret vanished after switching tabs a few times (typing still worked); asked for double tap and auto-closing brackets | done: the caret fix (the surface carries its focus to a new view), double/triple tap and the basics plugin added |
+| iPhone 15 Pro and iPad Air M2 (iOS 26) | curly quotes in code; Shift-Tab did not outdent; a long press on an empty line or a line's end crashed the iPhone (the iPad did not) | all three confirmed fixed by him: the Smart Punctuation shim, Shift-Tab / indentLess, the pointer shield |
+| Mac desktop sample, web sample | in use throughout the pass | no open report from him |
+
+Only what he reported is listed: items of the M3b checklist he did not report on are in the gaps below.
+
+The automated pass on the Mac (`mac:~/work/editor-pass/`, then the checks kept in the repo):
+
+| Surface | Check | Result |
+|---|---|---|
+| iOS Simulator | `device-checks/ios-sim.sh` (Maestro, console captured): a tap starts the input session and the keys type; Return, Backspace; `"` types U+0022 and pairs; the shim's traits all `.no`; one labelled text element; long presses (a word, an empty line, a line end, the caret, keyboard up) give the menu with no Kotlin exception | pass |
+| Android emulator (API 35) | `device-checks/android-keyboard.sh`: no keyboard before a tap or on a scroll, a tap shows it (`mInputShown`), a second tap brings it back; Turkish, Return, Backspace through the IME (ADB keyboard); handles, menu, pinch, fling, zoom keys, TalkBack (the controller's pass) | pass (Back-dismiss once flaky at load 100+) |
+| Chrome (headless, CDP) | `:editor-sample:webInputTest`: TEXTAREA on focus, `Input.insertText` / IME at the caret after the editor moved it, the paste event, Mod-V, one labelled text box | pass |
+| Desktop JVM | the UI harness (touch, menu, zoom, semantics, document switch, the field's pointer spy) | pass |
+
+**Known gaps.** Dictation and Japanese kana→kanji composition are not yet confirmed on the devices
+with the final build (they passed M0's probe, and web IME is covered over CDP). The web's
+hardware-keyboard heuristic is a heuristic (override: `EditorView.webKeyboard`). On Android and iOS
+a focus that starts with a trackpad or mouse click starts no input session (IME and dictation then
+need a tap); not yet checked on the iPad with its trackpad. Backgrounding and resuming the app was
+not tested for the caret bug (only document switching). Device frame times (120 Hz iPad, typing on
+the Fold) were not measured; that moves to M3c. The Smart Punctuation shim depends on Compose
+internals (above): re-run `ios-sim.sh` on every Compose upgrade. Undo is M4's history plugin.
+
 ## Tests
 
 `./gradlew :editor-compose:jvmTest` (on the Mac: see `scripts/editor/mac-sync.sh`): the pure logic
-in `commonTest` (height map, commands, grapheme and word rules, the field sync, the web fast-typing
-decision; also run by `iosSimulatorArm64Test`) and the real composable in the desktop UI harness
-(`jvmTest`: geometry against a real TextMeasurer, painting and pixels, scrolling, pointer gestures,
-typing through the real field). Compose's harness cannot open an IME composing region, so
-composition is tested at `FieldSync`; real-device IME checks are M3b's.
+in `commonTest` (height map, commands, grapheme and word rules, the field sync, the web key-path
+decision, the accessible text; also run by `iosSimulatorArm64Test`) and the real composable in the
+desktop UI harness (`jvmTest`: geometry against a real TextMeasurer, painting and pixels, scrolling,
+pointer gestures, touch handles, the menu with a fake platform toolbar, zoom, the semantics tree,
+document switching, typing through the real field). Compose's harness cannot open an IME composing
+region, so composition is tested at `FieldSync`; the device checks live in
+`apps/editor-sample/device-checks/` and `:editor-sample:webInputTest`. Counts at the end of M3b:
+JVM 183, iOS simulator 74.
 
 ## Not here yet
 
-M3b: selection handles, the copy/paste menu (the commands exist: `DefaultCommands.copy/cut/paste`),
-pinch and Mod +/-/0 zoom, accessibility semantics, the device IME
-pass. M3c: gutter markers, block widgets (`HeightMap.setBlockHeight` exists), inline widgets,
-`Replace` (folds), panels, linked views, device performance (120 Hz iPad).
+M3c: gutter markers, block widgets (`HeightMap.setBlockHeight` exists), inline widgets, `Replace`
+(folds), panels, linked views, device frame times (120 Hz iPad), moving scroll writes out of draw.
+An accessory bar for soft keyboards (Tab / Shift-Tab, arrows).
