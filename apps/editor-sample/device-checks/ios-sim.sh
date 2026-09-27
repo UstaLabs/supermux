@@ -23,7 +23,11 @@ flow() { # name, yaml
   if maestro --udid "$U" test --no-reinstall-driver "$OUT/$1.yaml" > "$OUT/$1.log" 2>&1; then echo "PASS $1"; else echo "FAIL $1 (see $OUT/$1.log)"; FAILS=$((FAILS+1)); fi
   xcrun simctl io "$U" screenshot "$OUT/$1.png" >/dev/null 2>&1
 }
-flow launch "- launchApp: { clearState: true, stopApp: true }
+# The app runs with its console captured: an uncaught Kotlin exception fails the check.
+xcrun simctl terminate "$U" dev.supermux.editor.sample 2>/dev/null
+( xcrun simctl launch --console-pty --terminate-running-process "$U" dev.supermux.editor.sample > "$OUT/console.log" 2>&1 & )
+sleep 5
+flow launch "- waitForAnimationToEnd
 - waitForAnimationToEnd
 - extendedWaitUntil: { visible: \"HostStore.kt (2k lines)\", timeout: 60000 }
 - swipe: { start: \"380,78\", end: \"30,78\", duration: 500 }
@@ -93,7 +97,25 @@ flow long-press-empty-line "- tapOn: { point: \"200,720\" }
 - waitForAnimationToEnd
 - extendedWaitUntil: { visible: \"Paste\", timeout: 5000 }
 - assertNotVisible: \"Allow Paste\""
+# The iPhone crash: with the keyboard up, a long press on an empty line, just past a line's end and
+# right on the caret reached the hidden field's own touch selection (Compose's moveCaretByLongPress
+# with -1 threw). Now the editor handles each: a caret and Paste, no exception.
+flow long-press-empty-line-kb "- tapOn: { point: \"200,121\" }
+- waitForAnimationToEnd
+- longPressOn: { point: \"200,121\" }
+- waitForAnimationToEnd
+- extendedWaitUntil: { visible: \"Paste\", timeout: 5000 }"
+flow long-press-line-end-kb "- tapOn: { point: \"380,103\" }
+- waitForAnimationToEnd
+- longPressOn: { point: \"385,103\" }
+- waitForAnimationToEnd"
+flow long-press-on-caret "- tapOn: { point: \"120,138\" }
+- waitForAnimationToEnd
+- longPressOn: { point: \"120,138\" }
+- waitForAnimationToEnd"
+sleep 2
 if xcrun simctl spawn "$U" launchctl list | grep -q editor.sample; then echo "PASS still running after the long presses"; else echo "FAIL the app is gone"; FAILS=$((FAILS+1)); fi
+if grep -q "Uncaught Kotlin exception" "$OUT/console.log"; then echo "FAIL an uncaught Kotlin exception:"; grep -A4 "Uncaught Kotlin exception" "$OUT/console.log" | head -8; FAILS=$((FAILS+1)); else echo "PASS no uncaught Kotlin exception in the console"; fi
 echo "INFO screenshots in $OUT (long-press-menu.png: the menu must not cover the handles)"
 echo "ios simulator checks: $FAILS failed"
 exit $FAILS

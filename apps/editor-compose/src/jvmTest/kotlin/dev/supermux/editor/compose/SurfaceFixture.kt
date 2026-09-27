@@ -50,6 +50,7 @@ internal fun editorTest(
     onFontSize: (Float) -> Unit = {},
     exposeField: Boolean = true,
     inputOnAnyFocus: Boolean = true,
+    fieldPointerSpy: (() -> Unit)? = null,
     toolbar: androidx.compose.ui.platform.TextToolbar? = null,
     body: ComposeUiTest.(SurfaceFixture) -> Unit,
 ) = runComposeUiTest {
@@ -66,6 +67,7 @@ internal fun editorTest(
             LocalEditorPlatformMenu provides platformMenu,
             LocalEditorExposeField provides exposeField,
             LocalEditorInputOnAnyFocus provides inputOnAnyFocus,
+            LocalEditorFieldPointerSpy provides fieldPointerSpy,
             androidx.compose.ui.platform.LocalTextToolbar provides (toolbar ?: androidx.compose.ui.platform.LocalTextToolbar.current),
         ) {
             val base = EditorTheme.default()

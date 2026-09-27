@@ -226,6 +226,12 @@ fun Editor(
             paintHook?.invoke()
         }
         EditorInputField(controller, readOnly)
+        // A pointer shield above the hidden field: the topmost hit sibling takes a pointer, so the
+        // field (at the caret, its touch target expanded to 48 dp) never gets one. Its own touch
+        // selection crashed on iOS (a long press on an empty line: Compose's moveCaretByLongPress
+        // with offset -1) and moved its selection behind the editor's back everywhere. The shield
+        // consumes nothing: the surface's own gestures (this Box's pointerInput) see every event.
+        Box(Modifier.matchParentSize().pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial) } })
         EditorSelectionMenu(controller, readOnly, clipboard, shownTheme)
         LineAnnouncement(controller.announcer)
     }

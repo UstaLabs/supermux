@@ -16,6 +16,7 @@ import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
@@ -696,7 +697,8 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
         modifier = Modifier
             .offset { controller.caretRectOnScreen(controller.view.state.selection.main.head).let { IntOffset(it.left.toInt(), it.top.toInt()) } }
             .size(1.dp)
-            .focusRequester(controller.focusRequester),
+            .focusRequester(controller.focusRequester)
+            .then(LocalEditorFieldPointerSpy.current?.let { spy -> Modifier.pointerInput(spy) { awaitPointerEventScope { while (true) { awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial); spy() } } } } ?: Modifier),
         readOnly = readOnly,
         inputTransformation = transformation,
         keyboardOptions = KeyboardOptions(
@@ -713,3 +715,6 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
     )
     }
 }
+
+/** Tests: called for every pointer event that reaches the hidden field (it must never be called). */
+internal val LocalEditorFieldPointerSpy = androidx.compose.runtime.staticCompositionLocalOf<(() -> Unit)?> { null }
