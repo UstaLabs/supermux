@@ -115,3 +115,19 @@ test("an index invalidated while it is being built is not stored", async () => {
   // Had the invalidated build been stored, this would reuse it (fresh for 30 s) and miss the file.
   expect((await idx.query(root, "okapi", 50)).length).toBe(1)
 })
+
+test("evicting an idle scope also forgets its invalidation epoch", async () => {
+  const a = realpathSync(mkdtempSync(join(tmpdir(), "fs-ep-")))
+  const b = realpathSync(mkdtempSync(join(tmpdir(), "fs-ep-")))
+  writeFileSync(join(a, "one.txt"), "")
+  let now = 1_000
+  const idx = new SearchIndexes(new RepoInfoCache(), { now: () => now })
+  await idx.query(a, "one", 10)
+  idx.invalidateContaining(a)
+  await idx.query(a, "one", 10)
+  idx.invalidateContaining(a)
+  expect((idx as unknown as { epoch: Map<string, number> }).epoch.has(a)).toBe(true)
+  now += 11 * 60_000
+  await idx.query(b, "x", 10)
+  expect((idx as unknown as { epoch: Map<string, number> }).epoch.has(a)).toBe(false)
+})

@@ -107,16 +107,76 @@ test("parseStatusZ reads ordinary, renamed, unmerged and untracked records", () 
 
 test("a cached 'no repo' answer expires, so a later git init is noticed; a found root is kept", async () => {
   const plain = realpathSync(mkdtempSync(join(tmpdir(), "fs-plain-")))
-  const c = new RepoInfoCache({ noRepoTtlMs: 50 })
+  const c = new RepoInfoCache({ noRepoTtlMs: 600 })
   expect(await c.repoFor(plain)).toBeNull()
   git(plain, "init", "-q")
   expect(await c.repoFor(plain)).toBeNull() // still cached
   expect(c.knownRepoFor(plain)).toBeNull()
-  await new Promise((r) => setTimeout(r, 80))
+  await new Promise((r) => setTimeout(r, 700))
   expect(c.knownRepoFor(plain)).toBeUndefined()
   expect(await c.repoFor(plain)).toBe(plain)
-  await new Promise((r) => setTimeout(r, 80))
+  await new Promise((r) => setTimeout(r, 700))
   expect(c.knownRepoFor(plain)).toBe(plain)
   c.forgetRootOf(plain)
   expect(c.knownRepoFor(plain)).toBeUndefined()
+})
+
+test("reading git state never touches the git dir (no index.lock churn a git-dir watcher would see)", async () => {
+  const root = repoFixture()
+  const { watch } = await import("fs")
+  const events: string[] = []
+  const w = watch(join(root, ".git"), (t, f) => events.push(`${t}:${f}`))
+  const r = new RepoInfoCache()
+  await r.state(root)
+  r.invalidate(root)
+  await r.state(root)
+  await new Promise((res) => setTimeout(res, 150))
+  w.close()
+  expect(events).toEqual([])
+})
+
+test("a state invalidated while its git read is in flight is read again", async () => {
+  const root = repoFixture()
+  const r = new RepoInfoCache()
+  const inner = r as unknown as { load: (root: string) => Promise<unknown> }
+  const orig = inner.load.bind(r)
+  let release: (() => void) | undefined
+  let calls = 0
+  inner.load = async (rt: string) => {
+    const st = await orig(rt)
+    if (++calls === 1) await new Promise<void>((res) => { release = res })
+    return st
+  }
+  const first = r.state(root)
+  while (!release) await new Promise((res) => setTimeout(res, 5))
+  writeFileSync(join(root, "late.ts"), "l")
+  r.invalidate(root)
+  const second = r.state(root)
+  release()
+  await first
+  expect((await second).status.get("late.ts")).toBe("?")
+})
+
+test("the folder → repo map is bounded: the oldest answers are dropped", async () => {
+  const root = repoFixture()
+  const r = new RepoInfoCache({ maxRoots: 2 })
+  mkdirSync(join(root, "x"))
+  await r.repoFor(join(root, "src"))
+  await r.repoFor(join(root, "x"))
+  await r.repoFor(root)
+  expect(r.knownRepoFor(join(root, "src"))).toBeUndefined()
+  expect(r.knownRepoFor(join(root, "x"))).toBe(root)
+  expect(r.knownRepoFor(root)).toBe(root)
+})
+
+test("callers arriving while a refresh is in flight get the refreshed state, not the previous one", async () => {
+  const root = repoFixture()
+  const r = new RepoInfoCache()
+  await r.state(root)
+  writeFileSync(join(root, "later.ts"), "l")
+  r.invalidate(root)
+  const a = r.state(root)
+  const b = r.state(root) // previous state is younger than the TTL, but a refresh is already running
+  expect((await b).status.get("later.ts")).toBe("?")
+  await a
 })

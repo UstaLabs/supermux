@@ -71,3 +71,60 @@ test("a throwing flush callback does not break later flushes", async () => {
   expect(calls).toBe(2)
   w.closeAll()
 })
+
+import { EventEmitter } from "events"
+import type { FSWatcher } from "fs"
+
+function fakeWatch() {
+  const listeners = new Map<string, (event: string, filename?: string | null) => void>()
+  const watchFn = (dir: string, listener: (event: string, filename?: string | null) => void) => {
+    listeners.set(dir, listener)
+    return Object.assign(new EventEmitter(), { close() {} }) as unknown as FSWatcher
+  }
+  return { listeners, watchFn }
+}
+
+test("a filter drops events by file name", async () => {
+  const { listeners, watchFn } = fakeWatch()
+  const flushed: string[] = []
+  const w = new DirWatchers((dir) => flushed.push(dir), {
+    debounceMs: 10, watchFn, filter: (_dir, name) => !name?.endsWith(".lock"),
+  })
+  w.watch("/g")
+  listeners.get("/g")!("rename", "index.lock")
+  listeners.get("/g")!("change", "index.lock")
+  await sleep(50)
+  expect(flushed).toEqual([])
+  listeners.get("/g")!("rename", "index")
+  await sleep(50)
+  expect(flushed).toEqual(["/g"])
+  w.closeAll()
+})
+
+test("an event without a file name (the folder itself went away) marks the watch dead", async () => {
+  const { listeners, watchFn } = fakeWatch()
+  const flushed: string[] = []
+  const w = new DirWatchers((dir) => flushed.push(dir), { debounceMs: 10, watchFn })
+  w.watch("/d")
+  listeners.get("/d")!("change", "a.txt")
+  expect(w.isDead("/d")).toBe(false)
+  listeners.get("/d")!("rename", undefined)
+  expect(w.isDead("/d")).toBe(true)
+  await sleep(50)
+  expect(flushed).toEqual(["/d"])
+  w.unwatch("/d"); w.watch("/d")
+  expect(w.isDead("/d")).toBe(false)
+  w.closeAll()
+})
+
+test("a watch that errored is dead", async () => {
+  let em: EventEmitter | undefined
+  const w = new DirWatchers(() => {}, {
+    debounceMs: 10,
+    watchFn: () => (em = Object.assign(new EventEmitter(), { close() {} })) as unknown as FSWatcher,
+  })
+  w.watch("/e")
+  em!.emit("error", new Error("gone"))
+  expect(w.isDead("/e")).toBe(true)
+  w.closeAll()
+})

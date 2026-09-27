@@ -14,6 +14,9 @@ export interface RepoState {
 interface Slot { state?: RepoState; loading?: Promise<RepoState>; stale: boolean }
 
 const GIT_TIMEOUT_MS = 5_000
+/** Read-only git calls must not take `index.lock` / refresh the index: a watcher on the git dir would
+ *  see that write, re-annotate, run git again, and loop forever. */
+export const GIT_READ = ["--no-optional-locks"] as const
 
 /**
  * Parse `git status --porcelain=v2 -z --untracked-files=all` into path → letter.
@@ -70,10 +73,24 @@ export class RepoInfoCache {
   private readonly rootOf = new Map<string, { root: string | null; at: number }>()
   private readonly ttlMs: number
   private readonly noRepoTtlMs: number
+  /** Number of git state reads performed (tests / debug). */
+  loadCount = 0
 
-  constructor(opts: { ttlMs?: number; noRepoTtlMs?: number } = {}) {
+  private readonly maxRoots: number
+
+  constructor(opts: { ttlMs?: number; noRepoTtlMs?: number; maxRoots?: number } = {}) {
     this.ttlMs = opts.ttlMs ?? 2_000
     this.noRepoTtlMs = opts.noRepoTtlMs ?? 30_000
+    this.maxRoots = opts.maxRoots ?? 10_000
+  }
+
+  private setRoot(dirReal: string, root: string | null): void {
+    this.rootOf.delete(dirReal)
+    this.rootOf.set(dirReal, { root, at: Date.now() })
+    for (const k of this.rootOf.keys()) {
+      if (this.rootOf.size <= this.maxRoots) break
+      this.rootOf.delete(k) // insertion order: oldest answer first
+    }
   }
 
   private cachedRoot(dirReal: string): string | null | undefined {
@@ -103,7 +120,7 @@ export class RepoInfoCache {
         d = parent
       }
     }
-    this.rootOf.set(dirReal, { root: found, at: Date.now() })
+    this.setRoot(dirReal, found)
     return found
   }
 
@@ -125,9 +142,14 @@ export class RepoInfoCache {
   async state(root: string): Promise<RepoState> {
     let slot = this.slots.get(root)
     if (!slot) { slot = { stale: true }; this.slots.set(root, slot) }
+    // A read in flight wins over the previous state: it was started because that state went stale.
+    if (slot.loading) {
+      // Invalidated after that read started: it may predate the change, so read once more after it.
+      if (!slot.stale) return slot.loading
+      return slot.loading.catch(() => {}).then(() => this.state(root))
+    }
     const fresh = slot.state && !slot.stale && Date.now() - slot.state.loadedAt < this.ttlMs
     if (fresh) return slot.state!
-    if (slot.loading) return slot.loading
     const s = slot
     s.stale = false
     s.loading = this.load(root).then(
@@ -138,9 +160,10 @@ export class RepoInfoCache {
   }
 
   private async load(root: string): Promise<RepoState> {
+    this.loadCount++
     const [ign, stat] = await Promise.all([
-      gitAsync(root, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], { timeoutMs: GIT_TIMEOUT_MS, trim: false }).catch(() => ""),
-      gitAsync(root, ["status", "--porcelain=v2", "-z", "--untracked-files=all"], { timeoutMs: GIT_TIMEOUT_MS, trim: false }).catch(() => ""),
+      gitAsync(root, [...GIT_READ, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], { timeoutMs: GIT_TIMEOUT_MS, trim: false }).catch(() => ""),
+      gitAsync(root, [...GIT_READ, "status", "--porcelain=v2", "-z", "--untracked-files=all"], { timeoutMs: GIT_TIMEOUT_MS, trim: false }).catch(() => ""),
     ])
     const ignored = new Set<string>()
     for (const p of ign.split("\0")) if (p) ignored.add(p.endsWith("/") ? p.slice(0, -1) : p)

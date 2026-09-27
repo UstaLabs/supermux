@@ -1,16 +1,29 @@
 import { watch as fsWatch, type FSWatcher } from "fs"
+import { basename } from "path"
+
+export type WatchListener = (event: string, filename?: string | null) => void
 
 export interface DirWatchersOpts {
   debounceMs?: number
   maxWaitMs?: number
   pollMs?: number
-  watchFn?: (dir: string, listener: () => void) => FSWatcher
+  watchFn?: (dir: string, listener: WatchListener) => FSWatcher
   onFallback?: (dir: string) => void
+  /** Only events whose file name passes are acted on. Events without a name always pass. */
+  filter?: (dir: string, filename: string) => boolean
 }
 
-interface Slot { watcher?: FSWatcher; poll?: ReturnType<typeof setInterval>; timer?: ReturnType<typeof setTimeout>; firstAt?: number }
+interface Slot {
+  watcher?: FSWatcher
+  poll?: ReturnType<typeof setInterval>
+  timer?: ReturnType<typeof setTimeout>
+  firstAt?: number
+  /** The watch can no longer be trusted (the folder itself was removed/replaced, or the watch errored). */
+  dead?: boolean
+}
 
-const defaultWatch = (dir: string, listener: () => void) => fsWatch(dir, { persistent: false }, listener)
+const defaultWatch = (dir: string, listener: WatchListener) =>
+  fsWatch(dir, { persistent: false }, (event, filename) => listener(event, filename == null ? filename : String(filename)))
 
 /** One NON-recursive watch per folder. Events are debounced into `onFlush(dir)`. */
 export class DirWatchers {
@@ -29,17 +42,20 @@ export class DirWatchers {
 
   get size(): number { return this.slots.size }
   has(dir: string): boolean { return this.slots.has(dir) }
+  /** True once the watch on `dir` stopped being reliable; `unwatch` + `watch` gives a fresh one. */
+  isDead(dir: string): boolean { return this.slots.get(dir)?.dead === true }
 
   watch(dir: string): void {
     if (this.slots.has(dir)) return
     const slot: Slot = {}
     this.slots.set(dir, slot)
     try {
-      slot.watcher = this.watchFn(dir, () => this.schedule(dir))
+      slot.watcher = this.watchFn(dir, (event, filename) => this.onEvent(dir, slot, event, filename))
       slot.watcher.on?.("error", () => {
         // The folder vanished or the watch broke: flush (the reload reports gone) and stop.
         try { slot.watcher?.close() } catch {}
         slot.watcher = undefined
+        slot.dead = true
         this.schedule(dir)
       })
     } catch {
@@ -59,6 +75,16 @@ export class DirWatchers {
 
   closeAll(): void {
     for (const dir of [...this.slots.keys()]) this.unwatch(dir)
+  }
+
+  private onEvent(dir: string, slot: Slot, event: string, filename: string | null | undefined): void {
+    if (this.slots.get(dir) !== slot) return
+    // No name (Bun reports the watched folder's own deletion as `rename` + undefined), or the folder's
+    // own name: the watch is on an inode that may be gone. Inode numbers get reused (ext4), so this
+    // flag is the reliable signal for "re-watch".
+    if (!filename || (event === "rename" && filename === basename(dir))) slot.dead = true
+    else if (this.opts.filter && !this.opts.filter(dir, filename)) return
+    this.schedule(dir)
   }
 
   /** A throwing consumer must never take down the timers of every other folder. */

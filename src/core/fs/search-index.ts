@@ -1,7 +1,7 @@
 import { readdir } from "fs/promises"
 import { join, relative, sep } from "path"
 import { gitAsync } from "../git/exec"
-import type { RepoInfoCache } from "./repo-info"
+import { GIT_READ, type RepoInfoCache } from "./repo-info"
 import type { SearchHit } from "./types"
 
 const SKIP = new Set(["node_modules", ".git", "build", "dist", ".next", ".nuxt", "out", "target", ".gradle", "Pods"])
@@ -102,26 +102,45 @@ export class SearchIndexes {
   /** Bumped per scope by invalidation so a build already in flight does not store a stale index. */
   private readonly epoch = new Map<string, number>()
 
-  constructor(private readonly repo: RepoInfoCache) {}
+  /** Builds running per scope, including ones invalidation already detached from `building`. */
+  private readonly running = new Map<string, number>()
+  private readonly now: () => number
+
+  constructor(private readonly repo: RepoInfoCache, opts: { now?: () => number } = {}) {
+    this.now = opts.now ?? Date.now
+  }
 
   private async build(scope: string): Promise<Built> {
+    this.running.set(scope, (this.running.get(scope) ?? 0) + 1)
+    try {
+      return await this.buildNow(scope)
+    } finally {
+      const n = (this.running.get(scope) ?? 1) - 1
+      if (n > 0) this.running.set(scope, n)
+      else this.running.delete(scope)
+    }
+  }
+
+  private async buildNow(scope: string): Promise<Built> {
     const startEpoch = this.epoch.get(scope) ?? 0
     const root = await this.repo.repoFor(scope)
     let rels: Array<{ rel: string; dir: boolean }>
     if (root) {
-      const out = await gitAsync(scope, ["ls-files", "-co", "--exclude-standard", "-z"], { timeoutMs: 5_000, trim: false }).catch(() => null)
+      const out = await gitAsync(scope, [...GIT_READ, "ls-files", "-co", "--exclude-standard", "-z"], { timeoutMs: 5_000, trim: false }).catch(() => null)
       rels = out === null ? await walk(scope) : withDirs(out.split("\0").filter(Boolean))
     } else {
       rels = await walk(scope)
     }
-    const b: Built = { scope, rels, builtAt: Date.now(), lastUsed: Date.now() }
+    const b: Built = { scope, rels, builtAt: this.now(), lastUsed: this.now() }
     if ((this.epoch.get(scope) ?? 0) === startEpoch) this.built.set(scope, b)
     return b
   }
 
   private async get(scope: string): Promise<Built> {
-    const now = Date.now()
+    const now = this.now()
     for (const [k, v] of this.built) if (now - v.lastUsed > EVICT_AFTER_MS) this.built.delete(k)
+    // An epoch only guards builds in flight; once a scope has neither an index nor a build, drop it.
+    for (const k of this.epoch.keys()) if (!this.built.has(k) && !this.running.has(k)) this.epoch.delete(k)
     const b = this.built.get(scope)
     if (b && now - b.builtAt < REBUILD_AFTER_MS) { b.lastUsed = now; return b }
     const running = this.building.get(scope)

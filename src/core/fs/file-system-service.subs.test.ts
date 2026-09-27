@@ -4,6 +4,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { execFileSync } from "child_process"
+import { EventEmitter } from "events"
+import type { FSWatcher } from "fs"
 import { FileSystemService } from "./file-system-service"
 import type { FsFrame } from "./types"
 
@@ -14,7 +16,7 @@ function harness(extra: Partial<ConstructorParameters<typeof FileSystemService<s
   const frames: Array<{ sock: string; f: FsFrame }> = []
   const fss = new FileSystemService<string>({
     bootId: "b", emit: (sock, f) => frames.push({ sock, f }),
-    debounceMs: 30, graceMs: 50, ...extra,
+    debounceMs: 30, graceMs: 50, repoDebounceMs: 30, ...extra,
   })
   const waitFor = async (pred: (f: FsFrame, sock: string) => boolean, ms = 2_000) => {
     const end = Date.now() + ms
@@ -189,3 +191,143 @@ test("git init in a watched folder is noticed: entries get git status and the gi
   await waitFor((f) => f.type === "fs_dir" && "entries" in f && f.entries.some((e) => e.name === "a.txt" && e.git === "A"), 4_000)
   fss.close()
 })
+
+const entriesOf = (f: FsFrame) => (f.type === "fs_dir" && "entries" in f ? f.entries : undefined)
+
+test("an idle repo settles: git's own reads never feed the git-dir watcher (no status loop)", async () => {
+  const d = tmp()
+  execFileSync("git", ["init", "-q"], { cwd: d })
+  writeFileSync(join(d, "a.txt"), "a")
+  const { fss, waitFor } = harness()
+  await fss.subscribe("s1", d)
+  writeFileSync(join(d, "b.txt"), "b")
+  await waitFor((f) => !!entriesOf(f)?.some((e) => e.name === "b.txt"))
+  await sleep(600)
+  const settled = fss.gitFlushCount
+  const loads = fss.repo.loadCount
+  await sleep(2_000)
+  expect(fss.gitFlushCount).toBe(settled)
+  expect(fss.repo.loadCount).toBe(loads)
+  fss.close()
+}, 10_000)
+
+test("a socket dropped while its subscribe is resolving holds nothing and gets nothing", async () => {
+  const d = tmp()
+  const { fss, frames } = harness()
+  const p = fss.subscribe("s1", d)
+  fss.dropSocket("s1")
+  await p
+  await sleep(150)
+  expect(fss.watcherCount).toBe(0)
+  expect(fss.cache.isPinned(d)).toBe(false)
+  expect(frames).toEqual([])
+  fss.close()
+})
+
+test("a watch reporting the folder itself went away (no file name) is re-watched even when the inode is reused", async () => {
+  const d = tmp()
+  const calls: Array<{ dir: string; listener: (event: string, filename?: string | null) => void }> = []
+  const watchFn = (dir: string, listener: (event: string, filename?: string | null) => void) => {
+    calls.push({ dir, listener })
+    return Object.assign(new EventEmitter(), { close() {} }) as unknown as FSWatcher
+  }
+  const { fss, waitFor } = harness({ watchFn })
+  await fss.subscribe("s1", d)
+  await sleep(50)
+  calls[0]!.listener("rename", undefined) // the inode is the same: only the dead flag can tell
+  const end = Date.now() + 1_000
+  while (calls.filter((c) => c.dir === d).length < 2 && Date.now() < end) await sleep(10)
+  expect(calls.filter((c) => c.dir === d).length).toBe(2)
+  expect(fss.watcherCount).toBe(1)
+  writeFileSync(join(d, "x.txt"), "")
+  calls.at(-1)!.listener("rename", "x.txt")
+  await waitFor((f) => !!entriesOf(f)?.some((e) => e.name === "x.txt"))
+  fss.close()
+})
+
+test("changes across watched folders of one repo are coalesced into few git reads, and every folder ends right", async () => {
+  const d = tmp()
+  execFileSync("git", ["init", "-q"], { cwd: d })
+  const subs = [0, 1, 2, 3, 4].map((i) => join(d, `f${i}`))
+  for (const s of subs) mkdirSync(s)
+  const { fss } = harness({ repoDebounceMs: 150 })
+  await fss.subscribe("s1", d)
+  for (const s of subs) await fss.subscribe("s1", s)
+  await sleep(700)
+  const before = fss.repo.loadCount
+  for (let i = 0; i < 20; i++) writeFileSync(join(subs[i % 5]!, `n${i}.txt`), String(i))
+  await sleep(1_500)
+  expect(fss.repo.loadCount - before).toBeLessThanOrEqual(3)
+  for (const [i, s] of subs.entries()) {
+    const snap = await fss.list(s)
+    expect(snap.entries.map((e) => e.name).sort()).toEqual([0, 1, 2, 3].map((k) => `n${i + k * 5}.txt`).sort())
+    expect(snap.entries.every((e) => e.git === "?")).toBe(true)
+  }
+  const root = await fss.list(d)
+  expect(root.entries.filter((e) => e.name.startsWith("f")).every((e) => e.git === "*")).toBe(true)
+  fss.close()
+}, 10_000)
+
+test("an emit that throws for one socket neither starves the others nor rejects unhandled", async () => {
+  const d = tmp()
+  const rejections: unknown[] = []
+  const onRej = (e: unknown) => { rejections.push(e) }
+  process.on("unhandledRejection", onRej)
+  try {
+    const good: FsFrame[] = []
+    const fss = new FileSystemService<string>({
+      bootId: "b", debounceMs: 30, graceMs: 50, repoDebounceMs: 30,
+      emit: (sock, f) => { if (sock === "bad") throw new Error("socket closed"); good.push(f) },
+    })
+    await fss.subscribe("bad", d)
+    await fss.subscribe("good", d)
+    writeFileSync(join(d, "n.txt"), "")
+    const end = Date.now() + 2_000
+    while (!good.some((f) => entriesOf(f)?.some((e) => e.name === "n.txt")) && Date.now() < end) await sleep(10)
+    expect(good.some((f) => entriesOf(f)?.some((e) => e.name === "n.txt"))).toBe(true)
+    await sleep(100)
+    expect(rejections).toEqual([])
+    fss.close()
+  } finally {
+    process.off("unhandledRejection", onRej)
+  }
+})
+
+test("after close no watcher (folder or git dir) is started", async () => {
+  const d = tmp()
+  execFileSync("git", ["init", "-q"], { cwd: d })
+  const { fss } = harness()
+  const p = fss.subscribe("s1", d)
+  fss.close()
+  await p
+  await sleep(200)
+  expect(fss.watcherCount).toBe(0)
+  expect(fss.gitWatcherCount).toBe(0)
+
+  const e = tmp()
+  execFileSync("git", ["init", "-q"], { cwd: e })
+  const h = harness()
+  await h.fss.subscribe("s1", e) // folder watched; git dir watch still resolving
+  h.fss.close()
+  await sleep(300)
+  expect(h.fss.gitWatcherCount).toBe(0)
+})
+
+test("a git dir watch that died (.git removed) is re-established on the next folder flush", async () => {
+  const d = tmp()
+  execFileSync("git", ["init", "-q"], { cwd: d })
+  writeFileSync(join(d, "a.txt"), "a")
+  const { fss, waitFor } = harness()
+  await fss.subscribe("s1", d)
+  await waitFor((f) => !!entriesOf(f)?.some((e) => e.name === "a.txt" && e.git === "?"))
+  await sleep(200)
+  rmSync(join(d, ".git"), { recursive: true })
+  await waitFor((f) => !!entriesOf(f) && !entriesOf(f)!.some((e) => e.name === ".git"))
+  await sleep(200)
+  execFileSync("git", ["init", "-q"], { cwd: d })
+  await waitFor((f) => !!entriesOf(f)?.some((e) => e.name === ".git"))
+  await sleep(300)
+  execFileSync("git", ["add", "a.txt"], { cwd: d })
+  await waitFor((f) => !!entriesOf(f)?.some((e) => e.name === "a.txt" && e.git === "A"), 4_000)
+  fss.close()
+}, 10_000)
