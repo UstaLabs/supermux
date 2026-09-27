@@ -108,6 +108,13 @@ class EditorView(initial: EditorState) : CommandTarget {
      */
     var onKeyPath: ((key: String, path: KeyPath) -> Unit)? = null
 
+    /**
+     * A click or tap on a gutter marker column that no plugin's [gutterClickFacet] handler took:
+     * the column id, the 0-based line, and the marker there (null for an empty cell). A marker's
+     * accessibility action (its tooltip is its label) reports here too.
+     */
+    var onGutterClick: ((column: String, line: Int, marker: dev.supermux.editor.core.GutterMarker?) -> Unit)? = null
+
     /** Where copy and cut put text and paste takes it from; set by the surface (`Editor(clipboard = …)`). */
     internal var clipboard: EditorClipboard? = null
 

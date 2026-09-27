@@ -10,10 +10,21 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.drawText
 import dev.supermux.editor.core.Decoration
 import dev.supermux.editor.core.EditorState
+import dev.supermux.editor.core.GutterMarker
+import dev.supermux.editor.core.gutterMarkersFacet
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.Path
 import dev.supermux.editor.core.RangeSet
 import dev.supermux.editor.core.Ranged
 import dev.supermux.editor.core.SelectionRange
 import dev.supermux.editor.core.decorationsFacet
+
+/**
+ * A gutter marker as drawn: its [column] cell on [line]'s first row ([rect], surface pixels), the
+ * line's whole text height (a diff bar spans a wrapped line), and the theme's [style] (null: the
+ * theme draws nothing for its kind).
+ */
+internal class DrawnMarker(val column: String, val line: Int, val marker: GutterMarker, val rect: Rect, val textHeight: Float, val style: GutterMarkerStyle?)
 
 /** One text layout to draw, its top-left in surface pixels. */
 internal class DrawnText(val layout: TextLayoutResult, val topLeft: Offset, val color: Color = Color.Unspecified)
@@ -37,6 +48,8 @@ internal class SurfaceFrame(
     val handles: List<HandleSpot>,
     /** The main caret (the hidden field and its pointer shield sit there). */
     val caret: Rect,
+    /** The gutter markers on the visible lines. */
+    val markers: List<DrawnMarker> = emptyList(),
 ) {
     companion object {
         fun empty(size: Size, scrollX: Float, scrollY: Float, gutterWidth: Float, caret: Rect) = SurfaceFrame(
@@ -140,18 +153,31 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme)
     }
     // The gutter: right-aligned line numbers, the main cursor's line brighter.
     val numbers = ArrayList<DrawnText>()
-    if (gutterWidth > 0f) {
+    if (numbersRight > 0f) {
         val active = doc.lineIndexAt(state.selection.main.head)
         val cw = g.layouts.charWidthPx
         for (l in lines) {
             val n = numberLayout(l + 1)
             val color = if (l == active) theme.gutterActiveForeground else theme.gutterForeground
             val y = top(l) + (g.layouts.lineHeightPx - n.size.height) / 2
-            numbers += DrawnText(n, Offset(gutterWidth - cw - n.size.width, y), color)
+            numbers += DrawnText(n, Offset(numbersRight - cw - n.size.width, y), color)
+        }
+    }
+    // Marker columns: per line and column, the highest-precedence marker.
+    val markers = ArrayList<DrawnMarker>()
+    if (gutterColumns.isNotEmpty()) {
+        val columns = gutterColumns.associateBy { it.id }
+        val taken = HashSet<Pair<String, Int>>()
+        for (set in state.facet(gutterMarkersFacet)) for (r in set.between(viewStart, viewEnd)) {
+            val col = columns[r.value.column] ?: continue
+            val line = doc.lineIndexAt(r.from)
+            if (line !in lines || !taken.add(col.id to line)) continue
+            val t = top(line)
+            markers += DrawnMarker(col.id, line, r.value, Rect(col.x, t, col.x + col.width, t + g.layouts.lineHeightPx), g.textHeight(line), theme.gutterMarkers[r.value.kind])
         }
     }
     val spots = if (handles != TouchHandles.NONE) handleSpots() else emptyList()
-    return SurfaceFrame(size, lines, scrollX, scrollY, gutterWidth, current, backgrounds, selections, text, cursors, numbers, spots, caret)
+    return SurfaceFrame(size, lines, scrollX, scrollY, gutterWidth, current, backgrounds, selections, text, cursors, numbers, spots, caret, markers)
 }
 
 /**
@@ -176,7 +202,48 @@ internal fun DrawScope.drawFrame(frame: SurfaceFrame, theme: EditorTheme, focuse
     if (gutter > 0f) {
         drawRect(theme.gutterBackground, Offset.Zero, Size(gutter, size.height))
         for (n in frame.numbers) drawText(n.layout, color = n.color, topLeft = n.topLeft)
+        for (m in frame.markers) m.style?.let { drawMarker(m, it) }
     }
     // The touch handles, over everything (they hang below the text they mark).
     if (frame.handles.isNotEmpty()) drawHandles(frame.handles, theme.selectionHandle, density)
+}
+
+/** One marker in its cell: a bar the line's height, a dot, a speech bubble, a fold arrow. */
+private fun DrawScope.drawMarker(m: DrawnMarker, style: GutterMarkerStyle) {
+    val r = m.rect
+    val c = r.center
+    val unit = minOf(r.width, r.height)
+    when (style.shape) {
+        GutterMarkerShape.BAR -> {
+            val w = maxOf(2f, 3f * density).coerceAtMost(r.width)
+            drawRect(style.color, Offset(c.x - w / 2, r.top), Size(w, m.textHeight))
+        }
+        GutterMarkerShape.DOT -> drawCircle(style.color, radius = unit * 0.28f, center = c)
+        GutterMarkerShape.BUBBLE -> {
+            val w = unit * 0.8f
+            val h = unit * 0.58f
+            val left = c.x - w / 2
+            val top = c.y - h * 0.62f
+            drawRoundRect(style.color, Offset(left, top), Size(w, h), CornerRadius(h * 0.3f))
+            val tail = Path().apply {
+                moveTo(left + w * 0.22f, top + h - 1f)
+                lineTo(left + w * 0.22f, top + h + h * 0.38f)
+                lineTo(left + w * 0.5f, top + h - 1f)
+                close()
+            }
+            drawPath(tail, style.color)
+        }
+        GutterMarkerShape.OPEN, GutterMarkerShape.CLOSED -> {
+            val s = unit * 0.24f
+            val p = Path().apply {
+                if (style.shape == GutterMarkerShape.OPEN) {
+                    moveTo(c.x - s, c.y - s * 0.55f); lineTo(c.x + s, c.y - s * 0.55f); lineTo(c.x, c.y + s * 0.65f)
+                } else {
+                    moveTo(c.x - s * 0.55f, c.y - s); lineTo(c.x - s * 0.55f, c.y + s); lineTo(c.x + s * 0.65f, c.y)
+                }
+                close()
+            }
+            drawPath(p, style.color)
+        }
+    }
 }

@@ -106,3 +106,15 @@ class RangeSet<T> private constructor(internal val ranges: List<Ranged<T>>) : It
 
 /** Decorations from every plugin; the surface draws all of them, in precedence order. */
 val decorationsFacet: Facet<RangeSet<Decoration>, List<RangeSet<Decoration>>> = Facet.list("decorations")
+
+/**
+ * A plugin's mark in a gutter column, as DATA: put it at a line's start (zero length; a range marks
+ * the line it starts on). The surface draws one column per distinct [column] id (`diff`, `lint`,
+ * `comment`, `fold`), in precedence order, and its theme resolves [kind] to a shape and a colour
+ * (`diff-add`, `diff-remove`, `diff-change`, `lint-error`, `lint-warning`, `comment`, `fold-open`,
+ * `fold-closed`). [tooltip] is what a screen reader says for it.
+ */
+data class GutterMarker(val column: String, val kind: String, val tooltip: String? = null)
+
+/** Gutter markers from every plugin, highest precedence first. */
+val gutterMarkersFacet: Facet<RangeSet<GutterMarker>, List<RangeSet<GutterMarker>>> = Facet.list("gutterMarkers")

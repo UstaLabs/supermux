@@ -26,6 +26,18 @@ fun interface InputHandler {
 /** Every plugin's [InputHandler], highest precedence first; the first to return true wins. */
 val inputHandlerFacet: Facet<InputHandler, List<InputHandler>> = Facet.list("inputHandler")
 
+/**
+ * A plugin's say over a click or tap on a gutter marker column (the fold arrows, a comment bubble):
+ * [line] is 0-based, [marker] the highest-precedence marker of [column] there (null: an empty cell).
+ * Return true to take it; the host's [EditorView.onGutterClick] hears only the clicks no plugin took.
+ */
+fun interface GutterClickHandler {
+    fun click(target: CommandTarget, column: String, line: Int, marker: dev.supermux.editor.core.GutterMarker?): Boolean
+}
+
+/** Every plugin's [GutterClickHandler], highest precedence first; the first to return true wins. */
+val gutterClickFacet: Facet<GutterClickHandler, List<GutterClickHandler>> = Facet.list("gutterClick")
+
 /** Annotations the surface puts on the transactions it makes, for plugins (history, M4) to read. */
 object EditorAnnotations {
     /**

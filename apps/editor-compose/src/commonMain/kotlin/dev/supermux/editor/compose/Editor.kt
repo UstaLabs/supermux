@@ -10,6 +10,9 @@ import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.gestures.scrollable
@@ -49,6 +52,9 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
 import dev.supermux.editor.core.Transaction
+import dev.supermux.editor.core.EditorState
+import dev.supermux.editor.core.GutterMarker
+import dev.supermux.editor.core.gutterMarkersFacet
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
@@ -289,6 +295,9 @@ internal class SurfaceSlots(
 
 private enum class Slot { CANVAS, TEST, FIELD, SHIELD, OVERLAY }
 
+/** A gutter marker's accessibility node's slot. */
+internal data class MarkerSlot(val column: String, val line: Int, val marker: GutterMarker)
+
 /**
  * The surface's layout pass: [configure] (cheap when nothing changed), then
  * [EditorController.layoutFrame] (the scroll, the visible lines, the frame), then the children:
@@ -309,9 +318,18 @@ private fun surfaceMeasurePolicy(
     val field = subcompose(Slot.FIELD, slots.field).map { it.measure(Constraints()) }
     val shield = subcompose(Slot.SHIELD, slots.shield).map { it.measure(Constraints()) }
     val overlay = subcompose(Slot.OVERLAY, slots.overlay).map { it.measure(Constraints(maxWidth = w, maxHeight = h)) }
+    // A node per visible marker with a tooltip, for screen readers (it takes no pointer).
+    val markers = frame?.markers.orEmpty().mapNotNull { m ->
+        val key = MarkerSlot(m.column, m.line, m.marker)
+        if (m.marker.tooltip == null) return@mapNotNull null
+        val size = Constraints.fixed(m.rect.width.toInt().coerceAtLeast(1), m.rect.height.toInt().coerceAtLeast(1))
+        m to subcompose(key, c.markerNode(key)).map { it.measure(size) }
+    }
+    c.pruneMarkerNodes(markers.mapTo(HashSet()) { MarkerSlot(it.first.column, it.first.line, it.first.marker) })
     val caret = frame?.caret ?: Rect.Zero
     layout(w, h) {
         canvas.forEach { it.place(0, 0) }
+        for ((m, p) in markers) p.forEach { it.place(m.rect.left.toInt(), m.rect.top.toInt()) }
         test.forEach { it.place(0, 0) }
         // The field sits at the caret, where the platform anchors the keyboard's candidates.
         field.forEach { it.place(caret.left.toInt(), caret.top.toInt()) }
@@ -570,14 +588,14 @@ internal class EditorController(
     private fun relayout() {
         val theme = theme ?: return
         val charWidth = layouts.charWidthPx
-        gutterWidth = if (showLineNumbers) (digits(view.state.doc.lineCount) + 2) * charWidth else 0f
+        gutterWidth = gutterFor(theme, charWidth)
         textLeft = gutterWidth + charWidth / 2
         val wrapWidth = if (lineWrap && viewportSize.width > 0f) (viewportSize.width - textLeft - charWidth / 2).toInt() else null
         val before = layouts.lineHeightPx to layouts.charWidthPx
         layouts.configure(theme, density, wrapWidth, view.state.facet(tabSizeFacet))
         if (before != (layouts.lineHeightPx to layouts.charWidthPx)) {
             // The cell changed: the gutter and the wrap width depend on it.
-            gutterWidth = if (showLineNumbers) (digits(view.state.doc.lineCount) + 2) * layouts.charWidthPx else 0f
+            gutterWidth = gutterFor(theme, layouts.charWidthPx)
             textLeft = gutterWidth + layouts.charWidthPx / 2
             val w = if (lineWrap && viewportSize.width > 0f) (viewportSize.width - textLeft - layouts.charWidthPx / 2).toInt() else null
             layouts.configure(theme, density, w, view.state.facet(tabSizeFacet))
@@ -592,6 +610,98 @@ internal class EditorController(
             geometry = Geometry({ view.state }, heights, layouts)
             if (view.surface === this) view.geometry = geometry
         }
+    }
+
+    // ------------------------------------------------------------------ the gutter --
+
+    /** The gutter's marker columns, left to right after the line numbers (a test hook too). */
+    var gutterColumns: List<GutterColumn> = emptyList()
+        private set
+
+    /** Every marker column seen, with the precedence index of the set it first came from. */
+    private val knownColumns = LinkedHashMap<String, Int>()
+    private var columnOrder: List<String> = emptyList()
+    private var markerSets: List<dev.supermux.editor.core.RangeSet<GutterMarker>> = emptyList()
+
+    /** The gutter's width: the line numbers, then each marker column at its theme width. */
+    private fun gutterFor(theme: EditorTheme, cw: Float): Float {
+        var x = if (showLineNumbers) (digits(view.state.doc.lineCount) + 2) * cw else 0f
+        numbersRight = x
+        val cols = ArrayList<GutterColumn>(columnOrder.size)
+        for (id in columnOrder) {
+            val w = theme.gutterColumns[id]?.let { it.value * density.density } ?: cw
+            cols += GutterColumn(id, x, w)
+            x += w
+        }
+        gutterColumns = cols
+        return x
+    }
+
+    /** Where the line numbers' column ends (they are right-aligned a cell before it). */
+    var numbersRight = 0f
+        private set
+
+    /**
+     * Follow the markers' columns: one per distinct id, in precedence order (the index of the set it
+     * first came from), kept once seen so a lint dot coming and going never shifts the text.
+     * True when a column was added (the gutter is wider).
+     */
+    private fun followMarkerColumns(state: EditorState): Boolean {
+        val sets = state.facet(gutterMarkersFacet)
+        if (sets === markerSets) return false
+        val last = markerSets
+        markerSets = sets
+        var added = false
+        sets.forEachIndexed { i, set ->
+            if (i < last.size && last[i] === set) return@forEachIndexed
+            for (r in set) if (!knownColumns.containsKey(r.value.column)) { knownColumns[r.value.column] = i; added = true }
+        }
+        if (!added) return false
+        columnOrder = knownColumns.entries.withIndex().sortedWith(compareBy({ it.value.value }, { it.index })).map { it.value.key }
+        return true
+    }
+
+    /** What is under [p] (surface pixels) when it is a marker column's cell on a line's text row. */
+    fun gutterHit(p: androidx.compose.ui.geometry.Offset): GutterHit? {
+        val col = gutterColumns.firstOrNull { p.x >= it.x && p.x < it.x + it.width } ?: return null
+        val y = p.y + scroll.y
+        if (y < 0f || y >= heights.totalHeight) return null
+        val line = heights.lineAt(y)
+        val top = geometry.lineTop(line)
+        if (y < top || y >= top + geometry.textHeight(line)) return null
+        return GutterHit(col.id, line, markerAt(view.state, col.id, line))
+    }
+
+    /** The highest-precedence marker of [column] on [line]. */
+    fun markerAt(state: EditorState, column: String, line: Int): GutterMarker? {
+        val doc = state.doc
+        val from = doc.lineStart(line)
+        val to = if (line + 1 < doc.lineCount) doc.lineStart(line + 1) - 1 else doc.length
+        for (set in state.facet(gutterMarkersFacet)) for (r in set.between(from, to)) if (r.from >= from && r.value.column == column) return r.value
+        return null
+    }
+
+    private val markerNodes = HashMap<MarkerSlot, @Composable () -> Unit>()
+
+    /** A marker's accessibility node: its tooltip as its label, a click that reports it. Kept per slot, so scrolling recomposes nothing. */
+    fun markerNode(slot: MarkerSlot): @Composable () -> Unit = markerNodes.getOrPut(slot) {
+        {
+            Box(Modifier.fillMaxSize().semantics {
+                contentDescription = slot.marker.tooltip.orEmpty()
+                onClick(slot.marker.tooltip) { reportGutterClick(GutterHit(slot.column, slot.line, slot.marker)); true }
+            })
+        }
+    }
+
+    fun pruneMarkerNodes(keep: Set<MarkerSlot>) {
+        if (markerNodes.size > keep.size) markerNodes.keys.retainAll(keep)
+    }
+
+    /** A click or tap on a marker column: the plugins' handlers ([gutterClickFacet]) first, then the host's. */
+    fun reportGutterClick(hit: GutterHit) {
+        val view = view
+        for (h in view.state.facet(gutterClickFacet)) if (h.click(view, hit.column, hit.line, hit.marker)) return
+        view.onGutterClick?.invoke(hit.column, hit.line, hit.marker)
     }
 
     private var heightsKey: Pair<Float, Boolean>? = null
@@ -628,7 +738,8 @@ internal class EditorController(
             try {
                 val size = Size(width, height)
                 val d = digits(state.doc.lineCount)
-                if (size != lastSize || d != lastDigits) {
+                val columns = followMarkerColumns(state)
+                if (size != lastSize || d != lastDigits || columns) {
                     lastSize = size
                     lastDigits = d
                     viewportSize = size
@@ -695,6 +806,10 @@ internal class EditorController(
     }
 
     override fun onStateReplaced() {
+        knownColumns.clear()
+        columnOrder = emptyList()
+        markerSets = emptyList()
+        relayout()
         handles = TouchHandles.NONE
         menuShown = false
         geometry.clearPieceWidths()
@@ -802,6 +917,12 @@ internal class EditorController(
 
     private fun digits(lines: Int): Int = maxOf(2, lines.toString().length)
 }
+
+/** One marker column of the gutter: its [id] ([GutterMarker.column]), where it starts and its width, in pixels. */
+data class GutterColumn(val id: String, val x: Float, val width: Float)
+
+/** A marker column's cell under a pointer: the column, the 0-based line, the marker there (if any). */
+data class GutterHit(val column: String, val line: Int, val marker: GutterMarker?)
 
 /**
  * What one composed `Editor` knows about its input across the views it shows: its Compose focus and

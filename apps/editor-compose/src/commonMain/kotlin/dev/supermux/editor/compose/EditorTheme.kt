@@ -10,6 +10,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import dev.supermux.editor.core.GutterMarker
 
 /**
  * Everything the surface paints with. Plugins never see this: they describe text with semantic
@@ -42,6 +45,13 @@ data class EditorTheme(
     val gutterActiveForeground: Color = foreground,
     /** The touch selection handles (the theme's accent, like the caret, by default). */
     val selectionHandle: Color = cursor,
+    /**
+     * Each gutter marker column's width, by [GutterMarker.column] id; a column not listed is one
+     * cell wide. The line numbers are a built-in column of their own, left of these.
+     */
+    val gutterColumns: Map<String, Dp> = DEFAULT_GUTTER_COLUMNS,
+    /** How each marker kind ([GutterMarker.kind]) is drawn; a kind not listed draws nothing. */
+    val gutterMarkers: Map<String, GutterMarkerStyle> = emptyMap(),
 ) {
     /** The style of mark class [cls], or null when the theme does not draw it. */
     fun styleOf(cls: String): SpanStyle? = tokens[cls] ?: classStyles[cls]
@@ -49,6 +59,21 @@ data class EditorTheme(
     companion object {
         /** The class the surface puts on text an IME is still composing (an underline). */
         const val COMPOSITION_CLASS = "ime-composition"
+
+        /** The M4 plugins' columns: diff bars, lint dots, comment bubbles, fold arrows. */
+        val DEFAULT_GUTTER_COLUMNS: Map<String, Dp> = mapOf("diff" to 6.dp, "lint" to 12.dp, "comment" to 16.dp, "fold" to 14.dp)
+
+        /** Marker kinds drawn by [dark] and [light], with the diff, lint and comment accents given. */
+        fun markerStyles(add: Color, remove: Color, change: Color, error: Color, warning: Color, comment: Color, fold: Color): Map<String, GutterMarkerStyle> = mapOf(
+            "diff-add" to GutterMarkerStyle(add, GutterMarkerShape.BAR),
+            "diff-remove" to GutterMarkerStyle(remove, GutterMarkerShape.BAR),
+            "diff-change" to GutterMarkerStyle(change, GutterMarkerShape.BAR),
+            "lint-error" to GutterMarkerStyle(error, GutterMarkerShape.DOT),
+            "lint-warning" to GutterMarkerStyle(warning, GutterMarkerShape.DOT),
+            "comment" to GutterMarkerStyle(comment, GutterMarkerShape.BUBBLE),
+            "fold-open" to GutterMarkerStyle(fold, GutterMarkerShape.OPEN),
+            "fold-closed" to GutterMarkerStyle(fold, GutterMarkerShape.CLOSED),
+        )
 
         /** Tuned to supermux's dark palette: its near-black code tone, the teal accent, One Dark tokens. */
         fun dark(font: FontFamily): EditorTheme = EditorTheme(
@@ -60,6 +85,10 @@ data class EditorTheme(
             gutterForeground = Color(0xFF5E6359),
             gutterBackground = Color(0xFF0A0B09),
             gutterActiveForeground = Color(0xFFB9BFB3),
+            gutterMarkers = markerStyles(
+                add = Color(0xFF6BBF59), remove = Color(0xFFE06C75), change = Color(0xFF61AFEF),
+                error = Color(0xFFE06C75), warning = Color(0xFFE5C07B), comment = Color(0xFF4BBAA7), fold = Color(0xFF8A9084),
+            ),
             tokens = tokenStyles(
                 keyword = Color(0xFFC678DD), string = Color(0xFF98C379), special = Color(0xFF56B6C2),
                 number = Color(0xFFD19A66), comment = Color(0xFF7F848E), function = Color(0xFF5CC8B4),
@@ -80,6 +109,10 @@ data class EditorTheme(
             gutterForeground = Color(0xFF9A9E94),
             gutterBackground = Color(0xFFFEFEFB),
             gutterActiveForeground = Color(0xFF3C4038),
+            gutterMarkers = markerStyles(
+                add = Color(0xFF2E9A3E), remove = Color(0xFFD13438), change = Color(0xFF2F6FD6),
+                error = Color(0xFFD13438), warning = Color(0xFFB88600), comment = Color(0xFF007368), fold = Color(0xFF6E7268),
+            ),
             tokens = tokenStyles(
                 keyword = Color(0xFFA626A4), string = Color(0xFF50A14F), special = Color(0xFF0184BC),
                 number = Color(0xFF986801), comment = Color(0xFF8A8F87), function = Color(0xFF00796B),
@@ -134,4 +167,22 @@ data class EditorTheme(
             "tok-diff-minus" to SpanStyle(color = red),
         )
     }
+}
+
+/** How a gutter marker kind is drawn: its [shape] in its [color]. */
+@Immutable
+data class GutterMarkerStyle(val color: Color, val shape: GutterMarkerShape)
+
+/** The shapes a gutter marker can take (drawn, not glyphs: the web has no emoji font). */
+enum class GutterMarkerShape {
+    /** A thin bar the height of the line (diff). */
+    BAR,
+    /** A dot in the line's first row (lint). */
+    DOT,
+    /** A speech bubble (a review comment). */
+    BUBBLE,
+    /** A downward arrow (a fold that can be folded). */
+    OPEN,
+    /** A rightward arrow (a folded region). */
+    CLOSED,
 }
