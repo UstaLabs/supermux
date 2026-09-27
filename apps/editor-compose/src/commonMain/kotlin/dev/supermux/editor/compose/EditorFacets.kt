@@ -118,6 +118,15 @@ object EditorAnnotations {
      */
     val imeJoinPrevious: dev.supermux.editor.core.AnnotationType<Boolean> = dev.supermux.editor.core.AnnotationType("imeJoinPrevious")
 
+    /**
+     * On a transaction from ANOTHER participant (a collaborator's edit, an agent's), whatever its
+     * userEvent: the editor's local-input rules (atomic ranges) leave it alone. For M4/M5's sync.
+     */
+    val remote: dev.supermux.editor.core.AnnotationType<Boolean> = dev.supermux.editor.core.AnnotationType("remote")
+
+    /** On the hidden field's own edits (the view checks they never insert its U+FFFC placeholder). */
+    internal val fieldInput: dev.supermux.editor.core.AnnotationType<Boolean> = dev.supermux.editor.core.AnnotationType("fieldInput")
+
     /** On an edit that deletes atomic ranges whole on purpose ([AtomicDelete.deleteWhole]): not asked again. */
     val atomicWhole: dev.supermux.editor.core.AnnotationType<Boolean> = dev.supermux.editor.core.AnnotationType("atomicWhole")
 }

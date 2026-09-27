@@ -268,11 +268,12 @@ class EditorView(initial: EditorState) : CommandTarget {
         if (readOnly && userEdit) return
         val start = current
         var tr = start.update(spec)
-        // Atomic ranges (folds): a user edit never takes a piece of one, whatever path it came by
+        // The hidden field's U+FFFC placeholder (a fold in its window) never becomes document text.
+        if (tr.docChanged && tr.annotation(EditorAnnotations.fieldInput) == true && insertsPlaceholder(tr)) return
+        // Replaced ranges (folds): local input never takes a piece of one, whatever path it came by
         // (the hidden field, typeText, paste, a key command, the web's key path).
-        if (userEdit && tr.docChanged && tr.annotation(EditorAnnotations.atomicWhole) != true) {
-            val hit = atomicReachedInto(tr)
-            if (hit != null) { deleteInto(hit.first, hit.second, spec); return }
+        if (tr.docChanged && policed(spec) && tr.annotation(EditorAnnotations.atomicWhole) != true) {
+            if (splitAtReplaces(tr, spec)) return
         }
         // The caret never lands inside a replaced range: moved out, unless a reveal handler shows it.
         var reveal: ReplaceRange? = null
@@ -314,30 +315,113 @@ class EditorView(initial: EditorState) : CommandTarget {
     internal val sharedFoldCache: Folds.Cache get() = foldCache
 
     /**
-     * The first atomic range (a fold, a range of `atomicRangesFacet`) that one of [tr]'s changes
-     * deletes a part of, unless a selection range covered all of it (the user selected across it).
+     * Whether [spec] is LOCAL input or a command (policed by the replaced-range rules): it has a
+     * userEvent that is not one of [POLICY_EXEMPT] (`undo`, `redo`, `disk`, `remote`, `agent`,
+     * `lsp` and their sub-events), and no [EditorAnnotations.remote]. A transaction without a
+     * userEvent is programmatic (a plugin's, a host's) and passes too.
      */
-    private fun atomicReachedInto(tr: Transaction): Pair<Int, Int>? {
+    private fun policed(spec: TransactionSpec): Boolean {
+        val e = spec.userEvent ?: return false
+        if (spec.annotations.any { it.type === EditorAnnotations.remote && it.value == true }) return false
+        return POLICY_EXEMPT.none { e == it || e.startsWith("$it.") }
+    }
+
+    /** A field edit inserting more U+FFFC than the text it replaces held (a leaked placeholder). */
+    private fun insertsPlaceholder(tr: Transaction): Boolean {
+        for (c in tr.changes.iterChanges()) {
+            val n = c.inserted.count { it == FieldWindow.PLACEHOLDER }
+            if (n == 0) continue
+            if (n > tr.startState.doc.slice(c.fromA, c.toA).count { it == FieldWindow.PLACEHOLDER }) return true
+        }
+        return false
+    }
+
+    /**
+     * The replaced-range rules for local input, per change (so per cursor):
+     * - a change that deletes part of a NON-atomic Replace grows to take all of it (a hidden range
+     *   is never deleted one character at a time, on any input path);
+     * - a change that reaches into an ATOMIC range (a fold, `atomicRangesFacet`) is dropped, and that
+     *   range goes through the policy ([deleteInto]); the other cursors' changes still apply.
+     * A range a selection covered whole is the user's to delete. Returns true when it dispatched
+     * (or dropped) instead of [tr].
+     */
+    private fun splitAtReplaces(tr: Transaction, spec: TransactionSpec): Boolean {
         val st = tr.startState
         val folds = replaced(st)
         val extra = st.facet(dev.supermux.editor.core.atomicRangesFacet)
-        if (folds.replaces.none { it.atomic } && extra.all { it.isEmpty }) return null
+        if (folds.replaces.isEmpty() && extra.all { it.isEmpty }) return false
         val sel = st.selection.ranges
         fun covered(from: Int, to: Int) = sel.any { it.from <= from && it.to >= to && it.from < it.to }
+        val kept = ArrayList<ChangeSpec>()
+        val dropped = ArrayList<Pair<dev.supermux.editor.core.Change, Pair<Int, Int>>>()
+        val grown = ArrayList<Pair<Int, Int>>() // the grown changes' spans (start coordinates)
+        var touched = false
         for (c in tr.changes.iterChanges()) {
-            if (c.toA <= c.fromA) continue
-            for (r in folds.replacesInside(c.fromA, c.toA)) if (r.atomic && !covered(r.from, r.to)) return r.from to r.to
-            for (set in extra) for (r in set.between(c.fromA, c.toA)) {
-                if (r.from < r.to && r.from < c.toA && r.to > c.fromA && !covered(r.from, r.to)) return r.from to r.to
+            if (c.toA <= c.fromA) { kept += ChangeSpec(c.fromA, c.toA, c.inserted); continue }
+            var atomic: Pair<Int, Int>? = null
+            var a = c.fromA
+            var b = c.toA
+            for (r in folds.replacesInside(c.fromA, c.toA)) {
+                if (covered(r.from, r.to)) continue
+                if (r.atomic) { atomic = r.from to r.to; break }
+                a = minOf(a, r.from); b = maxOf(b, r.to)
+            }
+            if (atomic == null) for (set in extra) for (r in set.between(c.fromA, c.toA)) {
+                if (r.from < r.to && r.from < c.toA && r.to > c.fromA && !covered(r.from, r.to)) { atomic = r.from to r.to; break }
+            }
+            when {
+                atomic != null -> { dropped += c to atomic; touched = true }
+                a != c.fromA || b != c.toA -> { kept += ChangeSpec(a, b, c.inserted); grown += a to b; touched = true }
+                else -> kept += ChangeSpec(c.fromA, c.toA, c.inserted)
             }
         }
-        return null
+        if (!touched) return false
+        // Overlapping grown changes (two cursors at one hidden range) merge.
+        val merged = ArrayList<ChangeSpec>()
+        for (k in kept.sortedWith(compareBy({ it.from }, { it.to }))) {
+            val last = merged.lastOrNull()
+            if (last != null && k.from < last.to) merged[merged.size - 1] = ChangeSpec(last.from, maxOf(last.to, k.to), last.insert + k.insert)
+            else merged += k
+        }
+        val cs = dev.supermux.editor.core.ChangeSet.of(st.doc.length, merged)
+        if (!cs.isEmpty) {
+            // Each range where the edit meant it, through the changes that stay: a cursor at a dropped
+            // change stays where it was, one at a grown change goes to its end, the others where [tr] put them.
+            val inv = tr.changes.invert(st.doc)
+            val pairIndex = tr.selection.ranges.size == sel.size
+            val next = sel.mapIndexed { i, r ->
+                fun at(span: Pair<Int, Int>) = r.head in span.first..span.second
+                when {
+                    dropped.any { (c, _) -> r.head in c.fromA..c.toA } -> r.map(cs)
+                    grown.any { at(it) } -> grown.first { at(it) }.let { SelectionRange(cs.mapPos(it.second, 1)) }
+                    pairIndex -> tr.selection.ranges[i].let { t -> SelectionRange(cs.mapPos(inv.mapPos(t.anchor, -1), 1), cs.mapPos(inv.mapPos(t.head, -1), 1)) }
+                    else -> r.map(cs)
+                }
+            }
+            dispatch(spec.copy(changes = emptyList(), changeSet = cs, selection = EditorSelection.create(next, st.selection.mainIndex),
+                annotations = spec.annotations + EditorAnnotations.atomicWhole.of(true)))
+        }
+        // Each atomic range reached into: the policy, at its place in the document now.
+        for ((from, to) in dropped.map { it.second }.distinct()) {
+            val f = cs.mapPos(from, 1)
+            val t = maxOf(f, cs.mapPos(to, -1))
+            val own = dropped.filter { it.second == (from to to) }.map { (c, _) -> ChangeSpec(cs.mapPos(c.fromA, 1), maxOf(cs.mapPos(c.fromA, 1), cs.mapPos(c.toA, -1)), c.inserted) }
+            deleteInto(f, t, spec.copy(changes = own, changeSet = null, selection = null))
+        }
+        return true
     }
 
-    /** A user edit reached into atomic range [from, to): the handlers' policy, else unfold first. */
+    /**
+     * A local edit reached into atomic range [from, to): the handlers' policy ([atomicDeleteFacet]),
+     * else unfold first ([revealFacet]), else SELECT the range (a second Backspace then deletes it as
+     * a selection: never a dead key, and safe without undo).
+     */
     private fun deleteInto(from: Int, to: Int, spec: TransactionSpec) {
         for (h in current.facet(atomicDeleteFacet)) if (h.deleteInto(this, from, to, spec)) return
-        revealRange(from, to)
+        if (revealRange(from, to)) return
+        val sel = current.selection
+        val ranges = sel.ranges.map { r -> if (r.head in from..to) (if (r.head == from) SelectionRange(from, to) else SelectionRange(to, from)) else r }
+        dispatch(TransactionSpec(selection = EditorSelection.create(ranges, sel.mainIndex), scrollIntoView = true, userEvent = "select"))
     }
 
     /** Ask the [revealFacet] handlers to show [from, to) (the fold plugin unfolds). */
@@ -362,9 +446,12 @@ class EditorView(initial: EditorState) : CommandTarget {
                 else -> r.to
             }
         }
-        val ranges = sel.ranges.mapIndexed { i, r ->
-            val o = old.ranges.getOrNull(i) ?: old.main
-            SelectionRange(out(r.anchor, tr.changes.mapPos(o.anchor, 1)), out(r.head, tr.changes.mapPos(o.head, 1)))
+        // Each new range with the old one it came from: the nearest by position (ranges may have
+        // merged, so an index says nothing).
+        val olds = old.ranges.map { SelectionRange(tr.changes.mapPos(it.anchor, 1), tr.changes.mapPos(it.head, 1)) }
+        val ranges = sel.ranges.map { r ->
+            val o = olds.minBy { kotlin.math.abs(it.head - r.head) }
+            SelectionRange(out(r.anchor, o.anchor), out(r.head, o.head))
         }
         return EditorSelection.create(ranges, sel.mainIndex)
     }
@@ -394,6 +481,9 @@ class EditorView(initial: EditorState) : CommandTarget {
 
     private companion object {
         val USER_EDITS = listOf("input", "delete", "paste", "undo", "redo", "drop")
+
+        /** userEvents the local-input rules (replaced and atomic ranges) never police, with their sub-events. */
+        val POLICY_EXEMPT = listOf("undo", "redo", "disk", "remote", "agent", "lsp")
         var nextWidgetStateId = 1L
     }
 }

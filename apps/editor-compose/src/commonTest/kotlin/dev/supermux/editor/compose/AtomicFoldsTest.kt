@@ -30,7 +30,7 @@ class AtomicFoldsTest {
     private val foldTo = text.indexOf("}\nend")
 
     /** A fold plugin as M4's: folds in a field, an unfold effect, a reveal handler that unfolds. */
-    private class FoldPlugin(initial: List<Pair<Int, Int>>, val atomic: Boolean = true) {
+    private class FoldPlugin(initial: List<Pair<Int, Int>>, val atomic: Boolean = true, reveal: Boolean = true) {
         val unfold = StateEffectType<Int>("unfold")
         val fold = StateEffectType<Pair<Int, Int>>("fold")
         var reveals = 0
@@ -47,7 +47,7 @@ class AtomicFoldsTest {
             },
             { f -> decorationsFacet.compute(FacetDep.field(f)) { it.field(f) } },
         )
-        val extension = extensionOf(field, revealFacet.of(RevealHandler { t, from, _ ->
+        val extension = if (!reveal) extensionOf(field) else extensionOf(field, revealFacet.of(RevealHandler { t, from, _ ->
             reveals++
             t.dispatch(TransactionSpec(effects = listOf(unfold.of(from))))
             true
@@ -154,11 +154,22 @@ class AtomicFoldsTest {
         assertEquals(0, p.reveals)
     }
 
-    @Test fun aNonFoldReplaceIsAtomicOnlyWhenItOptsIn() {
-        val plain = FoldPlugin(listOf(foldFrom to foldTo), atomic = false)
-        val v1 = EditorView(EditorState.create(text, EditorSelection.cursor(foldTo), plain.extension))
+    @Test fun aNonAtomicReplaceIsDeletedAsOneUnitOnEveryPath() {
+        // A hardware Backspace at its end, a soft one on its placeholder, a Delete at its start: the
+        // whole hidden range, never one hidden character.
+        val whole = text.removeRange(foldFrom, foldTo)
+        val v1 = EditorView(EditorState.create(text, EditorSelection.cursor(foldTo), FoldPlugin(listOf(foldFrom to foldTo), atomic = false).extension))
         DefaultCommands.deleteBackward.run(v1)
-        assertEquals(text.removeRange(foldTo - 1, foldTo), v1.state.doc.toString(), "a plain Replace was treated as atomic")
+        assertEquals(whole, v1.state.doc.toString(), "a hardware Backspace deleted one hidden character")
+        val h = Harness(text, foldTo, FoldPlugin(listOf(foldFrom to foldTo), atomic = false))
+        h.backspace()
+        assertEquals(whole, h.doc, "a soft Backspace")
+        val v2 = EditorView(EditorState.create(text, EditorSelection.cursor(foldFrom), FoldPlugin(listOf(foldFrom to foldTo), atomic = false).extension))
+        DefaultCommands.deleteForward.run(v2)
+        assertEquals(whole, v2.state.doc.toString(), "a Delete at its start")
+    }
+
+    @Test fun aNonFoldReplaceIsAtomicOnlyWhenItOptsIn() {
         // The same range listed in atomicRangesFacet: atomic.
         val listed = FoldPlugin(listOf(foldFrom to foldTo), atomic = false)
         val atomic = atomicRangesFacet.of(RangeSet.of(listOf(Ranged(foldFrom, foldTo, Unit))))
@@ -173,12 +184,54 @@ class AtomicFoldsTest {
         val other = text.indexOf("one") + 3
         val view = EditorView(EditorState.create(text, EditorSelection.create(listOf(SelectionRange(other), SelectionRange(foldTo)), 1), p.extension))
         DefaultCommands.deleteBackward.run(view)
-        // One cursor reached into the fold: the keystroke only unfolds.
-        assertEquals(text, view.state.doc.toString())
+        // Only the cursor at the fold goes through the policy (it unfolds); the other deletes as usual.
+        assertEquals(text.removeRange(other - 1, other), view.state.doc.toString())
         assertEquals(1, p.reveals)
+        assertTrue(p.folds(view.state).isEmpty())
         // Typing at both cursors after the unfold works at both.
         view.typeText("X")
         assertEquals(2, Regex("X").findAll(view.state.doc.toString()).count())
+    }
+
+    @Test fun withNoRevealHandlerTheFirstBackspaceSelectsTheFoldAndTheSecondDeletesIt() {
+        for (soft in listOf(false, true)) {
+            val p = FoldPlugin(listOf(foldFrom to foldTo), reveal = false)
+            val h = Harness(text, foldTo, p)
+            if (soft) h.backspace() else DefaultCommands.deleteBackward.run(h.view)
+            assertEquals(text, h.doc, "soft=$soft: the first Backspace deleted")
+            assertEquals(SelectionRange(foldFrom, foldTo).let { it.from to it.to }, h.view.state.selection.main.let { it.from to it.to }, "soft=$soft: the fold is not selected")
+            if (soft) h.backspace() else DefaultCommands.deleteBackward.run(h.view)
+            assertEquals(text.removeRange(foldFrom, foldTo), h.doc, "soft=$soft: the second Backspace did not delete the selected fold")
+        }
+    }
+
+    @Test fun undoRedoAndRemoteTransactionsPassThroughUnpoliced() {
+        for (spec in listOf(
+            TransactionSpec(changes = listOf(ChangeSpec(foldTo - 2, foldTo)), userEvent = "undo"),
+            TransactionSpec(changes = listOf(ChangeSpec(foldTo - 2, foldTo)), userEvent = "redo"),
+            TransactionSpec(changes = listOf(ChangeSpec(foldTo - 2, foldTo)), userEvent = "input", annotations = listOf(EditorAnnotations.remote.of(true))),
+            TransactionSpec(changes = listOf(ChangeSpec(foldTo - 2, foldTo)), userEvent = "disk"),
+        )) {
+            val p = FoldPlugin(listOf(foldFrom to foldTo))
+            val view = EditorView(EditorState.create(text, EditorSelection.cursor(foldTo), p.extension))
+            view.dispatch(spec)
+            assertEquals(text.removeRange(foldTo - 2, foldTo), view.state.doc.toString(), "${spec.userEvent} was policed")
+            assertEquals(0, p.reveals)
+        }
+        // The same edit as local input is policed.
+        val p = FoldPlugin(listOf(foldFrom to foldTo))
+        val view = EditorView(EditorState.create(text, EditorSelection.cursor(foldTo), p.extension))
+        view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(foldTo - 2, foldTo)), userEvent = "input"))
+        assertEquals(text, view.state.doc.toString())
+    }
+
+    @Test fun aClampPairsRangesByPositionNotIndex() {
+        // Two cursors, one before the fold and one right after it; one Left from the second lands
+        // inside the fold (the ranges merge to one): it moved LEFT, so it goes to the fold's start.
+        val p = FoldPlugin(listOf(foldFrom to foldTo))
+        val view = EditorView(EditorState.create(text, EditorSelection.create(listOf(SelectionRange(0), SelectionRange(foldTo)), 1), p.extension))
+        view.dispatch(TransactionSpec(selection = EditorSelection.cursor(foldTo - 1), userEvent = "select"))
+        assertEquals(foldFrom, view.state.selection.main.head)
     }
 
     @Test fun aCursorInsideARangeWhenItFoldsIsMovedOut() {

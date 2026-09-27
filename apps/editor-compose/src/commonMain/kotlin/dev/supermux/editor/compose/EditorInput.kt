@@ -274,11 +274,59 @@ internal class FieldSync(
     private var lastWasDeferredInput = false
     private var joinNext = false
 
-    /** [spec], with the join annotation when it is the step after a composition's first character. */
+    /**
+     * [spec] as the field's own edit ([EditorAnnotations.fieldInput]: the view refuses it if it
+     * inserts the placeholder), with the join annotation when it is the step after a composition's
+     * first character.
+     */
     private fun joined(spec: TransactionSpec, event: String): TransactionSpec {
-        if (!joinNext || event != "input.ime") return spec
+        val field = spec.copy(annotations = spec.annotations + EditorAnnotations.fieldInput.of(true))
+        if (!joinNext || event != "input.ime") return field
         joinNext = false
-        return spec.copy(annotations = spec.annotations + EditorAnnotations.imeJoinPrevious.of(true))
+        return field.copy(annotations = field.annotations + EditorAnnotations.imeJoinPrevious.of(true))
+    }
+
+    /**
+     * An IME edit [e] that hands U+FFFC back (a case transform or an autocorrect of a selection over a
+     * fold): each U+FFFC of the inserted text stands for the one it replaced, in order (a fold's
+     * placeholder, or one the document really holds), and is KEPT: only the text between them
+     * changes, so the hidden text stays as it was (untransformed) and so does the fold. When the
+     * counts differ, nothing maps unambiguously: the edit is refused and the field shows the
+     * document again.
+     */
+    private fun applyAroundPlaceholders(w: FieldWindow, e: FieldEdit, text: String, selStart: Int, selEnd: Int, event: String): FieldText? {
+        val ph = FieldWindow.PLACEHOLDER
+        val marks = (e.from until e.to).filter { w.text[it] == ph }
+        val parts = e.insert.split(ph)
+        if (parts.size - 1 != marks.size) return rewindow() ?: show(current())
+        val specs = ArrayList<ChangeSpec>()
+        var segStart = e.from
+        for ((i, part) in parts.withIndex()) {
+            val segEnd = if (i < marks.size) marks[i] else e.to
+            if (w.text.substring(segStart, segEnd) != part) specs += ChangeSpec(w.toDoc(segStart), w.toDoc(segEnd), part)
+            segStart = segEnd + 1
+        }
+        val st = view.state
+        val changes = dev.supermux.editor.core.ChangeSet.of(st.doc.length, specs)
+        // The window after it: the placeholders where the field now has them.
+        val delta = e.insert.length - (e.to - e.from)
+        val holes = w.holes.map { h ->
+            val at = when {
+                h.at < e.from -> h.at
+                h.at >= e.to -> h.at + delta
+                else -> { val j = marks.indexOf(h.at); e.from + parts.take(j + 1).sumOf { it.length } + j }
+            }
+            FieldHole(at, changes.mapPos(h.docFrom, 1), changes.mapPos(h.docTo, -1))
+        }
+        val nw = FieldWindow(changes.mapPos(w.base, -1), text, holes)
+        val sel = st.selection
+        val main = SelectionRange(nw.toDoc(selStart), nw.toDoc(selEnd))
+        val next = if (sel.ranges.size == 1) EditorSelection.single(main.anchor, main.head)
+        else EditorSelection.create(sel.ranges.mapIndexed { i, r -> if (i == sel.mainIndex) main else r.map(changes) }, sel.mainIndex)
+        window = nw
+        view.dispatch(joined(TransactionSpec(changeSet = changes, selection = next, scrollIntoView = true, userEvent = event), event))
+        if (!docMatches(window)) return rewindow() ?: show(current())
+        return null
     }
 
     private fun apply(text: String, selStart: Int, selEnd: Int, composition: IntRange?, deferRewindow: Boolean): FieldText? {
@@ -331,6 +379,7 @@ internal class FieldSync(
         val clampedFrom = main.from.coerceIn(w.base, w.end)
         val clampedTo = main.to.coerceIn(w.base, w.end)
         val event = if (composition != null || wasComposing) "input.ime" else "input"
+        if (e.insert.indexOf(FieldWindow.PLACEHOLDER) >= 0) return applyAroundPlaceholders(w, e, text, selStart, selEnd, event)
         if (composition == null && !wasComposing && e.insert == "\n" && e.from == e.to && from == main.head && main.empty) {
             // A soft Return is the Enter key: the keymap's binding (a plugin's Enter between braces),
             // else the editor's newline (it keeps the indentation), at every cursor.

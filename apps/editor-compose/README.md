@@ -184,7 +184,8 @@ shown in its place (none: nothing), overlapping replaces merged.
   (`}`), never the hidden text; an accessibility edit across that label is refused.
 - **The caret never lands inside one** (the view enforces it for every transaction): a move goes to
   the far side the way it moved (Right at a fold's start jumps to its end, End goes past a fold's
-  joined tail), a cursor inside a range when it gets folded goes to its nearer edge.
+  joined tail), a cursor inside a range when it gets folded goes to its nearer edge (see "The caret
+  and programmatic selections" below).
 - A fold survives edits outside and above it because the plugin maps its `RangeSet` (a Replace's
   start is right-sided: text typed at it stays visible before the fold). Lines over 10,000 units
   (laid out in pieces) show neither replaces nor inline widgets.
@@ -192,25 +193,41 @@ shown in its place (none: nothing), overlapping replaces merged.
   (`WidgetClickHandler(target, key, from, to)`: the fold plugin unfolds), then to
   `EditorView.onWidgetClick`. Registered content takes its own pointer input.
 
-**Atomic ranges.** A fold (`Replace(fold = true)`) is atomic; any other Replace only when it opts in
-(`atomic = true`), and any range can be made atomic through editor-core's `atomicRangesFacet` (CM6's
-atomicRanges, as data). **A user edit never takes a piece of one**, whatever path it came by: the
-rule is in `EditorView.dispatch`, so the hidden field, `typeText`, paste, key commands and the web's
-fast key path all meet it. An edit that deletes part of an atomic range (a Backspace at its end, a
-Delete at its start, an autocorrect across its edge) whose selection did not cover the whole range
-is NOT applied; the policy decides:
-- `atomicDeleteFacet` handlers first (`AtomicDeleteHandler(target, from, to, spec)`, the first
-  returning true takes it). `AtomicDelete.deleteWhole` is CM6's policy (the edit grown to take the
-  whole range), for a fold plugin with undo.
-- **Default: unfold first** (JetBrains): the `revealFacet` handlers are asked to show the range (the
-  fold plugin unfolds through its own state effect) and nothing else happens; the next Backspace
-  deletes normally. With no handler at all, the keystroke does nothing.
-- Deleting a selection that covers the whole range deletes it with the selection.
+**Which transactions are policed.** Only LOCAL input and commands: a transaction with a userEvent
+that is not `undo`, `redo`, `disk`, `remote`, `agent` or `lsp` (or a sub-event of one, `undo.x`), and
+without `EditorAnnotations.remote` (for M4/M5's collaborators and agents, whatever their userEvent,
+`input.*` included). Undo, redo, reloads, remote edits and programmatic transactions (no userEvent)
+pass through unchanged, as in CM6. The caret clamp below applies to every transaction.
 
-**The soft keyboard and folds.** The hidden field's window holds a replaced range as ONE placeholder
-character (U+FFFC, `FieldWindow.holes`), never its hidden text (a fold can be megabytes; the window
-is never sliced across one). Deleting the placeholder is an edit of the whole range, which the view
-then judges like any other; a field caret move lands on the range's edges, never inside.
+**Replaced ranges and deletion: one unit, on every input path.** The rule is in `EditorView.dispatch`,
+so the hidden field, `typeText`, paste, key commands and the web's fast key path all meet it. It is
+per change, so per cursor: with several cursors, the others edit as usual and only the one at the
+range is handled. A change that deletes part of a replaced range whose selection did not cover it:
+- a **non-atomic** Replace: the change grows to take the whole range (a hidden range is never
+  deleted one character at a time; a hardware Backspace and a soft one do the same);
+- an **atomic** range (a fold, `Replace(fold = true)`; any Replace with `atomic = true`; any range in
+  editor-core's `atomicRangesFacet`): the change is dropped and the policy decides:
+  1. `atomicDeleteFacet` handlers (`AtomicDeleteHandler(target, from, to, spec)`; the first
+     returning true takes it). `AtomicDelete.deleteWhole` is CM6's policy, for a fold plugin with undo.
+  2. Else **unfold first** (JetBrains): the `revealFacet` handlers show the range (the fold plugin
+     unfolds through its own state effect); the next Backspace deletes normally.
+  3. Else (no handler at all) the range is **selected**: a second Backspace deletes it as a
+     selection. Never a dead key, and safe without undo.
+- A selection that covers the whole range deletes it with the selection.
+
+**The soft keyboard and folds.** The hidden field's window holds a replaced range as ONE U+FFFC
+placeholder (`FieldWindow.holes`), never its hidden text (a fold can be megabytes; the window is never
+sliced across one). Deleting the placeholder is an edit of the whole range, judged as above; a field
+caret move lands on the range's edges. An IME edit that hands U+FFFC back (a case transform or an
+autocorrect over a selection holding a fold) keeps each placeholder's range as it is (the hidden
+text untransformed, the fold kept) and changes only the text between; when the U+FFFCs cannot be
+paired one to one with those it replaced, the edit is refused and the field resynced. As the last
+guard, the view refuses a field edit (`EditorAnnotations.fieldInput`) that inserts more U+FFFC than
+the text it replaces held. U+FFFC the document really holds round-trips (it pairs with itself).
+
+**The caret and programmatic selections.** A plugin's or host's selection inside a replaced range
+WITHOUT `scrollIntoView` is clamped to the range's edge (the nearer one, or past it the way it moved;
+the old and new ranges are paired by position, not index, since ranges may merge).
 
 **Scrolling or searching into a fold.** A transaction that sets the selection inside a replaced
 range and scrolls it into view (a search match, go-to-definition) asks the `revealFacet` handlers to
@@ -608,7 +625,7 @@ pointer gestures, touch handles, the menu with a fake platform toolbar, zoom, th
 document switching, typing through the real field). Compose's harness cannot open an IME composing
 region, so composition is tested at `FieldSync`; the device checks live in
 `apps/editor-sample/device-checks/` and `:editor-sample:webInputTest`. Counts at the end of M3b:
-JVM 183, iOS simulator 74. At the end of M3c (with the review fixes): JVM 266 (measure before
+JVM 183, iOS simulator 74. At the end of M3c (with both review rounds): JVM 276 (measure before
 draw, gutter markers, block widgets and their lifecycle, inline widgets and folds, atomic ranges on
 every input path, panels, linked views on measured heights, handles over widgets, a 300k-line fold),
 iOS simulator 96 (commonTest: `Folds`, `LineMap`, `AtomicFoldsTest`, `AccessibleFoldTest`,
