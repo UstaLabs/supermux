@@ -599,6 +599,12 @@ data class PromptRequestOption(
     val id: String,
     val label: String,
     val kind: String? = null,
+    /**
+     * Secondary text under a question option. Already on the wire: the broker's question body is
+     * the JSON-stringified question list and each option there carries the agent's `description`
+     * (AskUserQuestion sends one). Absent on permission options and on older brokers.
+     */
+    val description: String? = null,
 )
 
 @Serializable

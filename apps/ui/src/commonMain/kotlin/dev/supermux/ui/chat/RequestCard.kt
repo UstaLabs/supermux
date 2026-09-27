@@ -16,27 +16,53 @@
  *  - answering does not make the card vanish under the user's thumb: it leaves a one-line receipt
  *    ([ClosedRequestReceipt]) that states what was chosen, until the transcript moves on.
  *
- * Test tags are contract with `tests/ui/prompts-journey.spec.ts`: `request-card:<id>`,
- * `request-option:<id>`, `request-freetext`, `request-send`, `request-decline`.
+ *  - a question set is paged, one question at a time behind step tabs (see [QuestionBody] for
+ *    why), each option a full-width row with a radio or checkbox glyph and the agent's
+ *    description, "Other" as a text-field row of the same list, and one right-aligned primary
+ *    (Next → Submit) that stays disabled until the answer is complete.
+ *
+ * Test tags are contract with `tests/ui/prompts-journey.spec.ts` and
+ * `tests/ui/question-card-shots.spec.ts`: `request-card:<id>`, `request-option:<id>`,
+ * `request-freetext`, `request-send`, `request-decline`, plus `request-next`, `request-back`,
+ * `request-step:<questionId>` and `request-receipt:<id>` for the question flow.
  */
 package dev.supermux.ui.chat
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
@@ -45,28 +71,41 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import dev.supermux.proto.PromptQuestion
 import dev.supermux.proto.PromptRequest
@@ -77,6 +116,7 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.IconSize
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Motion
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
@@ -141,15 +181,20 @@ fun RequestCard(
             Modifier.padding(Space.md).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
+            val question = request.kind == "question"
+            val (questions, flat) = remember(request.requestId, request.body) {
+                if (question) questionsOf(request) else emptyList<PromptQuestion>() to false
+            }
             RequestHeader(
                 request = request,
+                title = if (question) questionTitle(request, questions) else null,
                 disabled = disabled,
                 showId = showId,
                 onToggleExpand = { expanded = !expanded },
                 onToggleId = { showId = !showId },
             )
-            if (request.kind == "question") {
-                QuestionBody(request, disabled, onRespond)
+            if (question) {
+                QuestionBody(request, questions, flat, disabled, onRespond)
             } else {
                 PermissionBody(request, disabled, expanded, { expanded = !expanded }, onRespond)
             }
@@ -163,6 +208,7 @@ fun RequestCard(
 @Composable
 private fun RequestHeader(
     request: PromptRequest,
+    title: String?,
     disabled: Boolean,
     showId: Boolean,
     onToggleExpand: () -> Unit,
@@ -172,7 +218,7 @@ private fun RequestHeader(
     val permission = request.kind != "question"
     val name = requestName(request)
     val meta = buildList {
-        name.qualifier?.let { add(it) }
+        if (permission) name.qualifier?.let { add(it) }
         // A non-blocking ask comes from a turn the user is not watching; say so, or the card looks
         // like it appeared out of nowhere.
         if (!request.blocking) add("background turn")
@@ -186,19 +232,25 @@ private fun RequestHeader(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
-        Surface(shape = CircleShape, color = cs.secondaryContainer, modifier = Modifier.size(28.dp)) {
+        // Tinted, not secondaryContainer: in this scheme that IS the card's own tone, and the badge
+        // vanished into it. Warning-tinted shield for a permission, accent for a question.
+        Surface(
+            shape = CircleShape,
+            color = if (permission) cs.tertiaryContainer else cs.primaryContainer,
+            modifier = Modifier.size(28.dp),
+        ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = if (permission) Icons.Filled.Shield else Icons.AutoMirrored.Filled.HelpOutline,
                     contentDescription = if (permission) "Permission request" else "Question from the agent",
-                    tint = cs.onSecondaryContainer,
+                    tint = if (permission) cs.onTertiaryContainer else cs.onPrimaryContainer,
                     modifier = Modifier.size(IconSize.md),
                 )
             }
         }
         Column(Modifier.weight(1f)) {
             Text(
-                name.title,
+                title ?: name.title,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -301,7 +353,17 @@ private fun PermissionBody(
                 if (index == 0) {
                     Button(onClick = { onRespond(allowAnswer(opt)) }, enabled = !disabled, modifier = mod) { label() }
                 } else {
-                    FilledTonalButton(onClick = { onRespond(allowAnswer(opt)) }, enabled = !disabled, modifier = mod) { label() }
+                    // Explicit container: the scheme's secondaryContainer is the card's own tone, so
+                    // the default tonal button rendered as bare text beside the filled one.
+                    FilledTonalButton(
+                        onClick = { onRespond(allowAnswer(opt)) },
+                        enabled = !disabled,
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = cs.surfaceContainerHighest,
+                            contentColor = cs.onSurface,
+                        ),
+                        modifier = mod,
+                    ) { label() }
                 }
             }
         }
@@ -433,160 +495,565 @@ private fun argumentRows(body: String): List<Pair<String, String>>? {
 
 // ── question ──────────────────────────────────────────────────────────────────────────────────
 
-@Composable
-private fun QuestionBody(
-    request: PromptRequest,
-    disabled: Boolean,
-    onRespond: (JsonObject) -> Unit,
-) {
-    val questions = request.parsedQuestions()
-    if (questions.isEmpty()) {
-        FlatQuestion(request, disabled, onRespond)
-        return
-    }
-    // One map for the whole card: a question set is answered as a unit, with a single Send.
-    var answers by remember(request.requestId) { mutableStateOf(mapOf<String, Any>()) }
-    var freeText by remember(request.requestId) { mutableStateOf(mapOf<String, String>()) }
-    questions.forEach { q ->
-        QuestionPrompt(q)
-        q.options.forEach { opt ->
-            val selected = if (q.multiSelect) {
-                (answers[q.id] as? Set<*>)?.contains(opt.id) == true
-            } else {
-                answers[q.id] == opt.id
-            }
-            ChoiceRow(
-                label = opt.label,
-                selected = selected,
-                multiSelect = q.multiSelect,
-                enabled = !disabled,
-                testTag = "request-option:${opt.id}",
-            ) {
-                answers = if (q.multiSelect) {
-                    val cur = (answers[q.id] as? Set<*>)?.mapNotNull { it as? String }?.toMutableSet() ?: mutableSetOf()
-                    if (selected) cur.remove(opt.id) else cur.add(opt.id)
-                    answers + (q.id to cur.toSet())
-                } else {
-                    answers + (q.id to opt.id)
-                }
-            }
-        }
-        if (q.allowFreeText) {
-            NoteField(
-                value = freeText[q.id].orEmpty(),
-                placeholder = if (q.options.isEmpty()) "Your answer" else "Something else…",
-                enabled = !disabled,
-                onChange = { freeText = freeText + (q.id to it) },
-                onSend = null,
-            )
-        }
-    }
-    val typed = freeText.filterValues { it.isNotBlank() }
-    QuestionActions(
-        disabled = disabled || (answers.isEmpty() && typed.isEmpty()),
-        // Free text wins over a selection for the same question: it is the later, more specific act.
-        onSend = { onRespond(answersObject(answers + typed)) },
-        onDecline = { onRespond(buildJsonObject { put("decline", JsonPrimitive(true)) }) },
-    )
-}
+/** Answer id for the flat (unparsed) question, which has no per-question id of its own. */
+private const val FLAT_QUESTION_ID = "_flat"
 
-/** A question the broker could not break into [PromptQuestion]s — options straight off the request. */
-@Composable
-private fun FlatQuestion(request: PromptRequest, disabled: Boolean, onRespond: (JsonObject) -> Unit) {
-    if (request.body.isNotBlank()) {
-        Text(request.body, style = MaterialTheme.typography.bodyMedium)
-    }
-    var picked by remember(request.requestId) { mutableStateOf<String?>(null) }
-    var freeText by remember(request.requestId) { mutableStateOf("") }
-    request.options.forEach { opt ->
-        ChoiceRow(
-            label = opt.label,
-            selected = picked == opt.id,
-            multiSelect = false,
-            enabled = !disabled,
-            testTag = "request-option:${opt.id}",
-        ) { picked = opt.id }
-    }
-    if (request.allowFreeText) {
-        NoteField(
-            value = freeText,
-            placeholder = "Your answer",
-            enabled = !disabled,
-            onChange = { freeText = it },
-            onSend = null,
-        )
-    }
-    QuestionActions(
-        disabled = disabled || (picked == null && freeText.isBlank()),
-        onSend = {
-            val chosen = freeText.ifBlank { picked.orEmpty() }
-            onRespond(buildJsonObject { put("optionId", JsonPrimitive(chosen)) })
-        },
-        onDecline = { onRespond(buildJsonObject { put("decline", JsonPrimitive(true)) }) },
-    )
-}
+/** Minimum height of an option row — a touch target with room for a two-line label. */
+private val OPTION_MIN_HEIGHT = 48.dp
 
-@Composable
-private fun QuestionPrompt(q: PromptQuestion) {
-    Text(q.header ?: q.prompt, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-    if (q.header != null && q.prompt.isNotBlank()) {
-        Text(q.prompt, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
+/** Diameter of the radio / checkbox glyph at the start of an option row. */
+private val INDICATOR_SIZE = 20.dp
+
+/**
+ * The questions a `kind=question` request asks. The broker ships them JSON-encoded in the body;
+ * when that fails to parse (an older or foreign adapter) the request's own options become one
+ * synthetic question, so both paths share one UI.
+ */
+private fun questionsOf(request: PromptRequest): Pair<List<PromptQuestion>, Boolean> {
+    val parsed = request.parsedQuestions()
+    if (parsed.isNotEmpty()) return parsed to false
+    return listOf(
+        PromptQuestion(
+            id = FLAT_QUESTION_ID,
+            prompt = request.body,
+            allowFreeText = request.allowFreeText,
+            options = request.options,
+        ),
+    ) to true
 }
 
 /**
- * One option as a full-width row — the control and its label are a single 44dp tap target, which a
- * bare [RadioButton] is not.
+ * The card title for a question. Never the same words as the text right under it: a set of
+ * questions is titled by its count (the step tabs carry each header), a single question by its
+ * header; a question with no header is just "Question", because the broker's fallback title for
+ * it IS the prompt, which the body is about to show.
  */
-@OptIn(ExperimentalFoundationApi::class)
+private fun questionTitle(request: PromptRequest, questions: List<PromptQuestion>): String {
+    if (questions.size > 1) return "${questions.size} questions"
+    val only = questions.firstOrNull()
+    only?.header?.takeIf { it.isNotBlank() }?.let { return it }
+    val name = requestName(request).title
+    return if (name.isBlank() || name == only?.prompt?.trim() || name == request.body.trim()) "Question" else name
+}
+
+/** One question's in-progress answer: the picked option ids, plus the "Other" field. */
+private data class Draft(
+    val picked: List<String> = emptyList(),
+    val other: String = "",
+    /** "Other" is the chosen answer (single-select) / one of them (multi-select). */
+    val otherOn: Boolean = false,
+)
+
+/**
+ * What a draft sends: an option id or free text for single-select, a list for multi-select, null
+ * while unanswered. Free text is sent verbatim; the broker passes anything that is not an option
+ * id straight through to the agent.
+ */
+private fun PromptQuestion.valueOf(d: Draft): Any? {
+    val typed = d.other.trim().takeIf { it.isNotEmpty() && (d.otherOn || options.isEmpty()) }
+    if (multiSelect) {
+        val ids = options.map { it.id }.filter { it in d.picked }
+        val all = if (typed != null) ids + typed else ids
+        return all.ifEmpty { null }
+    }
+    return typed ?: d.picked.firstOrNull()
+}
+
+/**
+ * A question set, one question per page.
+ *
+ * Paged, not stacked, on every width: this card is pinned in the composer dock, which does not
+ * scroll, so its height comes straight out of the transcript. Three stacked questions with
+ * descriptions are taller than a phone screen (the old stacked card pushed its own Send button
+ * off screen at 390px) and still crowd a laptop. The step tabs keep the overview a stacked layout
+ * gives — every header, which ones are answered, a tap to jump — at the height of one question.
+ */
 @Composable
-private fun ChoiceRow(
+private fun QuestionBody(
+    request: PromptRequest,
+    questions: List<PromptQuestion>,
+    flat: Boolean,
+    disabled: Boolean,
+    onRespond: (JsonObject) -> Unit,
+) {
+    var page by remember(request.requestId) { mutableStateOf(0) }
+    var drafts by remember(request.requestId) { mutableStateOf(mapOf<String, Draft>()) }
+    val current = questions[page.coerceIn(0, questions.lastIndex)]
+    fun draftOf(q: PromptQuestion) = drafts[q.id] ?: Draft()
+    // (A question that offers nothing to answer with — no options, no free text — cannot block.)
+    fun answered(q: PromptQuestion) = q.valueOf(draftOf(q)) != null || (q.options.isEmpty() && !q.allowFreeText)
+    val last = page >= questions.lastIndex
+    val canAdvance = !disabled && answered(current)
+    val canSubmit = !disabled && questions.all { answered(it) }
+
+    fun submit() {
+        if (!canSubmit) return
+        if (flat) {
+            val value = current.valueOf(draftOf(current))?.toString().orEmpty()
+            onRespond(buildJsonObject { put("optionId", JsonPrimitive(value)) })
+        } else {
+            onRespond(answersObject(questions.mapNotNull { q -> q.valueOf(draftOf(q))?.let { q.id to it } }.toMap()))
+        }
+    }
+    fun advance() {
+        if (last) submit() else if (canAdvance) page += 1
+    }
+
+    if (questions.size > 1) {
+        StepTabs(
+            questions = questions,
+            page = page,
+            answered = { answered(it) },
+            enabled = !disabled,
+            onPick = { page = it },
+        )
+    }
+    // A plain swap, no AnimatedContent: a cross-fade keeps the outgoing page's rows alive (and
+    // tappable) for its duration, and a tap landing on one that is detaching crashed the web client
+    // ("Cannot read CompositionLocal because the Modifier node is not currently attached").
+    key(page) {
+        val q = current
+        QuestionPage(
+            question = q,
+            showPrompt = q.prompt.isNotBlank(),
+            draft = draftOf(q),
+            enabled = !disabled,
+            onChange = { drafts = drafts + (q.id to it) },
+            onDone = ::advance,
+        )
+    }
+    QuestionActions(
+        showBack = page > 0,
+        primaryLabel = if (last) "Submit" else "Next",
+        primaryTag = if (last) "request-send" else "request-next",
+        primaryEnabled = if (last) canSubmit else canAdvance,
+        disabled = disabled,
+        onBack = { page -= 1 },
+        onPrimary = ::advance,
+        onDecline = { onRespond(buildJsonObject { put("decline", JsonPrimitive(true)) }) },
+    )
+}
+
+/** "① Goal  ② Features  ③ Branch": where you are, what is answered, and a tap to jump. */
+@Composable
+private fun StepTabs(
+    questions: List<PromptQuestion>,
+    page: Int,
+    answered: (PromptQuestion) -> Boolean,
+    enabled: Boolean,
+    onPick: (Int) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        questions.forEachIndexed { index, q ->
+            val active = index == page
+            val done = answered(q)
+            val container by animateColorAsState(
+                if (active) cs.primary.copy(alpha = 0.14f) else Color.Transparent,
+                Motion.stateChange(),
+                label = "step-bg",
+            )
+            val content = if (active) cs.primary else cs.onSurfaceVariant
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(Radii.pill))
+                    .background(container)
+                    .selectable(selected = active, enabled = enabled, role = Role.Tab, onClick = { onPick(index) })
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .heightIn(min = 32.dp)
+                    .padding(start = Space.xs + 2.dp, end = Space.md)
+                    .testTag("request-step:${q.id}"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                StepBadge(number = index + 1, done = done, active = active)
+                Text(
+                    q.header?.takeIf { it.isNotBlank() } ?: "Question ${index + 1}",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                    color = content,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/** The step number, or a tick once that question has an answer. */
+@Composable
+private fun StepBadge(number: Int, done: Boolean, active: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    val fill = when {
+        done -> cs.primary
+        active -> cs.primary.copy(alpha = 0.22f)
+        else -> cs.surfaceContainerHighest
+    }
+    Box(Modifier.size(20.dp).clip(CircleShape).background(fill), contentAlignment = Alignment.Center) {
+        if (done) {
+            Icon(Icons.Filled.Check, contentDescription = "Answered", tint = cs.onPrimary, modifier = Modifier.size(IconSize.sm))
+        } else {
+            Text(
+                "$number",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = if (active) cs.primary else cs.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun QuestionPage(
+    question: PromptQuestion,
+    showPrompt: Boolean,
+    draft: Draft,
+    enabled: Boolean,
+    onChange: (Draft) -> Unit,
+    onDone: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (showPrompt) {
+            Text(
+                question.prompt,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                color = cs.onSurface,
+                modifier = Modifier.padding(top = Space.xs).testTag("request-prompt:${question.id}"),
+            )
+        }
+        if (question.multiSelect && question.options.isNotEmpty()) {
+            Text("Select all that apply", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+        }
+        Spacer(Modifier.height(2.dp))
+        question.options.forEach { opt ->
+            val selected = opt.id in draft.picked
+            OptionRow(
+                label = opt.label,
+                description = opt.description?.takeIf { it.isNotBlank() },
+                selected = selected,
+                multiSelect = question.multiSelect,
+                enabled = enabled,
+                testTag = "request-option:${opt.id}",
+            ) {
+                onChange(
+                    if (question.multiSelect) {
+                        draft.copy(picked = if (selected) draft.picked - opt.id else draft.picked + opt.id)
+                    } else {
+                        // Picking an option is the answer; it takes the choice back from "Other".
+                        draft.copy(picked = listOf(opt.id), otherOn = false)
+                    },
+                )
+            }
+        }
+        if (question.allowFreeText || question.options.isEmpty()) {
+            OtherRow(
+                value = draft.other,
+                active = draft.otherOn && draft.other.isNotBlank(),
+                standalone = question.options.isEmpty(),
+                multiSelect = question.multiSelect,
+                enabled = enabled,
+                onChange = { text ->
+                    onChange(
+                        if (question.multiSelect) {
+                            draft.copy(other = text, otherOn = text.isNotBlank())
+                        } else {
+                            // Typing is choosing "Other": the radio moves to the field.
+                            draft.copy(other = text, otherOn = text.isNotBlank(), picked = if (text.isNotBlank()) emptyList() else draft.picked)
+                        },
+                    )
+                },
+                onToggle = {
+                    val on = !(draft.otherOn && draft.other.isNotBlank())
+                    onChange(
+                        if (question.multiSelect || !on) draft.copy(otherOn = on)
+                        else draft.copy(otherOn = true, picked = emptyList()),
+                    )
+                },
+                onDone = onDone,
+            )
+        }
+    }
+}
+
+/** The shared shell of an option row: surface, border, hover and selected states. */
+@Composable
+private fun optionColors(selected: Boolean, hovered: Boolean, focused: Boolean = false): Pair<Color, Color> {
+    val cs = MaterialTheme.colorScheme
+    val container by animateColorAsState(
+        when {
+            selected -> cs.primary.copy(alpha = 0.10f)
+            hovered -> cs.onSurface.copy(alpha = 0.05f)
+            // Light: a white row on the tinted card. Dark: the lowest container is near-black and
+            // read as a hole in the card, so the row is a faint lift of the card instead.
+            cs.surface.luminance() < 0.5f -> cs.onSurface.copy(alpha = 0.04f)
+            else -> cs.surfaceContainerLowest
+        },
+        Motion.stateChange(),
+        label = "option-bg",
+    )
+    val border by animateColorAsState(
+        when {
+            selected || focused -> cs.primary
+            hovered -> cs.outline
+            else -> cs.outlineVariant
+        },
+        Motion.stateChange(),
+        label = "option-border",
+    )
+    return container to border
+}
+
+/**
+ * One option as a full-width row: the glyph, the label and the description are one tap target,
+ * with a tinted surface and an accent border once chosen.
+ */
+@Composable
+private fun OptionRow(
     label: String,
+    description: String?,
     selected: Boolean,
     multiSelect: Boolean,
     enabled: Boolean,
     testTag: String,
     onPick: () -> Unit,
 ) {
+    val cs = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val (container, border) = optionColors(selected, hovered && enabled)
+    val shape = RoundedCornerShape(Radii.md)
+    val click = if (multiSelect) {
+        Modifier.toggleable(
+            value = selected,
+            interactionSource = interaction,
+            indication = LocalIndication.current,
+            enabled = enabled,
+            role = Role.Checkbox,
+            onValueChange = { onPick() },
+        )
+    } else {
+        Modifier.selectable(
+            selected = selected,
+            interactionSource = interaction,
+            indication = LocalIndication.current,
+            enabled = enabled,
+            role = Role.RadioButton,
+            onClick = onPick,
+        )
+    }
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = TAP_TARGET)
-            .clip(RoundedCornerShape(Radii.sm))
-            .combinedClickable(enabled = enabled, onClick = onPick)
-            .testTag(testTag),
-        verticalAlignment = Alignment.CenterVertically,
+            .heightIn(min = OPTION_MIN_HEIGHT)
+            .clip(shape)
+            .background(container)
+            .border(Stroke.hairline, border, shape)
+            .then(click)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .testTag(testTag)
+            .padding(horizontal = Space.md, vertical = 10.dp),
+        verticalAlignment = if (description == null) Alignment.CenterVertically else Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(Space.md),
     ) {
-        // null handlers on purpose: the ROW owns the click, so the control cannot fire a second
-        // toggle of its own and cancel the row's.
-        if (multiSelect) {
-            Checkbox(checked = selected, onCheckedChange = null, enabled = enabled)
-        } else {
-            RadioButton(selected = selected, onClick = null, enabled = enabled)
+        ChoiceGlyph(
+            selected = selected,
+            multiSelect = multiSelect,
+            enabled = enabled,
+            modifier = if (description == null) Modifier else Modifier.padding(top = 1.dp),
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                color = if (enabled) cs.onSurface else cs.onSurface.copy(alpha = 0.6f),
+            )
+            if (description != null) {
+                Text(description, style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+            }
         }
-        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f).padding(end = Space.sm))
     }
 }
 
+/** A radio dot (one answer) or a check box (several), drawn to match the row's accent. */
 @Composable
-private fun QuestionActions(disabled: Boolean, onSend: () -> Unit, onDecline: () -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-        Button(
-            onClick = onSend,
-            enabled = !disabled,
-            modifier = Modifier.weight(1f).heightIn(min = TAP_TARGET).testTag("request-send"),
-        ) { Text("Send") }
-        TextButton(
-            onClick = onDecline,
-            enabled = !disabled,
-            modifier = Modifier.heightIn(min = TAP_TARGET).testTag("request-decline"),
-        ) { Text("Decline") }
+private fun ChoiceGlyph(selected: Boolean, multiSelect: Boolean, enabled: Boolean, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    val accent = if (enabled) cs.primary else cs.onSurfaceVariant
+    // onSurfaceVariant, not outline: the outline token all but vanished on a dark option row.
+    val ring by animateColorAsState(
+        if (selected) accent else cs.onSurfaceVariant.copy(alpha = 0.75f),
+        Motion.stateChange(),
+        label = "glyph-ring",
+    )
+    if (multiSelect) {
+        val shape = RoundedCornerShape(5.dp)
+        Box(
+            modifier
+                .size(INDICATOR_SIZE)
+                .clip(shape)
+                .background(if (selected) accent else Color.Transparent)
+                .border(1.5.dp, ring, shape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (selected) Icon(Icons.Filled.Check, contentDescription = null, tint = cs.onPrimary, modifier = Modifier.size(IconSize.sm))
+        }
+    } else {
+        Box(
+            modifier.size(INDICATOR_SIZE).clip(CircleShape).border(1.5.dp, ring, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (selected) Box(Modifier.size(10.dp).clip(CircleShape).background(accent))
+        }
     }
 }
 
 /**
- * The one-line field shared by a refusal's note and a question's free text. [onSend] non-null adds
- * the inline send affordance; where the card already has a Send button it stays null.
+ * "Other": a row of the option list whose label is a text field. With no options at all it is
+ * the whole answer, so the glyph goes and the placeholder asks for the answer directly.
+ */
+@Composable
+private fun OtherRow(
+    value: String,
+    active: Boolean,
+    standalone: Boolean,
+    multiSelect: Boolean,
+    enabled: Boolean,
+    onChange: (String) -> Unit,
+    onToggle: () -> Unit,
+    onDone: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    var focused by remember { mutableStateOf(false) }
+    val (container, border) = optionColors(active, hovered && enabled, focused)
+    val shape = RoundedCornerShape(Radii.md)
+    val focus = remember { FocusRequester() }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = OPTION_MIN_HEIGHT)
+            .clip(shape)
+            .background(container)
+            .border(Stroke.hairline, border, shape)
+            .hoverable(interaction)
+            // 2dp + the 40dp glyph target (glyph centred in it) lines the glyph and the text up with
+            // the option rows above: 12dp to the glyph, 12dp from glyph to text.
+            .padding(start = if (standalone) 0.dp else 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (!standalone) {
+            // The glyph is its own 40dp target: tapping it toggles "Other" without opening the
+            // keyboard; tapping the text opens the keyboard.
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(enabled = enabled, role = if (multiSelect) Role.Checkbox else Role.RadioButton) {
+                        if (value.isBlank()) runCatching { focus.requestFocus() } else onToggle()
+                    }
+                    .testTag("request-other-toggle"),
+                contentAlignment = Alignment.Center,
+            ) {
+                ChoiceGlyph(selected = active, multiSelect = multiSelect, enabled = enabled)
+            }
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            enabled = enabled,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = cs.onSurface),
+            cursorBrush = SolidColor(cs.primary),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { onDone() }),
+            modifier = Modifier
+                .weight(1f)
+                .focusRequester(focus)
+                .onFocusChanged { focused = it.isFocused }
+                .padding(start = if (standalone) Space.md else 2.dp, end = Space.md, top = 12.dp, bottom = 12.dp)
+                .testTag("request-freetext"),
+            decorationBox = { inner ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        Text(
+                            if (standalone) "Type your answer" else "Other — type your own answer",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = cs.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    inner()
+                }
+            },
+        )
+    }
+}
+
+/**
+ * Back on the left (only past the first question); Decline and the one primary action on the
+ * right, at their natural size — the answer is what matters, not the button.
+ */
+@Composable
+private fun QuestionActions(
+    showBack: Boolean,
+    primaryLabel: String,
+    primaryTag: String,
+    primaryEnabled: Boolean,
+    disabled: Boolean,
+    onBack: () -> Unit,
+    onPrimary: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().padding(top = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+    ) {
+        if (showBack) {
+            TextButton(
+                onClick = onBack,
+                enabled = !disabled,
+                contentPadding = PaddingValues(start = Space.sm, end = Space.md),
+                modifier = Modifier.heightIn(min = TAP_TARGET).testTag("request-back"),
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(IconSize.md))
+                Spacer(Modifier.width(Space.xs))
+                Text("Back")
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        OutlinedButton(
+            onClick = onDecline,
+            enabled = !disabled,
+            border = BorderStroke(Stroke.hairline, cs.outline),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = cs.onSurface),
+            modifier = Modifier.heightIn(min = TAP_TARGET).testTag("request-decline"),
+        ) { Text("Decline") }
+        Button(
+            onClick = onPrimary,
+            enabled = primaryEnabled,
+            modifier = Modifier.heightIn(min = TAP_TARGET).testTag(primaryTag),
+        ) {
+            Text(primaryLabel)
+            if (primaryTag == "request-next") {
+                Spacer(Modifier.width(Space.xs))
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(IconSize.md))
+            }
+        }
+    }
+}
+
+/**
+ * The one-line field a refusal's note is typed into, with its inline Send.
  */
 @Composable
 private fun NoteField(
@@ -624,47 +1091,78 @@ private fun NoteField(
 // ── receipt ───────────────────────────────────────────────────────────────────────────────────
 
 /**
- * What a card leaves behind: "✓ Allow once · Bash". It states the answer the broker reported, so
- * it stays truthful for a rejection, and disappears once the transcript moves on.
+ * What a card leaves behind until the transcript moves on: a quiet one-card-high strip that says
+ * what happened — "Answered  Test supermux features, Multi-select", "Bash  Allow once",
+ * "Declined  Deploy". It states the answer the broker reported, so it stays truthful for a
+ * rejection; a tick, a cross or a neutral stop mark says which kind of ending it was.
  */
 @Composable
 private fun ClosedRequestReceipt(receipt: ClosedRequest) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
+    val question = receipt.kind == "question"
+    val label = receipt.answerLabel?.takeIf { it.isNotBlank() }
     val unanswered = receipt.outcome != "answered"
+    // The broker's decline label is the fixed string "Declined" (request-map.ts answerLabel).
+    val declined = question && label == "Declined"
     val rejected = receipt.answerKind?.startsWith("reject") == true
     val icon = when {
-        unanswered -> Icons.Filled.Block
+        unanswered || declined -> Icons.Filled.Block
         rejected -> Icons.Filled.Close
         else -> Icons.Filled.Check
     }
     val tint = when {
-        unanswered -> cs.onSurfaceVariant
+        unanswered || declined -> cs.onSurfaceVariant
         rejected -> sem.danger
         else -> sem.success
     }
-    val text = listOfNotNull(
-        receipt.answerLabel?.takeIf { it.isNotBlank() && !unanswered } ?: receipt.outcome.replaceFirstChar { it.uppercase() },
-        requestNameOf(receipt),
-    ).joinToString(" · ")
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = Space.sm).testTag("request-receipt:${receipt.requestId}"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.xs),
+    val title = requestNameOf(receipt)
+    val (lead, rest) = when {
+        unanswered -> receipt.outcome.replaceFirstChar { it.uppercase() } to title
+        declined -> "Declined" to title
+        question -> "Answered" to label
+        else -> (title ?: "Permission") to (label ?: "Answered")
+    }
+    Surface(
+        shape = RoundedCornerShape(Radii.md),
+        color = cs.surfaceContainerHigh.copy(alpha = 0.6f),
+        border = BorderStroke(Stroke.hairline, cs.outlineVariant.copy(alpha = 0.5f)),
+        modifier = Modifier.fillMaxWidth().testTag("request-receipt:${receipt.requestId}"),
     ) {
-        Icon(
-            icon,
-            contentDescription = if (unanswered) "Request closed unanswered" else "Request answered",
-            tint = tint,
-            modifier = Modifier.size(IconSize.sm),
-        )
-        Text(
-            text,
-            style = MaterialTheme.typography.labelMedium,
-            color = cs.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Row(
+            Modifier.padding(horizontal = Space.md, vertical = Space.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+        ) {
+            Box(
+                Modifier.size(20.dp).clip(CircleShape).background(tint.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = when {
+                        unanswered -> "Request closed unanswered"
+                        declined -> "Question declined"
+                        else -> "Request answered"
+                    },
+                    tint = tint,
+                    modifier = Modifier.size(IconSize.sm),
+                )
+            }
+            Text(
+                buildAnnotatedString {
+                    withStyle(SpanStyle(color = cs.onSurfaceVariant, fontWeight = FontWeight.Medium)) { append(lead) }
+                    if (!rest.isNullOrBlank()) {
+                        append("  ")
+                        withStyle(SpanStyle(color = cs.onSurface)) { append(rest) }
+                    }
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
@@ -676,7 +1174,6 @@ private fun answersObject(raw: Map<String, Any>): JsonObject = buildJsonObject {
     put("answers", buildJsonObject {
         for ((k, v) in raw) {
             when (v) {
-                is Set<*> -> put(k, JsonArray(v.map { JsonPrimitive(it.toString()) }))
                 is Collection<*> -> put(k, JsonArray(v.map { JsonPrimitive(it.toString()) }))
                 else -> put(k, JsonPrimitive(v.toString()))
             }
