@@ -13,8 +13,10 @@ import kotlin.test.assertTrue
 
 /** A clipboard in memory: never the host's. */
 internal class FakeClipboard(var text: String? = null) : EditorClipboard {
+    /** read() calls: on iOS a read is what shows the paste permission prompt. */
+    var reads = 0
     override fun write(text: String) { this.text = text }
-    override suspend fun read(): String? = text
+    override suspend fun read(): String? { reads++; return text }
     override fun hasText(): Boolean = text != null
 }
 

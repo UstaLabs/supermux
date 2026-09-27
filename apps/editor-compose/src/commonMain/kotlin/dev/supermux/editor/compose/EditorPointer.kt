@@ -348,7 +348,19 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         t.longPressed = true
         taps = 0
         c.focusFromTouch()
-        val w = TextBoundaries.wordAt(c.view.state.doc, offsetAt(t.down))
+        val doc = c.view.state.doc
+        val at = offsetAt(t.down)
+        val w = TextBoundaries.wordAt(doc, at)
+        if (w.isEmpty() || noWordAt(t.down, at)) {
+            // Nothing to select (an empty line, past a line's end, below the last line): the
+            // caret goes there with its handle, and the menu (Paste, Select All) comes on release.
+            select(EditorSelection.cursor(at))
+            c.handles = TouchHandles.CURSOR
+            c.menuShown = false
+            drag = null
+            lastPointer = t.down
+            return
+        }
         val r = SelectionRange(w.first, w.last + 1)
         select(EditorSelection.single(r.anchor, r.head))
         c.handles = TouchHandles.SELECTION
@@ -356,6 +368,17 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         // Keep the finger down and drag: the selection grows by words from the pressed one.
         drag = Drag(Mode.WORD, r, contentOf(t.down))
         lastPointer = t.down
+    }
+
+    /** True when [p] (surface pixels) is past the end of [at]'s line, or below the document. */
+    private fun noWordAt(p: Offset, at: Int): Boolean {
+        val g = c.geometry
+        val q = contentOf(p)
+        if (q.y >= g.heights.totalHeight) return true
+        val doc = c.view.state.doc
+        val line = doc.lineIndexAt(at)
+        val lineEnd = if (line + 1 < doc.lineCount) doc.lineStart(line + 1) - 1 else doc.length
+        return at == lineEnd && q.x > g.rectFor(lineEnd).left + g.layouts.charWidthPx / 2
     }
 
     private fun lineRange(at: Int): SelectionRange {

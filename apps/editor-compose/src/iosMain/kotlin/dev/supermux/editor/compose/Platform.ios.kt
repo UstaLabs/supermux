@@ -31,3 +31,5 @@ internal actual fun rememberPlatformKeyboardShow(): (() -> Unit)? {
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     return androidx.compose.runtime.remember(keyboard) { { keyboard?.show(); Unit } }
 }
+
+internal actual fun platformClipboardHasText(): Boolean? = platform.UIKit.UIPasteboard.generalPasteboard.hasStrings

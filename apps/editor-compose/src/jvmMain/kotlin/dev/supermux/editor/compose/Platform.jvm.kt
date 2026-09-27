@@ -24,3 +24,5 @@ internal actual val platformClearsFieldSemantics: Boolean = false
 
 @androidx.compose.runtime.Composable
 internal actual fun rememberPlatformKeyboardShow(): (() -> Unit)? = null
+
+internal actual fun platformClipboardHasText(): Boolean? = null

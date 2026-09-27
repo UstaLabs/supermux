@@ -41,6 +41,13 @@ fun rememberEditorClipboard(): EditorClipboard {
     return remember(manager) { platformEditorClipboard(ComposeEditorClipboard(manager)) }
 }
 
+/**
+ * Whether the system clipboard holds text, WITHOUT reading it, where Compose's `hasText()` reads
+ * (iOS: `UIPasteboard.string`, which shows the paste permission prompt and, asked from inside a
+ * frame, ran a nested run loop that re-entered Compose: the iPhone crash). Null: Compose's is fine.
+ */
+internal expect fun platformClipboardHasText(): Boolean?
+
 /** The platform's clipboard where Compose's is not enough (the web), else [compose]. */
 internal expect fun platformEditorClipboard(compose: EditorClipboard): EditorClipboard
 
@@ -48,7 +55,7 @@ internal expect fun platformEditorClipboard(compose: EditorClipboard): EditorCli
 private class ComposeEditorClipboard(private val manager: ClipboardManager) : EditorClipboard {
     override fun write(text: String) = manager.setText(AnnotatedString(text))
     override suspend fun read(): String? = manager.getText()?.text?.takeIf { it.isNotEmpty() }
-    override fun hasText(): Boolean = manager.hasText()
+    override fun hasText(): Boolean = platformClipboardHasText() ?: manager.hasText()
 }
 
 /**

@@ -35,3 +35,5 @@ internal actual fun rememberPlatformKeyboardShow(): (() -> Unit)? {
         }
     }
 }
+
+internal actual fun platformClipboardHasText(): Boolean? = null
