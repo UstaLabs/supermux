@@ -342,9 +342,11 @@ object DefaultCommands {
     private fun verticalByGeometry(g: Geometry, doc: Rope, head: Int, dir: Int, page: Float, goalX: Float): Int {
         val r = g.rectFor(head)
         val step = if (page > 0f) page else (r.bottom - r.top)
-        val y = (r.top + r.bottom) / 2 + dir * step
-        if (y < 0f) return 0
-        if (y >= g.heights.totalHeight) return doc.length
+        val raw = (r.top + r.bottom) / 2 + dir * step
+        if (raw < 0f) return 0
+        if (raw >= g.heights.totalHeight) return doc.length
+        // Over block widgets (and folded lines) to the next text row that way.
+        val y = g.textRowY(raw, dir) ?: return if (dir > 0) doc.length else 0
         return g.offsetAt(Offset(goalX, y))
     }
 

@@ -607,7 +607,7 @@ private fun swallowedChords(apple: Boolean) = if (apple) swallowedApple else swa
  * turns into an IME action and drops (terminal-compose's lesson).
  */
 @Composable
-internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
+internal fun EditorInputField(controller: EditorController, readOnly: Boolean, focus: Modifier = Modifier) {
     val sync = controller.fieldSync
     val field = remember(sync) { sync.initialField().let { TextFieldState(it.text, TextRange(it.selStart, it.selEnd)) } }
     // While the input transformation runs, the field cannot be edited: a write is kept for it to apply.
@@ -692,7 +692,7 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
     // hideFromAccessibility and showed it as a second, unlabelled text element. The IME does not
     // use semantics; it stays the input target.
     val expose = LocalEditorExposeField.current
-    Box(if (expose) Modifier.semantics { hideFromAccessibility() } else Modifier.clearAndSetSemantics { }) {
+    Box(focus.then(if (expose) Modifier.semantics { hideFromAccessibility() } else Modifier.clearAndSetSemantics { })) {
     BasicTextField(
         state = field,
         // Placed at the caret by the surface's layout pass (it knows where the caret is this frame).

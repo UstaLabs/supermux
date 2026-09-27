@@ -26,6 +26,9 @@ import dev.supermux.editor.core.decorationsFacet
  */
 internal class DrawnMarker(val column: String, val line: Int, val marker: GutterMarker, val rect: Rect, val textHeight: Float, val style: GutterMarkerStyle?)
 
+/** Subcomposes and measures a block widget's content at a width; returns its height, null when it has none. */
+internal typealias WidgetMeasurer = (key: dev.supermux.editor.core.WidgetKey, width: Int) -> Int?
+
 /** One text layout to draw, its top-left in surface pixels. */
 internal class DrawnText(val layout: TextLayoutResult, val topLeft: Offset, val color: Color = Color.Unspecified)
 
@@ -50,6 +53,8 @@ internal class SurfaceFrame(
     val caret: Rect,
     /** The gutter markers on the visible lines. */
     val markers: List<DrawnMarker> = emptyList(),
+    /** The block widgets on the drawn lines. */
+    val widgets: List<PlacedWidget> = emptyList(),
 ) {
     companion object {
         fun empty(size: Size, scrollX: Float, scrollY: Float, gutterWidth: Float, caret: Rect) = SurfaceFrame(
@@ -67,7 +72,7 @@ internal class SurfaceFrame(
  * measuring (a wrapped line that turned out taller pushes the ones below it down in the same
  * frame), and the anchor keeps the text on screen where it was.
  */
-internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme): SurfaceFrame {
+internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme, measureWidget: WidgetMeasurer?): SurfaceFrame {
     val g = geometry
     val doc = state.doc
     // The IME's composing text: underlined, on top of the state's own decorations.
@@ -80,16 +85,32 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme)
 
     beginAnchor()
     scroll.clamp()
-    val guess = g.visibleLines(scroll.y, height, overscan)
-    for (l in guess) g.measure(l)
+    blocks.beginFrame()
+    // Lay out what is visible (lines and block widgets), put the anchor back (measured heights
+    // moved nothing on screen), and look again until nothing new comes into view.
+    val measured = HashSet<Int>()
+    fun measureRange(range: IntRange) {
+        for (l in range) if (measured.add(l)) g.measure(l)
+        if (measureWidgets(range, measureWidget)) syncBlocks(state)
+    }
+    var lines = g.visibleLines(scroll.y, height, overscan)
+    measureRange(lines)
     // The lines the frame looks at off screen too (the caret the hidden field sits at, the touch
     // handles' ends): measured BEFORE the anchor is restored, so their real heights move nothing.
     val main = state.selection.main
-    for (at in intArrayOf(main.head, main.from, main.to)) doc.lineIndexAt(at).let { if (it !in guess) g.measure(it) }
+    for (at in intArrayOf(main.head, main.from, main.to)) doc.lineIndexAt(at).let { if (measured.add(it)) g.measure(it) }
     restoreAnchor()
     scroll.clamp()
-    val lines = g.visibleLines(scroll.y, height, overscan)
-    for (l in lines) if (l !in guess) g.measure(l)
+    for (pass in 0 until 4) {
+        val next = g.visibleLines(scroll.y, height, overscan)
+        if (next == lines) break
+        lines = next
+        measureRange(next)
+        restoreAnchor()
+        scroll.clamp()
+    }
+    lines = g.visibleLines(scroll.y, height, overscan)
+    measureRange(lines)
     drawnLines = lines
     recordAnchor()
 
@@ -177,7 +198,23 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme)
         }
     }
     val spots = if (handles != TouchHandles.NONE) handleSpots() else emptyList()
-    return SurfaceFrame(size, lines, scrollX, scrollY, gutterWidth, current, backgrounds, selections, text, cursors, numbers, spots, caret, markers)
+    // Block widgets on the drawn lines: above a line from its box's top, below it from its text's bottom.
+    val widgets = ArrayList<PlacedWidget>()
+    val lh = g.layouts.lineHeightPx
+    var lastLine = -1
+    var aboveY = 0f
+    var belowY = 0f
+    for (e in blocks.inLines(lines)) {
+        if (e.line != lastLine) {
+            lastLine = e.line
+            aboveY = g.heights.top(e.line) - scrollY
+            belowY = top(e.line) + g.textHeight(e.line)
+        }
+        val h = blocks.heightOf(e, lh, registry)
+        val y = if (e.above) aboveY.also { aboveY += h } else belowY.also { belowY += h }
+        widgets += PlacedWidget(e.key, Rect(gutterWidth, y, size.width, y + h), blocks.measuredThisFrame(e.key))
+    }
+    return SurfaceFrame(size, lines, scrollX, scrollY, gutterWidth, current, backgrounds, selections, text, cursors, numbers, spots, caret, markers, widgets)
 }
 
 /**

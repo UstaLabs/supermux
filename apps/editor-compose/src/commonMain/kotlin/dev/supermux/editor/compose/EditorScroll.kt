@@ -27,10 +27,17 @@ import androidx.compose.runtime.setValue
  */
 @Stable
 class EditorScrollState {
-    var x: Float by mutableFloatStateOf(0f)
-        private set
-    var y: Float by mutableFloatStateOf(0f)
-        private set
+    private val xState = mutableFloatStateOf(0f)
+    private val yState = mutableFloatStateOf(0f)
+
+    // While a surface lays out, reading the position is NOT observed: the pass observes [version]
+    // instead, so its own anchoring and clamping never schedule another pass.
+    var x: Float
+        get() = if (layoutDepth > 0) Snapshot.withoutReadObservation { xState.floatValue } else xState.floatValue
+        private set(v) { xState.floatValue = v }
+    var y: Float
+        get() = if (layoutDepth > 0) Snapshot.withoutReadObservation { yState.floatValue } else yState.floatValue
+        private set(v) { yState.floatValue = v }
 
     /**
      * Bumped by every change of the position that a surface's own layout pass did not make (a

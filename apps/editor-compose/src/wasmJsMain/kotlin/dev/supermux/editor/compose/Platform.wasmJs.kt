@@ -275,7 +275,9 @@ internal actual fun platformFocusChanged(c: EditorController, focused: Boolean) 
     bindSoon(st, f.text, f.selStart, f.selEnd)
 }
 
-private fun unbind(st: JsAny) { js("{ st.ta = null; st.composing = false; }") }
+// Compose may reuse the element for another field's session (a widget's text field): it must not
+// keep answering to this editor's state.
+private fun unbind(st: JsAny) { js("{ if (st.ta && st.ta.__editorState === st) st.ta.__editorState = null; st.ta = null; st.composing = false; }") }
 
 private fun bindSoon(st: JsAny, text: String, start: Int, end: Int) {
     // The field as it is now; a write in between (typing) replaces it before the resyncs run.

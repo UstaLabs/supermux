@@ -160,6 +160,9 @@ internal class EditorPointer(private val c: EditorController, private val scope:
     private fun AwaitPointerEventScope.onPress(event: PointerEvent, doubleTap: Long, slop: Float) {
         val change = event.changes.firstOrNull { it.pressed } ?: return
         eventTime = change.uptimeMillis
+        // A press on a block widget's content is the widget's (its text field, its buttons): no
+        // caret, no focus, no keyboard. A drag starting there still scrolls (the scrollable's).
+        if (c.widgetAt(change.position)) return
         if (change.type != PointerType.Mouse) {
             // A handle hangs BELOW its tip: a finger above the tip is on the text row, aiming at the
             // text (a second tap on a word, however slow), never the handle whose target reaches up

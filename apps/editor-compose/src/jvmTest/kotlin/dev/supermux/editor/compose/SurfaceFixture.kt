@@ -53,6 +53,8 @@ internal fun editorTest(
     fieldPointerSpy: (() -> Unit)? = null,
     child: (@androidx.compose.runtime.Composable androidx.compose.foundation.layout.BoxScope.() -> Unit)? = null,
     toolbar: androidx.compose.ui.platform.TextToolbar? = null,
+    widgets: WidgetRegistry? = null,
+    showLineNumbers: Boolean = true,
     body: ComposeUiTest.(SurfaceFixture) -> Unit,
 ) = runComposeUiTest {
     // Measuring or scrolling inside a draw pass fails every surface test (M3c: measure before draw).
@@ -88,6 +90,8 @@ internal fun editorTest(
                     onPaint = onPaint,
                     clipboard = clipboard,
                     onFontSize = onFontSize,
+                    widgets = widgets ?: androidx.compose.runtime.remember { WidgetRegistry() },
+                    showLineNumbers = showLineNumbers,
                 )
             }
         }

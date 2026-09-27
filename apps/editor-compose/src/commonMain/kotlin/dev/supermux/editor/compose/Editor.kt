@@ -3,6 +3,8 @@ package dev.supermux.editor.compose
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.SubcomposeMeasureScope
 import androidx.compose.ui.node.DrawModifierNode
@@ -70,6 +72,12 @@ internal object EditorDefaults {
 
     /** The pointer shield over the hidden field: its 48 dp touch target, with a margin. */
     const val SHIELD_DP = 64
+
+    /** Block widgets out of view stay composed while within this many screens of it... */
+    const val RETAIN_SCREENS = 2
+
+    /** ...and at most this many of them. */
+    const val RETAIN_WIDGETS = 8
 }
 
 /** Whether an input session starts on any focus ([EditorController.inputOnAnyFocus]); tests switch it. */
@@ -109,6 +117,7 @@ internal val LocalEditorCursorBlink = staticCompositionLocalOf { true }
  * @param label what a screen reader calls this editor (its content description).
  * @param onFontSize the font size (sp) after every zoom (`Mod +`/`Mod −`/`Mod 0`, a pinch once the
  *   fingers lift), for the host to keep per app; give it back through [EditorView.fontSize].
+ * @param widgets the composable content of block widgets (and panels), by widget type.
  */
 @Composable
 fun Editor(
@@ -124,6 +133,7 @@ fun Editor(
     scrollState: EditorScrollState = view.defaultScrollState,
     onFontSize: (Float) -> Unit = {},
     label: String = EditorSemantics.LABEL,
+    widgets: WidgetRegistry = remember { WidgetRegistry() },
 ) {
     // cacheSize = 0: the surface keeps its own bounded caches (LineLayouts).
     val measurer = rememberTextMeasurer(cacheSize = 0)
@@ -225,16 +235,6 @@ fun Editor(
                 reverseDirection = ScrollableDefaults.reverseDirection(layoutDirection, Orientation.Horizontal, false),
                 flingBehavior = ScrollableDefaults.flingBehavior(),
             )
-            // The focus TARGET is the hidden field inside (an IME only runs for a focused text
-            // field); this box is its ancestor, so `hasFocus` is the surface's focus and a key
-            // preview reaches the keymap before the field could insert anything.
-            .onFocusChanged {
-                surfaceInput.focused = it.hasFocus
-                view.focused = it.hasFocus
-                platformFocusChanged(controller, it.hasFocus)
-                if (!it.hasFocus) { controller.handles = TouchHandles.NONE; controller.menuShown = false; controller.onBlur() }
-            }
-            .onPreviewKeyEvent { handleEditorKey(view, it, controller.composing) }
             // INSIDE the scrollables: this node sees the Main pass first and consumes what is a
             // selection (mouse presses and drags), leaving a finger's drag to scroll.
             .pointerInput(pointer) { pointer.handle(this) }
@@ -242,6 +242,11 @@ fun Editor(
             .onGloballyPositioned { controller.coordinates = it },
     ) {
         val paintHook = rememberUpdatedState(onPaint)
+        val holder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+        SideEffect {
+            controller.registry = widgets
+            controller.saveableHolder = holder
+        }
         val surfaceText = LocalEditorSurfaceText.current
         val testChild = LocalEditorTestChild.current
         // The surface's children, each subcomposed by the layout pass below (M3c's widgets join them).
@@ -254,7 +259,24 @@ fun Editor(
                         .then(if (surfaceText) Modifier.editorSemantics(controller, label, readOnly) else Modifier))
                 },
                 testChild = testChild?.let { child -> { Box(Modifier.fillMaxSize()) { child() } } },
-                field = { EditorInputField(controller, readOnly) },
+                // The focus TARGET is the hidden field (an IME only runs for a focused text field); its
+                // wrapper's `hasFocus` is the editor's focus and its key preview reaches the keymap
+                // before the field could insert anything. The field's own, not the surface's: a
+                // widget's text field (a review comment) is inside the surface too, and its focus and
+                // keys are its own.
+                field = {
+                    EditorInputField(
+                        controller, readOnly,
+                        Modifier
+                            .onFocusChanged {
+                                surfaceInput.focused = it.hasFocus
+                                controller.view.focused = it.hasFocus
+                                platformFocusChanged(controller, it.hasFocus)
+                                if (!it.hasFocus) { controller.handles = TouchHandles.NONE; controller.menuShown = false; controller.onBlur() }
+                            }
+                            .onPreviewKeyEvent { handleEditorKey(controller.view, it, controller.composing) },
+                    )
+                },
                 // A pointer shield exactly over the hidden field's touch target: the topmost hit sibling
                 // takes a pointer, so the field (at the caret, its target expanded to 48 dp) never gets
                 // one. Its own touch selection crashed on iOS (a long press on an empty line: Compose's
@@ -277,6 +299,9 @@ fun Editor(
         }
         // Measure before draw: the layout pass positions the scroll, lays out the visible lines and
         // places the children; the canvas then only paints what it decided.
+        // The registry is the controller's before the first layout pass (a SideEffect runs after it).
+        controller.registry = widgets
+        controller.saveableHolder = holder
         val policy = remember(controller, slots, shownTheme, density, lineWrap, showLineNumbers) {
             surfaceMeasurePolicy(controller, slots) { controller.configure(shownTheme, density, lineWrap, showLineNumbers) }
         }
@@ -308,10 +333,19 @@ private fun surfaceMeasurePolicy(
     slots: SurfaceSlots,
     configure: () -> Unit,
 ): SubcomposeMeasureScope.(Constraints) -> MeasureResult = { constraints ->
-    configure()
     val w = if (constraints.hasBoundedWidth) constraints.maxWidth else constraints.minWidth
     val h = if (constraints.hasBoundedHeight) constraints.maxHeight else constraints.minHeight
-    val frame = c.layoutFrame(w.toFloat(), h.toFloat())
+    // Block widgets are subcomposed and measured INSIDE the layout pass (their heights move lines).
+    val widgetPlaceables = HashMap<dev.supermux.editor.core.WidgetKey, List<Placeable>>()
+    val measureWidget: WidgetMeasurer = { key, width ->
+        val ps = subcompose(WidgetSlot(key), c.widgetContent(key)).map { it.measure(Constraints(minWidth = width, maxWidth = width)) }
+        widgetPlaceables[key] = ps
+        if (ps.isEmpty()) null else ps.maxOf { it.height }
+    }
+    val frame = c.layoutFrame(w.toFloat(), h.toFloat(), configure, measureWidget)
+    val placed = frame?.widgets.orEmpty().filter { it.composed && widgetPlaceables.containsKey(it.key) }
+    // Out of view but near: still composed (not measured, not placed), so their state lives.
+    for (k in c.retainedWidgets(placed.map { it.key })) subcompose(WidgetSlot(k), c.widgetContent(k))
     val full = Constraints.fixed(w, h)
     val canvas = subcompose(Slot.CANVAS, slots.canvas).map { it.measure(full) }
     val test = slots.testChild?.let { t -> subcompose(Slot.TEST, t).map { it.measure(full) } }.orEmpty()
@@ -334,9 +368,14 @@ private fun surfaceMeasurePolicy(
         // The field sits at the caret, where the platform anchors the keyboard's candidates.
         field.forEach { it.place(caret.left.toInt(), caret.top.toInt()) }
         shield.forEach { it.place(caret.left.toInt() - it.width / 2, caret.top.toInt() - it.height / 2) }
+        // Widgets over the shield: a widget's text field right under the caret still gets its taps.
+        for (pw in placed) widgetPlaceables[pw.key]?.forEach { it.place(pw.rect.left.toInt(), kotlin.math.round(pw.rect.top).toInt()) }
         overlay.forEach { it.place(0, 0) }
     }
 }
+
+/** A block widget's slot. */
+private data class WidgetSlot(val key: dev.supermux.editor.core.WidgetKey)
 
 /** The canvas: paints the controller's last frame ([EditorController.draw]), then tells the host. */
 internal fun Modifier.editorCanvas(c: EditorController, onPaint: androidx.compose.runtime.State<(() -> Unit)?>): Modifier =
@@ -607,10 +646,96 @@ internal class EditorController(
         if (key != heightsKey) {
             heightsKey = key
             heights = HeightMap(view.state.doc.lineCount, layouts.lineHeightPx)
+            blocks.invalidate()
             geometry = Geometry({ view.state }, heights, layouts)
             if (view.surface === this) view.geometry = geometry
         }
     }
+
+    // ------------------------------------------------------------------ block widgets --
+
+    /** The state's block widgets and their heights in the height map. */
+    val blocks = BlockWidgets()
+
+    /** Where widget content comes from (`Editor(widgets = …)`). */
+    var registry: WidgetRegistry? = null
+
+    /** Keeps a disposed widget's saveable state (a draft) until it is composed again. */
+    var saveableHolder: androidx.compose.runtime.saveable.SaveableStateHolder? = null
+
+    /** The height map in step with the state's block widgets; true when a height changed. */
+    fun syncBlocks(state: EditorState): Boolean = blocks.sync(state, heights, layouts.lineHeightPx, registry)
+
+    /**
+     * Measure the registered widgets on [lines] not measured yet this frame ([measure] subcomposes
+     * them); true when a height changed (then the height map needs [syncBlocks]).
+     */
+    fun measureWidgets(lines: IntRange, measure: WidgetMeasurer?): Boolean {
+        if (measure == null) return false
+        val reg = registry ?: return false
+        val width = (viewportSize.width - gutterWidth).toInt().coerceAtLeast(1)
+        var changed = false
+        for (e in blocks.inLines(lines)) {
+            if (e.key.type !in reg || blocks.measuredThisFrame(e.key)) continue
+            val h = measure(e.key, width) ?: continue
+            if (blocks.setMeasured(e.key, h.toFloat())) changed = true
+        }
+        return changed
+    }
+
+    /** The widget scope every widget's content gets. */
+    val widgetScope: WidgetScope = object : WidgetScope {
+        override val view: EditorView get() = this@EditorController.view
+        override val theme: EditorTheme get() = this@EditorController.theme ?: error("the editor is not configured")
+        override val lineHeight: androidx.compose.ui.unit.Dp get() = with(density) { layouts.lineHeightPx.toDp() }
+        override fun focusEditor() { requestFocus() }
+    }
+
+    private val widgetContents = HashMap<dev.supermux.editor.core.WidgetKey, @Composable () -> Unit>()
+
+    /** A widget's content for its slot, kept per key (so a scroll recomposes nothing). */
+    fun widgetContent(key: dev.supermux.editor.core.WidgetKey): @Composable () -> Unit = widgetContents.getOrPut(key) {
+        {
+            val content = registry?.content(key.type)
+            val holder = saveableHolder
+            if (content != null && holder != null) {
+                holder.SaveableStateProvider(key.saveKey()) {
+                    Box(Modifier.fillMaxWidth()) { widgetScope.content(key) }
+                }
+            }
+        }
+    }
+
+    /** The widgets composed last frame, most recently shown last (the retained cache's order). */
+    private val composedWidgets = LinkedHashSet<dev.supermux.editor.core.WidgetKey>()
+
+    /**
+     * The widgets kept composed but not placed: shown recently, now out of view but within
+     * [EditorDefaults.RETAIN_SCREENS] screens of it, at most [EditorDefaults.RETAIN_WIDGETS]. So
+     * a scroll out and back keeps even their `remember` state; a widget further away is disposed
+     * (its `rememberSaveable` state, a draft, is kept by the saveable-state holder).
+     */
+    fun retainedWidgets(shown: List<dev.supermux.editor.core.WidgetKey>): List<dev.supermux.editor.core.WidgetKey> {
+        val shownSet = shown.toHashSet()
+        val h = viewportSize.height
+        // The frame's position, never the scroll state's (a read here, after the pass, is observed).
+        val y = frame?.scrollY ?: return emptyList()
+        val near = composedWidgets.filter { k ->
+            if (k in shownSet) return@filter false
+            val e = blocks.entry(k) ?: return@filter false
+            if (registry?.contains(k.type) != true || e.line >= heights.lineCount) return@filter false
+            val top = heights.top(e.line)
+            top + heights.height(e.line) >= y - EditorDefaults.RETAIN_SCREENS * h && top <= y + (1 + EditorDefaults.RETAIN_SCREENS) * h
+        }.takeLast(EditorDefaults.RETAIN_WIDGETS)
+        composedWidgets.clear()
+        composedWidgets += near
+        composedWidgets += shown
+        widgetContents.keys.retainAll(composedWidgets)
+        return near
+    }
+
+    /** True when [p] (surface pixels) is on a block widget's content: that pointer is the widget's. */
+    fun widgetAt(p: androidx.compose.ui.geometry.Offset): Boolean = frame?.widgets?.any { it.composed && it.rect.contains(p) } == true
 
     // ------------------------------------------------------------------ the gutter --
 
@@ -724,31 +849,31 @@ internal class EditorController(
 
     /**
      * The layout pass (measure before draw): the size, the scroll position (the anchor, clamping),
-     * the visible lines laid out and the frame decided. Observed: the state, a scroll that was not
-     * this pass's own ([EditorScrollState.version]), the composition, the touch handles; the rest is
-     * read unobserved, so the pass's own scroll writes never schedule another one.
+     * the visible lines and block widgets measured, the frame decided. Everything it reads is
+     * observed except the scroll position, which it reads through [EditorScrollState.version] (a
+     * scroll it did not make), so its own anchoring and clamping never schedule another pass.
      */
-    fun layoutFrame(width: Float, height: Float): SurfaceFrame? {
+    fun layoutFrame(width: Float, height: Float, configure: () -> Unit = {}, measureWidget: WidgetMeasurer? = null): SurfaceFrame? {
         layoutPasses++
-        val state = view.state
-        @Suppress("UNUSED_VARIABLE") val observed = Triple(scroll.version, composition, handles)
-        val theme = theme ?: return null
-        val f = Snapshot.withoutReadObservation {
-            scroll.layoutDepth++
-            try {
-                val size = Size(width, height)
-                val d = digits(state.doc.lineCount)
-                val columns = followMarkerColumns(state)
-                if (size != lastSize || d != lastDigits || columns) {
-                    lastSize = size
-                    lastDigits = d
-                    viewportSize = size
-                    relayout()
-                }
-                buildFrame(state, theme)
-            } finally {
-                scroll.layoutDepth--
+        scroll.version
+        scroll.layoutDepth++
+        val f = try {
+            configure()
+            val state = view.state
+            val theme = theme ?: return null
+            val size = Size(width, height)
+            val d = digits(state.doc.lineCount)
+            val columns = followMarkerColumns(state)
+            if (size != lastSize || d != lastDigits || columns) {
+                lastSize = size
+                lastDigits = d
+                viewportSize = size
+                relayout()
             }
+            syncBlocks(state)
+            buildFrame(state, theme, measureWidget)
+        } finally {
+            scroll.layoutDepth--
         }
         frame = f
         canvasNode?.invalidate()
@@ -779,13 +904,16 @@ internal class EditorController(
 
     override fun onTransaction(tr: Transaction) {
         followHandles(tr)
-        if (!tr.docChanged) return
+        // Block widgets' heights follow at once (a scroll-into-view right after sees them).
+        if (!tr.docChanged) { if (theme != null) syncBlocks(tr.state); return }
         if (heights.lineCount == tr.startState.doc.lineCount) heights.applyChanges(tr.changes, tr.startState.doc, tr.state.doc)
-        else heights.reset(tr.state.doc.lineCount)
+        else { heights.reset(tr.state.doc.lineCount); blocks.invalidate() }
+        blocks.onChanges(tr)
         geometry.onChanges(tr.changes)
         // The anchor follows its text: an edit above the viewport does not move what is shown.
         val doc = tr.state.doc
         anchorPos = doc.lineStart(doc.lineIndexAt(tr.changes.mapPos(anchorPos.coerceIn(0, tr.changes.lengthBefore), -1)))
+        if (theme != null) syncBlocks(tr.state)
     }
 
     /**
@@ -814,6 +942,7 @@ internal class EditorController(
         menuShown = false
         geometry.clearPieceWidths()
         heights.reset(view.state.doc.lineCount)
+        blocks.invalidate()
         anchorValid = false
         scroll.scrollTo(0f, 0f)
         fieldSync.rewindow()?.let { fieldWriter?.invoke(it) }

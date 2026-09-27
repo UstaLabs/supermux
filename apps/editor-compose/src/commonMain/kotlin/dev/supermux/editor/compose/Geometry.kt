@@ -74,6 +74,29 @@ class Geometry(
     fun textHeight(line: Int): Float = heights.textHeight(line)
 
     /**
+     * A vertical move's target [y] (content pixels) moved off block widgets (and lines with no
+     * height): on a line's text it stays; on a widget, the nearest text row in direction [dir]
+     * (the first row of the next line down, the last row of the one up). Null: no text that way.
+     */
+    fun textRowY(y: Float, dir: Int): Float? {
+        val n = heights.lineCount
+        if (n == 0) return null
+        val line = heights.lineAt(y)
+        val top = lineTop(line)
+        val th = textHeight(line)
+        if (th > 0f && y >= top && y < top + th) return y
+        val onAbove = y < top
+        if (dir > 0) {
+            var l = if (onAbove) line else line + 1
+            while (l < n && textHeight(l) <= 0f) l++
+            return if (l < n) lineTop(l) + minOf(1f, textHeight(l) / 2) else null
+        }
+        var l = if (onAbove) line - 1 else line
+        while (l >= 0 && textHeight(l) <= 0f) l--
+        return if (l >= 0) lineTop(l) + textHeight(l) - minOf(1f, textHeight(l) / 2) else null
+    }
+
+    /**
      * The layouts to draw for [line] and where (line-local: from the line's text top-left), limited
      * to line-local x in [xFrom, xTo] and y in [yFrom, yTo] for a long line. A short line is one
      * layout at (0, 0).
