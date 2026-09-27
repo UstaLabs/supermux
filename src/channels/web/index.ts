@@ -11,6 +11,7 @@ import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOver
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
 import { FileSystemService } from "../../core/fs/file-system-service"
+import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { reanchor } from "../../core/review/anchor"
@@ -456,7 +457,9 @@ export class WebChannel implements Channel {
   private displaySockets = new WeakMap<object, import("bun").Socket>()
   private readonly fsWatcher?: FsWatcher
   /** The host's single file-system service (spec 2026-09-27). */
-  readonly fss: FileSystemService
+  readonly fss: FileSystemService<import("bun").ServerWebSocket<WSData>>
+  /** `fss` for the legacy /…/fs* routes: WorkdirFs never subscribes, so the socket type is moot. */
+  private get legacyFss(): FileSystemService { return this.fss as unknown as FileSystemService }
   private readonly clientLogRing: StoredClientLogEntry[] = []
   // Per-instance auth-failure rate-limit buckets, keyed by client IP. Instance
   // (not module) scope keeps concurrent channels — e.g. the many WebChannels a
@@ -476,7 +479,9 @@ export class WebChannel implements Channel {
     this.mintDeviceToken = opts.mintDeviceToken
     this.getRelayUrl = opts.getRelayUrl
     this.fsWatcher = opts.fsWatcher
-    this.fss = new FileSystemService()
+    this.fss = new FileSystemService<import("bun").ServerWebSocket<WSData>>({
+      emit: (ws, frame) => { try { ws.send(JSON.stringify(frame)) } catch {} },
+    })
   }
 
   get boundPort(): number {
@@ -650,6 +655,7 @@ export class WebChannel implements Channel {
   async stop(): Promise<void> {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = undefined
+    this.fss.close()
     // Force-close active/keep-alive connections (the `true`). A graceful stop
     // leaves idle keep-alive sockets open, so a stopped channel keeps serving on
     // them — which on an in-process restart (and across reused ports under
@@ -906,6 +912,7 @@ export class WebChannel implements Channel {
   }
 
   private onWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
+    this.fss.dropSocket(ws)
     if (this.fsWatcher && (ws.data as any)?._editorCb) {
       this.fsWatcher.unsubscribe((ws.data as any)._editorSession, (ws.data as any)._editorCb)
     }
@@ -1431,6 +1438,14 @@ export class WebChannel implements Channel {
       this.broadcastToOthers({ type: "draft_clear", session: frame.session }, ws)
       return
     }
+    if (frame.type === "fs_sub" && typeof frame.path === "string") {
+      void this.fss.subscribe(ws, frame.path, typeof frame.since === "string" ? frame.since : undefined)
+      return
+    }
+    if (frame.type === "fs_unsub" && typeof frame.path === "string") {
+      this.fss.unsubscribe(ws, frame.path)
+      return
+    }
     if (frame.type === "editor_open" && frame.session) {
       if (this.fsWatcher && this.opts.getSessionWorkdir) {
         const fsWorkdir = this.opts.getSessionWorkdir(frame.session)
@@ -1446,6 +1461,10 @@ export class WebChannel implements Channel {
               }))
             } catch {}
           }
+          // A second editor_open on this socket replaces the first: release the old
+          // watcher callback, or it stays subscribed until the socket closes.
+          const prevCb = (ws.data as any)._editorCb
+          if (prevCb) this.fsWatcher.unsubscribe((ws.data as any)._editorSession, prevCb)
           ;(ws.data as any)._editorCb = cb
           ;(ws.data as any)._editorSession = frame.session
           this.fsWatcher.subscribe(frame.session, fsWorkdir, cb)
@@ -1644,6 +1663,17 @@ export class WebChannel implements Channel {
 
   private json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  }
+
+  /** An /fs/* failure as `{ error: <code>, message }` with a status that matches the code. */
+  private fsErrorResponse(e: unknown): Response {
+    const err = toFsError(e)
+    const status: Record<string, number> = {
+      EINVAL: 400, ENOTDIR: 400, EISDIR: 400, ELOOP: 400, ENAMETOOLONG: 400,
+      EACCES: 403, ENOENT: 404, EEXIST: 409, ENOTEMPTY: 409, EXDEV: 409,
+      TOO_LARGE: 413, BINARY: 415,
+    }
+    return this.json({ error: err.code, message: err.message }, status[err.code] ?? 500)
   }
 
   // Mode-specific instruction text shown when self-update isn't possible
@@ -2537,7 +2567,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new WorkdirFs(this.fss, workdir)
+      const fs = new WorkdirFs(this.legacyFss, workdir)
       const relPath = url.searchParams.get("path") ?? "."
       try {
         return this.json(await fs.listDir(relPath))
@@ -2549,7 +2579,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new WorkdirFs(this.fss, workdir)
+      const fs = new WorkdirFs(this.legacyFss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       try {
         const content = await fs.readFile(filePath)
@@ -2564,7 +2594,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new WorkdirFs(this.fss, workdir)
+      const fs = new WorkdirFs(this.legacyFss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       const content = await req.text()
       try {
@@ -2578,7 +2608,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new WorkdirFs(this.fss, workdir)
+      const fs = new WorkdirFs(this.legacyFss, workdir)
       const query = url.searchParams.get("q") ?? ""
       try {
         const results = await fs.searchFiles(query)
@@ -2621,7 +2651,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      const fs = new WorkdirFs(this.fss, workdir)
+      const fs = new WorkdirFs(this.legacyFss, workdir)
       const relPath = url.searchParams.get("path") ?? "."
       try {
         return this.json(await fs.listDir(relPath))
@@ -2633,7 +2663,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      const fs = new WorkdirFs(this.fss, workdir)
+      const fs = new WorkdirFs(this.legacyFss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       try {
         const content = await fs.readFile(filePath)
@@ -2648,7 +2678,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      const fs = new WorkdirFs(this.fss, workdir)
+      const fs = new WorkdirFs(this.legacyFss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       const content = await req.text()
       try {
@@ -2662,7 +2692,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      const fs = new WorkdirFs(this.fss, workdir)
+      const fs = new WorkdirFs(this.legacyFss, workdir)
       const query = url.searchParams.get("q") ?? ""
       try {
         const results = await fs.searchFiles(query)
@@ -2692,6 +2722,49 @@ export class WebChannel implements Channel {
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
       return this.json({ repos: listRepoRefs(workdir) })
+    }
+
+    // ── Host file system (spec 2026-09-27 §4.4) ─────────────────────────────
+    // Absolute paths anywhere on the host, no deny-list: the same trust as a terminal.
+    // That is only sound because this block sits BELOW the device-token gate above
+    // (`requireAuth`): the credential is a paired device's token (Bearer or the
+    // cmux_token cookie, which holds the same token), and requests addressed to a
+    // proxied port — subdomain host or /p/<slug>/ — are routed to the proxy before
+    // `routeRequest`, so a public proxy link can never reach here. fs-routes.test.ts
+    // pins both.
+    if (path === "/fs/list" || path === "/fs/stat" || path === "/fs/read" || path === "/fs/write" || path === "/fs/search" || path === "/fs/ops") {
+      const p = url.searchParams.get("path") ?? ""
+      try {
+        if (method === "GET" && path === "/fs/list") return this.json(await this.fss.list(p))
+        if (method === "GET" && path === "/fs/stat") return this.json(await this.fss.stat(p))
+        if (method === "GET" && path === "/fs/read") {
+          return new Response(await this.fss.read(p), { headers: { "content-type": "text/plain; charset=utf-8" } })
+        }
+        if (method === "PUT" && path === "/fs/write") return this.json(await this.fss.write(p, await req.text()))
+        if (method === "GET" && path === "/fs/search") {
+          const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "50") || 50, 1), 500)
+          return this.json(await this.fss.search(url.searchParams.get("scope") ?? "", url.searchParams.get("q") ?? "", limit))
+        }
+        if (method === "POST" && path === "/fs/ops") {
+          const body = await req.json().catch(() => null) as Record<string, unknown> | null
+          const op = body?.op
+          if (!body || typeof op !== "string" || typeof body.path !== "string") {
+            return this.json({ error: "EINVAL", message: "op and path required" }, 400)
+          }
+          if (op === "rename" || op === "move") {
+            if (typeof body.to !== "string") return this.json({ error: "EINVAL", message: `${op} needs to` }, 400)
+            await this.fss.op({ op, path: body.path, to: body.to })
+          } else if (op === "mkdir" || op === "touch" || op === "delete") {
+            await this.fss.op({ op, path: body.path })
+          } else {
+            return this.json({ error: "EINVAL", message: `unknown op: ${op}` }, 400)
+          }
+          return new Response(null, { status: 204 })
+        }
+        return this.json({ error: "method not allowed" }, 405)
+      } catch (e) {
+        return this.fsErrorResponse(e)
+      }
     }
 
     if (method === "GET" && path === "/sessions") {
