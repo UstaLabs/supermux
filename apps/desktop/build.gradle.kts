@@ -356,6 +356,15 @@ compose.desktop {
                 // entitlement is needed (JIT, and library validation for the downloaded CEF).
                 entitlementsFile.set(project.file("entitlements.mac.plist"))
                 runtimeEntitlementsFile.set(project.file("entitlements.mac.plist"))
+                // Without a usage string macOS never shows the mic prompt: TCC silently denies the app
+                // and javax.sound hands back a line of ALL-ZERO samples (not an error) — the broker
+                // then gets silence and the STT model invents a sentence from nothing.
+                infoPlist {
+                    extraKeysRawXml = """
+                        <key>NSMicrophoneUsageDescription</key>
+                        <string>Supermux uses the microphone for voice dictation.</string>
+                    """.trimIndent()
+                }
                 // Signing is OPT-IN so unsigned local/CI dry-run builds keep working untouched:
                 // pass -PsmMacSignIdentity=<identity-or-sha1> (plus -PsmMacSignKeychain=<path> when
                 // the identity lives outside the login keychain). ⚠️ Use the SHA-1 fingerprint from

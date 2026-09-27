@@ -60,6 +60,10 @@ internal object WavEncoder {
     }
 }
 
+/** True when 16-bit PCM holds only exact zeros — what a TCC-denied mic delivers. Real room noise
+ *  never stays at 0, so this cannot swallow a quiet speaker. */
+internal fun isDigitalSilence(pcm: ByteArray): Boolean = pcm.all { it == 0.toByte() }
+
 /** Seam over the raw mic capture backend so [DesktopMicCapture] is unit-testable without real audio
  *  hardware — [MicRecorder] is the production implementation, tests inject a fake. Distinct from the
  *  shared `dev.supermux.ui.platform.MicCapture`, which is what the dictation UI actually talks to:
@@ -120,7 +124,15 @@ internal class MicRecorder : RawMicCapture {
         l.stop(); l.close()
         line = null
         val pcm = synchronized(buffer) { buffer.toByteArray() }
-        return if (pcm.isEmpty()) null else WavEncoder.encode(pcm, DICTATION_FORMAT)
+        if (pcm.isEmpty()) return null
+        if (isDigitalSilence(pcm)) {
+            // A denied mic on macOS is not an exception — the line opens and reads zeros. Sending that
+            // makes the STT model hallucinate a whole sentence, so report "nothing captured" instead.
+            println("[MicRecorder] captured only digital silence — microphone access is probably denied " +
+                "(System Settings → Privacy & Security → Microphone)")
+            return null
+        }
+        return WavEncoder.encode(pcm, DICTATION_FORMAT)
     }
 
     override fun cancel() {

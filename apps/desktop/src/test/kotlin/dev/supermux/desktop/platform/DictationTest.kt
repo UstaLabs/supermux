@@ -65,4 +65,10 @@ class DictationTest {
         assertEquals(44, wav.size)
         assertEquals(0, le32(wav, 40))
     }
+
+    @Test fun a_denied_mac_mic_all_zero_capture_counts_as_silence_but_quiet_speech_does_not() {
+        kotlin.test.assertTrue(isDigitalSilence(ByteArray(3200)))
+        // One LSB of room noise is enough to be real audio.
+        kotlin.test.assertFalse(isDigitalSilence(ByteArray(3200).also { it[1601] = 1 }))
+    }
 }

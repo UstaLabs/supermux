@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   Hardened-runtime entitlements for the notarized macOS build. Notarization REQUIRES the hardened
-  runtime, and the hardened runtime breaks three things this app needs unless they're granted here:
+  runtime, and the hardened runtime breaks four things this app needs unless they're granted here:
 
   • allow-jit + allow-unsigned-executable-memory — the JVM JITs, and CEF/V8 does too. Without these
     the app dies the moment HotSpot writes an executable page.
@@ -10,6 +10,8 @@
     signed by the SAME team (or Apple). The bundled JBR/JCEF framework originates with JetBrains and
     is loaded dynamically by Chromium; this entitlement keeps that load valid in the notarized app.
   • allow-dyld-environment-variables — CEF's helper processes are launched with DYLD_* set.
+  • device.audio-input — voice dictation. The hardened runtime blocks the mic without it, and like a
+    missing NSMicrophoneUsageDescription the failure is silent: the capture line just reads zeros.
 -->
 <plist version="1.0">
 <dict>
@@ -20,6 +22,8 @@
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
     <true/>
 </dict>
 </plist>
