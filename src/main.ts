@@ -48,6 +48,7 @@ import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
 import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
+import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
@@ -2241,8 +2242,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       let sttEngine = "client"
       let prefersCleanup = true
       if (input.audioPath) {
+        // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
+        // answer "" (the client shows "Didn't catch that") instead of made-up text. Measured in
+        // parallel with the STT call so real speech pays no extra latency.
+        const silent = isDigitalSilence(input.audioPath)
         const t0 = Date.now()
-        const r = await runStt(input.audioPath, {
+        const stt = runStt(input.audioPath, {
           engine: cfg.voiceSttEngine ?? VOICE_STT_ENGINE,
           // whisper-specific knobs stay on app-config until engines grow their own model fields
           model: cfg.whisperModel,
@@ -2255,6 +2260,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           // codex-realtime puts it in its transcription prompt.
           keyterms: cfg.voiceCleanupGlossary,
         })
+        if (await silent) {
+          stt.catch(() => {})
+          log.warn("voice_transcribe_silent", { sessionId: sessionId ?? null, note: "all-zero audio — client mic likely denied or held by another app" })
+          return { text: "" }
+        }
+        const r = await stt
         sttMs = Date.now() - t0
         draft = r.text
         sttEngine = r.fellBack ? `${r.engine}(fallback)` : r.engine
