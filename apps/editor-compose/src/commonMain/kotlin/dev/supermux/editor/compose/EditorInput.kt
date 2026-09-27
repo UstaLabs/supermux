@@ -682,6 +682,8 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
         androidx.compose.runtime.withFrameNanos { }
         androidx.compose.runtime.withFrameNanos { }
         showKeyboard()
+        androidx.compose.runtime.withFrameNanos { }
+        platformAfterKeyboardShown()
     }
     // A screen reader reads the SURFACE (its visible text, see editorSemantics): this field holds
     // only a window of text around the caret. Cleared, not merely hidden: iOS and the web ignore

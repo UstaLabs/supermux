@@ -8,6 +8,7 @@ package = dev.supermux.editor.compose.uikit
 ---
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #include <string.h>
 
 static NSInteger editor_trait_no(id self, SEL _cmd) { return 1; } /* UITextSmart*TypeNo */
@@ -44,6 +45,42 @@ static void editor_reload_input_traits(void) {
             if (r) { [r reloadInputViews]; return; }
         }
     }
+}
+
+/** A trait getter's answer on [v] (0 default, 1 no, 2 yes), or 15 when [v] does not answer it. */
+static long editor_trait(id v, SEL sel) {
+    if (![v respondsToSelector:sel]) return 15;
+    return ((NSInteger (*)(id, SEL))objc_msgSend)(v, sel);
+}
+
+/**
+ * The first responder's three Smart Punctuation traits, packed: quotes | dashes << 4 |
+ * insertDelete << 8 (each 0 default, 1 no, 2 yes, 15 not answered); 0x111 means all off.
+ * -1 when there is no first responder, -2 when it is not a text input (no UITextInput).
+ */
+static long editor_first_responder_traits(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+            UIView *r = editor_find_first_responder(w);
+            if (!r) continue;
+            if (![r conformsToProtocol:@protocol(UITextInput)]) return -2;
+            return editor_trait(r, @selector(smartQuotesType)) | (editor_trait(r, @selector(smartDashesType)) << 4) | (editor_trait(r, @selector(smartInsertDeleteType)) << 8);
+        }
+    }
+    return -1;
+}
+
+/** The first responder's class name, for the warning. */
+static const char *editor_first_responder_class(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+            UIView *r = editor_find_first_responder(w);
+            if (r) return class_getName(object_getClass(r));
+        }
+    }
+    return "";
 }
 
 /** What the first responder answers for smartQuotesType (-1: none), for tests and diagnostics. */

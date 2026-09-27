@@ -139,7 +139,15 @@ indent/outdent action is a later addition.
 **Smart Punctuation (iOS).** The hidden field answers `.no` for `smartQuotesType`,
 `smartDashesType` and `smartInsertDeleteType` (Compose Multiplatform 1.12 exposes none of them, so a
 small cinterop shim, `src/nativeInterop/cinterop/uikitTraits.def`, adds the getters to Compose's
-input view classes): a typed `"` stays U+0022. Autocorrect and suggestions are unchanged. Android has
+input view classes): a typed `"` stays U+0022. Autocorrect and suggestions are unchanged.
+⚠️ **It depends on Compose-internal iOS class names** (`ComposeTextInputView`, `NativeTextInputView`;
+the runtime class is e.g. `EditorSampleandroidx.compose.ui.window.ComposeTextInputView18`), verified
+with **Compose Multiplatform 1.12.0**. After an input session the surface checks the focused view's
+three traits; when they are not all `.no` it logs one warning (`editor-compose: iOS Smart
+Punctuation is NOT off …`, stdout + NSLog) and reports it in `EditorDiagnostics.smartPunctuation`,
+which the sample shows in its status line and `apps/editor-sample/device-checks/ios-sim.sh` asserts
+(`smart-punctuation-shim`, and the `"` key must type U+0022). Re-run that check on every Compose
+upgrade. Android has
 no platform setting for this; Gboard and Samsung Keyboard type straight quotes by default.
 
 **Hardware keys** are previewed by the surface (an ancestor of the field, so it sees them first):

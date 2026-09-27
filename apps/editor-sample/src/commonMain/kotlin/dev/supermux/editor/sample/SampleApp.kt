@@ -174,7 +174,8 @@ fun SampleApp(
             val status = session?.let { s ->
                 val st = s.view.state
                 val syntax = when { s.language == null -> "plain"; Syntax.isOff(st) -> "syntax off"; else -> s.language }
-                "${st.doc.lineCount} lines · $syntax · ${stats.summary}"
+                val sp = dev.supermux.editor.compose.EditorDiagnostics.smartPunctuation
+                "${st.doc.lineCount} lines · $syntax · ${stats.summary}" + (if (sp == "n/a") "" else " · smart punctuation: $sp")
             } ?: ""
             BasicText(
                 status,

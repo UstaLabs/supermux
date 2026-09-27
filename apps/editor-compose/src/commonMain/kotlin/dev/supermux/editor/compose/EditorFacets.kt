@@ -1,5 +1,8 @@
 package dev.supermux.editor.compose
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+
 import dev.supermux.editor.core.CommandTarget
 import dev.supermux.editor.core.Facet
 
@@ -32,4 +35,15 @@ object EditorAnnotations {
      * two (and treats the first as IME input).
      */
     val imeJoinPrevious: dev.supermux.editor.core.AnnotationType<Boolean> = dev.supermux.editor.core.AnnotationType("imeJoinPrevious")
+}
+
+/**
+ * What the platform integration found at run time, for device checks and a host's debug screen.
+ * [smartPunctuation]: iOS only (elsewhere "n/a"): "off" once the focused input view answers `.no`
+ * for all three Smart Punctuation traits; a message saying what is wrong otherwise (see the
+ * README: it depends on Compose Multiplatform's internal iOS input view classes).
+ */
+object EditorDiagnostics {
+    var smartPunctuation: String by androidx.compose.runtime.mutableStateOf("n/a")
+        internal set
 }

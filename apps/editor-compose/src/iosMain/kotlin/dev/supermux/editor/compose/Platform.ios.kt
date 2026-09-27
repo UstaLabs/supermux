@@ -1,5 +1,7 @@
 package dev.supermux.editor.compose
 
+import kotlinx.cinterop.toKString
+
 internal actual fun detectApplePlatform(): Boolean = true
 
 
@@ -13,12 +15,18 @@ internal actual fun installFastTyping(view: EditorView, controller: EditorContro
  * characters in code, and closing brackets never see a straight quote. Compose Multiplatform 1.12
  * sets no `smartQuotesType` / `smartDashesType` / `smartInsertDeleteType` on its input views (and
  * PlatformImeOptions has no field for them), so they are added to those classes (the cinterop shim).
- * Compose creates its input view class with the first input session, so this is retried until it
- * finds it; once patched, the keyboard is asked to read the traits again.
+ *
+ * ⚠️ This depends on Compose-internal class names (`ComposeTextInputView`, `NativeTextInputView`;
+ * verified with Compose Multiplatform [VERIFIED_WITH]). Compose creates its input view class with the
+ * first input session, so [disable] is retried until it finds it; [verify] runs once an input view is
+ * the first responder and checks that it really answers `.no` for all three. Either failure is logged
+ * once and reported in [EditorDiagnostics.smartPunctuation]; `device-checks/ios-sim.sh` fails on it.
  */
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 internal object SmartPunctuation {
+    const val VERIFIED_WITH = "1.12.0"
     private var patched = false
+    private var warned = false
 
     fun disable() {
         if (patched) return
@@ -28,8 +36,31 @@ internal object SmartPunctuation {
         }
     }
 
-    /** The first responder's smartQuotesType (1: off), -1 without one, -2 when it has no such trait. */
-    fun firstResponderSmartQuotes(): Long = dev.supermux.editor.compose.uikit.editor_first_responder_smart_quotes()
+    /**
+     * After an input session made its view first responder: patched, and all three traits `.no`.
+     * A failure is logged once (a Compose upgrade renamed or reworked the input view: curly quotes).
+     */
+    fun verify() {
+        disable()
+        val traits = dev.supermux.editor.compose.uikit.editor_first_responder_traits()
+        if (traits < 0) return // no text input focused yet: nothing to check
+        val status = when {
+            !patched -> "NOT PATCHED: no Compose input view class found (first responder ${firstResponderClass()})"
+            traits == 0x111L -> "off"
+            else -> "NOT OFF: ${firstResponderClass()} answers quotes=${traits and 0xF} dashes=${(traits shr 4) and 0xF} insertDelete=${(traits shr 8) and 0xF}"
+        }
+        EditorDiagnostics.smartPunctuation = status
+        if (status != "off" && !warned) {
+            warned = true
+            val msg = "editor-compose: iOS Smart Punctuation is NOT off ($status). The shim targets Compose " +
+                "Multiplatform's internal input view classes (verified with $VERIFIED_WITH): curly quotes and dashes will be typed."
+            println(msg)
+            // No varargs: NSLog("%@", kotlinString) aborted the app (Kotlin/Native variadic call).
+            platform.Foundation.NSLog(msg.replace("%", "%%"))
+        }
+    }
+
+    private fun firstResponderClass(): String = dev.supermux.editor.compose.uikit.editor_first_responder_class()?.toKString() ?: "?"
 }
 
 internal actual fun androidx.compose.ui.Modifier.editorMagnifier(center: () -> androidx.compose.ui.geometry.Offset): androidx.compose.ui.Modifier = this
@@ -56,7 +87,9 @@ internal actual val platformClearsFieldSemantics: Boolean = true
 @androidx.compose.runtime.Composable
 internal actual fun rememberPlatformKeyboardShow(): (() -> Unit)? {
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
-    return androidx.compose.runtime.remember(keyboard) { { SmartPunctuation.disable(); keyboard?.show(); Unit } }
+    return androidx.compose.runtime.remember(keyboard) { { SmartPunctuation.disable(); keyboard?.show(); SmartPunctuation.verify(); Unit } }
 }
 
 internal actual fun platformClipboardHasText(): Boolean? = platform.UIKit.UIPasteboard.generalPasteboard.hasStrings
+
+internal actual fun platformAfterKeyboardShown() = SmartPunctuation.verify()

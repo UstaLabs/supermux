@@ -39,6 +39,9 @@ flow tap-starts-input "- tapOn: { point: \"60%,30%\" }
 - waitForAnimationToEnd
 - inputText: \"zzqx\"
 - extendedWaitUntil: { visible: \"shift\", timeout: 8000 }"
+# The Smart Punctuation shim depends on Compose-internal class names: after an input session it must
+# have patched the focused input view, all three traits answering .no (EditorDiagnostics, status line).
+flow smart-punctuation-shim "- extendedWaitUntil: { visible: \".*smart punctuation: off.*\", timeout: 8000 }"
 flow soft-keys-type "- tapOn: { id: \"Return\" }
 - tapOn: \"q\"
 - tapOn: \"z\"

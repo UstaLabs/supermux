@@ -26,3 +26,5 @@ internal actual val platformClearsFieldSemantics: Boolean = false
 internal actual fun rememberPlatformKeyboardShow(): (() -> Unit)? = null
 
 internal actual fun platformClipboardHasText(): Boolean? = null
+
+internal actual fun platformAfterKeyboardShown() {}

@@ -64,3 +64,6 @@ internal expect val platformClearsFieldSemantics: Boolean
  */
 @androidx.compose.runtime.Composable
 internal expect fun rememberPlatformKeyboardShow(): (() -> Unit)?
+
+/** A frame after the keyboard was asked for (iOS: check the Smart Punctuation traits). */
+internal expect fun platformAfterKeyboardShown()
