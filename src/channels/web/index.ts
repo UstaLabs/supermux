@@ -10,7 +10,8 @@ import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
-import { FsService } from "../../core/editor/fs-service"
+import { FileSystemService } from "../../core/fs/file-system-service"
+import { WorkdirFs } from "../../core/fs/legacy"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
@@ -454,6 +455,8 @@ export class WebChannel implements Channel {
   private wsConnections = new Set<{ ws: import("bun").ServerWebSocket<WSData>; deviceName: string }>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
   private readonly fsWatcher?: FsWatcher
+  /** The host's single file-system service (spec 2026-09-27). */
+  readonly fss: FileSystemService
   private readonly clientLogRing: StoredClientLogEntry[] = []
   // Per-instance auth-failure rate-limit buckets, keyed by client IP. Instance
   // (not module) scope keeps concurrent channels — e.g. the many WebChannels a
@@ -473,6 +476,7 @@ export class WebChannel implements Channel {
     this.mintDeviceToken = opts.mintDeviceToken
     this.getRelayUrl = opts.getRelayUrl
     this.fsWatcher = opts.fsWatcher
+    this.fss = new FileSystemService()
   }
 
   get boundPort(): number {
@@ -2533,16 +2537,19 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const relPath = url.searchParams.get("path") ?? "."
-      const entries = await fs.listDir(relPath)
-      return this.json(entries)
+      try {
+        return this.json(await fs.listDir(relPath))
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
+      }
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/fs\/read$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       try {
         const content = await fs.readFile(filePath)
@@ -2558,7 +2565,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       const content = await req.text()
       try {
@@ -2572,7 +2579,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const query = url.searchParams.get("q") ?? ""
       const results = await fs.searchFiles(query)
       return this.json(results)
@@ -2604,23 +2611,26 @@ export class WebChannel implements Channel {
     // Byte-for-byte the same handlers as the /sessions/:id/fs* block above,
     // resolving the workdir from the workspace instead of the session. Spec §7.4.
     //
-    // FsService enforces containment server-side: a path that escapes the root
-    // throws, and that is the security boundary. The client's own guard is
-    // redundant defense, not the real one.
+    // WorkdirFs (src/core/fs/legacy.ts) enforces containment server-side: a path
+    // that escapes the root throws, and that is the security boundary. The
+    // client's own guard is redundant defense, not the real one.
     if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const relPath = url.searchParams.get("path") ?? "."
-      const entries = await fs.listDir(relPath)
-      return this.json(entries)
+      try {
+        return this.json(await fs.listDir(relPath))
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
+      }
     }
     if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/read$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       try {
         const content = await fs.readFile(filePath)
@@ -2636,7 +2646,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       const content = await req.text()
       try {
@@ -2650,7 +2660,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const query = url.searchParams.get("q") ?? ""
       const results = await fs.searchFiles(query)
       return this.json(results)
