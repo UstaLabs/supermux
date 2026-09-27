@@ -112,7 +112,9 @@ dictation and CJK composition work; the design passed all 8 checks on an iPhone 
   field state then follows, where the composition is known: the composition underline, the IME's
   own caret moves, and re-windowing happen there.
 - A soft Return (iOS inserts `"\n"`) becomes `insertNewline` (indentation kept). The field is
-  multi-line for this: a single-line field turns Return into an IME action and drops it.
+  multi-line for this: a single-line field turns Return into an IME action and drops it. When a
+  binding takes Return (or any handler takes the input) without an edit, the field is rewritten to
+  the document at once, so the `\n` the IME put there never reaches the document on the next key.
 - With several cursors, typing or a soft Backspace at the main cursor happens at every cursor. Typing
   over a selection wider than the window replaces all of it.
 - After every transaction (a view listener, synchronously) the field is re-synced: rewritten when it
@@ -143,15 +145,31 @@ indent/outdent action is a later addition.
 **Smart Punctuation (iOS).** The hidden field answers `.no` for `smartQuotesType`,
 `smartDashesType` and `smartInsertDeleteType` (Compose Multiplatform 1.12 exposes none of them, so a
 small cinterop shim, `src/nativeInterop/cinterop/uikitTraits.def`, adds the getters to Compose's
-input view classes): a typed `"` stays U+0022. Autocorrect and suggestions are unchanged.
-⚠️ **It depends on Compose-internal iOS class names** (`ComposeTextInputView`, `NativeTextInputView`;
-the runtime class is e.g. `EditorSampleandroidx.compose.ui.window.ComposeTextInputView18`), verified
-with **Compose Multiplatform 1.12.0**. After an input session the surface checks the focused view's
+ObjC input view classes `CMPEditMenuView`, the base of `ComposeTextInputView`, and `CMPTextInputView`,
+looked up by name, no class-list scan): a typed `"` stays U+0022. The getters answer `.no` only while
+an editor's field has the focus and the system default otherwise, so **every other Compose text field
+of the app keeps the user's Smart Punctuation** (the sample's settings sheet has a plain field for this
+check). Autocorrect and suggestions are unchanged.
+⚠️ **It depends on Compose-internal iOS class names** (those two, and the runtime class, e.g.
+`EditorSampleandroidx.compose.ui.window.ComposeTextInputView18`), verified with **Compose
+Multiplatform 1.12.0**. Once per focus, after the input session, the surface checks the focused view's
 three traits; when they are not all `.no` it logs one warning (`editor-compose: iOS Smart
 Punctuation is NOT off …`, stdout + NSLog) and reports it in `EditorDiagnostics.smartPunctuation`,
 which the sample shows in its status line and `apps/editor-sample/device-checks/ios-sim.sh` asserts
-(`smart-punctuation-shim`, and the `"` key must type U+0022). Re-run that check on every Compose
-upgrade. Android has
+(`smart-punctuation-shim`, the `"` key must type U+0022, and the plain field must type a curly
+quote). Re-run that check on every Compose upgrade.
+
+**The floating cursor (iOS).** A long press on the space bar turns the keyboard into a trackpad.
+Compose moves the caret through the focused field's own layout, which for the 1 dp hidden field meant
+a caret wandering inside the window, unrelated to the finger (selection only: it never touched the
+text). So the shim also replaces the three floating cursor calls of the focused input view's class
+(`beginFloatingCursorAtPoint:` / `updateFloatingCursorAtPoint:` / `endFloatingCursor`, patched on the
+first responder's class once the keyboard is up) and, while an editor has the focus, sends them to its
+`FloatingCursor`: the caret moves by the finger's travel through the editor's layout from where it was
+at the start (only the travel counts), scrolled into view; any other Compose text field keeps
+Compose's handling. `EditorDiagnostics.floatingCursor` says `mapped`. Maestro cannot long-press the
+space bar, so `ios-sim.sh` (`floating-cursor`) sends UIKit's own calls through the sample's probe
+(`debugDriveFloatingCursor`, debug API) and asserts 3 lines down with the text unchanged. Android has
 no platform setting for this; Gboard and Samsung Keyboard type straight quotes by default.
 
 **Hardware keys** are previewed by the surface (an ancestor of the field, so it sees them first):
@@ -172,8 +190,15 @@ the TEXTAREA gets the focus back after a mouse press (the press focuses the canv
 `beforeinput` insertText / insertReplacementText is taken by the editor at the TEXTAREA's selection
 (`FieldSync.onDomInsert`) so the browser never edits it; and its `value` setter is wrapped to put the
 editor's selection back (Compose sets the selection only when its numbers changed, while setting
-`value` moves the DOM caret to the end, so IME text landed at the window's end). Composition stays
-Compose's. `:editor-sample:webInputTest` asserts all of it over CDP.
+`value` moves the DOM caret to the end, so IME text landed at the window's end). `beforeinput` reads
+the DOM selection before anything else and never resyncs for `insertReplacementText` (the
+autocorrect's own replacement). Composition stays Compose's.
+All of this state is **per editor** (`newWebInputState()`, kept in `EditorController.platformInput`):
+each editor binds to the TEXTAREA of its own input session when it takes the focus, and every
+listener (input, copy/cut/paste, the refocus, which runs only for presses on the canvas) acts only on
+events whose target is that editor's TEXTAREA. No globals: two editors and a plain DOM `<input>` on one
+page stay apart. `:editor-sample:webInputTest` asserts all of it over CDP (the `?two=1` page: two
+editors and a plain input).
 
 **On the web**, Compose handles queued DOM input only at the next animation frame, after that frame
 drew: a key it handles is painted two frames late. So while an editor is composed, a capture-phase
@@ -196,7 +221,8 @@ merely appears or a host focuses it (`focus(showKeyboard = false)`).
   `SoftwareKeyboardController.show()` does nothing until a session exists. So
   `EditorController.keyboardOnFocus` is that option: true on desktop and web always (the desktop
   IME and the web's TEXTAREA need a session on any focus), on Android and iOS only after a touch
-  (reset on blur).
+  (reset on blur). It lives on the surface, not the view, so a document switch keeps it (a host's
+  programmatic focus followed by a switch never asks for a keyboard).
 - A touch takes the focus **one frame later**, once the field carries the option, so the session
   starts inside the focus change; started from a recomposition, iOS never made its input view first
   responder. Every later tap asks the platform again once the session exists
@@ -207,7 +233,9 @@ merely appears or a host focuses it (`focus(showKeyboard = false)`).
   the caret vanished, and on Android/iOS typing stayed bound to the previous document's field).
 
 **The hidden field never takes a pointer.** A pointer shield (a sibling above the field, consuming
-nothing) takes every hit; the surface's own gestures (the parent's `pointerInput`) see everything.
+nothing, `EditorDefaults.SHIELD_DP` = 64 dp square at the caret, which covers the field's 48 dp touch
+target) takes those hits; the surface's own gestures (the parent's `pointerInput`) see everything, and
+any other child of the surface elsewhere (a host's overlay) still gets its pointers.
 Without it, a long press on an empty line or a line's end on the iPhone hit the field (it sits at the
 caret, and Compose expands its touch target to 48 dp; Compose's `touchSelectionFirstPress` ignores
 consumption) and crashed in Compose's own touch selection:
@@ -219,7 +247,9 @@ kotlin.IllegalArgumentException: start and end cannot be negative. [start: -1, e
   …selection.UIKitTextFieldTextDragObserver.onStart
   …text.selection.$touchSelectionFirstPressCOROUTINE$0.invokeSuspend
 ```
-The field keeps its place at the caret, where the keyboard and IME candidates anchor.
+The field keeps its place at the caret, where the keyboard and IME candidates anchor. One cost:
+**Android stylus handwriting into the field is blocked** (Compose starts it from a stylus press on
+the field, which the shield takes). Handwriting into the editor needs its own entry point, later.
 
 **Semantics of the field.** The field holds only a window of text, so a screen reader must never see
 it: on iOS and the web (which ignore `hideFromAccessibility`) its semantics are cleared; on Android
@@ -269,7 +299,9 @@ scrolls (for `EditorMenu.SCROLL_SETTLE_MILLIS`) and comes back after; typing or 
 - ⚠️ **Deciding to show Paste never reads the clipboard.** `EditorClipboard.hasText()` must not read:
   on iOS a read of `UIPasteboard.string` shows the paste permission prompt (and Compose's
   `ClipboardManager.hasText()` IS such a read), so iOS asks `UIPasteboard.hasStrings`. The clipboard
-  is read only when Paste is chosen. On the web Compose's clipboard reads nothing: the menu uses the
+  is read only when Paste is chosen, and then **synchronously inside the menu's own action**
+  (`EditorClipboard.readNow()`, the platform clipboard's text): iOS asks no "Allow Paste" for a read
+  inside its paste action. `ios-sim.sh` (`menu-paste-no-prompt`) asserts the prompt never shows. On the web Compose's clipboard reads nothing: the menu uses the
   async Clipboard API; the keys use the browser's own copy/cut/paste events.
 
 ## Zoom
@@ -290,6 +322,10 @@ region says the line a caret move lands on. Line numbers are drawn, never expose
 - The text node is its own layout node on the Canvas, not the scroll node: sharing a node with
   `scrollable` made macOS show an `AXScrollArea` without text. With `SetText` it is an
   **`AXTextField`** whose value is the exposed lines (checked in the running desktop sample's AX tree).
+- The exposed text joins lines that are not neighbours in the document (the caret's lines, the lines
+  around other carets, a partly exposed long line) with a `\n` that is not in the document. A
+  `SetText` that removes such a joiner is **refused** (it would delete text the AT never saw); joins
+  across real line breaks between shown lines apply as one transaction.
 - **On the web** the browser's focused TEXTAREA is always in the accessibility tree (Chrome refuses
   `aria-hidden` on a focused element), so it IS the editor's one text box: labelled with the editor's
   label, holding the lines around the caret with its selection on the editor's caret; the surface
