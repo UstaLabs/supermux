@@ -126,9 +126,23 @@ fun SampleApp(
         onPhase("precompiled")
         loaded = file to SampleFiles.load(file, kotlin, markdown)
     }
+    // What the M3c demo's gutter clicks said (shown in the status line).
+    var demoNote by remember { mutableStateOf("") }
     val session = loaded?.let { (f, text) ->
-        remember(f, text, backend) { SampleSession(text, f.language, backend!!, registry, scope) { run -> scope.launch { run() } } }
+        remember(f, text, backend) {
+            val extra = when (f) {
+                SampleFile.DEMO -> M3cDemo.extension { demoNote = it }
+                SampleFile.SIDE_BY_SIDE -> sideBySideExtension
+                else -> dev.supermux.editor.core.extensionOf()
+            }
+            SampleSession(text, f.language, backend!!, registry, scope, extra) { run -> scope.launch { run() } }
+        }
     }
+    // The side-by-side demo's working copy (B): the same file with a few edits, linked to A.
+    val sessionB = loaded?.takeIf { it.first == SampleFile.SIDE_BY_SIDE }?.let { (f, text) ->
+        remember(f, text, backend) { SampleSession(fakeWorkingCopy(text), f.language, backend!!, registry, scope, sideBySideExtension) { run -> scope.launch { run() } } }
+    }
+    if (sessionB != null) DisposableEffect(sessionB) { onDispose { sessionB.close() } }
     if (session != null) {
         DisposableEffect(session) {
             val remove = session.view.addListener { if (it.docChanged || it.selectionSet) stats.changed() }
@@ -166,19 +180,26 @@ fun SampleApp(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Chip("settings", settings, ink) { settings = !settings }
+            if (file == SampleFile.DEMO && session != null) {
+                val shown = M3cDemo.panelShown(session.view.state)
+                Chip(if (shown) "find panel: on" else "find panel: off", shown, ink) { M3cDemo.setPanel(session.view, !shown) }
+            }
             for (f in SampleFile.entries) Chip(f.label, f == file, ink) { file = f }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
                 failure != null -> Message("could not start: $failure", ink)
                 session == null -> Message("loading…", ink)
+                sessionB != null -> SideBySidePane(session, sessionB, theme, stats, onFontSize = { fontSize = it })
+                file == SampleFile.DEMO -> SampleEditorPane(session, theme, wrap, stats, readOnly = readOnly, onFontSize = { fontSize = it }, widgets = M3cDemo.rememberWidgets(ink, chrome))
                 else -> SampleEditorPane(session, theme, wrap, stats, readOnly = readOnly, onFontSize = { fontSize = it })
             }
             val status = session?.let { s ->
                 val st = s.view.state
                 val syntax = when { s.language == null -> "plain"; Syntax.isOff(st) -> "syntax off"; else -> s.language }
                 val sp = dev.supermux.editor.compose.EditorDiagnostics.smartPunctuation
-                "${st.doc.lineCount} lines · $syntax · ${stats.summary}" + (if (sp == "n/a") "" else " · smart punctuation: $sp")
+                "${st.doc.lineCount} lines · $syntax · ${stats.summary}" + (if (sp == "n/a") "" else " · smart punctuation: $sp") +
+                    (if (file == SampleFile.DEMO && demoNote.isNotEmpty()) " · $demoNote" else "")
             } ?: ""
             BasicText(
                 status,

@@ -65,7 +65,12 @@ class EditorScrollState {
         if (ny != this.y) { this.y = ny; changed = true }
         // Another surface showing a shared state must hear even a layout's write.
         if (changed && (layoutDepth == 0 || shared)) Snapshot.withoutReadObservation { version++ }
+        // A scroll of its own (not the layout's): a linked view tells the other side.
+        if (changed && layoutDepth == 0) onOwnScroll?.invoke()
     }
+
+    /** Set by a surface in a [LinkedScroll]: called after every scroll its layout did not make. */
+    internal var onOwnScroll: (() -> Unit)? = null
 
     /** Scroll by ([dx], [dy]); returns what was actually consumed on each axis. */
     fun scrollBy(dx: Float, dy: Float): Pair<Float, Float> {

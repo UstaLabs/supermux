@@ -21,6 +21,8 @@ import kotlinx.coroutines.CoroutineScope
 /** The files the sample opens. */
 enum class SampleFile(val label: String, val language: String?) {
     KOTLIN("HostStore.kt (2k lines)", "kotlin"),
+    DEMO("M3c demo: gutter, fold, thread, panel", "kotlin"),
+    SIDE_BY_SIDE("side-by-side diff", "kotlin"),
     KOTLIN_10K("10k lines of Kotlin", "kotlin"),
     MARKDOWN("the editor spec (Markdown)", "markdown"),
     TURKISH("Türkçe + emoji", null),
@@ -60,7 +62,7 @@ object SampleFiles {
     }
 
     suspend fun load(file: SampleFile, kotlin: String, markdown: String): String = when (file) {
-        SampleFile.KOTLIN -> kotlin
+        SampleFile.KOTLIN, SampleFile.DEMO, SampleFile.SIDE_BY_SIDE -> kotlin
         SampleFile.KOTLIN_10K -> tenK(kotlin)
         SampleFile.MARKDOWN -> markdown
         SampleFile.TURKISH -> TURKISH_TEXT
@@ -118,9 +120,10 @@ class SampleSession(
     backend: SyntaxBackend,
     registry: LanguageRegistry,
     scope: CoroutineScope,
+    extra: dev.supermux.editor.core.Extension = extensionOf(),
     hop: (() -> Unit) -> Unit,
 ) : AutoCloseable {
-    val view = EditorView(EditorState.create(text, extensions = extensionOf(Syntax.extension(language), basics())))
+    val view = EditorView(EditorState.create(text, extensions = extensionOf(Syntax.extension(language), basics(), extra)))
     val worker = SyntaxWorker(backend, registry, scope, dispatch = { spec -> hop { view.dispatch(spec) } })
     private val removeListener = view.addListener { worker.onState(it.state) }
 
@@ -177,6 +180,7 @@ fun SampleEditorPane(
     modifier: Modifier = Modifier.fillMaxSize(),
     readOnly: Boolean = false,
     onFontSize: (Float) -> Unit = {},
+    widgets: dev.supermux.editor.compose.WidgetRegistry? = null,
 ) {
     Editor(
         view = session.view,
@@ -188,5 +192,6 @@ fun SampleEditorPane(
         onPaint = stats?.let { s -> { s.drawEnd() } },
         onFontSize = onFontSize,
         label = "Sample editor",
+        widgets = widgets ?: androidx.compose.runtime.remember { dev.supermux.editor.compose.WidgetRegistry() },
     )
 }

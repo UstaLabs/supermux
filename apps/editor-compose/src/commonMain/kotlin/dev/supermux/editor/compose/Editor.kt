@@ -122,6 +122,8 @@ internal val LocalEditorCursorBlink = staticCompositionLocalOf { true }
  * @param onFontSize the font size (sp) after every zoom (`Mod +`/`Mod −`/`Mod 0`, a pinch once the
  *   fingers lift), for the host to keep per app; give it back through [EditorView.fontSize].
  * @param widgets the composable content of block widgets (and panels), by widget type.
+ * @param linked keeps this editor's lines aligned with another's (a side-by-side diff), as
+ *   [linkedSide]; see [LinkedScroll].
  */
 @Composable
 fun Editor(
@@ -138,6 +140,8 @@ fun Editor(
     onFontSize: (Float) -> Unit = {},
     label: String = EditorSemantics.LABEL,
     widgets: WidgetRegistry = remember { WidgetRegistry() },
+    linked: LinkedScroll? = null,
+    linkedSide: LinkedSide = LinkedSide.A,
 ) {
     // cacheSize = 0: the surface keeps its own bounded caches (LineLayouts).
     val measurer = rememberTextMeasurer(cacheSize = 0)
@@ -179,6 +183,17 @@ fun Editor(
                 view.surface = null
                 view.geometry = null
             }
+        }
+    }
+    // Linked views: the position is the pair of lines [linked] keeps; this side follows it and tells it its own scrolls.
+    controller.linked = linked
+    controller.linkedSide = linkedSide
+    DisposableEffect(controller, linked, linkedSide) {
+        linked?.attach(linkedSide, controller)
+        controller.scroll.onOwnScroll = linked?.let { l -> { l.scrolledBy(linkedSide, controller) } }
+        onDispose {
+            linked?.detach(linkedSide, controller)
+            if (controller.linked === linked) controller.scroll.onOwnScroll = null
         }
     }
     val reportViewport by rememberUpdatedState(onViewport)
@@ -1050,6 +1065,7 @@ internal class EditorController(
         val doc = tr.state.doc
         anchorPos = doc.lineStart(doc.lineIndexAt(tr.changes.mapPos(anchorPos.coerceIn(0, tr.changes.lengthBefore), -1)))
         if (theme != null) { syncFolds(tr.state); syncBlocks(tr.state) }
+        linked?.followEdit(linkedSide, tr)
     }
 
     /**
@@ -1124,10 +1140,12 @@ internal class EditorController(
      */
     fun beginAnchor() {
         view.pendingScroll?.let { restoreScroll(it) }
+        if (followLink()) return
         if (!anchorValid || scroll.y != anchorScrollY) recordAnchor() else restoreAnchor()
     }
 
     fun restoreAnchor() {
+        if (followLink()) return
         if (!anchorValid || scroll.y != anchorScrollY || scroll.shared) return
         val doc = view.state.doc
         if (heights.lineCount != doc.lineCount) return
@@ -1138,6 +1156,7 @@ internal class EditorController(
     }
 
     fun recordAnchor() {
+        if (linked != null) return
         val doc = view.state.doc
         if (heights.lineCount != doc.lineCount) return
         val line = heights.lineAt(scroll.y)
@@ -1145,6 +1164,35 @@ internal class EditorController(
         anchorDelta = scroll.y - heights.top(line)
         anchorScrollY = scroll.y
         anchorValid = true
+    }
+
+    // ------------------------------------------------------------------ linked views --
+
+    /** The [LinkedScroll] this surface is a side of, and which side. */
+    var linked: LinkedScroll? = null
+    var linkedSide: LinkedSide = LinkedSide.A
+
+    /** The line at content y [y], or null while the height map is not the document's. */
+    fun lineAtScroll(y: Float): Int? = if (heights.lineCount == view.state.doc.lineCount && heights.lineCount > 0) heights.lineAt(y) else null
+
+    /** A linked anchor's reference top for [line]: its box top for a changed run's start pair, else its text top. */
+    fun linkReference(line: Int, hunk: Boolean): Float? {
+        if (line < 0 || line >= heights.lineCount || heights.lineCount != view.state.doc.lineCount) return null
+        return if (hunk) heights.top(line) else geometry.lineTop(line)
+    }
+
+    /**
+     * Linked: the scroll where the shared pair of lines says (read observed, so the other side's
+     * scroll relayouts this one in the same frame). The pair is lines, so a height measured anywhere
+     * moves nothing on screen. False when not linked.
+     */
+    private fun followLink(): Boolean {
+        val l = linked ?: return false
+        val a = l.anchor
+        val x = l.x
+        val ref = linkReference(if (linkedSide == LinkedSide.A) a.a else a.b, a.hunk) ?: return true
+        scroll.scrollTo(if (lineWrap) 0f else x, ref + a.px)
+        return true
     }
 
     override fun scrollBy(dy: Float) {
