@@ -58,6 +58,10 @@ class HeightMap(
         private set
 
     private var total = 0.0
+
+    /** Bumped by every change of any height (linked views skip an alignment when neither side changed). */
+    var version = 0
+        private set
     private var topPad = 0f
     private var endPad = 0f
 
@@ -122,8 +126,8 @@ class HeightMap(
     val endPadding: Float get() = endPad
 
     /** Alignment padding before the first line / after the last. */
-    fun setTopPad(value: Float) { topPad = value }
-    fun setEndPad(value: Float) { endPad = value }
+    fun setTopPad(value: Float) { if (value != topPad) { topPad = value; version++ } }
+    fun setEndPad(value: Float) { if (value != endPad) { endPad = value; version++ } }
 
     /** Every alignment pad back to 0 (a new line mapping). */
     fun clearPads() {
@@ -259,6 +263,7 @@ class HeightMap(
             total += delta
             fenwickAdd(countTree, c, newCount - count)
             fenwickAdd(sumTree, c, delta)
+            version++
             return
         }
         // Across chunks (or a chunk overflowing / emptying): rebuild the chunks the range spans.
@@ -323,6 +328,7 @@ class HeightMap(
 
     /** Both Fenwick trees and the totals from the chunks: O(chunks). */
     private fun rebuild() {
+        version++
         val n = chunks.size
         countTree = IntArray(n + 1)
         sumTree = DoubleArray(n + 1)
@@ -347,6 +353,7 @@ class HeightMap(
     }
 
     private fun adjust(c: Int, delta: Double) {
+        version++
         chunks[c].sum += delta
         total += delta
         fenwickAdd(sumTree, c, delta)

@@ -87,7 +87,7 @@ object M3cDemo {
     private val panelSlot = dev.supermux.editor.core.Compartment("demo.panel")
 
     /** Show or hide the demo's find panel. */
-    fun setPanel(view: dev.supermux.editor.compose.EditorView, on: Boolean) =
+    fun setPanel(view: dev.supermux.editor.core.CommandTarget, on: Boolean) =
         view.dispatch(TransactionSpec(effects = listOf(panelSlot.reconfigure(if (on) panelsFacet.of(Panel("find", top = true)) else extensionOf()))))
 
     /** The line the review thread hangs under (0-based), clamped to the document. */
@@ -250,9 +250,9 @@ object M3cDemo {
                 ) {
                     BasicText("find:", style = TextStyle(color = ink, fontSize = 13.sp))
                     BasicTextField(query, Modifier.weight(1f).background(ink.copy(alpha = 0.08f)).padding(6.dp).testTag("find-field"), textStyle = TextStyle(color = ink, fontSize = 13.sp))
-                    val n = if (query.text.isEmpty()) 0 else Regex(Regex.escape(query.text.toString())).findAll(view.state.doc.slice(0, minOf(view.state.doc.length, 500_000))).count()
+                    val n = if (query.text.isEmpty()) 0 else Regex(Regex.escape(query.text.toString())).findAll(editor.state.doc.slice(0, minOf(editor.state.doc.length, 500_000))).count()
                     BasicText("$n found · Esc: back to the editor", style = TextStyle(color = ink.copy(alpha = 0.7f), fontSize = 11.sp))
-                    BasicText("✕", Modifier.clickable { setPanel(view, false); focusEditor() }.padding(6.dp), style = TextStyle(color = ink, fontSize = 13.sp))
+                    BasicText("✕", Modifier.clickable { setPanel(editor, false); focusEditor() }.padding(6.dp), style = TextStyle(color = ink, fontSize = 13.sp))
                 }
             }
         }

@@ -459,11 +459,14 @@ internal class FieldSync(
         val st = view.state
         val doc = st.doc
         if (w.end > doc.length) return false
-        if (w.holes.isEmpty()) {
-            val folds = view.replaced(st)
-            return (folds.replaces.isEmpty() || folds.replacesInside(w.base, w.end).isEmpty()) && doc.slice(w.base, w.end) == w.text
-        }
-        return FieldWindow.of(doc, w.base, w.end, view.replaced(st)) == w
+        val folds = view.replaced(st)
+        // The window's placeholders must be exactly the replaced ranges in it (checked before any
+        // slicing: a stale window must never slice a fold's hidden text, which can be megabytes).
+        val inside = if (folds.replaces.isEmpty()) emptyList() else folds.replacesInside(w.base, w.end)
+        if (inside.size != w.holes.size) return false
+        for (i in inside.indices) if (inside[i].from != w.holes[i].docFrom || inside[i].to != w.holes[i].docTo) return false
+        if (w.holes.isEmpty()) return doc.slice(w.base, w.end) == w.text
+        return FieldWindow.of(doc, w.base, w.end, folds) == w
     }
 
     /** The caret is within [margin] of an edge that has more document beyond it. */

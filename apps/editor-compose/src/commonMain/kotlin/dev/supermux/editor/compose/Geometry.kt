@@ -125,11 +125,12 @@ class Geometry(
         val onAbove = y < top
         if (dir > 0) {
             var l = if (onAbove) line else line + 1
-            while (l < n && textHeight(l) <= 0f) l++
+            // A fold's hidden lines in one step (a 300k-line fold is not walked).
+            while (l < n) { val run = folds.hiddenRunAt(l); if (run != null) l = run.last + 1 else if (textHeight(l) <= 0f) l++ else break }
             return if (l < n) lineTop(l) + minOf(1f, textHeight(l) / 2) else null
         }
         var l = if (onAbove) line - 1 else line
-        while (l >= 0 && textHeight(l) <= 0f) l--
+        while (l >= 0) { val run = folds.hiddenRunAt(l); if (run != null) l = run.first - 1 else if (textHeight(l) <= 0f) l-- else break }
         return if (l >= 0) lineTop(l) + textHeight(l) - minOf(1f, textHeight(l) / 2) else null
     }
 

@@ -49,6 +49,9 @@ object EditorSemantics {
     const val PASTE = "Paste"
     const val FOCUS = "Edit"
 
+    /** What a screen reader reads where a fold hides [lines] lines (0: part of one line). */
+    fun folded(lines: Int): String = if (lines <= 0) " … " else " … $lines lines folded … "
+
     /** What a caret move to another line says: "line 12: fun main() {". */
     fun lineAnnouncement(lineNumber: Int, text: String): String = "line $lineNumber: $text"
 }
@@ -67,6 +70,8 @@ internal class AccessibleText private constructor(
     private val textFrom: IntArray,
     /** [adjacent][i]: the "\n" before segment i is the document's own (segment i-1 ends its line, i starts the next). */
     private val adjacent: BooleanArray,
+    /** The length of the joiner before segment i ("\n", or a fold's label). */
+    private val joinLength: IntArray = IntArray(docFrom.size) { if (it == 0) 0 else 1 },
 ) {
     val segments: Int get() = docFrom.size
 
@@ -96,8 +101,9 @@ internal class AccessibleText private constructor(
     fun mapRange(from: Int, to: Int): Pair<Int, Int>? {
         if (from > to) return null
         for (i in 1 until segments) {
-            val joiner = textFrom[i] - 1
-            if (from <= joiner && joiner < to && !adjacent[i]) return null
+            val j0 = textFrom[i] - joinLength[i]
+            val j1 = textFrom[i]
+            if (from < j1 && to > j0 && !adjacent[i]) return null
         }
         return toDoc(from) to toDoc(to)
     }
@@ -107,42 +113,67 @@ internal class AccessibleText private constructor(
         const val MAX_LINE = 2_000
 
         /** [hidden]: lines a fold hides (never exposed: a screen reader reads what is shown). */
-        fun build(doc: Rope, visible: IntRange, caret: Int, hidden: (Int) -> Boolean = { false }): AccessibleText {
-            val caretLine = doc.lineIndexAt(caret.coerceIn(0, doc.length))
+        fun build(doc: Rope, visible: IntRange, caret: Int, hidden: (Int) -> Boolean = { false }, folds: Folds? = null): AccessibleText {
+            val caretLine = doc.lineIndexAt(caret.coerceIn(0, doc.length)).let { l -> folds?.visualLine(l) ?: l }
             val lines = ArrayList<Int>()
             if (!visible.isEmpty()) for (l in visible.first.coerceAtLeast(0)..visible.last.coerceAtMost(doc.lineCount - 1)) if (!hidden(l)) lines += l
             if (caretLine !in lines) {
                 val at = lines.indexOfFirst { it > caretLine }.let { if (it < 0) lines.size else it }
                 lines.add(at, caretLine)
             }
-            val n = lines.size
-            val df = IntArray(n)
-            val dt = IntArray(n)
-            val tf = IntArray(n)
-            val adj = BooleanArray(n)
+            val df = ArrayList<Int>()
+            val dt = ArrayList<Int>()
+            val tf = ArrayList<Int>()
+            val adj = ArrayList<Boolean>()
+            val jl = ArrayList<Int>()
             val sb = StringBuilder()
-            for ((i, l) in lines.withIndex()) {
-                val from = doc.lineStart(l)
-                val to = if (l + 1 < doc.lineCount) doc.lineStart(l + 1) - 1 else doc.length
-                var a = from
-                var b = to
+            fun segment(a0: Int, b0: Int, joiner: String, adjacent: Boolean, around: Int) {
+                var a = a0
+                var b = b0
                 if (b - a > MAX_LINE) {
-                    val around = if (l == caretLine) caret else from
-                    a = (around - MAX_LINE / 2).coerceIn(from, to - MAX_LINE)
+                    a = (around - MAX_LINE / 2).coerceIn(a0, b0 - MAX_LINE)
                     b = a + MAX_LINE
                     a = TextBoundaries.snap(doc, a)
                     b = TextBoundaries.snap(doc, b)
                 }
-                if (i > 0) {
-                    sb.append('\n')
-                    // The document's own line break: the previous segment ends at its line's end
-                    // (the break) and this one starts right after it.
-                    adj[i] = dt[i - 1] < doc.length && doc.charAt(dt[i - 1]) == '\n' && a == dt[i - 1] + 1
-                }
-                df[i] = a; dt[i] = b; tf[i] = sb.length
+                if (df.isNotEmpty()) sb.append(joiner)
+                df += a; dt += b; tf += sb.length; adj += adjacent; jl += if (df.size == 1) 0 else joiner.length
                 sb.append(doc.slice(a, b))
             }
-            return AccessibleText(sb.toString(), df, dt, tf, adj)
+            for (l in lines) {
+                val from = doc.lineStart(l)
+                val rowEnd = folds?.let { f -> f.lastJoined(l).let { e -> if (e + 1 < doc.lineCount) doc.lineStart(e + 1) - 1 else doc.length } }
+                    ?: (if (l + 1 < doc.lineCount) doc.lineStart(l + 1) - 1 else doc.length)
+                val around = if (l == caretLine) caret else from
+                // The document's own line break: the previous segment ends its line and this one starts the next.
+                val prevEnd = dt.lastOrNull()
+                val adjacent = prevEnd != null && prevEnd < doc.length && doc.charAt(prevEnd) == '\n' && from == prevEnd + 1
+                val parts = folds?.parts(from, rowEnd)?.filter { it.isText || it.from < it.to }
+                if (parts == null || parts.none { !it.isText }) { segment(from, rowEnd, "\n", adjacent, around); continue }
+                // A fold's row: its text pieces, each replaced range read as a label (never its hidden text).
+                var joiner = "\n"
+                var adj0 = adjacent
+                var pending: String? = null
+                var any = false
+                for (p in parts) {
+                    if (!p.isText) {
+                        pending = (pending ?: "") + EditorSemantics.folded(doc.lineIndexAt(p.to) - doc.lineIndexAt(p.from))
+                        continue
+                    }
+                    if (pending != null) { joiner = if (any) pending else joiner + pending.trimStart(); adj0 = false; pending = null }
+                    segment(p.from, p.to, joiner, adj0, around)
+                    any = true
+                    joiner = ""
+                    adj0 = false
+                }
+                if (pending != null) {
+                    // The row ends in a fold: an empty segment at its end carries the label.
+                    segment(parts.last().to, parts.last().to, if (any) pending else "\n" + pending.trimStart(), false, around)
+                }
+            }
+            val n = df.size
+            return AccessibleText(sb.toString(), df.toIntArray(), dt.toIntArray(), tf.toIntArray(), adj.toBooleanArray(), jl.toIntArray())
+                .also { require(n == 0 || it.segments == n) }
         }
     }
 }
@@ -218,7 +249,7 @@ private class EditorSemanticsNode(private var e: EditorSemanticsElement) : Modif
         exposed?.let { return it }
         val st = e.c.view.state
         val folds = e.c.geometry.folds
-        return AccessibleText.build(st.doc, visible(), st.selection.main.head) { folds.isHidden(it) }.also { exposed = it }
+        return AccessibleText.build(st.doc, visible(), st.selection.main.head, { folds.isHidden(it) }, folds.takeIf { !it.isEmpty }).also { exposed = it }
     }
 
     override fun SemanticsPropertyReceiver.applySemantics() {

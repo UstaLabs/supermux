@@ -68,6 +68,9 @@ class LinkedScroll {
 
     private var lastMapping: LineMapping? = null
 
+    /** What the last alignment saw: nothing changed since, nothing to do. */
+    private var aligned: List<Any?>? = null
+
     /** Alignment passes that changed some padding (a test hook). */
     var alignments = 0
         private set
@@ -264,14 +267,17 @@ class LinkedScroll {
         followMapping()
         val w = walker() ?: return false
         val a = Snapshot.withoutReadObservation { anchor }
-        // The window on each side: a screen above and below what the anchor puts on screen.
+        fun key(): List<Any?> = listOf(ca.linkHeights, ca.linkHeights.version, cb.linkHeights, cb.linkHeights.version, a, lastMapping,
+            ca.viewportSize, cb.viewportSize, ca.view.state.doc, cb.view.state.doc)
+        if (key() == aligned) return false
+        // The window on each side: half a screen above and below what the anchor puts on screen.
         val windows = arrayOf(ca, cb).mapIndexed { i, c ->
             val side = LinkedSide.entries[i]
             val y = (yOf(side, a.sync) ?: 0f) + a.px
             val vh = maxOf(c.viewportSize.height, c.layouts.lineHeightPx)
             val hm = c.linkHeights
-            val from = hm.lineAt(y - vh)
-            val to = hm.lineAt(y + 2 * vh)
+            val from = hm.lineAt(y - vh / 2)
+            val to = hm.lineAt(y + 1.5f * vh)
             for (l in from..to) c.geometry.measure(l)
             from to to
         }
@@ -329,6 +335,7 @@ class LinkedScroll {
             if (kotlin.math.abs(hm.padAt(slot) - v) > 0.01f) { hm.setPadAt(slot, v); changed[side.ordinal] = true }
         }
         if (changed[0] || changed[1]) alignments++
+        aligned = key()
         val other = if (caller == LinkedSide.A) LinkedSide.B else LinkedSide.A
         if (changed[other.ordinal]) bump(other)
         return changed[caller.ordinal]

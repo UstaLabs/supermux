@@ -59,6 +59,13 @@ internal class Folds private constructor(
 
     fun isHidden(line: Int): Boolean = hiddenFrom.isNotEmpty() && hiddenIndex(line) >= 0
 
+    /** The run of hidden lines holding [line], or null. */
+    fun hiddenRunAt(line: Int): IntRange? {
+        if (hiddenFrom.isEmpty()) return null
+        val i = hiddenIndex(line)
+        return if (i < 0) null else hiddenFrom[i]..hiddenTo[i]
+    }
+
     /** The line whose row shows [line]: itself, or for a hidden line the first line of its fold. */
     fun visualLine(line: Int): Int {
         val i = if (hiddenFrom.isEmpty()) -1 else hiddenIndex(line)
@@ -304,4 +311,23 @@ internal class LineMap(val parts: List<LinePart>) {
         }
         return out
     }
+}
+
+/** The parts of sorted, disjoint line runs [a] not covered by the sorted, disjoint runs [b]. */
+internal fun runsMinus(a: List<IntRange>, b: List<IntRange>): List<IntRange> {
+    val out = ArrayList<IntRange>()
+    var j = 0
+    for (r in a) {
+        var from = r.first
+        while (j < b.size && b[j].last < from) j++
+        var k = j
+        while (from <= r.last) {
+            val c = b.getOrNull(k)
+            if (c == null || c.first > r.last) { out += from..r.last; break }
+            if (c.first > from) out += from until c.first
+            from = maxOf(from, c.last + 1)
+            k++
+        }
+    }
+    return out
 }

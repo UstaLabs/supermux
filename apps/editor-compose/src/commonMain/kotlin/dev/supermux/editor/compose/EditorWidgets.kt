@@ -51,11 +51,16 @@ class WidgetRegistry {
     internal fun content(type: String): (@Composable WidgetScope.(WidgetKey) -> Unit)? = contents[type]
 }
 
-/** What a widget's content can use: the editor it sits in. */
+/**
+ * What a widget's content can use, and no more: the editor's state and a way to dispatch (an
+ * unfold, a resolved thread: the plugin's own effects), its theme and line height, and handing the
+ * focus back. Not the view, the surface or the platform (spec §4.4: widgets are the plugins' one
+ * exception to "data only", and they stay on the command API).
+ */
 @Stable
 interface WidgetScope {
-    /** The editor showing the widget (dispatch through it: an unfold, a resolved thread). */
-    val view: EditorView
+    /** The editor's state and `dispatch` (a [CommandTarget], as commands see it). */
+    val editor: dev.supermux.editor.core.CommandTarget
 
     /** The editor's theme, zoom included, so the content can match it. */
     val theme: EditorTheme

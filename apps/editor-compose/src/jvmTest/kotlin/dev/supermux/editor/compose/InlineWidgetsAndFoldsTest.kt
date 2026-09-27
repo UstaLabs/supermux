@@ -1,5 +1,6 @@
 package dev.supermux.editor.compose
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
@@ -60,6 +61,27 @@ class InlineWidgetsAndFoldsTest {
             assertEquals(3, f.view.state.selection.main.head)
             DefaultCommands.cursorLeft.run(f.view)
             assertEquals(2, f.view.state.selection.main.head)
+        }
+    }
+
+    @Test fun aTapOnAnInlineWidgetPutsTheCaretNextToItUnlessTheWidgetTakesIt() {
+        var clicks = 0
+        val registry = WidgetRegistry().apply {
+            register("pill") { Box(Modifier.width(30.dp).height(10.dp)) }
+            register("button") { Box(Modifier.width(30.dp).height(10.dp).clickable { clicks++ }) }
+        }
+        val plugin = RangePlugin("i", decorationsFacet, listOf(inline(3, side = 1), inline(9, side = 1, type = "button", id = "b")))
+        editorTest(EditorState.create("abcdef ghijkl\nsecond", EditorSelection.cursor(14), extensions = plugin.extension), widgets = registry) { f ->
+            val pill = f.controller.frame!!.widgets.single { it.inline && it.key.type == "pill" }.rect
+            onNodeWithTag(EDITOR_TAG).performTouchInput { click(pill.center) }
+            waitForIdle()
+            assertEquals(EditorSelection.cursor(3), f.view.state.selection, "a tap on a plain inline widget did not put the caret next to it")
+            assertTrue(f.view.focused)
+            val button = f.controller.frame!!.widgets.single { it.inline && it.key.type == "button" }.rect
+            onNodeWithTag(EDITOR_TAG).performTouchInput { click(button.center) }
+            waitForIdle()
+            assertEquals(1, clicks)
+            assertEquals(EditorSelection.cursor(3), f.view.state.selection, "a widget's own click moved the caret")
         }
     }
 

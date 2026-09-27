@@ -180,11 +180,15 @@ internal class EditorPointer(private val c: EditorController, private val scope:
             // A press on a widget's content is the widget's (its text field, its buttons): no caret, no
             // focus, no keyboard; a drag starting there still scrolls. A handle over it came first.
             if (c.widgetAt(change.position)) return
+            // On an inline widget: the widget's when it took the press itself (its own click); else the
+            // text's, the caret going next to it (the offset at the widget's point).
+            if (change.isConsumed && c.inlineWidgetAt(change.position)) return
             touch = TouchPress(change.id.value, change.position, change.uptimeMillis)
             return // a finger's press is also the start of a scroll: leave it to the scrollable
         }
         if (!event.buttons.isPrimaryPressed) return
         if (c.widgetAt(change.position)) return
+        if (change.isConsumed && c.inlineWidgetAt(change.position)) return
         // A placeholder chip (a fold's "⋯"): the plugin's to act on (unfold), not a caret.
         c.chipAt(change.position)?.let { chip ->
             change.consume()

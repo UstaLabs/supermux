@@ -139,3 +139,19 @@ object EditorDiagnostics {
     var floatingCursor: String by androidx.compose.runtime.mutableStateOf("n/a")
         internal set
 }
+
+/**
+ * Which editor owns a process-wide input setting (iOS Smart Punctuation off, the floating-cursor
+ * bridge): the one that took the focus last. Focus moving between two editors reports the new one's
+ * gain and the old one's loss in either order; only the OWNER's loss releases the setting.
+ */
+internal class FocusOwner<T : Any> {
+    var owner: T? = null
+        private set
+
+    /** [c] gained or lost the focus; returns whether some editor owns the setting now. */
+    fun changed(c: T, focused: Boolean): Boolean {
+        if (focused) owner = c else if (owner === c) owner = null
+        return owner != null
+    }
+}

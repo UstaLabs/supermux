@@ -32,14 +32,20 @@ internal object SmartPunctuation {
     private val patched: Boolean by lazy { dev.supermux.editor.compose.uikit.editor_patch_smart_punctuation() != 0 }
     private var warned = false
     private var verifiedThisFocus = false
+    private val owner = FocusOwner<EditorController>()
 
     fun disable() { patched }
 
-    /** An editor's surface took or left the focus. */
-    fun focusChanged(focused: Boolean) {
+    /**
+     * An editor's surface took or left the focus. The switch has an OWNER (the editor focused last):
+     * with two editors (a side-by-side diff), the old one's blur arriving after the new one's focus
+     * never turns Smart Punctuation back on under the new one.
+     */
+    fun focusChanged(c: EditorController, focused: Boolean) {
         disable()
-        dev.supermux.editor.compose.uikit.editor_set_smart_punctuation_off(if (focused) 1 else 0)
-        if (!focused) verifiedThisFocus = false
+        val on = owner.changed(c, focused)
+        dev.supermux.editor.compose.uikit.editor_set_smart_punctuation_off(if (on) 1 else 0)
+        if (!on) verifiedThisFocus = false
     }
 
     /**
@@ -105,7 +111,7 @@ internal actual fun platformAfterKeyboardShown() {
 }
 
 internal actual fun platformFocusChanged(c: EditorController, focused: Boolean) {
-    SmartPunctuation.focusChanged(focused)
+    SmartPunctuation.focusChanged(c, focused)
     FloatingCursorBridge.focusChanged(c, focused)
 }
 
@@ -118,11 +124,13 @@ internal actual fun platformFocusChanged(c: EditorController, focused: Boolean) 
  */
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 internal object FloatingCursorBridge {
-    private var focused: EditorController? = null
+    private val owner = FocusOwner<EditorController>()
+    private val focused: EditorController? get() = owner.owner
     private var installed = false
 
     fun focusChanged(c: EditorController, isFocused: Boolean) {
-        if (isFocused) focused = c else if (focused === c) { focused?.floatingCursor?.end(); focused = null }
+        if (!isFocused && owner.owner === c) c.floatingCursor.end()
+        owner.changed(c, isFocused)
     }
 
     fun install() {

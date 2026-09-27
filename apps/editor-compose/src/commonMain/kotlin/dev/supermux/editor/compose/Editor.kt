@@ -770,6 +770,9 @@ internal class EditorController(
     private var foldHeights: HeightMap? = null
     private var appliedHidden: List<IntRange> = emptyList()
 
+    /** The lines edits replaced since the last fold sync (new doc lines). */
+    private val editedLines = ArrayList<IntRange>()
+
     /**
      * The state's replaced ranges and inline widgets into the geometry, and their hidden lines into
      * the height map (zero; unfolded ones back to an estimate, measured as they come into view).
@@ -786,11 +789,15 @@ internal class EditorController(
         val f = Folds.build(state.doc, decos, view.sharedFoldCache) { geometry.isLong(it) }
         geometry.folds = f
         var changed = false
-        for (r in appliedHidden) for (l in r) {
-            if (l < heights.lineCount && !f.isHidden(l) && heights.textHeight(l) == 0f) { heights.setMeasured(l, heights.estimatedLineHeight); changed = true }
-        }
         val hidden = f.hidden
-        for (r in hidden) for (l in r) if (heights.textHeight(l) != 0f) { heights.setMeasured(l, 0f); changed = true }
+        // Only the lines whose state changed: unfolded ones back to an estimate, newly folded ones to
+        // zero, and the lines an edit replaced (they came back as estimates). Never every hidden line.
+        for (r in runsMinus(appliedHidden, hidden)) for (l in r) {
+            if (l < heights.lineCount && heights.textHeight(l) == 0f) { heights.setMeasured(l, heights.estimatedLineHeight); changed = true }
+        }
+        for (r in runsMinus(hidden, appliedHidden)) for (l in r) if (heights.textHeight(l) != 0f) { heights.setMeasured(l, 0f); changed = true }
+        for (r in editedLines) for (l in r) if (l < heights.lineCount && f.isHidden(l) && heights.textHeight(l) != 0f) { heights.setMeasured(l, 0f); changed = true }
+        editedLines.clear()
         appliedHidden = hidden
         return changed
     }
@@ -871,7 +878,7 @@ internal class EditorController(
 
     /** The widget scope every widget's content gets. */
     val widgetScope: WidgetScope = object : WidgetScope {
-        override val view: EditorView get() = this@EditorController.view
+        override val editor: dev.supermux.editor.core.CommandTarget get() = this@EditorController.view
         override val theme: EditorTheme get() = this@EditorController.theme ?: error("the editor is not configured")
         override val lineHeight: androidx.compose.ui.unit.Dp get() = with(density) { layouts.lineHeightPx.toDp() }
         override fun focusEditor() { requestFocus() }
@@ -961,7 +968,10 @@ internal class EditorController(
     }
 
     /** True when [p] (surface pixels) is on a block widget's content: that pointer is the widget's. */
-    fun widgetAt(p: androidx.compose.ui.geometry.Offset): Boolean = frame?.widgets?.any { it.composed && it.rect.contains(p) } == true
+    fun widgetAt(p: androidx.compose.ui.geometry.Offset): Boolean = frame?.widgets?.any { !it.inline && it.composed && it.rect.contains(p) } == true
+
+    /** True when [p] is on an inline widget's content (a tap there is the text's unless the widget took it). */
+    fun inlineWidgetAt(p: androidx.compose.ui.geometry.Offset): Boolean = frame?.widgets?.any { it.inline && it.composed && it.rect.contains(p) } == true
 
     // ------------------------------------------------------------------ the gutter --
 
@@ -1162,10 +1172,20 @@ internal class EditorController(
         else { heights.reset(tr.state.doc.lineCount); blocks.invalidate() }
         blocks.onChanges(tr)
         val before = tr.startState.doc
+        val lineDelta = tr.state.doc.lineCount - before.lineCount
+        val edits = tr.changes.iterChanges()
+        val firstEdited = before.lineIndexAt(edits.first().fromA)
+        // Runs before the first edit stay as they are, runs after the edits shift (no rope lookups
+        // per run for a keystroke far from them); a run an edit touches is mapped.
         appliedHidden = appliedHidden.mapNotNull { r ->
-            if (r.last >= before.lineCount) null
-            else tr.state.doc.lineIndexAt(tr.changes.mapPos(before.lineStart(r.first), 1))..tr.state.doc.lineIndexAt(tr.changes.mapPos(before.lineStart(r.last), 1))
+            when {
+                r.last < firstEdited -> r
+                r.last >= before.lineCount -> null
+                edits.size == 1 && r.first > before.lineIndexAt(edits[0].toA) -> (r.first + lineDelta)..(r.last + lineDelta)
+                else -> tr.state.doc.lineIndexAt(tr.changes.mapPos(before.lineStart(r.first), 1))..tr.state.doc.lineIndexAt(tr.changes.mapPos(before.lineStart(r.last), 1))
+            }
         }
+        for (c in edits) editedLines += tr.state.doc.lineIndexAt(c.fromB)..tr.state.doc.lineIndexAt(c.toB)
         geometry.onChanges(tr.changes)
         // The anchor follows its text: an edit above the viewport does not move what is shown.
         val doc = tr.state.doc
