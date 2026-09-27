@@ -26,8 +26,8 @@ import dev.supermux.editor.core.decorationsFacet
  */
 internal class DrawnMarker(val column: String, val line: Int, val marker: GutterMarker, val rect: Rect, val textHeight: Float, val style: GutterMarkerStyle?)
 
-/** Subcomposes and measures a block widget's content at a width; returns its height, null when it has none. */
-internal typealias WidgetMeasurer = (key: dev.supermux.editor.core.WidgetKey, width: Int) -> Int?
+/** Subcomposes and measures a widget's content (a block's, or an inline one's); its size, null when it has none. */
+internal typealias WidgetMeasurer = (key: dev.supermux.editor.core.WidgetKey, inline: Boolean, constraints: androidx.compose.ui.unit.Constraints) -> androidx.compose.ui.unit.IntSize?
 
 /** One text layout to draw, its top-left in surface pixels. */
 internal class DrawnText(val layout: TextLayoutResult, val topLeft: Offset, val color: Color = Color.Unspecified)
@@ -53,8 +53,11 @@ internal class SurfaceFrame(
     val caret: Rect,
     /** The gutter markers on the visible lines. */
     val markers: List<DrawnMarker> = emptyList(),
-    /** The block widgets on the drawn lines. */
+    /** The block widgets on the drawn lines, and the inline widgets in their rows. */
     val widgets: List<PlacedWidget> = emptyList(),
+    /** The drawn placeholder chips (a fold's "⋯"), and the glyph they show. */
+    val chips: List<DrawnChip> = emptyList(),
+    val chipGlyph: TextLayoutResult? = null,
 ) {
     companion object {
         fun empty(size: Size, scrollX: Float, scrollY: Float, gutterWidth: Float, caret: Rect) = SurfaceFrame(
@@ -90,7 +93,9 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
     // moved nothing on screen), and look again until nothing new comes into view.
     val measured = HashSet<Int>()
     fun measureRange(range: IntRange) {
-        for (l in range) if (measured.add(l)) g.measure(l)
+        val shown = g.shownLines(range)
+        measureInline(shown, measureWidget)
+        for (l in shown) if (measured.add(l)) g.measure(l)
         if (measureWidgets(range, measureWidget)) syncBlocks(state)
     }
     var lines = g.visibleLines(scroll.y, height, overscan)
@@ -98,7 +103,7 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
     // The lines the frame looks at off screen too (the caret the hidden field sits at, the touch
     // handles' ends): measured BEFORE the anchor is restored, so their real heights move nothing.
     val main = state.selection.main
-    for (at in intArrayOf(main.head, main.from, main.to)) doc.lineIndexAt(at).let { if (measured.add(it)) g.measure(it) }
+    for (at in intArrayOf(main.head, main.from, main.to)) g.visualLine(doc.lineIndexAt(at)).let { if (measured.add(it)) g.measure(it) }
     restoreAnchor()
     scroll.clamp()
     for (pass in 0 until 4) {
@@ -125,6 +130,8 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
 
     val left = textLeft - scrollX
     fun top(line: Int) = g.lineTop(line) - scrollY
+    // The lines drawn: the laid-out range without a fold's hidden lines.
+    val shown = g.shownLines(lines)
     fun textRow(line: Int) = Rect(gutterWidth, top(line), size.width, top(line) + g.textHeight(line))
 
     val ranges = state.selection.ranges
@@ -133,7 +140,7 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
     if (ranges.all { it.empty }) {
         var last = -1
         for (r in ranges) {
-            val line = doc.lineIndexAt(r.head)
+            val line = g.visualLine(doc.lineIndexAt(r.head))
             if (line == last || line !in lines) continue
             last = line
             current += textRow(line)
@@ -145,7 +152,9 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
         for (set in state.facet(decorationsFacet)) for (r in set.between(viewStart, viewEnd)) {
             val v = r.value as? Decoration.LineStyle ?: continue
             val color = v.classes.firstNotNullOfOrNull { theme.lineClassBackgrounds[it] } ?: continue
-            backgrounds += color to textRow(doc.lineIndexAt(r.from))
+            val line = doc.lineIndexAt(r.from)
+            if (g.folds.isHidden(line)) continue
+            backgrounds += color to textRow(line)
         }
     }
     // Selections, clipped to the laid-out lines (a select-all never lays out the whole document).
@@ -159,7 +168,7 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
     val text = ArrayList<DrawnText>()
     val areaWidth = size.width - textLeft
     val cellW = g.layouts.charWidthPx
-    for (l in lines) {
+    for (l in shown) {
         val t = top(l)
         val lineY = g.lineTop(l)
         for ((o, layout) in g.visiblePieces(l, scrollX - 4 * cellW, scrollX + areaWidth, scrollY - lineY, scrollY + height - lineY)) {
@@ -175,9 +184,9 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
     // The gutter: right-aligned line numbers, the main cursor's line brighter.
     val numbers = ArrayList<DrawnText>()
     if (numbersRight > 0f) {
-        val active = doc.lineIndexAt(state.selection.main.head)
+        val active = g.visualLine(doc.lineIndexAt(state.selection.main.head))
         val cw = g.layouts.charWidthPx
-        for (l in lines) {
+        for (l in shown) {
             val n = numberLayout(l + 1)
             val color = if (l == active) theme.gutterActiveForeground else theme.gutterForeground
             val y = top(l) + (g.layouts.lineHeightPx - n.size.height) / 2
@@ -192,7 +201,7 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
         for (set in state.facet(gutterMarkersFacet)) for (r in set.between(viewStart, viewEnd)) {
             val col = columns[r.value.column] ?: continue
             val line = doc.lineIndexAt(r.from)
-            if (line !in lines || !taken.add(col.id to line)) continue
+            if (line !in lines || g.folds.isHidden(line) || !taken.add(col.id to line)) continue
             val t = top(line)
             markers += DrawnMarker(col.id, line, r.value, Rect(col.x, t, col.x + col.width, t + g.layouts.lineHeightPx), g.textHeight(line), theme.gutterMarkers[r.value.kind])
         }
@@ -205,6 +214,7 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
     var aboveY = 0f
     var belowY = 0f
     for (e in blocks.inLines(lines)) {
+        if (g.folds.isHidden(e.line)) continue
         if (e.line != lastLine) {
             lastLine = e.line
             aboveY = g.heights.top(e.line) - scrollY
@@ -214,7 +224,25 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
         val y = if (e.above) aboveY.also { aboveY += h } else belowY.also { belowY += h }
         widgets += PlacedWidget(e.key, Rect(gutterWidth, y, size.width, y + h), blocks.measuredThisFrame(e.key))
     }
-    return SurfaceFrame(size, lines, scrollX, scrollY, gutterWidth, current, backgrounds, selections, text, cursors, numbers, spots, caret, markers, widgets)
+    // Inline widgets and placeholder chips, where their characters are in their rows.
+    val chips = ArrayList<DrawnChip>()
+    if (!g.folds.isEmpty) for (l in shown) {
+        if (g.isLong(l)) continue
+        val row = g.row(l)
+        val map = row.map ?: continue
+        for ((part, k) in map.widgetChars()) {
+            if (k < 0) continue
+            val key = part.widget ?: continue
+            val box = row.layout.getBoundingBox(k)
+            val r = row.layout.getLineForOffset(k)
+            val y0 = top(l) + row.layout.getLineTop(r)
+            val rect = Rect(left + box.left, y0, left + box.right, y0 + row.layout.getLineBottom(r) - row.layout.getLineTop(r))
+            if (registry?.contains(key.type) == true) widgets += PlacedWidget(key, rect, inlineMeasuredThisFrame(key), inline = true)
+            else chips += DrawnChip(key, part.from, part.to, rect)
+        }
+    }
+    val glyph = if (chips.isNotEmpty()) chipGlyph() else null
+    return SurfaceFrame(size, lines, scrollX, scrollY, gutterWidth, current, backgrounds, selections, text, cursors, numbers, spots, caret, markers, widgets, chips, glyph)
 }
 
 /**
@@ -231,6 +259,12 @@ internal fun DrawScope.drawFrame(frame: SurfaceFrame, theme: EditorTheme, focuse
         for ((color, r) in frame.lineBackgrounds) drawRect(color, r.topLeft, r.size)
         for (r in frame.selections) drawRect(theme.selection, r.topLeft, r.size)
         for (t in frame.text) drawText(t.layout, topLeft = t.topLeft)
+        val glyph = frame.chipGlyph
+        for (c in frame.chips) {
+            val r = c.rect.deflate(minOf(1.5f * density, c.rect.width / 8))
+            drawRoundRect(theme.widgetChipBackground, r.topLeft, r.size, androidx.compose.ui.geometry.CornerRadius(r.height / 4))
+            if (glyph != null) drawText(glyph, color = theme.widgetChipForeground, topLeft = Offset(r.center.x - glyph.size.width / 2f, r.center.y - glyph.size.height / 2f))
+        }
         if (focused && cursorOn) {
             val w = maxOf(2f, 1.5f * density)
             for (r in frame.cursors) drawRect(theme.cursor, Offset(r.left - w / 2, r.top), Size(w, r.height))

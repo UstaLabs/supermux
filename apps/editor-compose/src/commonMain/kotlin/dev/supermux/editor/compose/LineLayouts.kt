@@ -26,7 +26,7 @@ data class LineSpan(val start: Int, val end: Int, val style: SpanStyle)
 
 /** What a line's layout depends on besides the configuration: its text and its styled spans. */
 @Immutable
-private data class LineKey(val text: String, val spans: List<LineSpan>, val noWrap: Boolean = false)
+private data class LineKey(val text: String, val spans: List<LineSpan>, val noWrap: Boolean = false, val widgets: List<Float> = emptyList())
 
 /** The configuration every cached layout was measured under; a change clears the cache. */
 @Immutable
@@ -153,11 +153,39 @@ class LineLayouts(
         return layout(state.doc.slice(from, to), spans, noWrap = true)
     }
 
+    /**
+     * The layout of a visual row made of [parts] (a line with inline widgets or replaced ranges, a
+     * fold's row): each text part's document text, and one U+FFFC per widget covered by a
+     * placeholder [widgetWidth] pixels wide. Its offsets are layout offsets ([LineMap]).
+     */
+    internal fun layoutParts(state: EditorState, parts: List<LinePart>, extra: RangeSet<Decoration>?, widgetWidth: (LinePart) -> Float): TextLayoutResult {
+        val doc = state.doc
+        val sb = StringBuilder()
+        val spans = ArrayList<LineSpan>()
+        val widths = ArrayList<Float>()
+        val widgetAt = ArrayList<Int>()
+        for (p in parts) {
+            if (p.isText) {
+                val base = sb.length
+                sb.append(doc.slice(p.from, p.to))
+                val local = ArrayList<LineSpan>()
+                for (set in state.facet(decorationsFacet)) collect(set, p.from, p.to, local)
+                if (extra != null) collect(extra, p.from, p.to, local)
+                for (sp in local) spans += LineSpan(sp.start + base, sp.end + base, sp.style)
+            } else if (p.widget != null) {
+                widgetAt += sb.length
+                widths += widgetWidth(p)
+                sb.append(WIDGET_CHAR)
+            }
+        }
+        return layout(sb.toString(), spans, noWrap = false, widgets = widths, widgetAt = widgetAt)
+    }
+
     /** The layout of [text] (one line, no line break) with [spans]. */
-    fun layout(text: String, spans: List<LineSpan>, noWrap: Boolean = false): TextLayoutResult {
-        val key = LineKey(text, spans, noWrap)
+    fun layout(text: String, spans: List<LineSpan>, noWrap: Boolean = false, widgets: List<Float> = emptyList(), widgetAt: List<Int> = emptyList()): TextLayoutResult {
+        val key = LineKey(text, spans, noWrap, widgets)
         cache.remove(key)?.let { cache[key] = it; return it }
-        val result = measure(text, spans, noWrap)
+        val result = measure(text, spans, noWrap, widgets, widgetAt)
         cache[key] = result
         while (cache.size > capacity) cache.remove(cache.keys.first())
         return result
@@ -187,11 +215,16 @@ class LineLayouts(
         return out
     }
 
-    private fun measure(text: String, spans: List<LineSpan>, noWrap: Boolean): TextLayoutResult {
+    private fun measure(text: String, spans: List<LineSpan>, noWrap: Boolean, widgets: List<Float> = emptyList(), widgetAt: List<Int> = emptyList()): TextLayoutResult {
         DrawGuard.check("a line layout")
         measureCount++
         val annotated = AnnotatedString(text, spanStyles = spans.map { AnnotatedString.Range(it.style, it.start, it.end) })
-        val placeholders = if (text.indexOf('\t') < 0) emptyList() else tabPlaceholders(text)
+        val tabs = if (text.indexOf('\t') < 0) emptyList() else tabPlaceholders(text)
+        // A widget: its character covered by a box as wide as the widget (a font size tall, so the
+        // row keeps its height; the widget itself is placed over the whole row).
+        val placeholders = if (widgets.isEmpty()) tabs else (tabs + widgets.indices.map { i ->
+            AnnotatedString.Range(Placeholder((widgets[i] / fontSizePx).em, 1.em, PlaceholderVerticalAlign.TextCenter), widgetAt[i], widgetAt[i] + 1)
+        }).sortedBy { it.start }
         val w = if (noWrap) null else wrapWidth
         val result = measurer.measure(
             text = annotated,
@@ -228,6 +261,9 @@ class LineLayouts(
 
     companion object {
         const val DEFAULT_CAPACITY = 3000
+
+        /** The character a widget takes in a row's layout (an object replacement character). */
+        const val WIDGET_CHAR = '\uFFFC'
         private val COMPOSITION_STYLE = SpanStyle(textDecoration = TextDecoration.Underline)
     }
 }

@@ -47,18 +47,52 @@ class Geometry(
     /** True when [line] is too long to lay out whole. */
     fun isLong(line: Int): Boolean = lineTo(line) - lineFrom(line) > LONG_LINE
 
-    /** [line]'s layout (a line of at most [LONG_LINE] units); records its measured height. */
-    fun lineLayout(line: Int): TextLayoutResult {
-        val st = state()
-        if (heights.lineCount != st.doc.lineCount) heights.reset(st.doc.lineCount)
-        val layout = layouts.layout(st, line, extraMarks)
-        heights.setMeasured(line, layout.multiParagraph.height)
-        return layout
+    /** The state's replaced ranges and inline widgets, as the surface lays them out (set by it). */
+    internal var folds: Folds = Folds.EMPTY
+
+    /** How wide a widget part is in its row, in pixels (set by the surface). */
+    internal var widgetWidth: (LinePart) -> Float = { layouts.charWidthPx * 2 }
+
+    /**
+     * A visual row's layout: document [from] (its first line's start) to [to] (the end of the last
+     * line it joins, past a fold), and the offset mapping when it holds widgets ([map], else plain).
+     */
+    internal class Row(val layout: TextLayoutResult, val from: Int, val to: Int, val map: LineMap?) {
+        fun toLayout(pos: Int): Int = map?.toLayout(pos) ?: (pos - from).coerceIn(0, to - from)
+        fun toDoc(k: Int): Int = map?.toDoc(k) ?: (from + k).coerceIn(from, to)
+        /** The layout's length (its last offset). */
+        val length: Int get() = map?.layoutLength ?: (to - from)
     }
 
-    /** Measure [line] (short: its layout; long: its rows, without shaping) and record its height. */
+    /** The first line of [line]'s row (itself unless a fold hides it). */
+    fun visualLine(line: Int): Int = folds.visualLine(line)
+
+    /** Where the row holding document offset [offset] ends (past a fold's joined tail). */
+    fun visualEnd(offset: Int): Int = lineTo(folds.lastJoined(folds.visualLine(state().doc.lineIndexAt(offset))))
+
+    /** The row showing [line] (a hidden line: its fold's row), laid out; records its height. */
+    internal fun row(line: Int): Row {
+        val st = state()
+        if (heights.lineCount != st.doc.lineCount) heights.reset(st.doc.lineCount)
+        val first = folds.visualLine(line)
+        val from = lineFrom(first)
+        val to = lineTo(folds.lastJoined(first))
+        val parts = folds.parts(from, to)
+        val layout = if (parts == null) layouts.layout(st, first, extraMarks) else layouts.layoutParts(st, parts, extraMarks, widgetWidth)
+        heights.setMeasured(first, layout.multiParagraph.height)
+        return Row(layout, from, to, parts?.let { LineMap(it) })
+    }
+
+    /** [line]'s row layout (a line of at most [LONG_LINE] units); records its measured height. */
+    fun lineLayout(line: Int): TextLayoutResult = row(line).layout
+
+    /** Measure [line] (short: its layout; long: its rows, without shaping; hidden: nothing) and record its height. */
     fun measure(line: Int) {
-        if (!isLong(line)) { lineLayout(line); return }
+        if (folds.isHidden(line)) {
+            if (heights.textHeight(line) != 0f) heights.setMeasured(line, 0f)
+            return
+        }
+        if (!isLong(line)) { row(line); return }
         val st = state()
         if (heights.lineCount != st.doc.lineCount) heights.reset(st.doc.lineCount)
         val len = lineTo(line) - lineFrom(line)
@@ -66,6 +100,9 @@ class Geometry(
         heights.setMeasured(line, if (cols > 0) pieceCount(len) * layouts.lineHeightPx else layouts.lineHeightPx)
         if (cols == 0) layouts.noteWidth(len * layouts.charWidthPx)
     }
+
+    /** The lines of [range] that are shown (a fold's hidden lines skipped). */
+    fun shownLines(range: IntRange): List<Int> = folds.shownLines(range)
 
     /** Where [line]'s text starts (below any block widget above it). */
     fun lineTop(line: Int): Float = heights.top(line) + heights.blockAbove(line)
@@ -102,6 +139,7 @@ class Geometry(
      * layout at (0, 0).
      */
     fun visiblePieces(line: Int, xFrom: Float, xTo: Float, yFrom: Float, yTo: Float): List<Pair<Offset, TextLayoutResult>> {
+        if (folds.isHidden(line)) return emptyList()
         if (!isLong(line)) return listOf(Offset.Zero to lineLayout(line))
         measure(line)
         val from = lineFrom(line)
@@ -122,23 +160,24 @@ class Geometry(
     /** The document offset nearest to content position [position]. */
     fun offsetAt(position: Offset): Int {
         val doc = state().doc
-        val line = heights.lineAt(position.y)
+        val line = folds.visualLine(heights.lineAt(position.y))
         if (isLong(line)) return longOffsetAt(line, position)
-        val layout = lineLayout(line)
+        val row = row(line)
+        val layout = row.layout
         val top = lineTop(line)
         val h = layout.multiParagraph.height
         val y = (position.y - top).coerceIn(0f, maxOf(0f, h - 0.01f))
         val local = layout.getOffsetForPosition(Offset(position.x, y))
-        return doc.lineStart(line) + local
+        return row.toDoc(local).coerceIn(0, doc.length)
     }
 
     /** The caret rect at [offset] (zero width: the painter decides how thick a caret is). */
     fun rectFor(offset: Int): Rect {
         val doc = state().doc
-        val line = doc.lineIndexAt(offset)
+        val line = folds.visualLine(doc.lineIndexAt(offset))
         if (isLong(line)) return longRectFor(line, offset)
-        val layout = lineLayout(line)
-        val r = layout.getCursorRect(offset - doc.lineStart(line))
+        val row = row(line)
+        val r = row.layout.getCursorRect(row.toLayout(offset).coerceIn(0, row.length))
         val top = lineTop(line)
         return Rect(r.left, r.top + top, r.left, r.bottom + top)
     }
@@ -152,29 +191,31 @@ class Geometry(
         if (range.empty) return emptyList()
         val doc = state().doc
         val out = ArrayList<Rect>()
-        val first = doc.lineIndexAt(range.from)
+        val first = folds.visualLine(doc.lineIndexAt(range.from))
         val last = doc.lineIndexAt(range.to)
-        for (line in first..last) {
+        for (line in folds.shownLines(first..last)) {
             val lineFrom = doc.lineStart(line)
-            val lineTo = lineTo(line)
+            if (isLong(line)) { val lineTo = lineTo(line); longSelection(line, lineFrom, lineTo, range, range.to > lineTo, yFrom, yTo, out); continue }
+            val row = row(line)
+            val lineTo = row.to
             val includesBreak = range.to > lineTo
-            if (isLong(line)) { longSelection(line, lineFrom, lineTo, range, includesBreak, yFrom, yTo, out); continue }
-            val layout = lineLayout(line)
+            val layout = row.layout
             val top = lineTop(line)
-            val s = maxOf(range.from, lineFrom) - lineFrom
-            val e = minOf(range.to, lineTo) - lineFrom
+            val s = row.toLayout(maxOf(range.from, lineFrom))
+            val e = row.toLayout(minOf(range.to, lineTo))
+            val end = row.length
             val rows = layout.lineCount
-            for (row in 0 until rows) {
-                val rs = layout.getLineStart(row)
-                val re = if (row == rows - 1) lineTo - lineFrom else layout.getLineEnd(row)
+            for (r in 0 until rows) {
+                val rs = layout.getLineStart(r)
+                val re = if (r == rows - 1) end else layout.getLineEnd(r)
                 val a = maxOf(s, rs)
                 val b = minOf(e, re)
-                val lastRow = row == rows - 1
+                val lastRow = r == rows - 1
                 if (a > b || (a == b && !(includesBreak && lastRow))) continue
-                val left = if (a == rs) layout.getLineLeft(row) else layout.getHorizontalPosition(a, true)
-                var right = if (b == re && !lastRow) layout.getLineRight(row) else layout.getHorizontalPosition(b, true)
+                val left = if (a == rs) layout.getLineLeft(r) else layout.getHorizontalPosition(a, true)
+                var right = if (b == re && !lastRow) layout.getLineRight(r) else layout.getHorizontalPosition(b, true)
                 if (includesBreak && lastRow && b == re) right += layouts.charWidthPx
-                out += Rect(left, top + layout.getLineTop(row), maxOf(left, right), top + layout.getLineBottom(row))
+                out += Rect(left, top + layout.getLineTop(r), maxOf(left, right), top + layout.getLineBottom(r))
             }
         }
         return out
@@ -189,7 +230,7 @@ class Geometry(
     fun rowBounds(offset: Int): Pair<Int, Int> {
         val doc = state().doc
         val at = offset.coerceIn(0, doc.length)
-        val line = doc.lineIndexAt(at)
+        val line = folds.visualLine(doc.lineIndexAt(at))
         val from = lineFrom(line)
         val to = lineTo(line)
         if (isLong(line)) {
@@ -200,14 +241,15 @@ class Geometry(
             // A row's end offset is the next row's start: the caret there shows on the next row.
             return a to (if (k == pieceCount(len) - 1) to else maxOf(a, TextBoundaries.prevGrapheme(state().doc, b)))
         }
-        val layout = lineLayout(line)
-        if (layout.lineCount <= 1) return from to to
-        val row = layout.getLineForOffset(at - from)
-        val start = from + layout.getLineStart(row)
-        var end = if (row == layout.lineCount - 1) to else from + layout.getLineEnd(row, visibleEnd = true)
+        val vr = row(line)
+        val layout = vr.layout
+        if (layout.lineCount <= 1) return vr.from to vr.to
+        val row = layout.getLineForOffset(vr.toLayout(at))
+        val start = vr.toDoc(layout.getLineStart(row))
+        var end = if (row == layout.lineCount - 1) vr.to else vr.toDoc(layout.getLineEnd(row, visibleEnd = true))
         // A row broken inside a token (no space to end it) ends at the next row's first offset, where a
         // caret shows at the next row's start: the row's end is the last position still on it.
-        if (row < layout.lineCount - 1 && end == from + layout.getLineStart(row + 1)) end = TextBoundaries.prevGrapheme(state().doc, end)
+        if (row < layout.lineCount - 1 && end == vr.toDoc(layout.getLineStart(row + 1))) end = TextBoundaries.prevGrapheme(state().doc, end)
         return start to maxOf(start, end)
     }
 

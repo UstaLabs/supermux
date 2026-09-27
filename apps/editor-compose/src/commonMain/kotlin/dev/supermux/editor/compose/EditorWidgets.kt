@@ -73,7 +73,10 @@ internal class BlockEntry(val key: WidgetKey, val pos: Int, val above: Boolean, 
 }
 
 /** A block widget in a frame: its surface-pixel [rect], and whether it has composed content there. */
-internal class PlacedWidget(val key: WidgetKey, val rect: Rect, val composed: Boolean)
+internal class PlacedWidget(val key: WidgetKey, val rect: Rect, val composed: Boolean, val inline: Boolean = false)
+
+/** A drawn placeholder chip in a frame: a fold's "⋯", an inline widget nobody registered content for. */
+internal class DrawnChip(val key: WidgetKey, val from: Int, val to: Int, val rect: Rect)
 
 /**
  * The block widgets of the state and their heights in the [HeightMap]: every `BlockWidget`
@@ -158,7 +161,7 @@ internal class BlockWidgets {
      * decorations, the document, the height map and the registry are the same instances).
      * Returns true when a height changed.
      */
-    fun sync(state: EditorState, heights: HeightMap, lineHeight: Float, registry: WidgetRegistry?): Boolean {
+    fun sync(state: EditorState, heights: HeightMap, lineHeight: Float, registry: WidgetRegistry?, hidden: (Int) -> Boolean = { false }): Boolean {
         val decos = state.facet(decorationsFacet)
         val reg = registry?.version ?: -1
         if (!dirty && decos === syncedDecos && state.doc === syncedDoc && heights === syncedHeights && lineHeight == syncedLineHeight && reg == syncedRegistry) return false
@@ -172,7 +175,8 @@ internal class BlockWidgets {
         dirty = false
         extract(state, decos)
         val desired = HashMap<Int, FloatArray>()
-        for (e in entries) desired.getOrPut(e.line) { FloatArray(2) }[if (e.above) 0 else 1] += heightOf(e, lineHeight, registry)
+        // A widget on a folded line is hidden with it.
+        for (e in entries) if (!hidden(e.line)) desired.getOrPut(e.line) { FloatArray(2) }[if (e.above) 0 else 1] += heightOf(e, lineHeight, registry)
         var changed = false
         for (l in applied) if (l < heights.lineCount && l !in desired && (heights.blockAbove(l) != 0f || heights.blockBelow(l) != 0f)) {
             heights.setBlockHeight(l, 0f, 0f)

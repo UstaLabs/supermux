@@ -184,6 +184,12 @@ internal class EditorPointer(private val c: EditorController, private val scope:
             return // a finger's press is also the start of a scroll: leave it to the scrollable
         }
         if (!event.buttons.isPrimaryPressed) return
+        // A placeholder chip (a fold's "⋯"): the plugin's to act on (unfold), not a caret.
+        c.chipAt(change.position)?.let { chip ->
+            change.consume()
+            c.reportWidgetClick(chip)
+            return
+        }
         // A marker column's cell: the click is the marker's (a fold arrow, a comment), not the text's.
         c.gutterHit(change.position)?.let { hit ->
             change.consume()
@@ -312,6 +318,7 @@ internal class EditorPointer(private val c: EditorController, private val scope:
     private fun onTap(p: Offset, time: Long) {
         // A marker column's cell: the tap is the marker's; no caret, no keyboard.
         c.gutterHit(p)?.let { c.reportGutterClick(it); return }
+        c.chipAt(p)?.let { c.reportWidgetClick(it); return }
         c.focusFromTouch()
         // Taps close in time and place count up: the first places the caret AT ONCE (a single tap
         // never waits for a second), the second upgrades it to the word, the third to the line.

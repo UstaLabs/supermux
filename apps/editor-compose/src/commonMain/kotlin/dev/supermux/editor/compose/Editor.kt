@@ -336,16 +336,17 @@ private fun surfaceMeasurePolicy(
     val w = if (constraints.hasBoundedWidth) constraints.maxWidth else constraints.minWidth
     val h = if (constraints.hasBoundedHeight) constraints.maxHeight else constraints.minHeight
     // Block widgets are subcomposed and measured INSIDE the layout pass (their heights move lines).
-    val widgetPlaceables = HashMap<dev.supermux.editor.core.WidgetKey, List<Placeable>>()
-    val measureWidget: WidgetMeasurer = { key, width ->
-        val ps = subcompose(WidgetSlot(key), c.widgetContent(key)).map { it.measure(Constraints(minWidth = width, maxWidth = width)) }
-        widgetPlaceables[key] = ps
-        if (ps.isEmpty()) null else ps.maxOf { it.height }
+    val widgetPlaceables = HashMap<WidgetSlot, List<Placeable>>()
+    val measureWidget: WidgetMeasurer = { key, inline, cs ->
+        val slot = WidgetSlot(key, inline)
+        val ps = subcompose(slot, c.widgetContent(key)).map { it.measure(cs) }
+        widgetPlaceables[slot] = ps
+        if (ps.isEmpty()) null else androidx.compose.ui.unit.IntSize(ps.maxOf { it.width }, ps.maxOf { it.height })
     }
     val frame = c.layoutFrame(w.toFloat(), h.toFloat(), configure, measureWidget)
-    val placed = frame?.widgets.orEmpty().filter { it.composed && widgetPlaceables.containsKey(it.key) }
+    val placed = frame?.widgets.orEmpty().filter { it.composed && widgetPlaceables.containsKey(WidgetSlot(it.key, it.inline)) }
     // Out of view but near: still composed (not measured, not placed), so their state lives.
-    for (k in c.retainedWidgets(placed.map { it.key })) subcompose(WidgetSlot(k), c.widgetContent(k))
+    for (k in c.retainedWidgets(placed.filter { !it.inline }.map { it.key })) subcompose(WidgetSlot(k, false), c.widgetContent(k))
     val full = Constraints.fixed(w, h)
     val canvas = subcompose(Slot.CANVAS, slots.canvas).map { it.measure(full) }
     val test = slots.testChild?.let { t -> subcompose(Slot.TEST, t).map { it.measure(full) } }.orEmpty()
@@ -369,13 +370,17 @@ private fun surfaceMeasurePolicy(
         field.forEach { it.place(caret.left.toInt(), caret.top.toInt()) }
         shield.forEach { it.place(caret.left.toInt() - it.width / 2, caret.top.toInt() - it.height / 2) }
         // Widgets over the shield: a widget's text field right under the caret still gets its taps.
-        for (pw in placed) widgetPlaceables[pw.key]?.forEach { it.place(pw.rect.left.toInt(), kotlin.math.round(pw.rect.top).toInt()) }
+        for (pw in placed) widgetPlaceables[WidgetSlot(pw.key, pw.inline)]?.forEach {
+            // An inline widget sits on its row, centred; a block across the text area.
+            val y = if (pw.inline) pw.rect.top + (pw.rect.height - it.height) / 2 else pw.rect.top
+            it.place(kotlin.math.round(pw.rect.left).toInt(), kotlin.math.round(y).toInt())
+        }
         overlay.forEach { it.place(0, 0) }
     }
 }
 
-/** A block widget's slot. */
-private data class WidgetSlot(val key: dev.supermux.editor.core.WidgetKey)
+/** A widget's slot (a key may be shown as a block and inline at once: two slots). */
+private data class WidgetSlot(val key: dev.supermux.editor.core.WidgetKey, val inline: Boolean)
 
 /** The canvas: paints the controller's last frame ([EditorController.draw]), then tells the host. */
 internal fun Modifier.editorCanvas(c: EditorController, onPaint: androidx.compose.runtime.State<(() -> Unit)?>): Modifier =
@@ -422,8 +427,14 @@ internal class EditorController(
     val layouts = LineLayouts(measurer)
     private var heights = HeightMap(view.state.doc.lineCount, layouts.lineHeightPx)
 
-    var geometry: Geometry = Geometry({ view.state }, heights, layouts)
+    var geometry: Geometry = newGeometry(null)
         private set
+
+    /** A geometry over the current height map, keeping [previous]'s folds until they are synced again. */
+    private fun newGeometry(previous: Geometry?): Geometry = Geometry({ view.state }, heights, layouts).also { g ->
+        g.widgetWidth = { widgetWidthOf(it) }
+        previous?.let { g.folds = it.folds }
+    }
 
 
     /** iOS's space-bar trackpad, forwarded by the platform (see [FloatingCursor]). */
@@ -614,6 +625,7 @@ internal class EditorController(
         this.lineWrap = lineWrap
         this.showLineNumbers = showLineNumbers
         numberLayouts.clear()
+        chipGlyph = null
         numberStyle = TextStyle(fontFamily = theme.fontFamily, fontSize = theme.fontSizeSp.sp, fontFeatureSettings = "liga 0, calt 0")
         relayout()
         if (keep != null && oldLine > 0f) {
@@ -647,7 +659,7 @@ internal class EditorController(
             heightsKey = key
             heights = HeightMap(view.state.doc.lineCount, layouts.lineHeightPx)
             blocks.invalidate()
-            geometry = Geometry({ view.state }, heights, layouts)
+            geometry = newGeometry(geometry)
             if (view.surface === this) view.geometry = geometry
         }
     }
@@ -664,7 +676,97 @@ internal class EditorController(
     var saveableHolder: androidx.compose.runtime.saveable.SaveableStateHolder? = null
 
     /** The height map in step with the state's block widgets; true when a height changed. */
-    fun syncBlocks(state: EditorState): Boolean = blocks.sync(state, heights, layouts.lineHeightPx, registry)
+    fun syncBlocks(state: EditorState): Boolean = blocks.sync(state, heights, layouts.lineHeightPx, registry) { geometry.folds.isHidden(it) }
+
+    // ------------------------------------------------------------------ folds, inline widgets --
+
+    private val foldCache = Folds.Cache()
+    private var foldDecos: List<dev.supermux.editor.core.RangeSet<dev.supermux.editor.core.Decoration>>? = null
+    private var foldDoc: dev.supermux.editor.core.Rope? = null
+    private var foldHeights: HeightMap? = null
+    private var appliedHidden: List<IntRange> = emptyList()
+
+    /**
+     * The state's replaced ranges and inline widgets into the geometry, and their hidden lines into
+     * the height map (zero; unfolded ones back to an estimate, measured as they come into view).
+     * True when a height changed.
+     */
+    fun syncFolds(state: EditorState): Boolean {
+        val decos = state.facet(dev.supermux.editor.core.decorationsFacet)
+        if (decos === foldDecos && state.doc === foldDoc && heights === foldHeights) return false
+        if (heights.lineCount != state.doc.lineCount) return false
+        if (heights !== foldHeights) appliedHidden = emptyList()
+        foldDecos = decos
+        foldDoc = state.doc
+        foldHeights = heights
+        val f = Folds.build(state.doc, decos, foldCache) { geometry.isLong(it) }
+        geometry.folds = f
+        var changed = false
+        for (r in appliedHidden) for (l in r) {
+            if (l < heights.lineCount && !f.isHidden(l) && heights.textHeight(l) == 0f) { heights.setMeasured(l, heights.estimatedLineHeight); changed = true }
+        }
+        val hidden = f.hidden
+        for (r in hidden) for (l in r) if (heights.textHeight(l) != 0f) { heights.setMeasured(l, 0f); changed = true }
+        appliedHidden = hidden
+        return changed
+    }
+
+    /** Measured sizes of registered inline widgets' content, in pixels. */
+    private val inlineSizes = HashMap<dev.supermux.editor.core.WidgetKey, androidx.compose.ui.unit.IntSize>()
+    private val inlineMeasured = HashSet<dev.supermux.editor.core.WidgetKey>()
+
+    /** A drawn placeholder chip's width: an unregistered inline widget or a fold's "⋯". */
+    fun chipWidth(): Float = kotlin.math.round(layouts.charWidthPx * 2.5f)
+
+    /** How wide a widget part is in its row: its content's measured width, a chip, nothing for a bare Replace. */
+    private fun widgetWidthOf(p: LinePart): Float {
+        val key = p.widget ?: return 0f
+        if (registry?.contains(key.type) == true) return inlineSizes[key]?.width?.toFloat() ?: (layouts.charWidthPx * 2)
+        return chipWidth()
+    }
+
+    fun inlineMeasuredThisFrame(key: dev.supermux.editor.core.WidgetKey) = key in inlineMeasured
+
+    /**
+     * Measure the registered inline widgets on the rows of [lines] (shown lines) not measured yet this
+     * frame, BEFORE those rows are laid out (their widths go into the layout).
+     */
+    fun measureInline(lines: List<Int>, measure: WidgetMeasurer?) {
+        if (measure == null || geometry.folds.inline.isEmpty() && geometry.folds.replaces.isEmpty()) return
+        val reg = registry ?: return
+        val g = geometry
+        val doc = view.state.doc
+        val lh = layouts.lineHeightPx.toInt().coerceAtLeast(1)
+        for (l in lines) {
+            val from = doc.lineStart(l)
+            val to = geometry.visualEnd(from)
+            val parts = g.folds.parts(from, to) ?: continue
+            for (p in parts) {
+                val key = p.widget ?: continue
+                if (p.isText || key.type !in reg || key in inlineMeasured) continue
+                inlineMeasured += key
+                val size = measure(key, true, Constraints(maxHeight = lh)) ?: continue
+                inlineSizes[key] = size
+            }
+        }
+    }
+
+    /** A drawn chip under [p] (surface pixels): a click on it is the plugin's (an unfold). */
+    fun chipAt(p: androidx.compose.ui.geometry.Offset): DrawnChip? = frame?.chips?.firstOrNull { it.rect.contains(p) }
+
+    /** A click or tap on a drawn chip: the plugins' handlers ([widgetClickFacet]) first, then the host's. */
+    fun reportWidgetClick(chip: DrawnChip) {
+        for (h in view.state.facet(widgetClickFacet)) if (h.click(view, chip.key, chip.from, chip.to)) return
+        view.onWidgetClick?.invoke(chip.key, chip.from, chip.to)
+    }
+
+    private var chipGlyph: TextLayoutResult? = null
+
+    /** The "⋯" a placeholder chip shows. */
+    fun chipGlyph(): TextLayoutResult = chipGlyph ?: run {
+        DrawGuard.check("a chip layout")
+        measurer.measure("⋯", numberStyle, softWrap = false, density = density).also { chipGlyph = it }
+    }
 
     /**
      * Measure the registered widgets on [lines] not measured yet this frame ([measure] subcomposes
@@ -676,9 +778,9 @@ internal class EditorController(
         val width = (viewportSize.width - gutterWidth).toInt().coerceAtLeast(1)
         var changed = false
         for (e in blocks.inLines(lines)) {
-            if (e.key.type !in reg || blocks.measuredThisFrame(e.key)) continue
-            val h = measure(e.key, width) ?: continue
-            if (blocks.setMeasured(e.key, h.toFloat())) changed = true
+            if (e.key.type !in reg || blocks.measuredThisFrame(e.key) || geometry.folds.isHidden(e.line)) continue
+            val size = measure(e.key, false, Constraints(minWidth = width, maxWidth = width)) ?: continue
+            if (blocks.setMeasured(e.key, size.height.toFloat())) changed = true
         }
         return changed
     }
@@ -723,7 +825,7 @@ internal class EditorController(
         val near = composedWidgets.filter { k ->
             if (k in shownSet) return@filter false
             val e = blocks.entry(k) ?: return@filter false
-            if (registry?.contains(k.type) != true || e.line >= heights.lineCount) return@filter false
+            if (registry?.contains(k.type) != true || e.line >= heights.lineCount || geometry.folds.isHidden(e.line)) return@filter false
             val top = heights.top(e.line)
             top + heights.height(e.line) >= y - EditorDefaults.RETAIN_SCREENS * h && top <= y + (1 + EditorDefaults.RETAIN_SCREENS) * h
         }.takeLast(EditorDefaults.RETAIN_WIDGETS)
@@ -870,7 +972,9 @@ internal class EditorController(
                 viewportSize = size
                 relayout()
             }
+            syncFolds(state)
             syncBlocks(state)
+            inlineMeasured.clear()
             buildFrame(state, theme, measureWidget)
         } finally {
             scroll.layoutDepth--
@@ -905,15 +1009,20 @@ internal class EditorController(
     override fun onTransaction(tr: Transaction) {
         followHandles(tr)
         // Block widgets' heights follow at once (a scroll-into-view right after sees them).
-        if (!tr.docChanged) { if (theme != null) syncBlocks(tr.state); return }
+        if (!tr.docChanged) { if (theme != null) { syncFolds(tr.state); syncBlocks(tr.state) }; return }
         if (heights.lineCount == tr.startState.doc.lineCount) heights.applyChanges(tr.changes, tr.startState.doc, tr.state.doc)
         else { heights.reset(tr.state.doc.lineCount); blocks.invalidate() }
         blocks.onChanges(tr)
+        val before = tr.startState.doc
+        appliedHidden = appliedHidden.mapNotNull { r ->
+            if (r.last >= before.lineCount) null
+            else tr.state.doc.lineIndexAt(tr.changes.mapPos(before.lineStart(r.first), 1))..tr.state.doc.lineIndexAt(tr.changes.mapPos(before.lineStart(r.last), 1))
+        }
         geometry.onChanges(tr.changes)
         // The anchor follows its text: an edit above the viewport does not move what is shown.
         val doc = tr.state.doc
         anchorPos = doc.lineStart(doc.lineIndexAt(tr.changes.mapPos(anchorPos.coerceIn(0, tr.changes.lengthBefore), -1)))
-        if (theme != null) syncBlocks(tr.state)
+        if (theme != null) { syncFolds(tr.state); syncBlocks(tr.state) }
     }
 
     /**

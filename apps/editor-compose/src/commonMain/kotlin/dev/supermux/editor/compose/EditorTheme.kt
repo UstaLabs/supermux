@@ -52,6 +52,10 @@ data class EditorTheme(
     val gutterColumns: Map<String, Dp> = DEFAULT_GUTTER_COLUMNS,
     /** How each marker kind ([GutterMarker.kind]) is drawn; a kind not listed draws nothing. */
     val gutterMarkers: Map<String, GutterMarkerStyle> = emptyMap(),
+    /** A drawn placeholder chip (a fold's "⋯", an inline widget without content): its fill... */
+    val widgetChipBackground: Color = selection,
+    /** ...and its glyph. */
+    val widgetChipForeground: Color = foreground,
 ) {
     /** The style of mark class [cls], or null when the theme does not draw it. */
     fun styleOf(cls: String): SpanStyle? = tokens[cls] ?: classStyles[cls]

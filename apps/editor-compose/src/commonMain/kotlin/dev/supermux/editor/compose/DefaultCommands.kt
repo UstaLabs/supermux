@@ -212,10 +212,21 @@ object DefaultCommands {
 
     // ------------------------------------------------------------------ helpers --
 
+    /** The replaced (folded) ranges [t] shows: the surface's, else the state's own. */
+    private fun folds(t: CommandTarget, st: EditorState): Folds =
+        (t as? EditorView)?.geometry?.folds ?: Folds.of(st)
+
+    /** A move to [head] from [from] never lands inside a replaced range: it goes to the range's far side. */
+    private fun skipReplaced(folds: Folds, from: Int, head: Int): Int {
+        val r = folds.replaceInside(head) ?: return head
+        return if (head > from) r.to else r.from
+    }
+
     private fun move(t: CommandTarget, extend: Boolean, to: (EditorState, SelectionRange) -> Int): Boolean {
         val st = t.state
+        val folds = folds(t, st)
         val ranges = st.selection.ranges.map { r ->
-            val head = to(st, r)
+            val head = skipReplaced(folds, r.head, to(st, r))
             if (extend) SelectionRange(r.anchor, head) else SelectionRange(head)
         }
         t.dispatch(TransactionSpec(selection = EditorSelection.create(ranges, st.selection.mainIndex), scrollIntoView = true, userEvent = "select"))
@@ -230,7 +241,14 @@ object DefaultCommands {
     private fun change(t: CommandTarget, userEvent: String, f: (EditorState, SelectionRange) -> ChangeSpec?): Boolean {
         val st = t.state
         val ranges = st.selection.ranges
-        val specs = ranges.map { f(st, it) }
+        // A deletion reaching into a replaced (folded) range takes all of it (CM6's atomic ranges):
+        // never a piece of text nobody can see.
+        val folds = if (userEvent.startsWith("delete")) folds(t, st) else null
+        val specs = ranges.map { r ->
+            val sp = f(st, r)
+            if (sp == null || folds == null || folds.replaces.isEmpty()) sp
+            else ChangeSpec(folds.replaceInside(sp.from)?.from ?: sp.from, folds.replaceInside(sp.to)?.to ?: sp.to, sp.insert)
+        }
         val merged = ArrayList<ChangeSpec>()
         for (s in specs.filterNotNull().sortedWith(compareBy({ it.from }, { it.to }))) {
             val last = merged.lastOrNull()
@@ -289,7 +307,8 @@ object DefaultCommands {
 
     private fun end(t: CommandTarget, doc: Rope, head: Int): Int {
         val r = row(t, head)
-        val lineEnd = lineEnd(doc, head)
+        // A row that folds lines ends past the fold (its joined tail's end).
+        val lineEnd = (t as? EditorView)?.geometry?.visualEnd(head) ?: lineEnd(doc, head)
         if (r != null && r.second < lineEnd && head != r.second) return r.second
         return lineEnd
     }

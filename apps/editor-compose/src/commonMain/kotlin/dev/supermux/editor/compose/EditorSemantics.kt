@@ -106,10 +106,11 @@ internal class AccessibleText private constructor(
         /** A longer line is exposed in part. */
         const val MAX_LINE = 2_000
 
-        fun build(doc: Rope, visible: IntRange, caret: Int): AccessibleText {
+        /** [hidden]: lines a fold hides (never exposed: a screen reader reads what is shown). */
+        fun build(doc: Rope, visible: IntRange, caret: Int, hidden: (Int) -> Boolean = { false }): AccessibleText {
             val caretLine = doc.lineIndexAt(caret.coerceIn(0, doc.length))
             val lines = ArrayList<Int>()
-            if (!visible.isEmpty()) for (l in visible.first.coerceAtLeast(0)..visible.last.coerceAtMost(doc.lineCount - 1)) lines += l
+            if (!visible.isEmpty()) for (l in visible.first.coerceAtLeast(0)..visible.last.coerceAtMost(doc.lineCount - 1)) if (!hidden(l)) lines += l
             if (caretLine !in lines) {
                 val at = lines.indexOfFirst { it > caretLine }.let { if (it < 0) lines.size else it }
                 lines.add(at, caretLine)
@@ -216,7 +217,8 @@ private class EditorSemanticsNode(private var e: EditorSemanticsElement) : Modif
     private fun text(): AccessibleText {
         exposed?.let { return it }
         val st = e.c.view.state
-        return AccessibleText.build(st.doc, visible(), st.selection.main.head).also { exposed = it }
+        val folds = e.c.geometry.folds
+        return AccessibleText.build(st.doc, visible(), st.selection.main.head) { folds.isHidden(it) }.also { exposed = it }
     }
 
     override fun SemanticsPropertyReceiver.applySemantics() {

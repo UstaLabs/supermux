@@ -38,6 +38,20 @@ fun interface GutterClickHandler {
 /** Every plugin's [GutterClickHandler], highest precedence first; the first to return true wins. */
 val gutterClickFacet: Facet<GutterClickHandler, List<GutterClickHandler>> = Facet.list("gutterClick")
 
+/**
+ * A plugin's say over a click or tap on a drawn placeholder chip: a fold's "⋯" (a `Replace` whose
+ * widget type has no registered content), an inline widget without content. [from, to) is the
+ * decoration's range (the hidden text). Return true to take it (the fold plugin unfolds); the
+ * host's [EditorView.onWidgetClick] hears the rest. Widgets with registered content take their own
+ * pointer input.
+ */
+fun interface WidgetClickHandler {
+    fun click(target: CommandTarget, key: dev.supermux.editor.core.WidgetKey, from: Int, to: Int): Boolean
+}
+
+/** Every plugin's [WidgetClickHandler], highest precedence first; the first to return true wins. */
+val widgetClickFacet: Facet<WidgetClickHandler, List<WidgetClickHandler>> = Facet.list("widgetClick")
+
 /** Annotations the surface puts on the transactions it makes, for plugins (history, M4) to read. */
 object EditorAnnotations {
     /**

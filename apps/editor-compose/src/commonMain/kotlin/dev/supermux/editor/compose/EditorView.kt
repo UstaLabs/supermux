@@ -115,6 +115,12 @@ class EditorView(initial: EditorState) : CommandTarget {
      */
     var onGutterClick: ((column: String, line: Int, marker: dev.supermux.editor.core.GutterMarker?) -> Unit)? = null
 
+    /**
+     * A click or tap on a drawn placeholder chip (a fold's "⋯") that no [widgetClickFacet] handler
+     * took: the widget's key and the decoration's range.
+     */
+    var onWidgetClick: ((key: dev.supermux.editor.core.WidgetKey, from: Int, to: Int) -> Unit)? = null
+
     /** Where copy and cut put text and paste takes it from; set by the surface (`Editor(clipboard = …)`). */
     internal var clipboard: EditorClipboard? = null
 
