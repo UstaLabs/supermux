@@ -20,8 +20,13 @@ kotlin {
     jvm()
     androidTarget()
     // Apple targets: compiled on the Mac (kotlin.native.ignoreDisabledTargets elsewhere).
-    iosArm64()
-    iosSimulatorArm64()
+    // iOS: a small Objective-C shim for the UIKit text input traits Compose does not expose
+    // (src/nativeInterop/cinterop/uikitTraits.def: Smart Punctuation off).
+    listOf(iosArm64(), iosSimulatorArm64()).forEach { t ->
+        t.compilations.getByName("main").cinterops.create("uikitTraits") {
+            definitionFile.set(project.file("src/nativeInterop/cinterop/uikitTraits.def"))
+        }
+    }
     // Browser; its test task is off: commonTest runs on the JVM, and :editor-sample's web page is
     // where the browser behaviour is exercised.
     @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)

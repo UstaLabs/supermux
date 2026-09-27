@@ -1,0 +1,60 @@
+# The hidden field's UIKit text input traits Compose Multiplatform 1.12 does not expose:
+# Smart Punctuation (curly quotes, dashes, smart insert/delete) must be off in a code editor.
+# Compose's input views (ComposeTextInputView / NativeTextInputView) implement only the traits in
+# PlatformImeOptions, so the three getters are added to their classes at run time (a trait UIKit
+# asks with respondsToSelector:). Autocorrect and suggestions are untouched.
+language = Objective-C
+package = dev.supermux.editor.compose.uikit
+---
+#import <UIKit/UIKit.h>
+#import <objc/runtime.h>
+#include <string.h>
+
+static NSInteger editor_trait_no(id self, SEL _cmd) { return 1; } /* UITextSmart*TypeNo */
+
+/** Adds the three "No" getters to Compose's input view classes; returns how many classes were patched. */
+static int editor_disable_smart_punctuation(void) {
+    unsigned int n = 0;
+    Class *classes = objc_copyClassList(&n);
+    int patched = 0;
+    for (unsigned int i = 0; i < n; i++) {
+        const char *name = class_getName(classes[i]);
+        if (strstr(name, "ComposeTextInputView") == NULL && strstr(name, "NativeTextInputView") == NULL) continue;
+        class_replaceMethod(classes[i], @selector(smartQuotesType), (IMP)editor_trait_no, "q@:");
+        class_replaceMethod(classes[i], @selector(smartDashesType), (IMP)editor_trait_no, "q@:");
+        class_replaceMethod(classes[i], @selector(smartInsertDeleteType), (IMP)editor_trait_no, "q@:");
+        patched++;
+    }
+    free(classes);
+    return patched;
+}
+
+static UIView *editor_find_first_responder(UIView *v) {
+    if (v.isFirstResponder) return v;
+    for (UIView *s in v.subviews) { UIView *r = editor_find_first_responder(s); if (r) return r; }
+    return nil;
+}
+
+/** The keyboard reads the traits when an input view becomes first responder: make it read again. */
+static void editor_reload_input_traits(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+            UIView *r = editor_find_first_responder(w);
+            if (r) { [r reloadInputViews]; return; }
+        }
+    }
+}
+
+/** What the first responder answers for smartQuotesType (-1: none), for tests and diagnostics. */
+static long editor_first_responder_smart_quotes(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+            UIView *r = editor_find_first_responder(w);
+            if (r && [r respondsToSelector:@selector(smartQuotesType)]) return (long)[(id<UITextInputTraits>)r smartQuotesType];
+            if (r) return -2;
+        }
+    }
+    return -1;
+}

@@ -46,6 +46,13 @@ flow soft-keys-type "- tapOn: { id: \"Return\" }
 - tapOn: { id: \"delete\" }
 - tapOn: { id: \"space\" }
 - waitForAnimationToEnd"
+# Smart Punctuation off: the keyboard's " key types U+0022 and closing brackets pair it ("" with the
+# cursor between), never “ ”.
+flow straight-quotes "- tapOn: { point: \"200,450\" }
+- waitForAnimationToEnd
+- tapOn: { id: \"more\" }
+- tapOn: \"\\\"\"
+- waitForAnimationToEnd"
 maestro --udid "$U" hierarchy > "$OUT/tree.json" 2>"$OUT/tree.err"
 python3 - "$OUT/tree.json" <<'PY' || FAILS=$((FAILS+1))
 import json, sys
@@ -66,12 +73,24 @@ ok0 = "zzqx" in v
 print(("PASS" if ok0 else "FAIL") + " the first tap's input session typed 'zzqx' at the caret")
 ok2 = re.search(r"\nqz ", v) is not None or "\nqz" in v
 print(("PASS" if ok2 else "FAIL") + " Return, the keys and Backspace reached the document (a line 'qz'): " + repr([l for l in v.split("\n") if l.startswith("qz")][:2]))
-sys.exit(0 if ok and ok0 and ok2 else 1)
+ok3 = '\n""' in v
+curly = any(ch in v for ch in "\u201c\u201d\u2018\u2019")
+print(("PASS" if ok3 and not curly else "FAIL") + " the \" key typed U+0022 and paired to \"\" (no curly quotes): " + repr([l for l in v.split("\n") if '"' in l or "\u201c" in l or "\u201d" in l][:2]))
+sys.exit(0 if ok and ok0 and ok2 and ok3 and not curly else 1)
 PY
-flow long-press-menu "- tapOn: { point: \"10%,90%\" }
-- longPressOn: { point: \"45%,30%\" }
+flow long-press-menu "- tapOn: { point: \"200,720\" }
+- longPressOn: { point: \"120,138\" }
 - waitForAnimationToEnd
 - extendedWaitUntil: { visible: \"Copy\", timeout: 5000 }"
+# The iPhone crash: a long press on an empty line (to paste there) gives a caret and Paste, and never
+# reads the clipboard (a read shows iOS's paste permission prompt).
+printf 'from another app' | xcrun simctl pbcopy "$U"
+flow long-press-empty-line "- tapOn: { point: \"200,720\" }
+- longPressOn: { point: \"200,121\" }
+- waitForAnimationToEnd
+- extendedWaitUntil: { visible: \"Paste\", timeout: 5000 }
+- assertNotVisible: \"Allow Paste\""
+if xcrun simctl spawn "$U" launchctl list | grep -q editor.sample; then echo "PASS still running after the long presses"; else echo "FAIL the app is gone"; FAILS=$((FAILS+1)); fi
 echo "INFO screenshots in $OUT (long-press-menu.png: the menu must not cover the handles)"
 echo "ios simulator checks: $FAILS failed"
 exit $FAILS
