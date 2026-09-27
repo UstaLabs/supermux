@@ -1,6 +1,7 @@
 import { mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
+import { uptime } from "node:os"
 import { CoreError } from "./errors.js"
 import type { SessionConfiguration, SessionRecord } from "./types.js"
 
@@ -17,14 +18,18 @@ export class SessionStore {
     if (this.owner) return
     if (this.closed) throw new CoreError("store_closed", "The session store is closed")
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
+    const lockPath = join(this.directory, ".core.lock")
     let lock
-    try {
-      lock = await open(join(this.directory, ".core.lock"), "wx", 0o600)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new CoreError("state_locked", "State directory is already owned. After a crash, verify its owner has exited before removing .core.lock.")
+    for (let attempt = 0; ; attempt++) {
+      try {
+        lock = await open(lockPath, "wx", 0o600)
+        break
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+        if (attempt > 0 || !(await reclaimStaleLock(lockPath))) {
+          throw new CoreError("state_locked", "State directory is already owned. After a crash, verify its owner has exited before removing .core.lock.")
+        }
       }
-      throw error
     }
     this.owner = true
     try {
@@ -95,6 +100,43 @@ export class SessionStore {
       await rm(join(this.directory, ".core.lock"), { force: true })
       this.owner = false
     }
+  }
+}
+
+/**
+ * Moves aside a lock whose owner provably no longer holds it: the recorded pid is gone, or the
+ * lock was written before this boot (after a reboot the pid may belong to an unrelated process).
+ * An unreadable lock is never reclaimed — it may be a live owner mid-write.
+ */
+async function reclaimStaleLock(lockPath: string): Promise<boolean> {
+  let text: string
+  try { text = await readFile(lockPath, "utf8") } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+  }
+  let owner: { pid?: unknown; startedAt?: unknown }
+  try { owner = JSON.parse(text) } catch { return false }
+  const pid = owner.pid
+  const startedAt = typeof owner.startedAt === "string" ? Date.parse(owner.startedAt) : NaN
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || Number.isNaN(startedAt)) return false
+  const bootedAt = Date.now() - uptime() * 1000
+  if (startedAt >= bootedAt && processExists(pid)) return false
+  // Rename rather than delete, then confirm it was the lock we judged: a concurrent reclaimer
+  // may already have replaced it with its own live lock, which must be put back untouched.
+  const aside = `${lockPath}.stale-${randomUUID()}`
+  try { await rename(lockPath, aside) } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+  }
+  if ((await readFile(aside, "utf8").catch(() => "")) !== text) {
+    await rename(aside, lockPath).catch(() => {})
+    return false
+  }
+  await rm(aside, { force: true })
+  return true
+}
+
+function processExists(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH"
   }
 }
 
