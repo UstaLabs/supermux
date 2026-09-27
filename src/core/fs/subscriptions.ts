@@ -17,7 +17,7 @@ export class SubscriptionRegistry<S> {
   isWatched(real: string): boolean { return this.byDir.has(real) || this.lingering.has(real) }
   realOf(sock: S, path: string): string | undefined { return this.bySocket.get(sock)?.get(path) }
 
-  /** Every real folder that currently has at least one subscriber. */
+  /** Every real folder that currently has at least one subscriber (lingering ones have none to notify). */
   watchedReals(): string[] { return [...this.byDir.keys()] }
 
   add(sock: S, path: string, real: string): "ok" | "limit" {
@@ -53,10 +53,12 @@ export class SubscriptionRegistry<S> {
     if (paths && paths.size === 0) subs!.delete(sock)
     if (subs && subs.size === 0) {
       this.byDir.delete(real)
-      this.lingering.set(real, setTimeout(() => {
+      const t = setTimeout(() => {
         this.lingering.delete(real)
         if (!this.byDir.has(real)) this.hooks.onLast(real)
-      }, this.graceMs))
+      }, this.graceMs)
+      ;(t as { unref?: () => void }).unref?.() // a pending teardown must not hold the process open
+      this.lingering.set(real, t)
     }
   }
 
