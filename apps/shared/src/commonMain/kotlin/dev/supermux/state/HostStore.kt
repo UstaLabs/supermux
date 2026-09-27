@@ -208,6 +208,9 @@ class HostStore(
     private val apiWorktreeDelete by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpWorktreeDelete.value) }
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
 
+    /** The host's file-system service (spec 2026-09-27): shared folder listings for every pane. */
+    val fileSystem = dev.supermux.fs.FileSystemService(api, send = { sendFrame(it) }, scope = stateScope)
+
     // ── Viewing presence (mirrors iOS BrokerSession / web useViewing) ──────────────
     /** Session ids of chats currently on screen (one per visible group), or empty. */
     private var viewingSessionIds: List<String> = emptyList()
@@ -436,7 +439,9 @@ class HostStore(
                 sendViewingIfChanged()
                 refreshAgentModels()
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
+                fileSystem.onReconnect()
             }
+            is ServerFrame.FsDir, is ServerFrame.FsGone, is ServerFrame.FsErr -> fileSystem.onFrame(frame)
             ServerFrame.AgentModelsChanged -> refreshAgentModels()
             is ServerFrame.SessionRemoved -> {
                 walkthroughs.remove(frame.id)
