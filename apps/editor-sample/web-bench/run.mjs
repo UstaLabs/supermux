@@ -20,6 +20,8 @@
 //        has focus (mouse or touch), Input.insertText / imeSetComposition land at the editor's caret
 //        after the editor moved it (DOM caret sync), a paste event pastes, and the accessibility tree
 //        has exactly one text box. Exit code 1 when a check fails.
+// two:   ?two=1 (two editors and a plain <input>): typing and IME land in the focused editor; a
+//        programmatic edit of the unfocused editor never touches the other text inputs.
 // bench: opens ?bench=1 (the 10k-line file): 200 keystrokes then 400 wheel-scrolled frames, as
 //        SampleApp.runBench does in the desktop window; prints window.__editorBench.
 
@@ -31,8 +33,8 @@ import { spawn } from 'node:child_process';
 
 const CHROME = process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const [mode, distArg, ...rest] = process.argv.slice(2);
-if (!['cold', 'bench', 'eval', 'input'].includes(mode) || !distArg) {
-  console.error('usage: node run.mjs cold|bench|input <dist> [--runs N] [--ceiling MS] [--syntax-ceiling MS] [--headed]');
+if (!['cold', 'bench', 'eval', 'input', 'two'].includes(mode) || !distArg) {
+  console.error('usage: node run.mjs cold|bench|input|two <dist> [--runs N] [--ceiling MS] [--syntax-ceiling MS] [--headed]');
   process.exit(2);
 }
 const opt = (name, dflt) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : dflt; };
@@ -234,6 +236,52 @@ try {
       check('the text box is the editor, named', boxes.length > 0 && boxes[0].name?.value === 'Sample editor', boxes[0]?.name?.value);
       const caretLine = (await doc()).split('\n').find((l) => l.includes('PASTED'));
       check('it holds the caret\'s line', boxes.length > 0 && (boxes[0].value?.value || '').includes(caretLine), caretLine);
+      page.close();
+    } finally {
+      await chrome.close();
+    }
+  } else if (mode === 'two') {
+    const chrome = await launchChrome(flag('--headed'));
+    try {
+      const page = await openPage(chrome.port, `${base}?two=1`);
+      await waitFor(page, "typeof window.__twoDoc === 'function'", 60000);
+      await sleep(1500);
+      const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ': ' + detail : ''}`); if (!ok) failed = true; };
+      const doc = (i) => page.value(`window.__twoDoc(${i})`);
+      const click = async (x, y) => { for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await page.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }); await sleep(500); };
+      const textareas = `(() => { const out = []; const roots = [document]; for (let i = 0; i < roots.length; i++) for (const el of roots[i].querySelectorAll('*')) { if (el.shadowRoot) roots.push(el.shadowRoot); if (el.tagName === 'TEXTAREA') out.push(el.value); } return JSON.stringify(out); })()`;
+      const h = (await page.send('Runtime.evaluate', { expression: 'window.innerHeight', returnByValue: true })).result.result.value;
+      // Editor 1 (top half): click the end of its first line, type, compose.
+      await click(400, 12);
+      await page.send('Input.insertText', { text: 'A1' });
+      await sleep(300);
+      await page.send('Input.imeSetComposition', { text: 'に', selectionStart: 1, selectionEnd: 1 });
+      await sleep(100);
+      await page.send('Input.insertText', { text: '日' });
+      await sleep(300);
+      check('typing and IME land in editor 1', (await doc(0)).includes('A1日') && !(await doc(1)).includes('A1'), JSON.stringify([await doc(0), await doc(1)]));
+      // Editor 2 (bottom half).
+      await click(400, h / 2 + 12);
+      await page.send('Input.insertText', { text: 'B2' });
+      await sleep(300);
+      check('typing lands in editor 2, not editor 1', (await doc(1)).includes('B2') && !(await doc(0)).includes('B2'), JSON.stringify([await doc(0), await doc(1)]));
+      const before = await page.value(textareas);
+      // A programmatic edit of editor 1 while editor 2 has the focus.
+      await page.value("window.__twoEdit(0, 'PROG ')");
+      await sleep(400);
+      const after = await page.value(textareas);
+      check('an unfocused editor never rewrites the focused one\'s TEXTAREA', before === after && !after.includes('PROG'), `${before} -> ${after}`);
+      await page.send('Input.insertText', { text: 'C3' });
+      await sleep(300);
+      check('editor 2 keeps typing at its caret', (await doc(1)).includes('B2C3') && !(await doc(0)).includes('C3'), await doc(1));
+      // The plain <input> on the page: its own text, the editors untouched.
+      // A real click on it, as a user focuses it.
+      const r = JSON.parse(await page.value("JSON.stringify(document.getElementById('plain').getBoundingClientRect())"));
+      await click(r.x + r.width / 2, r.y + r.height / 2);
+      await page.send('Input.insertText', { text: 'zz' });
+      await sleep(300);
+      const plain = await page.value("document.getElementById('plain').value");
+      check('a plain input on the page gets its own typing', plain === 'zz' && !(await doc(0)).includes('zz') && !(await doc(1)).includes('zz'), JSON.stringify([plain, await page.value("(() => { let a = document.activeElement; return a ? a.tagName + '#' + a.id : 'none'; })()")]));
       page.close();
     } finally {
       await chrome.close();

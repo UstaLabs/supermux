@@ -181,6 +181,10 @@ tasks.register<Exec>("webInputTest") {
     dependsOn("wasmJsBrowserDistribution")
     workingDir = projectDir
     commandLine("node", "web-bench/run.mjs", "input", webDist.get().asFile.absolutePath)
+    // Then two editors and a plain <input> on one page.
+    doLast {
+        project.providers.exec { commandLine("node", "web-bench/run.mjs", "two", webDist.get().asFile.absolutePath); workingDir = projectDir }.result.get().assertNormalExitValue()
+    }
 }
 
 /** The in-page benchmark (keystrokes and wheel scrolling on the 10k-line file) in Chrome. */

@@ -26,9 +26,14 @@ internal actual fun detectApplePlatform(): Boolean = appleNavigator()
  */
 internal actual fun installFastTyping(view: EditorView, controller: EditorController): (() -> Unit)? {
     val keyboard = WebKeyboardState()
+    // This editor's own DOM state (its TEXTAREA once bound, the field it must show, composing, its
+    // label): per editor, never a page global, so several editors (and plain inputs) share a page.
+    val st = newWebInputState()
+    controller.platformInput = st
     val handle = installListeners(
+        st = st,
         onKey = { e ->
-            val facts = WebKeyFacts(aimedAtEditorField(e), eventKey(e), eventCode(e), eventFlags(e), lastPointerType(), maxTouchPoints())
+            val facts = WebKeyFacts(aimedAtEditorField(e), eventKey(e), eventCode(e), eventFlags(e), lastPointerType(st), maxTouchPoints())
             webKeyPath(view, controller.composing, facts, keyboard)
         },
         onCopy = { cut -> webClipboardText(view, cut) },
@@ -39,7 +44,10 @@ internal actual fun installFastTyping(view: EditorView, controller: EditorContro
             else { controller.fieldSync.onDomInsert(start, end, data).let { u -> controller.fieldWriter?.invoke(u) }; true }
         },
     )
-    return { removeListeners(handle) }
+    return {
+        removeListeners(handle)
+        if (controller.platformInput === st) controller.platformInput = null
+    }
 }
 
 /** The key-down is aimed at Compose's own text input: the TEXTAREA in the canvas's shadow root. */
@@ -52,32 +60,88 @@ private fun aimedAtEditorField(e: JsAny): Boolean = js(
     })()"""
 )
 
-private fun lastPointerType(): String = js("String(window.__editorLastPointer || '')")
+private fun lastPointerType(st: JsAny): String = js("String(st.lastPointer || '')")
 
 private fun maxTouchPoints(): Int = js("(navigator.maxTouchPoints || 0)")
 
-private fun installListeners(onKey: (JsAny) -> Int, onCopy: (Boolean) -> String?, onPaste: (String) -> Boolean, focused: () -> Boolean, onInsert: (Int, Int, String) -> Boolean): JsAny = js(
+/**
+ * One editor's DOM state: `ta` its session's TEXTAREA (bound while it is focused: Compose's
+ * backing TEXTAREA is the deep active element then), `field` what that TEXTAREA must show, and the
+ * functions over them. The TEXTAREA's `value` setter is wrapped once per element and asks the
+ * state of the editor that owns it now (`ta.__editorState`).
+ */
+private fun newWebInputState(): JsAny = js(
+    """(() => {
+      const proto = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+      const st = { ta: null, field: null, composing: false, label: '', lastPointer: '' };
+      st.deepActive = () => {
+        let a = document.activeElement;
+        while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+        return a;
+      };
+      // Bind the focused editor's session TEXTAREA (called only while this editor has the focus).
+      st.bind = () => {
+        const a = st.deepActive();
+        if (a && a.tagName === 'TEXTAREA') {
+          const root = a.getRootNode();
+          if (root && root.querySelector && root.querySelector('canvas')) st.ta = a;
+        }
+        const ta = st.ta && st.ta.isConnected ? st.ta : null;
+        if (!ta) return null;
+        ta.__editorState = st;
+        if (st.label) ta.setAttribute('aria-label', st.label);
+        if (!ta.__editorHooked) {
+          ta.__editorHooked = true;
+          Object.defineProperty(ta, 'value', {
+            configurable: true,
+            get() { return proto.get.call(this); },
+            set(v) {
+              proto.set.call(this, v);
+              const s = this.__editorState, f = s && s.field;
+              if (f && f.text === v && !s.composing) this.setSelectionRange(f.start, f.end);
+            },
+          });
+        }
+        return ta;
+      };
+      st.resync = () => {
+        const f = st.field, ta = st.bind();
+        if (!f || !ta || st.composing) return;
+        if (ta.value !== f.text) ta.value = f.text;
+        if (ta.selectionStart !== f.start || ta.selectionEnd !== f.end) ta.setSelectionRange(f.start, f.end);
+      };
+      st.isMine = (e) => { const t = e.composedPath && e.composedPath()[0]; return !!t && t === st.ta; };
+      return st;
+    })()"""
+)
+
+private fun installListeners(st: JsAny, onKey: (JsAny) -> Int, onCopy: (Boolean) -> String?, onPaste: (String) -> Boolean, focused: () -> Boolean, onInsert: (Int, Int, String) -> Boolean): JsAny = js(
     """(() => {
       // A mouse press focuses the CANVAS by default, after Compose moved the focus to its TEXTAREA
       // for the editor's input session: give it back, or the next keys and IME text go nowhere.
-      const refocus = () => requestAnimationFrame(() => {
+      const refocus = (e) => {
+        // Only a press on Compose's canvas: a click on another element of the page is its own.
+        const path = e.composedPath ? e.composedPath() : [];
+        if (!path.some((n) => n && n.tagName === 'CANVAS')) return;
+        requestAnimationFrame(() => refocusNow());
+      };
+      const refocusNow = () => {
         if (!focused()) return;
-        const ta = window.__editorFindTextArea && window.__editorFindTextArea();
-        if (!ta) return;
+        const ta = st.ta && st.ta.isConnected ? st.ta : null;
+        if (!ta) { st.bind(); return; }
         const root = ta.getRootNode();
         if (root.activeElement !== ta) ta.focus({ preventScroll: true });
-      });
-      // Right before the browser inserts text (IME, dictation, insertText) the TEXTAREA must hold the
-      // editor's window and caret, and Compose's own model of it must too: it follows the DOM
-      // selection through selectionchange, which may not have fired yet for our last change.
-      const resync = () => { if (window.__editorResync) window.__editorResync(); };
+      };
       const key = (e) => {
         const r = onKey(e);
         if (r === 1) { e.preventDefault(); e.stopImmediatePropagation(); }
         else if (r === 2) { e.stopImmediatePropagation(); }
       };
-      const pointer = (e) => { window.__editorLastPointer = e.pointerType; };
+      const pointer = (e) => { st.lastPointer = e.pointerType; };
+      // Only this editor's own TEXTAREA, and only while it has the focus.
+      const mine = (e) => focused() && st.isMine(e);
       const copy = (cut) => (e) => {
+        if (!mine(e)) return;
         const text = onCopy(cut);
         if (text === null || text === undefined) return;
         if (e.clipboardData) e.clipboardData.setData('text/plain', text);
@@ -85,24 +149,25 @@ private fun installListeners(onKey: (JsAny) -> Int, onCopy: (Boolean) -> String?
       };
       const onCopyEvent = copy(false), onCutEvent = copy(true);
       const paste = (e) => {
+        if (!mine(e)) return;
         const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
         if (onPaste(text)) { e.preventDefault(); e.stopImmediatePropagation(); }
       };
       // Plain text insertion (dictation, a soft keyboard's word, CDP's insertText) goes straight to
-      // the editor, at the TEXTAREA's selection, and the browser never edits the TEXTAREA itself:
-      // left to the browser and Compose, the edit raced Compose's selectionchange echo and landed
-      // off the caret. Composition (insertCompositionText) stays Compose's.
+      // the editor, at the TEXTAREA's selection READ FIRST (a spell-check replacement selects the
+      // word it replaces), and the browser never edits the TEXTAREA itself: left to the browser and
+      // Compose, the edit raced Compose's selectionchange echo and landed off the caret. Anything
+      // else (composition) is Compose's, after a resync of the TEXTAREA.
       const beforeInput = (e) => {
-        resync();
-        if (e.isComposing || window.__editorComposing) return;
-        if (e.inputType !== 'insertText' && e.inputType !== 'insertReplacementText') return;
-        const ta = window.__editorFindTextArea && window.__editorFindTextArea();
-        const t = e.composedPath && e.composedPath()[0];
-        if (!ta || t !== ta || e.data == null) return;
-        if (onInsert(ta.selectionStart, ta.selectionEnd, e.data)) { e.preventDefault(); e.stopImmediatePropagation(); }
+        if (!mine(e)) return;
+        const ta = st.ta;
+        const start = ta.selectionStart, end = ta.selectionEnd;
+        const plain = !e.isComposing && !st.composing && e.data != null && (e.inputType === 'insertText' || e.inputType === 'insertReplacementText');
+        if (plain && onInsert(start, end, e.data)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+        if (e.inputType !== 'insertReplacementText') st.resync();
       };
-      const cstart = () => { resync(); window.__editorComposing = true; };
-      const cend = () => { window.__editorComposing = false; };
+      const cstart = (e) => { if (!mine(e)) return; st.resync(); st.composing = true; };
+      const cend = (e) => { if (st.isMine(e)) st.composing = false; };
       window.addEventListener('compositionstart', cstart, true);
       window.addEventListener('compositionend', cend, true);
       window.addEventListener('beforeinput', beforeInput, true);
@@ -139,10 +204,16 @@ internal actual val platformTextToolbarPreferred: Boolean = false
 
 internal actual val platformInputOnAnyFocus: Boolean = true
 
-internal actual fun syncPlatformField(f: FieldText) = syncDomTextArea(f.text, f.selStart, f.selEnd)
+internal actual fun syncPlatformField(c: EditorController, f: FieldText) {
+    // Only the focused editor owns the session TEXTAREA: another editor's programmatic edit never
+    // touches it (nor any other text input on the page).
+    val st = c.platformInput as? JsAny ?: return
+    if (!c.view.focused) return
+    syncDomTextArea(st, f.text, f.selStart, f.selEnd)
+}
 
 /**
- * Compose's TEXTAREA (in the canvas's shadow root) as the field now is: its value and selection.
+ * The editor's session TEXTAREA as the field now is: its value and selection.
  *
  * Compose web (1.12, `DomInputStrategy.updateState`) writes the field's text into `textarea.value`
  * and sets the DOM selection only when the selection's NUMBERS changed; setting `value` puts the
@@ -150,52 +221,10 @@ internal actual fun syncPlatformField(f: FieldText) = syncDomTextArea(f.text, f.
  * end, the next `selectionchange` sent Compose that stale caret, and IME text and `insertText`
  * landed there (the device pass). So the TEXTAREA's `value` setter is wrapped to put the field's
  * selection back whenever the value written is the field's text, and the selection is applied here
- * and right before the browser inserts text (`beforeinput`, `compositionstart`). Never while the
- * browser composes.
+ * and right before the browser composes. Never while it composes.
  */
-private fun syncDomTextArea(text: String, start: Int, end: Int) {
-    js(
-        """{
-      if (!window.__editorFindTextArea) {
-        window.__editorFindTextArea = () => {
-          const cached = window.__editorTextArea;
-          if (cached && cached.isConnected) return cached;
-          const roots = [document];
-          for (let i = 0; i < roots.length; i++) {
-            for (const el of roots[i].querySelectorAll('*')) if (el.shadowRoot) roots.push(el.shadowRoot);
-            const ta = roots[i].querySelector('textarea');
-            if (ta) return (window.__editorTextArea = ta);
-          }
-          return null;
-        };
-        const proto = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
-        window.__editorHook = (ta) => {
-          if (ta.__editorHooked) return;
-          ta.__editorHooked = true;
-          // The editor's one text box for a screen reader (see platformSurfaceText).
-          if (window.__editorLabel) ta.setAttribute('aria-label', window.__editorLabel);
-          Object.defineProperty(ta, 'value', {
-            configurable: true,
-            get() { return proto.get.call(this); },
-            set(v) {
-              proto.set.call(this, v);
-              const f = window.__editorField;
-              if (f && f.text === v && !window.__editorComposing) this.setSelectionRange(f.start, f.end);
-            },
-          });
-        };
-        window.__editorResync = () => {
-          const f = window.__editorField, ta = window.__editorFindTextArea();
-          if (!f || !ta || window.__editorComposing) return;
-          window.__editorHook(ta);
-          if (ta.value !== f.text) ta.value = f.text;
-          if (ta.selectionStart !== f.start || ta.selectionEnd !== f.end) ta.setSelectionRange(f.start, f.end);
-        };
-      }
-      window.__editorField = { text: text, start: start, end: end };
-      window.__editorResync();
-    }"""
-    )
+private fun syncDomTextArea(st: JsAny, text: String, start: Int, end: Int) {
+    js("{ st.field = { text: text, start: start, end: end }; st.resync(); }")
 }
 
 /**
@@ -220,8 +249,13 @@ private fun readClipboard(): kotlin.js.Promise<JsString?> =
 
 internal actual val platformSurfaceText: Boolean = false
 
-internal actual fun platformFieldLabel(label: String) {
-    js("{ window.__editorLabel = label; const ta = window.__editorFindTextArea && window.__editorFindTextArea(); if (ta) ta.setAttribute('aria-label', label); }")
+internal actual fun platformFieldLabel(c: EditorController, label: String) {
+    val st = c.platformInput as? JsAny ?: return
+    setLabel(st, label)
+}
+
+private fun setLabel(st: JsAny, label: String) {
+    js("{ st.label = label; if (st.ta && st.ta.isConnected && st.ta.__editorState === st) st.ta.setAttribute('aria-label', label); }")
 }
 
 internal actual val platformClearsFieldSemantics: Boolean = true
@@ -232,3 +266,18 @@ internal actual fun rememberPlatformKeyboardShow(): (() -> Unit)? = null
 internal actual fun platformClipboardHasText(): Boolean? = null
 
 internal actual fun platformAfterKeyboardShown() {}
+
+internal actual fun platformFocusChanged(c: EditorController, focused: Boolean) {
+    val st = c.platformInput as? JsAny ?: return
+    if (!focused) { unbind(st); return }
+    // Compose creates and focuses the session TEXTAREA a frame or two after the focus change.
+    val f = c.fieldSync.current()
+    bindSoon(st, f.text, f.selStart, f.selEnd)
+}
+
+private fun unbind(st: JsAny) { js("{ st.ta = null; st.composing = false; }") }
+
+private fun bindSoon(st: JsAny, text: String, start: Int, end: Int) {
+    // The field as it is now; a write in between (typing) replaces it before the resyncs run.
+    js("{ st.field = { text: text, start: start, end: end }; requestAnimationFrame(() => { st.resync(); requestAnimationFrame(() => st.resync()); }); }")
+}

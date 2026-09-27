@@ -38,7 +38,7 @@ internal expect val platformInputOnAnyFocus: Boolean
  * selection, so IME and `insertText` land at the editor's caret, not where the DOM caret was left.
  * Elsewhere nothing (the platform input connection follows the field state).
  */
-internal expect fun syncPlatformField(f: FieldText)
+internal expect fun syncPlatformField(c: EditorController, f: FieldText)
 
 /**
  * Where the surface's own text node is what a screen reader reads (desktop, Android, iOS). On the
@@ -50,7 +50,7 @@ internal expect fun syncPlatformField(f: FieldText)
 internal expect val platformSurfaceText: Boolean
 
 /** The web: the TEXTAREA's accessible name. Elsewhere nothing. */
-internal expect fun platformFieldLabel(label: String)
+internal expect fun platformFieldLabel(c: EditorController, label: String)
 
 /** iOS and the web: the hidden field's semantics are cleared, not merely hidden (see LocalEditorExposeField). */
 internal expect val platformClearsFieldSemantics: Boolean
@@ -67,3 +67,9 @@ internal expect fun rememberPlatformKeyboardShow(): (() -> Unit)?
 
 /** A frame after the keyboard was asked for (iOS: check the Smart Punctuation traits). */
 internal expect fun platformAfterKeyboardShown()
+
+/**
+ * The surface's focus changed (the web binds this editor's session TEXTAREA and shows the field in
+ * it; iOS turns the Smart Punctuation traits off only while an editor's field is the one in focus).
+ */
+internal expect fun platformFocusChanged(c: EditorController, focused: Boolean)

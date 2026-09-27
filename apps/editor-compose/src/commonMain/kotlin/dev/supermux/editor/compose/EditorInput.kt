@@ -627,7 +627,7 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
                 pending[0]?.let { u ->
                     if (!asCharSequence().contentEquals(u.text)) replace(0, length, u.text)
                     selection = TextRange(u.selStart, u.selEnd)
-                    syncPlatformField(u)
+                    syncPlatformField(controller, u)
                 }
             } finally {
                 active[0] = false
@@ -644,7 +644,7 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
                     if (!asCharSequence().contentEquals(u.text)) replace(0, length, u.text)
                     selection = TextRange(u.selStart, u.selEnd)
                 }
-                if (!controller.composing) syncPlatformField(u)
+                if (!controller.composing) syncPlatformField(controller, u)
             }
         }
         controller.fieldWriter = write
@@ -664,7 +664,7 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
                     if (!asCharSequence().contentEquals(u.text)) replace(0, length, u.text)
                     selection = TextRange(u.selStart, u.selEnd)
                 }
-                if (comp == null) syncPlatformField(u)
+                if (comp == null) syncPlatformField(controller, u)
             }
             controller.composition = sync.composition
         }

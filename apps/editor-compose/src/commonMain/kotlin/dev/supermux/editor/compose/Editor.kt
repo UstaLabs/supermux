@@ -189,7 +189,7 @@ fun Editor(
             controller.inputOnAnyFocus = inputOnAnyFocus
             if (!controller.view.focused) controller.onBlur()
         }
-        platformFieldLabel(label)
+        platformFieldLabel(controller, label)
         controller.keyboard = keyboard
         view.clipboard = clipboard
         view.scope = scope
@@ -218,6 +218,7 @@ fun Editor(
             .onFocusChanged {
                 surfaceInput.focused = it.hasFocus
                 view.focused = it.hasFocus
+                platformFocusChanged(controller, it.hasFocus)
                 if (!it.hasFocus) { controller.handles = TouchHandles.NONE; controller.menuShown = false; controller.onBlur() }
             }
             .onPreviewKeyEvent { handleEditorKey(view, it, controller.composing) }
@@ -376,6 +377,9 @@ internal class EditorController(
         if (inputOnAnyFocus || view.focused) requestFocus() else focusAfterRequest = true
         keyboard?.show()
     }
+
+    /** The platform's own per-editor input state (the web: this editor's DOM TEXTAREA binding). */
+    var platformInput: Any? = null
 
     /** A touch's focus waits for the field's new options (see [focusFromTouch]). */
     var focusAfterRequest = false

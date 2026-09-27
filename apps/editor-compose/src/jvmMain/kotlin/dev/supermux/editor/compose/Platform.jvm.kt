@@ -12,13 +12,13 @@ internal actual val platformTextToolbarPreferred: Boolean = false
 
 internal actual val platformInputOnAnyFocus: Boolean = true
 
-internal actual fun syncPlatformField(f: FieldText) {}
+internal actual fun syncPlatformField(c: EditorController, f: FieldText) {}
 
 internal actual fun platformEditorClipboard(compose: EditorClipboard): EditorClipboard = compose
 
 internal actual val platformSurfaceText: Boolean = true
 
-internal actual fun platformFieldLabel(label: String) {}
+internal actual fun platformFieldLabel(c: EditorController, label: String) {}
 
 internal actual val platformClearsFieldSemantics: Boolean = false
 
@@ -28,3 +28,5 @@ internal actual fun rememberPlatformKeyboardShow(): (() -> Unit)? = null
 internal actual fun platformClipboardHasText(): Boolean? = null
 
 internal actual fun platformAfterKeyboardShown() {}
+
+internal actual fun platformFocusChanged(c: EditorController, focused: Boolean) {}
