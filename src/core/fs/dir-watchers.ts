@@ -44,7 +44,7 @@ export class DirWatchers {
       })
     } catch {
       this.opts.onFallback?.(dir)
-      slot.poll = setInterval(() => this.onFlush(dir), this.pollMs)
+      slot.poll = setInterval(() => this.flush(dir), this.pollMs)
     }
   }
 
@@ -61,6 +61,15 @@ export class DirWatchers {
     for (const dir of [...this.slots.keys()]) this.unwatch(dir)
   }
 
+  /** A throwing consumer must never take down the timers of every other folder. */
+  private flush(dir: string): void {
+    try {
+      this.onFlush(dir)
+    } catch (e) {
+      console.error("[dir-watchers] flush failed", dir, e)
+    }
+  }
+
   private schedule(dir: string): void {
     const slot = this.slots.get(dir)
     if (!slot) return
@@ -71,7 +80,7 @@ export class DirWatchers {
     slot.timer = setTimeout(() => {
       slot.timer = undefined
       slot.firstAt = undefined
-      if (this.slots.get(dir) === slot) this.onFlush(dir)
+      if (this.slots.get(dir) === slot) this.flush(dir)
     }, wait)
   }
 }

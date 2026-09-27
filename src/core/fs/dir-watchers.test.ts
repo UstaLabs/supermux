@@ -58,3 +58,16 @@ test("when watching fails, the folder is polled instead", async () => {
   expect(flushed.length).toBeGreaterThanOrEqual(2)
   w.closeAll()
 })
+
+test("a throwing flush callback does not break later flushes", async () => {
+  const d = tmp()
+  let calls = 0
+  const w = new DirWatchers(() => { calls++; throw new Error("boom") }, { debounceMs: 30 })
+  w.watch(d)
+  writeFileSync(join(d, "a"), "")
+  await sleep(120)
+  writeFileSync(join(d, "b"), "")
+  await sleep(120)
+  expect(calls).toBe(2)
+  w.closeAll()
+})
