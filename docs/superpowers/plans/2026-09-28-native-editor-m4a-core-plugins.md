@@ -38,6 +38,16 @@ Same as M3c:
 
 ---
 
+### Task 0: close the M3c review's hardening item first
+- **No-userEvent hole:** a dispatch made while the view is running a key binding, input handler, menu command, or
+  gutter/widget click handler is policed by the atomic-range rules, whatever its userEvent (or lack of one). Only
+  `undo`/`redo`/`disk`/`remote`/`agent`/`lsp` and `EditorAnnotations.remote` are exempt. Add a debug assertion that
+  logs a key-bound command whose edit has no userEvent.
+- **README note:** only folds get the safe two-step Backspace. A non-atomic `Replace` is deleted whole in one
+  keystroke.
+- Tests: a plugin command without a userEvent, bound to a key, cannot take part of a fold.
+- [ ] Commit: `fix(editor-compose): police command dispatches regardless of userEvent`.
+
 ### Task 1: history (`apps/editor-plugins/history`)
 - **Model:** CM6's `@codemirror/commands` history, redone in Kotlin.
   - A `StateField` holds done/undone stacks of events.
