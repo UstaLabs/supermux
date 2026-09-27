@@ -17,6 +17,7 @@ import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.platform.PushRegistrar
 import dev.supermux.ui.platform.TtsEngine
 import dev.supermux.ui.platform.WindowHostController
+import dev.supermux.ui.terminal.SharedTerminal
 import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
@@ -26,7 +27,6 @@ import dev.supermux.web.seams.WebFiles
 import dev.supermux.web.seams.WebMic
 import dev.supermux.web.seams.WebTts
 import dev.supermux.web.seams.pickFilesViaInput
-import dev.supermux.web.terminal.XtermTerminalViewFactory
 import kotlinx.browser.window
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
@@ -34,8 +34,10 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.onEach
 
 /**
- * What the browser can do. Plan 3 turns on terminal (xterm.js) and clipboardImages; plan 4 push
- * and [Caps.setupWizard].
+ * What the browser can do. Plan 3 turned on terminal and clipboardImages; plan 4 push and
+ * [Caps.setupWizard]. The terminal is no longer xterm.js in the DOM: it is the shared Compose
+ * renderer over the Ghostty engine compiled to wasm, drawn on the same canvas as the rest of the
+ * app (see [dev.supermux.ui.terminal.SharedTerminal]).
  *
  * `setupWizard` is true HERE and nowhere else: the browser is the surface a brand-new broker is
  * opened on, so it is the one host that must be able to run first-run setup. Android/iOS/desktop
@@ -93,8 +95,11 @@ class WebPlatform(
      *  very instance to `NoticeOverlay`, which takes the concrete bus. */
     override val notices: FlowNotices = FlowNotices()
 
-    /** xterm.js behind the shared seam — one instance, like every other host's factory object. */
-    override fun terminalView(): TerminalViewFactory = XtermTerminalViewFactory
+    /** The shared Compose terminal, exactly as every other host mounts it. The browser needs no
+     *  wasm URL of its own: webpack emits the engine binary from the loader's
+     *  `new URL("./supermux-terminal.wasm", import.meta.url)` and `:web:stageForBroker` content-
+     *  hashes it, so the package default already resolves to the hashed asset. */
+    override fun terminalView(): TerminalViewFactory = SharedTerminal
     override fun videoDecoder(): VideoSurfaceFactory? = null
     override val updates: AppUpdater = NoAppUpdater
     override val notifications: NotificationManager = NoopNotificationManager

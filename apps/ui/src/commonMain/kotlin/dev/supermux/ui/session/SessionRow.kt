@@ -496,4 +496,3 @@ private fun PointerSessionRow(
         }
     }
 }
-

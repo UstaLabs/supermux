@@ -75,6 +75,24 @@ class TerminalKeySinkModifiersTest {
         assertEquals(TerminalModState.OFF, s.alt)
     }
 
+    /**
+     * The accessory bar's "hide keyboard" button reaches whatever [rememberSemanticTerminalKeySink]
+     * (or a raw byte sink) was built with — not `semantic`, and not `send`: dismissing the IME is
+     * neither a [TerminalKey] the emulator encodes nor bytes for the pty.
+     */
+    @Test fun hideKeyboard_invokes_whatever_the_sink_was_wired_with() {
+        var hidden = 0
+        val s = TerminalKeySink(onHideKeyboard = { hidden++ }) { }
+        s.hideKeyboard()
+        s.hideKeyboard()
+        assertEquals(2, hidden)
+    }
+
+    @Test fun hideKeyboard_is_a_silent_no_op_when_nothing_was_wired() {
+        // A sink that never wires it (a raw byte sink, most test fakes) must not throw.
+        sink().hideKeyboard()
+    }
+
     @Test fun singlePrintableChar_covers_exactly_the_printable_ascii_range() {
         assertEquals(' ', singlePrintableChar(byteArrayOf(0x20)))
         assertEquals('~', singlePrintableChar(byteArrayOf(0x7e)))

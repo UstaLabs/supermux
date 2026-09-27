@@ -49,6 +49,13 @@ kotlin {
             // gets unresolved references on our own API and only :desktop compiles, by accident of
             // declaring the same dependencies itself.
             api(project(":shared"))
+            // The ONE terminal renderer (Plan 4 Task 3). `:terminal-compose` and `:terminal-core`
+            // are a standalone, publishable pair that knows nothing about supermux — the arrow
+            // points THIS WAY ONLY, and must keep doing so: `GhosttyTerminalViewFactory` adapts
+            // their API to this module's `TerminalViewFactory` seam, and nothing over there names
+            // a type from here. `api`, because TerminalSession/TerminalTheme appear in that
+            // factory's own public signatures.
+            api(project(":terminal-compose"))
             api(compose.runtime)
             api(libs.coroutines.core)
             api(libs.serialization.json)

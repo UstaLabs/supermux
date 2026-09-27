@@ -10,17 +10,13 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.net.CursorPos
 import dev.supermux.net.TerminalClient
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
-import dev.supermux.net.DrawDim
-import dev.supermux.net.HideCaret
 import dev.supermux.net.Mods
 import dev.supermux.net.SpecialKey
 import dev.supermux.net.specialKeySequence
-import dev.supermux.ui.platform.FakePredictionSink
 import dev.supermux.ui.platform.FakeTerminalViewFactory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -82,22 +78,6 @@ class TerminalViewFactoryTest {
             UnavailableTerminalViewFactory.TerminalView({ connect() }, Modifier, true, null)
         }
         onNodeWithTag("terminal_unavailable").assertIsDisplayed()
-    }
-
-    @Test
-    fun the_prediction_sink_records_the_ops_it_was_handed() {
-        val sink = FakePredictionSink(cursor = CursorPos(3, 7))
-        assertTrue(sink.available)
-        assertEquals(CursorPos(3, 7), sink.cursor())
-        assertEquals(1, sink.cursorReads)
-        sink.render(listOf(HideCaret, DrawDim(1, 2, 3, "x")))
-        assertEquals(2, sink.rendered.size)
-        assertEquals(HideCaret, sink.rendered.first())
-    }
-
-    @Test
-    fun an_unavailable_sink_is_what_a_pipeline_skips_prediction_on() {
-        assertFalse(FakePredictionSink(available = false).available)
     }
 
     // ── the key sink (cluster G3's shared TerminalKeyBar drives exactly this) ───────────────────

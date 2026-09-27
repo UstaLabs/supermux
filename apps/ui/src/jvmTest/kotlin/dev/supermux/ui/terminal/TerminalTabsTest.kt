@@ -123,9 +123,12 @@ class TerminalTabsTest {
         private val mounts: MutableList<String>,
         private val disposals: MutableList<String>,
         private val sent: MutableList<String>,
+        private val hidden: MutableList<String>,
         private val activeOf: MutableMap<String, Boolean>,
     ) : TerminalSurface {
-        override val keys = TerminalKeySink { bytes -> sent.add("$tabId:${bytes.decodeToString()}") }
+        override val keys = TerminalKeySink(onHideKeyboard = { hidden.add(tabId) }) { bytes ->
+            sent.add("$tabId:${bytes.decodeToString()}")
+        }
 
         @Composable
         override fun Content(modifier: Modifier, active: Boolean, onExit: (() -> Unit)?) {
@@ -139,6 +142,7 @@ class TerminalTabsTest {
     private val mounts = mutableListOf<String>()
     private val disposals = mutableListOf<String>()
     private val sent = mutableListOf<String>()
+    private val hidden = mutableListOf<String>()
     private val activeOf = mutableMapOf<String, Boolean>()
     private val surfaces = mutableMapOf<String, RecordingSurface>()
 
@@ -146,7 +150,7 @@ class TerminalTabsTest {
     private val recordingSurfaces: @Composable (String, () -> dev.supermux.net.TerminalClient) -> TerminalSurface =
         { tabId, _ ->
             remember(tabId) {
-                RecordingSurface(tabId, mounts, disposals, sent, activeOf).also { surfaces[tabId] = it }
+                RecordingSurface(tabId, mounts, disposals, sent, hidden, activeOf).also { surfaces[tabId] = it }
             }
         }
 
@@ -375,6 +379,27 @@ class TerminalTabsTest {
             "t2:" + specialKeySequence(SpecialKey.Escape, Mods(ctrl = false, alt = false), appCursor = false),
             sent[1],
         )
+    }
+
+    @Test
+    fun the_key_bar_hide_keyboard_button_dismisses_the_active_tabs_ime() = runComposeUiTest {
+        val app = appWithTerminals(
+            """{"terminals":[{"id":"main","createdAt":1},{"id":"t2","createdAt":2}]}""")
+        setContent { host(app, input = InputMode.Touch, width = WindowWidthClass.Compact) }
+
+        waitForTag("term-tab-main")
+        onNodeWithTag("terminal_key_hide_keyboard").assertIsDisplayed()
+
+        onNodeWithTag("terminal_key_hide_keyboard").performClick()
+        waitUntil(timeoutMillis = 5_000) { hidden.isNotEmpty() }
+        assertEquals(listOf("main"), hidden, "the button did not reach the ACTIVE tab's sink")
+
+        // Switching tabs re-targets it, exactly like every other accessory-bar button.
+        onNodeWithTag("term-tab-t2").performTouchInput { click(Offset(2f, centerY)) }
+        waitUntil(timeoutMillis = 5_000) { activeOf["t2"] == true }
+        onNodeWithTag("terminal_key_hide_keyboard").performClick()
+        waitUntil(timeoutMillis = 5_000) { hidden.size == 2 }
+        assertEquals("t2", hidden[1])
     }
 
     // ── add/close reconcile at both widths (a phone strip and a desktop strip) ──────────────────

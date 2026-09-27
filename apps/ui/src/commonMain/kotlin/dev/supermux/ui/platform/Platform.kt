@@ -116,11 +116,13 @@ interface Platform {
     val notices: NoticeChannel
 
     /**
-     * The host's terminal engine — jediterm inside a `SwingPanel` on desktop, ConnectBot termlib
-     * inside an `AndroidView` on Android. Gated by [Caps.terminal]; a host with no engine installs
+     * The terminal surface — [dev.supermux.ui.terminal.SharedTerminal] on every host since Plan 4
+     * Task 3, where four per-host engines (jediterm in a `SwingPanel`, ConnectBot termlib in an
+     * `AndroidView`, SwiftTerm in a `UIKitView`, xterm.js in the DOM) became one Compose renderer
+     * over Ghostty. Gated by [Caps.terminal]; a host with no engine installs
      * [dev.supermux.ui.terminal.UnavailableTerminalViewFactory], which draws a hint instead of a
-     * grid. A function rather than a `val` because the factory may be built lazily per call site
-     * (both hosts return the same instance today).
+     * grid. Still a function rather than a `val`, because the seam is what lets a host pass a
+     * different asset URL or theme without `:ui` knowing which host asked.
      */
     fun terminalView(): TerminalViewFactory
 

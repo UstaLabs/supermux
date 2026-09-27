@@ -75,6 +75,20 @@ export class CommandRegistry {
     return this.previewCache.get(this.previewKey(kind, workdir)) ?? []
   }
 
+  /**
+   * The launcher's preview, stale-while-revalidate: a folder already probed answers from the cache
+   * at once and refreshes in the background (a Claude probe spawns the CLI, ~8 s); only the first
+   * ask for a kind+folder waits for the probe.
+   */
+  async preview(req: CommandPreviewRequest): Promise<{ commands: SlashCommand[]; resolved: boolean }> {
+    if (this.isPreviewResolved(req.kind, req.workdir)) {
+      void this.refreshPreview(req).catch(() => {})
+    } else {
+      await this.refreshPreview(req)
+    }
+    return { commands: this.getPreview(req.kind, req.workdir), resolved: this.isPreviewResolved(req.kind, req.workdir) }
+  }
+
   /** (Re)compute agent commands for a launcher preview. Dedupes concurrent calls. */
   refreshPreview(req: CommandPreviewRequest): Promise<void> {
     const key = this.previewKey(req.kind, req.workdir)

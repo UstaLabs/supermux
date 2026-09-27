@@ -321,6 +321,17 @@ sealed interface ServerFrame {
         val requests: Map<String, List<PromptRequest>> = emptyMap(),
         /** Catalog of permission modes per agent so clients do not hardcode labels. */
         val permissionModes: Map<String, List<PermissionModeInfo>> = emptyMap(),
+        /**
+         * Sessions whose [logs] entry is only the newest few entries, because the `subscribe`
+         * asked for a `logTail` and did not list them in `fullLogs`. Null from a broker that
+         * ignores `logTail` (every log is the full page).
+         */
+        val partialLogs: List<String>? = null,
+        /**
+         * Sessions the snapshot sent without [activity] / [commands] (the `subscribe` asked for
+         * `trimExtras`); fetched on chat open. Null from a broker that ignores `trimExtras`.
+         */
+        val partialExtras: List<String>? = null,
     ) : ServerFrame
 
     /**
@@ -333,6 +344,13 @@ sealed interface ServerFrame {
         val projects: List<ProjectDto> = emptyList(),
         val projectMembership: Map<String, String> = emptyMap(),
     ) : ServerFrame
+
+    /**
+     * An installed agent's model list changed, or an agent was installed: the cached
+     * GET /agents/models is stale. No payload — the client refetches the catalog.
+     */
+    @Serializable @SerialName("agent_models_changed")
+    data object AgentModelsChanged : ServerFrame
 
     @Serializable @SerialName("session_added")
     data class SessionAdded(val session: SessionInfo) : ServerFrame

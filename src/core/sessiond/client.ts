@@ -34,8 +34,8 @@ type Pending = { resolve(value: unknown): void; reject(error: Error): void; time
 type ViewerRegistration = {
   targetId: string
   viewerId: string
-  onData: (data: Uint8Array) => void | Promise<void>
-  queue: Uint8Array[]
+  onData: (data: Uint8Array, replay: boolean) => void | Promise<void>
+  queue: Array<{ data: Uint8Array; replay: boolean }>
   pendingBytes: number
   delivering: boolean
   open: boolean
@@ -213,7 +213,7 @@ export class SessiondBackend implements SessionBackend {
     return value
   }
 
-  async attach(targetId: string, viewerId: string, onData: (data: Uint8Array) => void | Promise<void>): Promise<RuntimeViewer> {
+  async attach(targetId: string, viewerId: string, onData: (data: Uint8Array, replay: boolean) => void | Promise<void>): Promise<RuntimeViewer> {
     const key = `${targetId}\0${viewerId}`
     let resolveExited!: (code: number) => void
     const exited = new Promise<number>(resolve => { resolveExited = resolve })
@@ -360,18 +360,21 @@ export class SessiondBackend implements SessionBackend {
     const viewer = this.viewers.get(`${input.targetId}\0${input.viewerId}`)
     if (!viewer) return
     if (input.event === "data" && validBase64(input.dataBase64)) {
-      this.enqueueViewerData(viewer, Buffer.from(input.dataBase64, "base64"))
+      // The frame states the attach boundary; absent is live. Nothing here
+      // infers it from arrival order — the pump that produced these bytes is
+      // not the attach response, and they race.
+      this.enqueueViewerData(viewer, Buffer.from(input.dataBase64, "base64"), input.replay === true)
     }
   }
 
-  private enqueueViewerData(viewer: ViewerRegistration, data: Uint8Array): void {
+  private enqueueViewerData(viewer: ViewerRegistration, data: Uint8Array, replay: boolean): void {
     if (!viewer.open || viewer.requestedExit !== undefined || viewer.requestedFailure !== undefined || data.byteLength === 0) return
     const key = `${viewer.targetId}\0${viewer.viewerId}`
     if (viewer.pendingBytes + data.byteLength > this.viewerInboundByteLimit) {
       this.failViewer(key, viewer, `sessiond viewer delivery queue exceeds ${this.viewerInboundByteLimit} bytes`, true)
       return
     }
-    viewer.queue.push(data.slice())
+    viewer.queue.push({ data: data.slice(), replay })
     viewer.pendingBytes += data.byteLength
     this.pumpViewerData(viewer)
   }
@@ -386,12 +389,12 @@ export class SessiondBackend implements SessionBackend {
           const chunk = viewer.queue.shift()
           if (!chunk) break
           try {
-            await viewer.onData(chunk)
+            await viewer.onData(chunk.data, chunk.replay)
           } catch {
             this.failViewer(key, viewer, "sessiond viewer data handler failed", true)
             return
           } finally {
-            viewer.pendingBytes = Math.max(0, viewer.pendingBytes - chunk.byteLength)
+            viewer.pendingBytes = Math.max(0, viewer.pendingBytes - chunk.data.byteLength)
           }
         }
       } finally {

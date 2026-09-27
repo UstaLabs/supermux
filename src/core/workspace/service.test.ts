@@ -8,11 +8,18 @@ function make(overrides: Partial<WorkspaceDeps> = {}) {
   const db = openDb(":memory:")
   runMigrations(db, MIGRATIONS)
   const store = new WorkspaceStore(db)
-  const calls = { archived: [] as string[], resumed: [] as string[], terminalsClosed: [] as string[][], displaysStopped: [] as string[] }
+  const calls = {
+    archived: [] as string[],
+    resumed: [] as string[],
+    terminalsClosed: [] as string[][],
+    scopesClosed: [] as string[],
+    displaysStopped: [] as string[],
+  }
   const deps: WorkspaceDeps = {
     archiveSession: async (id) => { calls.archived.push(id) },
     resumeSession: async (id) => { calls.resumed.push(id) },
     closeTerminal: async (scope, terminalId) => { calls.terminalsClosed.push([scope, terminalId]) },
+    closeTerminalScope: async (scope) => { calls.scopesClosed.push(scope) },
     stopDisplay: async (id) => { calls.displaysStopped.push(id) },
     ...overrides,
   }
@@ -148,7 +155,7 @@ test("closeView on an editor stops nothing", async () => {
 
   await svc.closeView(v.id)
 
-  expect(calls).toEqual({ archived: [], resumed: [], terminalsClosed: [], displaysStopped: [] })
+  expect(calls).toEqual({ archived: [], resumed: [], terminalsClosed: [], scopesClosed: [], displaysStopped: [] })
   expect(store.listViews(w.id)).toEqual([])
 })
 
@@ -193,6 +200,47 @@ test("archiveWorkspace archives every chat session and the workspace", async () 
 
   expect(calls.archived.sort()).toEqual(["s1", "s2"])
   expect(store.getById(w.id)!.status).toBe("archived")
+})
+
+test("archiveWorkspace closes the workspace's terminals — it used to leak one shell each", async () => {
+  // Archiving closed sessions and displays and left every terminal running.
+  // Nothing else would ever close them: the views stay in the database because
+  // archive is reversible, so no `closeView` runs for them, and there is no
+  // sweeper. Under zmx that is a detached daemon AND a shell per terminal,
+  // held open by nothing but themselves, outliving broker restarts.
+  const { store, svc, calls } = make()
+  const w = store.create({ name: "a", workdir: "/wt" })
+  store.addView(w.id, { kind: "terminal", state: { scope: "workspace", terminalId: "t1" } })
+  store.addView(w.id, { kind: "terminal", state: { scope: "workspace", terminalId: "t2" } })
+
+  await svc.archiveWorkspace(w.id)
+
+  // ONE scope close, not a loop over the views: the backend enumerates what is
+  // actually running, so a target whose view row was lost is reaped too — and
+  // that is exactly the case where nothing else ever will.
+  expect(calls.scopesClosed).toEqual([`w:${w.id}`])
+  expect(store.getById(w.id)!.status).toBe("archived")
+
+  // The tabs SURVIVE. Archive is reversible and the layout is part of what
+  // comes back; it is the shells that must not.
+  expect(store.listViews(w.id).map(v => (v.state as { terminalId: string }).terminalId)).toEqual(["t1", "t2"])
+})
+
+test("a terminal that will not die leaves the workspace un-archived", async () => {
+  // The same contract `closeView` keeps. Archiving a workspace whose terminals
+  // are still running is the bug this fixes, so it must not be what happens
+  // when the fix fails: the caller is told, and can retry.
+  const { store, svc, calls } = make({
+    closeTerminalScope: async () => { throw new Error("still running 100 ms after SIGKILL") },
+  })
+  const w = store.create({ name: "a", workdir: "/wt" })
+  store.addView(w.id, { kind: "terminal", state: { scope: "workspace", terminalId: "t1" } })
+
+  await expect(svc.archiveWorkspace(w.id)).rejects.toThrow("still running")
+  expect(store.getById(w.id)!.status).toBe("active")
+  // ...and no session was archived either: terminals go first, so nothing has
+  // been taken down when the refusal arrives.
+  expect(calls.archived).toEqual([])
 })
 
 test("restoreWorkspace unarchives and resumes every archived chat", async () => {

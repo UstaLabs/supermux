@@ -23,17 +23,17 @@ import androidx.compose.ui.graphics.Color
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.theme.LocalPanes
-import dev.supermux.net.CursorPos
-import dev.supermux.net.DisplayOp
 import dev.supermux.net.TerminalClient
 
 /**
  * Builds the host's native terminal surface for one [TerminalClient].
  *
- * There are exactly two implementations: `JediTermTerminalViewFactory` (desktop — a
- * `JediTermWidget` inside a `SwingPanel`) and `TermlibTerminalViewFactory` (Android — ConnectBot
- * termlib's emulator inside an `AndroidView`). Both drive the SAME lifecycle, which is the contract
- * a shared caller may rely on:
+ * There is exactly ONE implementation now: [GhosttyTerminalViewFactory], mounted by every host as
+ * [SharedTerminal]. It replaced four — a `JediTermWidget` in a `SwingPanel`, ConnectBot termlib in
+ * an `AndroidView`, SwiftTerm in a `UIKitView` and xterm.js in the DOM — which is why the lifecycle
+ * below is written as a contract at all: it was the only thing holding those four to one behaviour,
+ * and it is now the seam a host uses to pass a different wasm URL or theme rather than a different
+ * engine. The lifecycle is unchanged, and is what a shared caller may rely on:
  *
  *  - **feed** — every byte the client emits reaches the emulator in arrival order (desktop through
  *    the connector's ordered FIFO, Android through `writeInput`).
@@ -44,7 +44,10 @@ import dev.supermux.net.TerminalClient
  *    background pane never owns the shared pty geometry or the soft keyboard.
  *  - **dispose** — leaving the composition stops the client, closes the byte stream and releases
  *    the engine.
- *  - **predictions** — a [PredictionSink] over the shared `PredictionEngine`'s [DisplayOp]s.
+ *  - **predictions** — the shared `PredictionEngine`'s decisions, drawn ON TOP of the grid by
+ *    [GhosttyPredictionState] rather than written into the emulator. The per-host `PredictionSink`
+ *    that each retired adapter implemented went with them: a speculative glyph is never fed to the
+ *    authoritative screen now, so there is nothing for a host to implement.
  *
  * DEVIATION (recorded in G1): those five are the surface's OWN lifecycle rather than five methods
  * on this interface. Both engines own their geometry and run their emulator on their own thread, so
@@ -179,24 +182,6 @@ fun rememberLazyTerminalClient(connect: () -> TerminalClient): LazyTerminalClien
     val holder = remember { LazyTerminalClient(connect) }
     DisposableEffect(holder) { onDispose { holder.stopIfCreated() } }
     return holder
-}
-
-/**
- * Renders the shared `PredictionEngine`'s display ops against one engine's screen — the typed shape
- * both host adapters (`JediTermPredictionAdapter`, `TermlibPredictionAdapter`) already had.
- *
- * [available] is false where the engine's cursor/cell read path is unreachable (Android reflects
- * into termlib's internal snapshot and can lose it on a library bump); the pipeline then skips
- * prediction wholesale and the terminal runs unaffected.
- */
-interface PredictionSink {
-    val available: Boolean
-
-    /** Current caret, screen-relative and 0-based on BOTH axes (all three clients agree). */
-    fun cursor(): CursorPos
-
-    /** Render one engine batch. Ops are applied in order; `Passthrough` carries server bytes. */
-    fun render(ops: List<DisplayOp>)
 }
 
 /** The "this host has no terminal engine" factory — mounts [UnavailableTerminalHint]. */

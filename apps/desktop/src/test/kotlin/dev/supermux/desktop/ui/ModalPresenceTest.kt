@@ -25,7 +25,7 @@ import kotlin.test.assertTrue
  *
  * Ahmet: "most modals etc. stays under when there is terminal view".
  *
- * Compose cannot paint over JediTerm or JCEF, so [ModalPresence] tells them to
+ * Compose cannot paint over a heavyweight AWT child (JCEF), so [ModalPresence] tells it to
  * step aside. The shared dialogs and menus (`dev.supermux.ui.widgets`) reach it through
  * [ModalPresenceHost], which is what `DesktopTheme` installs as their `LocalModalHost` — so these
  * tests provide the same pair the app does. The failure modes are asymmetric and both bad: miss a retain and

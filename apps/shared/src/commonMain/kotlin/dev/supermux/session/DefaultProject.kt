@@ -62,21 +62,26 @@ fun orderProjectsByRecency(recent: List<String>, known: List<String>): List<Stri
 }
 
 /**
- * The working directory the launcher should show.
+ * The working directory the launcher should show, or null when there is nothing to pick from yet
+ * ("Choose a project" — never a silent `~`).
  *
- * @param current currently selected path
+ * @param current currently selected path (null = none yet)
  * @param recent project paths, most-recently-active first
- * @param picked user explicitly chose a path via the project picker
+ * @param picked user explicitly chose a path via the project picker (or a draft restored one)
  * @param composing user has started typing / attaching / recording
+ * @param fallback used only when nothing else names a project (the catalog's first project)
  */
 fun chooseDefaultProject(
-    current: String,
+    current: String?,
     recent: List<String>,
     picked: Boolean,
     composing: Boolean,
-): String {
-    if (picked || composing) return current
-    return recent.firstOrNull() ?: current
+    fallback: String? = null,
+): String? {
+    if (picked) return current
+    // Typing freezes a project that is SHOWING; with none yet there is nothing to freeze.
+    if (composing && current != null) return current
+    return recent.firstOrNull() ?: current ?: fallback
 }
 
 /** What the project picker shows under a project: how many sessions live there, and when one last spoke. */

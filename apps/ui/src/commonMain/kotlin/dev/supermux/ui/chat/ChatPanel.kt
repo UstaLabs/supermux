@@ -197,6 +197,8 @@ class ChatActions(
     val composer: ComposerActions = ComposerActions(),
     val loadModels: suspend () -> ModelsResponse? = { null },
     val loadReasoning: suspend () -> ReasoningResponse? = { null },
+    /** Levels for a just-picked [model] (null = Default), before the session row carries it. */
+    val loadReasoningFor: suspend (model: String?) -> ReasoningResponse? = { loadReasoning() },
     /** Returns true when the switch took, so the panel can update its shown `current`. */
     val pickModel: suspend (String) -> Boolean = { false },
     val pickReasoning: suspend (String) -> Boolean = { false },
@@ -229,6 +231,7 @@ fun rememberChatActions(
             composer = composerActions,
             loadModels = { app.sessionModels(session.id) },
             loadReasoning = { app.sessionReasoning(session.id) },
+            loadReasoningFor = { model -> app.sessionReasoningFor(session.id, model) },
             pickModel = { model -> app.switchModel(session.id, model) },
             pickReasoning = { level -> app.switchReasoning(session.id, level) },
             ensureMessagesLoaded = { app.ensureMessagesLoaded(session.id) },
@@ -672,7 +675,7 @@ fun ChatPanel(
                     scope.launch {
                         if (actions.pickModel(model)) {
                             modelsData = modelsData?.copy(current = model.ifBlank { null })
-                            reasoningData = actions.loadReasoning()
+                            reasoningData = actions.loadReasoningFor(model.ifBlank { null })
                         }
                     }
                 },

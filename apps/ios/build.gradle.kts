@@ -5,7 +5,8 @@ plugins {
     // its own and needs no `compose.` DSL (every artifact arrives through `api(project(":ui"))`).
     //
     // It is here for ONE reason: `syncComposeResourcesForIos`. Compose Multiplatform copies a
-    // dependency's `composeResources` — for us `:ui`'s Geist fonts — into the app bundle from a
+    // dependency's `composeResources` — for us `:ui`'s Geist fonts and `:terminal-compose`'s
+    // JetBrains Mono, the terminal's own face — into the app bundle from a
     // hook it installs on the FRAMEWORK module's `embedAndSignAppleFrameworkForXcode`, and that
     // hook only exists where this plugin is applied. Without it the framework still links and the
     // app still launches; the fonts are simply absent and every screen falls back to the system

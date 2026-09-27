@@ -4,10 +4,15 @@ package dev.supermux.net
  * Byte sequences for the mobile terminal key-accessory bar (Esc/Tab/Ctrl/Alt/
  * arrows the soft keyboard lacks). Shared-Kotlin port of the retired Vue PWA's
  * terminal-keys reference (retired Vue PWA; see git history before 2026-09-12)
- * so the Android native terminal drives the SAME, tested logic — mirroring how
- * TerminalScroll.kt ports the touch-scroll math.
+ * so every client's accessory bar drives the SAME, tested logic.
  *
- * Pure logic (no Compose, no termlib): callers decide WHEN to build a sequence
+ * This is the ACCESSORY BAR only. Ordinary key events, mouse events and paste go
+ * through the engine's own encoder (Plan 4): re-encoding them in Kotlin is how a
+ * client ends up disagreeing with the terminal about DECCKM or the Kitty
+ * protocol. The touch-scroll math that used to live beside this file is gone for
+ * exactly that reason — the Compose terminal scrolls its own local history.
+ *
+ * Pure logic (no Compose, no renderer): callers decide WHEN to build a sequence
  * (which button, which sticky modifier); this only answers WHAT bytes a key
  * produces. Encode the result with `.encodeToByteArray()` before sending it down
  * the pty — every character here is in the 7-bit ASCII range, so UTF-8 encodes

@@ -5,7 +5,7 @@
 # documented for if/when minify is re-enabled. The v1 minified release (commit f7b8d25)
 # crashed/misbehaved because these were incomplete: R8 renames code that JNI / WebView /
 # Tink resolve BY NAME. Every rule below marked "[required]" fixed a real runtime break:
-#  - org.connectbot.terminal.**  [required] native crash opening Terminal (TerminalNative JNI)
+#  - the terminal engine's JNI class [required] native crash opening Terminal
 #  - @JavascriptInterface methods [required] cm6 editor/LSP bridge calls silently no-op
 #  - com.google.crypto.tink.**    [required] EncryptedSharedPreferences lost the pairing
 # If re-enabling minify, re-verify EVERY subsystem (terminal, voice, editor/LSP, VNC/scrcpy,
@@ -49,16 +49,15 @@
 -keep class com.journeyapps.barcodescanner.** { *; }   # zxing-android-embedded
 -keep class com.google.zxing.** { *; }
 -dontwarn com.google.zxing.**
-# termlib (terminal emulator) — [required] the native lib (libjni_cb_term.so) resolves
-# TerminalNative + the TerminalCallbacks methods/fields BY NAME via JNI; renaming any of
-# them aborts in Terminal::Terminal on open. Coordinate is org.connectbot:termlib.
-# ALSO [required for predictive echo]: PredictionAdapter reflects termlib's internal
-# getSnapshot$lib()/TerminalSnapshot/TerminalLine/Cell getters BY NAME to read the cursor +
-# cells — do NOT narrow this keep, or prediction silently degrades to no-prediction if minify
-# is ever re-enabled.
--keep class org.connectbot.terminal.** { *; }
--keepclassmembers class org.connectbot.terminal.** { *; }
--dontwarn org.connectbot.terminal.**
+# The terminal engine's JNI binding — [required]. `libsupermux_terminal_jni.so` exports
+# `Java_dev_supermux_terminal_NativeTerminal_<method>`, the classic name-derived JNI linkage, so
+# renaming the class or any of its `external` methods turns every call into an
+# UnsatisfiedLinkError on the first terminal opened. This replaced ConnectBot termlib in Plan 4;
+# termlib's own keep (`org.connectbot.terminal.**`) is gone with the dependency, and so is the
+# second rule it needed — the old predictive echo reflected into termlib's internal snapshot BY
+# NAME, while the shared renderer draws predictions in an overlay and reflects into nothing.
+-keep class dev.supermux.terminal.NativeTerminal { *; }
+-keepclassmembers class dev.supermux.terminal.NativeTerminal { native <methods>; }
 
 # ---- App entrypoints (Activities/Application referenced from the manifest are
 #       kept by the AGP-generated rules; this is belt-and-suspenders) ----

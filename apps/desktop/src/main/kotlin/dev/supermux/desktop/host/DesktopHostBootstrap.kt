@@ -64,6 +64,7 @@ object DesktopHostBootstrap {
                     sessiondPath = null,
                     frpcPath = null,
                     tmuxPath = null,
+                    zmxDir = null,
                 ),
             )
         val extraEnv = buildSidecarEnvironment(bins, defaultHostName())
@@ -84,6 +85,9 @@ object DesktopHostBootstrap {
     ): Map<String, String> = buildMap {
         bins.binDir?.let { put("PATH", HostBinaries.prependPath(it, existingPath)) }
         bins.sessiondPath?.let { put("MUX_SESSIOND_PATH", it.toString()) }
+        // The workspace-terminal backend is named, not searched for: the broker execs exactly the
+        // pinned+patched zmx this app shipped, and never a `zmx` that happens to be on PATH.
+        bins.zmxDir?.let { put("MUX_ZMX_BIN_DIR", it.toString()) }
         put("MUX_HOST_NAME", hostName)
     }
 

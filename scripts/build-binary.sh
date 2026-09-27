@@ -16,12 +16,22 @@
 #      embedding it raw would break on arm64 — recompile so the right arch is
 #      embedded by bun build --compile); Windows uses sessiond and skips it
 #   4. fetch + verify the native frpc used by the built-in connectivity relay
+#   4b. stage the pinned zmx bundle (POSIX): the patched daemon, the framed
+#      broker helper and their manifest, verified against vendor/zmx/upstream.lock.json
+#      and copied into the committed slots under src/core/terminal/zmx/embedded/
+#      so `bun build --compile` embeds them. Without this a compiled release has
+#      no workspace-terminal backend at all: every attach fails the manifest
+#      check with a typed `backend-unavailable`. Overrides:
+#        SUPERMUX_ZMX_DIR=<dir>  use this prebuilt bundle (bin/ + manifest.json)
+#        SUPERMUX_SKIP_ZMX=1     ship the placeholder (wiring tests only — the
+#                                resulting binary says so when asked for a terminal)
 #   5. generate the static manifest (turns the committed empty stub into one
 #      `with { type: "file" }` import per staged file so the whole web client is
 #      embedded)
 #   6. bun build --compile (version/commit injected via --define)
 #   7. restore the working tree (manifest stub + committed native helpers) — the
 #      embedded copies now live INSIDE the binary, the tree goes back to clean.
+#      Restored from file backups taken at the top, never from git.
 set -eu
 
 OUT="${1:?usage: build-binary.sh <outfile> [version] [commit]}"
@@ -53,12 +63,26 @@ esac
 # Restore workspace mutations unconditionally (on success, failure, or signal):
 # the embedded copies live inside $OUT now; the tree goes back to its prior state.
 # frpc uses an explicit backup so this also preserves an uncommitted local stub.
-FRPC_BACKUP="$(mktemp)"
-cp src/core/relay/frpc-embedded "$FRPC_BACKUP"
+# Back the mutated files up as FILES, not as git state. `git checkout --` was the
+# old restore for the static manifest and the pty-helper, and it is a poor one:
+# it takes several pathspecs and restores NONE of them if one fails, it discards
+# an uncommitted local edit rather than putting it back, and it is silenced with
+# `2>/dev/null || true` so a failure leaves a dirty tree and says nothing.
+# Observed doing exactly that on this host (2026-09-23): a completed build left
+# the generated static manifest — 60 lines of embedded imports — behind in the
+# working tree. Copies cannot fail that way.
+BACKUP_DIR="$(mktemp -d)"
+mkdir -p "$BACKUP_DIR/zmx"
+cp src/core/relay/frpc-embedded "$BACKUP_DIR/frpc-embedded"
+cp src/channels/web/static-manifest.generated.ts "$BACKUP_DIR/static-manifest.generated.ts"
+cp src/core/terminal/pty-helper "$BACKUP_DIR/pty-helper"
+cp -a src/core/terminal/zmx/embedded/. "$BACKUP_DIR/zmx/"
 cleanup() {
-  git checkout -- src/channels/web/static-manifest.generated.ts src/core/terminal/pty-helper 2>/dev/null || true
-  cp "$FRPC_BACKUP" src/core/relay/frpc-embedded 2>/dev/null || true
-  rm -f "$FRPC_BACKUP"
+  cp "$BACKUP_DIR/frpc-embedded" src/core/relay/frpc-embedded 2>/dev/null || true
+  cp "$BACKUP_DIR/static-manifest.generated.ts" src/channels/web/static-manifest.generated.ts 2>/dev/null || true
+  cp "$BACKUP_DIR/pty-helper" src/core/terminal/pty-helper 2>/dev/null || true
+  cp -a "$BACKUP_DIR/zmx/." src/core/terminal/zmx/embedded/ 2>/dev/null || true
+  rm -rf "$BACKUP_DIR"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -94,6 +118,33 @@ fi
 # frpc: fetch the native-arch helper and embed it beside the pty helper. The
 # release binary's own checksum therefore covers the relay executable too.
 scripts/fetch-frpc.sh "$TARGET" src/core/relay/frpc-embedded
+
+# zmx: the POSIX workspace-terminal backend, embedded whole. Windows has no zmx
+# (persistent terminals there are sessiond's job), so the slots keep their
+# placeholders and the compiled binary never claims otherwise.
+if [ "$TARGET" != "windows-x64" ]; then
+  if [ "${SUPERMUX_SKIP_ZMX:-}" = "1" ]; then
+    echo "build-binary.sh: WARNING zmx bundle SKIPPED (SUPERMUX_SKIP_ZMX=1) — this binary has no workspace-terminal backend" >&2
+  else
+    if [ -n "${SUPERMUX_ZMX_DIR:-}" ]; then
+      ZMX_DIR="$SUPERMUX_ZMX_DIR"
+      echo "build-binary.sh: zmx bundle from SUPERMUX_ZMX_DIR=$ZMX_DIR"
+    else
+      # Its own output directory per target: build/zmx/out is the bundle a
+      # source-mode broker and the integration suite EXEC, and a cross-built
+      # aarch64 zmx dropped there would break both without failing anything.
+      ZMX_DIR="build/zmx/out-$TARGET"
+      echo "build-binary.sh: building the pinned zmx for $TARGET (scripts/build-zmx.sh)"
+      scripts/build-zmx.sh --target "$TARGET" --no-test --out "$ROOT/$ZMX_DIR"
+    fi
+    # The bundle is the pinned one, and its manifest is the truth about it.
+    scripts/check-zmx-bundle.sh "$ZMX_DIR" "$TARGET"
+    cp "$ZMX_DIR/bin/zmx" src/core/terminal/zmx/embedded/zmx
+    cp "$ZMX_DIR/bin/mux-zmx-helper" src/core/terminal/zmx/embedded/mux-zmx-helper
+    cp "$ZMX_DIR/manifest.json" src/core/terminal/zmx/embedded/manifest
+    chmod +x src/core/terminal/zmx/embedded/zmx src/core/terminal/zmx/embedded/mux-zmx-helper
+  fi
+fi
 
 # Embed the freshly-staged web client: rewrites the committed stub with per-file imports.
 bun scripts/generate-static-manifest.ts

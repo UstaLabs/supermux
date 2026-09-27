@@ -17,12 +17,16 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardHide
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -73,20 +77,34 @@ private val KEYS: List<BarKey> = listOf(
  */
 @Composable
 fun TerminalKeyBar(keys: TerminalKeySink, modifier: Modifier = Modifier) {
-    TerminalKeyBar(ctrl = keys.ctrl, alt = keys.alt, onPress = { keys.press(it) }, modifier = modifier)
+    TerminalKeyBar(
+        ctrl = keys.ctrl,
+        alt = keys.alt,
+        onPress = { keys.press(it) },
+        onHideKeyboard = { keys.hideKeyboard() },
+        modifier = modifier,
+    )
 }
 
 /**
  * A horizontally-scrollable row of keys the soft keyboard lacks (Esc/Tab/Ctrl/
- * Alt/arrows/…). Purely presentational: it reports each press up to its caller,
- * which owns the modifier state machine and byte-sending. Ctrl/Alt render their
- * tri-state (off / armed-once / locked) so the active modifier is visible.
+ * Alt/arrows/…), plus a trailing "hide keyboard" button. Purely presentational: it reports each
+ * press up to its caller, which owns the modifier state machine and byte-sending. Ctrl/Alt render
+ * their tri-state (off / armed-once / locked) so the active modifier is visible.
+ *
+ * The bar is drawn only under [dev.supermux.ui.adaptive.InputMode.Touch] (see [TerminalPane] /
+ * `TerminalTabs`), so [onHideKeyboard] never appears on desktop or web, where there is no soft
+ * keyboard to hide. It is shown on Android too, alongside Esc/Tab/Ctrl — even though the system
+ * back gesture already dismisses the IME there — because the bar has no other per-OS branch and a
+ * redundant, always-reachable button is cheaper to reason about (and to test) than teaching this
+ * row which touch platform it is running on.
  */
 @Composable
 fun TerminalKeyBar(
     ctrl: TerminalModState,
     alt: TerminalModState,
     onPress: (TerminalKey) -> Unit,
+    onHideKeyboard: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -135,6 +153,17 @@ fun TerminalKeyBar(
                     }
             }
         }
+        // Trailing: dismiss the soft keyboard. A divider first, same as every other logical group
+        // above — this one is not a pty key at all, and the gap says so.
+        Box(
+            Modifier
+                .size(width = 1.dp, height = 22.dp)
+                .background(cs.outlineVariant),
+        )
+        KeyIconButton(icon = Icons.Filled.KeyboardHide, contentDescription = "Hide keyboard") {
+            haptic.perform(HapticKind.Tick)
+            onHideKeyboard()
+        }
     }
 }
 
@@ -177,5 +206,32 @@ private fun KeyButton(
                     .background(cs.onPrimary),
             )
         }
+    }
+}
+
+/**
+ * An accessory key whose face is an icon rather than a label — same box, size and touch target as
+ * [KeyButton], for the one bar entry ([TerminalKeyBar]'s "hide keyboard") that has no character or
+ * [TerminalKey] to render as text.
+ */
+@Composable
+private fun KeyIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        Modifier
+            .height(40.dp)
+            .widthIn(min = 44.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(cs.surfaceContainerHighest)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp)
+            .testTag("terminal_key_hide_keyboard"),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = contentDescription, tint = cs.onSurface, modifier = Modifier.size(20.dp))
     }
 }

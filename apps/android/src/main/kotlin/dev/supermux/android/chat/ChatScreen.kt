@@ -166,6 +166,7 @@ fun ChatScreen(
     sessionLinks: List<dev.supermux.net.ProxyDto> = emptyList(),
     vmModels: suspend (String) -> ModelsResponse? = { null },
     vmReasoning: suspend (String) -> ReasoningResponse? = { null },
+    vmReasoningFor: suspend (String, String?) -> ReasoningResponse? = { id, _ -> vmReasoning(id) },
     // Suspend + Boolean: the shared ChatPanel only rewrites the shown catalog `current` when the
     // broker ACCEPTED the switch, so a rejected pick must report false rather than a blind true.
     onPickModel: suspend (String) -> Boolean = { false },
@@ -644,6 +645,7 @@ fun ChatScreen(
                             ),
                             loadModels = { vmModels(session.id) },
                             loadReasoning = { vmReasoning(session.id) },
+                            loadReasoningFor = { model -> vmReasoningFor(session.id, model) },
                             pickModel = { onPickModel(it) },
                             pickReasoning = { onPickEffort(it) },
                         )

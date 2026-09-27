@@ -1,9 +1,9 @@
 // The one session/workspace list both apps render (cluster F4).
 //
-// Desktop's list on every host — the same frame (new-session card, host chips, section header,
-// list, footer) and the same rows. The only extras: where this screen is the whole surface (a
-// phone) it paints the logo title and clears the system bars; touch-sized hit targets live inside
-// the shared rows.
+// Desktop's list on every host — the same frame (new-session card, section header, list, footer
+// with the host switch) and the same rows. The only extras: where this screen is the whole surface
+// (a phone) it paints the logo title and clears the system bars; touch-sized hit targets live
+// inside the shared rows.
 //
 // The screen owns NO navigation of its own: it registers no `BackHandler` (the list is the phone's
 // back destination, not a back consumer) and Android's shared-element scopes stay at the
@@ -114,7 +114,6 @@ import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.host.HostDot
-import dev.supermux.ui.host.HostFilterChips
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.resources.Res
@@ -215,7 +214,6 @@ fun SessionListScreen(
     hosts: List<HostView> = emptyList(),
     sessionHost: Map<String, String> = emptyMap(),
     hostFilter: String? = null,
-    onHostFilter: (String?) -> Unit = {},
     onAddHost: () -> Unit = {},
     // ── Persistent projects; default-empty so an old broker keeps the path grouping ──
     /** Every host's project catalog, host-qualified (the same id space as [workspaceHost]). */
@@ -1194,7 +1192,7 @@ fun SessionListScreen(
 
     // ── Chrome ────────────────────────────────────────────────────────────────────────────────
     val listTag = if (useWorkspaces) WorkspaceListTestIds.LIST else TestIds.SESSION_LIST
-    // One frame at every width (desktop's): new-session card, chips, section header, list, footer.
+    // One frame at every width (desktop's): new-session card, section header, list, footer.
     // Where this screen is the whole surface (a phone) it keeps the logo title above, and clears
     // the system bars itself.
     Column(
@@ -1220,18 +1218,6 @@ fun SessionListScreen(
             }
         }
         NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
-        if (multiHost) {
-            HostFilterChips(
-                hosts = hosts,
-                sessions = sessions,
-                sessionHost = sessionHost,
-                selected = hostFilter,
-                onSelect = onHostFilter,
-                onAddHost = onAddHost,
-                onRenameHost = actions.renameHost,
-                onForgetHost = actions.forgetHost,
-            )
-        }
         SessionsSectionHeader(
             title = if (useWorkspaces) "Workspaces" else "Sessions",
             groupByProject = groupByProject,
@@ -1656,10 +1642,11 @@ private fun NavItem(label: String, icon: ImageVector, tag: String, onClick: () -
 }
 
 /**
- * Desktop's sticky sidebar footer: theme / usage / devices / settings.
+ * The sticky sidebar footer: the host switch on the left; theme / usage / devices / settings on
+ * the right.
  *
  * A slot rather than parameters on the screen — usage is an anchored popover whose body only the
- * shell can build, and Android has no footer at all.
+ * shell can build, and so is the host switch ([hostSwitcher]), which reaches the fleet.
  */
 @Composable
 fun SessionListFooter(
@@ -1671,6 +1658,7 @@ fun SessionListFooter(
     usageOpen: Boolean = false,
     onUsageDismiss: () -> Unit = {},
     usageContent: (@Composable () -> Unit)? = null,
+    hostSwitcher: (@Composable () -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     // The icon shows what you'll switch TO: sun when dark, moon when light.
@@ -1692,6 +1680,9 @@ fun SessionListFooter(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.End,
         ) {
+            if (hostSwitcher != null) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { hostSwitcher() }
+            }
             FooterIcon(themeIcon, themeLabel, "sidebar_footer_theme", onToggleTheme)
             Box {
                 FooterIcon(Icons.Filled.DataUsage, "Usage", "sidebar_footer_usage", onUsage)

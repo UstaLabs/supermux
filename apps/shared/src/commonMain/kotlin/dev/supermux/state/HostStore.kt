@@ -16,6 +16,7 @@ import dev.supermux.state.StagedUpload
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallJob
+import dev.supermux.net.AgentModelsResponse
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AppConfigDto
@@ -81,6 +82,8 @@ import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.net.MoveViewBody
 import dev.supermux.net.PatchViewBody
 import kotlinx.serialization.json.JsonObject
+import kotlinx.coroutines.flow.getAndUpdate
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -108,6 +111,7 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -174,7 +178,11 @@ class HostStore(
     internal val projectionsActive: Boolean get() = projectionJob.isActive
 
     private val http = deps.httpFactory(null)
-    val client = BrokerClient(baseUrl, token, http, onConnectionChange = onConnectionChange)
+    val client = BrokerClient(
+        baseUrl, token, http,
+        onConnectionChange = onConnectionChange,
+        subscribeFrame = { subscribeFrameJson(viewingSessionIds) },
+    )
     val api = apiOverride ?: BrokerApi(baseUrl, token, http)
 
     // CIO's default per-request timeout is 15s — too short for the mic-dictation POST (M5-1): the
@@ -341,6 +349,13 @@ class HostStore(
     // Last GET /usage (or usage_updated) snapshot. The Usage popover renders this immediately
     // on open and updates in place when a usage_updated frame arrives — never waits on the
     // network to draw. Seeded by [usage]/[refreshUsage]; WS [ServerFrame.UsageUpdated] replaces it.
+    // The launcher's model catalog (GET /agents/models), fetched on every snapshot (= connect or
+    // reconnect) and on `agent_models_changed` — never per New Session open. Null until the first
+    // answer, and stays null on a broker older than the endpoint (the launcher then asks per call).
+    private val _agentModels = MutableStateFlow<AgentModelsResponse?>(null)
+    val agentModels: StateFlow<AgentModelsResponse?> = _agentModels
+    private var agentModelsJob: Job? = null
+
     private val _usage = MutableStateFlow<UsageResponse?>(null)
     val usageSnapshot: StateFlow<UsageResponse?> = _usage
 
@@ -421,7 +436,10 @@ class HostStore(
                 _onboarded.value = frame.onboarded
                 lastSentViewing = null
                 sendViewingIfChanged()
+                refreshAgentModels()
+                if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
             }
+            ServerFrame.AgentModelsChanged -> refreshAgentModels()
             is ServerFrame.SessionRemoved -> {
                 walkthroughs.remove(frame.id)
                 refreshArchived()
@@ -1540,23 +1558,84 @@ class HostStore(
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         runApi("archivedLogs") { api.archivedLogs(sessionId) } ?: emptyList()
 
+    /** Sessions whose chat fetch is in flight, so a chat pane and the shell asking for the same
+     *  session at once make one request. */
+    private val logFetches = MutableStateFlow<Set<String>>(emptySet())
+    private var prefetchJob: Job? = null
+
+    /** Holds everything an open chat shows: the full history page and its activity/commands. */
+    private fun chatLoaded(st: HostState, id: String) = id in st.completeLogs && id in st.completeExtras
+
     /**
-     * Lazily fetch a session's transcript when we don't already have it. The WS Snapshot seeds
-     * [messages] for every session live at connect time, and MessageAppend keeps them current —
-     * but a session resumed from archive arrives via SessionAdded (no history), so its transcript
-     * stays empty until the next snapshot. Calling this on chat-open closes that gap. No-op when
-     * the snapshot already populated it. Web/iOS parity: ChatView.loadMessages /
+     * Fetch what a chat needs that we don't already hold: its history unless we have the full
+     * page ([HostState.completeLogs]), its activity + slash commands unless they are current
+     * ([HostState.completeExtras]). A trimmed snapshot carries neither for sessions that were not
+     * on screen at connect, and a session resumed from archive arrives via SessionAdded with no
+     * history at all; opening its chat calls this. Web/iOS parity: ChatView.loadMessages /
      * BrokerSession.ensureMessagesLoaded (GET /sessions/:id/messages).
      */
     fun ensureMessagesLoaded(sessionId: String) {
-        if (_state.value.messages[sessionId]?.isNotEmpty() == true) return
-        stateScope.launch {
-            val fetched = archivedLogs(sessionId)
-            // Re-check after the await: a live MessageAppend / optimistic send / fresh snapshot may
-            // have populated the buffer while the fetch was in flight — don't clobber it.
-            if (fetched.isNotEmpty() && _state.value.messages[sessionId]?.isNotEmpty() != true) {
-                _state.update { it.copy(messages = it.messages + (sessionId to fetched)) }
+        stateScope.launch { loadChat(sessionId) }
+    }
+
+    private suspend fun loadChat(sessionId: String) {
+        val st = _state.value
+        if (chatLoaded(st, sessionId)) return
+        if (sessionId in logFetches.getAndUpdate { it + sessionId }) return
+        try {
+            coroutineScope {
+                if (sessionId !in st.completeLogs) launch { loadFullLog(sessionId) }
+                if (sessionId !in st.completeExtras) launch { loadExtras(sessionId) }
             }
+        } finally {
+            logFetches.update { it - sessionId }
+        }
+    }
+
+    private suspend fun loadFullLog(sessionId: String) {
+        val fetched = runApi("loadFullLog") { api.archivedLogs(sessionId) } ?: return
+        // Live MessageAppends / optimistic sends may have landed while the fetch was in flight.
+        _state.update {
+            it.copy(
+                messages = it.messages + (sessionId to mergeFetchedLog(fetched, it.messages[sessionId].orEmpty())),
+                completeLogs = it.completeLogs + sessionId,
+            )
+        }
+    }
+
+    private suspend fun loadExtras(sessionId: String) {
+        val fetched = runApi("loadExtras") { api.chatExtras(sessionId) } ?: return
+        _state.update {
+            it.copy(
+                activity = it.activity +
+                    (sessionId to mergeFetchedActivity(fetched.activity, it.activity[sessionId].orEmpty())),
+                commands = it.commands + (sessionId to fetched.commands),
+                commandsResolved = it.commandsResolved + (sessionId to fetched.commandsResolved),
+                completeExtras = it.completeExtras + sessionId,
+            )
+        }
+    }
+
+    /**
+     * After a trimmed snapshot: reload the chats on screen whose extras it left out (opened in
+     * the moment between our `subscribe` and its answer), then quietly load the few most
+     * recently active sessions so switching to one of them is instant — one at a time, behind
+     * whatever the UI asked for first. The most recent N overall, minus those already loaded —
+     * NOT the next N unloaded ones, or every reconnect would warm four more sessions until the
+     * whole fleet was fetched.
+     */
+    private fun prefetchRecentLogs() {
+        for (id in viewingSessionIds) if (!chatLoaded(_state.value, id)) ensureMessagesLoaded(id)
+        prefetchJob?.cancel()
+        prefetchJob = stateScope.launch {
+            delay(PREFETCH_DELAY_MS)
+            val st = _state.value
+            val recent = st.messages.entries
+                .filter { (_, log) -> log.isNotEmpty() }
+                .sortedByDescending { (_, log) -> log.last().ts }
+                .take(PREFETCH_SESSIONS)
+                .filter { (id, _) -> !chatLoaded(st, id) }
+            for ((id, _) in recent) loadChat(id)
         }
     }
 
@@ -1825,13 +1904,26 @@ class HostStore(
     suspend fun validatePath(path: String): PathValidation? =
         runApi("validatePath") { api.validatePath(path) }
 
-    /** GET /models?agent= → models pickable in the launcher (no session yet). Empty on failure. */
-    suspend fun launcherModels(agent: String): List<ModelInfo> =
-        runApi("launcherModels") { api.listModels(agent).models } ?: emptyList()
+    /** [agent]'s entry in the cached catalog when it has models; null → ask the broker. */
+    private fun cachedAgent(agent: String) = _agentModels.value?.agent(agent)?.takeIf { it.models.isNotEmpty() }
 
-    /** GET /reasoning-levels?agent=&model= → thinking levels for the launcher. Null on failure. */
+    /** The agent's models: the cached catalog, else GET /models?agent=. Empty on failure. */
+    suspend fun launcherModels(agent: String): List<ModelInfo> =
+        cachedAgent(agent)?.models
+            ?: runApi("launcherModels") { api.listModels(agent).models } ?: emptyList()
+
+    /** Refetch [agentModels]; a newer request supersedes one still in flight. Failure keeps the last answer. */
+    fun refreshAgentModels() {
+        agentModelsJob?.cancel()
+        agentModelsJob = stateScope.launch {
+            runApi("agentModels") { api.agentModels() }?.let { _agentModels.value = it }
+        }
+    }
+
+    /** Thinking levels for [agent]/[model]: the cached catalog, else GET /reasoning-levels. Null on failure. */
     suspend fun launcherReasoning(agent: String, model: String? = null): ReasoningResponse? =
-        runApi("launcherReasoning") { api.getReasoningLevels(agent, model) }
+        cachedAgent(agent)?.reasoningFor(model)?.let { ReasoningResponse(agent, levels = it.levels, visible = it.visible) }
+            ?: runApi("launcherReasoning") { api.getReasoningLevels(agent, model) }
 
     /** GET /repos/info?path= → git status for the launcher's worktree picker. Null on failure. */
     suspend fun launcherRepoInfo(workdir: String, fetch: Boolean = false): RepoInfo? =
@@ -1902,15 +1994,35 @@ class HostStore(
     // Back DesktopComposer's model/reasoning pills. All go through [runApi] and degrade to
     // null/false so a broker hiccup just leaves the pills showing their last-known state.
 
-    /** GET /sessions/<id>/models → the session's pickable models + current selection. Null on
-     *  failure. */
-    suspend fun sessionModels(id: String): ModelsResponse? =
-        runApi("sessionModels") { api.models(id) }
+    // The session pickers answer from the cached catalog too: its agent's models, with `current`
+    // from the live session row (which the composer prefers anyway). The broker is asked only when
+    // the catalog can't answer (older broker, or the agent has no models cached).
+    private fun sessionRow(id: String): SessionInfo? = _state.value.sessions.firstOrNull { it.id == id }
 
-    /** GET /sessions/<id>/reasoning-levels → the session's thinking levels + current + visibility.
-     *  Null on failure. */
+    /** The session's pickable models + current selection (catalog, else GET /sessions/<id>/models). */
+    suspend fun sessionModels(id: String): ModelsResponse? {
+        val s = sessionRow(id)
+        val cached = s?.let { cachedAgent(it.agent) }
+        if (s != null && cached != null) return ModelsResponse(agent = s.agent, current = s.model, models = cached.models)
+        return runApi("sessionModels") { api.models(id) }
+    }
+
+    /** The session's thinking levels + current + visibility (catalog, else GET /sessions/<id>/reasoning-levels). */
     suspend fun sessionReasoning(id: String): ReasoningResponse? =
-        runApi("sessionReasoning") { api.reasoningLevels(id) }
+        sessionRow(id)?.let { cachedSessionReasoning(it, it.model) }
+            ?: runApi("sessionReasoning") { api.reasoningLevels(id) }
+
+    /**
+     * The levels for [model] (null = Default) on this session — what the composer shows right after
+     * a switch, before the session row carries the new model. Broker fallback as [sessionReasoning].
+     */
+    suspend fun sessionReasoningFor(id: String, model: String?): ReasoningResponse? =
+        sessionRow(id)?.let { cachedSessionReasoning(it, model) } ?: sessionReasoning(id)
+
+    private fun cachedSessionReasoning(s: SessionInfo, model: String?): ReasoningResponse? =
+        cachedAgent(s.agent)?.reasoningFor(model)?.let {
+            ReasoningResponse(agent = s.agent, current = s.reasoningLevel, levels = it.levels, visible = it.visible)
+        }
 
     /** POST /sessions/<id>/model {"model"} — switch the session's model (persists broker-side).
      *  Returns true on success, false on any failure. */
@@ -2213,3 +2325,25 @@ class HostStore(
 internal fun resolveSpawnId(resp: SpawnResponse, sessions: List<SessionInfo>): String? =
     if (resp.id.isNotBlank()) resp.id
     else sessions.firstOrNull { it.name == resp.name }?.id
+
+/** How many recent sessions [HostStore] prefetches after a trimmed snapshot, and after how long. */
+private const val PREFETCH_SESSIONS = 4
+private const val PREFETCH_DELAY_MS = 1_000L
+
+/** Entries the snapshot carries for a session that is not on screen: its sidebar preview. */
+internal const val SNAPSHOT_LOG_TAIL = 1
+
+/**
+ * The `subscribe` frame: full logs, activity and slash commands only for the chats on screen
+ * ([fullLogs]); a [SNAPSHOT_LOG_TAIL]-entry tail and nothing else for every other session; and
+ * archived workspaces without their views/layout. A broker that predates these fields ignores
+ * them and sends everything.
+ */
+internal fun subscribeFrameJson(fullLogs: Collection<String>): String = buildJsonObject {
+    put("type", "subscribe")
+    put("logTail", SNAPSHOT_LOG_TAIL)
+    put("fullLogs", JsonArray(fullLogs.distinct().map(::JsonPrimitive)))
+    // Activity + slash commands only for [fullLogs] too; archived workspaces without views/layout.
+    put("trimExtras", true)
+    put("slimArchived", true)
+}.toString()

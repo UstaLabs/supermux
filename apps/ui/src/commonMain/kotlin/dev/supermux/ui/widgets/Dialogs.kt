@@ -10,7 +10,7 @@ import androidx.compose.ui.window.DialogProperties
  *
  * ── Why this exists ─────────────────────────────────────────────────────────
  *
- * Compose Desktop cannot paint over a heavyweight AWT child (JediTerm, JCEF), so on desktop every
+ * Compose Desktop cannot paint over a heavyweight AWT child (the JCEF editor), so on desktop every
  * dialog and every open menu has to make those children step aside while it is on screen — see
  * `desktop/ui/ModalPresence.kt` (`ModalPresence`, `ModalOpen`, `HeavyweightModalShield`), which is
  * a genuine desktop actual and stays there. Android has no such problem and needs nothing.

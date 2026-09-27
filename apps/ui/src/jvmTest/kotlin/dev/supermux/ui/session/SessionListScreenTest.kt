@@ -12,6 +12,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.host.HostView
+import dev.supermux.ui.host.HostSwitcher
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
@@ -283,27 +284,7 @@ class SessionListScreenTest {
     }
 
     @Test
-    fun hostChips_appearWithTwoHosts_andAbsentWithOne() = runComposeUiTest {
-        val h1 = HostView(recordId = "r1", hostId = "h1", displayName = "Alpha", online = true)
-        val h2 = HostView(recordId = "r2", hostId = "h2", displayName = "Beta", online = true)
-        val session = SessionInfo(id = "s1", name = "sess", workdir = "/p", agent = "claude")
-        setContent {
-            SessionListScreen(
-                workspaces = listOf(ws("w1", "a", "/p", views = listOf(chatView("v1", "s1", "w1")))),
-                home = "/home/u",
-                activeId = null,
-                onOpen = {},
-                sessions = listOf(session),
-                hosts = listOf(h1, h2),
-                sessionHost = mapOf("s1" to "r1"),
-            )
-        }
-        onNodeWithTag("host_filter_chips").assertIsDisplayed()
-        onNodeWithTag("host_chip_all").assertIsDisplayed()
-    }
-
-    @Test
-    fun hostChips_absentWithSingleHost() = runComposeUiTest {
+    fun footer_carriesTheHostSwitch_onItsLeft_evenWithOneHost() = runComposeUiTest {
         val h1 = HostView(recordId = "r1", hostId = "h1", displayName = "Only", online = true)
         setContent {
             SessionListScreen(
@@ -312,9 +293,32 @@ class SessionListScreenTest {
                 activeId = null,
                 onOpen = {},
                 hosts = listOf(h1),
+                footer = {
+                    SessionListFooter(
+                        appearance = dev.supermux.ui.theme.AppearanceMode.DARK,
+                        onToggleTheme = {},
+                        onUsage = {},
+                        onDevices = {},
+                        onSettings = {},
+                        hostSwitcher = {
+                            HostSwitcher(
+                                hosts = listOf(h1),
+                                sessions = emptyList(),
+                                sessionHost = emptyMap(),
+                                selected = null,
+                                onSelect = {},
+                                onAddHost = {},
+                            )
+                        },
+                    )
+                },
             )
         }
-        onNodeWithTag("host_filter_chips").assertDoesNotExist()
+        onNodeWithTag("host_switcher").assertIsDisplayed()
+        onNodeWithText("Only").assertIsDisplayed()
+        val switcherRight = onNodeWithTag("host_switcher").fetchSemanticsNode().boundsInRoot.right
+        val themeLeft = onNodeWithTag("sidebar_footer_theme").fetchSemanticsNode().boundsInRoot.left
+        assertTrue(switcherRight <= themeLeft, "the host switch sits left of the footer icons")
     }
 
     // ── Visual regressions the first 16 chrome tests missed ───────────────────

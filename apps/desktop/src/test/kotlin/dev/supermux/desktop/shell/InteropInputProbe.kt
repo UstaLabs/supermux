@@ -157,7 +157,7 @@ fun main() {
                                 modifier = Modifier.padding(16.dp),
                             )
                         }
-                        // Stand-in for JediTerm: a heavyweight Swing interop child.
+                        // Stand-in for a real pane: a heavyweight Swing interop child.
                         SwingPanel(
                             background = Color(0xFF7B1FA2),
                             modifier = Modifier.fillMaxWidth().height(560.dp),

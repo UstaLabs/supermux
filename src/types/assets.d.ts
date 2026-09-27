@@ -20,6 +20,28 @@ declare module "*/relay/frpc-embedded" {
   export default path
 }
 
+// The zmx bundle's three committed slots (the patched daemon, the framed broker
+// helper, and their manifest), filled by scripts/build-binary.sh before the
+// compile and restored after it. All three are extension-LESS on purpose: the
+// manifest is JSON, and with a `.json` name tsc resolves it through
+// resolveJsonModule and types the import as the parsed object while bun — which
+// honours the `file` attribute — hands back a path string. Same file, two
+// disagreeing types, and only one of them runs.
+declare module "*/zmx/embedded/zmx" {
+  const path: string
+  export default path
+}
+
+declare module "*/zmx/embedded/mux-zmx-helper" {
+  const path: string
+  export default path
+}
+
+declare module "*/zmx/embedded/manifest" {
+  const path: string
+  export default path
+}
+
 // Memory seed templates imported with `with { type: "text" }`. Bun returns
 // the file content as a string (source mode: reads the file; compiled: bundled
 // bytes). tsc has no built-in knowledge of the "text" import attribute.

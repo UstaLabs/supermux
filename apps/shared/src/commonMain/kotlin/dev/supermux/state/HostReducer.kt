@@ -1,5 +1,6 @@
 package dev.supermux.state
 
+import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ServerFrame
@@ -30,12 +31,14 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             },
             projects = frame.projects,
             projectCatalogKnown = catalogKnown,
-            messages = frame.logs,
-            activity = frame.activity,
+            messages = snapshotMessages(state, frame),
+            completeLogs = snapshotCompleteLogs(state, frame),
+            activity = frame.activity + keptExtras(state.activity, frame),
+            completeExtras = frame.partialExtras?.let { frame.logs.keys - it.toSet() } ?: frame.logs.keys,
             bgTasks = frame.bgTasks,
             agentState = frame.agentState,
-            commands = frame.commands,
-            commandsResolved = frame.commandsResolved,
+            commands = frame.commands + keptExtras(state.commands, frame),
+            commandsResolved = frame.commandsResolved + keptExtras(state.commandsResolved, frame),
             lastRead = lastRead,
             finishJobs = frame.sessions
                 .mapNotNull { s -> s.finish_job?.let { s.id to it } }
@@ -80,7 +83,9 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         // so a stale `dead`/`working` entry left behind here would misreport the healthy resumed
         // session (a dead badge on a live agent) until the agent next changed state.
         val hadAgent = state.agentState.containsKey(frame.id) || state.agentErrors.containsKey(frame.id)
-        if (state.sessions.none { it.id == frame.id } && !state.bgTasks.containsKey(frame.id) && !hadAgent) {
+        if (state.sessions.none { it.id == frame.id } && !state.bgTasks.containsKey(frame.id) && !hadAgent &&
+            frame.id !in state.completeLogs && frame.id !in state.completeExtras
+        ) {
             state
         } else {
             state.copy(
@@ -90,6 +95,8 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 agentErrors = state.agentErrors - frame.id,
                 requests = state.requests - frame.id,
                 closedRequests = state.closedRequests - frame.id,
+                completeLogs = state.completeLogs - frame.id,
+                completeExtras = state.completeExtras - frame.id,
             )
         }
     }
@@ -330,4 +337,61 @@ private fun markLspState(
             }
         },
     )
+}
+
+/**
+ * A loaded log survives a snapshot that only carries its tail, as long as the tail's newest entry
+ * is already in it — nothing arrived while we were away, so the page is still whole. The tail's
+ * copy of that entry wins (it may have been edited). Otherwise the tail replaces it.
+ */
+private fun keepsLoadedLog(state: HostState, id: String, tail: List<LogEntry>): Boolean {
+    if (id !in state.completeLogs) return false
+    val newest = tail.lastOrNull() ?: return false
+    return state.messages[id]?.any { it.id == newest.id } == true
+}
+
+private fun snapshotMessages(state: HostState, frame: ServerFrame.Snapshot): Map<String, List<LogEntry>> {
+    val partial = frame.partialLogs?.toSet() ?: return frame.logs
+    return frame.logs.mapValues { (id, log) ->
+        if (id !in partial || !keepsLoadedLog(state, id, log)) {
+            log
+        } else {
+            val newest = log.last()
+            state.messages.getValue(id).map { if (it.id == newest.id) newest else it }
+        }
+    }
+}
+
+private fun snapshotCompleteLogs(state: HostState, frame: ServerFrame.Snapshot): Set<String> {
+    val partial = frame.partialLogs?.toSet() ?: return frame.logs.keys
+    return frame.logs.filter { (id, log) -> id !in partial || keepsLoadedLog(state, id, log) }.keys
+}
+
+/**
+ * What we already held for sessions a trimmed snapshot sent without extras — shown (possibly a
+ * little stale) until the chat's own fetch replaces it, so an open chat never blanks on reconnect.
+ */
+private fun <V> keptExtras(held: Map<String, V>, frame: ServerFrame.Snapshot): Map<String, V> {
+    val trimmed = frame.partialExtras ?: return emptyMap()
+    return trimmed.filter { it in frame.logs && it in held }.associateWith { held.getValue(it) }
+}
+
+/**
+ * Fetched activity plus live `activity_append`s that landed while the fetch was in flight —
+ * those carry a higher broker `seq` than anything in the fetched list.
+ */
+fun mergeFetchedActivity(fetched: List<ActivityEvent>, current: List<ActivityEvent>): List<ActivityEvent> {
+    val newest = fetched.mapNotNull { it.seq }.maxOrNull() ?: return if (fetched.isEmpty()) current else fetched
+    return fetched + current.filter { (it.seq ?: Int.MIN_VALUE) > newest }
+}
+
+/**
+ * A fetched history page plus whatever the live buffer gained while the fetch was in flight:
+ * entries newer than the page's newest, and optimistic `local-` bubbles. Everything else in the
+ * buffer (the snapshot tail) is already inside the page.
+ */
+fun mergeFetchedLog(fetched: List<LogEntry>, current: List<LogEntry>): List<LogEntry> {
+    val newestTs = fetched.lastOrNull()?.ts ?: return current
+    val known = fetched.mapTo(HashSet()) { it.id }
+    return fetched + current.filter { it.id !in known && (it.ts > newestTs || it.id.startsWith("local-")) }
 }

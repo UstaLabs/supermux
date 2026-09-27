@@ -26,25 +26,29 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
-import com.jediterm.terminal.ui.JediTermWidget
-import com.jediterm.terminal.ui.settings.DefaultSettingsProvider
 import dev.supermux.desktop.editor.JcefRuntime
 import dev.supermux.desktop.editor.JcefState
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Container
+import java.awt.Font
 import javax.swing.JPanel
+import javax.swing.JTextArea
 
 /**
- * Probe 3: does interop blending survive the app's REAL heavyweight children?
+ * Probe 3: does interop blending survive the app's REAL heavyweight child?
  *
  * Probe 2 proved blending works on Metal for a plain Swing JTextArea. That is
- * the EASY case. The two children that actually matter are:
- *   • JediTermWidget — pure Swing, but a big custom-painted canvas.
- *   • JCEF — a WINDOWED (not offscreen) Chromium, i.e. a real native NSView
- *     child. Nothing about probe 2 says Compose can paint over THAT.
+ * the EASY case. The child that actually matters is JCEF — a WINDOWED (not
+ * offscreen) Chromium, i.e. a real native NSView child. Nothing about probe 2
+ * says Compose can paint over THAT.
  *
- * So this hosts both for real and puts a dialog + a dropdown across both.
+ * The probe originally hosted a second real child, a custom-painted terminal widget; Plan 4
+ * retired that library and the terminal is drawn by Compose now, so the big custom-painted
+ * canvas is back to being the heavyweight Swing STAND-IN probe 2 uses — the interop path is
+ * what is under test, not the widget. JCEF is hosted for real.
+ *
+ * So this puts a dialog + a dropdown across both.
  *
  * Isolation: run with XDG_CONFIG_HOME pointed at a scratch directory. The probe launches with the
  * same pinned JBR/JCEF runtime as the app but gets its own CEF cache, so it cannot disturb a running
@@ -109,13 +113,17 @@ fun main() {
             MaterialTheme {
                 Box(Modifier.fillMaxSize().background(Color(0xFF101418))) {
                     Column(Modifier.fillMaxSize()) {
-                        Text("── JEDITERM (real widget) below ──", color = Color.White,
+                        Text("── HEAVYWEIGHT SWING (stand-in) below ──", color = Color.White,
                              modifier = Modifier.padding(4.dp))
                         SwingPanel(
                             background = Color.Black,
                             modifier = Modifier.fillMaxWidth().height(260.dp),
                             factory = {
-                                JediTermWidget(80, 18, DefaultSettingsProvider())
+                                JTextArea("HEAVYWEIGHT SWING PANEL\n".repeat(18)).apply {
+                                    font = Font(Font.MONOSPACED, Font.BOLD, 14)
+                                    background = java.awt.Color.BLACK
+                                    foreground = java.awt.Color.WHITE
+                                }
                             },
                         )
                         Text("── JCEF (real windowed Chromium) below ──", color = Color.White,
@@ -158,7 +166,7 @@ fun main() {
                         }
                     }
 
-                    // Dropdown positioned to straddle the JediTerm surface.
+                    // Dropdown positioned to straddle the heavyweight Swing surface.
                     var menuOpen by remember { mutableStateOf(true) }
                     Box(Modifier.padding(start = 60.dp, top = 90.dp)) {
                         // onDismissRequest is deliberately a NO-OP: under layers.type=WINDOW a popup
@@ -217,7 +225,7 @@ fun main() {
 private fun snapshotHeavyweights(root: Component) {
     fun walk(c: Component, out: MutableList<Component>) {
         val n = c.javaClass.name
-        if (n.contains("JediTermWidget") || n.contains("CefBrowser")) out += c
+        if (n.contains("JTextArea") || n.contains("CefBrowser")) out += c
         if (c is Container) c.components.forEach { walk(it, out) }
     }
     val targets = mutableListOf<Component>()

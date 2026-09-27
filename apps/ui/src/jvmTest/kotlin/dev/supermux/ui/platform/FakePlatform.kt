@@ -8,8 +8,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import dev.supermux.net.ByteArrayChunkSource
-import dev.supermux.net.CursorPos
-import dev.supermux.net.DisplayOp
 import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.TerminalClient
 import dev.supermux.ui.display.VideoSurfaceFactory
@@ -17,7 +15,6 @@ import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.editor.engine.UnavailableEditorEngineFactory
 import androidx.compose.runtime.remember
 import dev.supermux.ui.terminal.LazyTerminalClient
-import dev.supermux.ui.terminal.PredictionSink
 import dev.supermux.ui.terminal.TerminalKeySink
 import dev.supermux.ui.terminal.TerminalSurface
 import dev.supermux.ui.terminal.TerminalViewFactory
@@ -117,7 +114,6 @@ internal class FakeTerminalViewFactory(
     /** Every mount ever, in order (a disposed surface stays here). */
     val mounts = mutableListOf<String>()
     var lastActive: Boolean? = null
-    val predictions = FakePredictionSink()
     /** Bytes the surface's key sink wrote to the pty, in press order. */
     val sent = mutableListOf<String>()
     /** The surfaces handed out, so a test can assert each pane got its OWN sink. */
@@ -152,24 +148,6 @@ internal class FakeTerminalSurface(
             onDispose { factory.mounted.remove("terminal") }
         }
         Box(modifier.fillMaxSize().testTag("fake_terminal")) { Text("terminal") }
-    }
-}
-
-/** Records the ops a prediction pipeline renders, and the cursor it was told to read. */
-internal class FakePredictionSink(
-    override val available: Boolean = true,
-    var cursor: CursorPos = CursorPos(0, 0),
-) : PredictionSink {
-    val rendered = mutableListOf<DisplayOp>()
-    var cursorReads = 0
-
-    override fun cursor(): CursorPos {
-        cursorReads++
-        return cursor
-    }
-
-    override fun render(ops: List<DisplayOp>) {
-        rendered += ops
     }
 }
 

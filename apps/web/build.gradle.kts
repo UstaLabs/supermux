@@ -31,6 +31,9 @@ kotlin {
             testTask {
                 useKarma { useChromeHeadless() }
             }
+            // Karma serves the engine `.wasm` as `application/wasm` — see
+            // web/karma.config.d/terminal-wasm.js, which is why the streaming compile the broker
+            // serves is the one the tests take too.
         }
         // No `applyBinaryen()` here on purpose: on KGP 2.3.x calling it is a hard ERROR
         // ("Binaryen is enabled by default. This call is redundant. Scheduled for removal in
@@ -53,12 +56,6 @@ kotlin {
                 implementation(libs.serialization.json)
                 // kotlinx.browser / org.w3c — no longer in the wasm stdlib.
                 implementation(libs.kotlinx.browser)
-                // The terminal pane. KGP resolves these through its own yarn workspace
-                // (build/wasm/node_modules) and webpack bundles them into app.js; the stylesheet is
-                // NOT bundled, so `stageForBroker` copies xterm.css to the root of the served tree.
-                implementation(npm("@xterm/xterm", "5.5.0"))
-                implementation(npm("@xterm/addon-fit", "0.10.0"))
-                implementation(npm("@xterm/addon-webgl", "0.18.0"))
             }
         }
         wasmJsTest {
@@ -75,6 +72,60 @@ kotlin {
     }
 }
 
+// ── The terminal engine's browser assets ────────────────────────────────────────────────────
+//
+// MEASURED (terminal-core/consumer-smoke, 2026-09-22) and hit here for real in Plan 4 Task 4: the
+// Kotlin/Wasm toolchain does NOT copy a DEPENDENCY klib's resources next to the consumer's
+// compiled module, so webpack fails the whole bundle with
+//   Module not found: Error: Can't resolve './terminal-loader.mjs'
+// — and it fails even though nothing in the app has run yet, because `@file:JsModule` is resolved
+// at BUNDLE time. Every browser host of terminal-core therefore re-exports the two files the
+// package ships inside its klib as its own wasmJs resources; `:terminal-sample` does the same, and
+// this is the line that made `:web` a browser host of it.
+//
+// It is also what makes the DEFAULT wasm URL correct. Once `supermux-terminal.wasm` sits beside
+// the loader, webpack recognises the loader's `new URL("./supermux-terminal.wasm",
+// import.meta.url)` and emits the binary as an asset, `stageForBroker` content-hashes it into
+// `assets/` with everything else and rewrites the reference — so no host has to pass
+// `wasmAssetUrl`, and there is no second place for the hash to go stale.
+//
+// The bytes come from `:terminal-core:stageWasmResources`, the task that verifies
+// `build/wasm/supermux-terminal.wasm` against its manifest (sha256 + size + ABI) before staging.
+val terminalCoreWasmResources: File =
+    project(":terminal-core").projectDir.resolve("build/gradle/generated/wasmResources")
+
+val stageTerminalWasmAssets by tasks.registering(Copy::class) {
+    description = "Re-export terminal-loader.mjs + supermux-terminal.wasm as this app's wasmJs resources."
+    dependsOn(":terminal-core:stageWasmResources")
+    from(terminalCoreWasmResources)
+    into(layout.buildDirectory.dir("generated/terminalWasmAssets"))
+}
+kotlin.sourceSets.getByName("wasmJsMain").resources.srcDir(stageTerminalWasmAssets)
+kotlin.sourceSets.getByName("wasmJsTest").resources.srcDir(stageTerminalWasmAssets)
+
+// `supermux-terminal.wasm` reaches the distribution TWICE, and that is the design working, not a
+// mistake: once as the wasmJs resource above (which is what lets webpack RESOLVE the loader's
+// `new URL(...)` at bundle time) and once as the asset webpack EMITS from that same URL. Same
+// file, same bytes, two producers — so the distribution copy has to be told that a duplicate is
+// expected instead of failing the build with "no duplicate handling strategy has been set".
+// EXCLUDE rather than INCLUDE: with identical bytes either is correct, and keeping the first
+// makes the outcome independent of the order the copy happens to visit its sources in.
+tasks.named<Sync>("wasmJsBrowserDistribution") {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// The same two environment facts `:terminal-core` and `:terminal-sample` need, now that `:web`'s
+// bundle carries the engine and its browser tests load a `.wasm` too. Without CHROME_BIN the task
+// fails on a host that has Chrome under a name Karma does not guess; with a D-Bus session bus,
+// headless Chrome can stall every http(s) navigation on a headless host (file: URLs still load),
+// which hangs Karma's capture.
+tasks.withType<org.jetbrains.kotlin.gradle.targets.js.testing.KotlinJsTest>().configureEach {
+    if (System.getenv("CHROME_BIN") == null && File("/usr/bin/google-chrome").canExecute()) {
+        environment("CHROME_BIN", "/usr/bin/google-chrome")
+    }
+    environment("DBUS_SESSION_BUS_ADDRESS", "disabled:")
+}
+
 // ── Staging for the broker ──────────────────────────────────────────────────────────────────
 //
 // The broker serves src/channels/web/static disk-first with `/assets/*` immutable and everything
@@ -84,14 +135,46 @@ kotlin {
 val brokerStaticDir: File = rootProject.projectDir.resolve("../src/channels/web/static")
 val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 
-// Ceiling on the gzipped download (spec §8): app + skiko wasm + loader js under assets/.
-// MEASURED on this branch, gzipped: skiko.wasm 3.18 MiB (the immovable floor), the app wasm — all
-// of `:ui` + `:shared` — 2.58 MiB, the webpack loader app.js 0.20 MiB; 5.94 MiB (6085 KiB) total,
-// of which xterm.js is 0.10 MiB — the same tree measured 5981 KiB before task 3 bundled it.
-// 8 MiB is a bloat catch with roughly 2 MiB of headroom for the
-// remaining panes of this plan — NOT a target to grow into. The staged `editor/` bundle
-// (CodeMirror, 1.3 MB raw) sits outside assets/ and is deliberately not counted: it is a separate,
-// lazily-loaded page.
+// Ceiling on the gzipped download (spec §8): the wasm/js/mjs files directly under assets/ — which
+// is what the guard below actually sums, top level only, so fonts and composeResources are outside
+// it.
+//
+// RE-MEASURED 2026-09-23, after the Ghostty terminal replaced xterm.js (numbers from this task's
+// own `stageForBroker` run, which prints the same total it checks):
+//
+//     skiko.wasm                3.18 MiB   the immovable floor
+//     supermux-apps-web.wasm    3.00 MiB   all of `:ui` + `:shared` (was 2.58)
+//     supermux-terminal.wasm    0.27 MiB   the engine, in place of ~0.10 MiB of xterm.js
+//     app.js                    0.12 MiB   the webpack loader (was 0.20)
+//     terminal-loader.mjs      ~0.00 MiB
+//     ------------------------------------
+//     total                     6.57 MiB   (6724 KiB)
+//
+// So the headroom under the 8 MiB ceiling is 1.43 MiB, not the ~2 MiB the previous note claimed:
+// the cutover cost ~0.6 MiB net, most of it in the app wasm rather than in the engine module. It
+// remains a bloat catch, NOT a target to grow into — one more feature the size of this one would
+// put the ceiling in reach.
+//
+// The staged `editor/` bundle (CodeMirror, 1.3 MB raw) sits outside assets/ and is deliberately not
+// counted: it is a separate, lazily-loaded page.
+//
+// NEITHER ARE THE FONTS, and that is now worth a number rather than a clause. `assets.listFiles()`
+// below is top level only, so everything under `assets/composeResources/` is outside this ceiling
+// by construction:
+//
+//     geist * 6 (`:ui`, the app's type scale)        810 KB raw   369 KiB gzip
+//     jetbrains_mono * 3 (`:terminal-compose`)       829 KB raw   382 KiB gzip   ← added 2026-09-24
+//     -------------------------------------------------------------------------
+//     fonts, first load                            1 638 KB raw   751 KiB gzip
+//
+// The terminal's three faces are NEW (the surface used to ask the platform for
+// `FontFamily.Monospace`, which resolves to nothing in the browser — see
+// `terminal-compose/TerminalFont.kt`). They are fetched when a terminal first mounts, not with the
+// shell, and then served `immutable` like every other hashed asset. They add NOTHING to the sum
+// this guard checks; the figures above are measured on the files themselves (`gzip -9`), so the
+// headroom under the 8 MiB ceiling is still the 1.43 MiB measured on 2026-09-23 plus whatever the
+// Kotlin of that change costs in the app wasm — re-read the `stageForBroker:` line of the next
+// staged build for the exact total.
 val maxGzipBytes = 8L * 1024 * 1024
 
 fun sha8(bytes: ByteArray): String =
@@ -104,14 +187,12 @@ fun gzipSize(bytes: ByteArray): Long {
 }
 
 // Extra sources `stageForBroker` copies in beside the webpack dist. Hoisted out of the task action
-// so they can be declared as INPUTS: editing the CodeMirror bundle or bumping xterm must re-run the
-// task, not leave a stale copy published under an up-to-date check.
+// so they can be declared as INPUTS: editing the CodeMirror bundle must re-run the task, not leave
+// a stale copy published under an up-to-date check.
 //
-// xterm.js's stylesheet is a real npm file that webpack never bundles, so it is lifted straight out
-// of KGP's yarn workspace. The editor bundle's single source of truth is the committed android
-// assets dir (desktop reads the same files).
-val xtermCssFile: File = rootProject.layout.buildDirectory
-    .file("wasm/node_modules/@xterm/xterm/css/xterm.css").get().asFile
+// The editor bundle's single source of truth is the committed android assets dir (desktop reads
+// the same files). There is no stylesheet to lift out of KGP's yarn workspace any more — the
+// terminal was the only npm package this app had, and the Compose renderer needs no CSS.
 val editorSrcDir: File = rootProject.projectDir.resolve("android/src/main/assets/editor")
 
 // NOT under `src/wasmJsMain/resources/`: everything there is copied to the webpack dist root, where
@@ -135,7 +216,6 @@ val stageForBroker by tasks.registering {
     // `files(...).optional()` rather than `file(...)`: a missing input must fail in the task action
     // with its own explanatory message, not as an opaque Gradle snapshotting error. The shim is
     // genuinely optional until task 4 creates it.
-    inputs.files(xtermCssFile).withPropertyName("xtermCss").optional()
     inputs.dir(editorSrcDir).withPropertyName("editorBundle")
     inputs.files(editorShimFile).withPropertyName("editorShim").optional()
     // `.optional()` like the editor shim above: a missing `pwa/` must fail in the task action
@@ -205,12 +285,6 @@ val stageForBroker by tasks.registering {
             dst.parentFile.mkdirs()
             if (f.name == "index.html") dst.writeText(rewrite(f.readText(), "")) else f.copyTo(dst, overwrite = true)
         }
-
-        // xterm.js's stylesheet, at the root of the served tree (no-cache, ~5 KB); index.html links
-        // it by name. Deliberately unhashed: cheap to revalidate, and one fewer rewrite rule. Fail
-        // loudly if the dependency moved rather than shipping a terminal with no CSS.
-        check(xtermCssFile.isFile) { "xterm.css not found at $xtermCssFile — did the npm dependency change?" }
-        xtermCssFile.copyTo(staging.resolve("xterm.css"), overwrite = true)
 
         // The CodeMirror editor bundle, staged at `editor/` in the ROOT, not under assets/: the page
         // references `cm6.js` by a relative bare name, so content-hashing would break it. 1.3 MB

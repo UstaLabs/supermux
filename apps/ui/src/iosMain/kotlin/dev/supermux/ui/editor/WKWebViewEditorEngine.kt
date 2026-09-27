@@ -2,9 +2,11 @@
 // cm6 bundle Android loads from its assets and desktop loads under JCEF, and speaking the SAME `cm*`
 // JS built by the shared [EditorPushPlanner] and the JS builders in `EditorBridge.kt`.
 //
-// ── Why this is Kotlin/Native and the terminal is Swift ──────────────────────
-// The terminal is Swift-vended because SwiftTerm has no Kotlin binding and ~470 lines of iOS input
-// policy sit on top of it. The editor has the opposite shape: the bridge is ALREADY pure shared
+// ── Why this is Kotlin/Native (and not, as the terminal once was, Swift) ─────
+// The terminal used to be Swift-vended: its emulator had no Kotlin binding and ~470 lines of iOS
+// input policy sat on top of it. (Plan 4 removed even that — the terminal is the shared Compose
+// renderer on every host now, and this is the only interop surface iOS has left.)
+// The editor always had the opposite shape: the bridge is ALREADY pure shared
 // Kotlin (`bridgeShimJs`, `initScript`, `parseBridgeEvent`, `EditorPushPlanner` — all unit-tested),
 // the bundle's LSP hook is already `window.webkit.messageHandlers.lsp` (it was written FOR WKWebView
 // and Android is the one that shims it), and `WKWebView` is a plain ObjC class cinterop covers

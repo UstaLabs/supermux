@@ -168,21 +168,6 @@ interface IosBridge {
     /** Withdraw already-delivered notifications for [sessionId] (the user just opened it). */
     fun cancelNotificationsFor(sessionId: String)
 
-    // ── Terminal (H5) ───────────────────────────────────────────────────────────────────────
-
-    /**
-     * The SwiftTerm view vendor, or null on a host that has none (see [NoopIosBridge]).
-     *
-     * Nullable rather than absent so `IosPlatform.terminalView()` can fall back to
-     * `UnavailableTerminalViewFactory` — the shared "this client has no terminal" hint — instead of
-     * a factory that claims to be available and then cannot build anything.
-     *
-     * It is a member of THIS interface rather than a second bridge object because Swift hands
-     * Compose exactly one bridge; [IosTerminalVendor] is the per-terminal factory hanging off it,
-     * and [IosTerminalHandle] the per-terminal instance.
-     */
-    fun terminalVendor(): IosTerminalVendor?
-
     // ── System (H2) ─────────────────────────────────────────────────────────────────────────
 
     /** Open [url] with `UIApplication.openURL`. Fire-and-forget. */
@@ -288,8 +273,6 @@ object NoopIosBridge : IosBridge {
 
     override fun registerPushIfPaired() = Unit
     override fun cancelNotificationsFor(sessionId: String) = Unit
-
-    override fun terminalVendor(): IosTerminalVendor? = null
 
     override fun openUrl(url: String) = Unit
 

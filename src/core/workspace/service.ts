@@ -18,6 +18,14 @@ export type WorkspaceDeps = {
   resumeSession: (sessionId: string) => Promise<void>
   /** scope is "w:<workspaceId>" for a workspace terminal, or the session name/id for an agent one. */
   closeTerminal: (scope: string, terminalId: string) => Promise<void>
+  /**
+   * Every terminal in one scope at once, viewers and backing targets both.
+   *
+   * Separate from `closeTerminal` because it is not a loop over the views: the
+   * backend enumerates the running targets, so a target whose view row was
+   * lost — the exact thing that has nothing left to close it — is reaped too.
+   */
+  closeTerminalScope: (scope: string) => Promise<void>
   stopDisplay: (displayId: string) => Promise<void>
   /**
    * Registers the workspace's effective location with the project catalog. Runs
@@ -129,8 +137,37 @@ export class WorkspaceService {
     }
   }
 
-  /** Spec §9.6. Archive the workspace and every session it chats with. */
+  /**
+   * Spec §9.6. Archive the workspace, every session it chats with, and — the
+   * part that was missing — every terminal it owns.
+   *
+   * ARCHIVING USED TO LEAK A SHELL PER TERMINAL. Nothing here closed them, and
+   * nothing else would: the views stay in the database (archive is reversible,
+   * so the tab layout has to survive), so no `closeView` ever runs for them,
+   * and there is no sweeper. Under tmux that was a session left inside a server
+   * that at least had one process and one socket for all of them. Under zmx
+   * every terminal is its own DETACHED DAEMON plus its own shell, held open by
+   * nothing but themselves, surviving broker restarts, until the machine
+   * reboots or somebody notices.
+   *
+   * The scope close, not a loop over the terminal views: the backend
+   * enumerates what is actually RUNNING under `w:<id>`, so a target whose view
+   * row was lost is reaped as well — and a lost view row is precisely the case
+   * where nothing else ever will.
+   *
+   * Terminals first, and a failure is not swallowed. A shell that will not die
+   * leaves the workspace un-archived and the error at the caller, which is the
+   * same contract `closeView` keeps: the client can retry, rather than being
+   * told the work is put away while it is still running. Archiving a workspace
+   * whose terminals are still alive is the bug this fixes, so it must not be
+   * the fallback when the fix fails.
+   *
+   * Session-scoped terminal views inside this workspace are NOT closed here.
+   * They belong to the session, and `archiveSession` → `killSession` →
+   * `TerminalManager.killAllForSession` already ends them.
+   */
   async archiveWorkspace(workspaceId: string): Promise<void> {
+    await this.deps.closeTerminalScope(workspaceScope(workspaceId))
     for (const sessionId of this.store.chatSessionIds(workspaceId)) {
       await this.deps.archiveSession(sessionId)
     }

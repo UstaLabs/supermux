@@ -2,24 +2,23 @@ package dev.supermux.ui.host
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.ui.input.pointer.positionChanged
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.FilterChip
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -35,12 +34,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -49,19 +47,16 @@ import dev.supermux.host.HostView
 import dev.supermux.host.formatLastSeen
 import dev.supermux.host.hostDotArgb
 import dev.supermux.proto.SessionInfo
-import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
-import dev.supermux.ui.adaptive.isSecondaryButtonPress
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import kotlin.time.Clock
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Host badge visuals for the merged fleet list (spec §5): a stable per-host color dot, a compact
- * per-row badge, the `All · <host…> · +` filter chip row, and the one-host scope picker.
+ * per-row badge, the sidebar footer's [HostSwitcher], and the one-host scope picker.
  *
  * The pure slot/label/filter logic AND the OKLCH dot palette live in the shared
  * [dev.supermux.host] FleetModel (unit-tested on the JVM, reused verbatim by iOS); this file is
@@ -186,22 +181,28 @@ fun HostScopePicker(
 }
 
 /**
- * The `All · <host…> · +` filter chip row (spec §5). Each host chip carries its color dot and a
- * live session count; an OFFLINE host is greyed and carries its last-seen; the trailing `+` chip
- * adds a host. [selected] is a recordId or null (= All).
+ * The host the [HostSwitcher] names: the filtered host, else the only one. Null reads "All hosts".
+ * A stale filter (a forgotten host's id) falls through the same way, so the pill never names a
+ * host that is gone.
+ */
+fun switcherHost(hosts: List<HostView>, filter: String?): HostView? =
+    hosts.firstOrNull { it.recordId == filter } ?: hosts.singleOrNull()
+
+/**
+ * The host switch at the left of the sidebar footer: the current host's dot and name (or "All
+ * hosts") with a ⌄, opening a menu of `All hosts`, every host with its live session count (an
+ * OFFLINE host is greyed and carries its last-seen), Rename / Forget for the selected host, and
+ * `Add host`. [selected] is a recordId or null (= All).
  *
- * The Rename / Forget menu ([onRenameHost] / [onForgetHost]) opens the way the machine expects:
- * a LONG-PRESS where there is no pointing device, a RIGHT-CLICK where there is one. Both paths are
- * always wired — a docked tablet with a mouse gets the desktop gesture without losing the touch one
- * for its screen — and they key on [LocalPointerAvailable], not the keyboard-inclusive input mode.
+ * It shows from ONE host up: a device that has paired a single host is exactly the one that needs
+ * a visible way to add the next.
  *
  * [nowMs] is a parameter so the offline "· 5m ago" suffix is assertable; it defaults to the wall
  * clock through the multiplatform `kotlin.time.Clock` — the stdlib one every module in this repo
  * now uses; there is no platform wall-clock call in commonMain.
  */
-
 @Composable
-fun HostFilterChips(
+fun HostSwitcher(
     hosts: List<HostView>,
     sessions: List<SessionInfo>,
     sessionHost: Map<String, String>,
@@ -213,124 +214,90 @@ fun HostFilterChips(
     nowMs: Long = Clock.System.now().toEpochMilliseconds(),
     modifier: Modifier = Modifier,
 ) {
+    if (hosts.isEmpty()) return
     val cs = MaterialTheme.colorScheme
-    val pointer = LocalPointerAvailable.current
-    // Host-actions menu: which chip's menu is open, and the target of the rename/forget dialogs.
-    var menuFor by remember { mutableStateOf<String?>(null) }
+    val current = switcherHost(hosts, selected)
+    var expanded by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<HostView?>(null) }
     var renameText by remember { mutableStateOf("") }
     var forgetTarget by remember { mutableStateOf<HostView?>(null) }
 
-    Row(
-        modifier
-            .testTag("host_filter_chips")
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        FilterChip(
-            selected = selected == null,
-            onClick = { onSelect(null) },
-            label = { Text("All") },
-            modifier = Modifier.testTag("host_chip_all").pointerHoverIcon(PointerIcon.Hand),
-        )
-        hosts.forEach { h ->
-            val count = sessions.count { sessionHost[it.id] == h.recordId }
-            val lastSeen = if (!h.online) formatLastSeen(nowMs, h.lastSeenAt) else ""
-            Box {
-                // The gesture wrapper is a PARENT of the chip, not a sibling overlay: a sibling
-                // laid over the chip wins hit-testing outright and would eat the primary click,
-                // taking the chip's click semantics (keyboard, switch access, screen readers) with
-                // it. As a parent it watches the INITIAL pointer pass — before the chip's own
-                // clickable — and consumes nothing unless the gesture really became a long press.
-                Box(
-                    Modifier
-                        .testTag("host_chip_press_${h.recordId}")
-                        .pointerInput(h.recordId) {
-                            awaitEachGesture {
-                                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                                val settled = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-                                    do {
-                                        // Final pass: a scroll of the chip row consumes the MOVE on Main (the
-                                        // chip's own clickable only consumes the down), so a consumed
-                                        // position change means the gesture became a drag — bail like
-                                        // combinedClickable did instead of opening the menu later.
-                                        val event = awaitPointerEvent(PointerEventPass.Final)
-                                        if (event.changes.any { it.isConsumed && it.positionChanged() }) return@withTimeoutOrNull Unit
-                                    } while (event.changes.any { it.pressed })
-                                }
-                                if (settled != null) return@awaitEachGesture // short tap / drag → not ours
-                                menuFor = h.recordId
-                                // Swallow the tail of THIS gesture so opening the menu does not
-                                // also select the host.
-                                do {
-                                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                                    event.changes.forEach { it.consume() }
-                                } while (event.changes.any { it.pressed })
-                            }
-                        }
-                        .then(
-                            // Pointer gesture: secondary-button press (through the
-                            // `isSecondaryButtonPress` seam, because Compose declares
-                            // `isSecondaryPressed` per platform). Only installed where a pointing
-                            // device exists, so a phone never carries a dead detector.
-                            if (pointer) {
-                                Modifier.pointerInput(h.recordId) {
-                                    awaitPointerEventScope {
-                                        while (true) {
-                                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                                            if (event.isSecondaryButtonPress()) {
-                                                event.changes.forEach { it.consume() }
-                                                menuFor = h.recordId
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                Modifier
-                            },
-                        ),
-                ) {
-                    FilterChip(
-                        selected = selected == h.recordId,
-                        // The chip keeps its own onClick: it is what carries the click semantics a
-                        // keyboard / switch-access / screen-reader activation goes through.
-                        onClick = { onSelect(h.recordId) },
-                        leadingIcon = { HostDot(h.colorIndex, size = 9.dp) },
-                        label = {
-                            Text(
-                                buildString {
-                                    append(h.shortLabel)
-                                    if (count > 0) append("  $count")
-                                    if (lastSeen.isNotEmpty()) append("  · $lastSeen")
-                                },
-                                color = if (h.online) cs.onSurface else cs.onSurfaceVariant.copy(alpha = 0.7f),
-                            )
-                        },
-                        modifier = Modifier.testTag("host_chip_${h.recordId}").pointerHoverIcon(PointerIcon.Hand),
-                    )
-                }
-                DropdownMenu(expanded = menuFor == h.recordId, onDismissRequest = { menuFor = null }) {
-                    DropdownMenuItem(
-                        text = { Text("Rename") },
-                        onClick = { menuFor = null; renameText = h.displayLabel; renameTarget = h },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Forget", color = cs.error) },
-                        onClick = { menuFor = null; forgetTarget = h },
-                    )
-                }
+    Box(modifier) {
+        Row(
+            Modifier
+                .height(30.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { expanded = true }
+                .pointerHoverIcon(PointerIcon.Hand)
+                .padding(horizontal = 8.dp)
+                .testTag("host_switcher"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (current != null) {
+                HostDot(current.colorIndex, size = 8.dp)
+            } else {
+                Icon(Icons.Filled.Dns, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
             }
+            Text(
+                current?.displayLabel ?: "All hosts",
+                modifier = Modifier.weight(1f, fill = false),
+                color = if (current == null || current.online) cs.onSurface else cs.onSurfaceVariant.copy(alpha = 0.7f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Icon(Icons.Filled.ExpandMore, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
         }
-        // Add-host chip: opens the QR / paste / typed-URL flow.
-        FilterChip(
-            selected = false,
-            onClick = onAddHost,
-            leadingIcon = { Icon(Icons.Filled.Add, contentDescription = "Add host", modifier = Modifier.size(16.dp)) },
-            label = { Text("Add") },
-            modifier = Modifier.testTag("host_chip_add").pointerHoverIcon(PointerIcon.Hand),
-        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (hosts.size > 1) {
+                DropdownMenuItem(
+                    text = { Text("All hosts") },
+                    leadingIcon = {
+                        Icon(Icons.Filled.Dns, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
+                    },
+                    trailingIcon = { MenuTrailing(sessions.size, checked = current == null) },
+                    onClick = { expanded = false; onSelect(null) },
+                    modifier = Modifier.testTag("host_switcher_all"),
+                )
+            }
+            hosts.forEach { h ->
+                val count = sessions.count { sessionHost[it.id] == h.recordId }
+                val lastSeen = if (!h.online) formatLastSeen(nowMs, h.lastSeenAt) else ""
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            h.displayLabel + if (!h.online) " · ${lastSeen.ifEmpty { "offline" }}" else "",
+                            color = if (h.online) Color.Unspecified else cs.onSurfaceVariant.copy(alpha = 0.7f),
+                        )
+                    },
+                    leadingIcon = { HostDot(h.colorIndex, size = 9.dp) },
+                    trailingIcon = { MenuTrailing(count, checked = current?.recordId == h.recordId) },
+                    onClick = { expanded = false; onSelect(h.recordId) },
+                    modifier = Modifier.testTag("host_switcher_${h.recordId}"),
+                )
+            }
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            if (current != null) {
+                DropdownMenuItem(
+                    text = { Text("Rename ${current.displayLabel}…") },
+                    onClick = { expanded = false; renameText = current.displayLabel; renameTarget = current },
+                    modifier = Modifier.testTag("host_switcher_rename"),
+                )
+                DropdownMenuItem(
+                    text = { Text("Forget ${current.displayLabel}…", color = cs.error) },
+                    onClick = { expanded = false; forgetTarget = current },
+                    modifier = Modifier.testTag("host_switcher_forget"),
+                )
+            }
+            DropdownMenuItem(
+                text = { Text("Add host…") },
+                leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                onClick = { expanded = false; onAddHost() },
+                modifier = Modifier.testTag("host_switcher_add"),
+            )
+        }
     }
 
     renameTarget?.let { target ->
@@ -368,5 +335,17 @@ fun HostFilterChips(
             },
             dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text("Cancel") } },
         )
+    }
+}
+
+/** A menu row's live session count, then a check on the row that is the current scope. */
+@Composable
+private fun MenuTrailing(count: Int, checked: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (count > 0) Text("$count", color = cs.onSurfaceVariant, fontSize = 11.sp)
+        Box(Modifier.size(14.dp)) {
+            if (checked) Icon(Icons.Filled.Check, contentDescription = "Selected", tint = cs.primary, modifier = Modifier.size(14.dp))
+        }
     }
 }

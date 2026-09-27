@@ -22,7 +22,7 @@ class ContractTest {
             "sessions_reordered", "session_read",
             "walkthrough_updated", "review_comment",
             "request_open", "request_closed", "error",
-            "worktree_sizes", "worktrees_removed",
+            "worktree_sizes", "worktrees_removed", "agent_models_changed",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -66,6 +66,7 @@ class ContractTest {
                 is ServerFrame.FinishJobFrame -> {}
                 is ServerFrame.SessionGit -> {}
                 is ServerFrame.ProjectsChanged -> {}
+                ServerFrame.AgentModelsChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
                 is ServerFrame.ReviewCommentFrame -> {}
                 is ServerFrame.RequestOpen -> {}

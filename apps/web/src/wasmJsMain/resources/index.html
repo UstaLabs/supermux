@@ -23,10 +23,6 @@
   <!-- Standalone on iOS draws under the status bar (the page is already viewport-fit=cover),
        so the bar must be translucent or its opaque strip double-pads the top inset. -->
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <!-- xterm.js's own stylesheet (cell metrics, the viewport/screen stacking, selection layers).
-       Staged to the root by `stageForBroker` straight out of KGP's node_modules — webpack bundles
-       the JS but not the CSS, and the terminal renders as overlapping garbage without it. -->
-  <link rel="stylesheet" href="xterm.css">
   <style>
     html, body { margin: 0; padding: 0; height: 100%; background: #0b0b0b; color: #e6e6e6;
       font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }

@@ -59,6 +59,13 @@ echo "UPDATE-FLOW: root=$ROOT work=$WORK port=$PORT"
 # ── 1. Build two real binaries (A=old, B=new) into the workdir ───────────────
 # These are full ~95MB compiles (PWA + native pty-helper embed) — slow-ish but
 # the only way to prove the real fetch+swap on genuine binaries.
+#
+# WITHOUT the zmx bundle, deliberately. What this script proves is the update
+# CYCLE — fetch, swap, version transition, rollback — and none of it reads the
+# workspace-terminal backend. Embedding it would add a Ghostty+zmx compile to
+# each of the two builds to change nothing that is asserted here; the bundle is
+# gated where it belongs, in the release lane's smoke + asset probe.
+export SUPERMUX_SKIP_ZMX=1
 BIN_A="$WORK/supermux-linux-x64-A"
 BIN_B="$WORK/supermux-linux-x64-B"
 

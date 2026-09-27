@@ -35,6 +35,13 @@ import { detectUpdateMode } from "../../core/update/mode"
 import { resolveAndApply, restartService } from "../../core/update/apply"
 import { BUILD_COMMIT, BUILD_VERSION } from "../../shared/build-info"
 import { workspaceScope, parseScope } from "../../core/workspace/scope"
+import {
+  TerminalFrameLane,
+  decodeClientControl,
+  decodeReplyPayload,
+  dimension,
+  parseTerminalRevision,
+} from "./terminal-protocol"
 import { ProjectConflictError, ProjectNotFoundError } from "../../core/project/service"
 import { PROJECT_IMAGE_MAX_BYTES } from "../../core/project/images"
 
@@ -158,13 +165,34 @@ const MUTATING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"])
 // that won't trip on burst repaints. Tune via the perf measurement.
 const TERMINAL_BP_HIGH_WATER = 256 * 1024
 
+/** A websocket binary payload as bytes, without copying a Buffer. */
+function toBytes(msg: Buffer | ArrayBuffer): Uint8Array {
+  return msg instanceof ArrayBuffer
+    ? new Uint8Array(msg)
+    : new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength)
+}
+
 function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void
   const promise = new Promise<void>((r) => { resolve = r })
   return { promise, resolve }
 }
 
-type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
+/**
+ * One terminal SOCKET's viewer identity, and its protocol epoch.
+ *
+ * A device is not a viewer: one browser can hold two tabs on the same terminal,
+ * and until each connection carried its own id they shared a slot in
+ * `TerminalManager` — the second attach detached the first tab's backend viewer
+ * behind its back, and the first tab's eventual close then took the second
+ * tab's live viewer down with it. One id per connection, and neither tab can
+ * reach the other's viewer.
+ */
+function newTerminalViewerId(): string {
+  return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+}
+
+type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
 
 export interface SessionSnapshot {
   id?: string
@@ -207,7 +235,8 @@ export interface WebChannelOpts {
   staticDir?: string
   staticEmbedded?: Record<string, string>
   getSessionsSnapshot: () => SessionSnapshot[]
-  getSessionLog: (name: string) => unknown[]
+  /** Newest `limit` entries (the store's default when omitted), oldest first. */
+  getSessionLog: (name: string, limit?: number) => unknown[]
   getSessionActivity?: (name: string) => unknown[]
   getSessionBgTasks?: (name: string) => unknown[]
   setMute: (name: string, muted: boolean) => void
@@ -228,6 +257,8 @@ export interface WebChannelOpts {
   // Session-less reasoning levels for the New Session launcher (no session id yet):
   // resolves the levels an agent+model offers before spawn. Codex's are per-model.
   getReasoningLevels?: (agent: AgentKind, model?: string) => { agent: string; levels: { id: string; description?: string }[]; visible: boolean }
+  /** GET /agents/models — every installed agent's models + reasoning in one answer (see core/models/agent-models). */
+  getAgentModels?: () => { agents: import("../../core/models/agent-models").AgentModelsEntry[] }
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   switchPermissionMode?: (id: string, mode: string) => Promise<{ ok: true; status: "applied"; applied?: "now" | "next-turn" } | { ok: false; error: string }>
   getSessionRequests?: (id: string) => unknown[]
@@ -718,9 +749,65 @@ export class WebChannel implements Channel {
       const terminalId = kind === "agent"
         ? "agent"
         : ((url.searchParams.get("terminal") ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 64) || "main")
+      // NEW TERMINAL vs RECONNECT. `tmux new-session -A` conflated them, which
+      // is how a reconnect to a terminal whose shell had exited came back alive
+      // and empty with the exit never reported. The backend splits creation
+      // from attachment, so the client has to say which it means:
+      //
+      //   ?create=1   a UI "new terminal"
+      //   ?create=0   a reconnect; a missing terminal is an error, never a
+      //               fresh shell
+      //
+      // Omitting it is what every client sends today, and it keeps the old
+      // behaviour by the safest route available: attach first, create only if
+      // there is genuinely nothing there. Plan 4 Task 1 is where the clients
+      // start saying it and this default goes away.
+      const createParam = url.searchParams.get("create")
+      const intent = createParam === null
+        ? undefined
+        : (createParam === "1" || createParam === "true" ? "create" as const : "attach" as const)
+      // WHICH WIRE. `?terminalProtocol=2` is the ordered revision-2 stream;
+      // omitting it is the legacy framing, which lives only until Plan 4
+      // Tasks 3-5 delete the last client that speaks it. A revision we do not
+      // speak is refused BY NAME over the socket (below) rather than dropped,
+      // because "your client is too old" is actionable and a closed socket
+      // looks exactly like a network fault.
+      const revisionChoice = parseTerminalRevision(url.searchParams.get("terminalProtocol"))
       const auth = this.authenticate(req)
       if (!auth.ok) return this.authFailureResponse(auth)
       const dev = auth.device
+
+      // ORIGIN. The CSRF guard in `routeRequest` exempts websockets — "GET/WS
+      // are exempt" — which was defensible when this socket carried a live
+      // screen and no history. It does not carry a live screen and no history
+      // any more: a revision-2 attach opens with the target's FULL SCROLLBACK
+      // replayed (measured at ~797 KB against ~6.9 KB before), so one socket
+      // opened by page JS reads back everything the user has typed and
+      // everything their shell has printed.
+      //
+      // The same rule the mutating HTTP routes use, for the same reason and
+      // with the same two exemptions:
+      //
+      //   * BEARER-AUTHED CLIENTS ARE SKIPPED. The native apps authenticate
+      //     with `Authorization: Bearer` (`KtorTerminalTransport`), carry no
+      //     ambient cookie, and there is nothing for a third party to ride.
+      //   * A MISSING `Origin` IS ALLOWED, and here that is not the soft
+      //     judgement it is for HTTP: a browser is REQUIRED to send `Origin`
+      //     on a WebSocket handshake it opens (WHATWG WebSocket, step 10), so
+      //     no header means no browser, which means no ambient cookie. The
+      //     desktop and mobile clients are the ones that land here.
+      //
+      // WHAT THIS DOES NOT CLOSE, said plainly. In PATH proxy mode the broker
+      // serves arbitrary proxied content at `/p/<slug>/…` on its OWN origin,
+      // so JS in a proxied page sends an `Origin` that matches by construction
+      // and this check waves it through. Subdomain mode is different — the
+      // proxied page is on `<slug>.<base>`, which is not the app origin, so it
+      // is rejected here even though the `Domain=.<base>` cookie is attached.
+      // Closing the path-mode case means giving proxied content an origin of
+      // its own, which is a structural change and not this one.
+      if (!authedViaBearer(req) && !sameOriginOk(req, this.opts.publicUrl, this.getRelayUrl?.())) {
+        return new Response("bad origin", { status: 403 })
+      }
 
       if (sessionName && workspaceId) {
         return new Response("pass session or workspace, not both", { status: 400 })
@@ -746,8 +833,26 @@ export class WebChannel implements Channel {
         agentTarget = await this.opts.getSessionTmuxTarget?.(sessionName)
         if (!agentTarget) return new Response("agent terminal unsupported", { status: 404 })
       }
+      // An agent pane is a window inside the agent's own tmux: it has no
+      // replay boundary and no size lease, so it cannot honour revision 2's
+      // contract. Saying so is better than serving a stream that silently
+      // never closes a replay.
+      const revisionError = !revisionChoice.ok
+        ? revisionChoice.message
+        : (revisionChoice.revision === 2 && kind === "agent"
+          ? "terminal protocol 2 is for workspace terminals; an agent pane has no replay boundary"
+          : undefined)
       const upgraded = server.upgrade(req, {
-        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind, terminalSession: scopeKey, terminalId, terminalAgentTarget: agentTarget } as WSData,
+        data: {
+          deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind,
+          terminalSession: scopeKey, terminalId, terminalAgentTarget: agentTarget, terminalIntent: intent,
+          // This CONNECTION's viewer identity. Two tabs of one browser may show
+          // one terminal; without it they share a viewer slot in
+          // TerminalManager and each one's close tears down the other's.
+          terminalViewerId: newTerminalViewerId(),
+          terminalRevision: revisionChoice.ok ? revisionChoice.revision : 2,
+          terminalRevisionError: revisionError,
+        } as WSData,
       })
       if (upgraded) return undefined
       return new Response("upgrade failed", { status: 500 })
@@ -814,7 +919,85 @@ export class WebChannel implements Channel {
     this.opts.viewingTracker?.clear(ws.data.deviceName)
   }
 
+  /** Bytes out, plus the drain promise that turns a congested socket into
+   * backpressure on the target instead of a queue in the broker. */
+  private sendTerminalBytes(ws: import("bun").ServerWebSocket<WSData>, data: Uint8Array): Promise<void> | void {
+    try { ws.sendBinary(data) } catch { return }
+    if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
+      const d = ws.data._termDrain ?? makeDeferred()
+      ws.data._termDrain = d
+      return d.promise
+    }
+  }
+
+  /**
+   * REVISION 2. One lane owns the socket, and the backend's events are the
+   * only thing that writes to it — no reset invented here at open time, no
+   * second callback that could overtake the bytes it invalidates.
+   */
+  private async onTerminalWsOpenV2(ws: import("bun").ServerWebSocket<WSData>): Promise<void> {
+    const lane = new TerminalFrameLane({
+      text: (payload) => { try { ws.send(payload) } catch {} },
+      binary: (bytes) => this.sendTerminalBytes(ws, bytes),
+      close: (code, reason) => { try { ws.close(code, reason.slice(0, 120)) } catch {} },
+    }, ws.data.terminalViewerId ?? newTerminalViewerId())
+    ws.data._termLane = lane
+
+    const refuse = (code: string, recoverable: boolean, message: string) => lane.failure(code, recoverable, message)
+    if (ws.data.terminalRevisionError) {
+      await refuse("protocol-unsupported", false, ws.data.terminalRevisionError)
+      return
+    }
+    const tm = this.opts.terminalManager
+    if (!tm) { await refuse("backend-unavailable", false, "terminal not configured"); return }
+    const sessionName = ws.data.terminalSession!
+    const terminalId = ws.data.terminalId!
+    const scope = parseScope(sessionName)
+    const workdir = scope.kind === "workspace"
+      ? this.opts.getWorkspaceWorkdir?.(scope.id)
+      : this.opts.getSessionWorkdir?.(scope.id)
+    if (!workdir) { await refuse("target-not-found", false, "session not found"); return }
+
+    await lane.ready()
+    let result: Awaited<ReturnType<typeof tm.attach>>
+    try {
+      result = await tm.attach({
+        deviceName: ws.data.deviceName,
+        viewerId: ws.data.terminalViewerId,
+        sessionName,
+        terminalId,
+        workdir,
+        cols: 80,
+        rows: 24,
+        kind: "scratch",
+        intent: ws.data.terminalIntent,
+        // The single ordered lane. Every frame this connection will ever send
+        // after `ready` is produced here, from a backend event.
+        onEvent: (event) => lane.event(event),
+        // Unused on this path (onEvent takes precedence) but the manager's
+        // interface still requires them.
+        onData: () => {},
+        onExit: () => {},
+      })
+    } catch (error) {
+      // A helper we could not reach is a FAILURE, not a shell that exited:
+      // one reconnects, the other closes the tab.
+      const message = error instanceof Error ? error.message : String(error)
+      const code = (error as { code?: string })?.code
+      const recoverable = (error as { recoverable?: boolean })?.recoverable
+      await refuse(typeof code === "string" ? code : "backend-unavailable", recoverable === true, message)
+      return
+    }
+    if (!result.ok) {
+      await refuse(result.code ?? "backend-unavailable", result.recoverable === true, result.error)
+    }
+  }
+
   private async onTerminalWsOpen(ws: import("bun").ServerWebSocket<WSData>): Promise<void> {
+    if (ws.data.terminalRevision === 2 || ws.data.terminalRevisionError) {
+      await this.onTerminalWsOpenV2(ws)
+      return
+    }
     const tm = this.opts.terminalManager
     if (!tm) { ws.close(1011, "terminal not configured"); return }
     const sessionName = ws.data.terminalSession!
@@ -824,6 +1007,12 @@ export class WebChannel implements Channel {
       ? this.opts.getWorkspaceWorkdir?.(scope.id)
       : this.opts.getSessionWorkdir?.(scope.id)
     if (!workdir) { ws.close(1011, "session not found"); return }
+    // REVISION 1 ONLY. This reset is the channel's own invention, sent outside
+    // the backend's ordering and carrying no epoch — which is exactly why
+    // revision 2 has none: there, every frame comes from a backend event
+    // through the lane. It stays here because a revision-1 client has no other
+    // way to learn that the screen it is about to be handed is a fresh one,
+    // and it goes when the last such client does (Plan 4 Tasks 3-5).
     try {
       ws.send(JSON.stringify({ type: "reset" }))
     } catch {
@@ -834,6 +1023,7 @@ export class WebChannel implements Channel {
     try {
       result = await tm.attach({
         deviceName: ws.data.deviceName,
+        viewerId: ws.data.terminalViewerId,
         sessionName,
         terminalId,
         workdir,
@@ -841,17 +1031,12 @@ export class WebChannel implements Channel {
         rows: 24,
         kind: ws.data.terminalKind ?? "scratch",
         agentTarget: ws.data.terminalAgentTarget,
-        onData: (data) => {
-          try { ws.sendBinary(data) } catch {}
-          // Past the high-water mark: hand pumpOutput a promise that resolves on
-          // the socket's `drain`, so we stop pulling pty-helper output (→ tmux
-          // sees a slow client and redraws current state instead of replaying).
-          if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
-            const d = ws.data._termDrain ?? makeDeferred()
-            ws.data._termDrain = d
-            return d.promise
-          }
-        },
+        intent: ws.data.terminalIntent,
+        // The backing target re-synchronised (a new replay epoch): everything
+        // drawn so far is void. Same frame the open above sends, so no client
+        // needs to learn anything new to stop drawing over a stale screen.
+        onReset: () => { try { ws.send(JSON.stringify({ type: "reset" })) } catch {} },
+        onData: (data) => this.sendTerminalBytes(ws, data),
         onExit: (code) => { try { ws.send(JSON.stringify({ type: "exit", code })); ws.close() } catch {} },
         onFailure: (reason) => { try { ws.close(1011, reason.slice(0, 120)) } catch {} },
       })
@@ -872,30 +1057,95 @@ export class WebChannel implements Channel {
     if (!tm) return
     const sessionName = ws.data.terminalSession!
     const terminalId = ws.data.terminalId!
+    const viewerId = ws.data.terminalViewerId
+    const lane = ws.data._termLane
+    if (lane) {
+      // A LANE THAT IS OVER TAKES NOTHING. `lane.finished` is set by the
+      // `failure`/`exit` that ended this connection — including the
+      // `protocol-unsupported` refusal sent to a client whose revision we do
+      // not speak, before it was ever attached to anything. That client was
+      // told "no" and its socket is closing, and `{"type":"close"}` from it
+      // still reached `tm.close`, which DESTROYS the target: a client too old
+      // to be served could still kill a shell two other viewers were watching.
+      if (lane.finished) {
+        log.debug("terminal_frame_after_end", { device: ws.data.deviceName })
+        return
+      }
+      // Revision 2. Binary is user input — typing is typing, it reaches the
+      // pty from any viewer and never moves size ownership.
+      if (typeof msg !== "string") {
+        tm.write(ws.data.deviceName, sessionName, terminalId, toBytes(msg), viewerId)
+        return
+      }
+      const decoded = decodeClientControl(msg)
+      if (!decoded.ok) {
+        log.debug("terminal_frame_refused", { device: ws.data.deviceName, reason: decoded.reason })
+        return
+      }
+      const frame = decoded.frame
+      switch (frame.type) {
+        case "resize":
+          tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows, viewerId)
+          return
+        case "focus":
+          tm.focus(ws.data.deviceName, sessionName, terminalId, frame.focused,
+            frame.cols || undefined, frame.rows || undefined, viewerId)
+          return
+        case "reply": {
+          // A REPLY, not typing. It is owner-only and epoch-bound, and the
+          // lane is what remembers both — a stale one is dropped here rather
+          // than typed into the shell. Nothing is sent back: the viewer was
+          // told it did not own the answer before it produced one, so a drop
+          // is not news and certainly not a retry signal.
+          if (!lane.acceptsReply(frame)) {
+            log.debug("terminal_reply_dropped", { device: ws.data.deviceName, epoch: frame.epoch })
+            return
+          }
+          const bytes = decodeReplyPayload(frame.data)
+          if (!bytes) return
+          tm.reply(ws.data.deviceName, sessionName, terminalId, bytes, viewerId)
+          return
+        }
+        case "close":
+          void tm.close(sessionName, terminalId)
+          try { ws.close() } catch {}
+          return
+      }
+      return
+    }
     if (typeof msg === "string") {
       try {
         const frame = JSON.parse(msg)
-        if (frame.type === "resize" && typeof frame.cols === "number" && typeof frame.rows === "number") {
-          tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows)
+        // `dimension`, not `typeof === "number"`. This branch is revision 1 and
+        // it was reading geometry with a bare type test, so it accepted 1e9,
+        // 2 ** 40 and -0 alike and handed them straight to a backend — the same
+        // values `decodeClientControl` refuses on the revision-2 path beside it.
+        // A bound that one of two doors enforces is not a bound.
+        if (frame.type === "resize") {
+          const cols = dimension(frame.cols)
+          const rows = dimension(frame.rows)
+          if (cols !== null && rows !== null) {
+            tm.resize(ws.data.deviceName, sessionName, terminalId, cols, rows, viewerId)
+          }
         } else if (frame.type === "focus" && typeof frame.focused === "boolean") {
           tm.focus(
             ws.data.deviceName,
             sessionName,
             terminalId,
             frame.focused,
-            typeof frame.cols === "number" ? frame.cols : undefined,
-            typeof frame.rows === "number" ? frame.rows : undefined,
+            dimension(frame.cols) ?? undefined,
+            dimension(frame.rows) ?? undefined,
+            viewerId,
           )
         } else if (frame.type === "close") {
-          // Explicit close: destroy the tmux session, then drop the socket.
+          // Explicit close: destroy the backing target, then drop the socket.
           void tm.close(sessionName, terminalId)
           try { ws.close() } catch {}
         }
       } catch {}
       return
     }
-    const data = msg instanceof ArrayBuffer ? new Uint8Array(msg) : new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength)
-    tm.write(ws.data.deviceName, sessionName, terminalId, data)
+    tm.write(ws.data.deviceName, sessionName, terminalId, toBytes(msg), viewerId)
   }
 
   private onTerminalWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
@@ -903,8 +1153,9 @@ export class WebChannel implements Channel {
     // ending — otherwise it would await a drain that never comes.
     const d = ws.data._termDrain
     if (d) { ws.data._termDrain = undefined; d.resolve() }
-    // Socket dropped (reload / nav / network): DETACH — the tmux session lives on.
-    this.opts.terminalManager?.detach(ws.data.deviceName, ws.data.terminalSession!, ws.data.terminalId!)
+    // Socket dropped (reload / nav / network): DETACH — the backing target lives on.
+    this.opts.terminalManager?.detach(ws.data.deviceName, ws.data.terminalSession!, ws.data.terminalId!,
+      ws.data.terminalViewerId)
   }
 
   private onDisplayWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
@@ -1032,19 +1283,47 @@ export class WebChannel implements Channel {
       const agentState: Record<string, unknown> = {}
       const commands: Record<string, unknown[]> = {}
       const commandsResolved: Record<string, boolean> = {}
+      // A client that sends `logTail` only needs the newest few entries for sessions it isn't
+      // showing (sidebar preview + unread); it lists the ones it shows in `fullLogs` and fetches
+      // the rest over GET /sessions/:id/messages when opened. A client that sends neither gets
+      // full logs. `partialLogs` names every session that may have been cut short.
+      const logTail = Number.isInteger(frame.logTail) && frame.logTail >= 1 ? frame.logTail as number : undefined
+      const fullLogs = new Set<string>(Array.isArray(frame.fullLogs) ? frame.fullLogs.filter((x: unknown) => typeof x === "string") : [])
+      const partialLogs: string[] = []
+      // `trimExtras` (with `logTail`): activity and slash commands only matter inside an open
+      // chat, so sessions outside `fullLogs` get neither; the client loads them over
+      // GET /sessions/:id/chat-extras when the chat opens. `partialExtras` names those sessions.
+      const trimExtras = logTail !== undefined && frame.trimExtras === true
+      const partialExtras: string[] = []
       for (const s of sessions) {
         const sessionKey = s.id ?? s.name
-        logs[sessionKey] = this.opts.getSessionLog(sessionKey)
-        activity[sessionKey] = this.opts.getSessionActivity?.(sessionKey) ?? []
+        if (logTail !== undefined && !fullLogs.has(sessionKey)) {
+          const tail = this.opts.getSessionLog(sessionKey, logTail)
+          logs[sessionKey] = tail
+          if (tail.length >= logTail) partialLogs.push(sessionKey)
+        } else {
+          logs[sessionKey] = this.opts.getSessionLog(sessionKey)
+        }
         bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
-        commands[sessionKey] = this.opts.getSessionCommands?.(sessionKey) ?? []
-        commandsResolved[sessionKey] = this.opts.getSessionCommandsResolved?.(sessionKey) ?? false
+        if (trimExtras && !fullLogs.has(sessionKey)) {
+          partialExtras.push(sessionKey)
+        } else {
+          activity[sessionKey] = this.opts.getSessionActivity?.(sessionKey) ?? []
+          commands[sessionKey] = this.opts.getSessionCommands?.(sessionKey) ?? []
+          commandsResolved[sessionKey] = this.opts.getSessionCommandsResolved?.(sessionKey) ?? false
+        }
       }
       const proxies = this.opts.listProxies?.() ?? []
       const displays = this.opts.listDisplays?.() ?? []
       const workspaces = this.opts.listWorkspaces?.() ?? []
-      const archivedWorkspaces = this.opts.listArchivedWorkspaces?.() ?? []
+      // `slimArchived`: an archived workspace's views and layout are only needed once it is
+      // restored, and restoring sends the full record (`workspace_added`). ~40% of the list.
+      const archivedWorkspaces = (this.opts.listArchivedWorkspaces?.() ?? []).map((w) => {
+        if (frame.slimArchived !== true) return w
+        const { views: _views, layout: _layout, ...rest } = w as Record<string, unknown>
+        return rest
+      })
       const projects = this.opts.listProjectCatalog?.() ?? []
       const projectMembership = this.opts.getProjectMembership?.() ?? {}
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
@@ -1056,7 +1335,7 @@ export class WebChannel implements Channel {
         requests[sessionKey] = this.opts.getSessionRequests?.(sessionKey) ?? []
       }
       const permissionModes = permissionCatalog()
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests, permissionModes }))
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
       return
     }
     if (frame.type === "ping") {
@@ -2210,6 +2489,12 @@ export class WebChannel implements Channel {
       return this.json(result, result.ok ? 200 : 400)
     }
 
+    if (method === "GET" && path === "/agents/models") {
+      const catalog = this.opts.getAgentModels?.()
+      if (!catalog) return this.json({ error: "agent models unavailable" }, 503)
+      return this.json(catalog)
+    }
+
     if (method === "GET" && path === "/agents/status") {
       const statuses = this.opts.getAgentStatuses?.()
       if (!statuses) return this.json({ error: "agent detection unavailable" }, 503)
@@ -2458,6 +2743,16 @@ export class WebChannel implements Channel {
         return { ...s, ...extras }
       })
       return this.json(enriched)
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/chat-extras$/)) {
+      // What an open chat needs beyond its messages; the snapshot leaves these out for chats
+      // that were not on screen (`trimExtras`).
+      const id = decodeURIComponent(path.split("/")[2]!)
+      return this.json({
+        activity: this.opts.getSessionActivity?.(id) ?? [],
+        commands: this.opts.getSessionCommands?.(id) ?? [],
+        commandsResolved: this.opts.getSessionCommandsResolved?.(id) ?? false,
+      })
     }
     if (method === "GET" && path.startsWith("/sessions/") && path.endsWith("/messages")) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -3418,8 +3713,9 @@ export class WebChannel implements Channel {
     }
 
     // ── Web terminals ────────────────────────────────────────────────────────
-    // List a session's persisted terminals (source of truth: the muxterm tmux
-    // server) so the PWA can rebuild its tab strip across reloads.
+    // List a session's persisted terminals (source of truth: the workspace terminal backend —
+    // zmx on POSIX, sessiond/ConPTY on Windows) so the PWA can rebuild its tab strip across
+    // reloads.
     if (method === "GET" && path === "/api/term/list") {
       const session = url.searchParams.get("session") ?? ""
       const workspace = url.searchParams.get("workspace") ?? ""
@@ -3435,7 +3731,7 @@ export class WebChannel implements Channel {
       const terminals = (await this.opts.terminalManager?.listForSession(scopeKey)) ?? []
       return this.json({ terminals })
     }
-    // Explicitly destroy one terminal (its tmux session + any viewers).
+    // Explicitly destroy one terminal (its backend shell + any viewers).
     if (method === "POST" && path === "/api/term/close") {
       const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
       const session = typeof body.session === "string" ? body.session : ""

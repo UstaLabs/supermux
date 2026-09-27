@@ -51,3 +51,14 @@ test("refreshModelCache treats a throwing discoverer as empty", async () => {
   })
   expect(cache.get("claude")).toEqual([])
 })
+
+test("refreshModelCache resolves to the agents whose list actually changed", async () => {
+  const cache = new ModelCache()
+  expect(await refreshModelCache(cache, { claude: async () => claudeModels })).toEqual(["claude"])
+  // Same list again: nothing to announce.
+  expect(await refreshModelCache(cache, { claude: async () => claudeModels })).toEqual([])
+  // A transient empty keeps the old list — also nothing to announce.
+  expect(await refreshModelCache(cache, { claude: async () => [] })).toEqual([])
+  const renamed = [{ ...claudeModels[0]!, displayName: "Claude Opus 4.8 (new)" }]
+  expect(await refreshModelCache(cache, { claude: async () => renamed })).toEqual(["claude"])
+})

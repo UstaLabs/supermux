@@ -44,6 +44,33 @@ test("refreshPreview caches agent commands for the launcher", async () => {
   expect(calls).toBe(2)
 })
 
+test("preview waits for the first probe, then answers from the cache while refreshing", async () => {
+  let calls = 0
+  let release: () => void = () => {}
+  const reg = new CommandRegistry({
+    providers: {
+      claude: {
+        kind: "claude",
+        async list() {
+          calls++
+          if (calls > 1) await new Promise<void>((r) => { release = r })
+          return [agentCommand({ name: "verify", sigil: "/" })]
+        },
+      },
+    },
+    resolveSession: () => sessionStub,
+  })
+  const req = { kind: "claude" as const, workdir: "/tmp", pluginSpawnArgs: [] }
+  const first = await reg.preview(req)
+  expect(first.commands.map((c) => c.name)).toEqual(["verify"])
+  expect(first.resolved).toBe(true)
+  // The second ask returns while its background probe is still pending.
+  const second = await reg.preview(req)
+  expect(second.commands.map((c) => c.name)).toEqual(["verify"])
+  expect(calls).toBe(2)
+  release()
+})
+
 test("onChange fires with the merged list after a refresh", async () => {
   const seen: string[][] = []
   const reg = new CommandRegistry({

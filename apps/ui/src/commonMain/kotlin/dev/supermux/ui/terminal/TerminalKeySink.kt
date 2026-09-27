@@ -36,13 +36,36 @@ sealed interface TerminalKey {
  * own subtree, which is what a shared bar pinned above the IME needs — always types into the pane
  * it was handed, and a background pane's armed Ctrl cannot leak into the foreground one.
  *
- * Behaviour is Android's `TermlibTerminalView.onKeyboardInput` verbatim (itself the web `TerminalPane.vue`
- * rule): a modifier press cycles off → once → locked; any other key is encoded with the modifiers
+ * Behaviour is the rule the retired Android renderer's `onKeyboardInput` had (itself the web
+ * `TerminalPane.vue` rule), lifted here unchanged when it stopped being Android's alone:
+ * a modifier press cycles off → once → locked; any other key is encoded with the modifiers
  * currently held (`appCursor = false` — no client exposes DECCKM) and sent, after which a `once`
  * modifier is consumed and a `locked` one stays armed.
+ *
+ * WHO ENCODES. [semantic] is the difference between a host whose emulator takes BYTES and one whose
+ * emulator takes KEYS. The shared Ghostty renderer is the second kind: it owns application-cursor
+ * mode, the kitty keyboard protocol, `modifyOtherKeys` and the backarrow mode, and re-deriving any
+ * of that here would be a second implementation of a protocol it already negotiated — and, worse,
+ * a SECOND transformation on top of its own, which is how an armed Ctrl arrived as a control code
+ * the emulator then treated as a fresh keystroke. When [semantic] is set this sink stops encoding
+ * entirely and hands the press over whole; the bar's tri-state stays exactly as it was, because a
+ * sticky Ctrl is a supermux affordance and not something any emulator models.
  */
 @Stable
-class TerminalKeySink(private val send: (ByteArray) -> Unit) {
+class TerminalKeySink(
+    // `semantic` and `onHideKeyboard` both come BEFORE `send` so `send` stays the trailing
+    // parameter: every byte-sink call site in the tree is `TerminalKeySink { bytes -> … }`, and a
+    // trailing lambda binds to the LAST parameter. Putting either at the end would have silently
+    // rebound those call sites to it — the compiler only catches that when the lambda shapes
+    // differ, and `() -> Unit` vs `(ByteArray) -> Unit` do, but nothing guarantees the next one
+    // will.
+    private val semantic: ((TerminalKey, Mods) -> Unit)? = null,
+    // The bar's "hide keyboard" button. No-op by default: most sinks (a raw byte sink, a test
+    // fake) have never needed it, and hiding the IME is not something that belongs in `semantic`
+    // — it is not a keystroke the emulator encodes, and it must never touch the armed modifiers.
+    private val onHideKeyboard: () -> Unit = {},
+    private val send: (ByteArray) -> Unit,
+) {
     var ctrl: TerminalModState by mutableStateOf(TerminalModState.OFF)
         private set
 
@@ -66,11 +89,23 @@ class TerminalKeySink(private val send: (ByteArray) -> Unit) {
                 if (key.key == TerminalModKey.CTRL) ctrl = next(ctrl) else alt = next(alt)
                 return
             }
-            is TerminalKey.Special -> {
-                val seq = specialKeySequence(key.key, mods, appCursor = false)
-                if (seq.isNotEmpty()) send(seq.encodeToByteArray())
+            else -> {
+                val route = semantic
+                if (route != null) {
+                    // The emulator encodes it, ONCE. Nothing here touches the bytes.
+                    route(key, mods)
+                    consumeOnce()
+                    return
+                }
+                when (key) {
+                    is TerminalKey.Special -> {
+                        val seq = specialKeySequence(key.key, mods, appCursor = false)
+                        if (seq.isNotEmpty()) send(seq.encodeToByteArray())
+                    }
+                    is TerminalKey.Printable -> send(printableSequence(key.ch, mods).encodeToByteArray())
+                    is TerminalKey.Mod -> return // unreachable: handled above
+                }
             }
-            is TerminalKey.Printable -> send(printableSequence(key.ch, mods).encodeToByteArray())
         }
         consumeOnce()
     }
@@ -82,6 +117,19 @@ class TerminalKeySink(private val send: (ByteArray) -> Unit) {
     fun consumeOnce() {
         if (ctrl == TerminalModState.ONCE) ctrl = TerminalModState.OFF
         if (alt == TerminalModState.ONCE) alt = TerminalModState.OFF
+    }
+
+    /**
+     * Disarm everything, `locked` included — the pane stopped being the one the user is typing at.
+     *
+     * [consumeOnce] is "a keystroke used it up"; this is "there is no next keystroke here". A
+     * background tab that kept a locked Ctrl would fire it into whatever the user came back to,
+     * and a lock the user can no longer SEE (the bar is only drawn for the active pane) is a
+     * modifier they have no way to turn off.
+     */
+    fun clearArmed() {
+        ctrl = TerminalModState.OFF
+        alt = TerminalModState.OFF
     }
 
     /**
@@ -108,13 +156,21 @@ class TerminalKeySink(private val send: (ByteArray) -> Unit) {
         consumeOnce()
         return bytes
     }
+
+    /**
+     * Hide the soft keyboard, without touching [ctrl]/[alt] or moving focus away from the pane —
+     * see [TerminalKeyBar]'s "hide keyboard" button and `TerminalInputController.hideKeyboard`,
+     * which is what a semantic sink's [onHideKeyboard] ultimately reaches.
+     */
+    fun hideKeyboard() = onHideKeyboard()
 }
 
 /**
  * A single printable ASCII char (0x20–0x7e) from a keystroke's bytes, or null.
  *
- * Was private to Android's termlib view; lifted here in H5 when iOS needed the identical rule, so
- * the two hosts cannot drift on which keystrokes an armed bar modifier may transform.
+ * Was private to Android's own terminal view; lifted here in H5 when iOS needed the identical
+ * rule, so no two hosts can drift on which keystrokes an armed bar modifier may transform. Both
+ * of those views are gone — there is one renderer now — and the rule stayed.
  */
 fun singlePrintableChar(data: ByteArray): Char? {
     if (data.size != 1) return null
@@ -133,4 +189,27 @@ fun singlePrintableChar(data: ByteArray): Char? {
 fun rememberTerminalKeySink(send: (ByteArray) -> Unit): TerminalKeySink {
     val current by rememberUpdatedState(send)
     return remember { TerminalKeySink { bytes -> current(bytes) } }
+}
+
+/**
+ * A sink whose presses are handed to [press] as KEYS, not bytes — for a host whose emulator does
+ * its own encoding. Same non-keying rule as [rememberTerminalKeySink], for the same reason.
+ *
+ * [hideKeyboard] wires the bar's "hide keyboard" button through to whatever the host's real IME
+ * controller is; the default no-ops for a caller that never draws that button.
+ */
+@Composable
+fun rememberSemanticTerminalKeySink(
+    hideKeyboard: () -> Unit = {},
+    press: (TerminalKey, Mods) -> Unit,
+): TerminalKeySink {
+    val current by rememberUpdatedState(press)
+    val currentHideKeyboard by rememberUpdatedState(hideKeyboard)
+    return remember {
+        TerminalKeySink(
+            send = { },
+            semantic = { key, mods -> current(key, mods) },
+            onHideKeyboard = { currentHideKeyboard() },
+        )
+    }
 }
