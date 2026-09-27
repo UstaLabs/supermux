@@ -18,6 +18,10 @@ export interface DirCacheOpts {
   maxEntries?: number
   maxDirs?: number
   statConcurrency?: number
+  /** Test-only hook run once a read has fully gathered its data, just before it is compared and
+   *  committed; used to hold a read's promise open so tests can force overlap with another
+   *  load() call deterministically. */
+  beforeRead?: (real: string) => Promise<void>
 }
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
@@ -31,10 +35,31 @@ export function sortEntries(entries: FsEntry[]): FsEntry[] {
   })
 }
 
+/** Same-listing comparison used to decide `changed`. A dir-ish entry's own mtime is ignored: it
+ *  ticks whenever its children change, which is noise here (nothing in this listing shows it). */
+function entrySameForChange(a: FsEntry, b: FsEntry): boolean {
+  if (a.name !== b.name || a.type !== b.type || a.target !== b.target || a.ignored !== b.ignored || a.git !== b.git) return false
+  if (isDirish(a)) return true
+  return a.size === b.size && a.mtime === b.mtime
+}
+
+function sameListing(prev: CachedDir, entries: FsEntry[], truncated: { total: number } | undefined): boolean {
+  if (prev.entries.length !== entries.length) return false
+  if ((prev.truncated?.total ?? -1) !== (truncated?.total ?? -1)) return false
+  for (let i = 0; i < entries.length; i++) {
+    if (!entrySameForChange(prev.entries[i]!, entries[i]!)) return false
+  }
+  return true
+}
+
 /** Folder listings keyed by real path. Loads are async, single-flight, compared, versioned. */
 export class DirCache {
   private readonly dirs = new Map<string, CachedDir>() // insertion order = LRU order
   private readonly inflight = new Map<string, Promise<{ snap: CachedDir; changed: boolean }>>()
+  /** A pending "one more read" promise for callers that arrived while a read was already in flight. */
+  private readonly joiners = new Map<string, Promise<{ snap: CachedDir; changed: boolean }>>()
+  /** Bumped by forget() so a read that was already in flight knows not to re-insert its result. */
+  private readonly gen = new Map<string, number>()
   private readonly pins = new Map<string, number>()
   private counter = 0
   /** Number of real directory reads performed (tests). */
@@ -57,23 +82,46 @@ export class DirCache {
   }
   isPinned(real: string): boolean { return this.pins.has(real) }
 
-  forget(real: string): void { this.dirs.delete(real) }
+  forget(real: string): void {
+    this.dirs.delete(real)
+    this.gen.set(real, (this.gen.get(real) ?? 0) + 1)
+  }
 
   /** Cached listing, or load it. */
   async getOrLoad(real: string): Promise<CachedDir> {
     return this.get(real) ?? (await this.load(real)).snap
   }
 
-  /** Read the folder now (joining an in-flight read) and compare with the previous listing. */
+  /**
+   * Read the folder now (joining an in-flight read) and compare with the previous listing.
+   *
+   * If a read of `real` is already in flight when this is called, that read may predate whatever
+   * change triggered this call, so we don't just hand back its result: we wait for it, then run
+   * exactly one more read, and resolve with THAT result. Every caller that arrives while the first
+   * read (or that one extra read) is in flight shares this single follow-up read and its result;
+   * only the caller that started the original read gets that read's own result.
+   */
   load(real: string): Promise<{ snap: CachedDir; changed: boolean }> {
+    const joiner = this.joiners.get(real)
+    if (joiner) return joiner
     const running = this.inflight.get(real)
-    if (running) return running
-    const p = this.read(real).finally(() => this.inflight.delete(real))
+    if (running) {
+      const j = running.then(() => this.runRead(real))
+      this.joiners.set(real, j)
+      j.finally(() => { if (this.joiners.get(real) === j) this.joiners.delete(real) })
+      return j
+    }
+    return this.runRead(real)
+  }
+
+  private runRead(real: string): Promise<{ snap: CachedDir; changed: boolean }> {
+    const p = this.read(real).finally(() => { this.inflight.delete(real) })
     this.inflight.set(real, p)
     return p
   }
 
   private async read(real: string): Promise<{ snap: CachedDir; changed: boolean }> {
+    const startGen = this.gen.get(real) ?? 0
     this.readCount++
     let dirents: import("fs").Dirent[]
     try {
@@ -88,19 +136,24 @@ export class DirCache {
     const truncated = entries.length > max ? { total: entries.length } : undefined
     const kept = truncated ? entries.slice(0, max) : entries
     await this.opts.repo.annotate(real, kept)
+    // Test-only hook, run once this read's data is fully gathered but before it is compared and
+    // committed — used to hold a read open (its promise unresolved) so tests can force overlap
+    // with another load() call without racing real disk timing.
+    if (this.opts.beforeRead) await this.opts.beforeRead(real)
 
     const prev = this.dirs.get(real)
-    const same = prev !== undefined
-      && JSON.stringify(prev.entries) === JSON.stringify(kept)
-      && JSON.stringify(prev.truncated) === JSON.stringify(truncated)
-    if (same) {
+    if (prev !== undefined && sameListing(prev, kept, truncated)) {
       this.get(real) // touch LRU
-      return { snap: prev!, changed: false }
+      return { snap: prev, changed: false }
     }
     const snap: CachedDir = { real, version: `${this.opts.bootId}:${++this.counter}`, entries: kept, ...(truncated ? { truncated } : {}) }
-    this.dirs.delete(real)
-    this.dirs.set(real, snap)
-    this.evict()
+    // A forget() during this read bumps the generation counter; a read that started before it
+    // must still hand its result to its callers, but must not resurrect the (evicted) entry.
+    if ((this.gen.get(real) ?? 0) === startGen) {
+      this.dirs.delete(real)
+      this.dirs.set(real, snap)
+      this.evict()
+    }
     return { snap, changed: true }
   }
 
