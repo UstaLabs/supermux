@@ -107,6 +107,17 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
+/** `scheme://host` of the request itself, from its Host header (undefined when absent). */
+function hostOrigin(req: Request): string | undefined {
+  const host = req.headers.get("host")
+  if (!host) return undefined
+  const proto = req.headers.get("x-forwarded-proto") ?? new URL(req.url).protocol.replace(":", "")
+  return `${proto}://${host}`
+}
+
+/** Largest body PUT /fs/write accepts (the editor reads at most 1 MB). */
+const FS_WRITE_MAX_BYTES = 8 * 1024 * 1024
+
 const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
@@ -458,7 +469,6 @@ export class WebChannel implements Channel {
   private readonly fsWatcher?: FsWatcher
   /** The host's single file-system service (spec 2026-09-27). */
   readonly fss: FileSystemService<import("bun").ServerWebSocket<WSData>>
-  /** `fss` for the legacy /…/fs* routes: WorkdirFs never subscribes, so the socket type is moot. */
   private readonly clientLogRing: StoredClientLogEntry[] = []
   // Per-instance auth-failure rate-limit buckets, keyed by client IP. Instance
   // (not module) scope keeps concurrent channels — e.g. the many WebChannels a
@@ -736,6 +746,14 @@ export class WebChannel implements Channel {
     if (url.pathname === "/ws") {
       const auth = this.authenticate(req)
       if (!auth.ok) return this.authFailureResponse(auth)
+      // Same rule as /ws/term: a cookie-authenticated socket must come from the app's own origin, so a
+      // proxied page on `<slug>.<base>` (which gets the `Domain=.<base>` cookie) can't open it and, e.g.,
+      // list any folder on the host with fs_sub. Native clients use a bearer token and are unaffected.
+      // The request's own Host counts as same-origin too, so a LAN/localhost address that isn't the
+      // configured public URL keeps working.
+      if (!authedViaBearer(req) && !sameOriginOk(req, this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req))) {
+        return new Response("bad origin", { status: 403 })
+      }
       const dev = auth.device
       const upgraded = server.upgrade(req, { data: { deviceName: dev.name, openedAt: Date.now() } as WSData })
       if (upgraded) return undefined  // 101 returned by Bun automatically
@@ -2739,7 +2757,13 @@ export class WebChannel implements Channel {
         if (method === "GET" && path === "/fs/read") {
           return new Response(await this.fss.read(p), { headers: { "content-type": "text/plain; charset=utf-8" } })
         }
-        if (method === "PUT" && path === "/fs/write") return this.json(await this.fss.write(p, await req.text()))
+        if (method === "PUT" && path === "/fs/write") {
+          // The editor can't open files over 1 MB anyway; don't buffer a huge body twice.
+          if (Number(req.headers.get("content-length") ?? "0") > FS_WRITE_MAX_BYTES) {
+            return this.json({ error: "TOO_LARGE", message: `body over ${FS_WRITE_MAX_BYTES} bytes` }, 413)
+          }
+          return this.json(await this.fss.write(p, await req.text()))
+        }
         if (method === "GET" && path === "/fs/search") {
           const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "50") || 50, 1), 500)
           return this.json(await this.fss.search(url.searchParams.get("scope") ?? "", url.searchParams.get("q") ?? "", limit))

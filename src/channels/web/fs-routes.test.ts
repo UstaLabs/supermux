@@ -218,3 +218,27 @@ test("a second editor_open on one socket releases the first watcher callback", a
   await until(() => live.size === 0, 2_000)
   expect(live.size).toBe(0)
 })
+
+test("a cookie-authenticated /ws from a foreign origin is refused; own host and bearer are fine", async () => {
+  const { base, token } = await boot({ publicUrl: "https://app.example.test" })
+  const wsUrl = base.replace("http", "ws") + "/ws"
+  const open = (headers: Record<string, string>) => new Promise<"open" | "closed">((resolve) => {
+    const ws = new WebSocket(wsUrl, { headers } as any)
+    ws.onopen = () => { resolve("open"); ws.close() }
+    ws.onerror = () => resolve("closed")
+    ws.onclose = () => resolve("closed")
+  })
+  expect(await open({ cookie: `cmux_token=${token}`, origin: "https://px.example.test" })).toBe("closed")
+  expect(await open({ cookie: `cmux_token=${token}`, origin: "https://app.example.test" })).toBe("open")
+  expect(await open({ cookie: `cmux_token=${token}`, origin: base })).toBe("open") // the request's own host
+  expect(await open({ Authorization: `Bearer ${token}`, origin: "https://px.example.test" })).toBe("open")
+})
+
+test("PUT /fs/write refuses an oversized body with 413", async () => {
+  const { base, auth } = await boot()
+  const d = tmp()
+  const big = "x".repeat(8 * 1024 * 1024 + 1)
+  const r = await fetch(`${base}/fs/write?path=${encodeURIComponent(join(d, "big.txt"))}`, { method: "PUT", headers: auth, body: big })
+  expect(r.status).toBe(413)
+  expect(existsSync(join(d, "big.txt"))).toBe(false)
+})
