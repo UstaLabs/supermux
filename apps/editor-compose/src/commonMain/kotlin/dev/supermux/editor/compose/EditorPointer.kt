@@ -160,9 +160,6 @@ internal class EditorPointer(private val c: EditorController, private val scope:
     private fun AwaitPointerEventScope.onPress(event: PointerEvent, doubleTap: Long, slop: Float) {
         val change = event.changes.firstOrNull { it.pressed } ?: return
         eventTime = change.uptimeMillis
-        // A press on a block widget's content is the widget's (its text field, its buttons): no
-        // caret, no focus, no keyboard. A drag starting there still scrolls (the scrollable's).
-        if (c.widgetAt(change.position)) return
         if (change.type != PointerType.Mouse) {
             // A handle hangs BELOW its tip: a finger above the tip is on the text row, aiming at the
             // text (a second tap on a word, however slow), never the handle whose target reaches up
@@ -180,10 +177,14 @@ internal class EditorPointer(private val c: EditorController, private val scope:
                 change.consume()
                 return
             }
+            // A press on a widget's content is the widget's (its text field, its buttons): no caret, no
+            // focus, no keyboard; a drag starting there still scrolls. A handle over it came first.
+            if (c.widgetAt(change.position)) return
             touch = TouchPress(change.id.value, change.position, change.uptimeMillis)
             return // a finger's press is also the start of a scroll: leave it to the scrollable
         }
         if (!event.buttons.isPrimaryPressed) return
+        if (c.widgetAt(change.position)) return
         // A placeholder chip (a fold's "⋯"): the plugin's to act on (unfold), not a caret.
         c.chipAt(change.position)?.let { chip ->
             change.consume()

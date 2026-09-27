@@ -275,7 +275,10 @@ internal fun DrawScope.drawFrame(frame: SurfaceFrame, theme: EditorTheme, focuse
         for (n in frame.numbers) drawText(n.layout, color = n.color, topLeft = n.topLeft)
         for (m in frame.markers) m.style?.let { drawMarker(m, it) }
     }
-    // The touch handles, over everything (they hang below the text they mark).
+}
+
+/** The touch handles, drawn by an overlay above the widgets (a handle hangs below its line, over whatever is there). */
+internal fun DrawScope.drawHandleLayer(frame: SurfaceFrame, theme: EditorTheme) {
     if (frame.handles.isNotEmpty()) drawHandles(frame.handles, theme.selectionHandle, density)
 }
 

@@ -284,6 +284,13 @@ fun Editor(
                     Spacer(Modifier.fillMaxSize().editorCanvas(controller, paintHook)
                         .then(if (surfaceText) Modifier.editorSemantics(controller, label, readOnly) else Modifier))
                 },
+                // Above the widgets: the touch handles, and a pointer shield over each one's target so a
+                // widget under a handle never takes the finger meant for it (the surface's gestures,
+                // an ancestor, still see every event).
+                handles = { Spacer(Modifier.fillMaxSize().editorCanvas(controller, paintHook, handles = true)) },
+                handleShield = {
+                    Box(Modifier.fillMaxSize().pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial) } })
+                },
                 testChild = testChild?.let { child -> { Box(Modifier.fillMaxSize()) { child() } } },
                 // The focus TARGET is the hidden field (an IME only runs for a focused text field); its
                 // wrapper's `hasFocus` is the editor's focus and its key preview reaches the keymap
@@ -355,13 +362,17 @@ private fun androidx.compose.foundation.layout.ColumnScope.EditorPanel(c: Editor
 /** The surface's fixed children (see [surfaceMeasurePolicy]). */
 internal class SurfaceSlots(
     val canvas: @Composable () -> Unit,
+    val handles: @Composable () -> Unit,
+    val handleShield: @Composable () -> Unit,
     val testChild: (@Composable () -> Unit)?,
     val field: @Composable () -> Unit,
     val shield: @Composable () -> Unit,
     val overlay: @Composable () -> Unit,
 )
 
-private enum class Slot { CANVAS, TEST, FIELD, SHIELD, OVERLAY }
+private enum class Slot { CANVAS, TEST, FIELD, SHIELD, HANDLES, OVERLAY }
+
+private data class HandleShieldSlot(val i: Int)
 
 /**
  * A gutter marker's accessibility node's slot: the marker by IDENTITY (a plugin's RangeSet keeps its
@@ -405,6 +416,11 @@ private fun surfaceMeasurePolicy(
     val test = slots.testChild?.let { t -> subcompose(Slot.TEST, t).map { it.measure(full) } }.orEmpty()
     val field = subcompose(Slot.FIELD, slots.field).map { it.measure(Constraints()) }
     val shield = subcompose(Slot.SHIELD, slots.shield).map { it.measure(Constraints()) }
+    val handles = subcompose(Slot.HANDLES, slots.handles).map { it.measure(full) }
+    val handleShields = frame?.handles.orEmpty().mapIndexed { i, spot ->
+        val r = spot.touch
+        spot to subcompose(HandleShieldSlot(i), slots.handleShield).map { it.measure(Constraints.fixed(r.width.toInt().coerceAtLeast(1), r.height.toInt().coerceAtLeast(1))) }
+    }
     val overlay = subcompose(Slot.OVERLAY, slots.overlay).map { it.measure(Constraints(maxWidth = w, maxHeight = h)) }
     // A node per visible marker with a tooltip, for screen readers (it takes no pointer).
     val seen = HashMap<GutterMarker, Int>()
@@ -433,6 +449,8 @@ private fun surfaceMeasurePolicy(
             val y = if (pw.inline) pw.rect.top + (pw.rect.height - it.height) / 2 else pw.rect.top
             it.place(kotlin.math.round(pw.rect.left).toInt(), kotlin.math.round(y).toInt())
         }
+        handles.forEach { it.place(0, 0) }
+        for ((spot, ps) in handleShields) ps.forEach { it.place(spot.touch.left.toInt(), spot.touch.top.toInt()) }
         overlay.forEach { it.place(0, 0) }
     }
 }
@@ -447,23 +465,25 @@ internal data class WidgetSlot(val view: Long, val key: dev.supermux.editor.core
 }
 
 /** The canvas: paints the controller's last frame ([EditorController.draw]), then tells the host. */
-internal fun Modifier.editorCanvas(c: EditorController, onPaint: androidx.compose.runtime.State<(() -> Unit)?>): Modifier =
-    this then EditorCanvasElement(c, onPaint)
+internal fun Modifier.editorCanvas(c: EditorController, onPaint: androidx.compose.runtime.State<(() -> Unit)?>, handles: Boolean = false): Modifier =
+    this then EditorCanvasElement(c, onPaint, handles)
 
-private data class EditorCanvasElement(val c: EditorController, val onPaint: androidx.compose.runtime.State<(() -> Unit)?>) :
+private data class EditorCanvasElement(val c: EditorController, val onPaint: androidx.compose.runtime.State<(() -> Unit)?>, val handles: Boolean) :
     ModifierNodeElement<EditorCanvasNode>() {
-    override fun create() = EditorCanvasNode(c, onPaint)
-    override fun update(node: EditorCanvasNode) = node.bind(c, onPaint)
+    override fun create() = EditorCanvasNode(c, onPaint, handles)
+    override fun update(node: EditorCanvasNode) = node.bind(c, onPaint, handles)
 }
 
-internal class EditorCanvasNode(private var c: EditorController, private var onPaint: androidx.compose.runtime.State<(() -> Unit)?>) :
+/** The main canvas (the frame, then the host's paint hook) or, with [handles], the touch handles' overlay. */
+internal class EditorCanvasNode(private var c: EditorController, private var onPaint: androidx.compose.runtime.State<(() -> Unit)?>, private var handles: Boolean) :
     Modifier.Node(), DrawModifierNode {
-    override fun onAttach() { c.canvasNode = this }
-    override fun onDetach() { if (c.canvasNode === this) c.canvasNode = null }
+    override fun onAttach() { c.canvasNodes += this }
+    override fun onDetach() { c.canvasNodes -= this }
 
-    fun bind(c: EditorController, onPaint: androidx.compose.runtime.State<(() -> Unit)?>) {
-        if (c !== this.c) { if (this.c.canvasNode === this) this.c.canvasNode = null; this.c = c; c.canvasNode = this }
+    fun bind(c: EditorController, onPaint: androidx.compose.runtime.State<(() -> Unit)?>, handles: Boolean) {
+        if (c !== this.c) { this.c.canvasNodes -= this; this.c = c; c.canvasNodes += this }
         this.onPaint = onPaint
+        this.handles = handles
         invalidate()
     }
 
@@ -471,6 +491,7 @@ internal class EditorCanvasNode(private var c: EditorController, private var onP
     fun invalidate() { if (isAttached) invalidateDraw() }
 
     override fun ContentDrawScope.draw() {
+        if (handles) { c.drawHandles(this); return }
         c.draw(this)
         onPaint.value?.invoke()
     }
@@ -1057,8 +1078,8 @@ internal class EditorController(
     internal var frame: SurfaceFrame? = null
         private set
 
-    /** The canvas painting [frame], told when there is a new one. */
-    internal var canvasNode: EditorCanvasNode? = null
+    /** The canvases painting [frame] (the text, the handles' overlay), told when there is a new one. */
+    internal val canvasNodes = LinkedHashSet<EditorCanvasNode>()
 
     /** Layout passes so far (a test hook). */
     var layoutPasses = 0
@@ -1100,8 +1121,15 @@ internal class EditorController(
             scroll.layoutDepth--
         }
         frame = f
-        canvasNode?.invalidate()
+        for (n in canvasNodes) n.invalidate()
         return f
+    }
+
+    /** The handles' overlay's draw pass. */
+    fun drawHandles(scope: androidx.compose.ui.graphics.drawscope.DrawScope) {
+        val theme = theme ?: return
+        val f = frame ?: return
+        DrawGuard.drawing { scope.drawHandleLayer(f, theme) }
     }
 
     /** The draw pass: the last frame as it is ([drawFrame]); it measures and scrolls nothing. */
