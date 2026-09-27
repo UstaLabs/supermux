@@ -105,7 +105,7 @@ class Geometry(
     fun shownLines(range: IntRange): List<Int> = folds.shownLines(range)
 
     /** Where [line]'s text starts (below any block widget above it). */
-    fun lineTop(line: Int): Float = heights.top(line) + heights.blockAbove(line)
+    fun lineTop(line: Int): Float = heights.top(line) + heights.textOffset(line)
 
     /** [line]'s text height (without its block widgets). */
     fun textHeight(line: Int): Float = heights.textHeight(line)

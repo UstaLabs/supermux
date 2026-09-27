@@ -217,7 +217,7 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
         if (g.folds.isHidden(e.line)) continue
         if (e.line != lastLine) {
             lastLine = e.line
-            aboveY = g.heights.top(e.line) - scrollY
+            aboveY = g.heights.boxTop(e.line) - scrollY
             belowY = top(e.line) + g.textHeight(e.line)
         }
         val h = blocks.heightOf(e, lh, registry)

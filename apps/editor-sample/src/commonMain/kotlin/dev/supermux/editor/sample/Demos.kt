@@ -36,7 +36,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.editor.compose.Editor
 import dev.supermux.editor.compose.EditorTheme
 import dev.supermux.editor.compose.GutterClickHandler
-import dev.supermux.editor.compose.LineMapping
+import dev.supermux.editor.core.LineMapping
 import dev.supermux.editor.compose.LinkedScroll
 import dev.supermux.editor.compose.LinkedSide
 import dev.supermux.editor.compose.WidgetClickHandler
@@ -322,8 +322,8 @@ fun lineDiff(a: List<String>, b: List<String>, maxD: Int = 2000): List<LineMappi
     return hunks
 }
 
-/** The side-by-side demo's per-side decorations: gap widgets, diff line tints, diff markers. */
-private class DiffSide(val decos: RangeSet<Decoration>, val markers: RangeSet<GutterMarker>)
+/** The side-by-side demo's per-side decorations (diff line tints, markers) and, in B, the line mapping. */
+private class DiffSide(val decos: RangeSet<Decoration>, val markers: RangeSet<GutterMarker>, val mapping: dev.supermux.editor.core.LineMapping? = null)
 
 private val setDiff = StateEffectType<DiffSide>("demo.diff")
 
@@ -331,7 +331,7 @@ private val diffField: StateField<DiffSide> = StateField(
     "demo.diffSide",
     { DiffSide(RangeSet.empty(), RangeSet.empty()) },
     { v, tr ->
-        var out = DiffSide(v.decos.map(tr.changes), v.markers.map(tr.changes))
+        var out = DiffSide(v.decos.map(tr.changes), v.markers.map(tr.changes), v.mapping)
         for (e in tr.effects) e.valueIf(setDiff)?.let { out = it }
         out
     },
@@ -339,6 +339,8 @@ private val diffField: StateField<DiffSide> = StateField(
         extensionOf(
             decorationsFacet.compute(FacetDep.field(f)) { it.field(f).decos },
             gutterMarkersFacet.compute(FacetDep.field(f)) { it.field(f).markers },
+            // What M4's diff plugin will do: the mapping as data; the surface aligns the rows itself.
+            dev.supermux.editor.core.lineMappingFacet.compute(FacetDep.field(f)) { it.field(f).mapping ?: dev.supermux.editor.core.LineMapping.IDENTITY },
         )
     },
 )
@@ -360,18 +362,18 @@ fun fakeWorkingCopy(text: String): String {
 }
 
 /**
- * Recompute the diff of [a] against [b] and put it in both: the linked mapping, gap widgets (above
- * the line after the shorter side's run; below the last line when the run ends the document), diff
- * tints and markers.
+ * Recompute the diff of [a] against [b] and put it in both: diff tints and markers, and the line
+ * mapping (in B's state: `lineMappingFacet`). No gap widgets: the linked surfaces pad the rows
+ * from their measured heights.
  */
-fun applyDiff(a: dev.supermux.editor.compose.EditorView, b: dev.supermux.editor.compose.EditorView, link: LinkedScroll) {
+fun applyDiff(a: dev.supermux.editor.compose.EditorView, b: dev.supermux.editor.compose.EditorView) {
     val da = a.state.doc
     val db = b.state.doc
     val hunks = lineDiff(da.toString().split('\n'), db.toString().split('\n'))
     fun side(doc: Rope, isA: Boolean): DiffSide {
         val decos = ArrayList<Ranged<Decoration>>()
         val markers = ArrayList<Ranged<GutterMarker>>()
-        for ((i, h) in hunks.withIndex()) {
+        for (h in hunks) {
             val from = if (isA) h.aFrom else h.bFrom
             val to = if (isA) h.aTo else h.bTo
             val other = if (isA) h.bTo - h.bFrom else h.aTo - h.aFrom
@@ -381,18 +383,11 @@ fun applyDiff(a: dev.supermux.editor.compose.EditorView, b: dev.supermux.editor.
                 decos += Ranged(s, s, Decoration.LineStyle(setOf(kind)))
                 markers += Ranged(s, s, GutterMarker("diff", kind, kind.removePrefix("diff-")))
             }
-            val gap = other - (to - from)
-            if (gap > 0) {
-                val below = to >= doc.lineCount
-                val at = if (below) doc.length else doc.lineStart(to)
-                decos += Ranged(at, at, Decoration.BlockWidget(WidgetKey("gap", "g$i"), above = !below, estimatedHeightLines = gap.toFloat()))
-            }
         }
-        return DiffSide(RangeSet.of(decos), RangeSet.of(markers))
+        return DiffSide(RangeSet.of(decos), RangeSet.of(markers), if (isA) null else dev.supermux.editor.core.LineMapping(hunks.map { dev.supermux.editor.core.LineMapping.Hunk(it.aFrom, it.aTo, it.bFrom, it.bTo) }))
     }
     a.dispatch(TransactionSpec(effects = listOf(setDiff.of(side(da, true)))))
     b.dispatch(TransactionSpec(effects = listOf(setDiff.of(side(db, false)))))
-    link.mapping = LineMapping(hunks)
 }
 
 /** The side-by-side pane: A (the file, read-only) and B (its working copy) linked line by line. */
@@ -410,7 +405,7 @@ fun SideBySidePane(a: SampleSession, b: SampleSession, theme: EditorTheme, stats
     // B is the working copy: every edit recomputes the diff, a frame later (never from inside B's
     // own dispatch; M4's diff plugin will debounce and run off the UI thread).
     androidx.compose.runtime.LaunchedEffect(a, b, link) {
-        androidx.compose.runtime.snapshotFlow { b.view.state.doc }.collect { applyDiff(a.view, b.view, link) }
+        androidx.compose.runtime.snapshotFlow { b.view.state.doc }.collect { applyDiff(a.view, b.view) }
     }
     Row(Modifier.fillMaxSize()) {
         Editor(a.view, Modifier.weight(1f).fillMaxHeight(), theme = tinted, readOnly = true, onViewport = a::onViewport,

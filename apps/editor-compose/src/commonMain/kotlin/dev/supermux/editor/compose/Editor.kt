@@ -1076,6 +1076,7 @@ internal class EditorController(
     fun layoutFrame(width: Float, height: Float, configure: () -> Unit = {}, measureWidget: WidgetMeasurer? = null): SurfaceFrame? {
         layoutPasses++
         scroll.version
+        linked?.observe(linkedSide)
         scroll.layoutDepth++
         val f = try {
             configure()
@@ -1222,7 +1223,7 @@ internal class EditorController(
     }
 
     fun restoreAnchor() {
-        if (followLink()) return
+        linked?.let { it.align(linkedSide); followLink(); return }
         if (!anchorValid || scroll.y != anchorScrollY || scroll.shared) return
         val doc = view.state.doc
         if (heights.lineCount != doc.lineCount) return
@@ -1249,26 +1250,23 @@ internal class EditorController(
     var linked: LinkedScroll? = null
     var linkedSide: LinkedSide = LinkedSide.A
 
-    /** The line at content y [y], or null while the height map is not the document's. */
-    fun lineAtScroll(y: Float): Int? = if (heights.lineCount == view.state.doc.lineCount && heights.lineCount > 0) heights.lineAt(y) else null
+    /** The height map (linked views pad it). */
+    internal val linkHeights: HeightMap get() = heights
 
-    /** A linked anchor's reference top for [line]: its box top for a changed run's start pair, else its text top. */
-    fun linkReference(line: Int, hunk: Boolean): Float? {
-        if (line < 0 || line >= heights.lineCount || heights.lineCount != view.state.doc.lineCount) return null
-        return if (hunk) heights.top(line) else geometry.lineTop(line)
-    }
+    /** True when this side can take part in the alignment: configured, sized, its height map the document's. */
+    internal fun linkReady(): Boolean = theme != null && viewportSize.height > 0f && heights.lineCount == view.state.doc.lineCount
 
     /**
-     * Linked: the scroll where the shared pair of lines says (read observed, so the other side's
-     * scroll relayouts this one in the same frame). The pair is lines, so a height measured anywhere
-     * moves nothing on screen. False when not linked.
+     * Linked: the scroll where the shared sync point says (read observed, so the other side's
+     * scroll relayouts this one in the same frame). A sync point is a line, so a height measured
+     * anywhere moves nothing on screen. False when not linked.
      */
     private fun followLink(): Boolean {
         val l = linked ?: return false
         val a = l.anchor
         val x = l.x
-        val ref = linkReference(if (linkedSide == LinkedSide.A) a.a else a.b, a.hunk) ?: return true
-        scroll.scrollTo(if (lineWrap) 0f else x, ref + a.px)
+        val y = l.yOf(linkedSide, a.sync) ?: return true
+        scroll.scrollTo(if (lineWrap) 0f else x, y + a.px)
         return true
     }
 

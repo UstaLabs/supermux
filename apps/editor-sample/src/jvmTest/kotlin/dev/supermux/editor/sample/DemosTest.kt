@@ -1,6 +1,6 @@
 package dev.supermux.editor.sample
 
-import dev.supermux.editor.compose.LineMapping
+import dev.supermux.editor.core.LineMapping
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
