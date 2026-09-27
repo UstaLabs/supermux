@@ -3,7 +3,7 @@
 The native editor's one surface: a Compose Multiplatform composable that draws and edits an
 `editor-core` `EditorState` on a single Canvas, for Android, the desktop JVM, iOS and the browser.
 Spec: `docs/superpowers/specs/2026-09-25-native-editor-design.md` §6. Plans: `…/plans/2026-09-26-native-editor-m3a-surface.md`,
-`…/plans/2026-09-26-native-editor-m3b-touch-a11y-devices.md`.
+`…/plans/2026-09-26-native-editor-m3b-touch-a11y-devices.md`, `…/plans/2026-09-27-native-editor-m3c-widgets-linked-views.md`.
 
 It depends on `:editor-core` and Compose only: no `:shared`, no `:ui`, and not `:editor-syntax`.
 Syntax colours (and any plugin's styling) arrive as editor-core decorations whose classes the
@@ -19,13 +19,16 @@ Editor(view, Modifier.fillMaxSize(), onViewport = { r -> view.dispatch(Transacti
 ```
 EditorView            state (Compose state), dispatch(spec), listeners, viewport, focused, readOnly
   └ EditorController  one composed surface (EditorSurfaceHooks: follows every transaction)
-      ├ HeightMap     every line's height (measured, else estimated); top/lineAt O(log n)
-      ├ LineLayouts   TextMeasurer layouts of visible lines, LRU by (text, spans) per configuration
-      ├ Geometry      offset <-> content position, caret and selection rects, visible lines
+      ├ HeightMap     every line's height (measured, else estimated) + its block widgets; top/lineAt O(log n)
+      ├ LineLayouts   TextMeasurer layouts of visible rows, LRU by (text, spans, widget widths) per configuration
+      ├ Geometry      offset <-> content position over visual rows (folds, inline widgets), caret and selection rects
+      ├ BlockWidgets  the state's block widgets and their heights in the height map
+      ├ Folds         the state's Replace ranges and inline widgets: hidden lines, a row's parts (LineMap)
       ├ EditorScroll  x/y in pixels; ScrollableStates for Modifier.scrollable (wheel, drag, fling)
       ├ EditorPointer click / drag / multi-click / Alt-drag column; tap, double/triple tap, long press, handles, pinch
-      └ FieldSync     the hidden field <-> the document (EditorInputField)
-Painter               background, current line, LineStyle backgrounds, selections, text, cursors, gutter
+      ├ FieldSync     the hidden field <-> the document (EditorInputField)
+      └ LinkedScroll  (optional) the pair of lines two linked editors keep aligned
+Painter               buildFrame (the layout pass decides) / drawFrame (the draw pass paints exactly that)
 DefaultCommands       movement, selection, insert/delete/newline/tab, select all; defaultKeymap()
 ```
 
@@ -36,13 +39,16 @@ DefaultCommands       movement, selection, insert/delete/newline/tab, select all
 | `EditorTheme.kt`, `EditorFont.kt` | colours, token styles, the packaged JetBrains Mono |
 | `HeightMap.kt` | chunked line heights with two Fenwick trees over the chunks |
 | `LineLayouts.kt`, `Geometry.kt` | layout cache, tab stops, offset/position mapping |
-| `Painter.kt` | one frame |
+| `Painter.kt` | the frame: `buildFrame` (layout pass) and `drawFrame` (draw pass), gutter marker shapes |
+| `EditorWidgets.kt` | `WidgetRegistry`, `WidgetScope`, `BlockWidgets` (block heights in the height map) |
+| `EditorFolds.kt` | `Folds` (replaced ranges, inline widgets, hidden lines), `LineMap` (row offsets <-> document offsets) |
+| `LinkedScroll.kt` | `LinkedScroll`, `LineMapping`, `LinkedSide`: side-by-side alignment |
 | `EditorScroll.kt`, `EditorPointer.kt` | scrolling, pointer gestures |
 | `EditorTouch.kt`, `EditorMenu.kt` | touch handles (geometry, drawing, hit targets), the selection menu |
 | `EditorSemantics.kt` | the accessibility node (`AccessibleText`, `LineAnnouncer`) |
 | `EditorClipboard.kt` | the clipboard seam (platform, web Clipboard API) |
 | `EditorInput.kt` | the windowed hidden field (`FieldWindow`, `diffField`, `FieldSync`), hardware keys, web fast typing |
-| `DefaultCommands.kt`, `TextBoundaries.kt`, `EditorFacets.kt` | commands, grapheme/word rules, `tabSizeFacet` / `indentUnitFacet` |
+| `DefaultCommands.kt`, `TextBoundaries.kt`, `EditorFacets.kt` | commands, grapheme/word rules, `tabSizeFacet` / `indentUnitFacet` / `gutterClickFacet` / `widgetClickFacet` |
 
 **Public API for hosts.** `EditorView.typeText(text, userEvent)` is the one entry point for typed
 text (the hidden field, the web's key path and `DefaultCommands.insertText` all use it); plugins
@@ -53,7 +59,8 @@ paste. `paste(text)` distributes one line per cursor when the counts match. `scr
 earlier). `focus(showKeyboard = false)`: a host's focus never raises a soft keyboard.
 `coordsAtPos(offset)` gives the caret rect in the surface, for popups. `EditorScrollState` can be
 passed to several `Editor`s to scroll them together (clamped to the largest; anchoring is off while
-shared): the seam M3c's linked views align lines on.
+shared); side-by-side views that keep corresponding LINES aligned use `LinkedScroll` (below).
+`onGutterClick` and `onWidgetClick` hear the gutter and placeholder clicks no plugin took.
 
 **Coordinates.** Offsets are UTF-16 (as everywhere in the editor). Geometry works in *content*
 coordinates (x from the text area's left edge, y from the document top); the surface adds the
@@ -91,6 +98,112 @@ character may overhang). A keystroke on a 1 MB line takes ~6 ms to its frame.
 **Keep the cursor visible.** A transaction with `scrollIntoView` (every default command, every
 typed character) scrolls the least needed to show the main cursor with a margin of a line
 (four cells horizontally, without wrapping). Page moves scroll a page as well.
+
+## Gutter markers
+
+`GutterMarker(column, kind, tooltip)` in editor-core's `gutterMarkersFacet` (a `RangeSet`, a marker at
+a line's start): data, like every decoration. The gutter is the line numbers (a built-in column,
+`showLineNumbers`), then one column per distinct `column` id, in precedence order (the index of the
+facet input it first came from, then first seen). A column appears with its first marker and KEEPS
+its place after its last one goes, so a lint dot coming and going never shifts the text (a replaced
+state starts over). Widths are `EditorTheme.gutterColumns[column]` (dp; `diff` 6, `lint` 12,
+`comment` 16, `fold` 14; unknown: one cell). `EditorTheme.gutterMarkers[kind]` draws it as a shape
+(the web has no emoji font): `BAR` (the line's full height: `diff-add`, `diff-remove`,
+`diff-change`), `DOT` (`lint-error`, `lint-warning`), `BUBBLE` (`comment`), `OPEN` / `CLOSED`
+(`fold-open`, `fold-closed`); a kind the theme lacks draws nothing. Markers move with edits because
+the plugin maps its `RangeSet`; a marker's line deleted, it goes.
+
+A click or tap on a marker column's cell (never a caret move, never a keyboard) goes to
+`gutterClickFacet`'s handlers (`GutterClickHandler(target, column, line, marker)`, 0-based line,
+the cell's highest-precedence marker or null), the first returning true taking it, then to
+`EditorView.onGutterClick`. A marker with a `tooltip` is a semantics node of its own (the tooltip
+its label, a click action that reports the same way); it takes no pointer.
+
+## Widgets: the registry contract
+
+Widget CONTENT is the one sanctioned exception to "plugins describe everything as data" (spec §4.4),
+for compiled-in plugins only: `WidgetRegistry.register(type) { key -> … }` gives the composable for
+every `WidgetKey(type, id)`; `Editor(widgets = registry)`. The content runs in a `WidgetScope`
+(`view` to dispatch through, the zoomed `theme`, `lineHeight`, `focusEditor()`). Registering or
+unregistering relayouts. A sandboxed plugin later would describe its widget declaratively instead.
+
+**Block widgets** (`Decoration.BlockWidget(key, above, estimatedHeightLines)` in `decorationsFacet`,
+on the line holding its position): subcomposed IN the layout pass for the drawn lines (visible plus
+overscan) across the text area (from the gutter's edge; the gutter beside it is blank), measured
+at that width, their height put into `HeightMap.setBlockHeight` (the sum above / below each line).
+- Until measured a widget counts `estimatedHeightLines` lines; the measured height replaces it and
+  the anchor keeps the visible text still (`BlockWidgetsTest`: no jump past 300 px widgets
+  estimated at one line, up and down). The height map follows every transaction at once, so a
+  scroll-into-view right after an edit sees real heights.
+- **A type nobody registered is empty space of exactly `estimatedHeightLines` lines** (rounded to
+  whole pixels, never measured): the diff plugin's alignment gaps need no composable.
+- **Lifecycle.** A widget out of view stays composed (not measured, not placed) while it is within
+  `RETAIN_SCREENS` (2) screens of the viewport, at most `RETAIN_WIDGETS` (8), so a scroll out and back
+  keeps even its `remember` state. Further away it is disposed; its `rememberSaveable` state (a
+  `rememberTextFieldState()` draft) is kept by a `SaveableStateHolder` under a String key and comes
+  back with it.
+- **Input.** A widget gets its own pointer and keyboard input. The editor's gestures ignore a press
+  on a widget's content (no caret, no focus, no keyboard); a drag there still scrolls the editor.
+  Widgets are placed ABOVE the hidden field's pointer shield, so a comment field right under the
+  caret still gets its taps. The editor's focus and its key preview are its hidden field's (the
+  field's wrapper, not the surface): a widget's text field has its own focus, keys and input
+  session, so the soft keyboard is the widget field's own, and the editor's keymap, the web's fast
+  key path and the iOS Smart Punctuation shim leave it alone. Focus comes back with a tap on the
+  text or `WidgetScope.focusEditor()` (Escape in a comment box).
+- Up and Down step over a widget (from the line above it to the line below, the goal column kept).
+
+**Inline widgets** (`Decoration.InlineWidget(key, side)`, a point) take room INSIDE the row: the
+row is laid out from parts (text, one U+FFFC per widget covered by a placeholder as wide as the
+widget's measured content, a font size tall); `LineMap` maps row offsets to document offsets. A
+caret at the widget's point is before it for `side > 0`, after it for `side < 0`; the text on
+both sides lays out and hit-tests as it would. Registered content is subcomposed and measured
+(height at most a line) before its row is laid out, and placed centred on its row. **A type nobody
+registered is a drawn chip** (`EditorTheme.widgetChipBackground` / `widgetChipForeground`, "⋯").
+
+**Replace** (`Decoration.Replace(widget)`, a range): the range is hidden, its widget shown in its
+place (none: nothing), overlapping replaces merged.
+- Spanning lines, it hides every line after its first up to its last: zero height, never laid out,
+  never numbered (the numbers after it are the real ones), their text after the range's end joined
+  to the first line's row (`fun f() {⋯}`: CM6's fold). Block widgets and markers on hidden lines
+  hide with them; so does their text from a screen reader.
+- The caret never lands inside: moves go to the far side (Right at the start jumps to the end, End
+  goes past a fold's joined tail); a deletion reaching into it takes all of it (CM6's atomic ranges;
+  a fold plugin that prefers to unfold binds Backspace first).
+- A click or tap on a drawn chip goes to `widgetClickFacet`'s handlers
+  (`WidgetClickHandler(target, key, from, to)`: the fold plugin unfolds), then to
+  `EditorView.onWidgetClick`. Registered content takes its own pointer input.
+- A fold survives edits outside and above it because the plugin maps its `RangeSet` (a Replace's
+  start is right-sided: text typed at it stays visible before the fold).
+- Lines over 10,000 units (laid out in pieces) show neither replaces nor inline widgets.
+
+## Panels
+
+`Panel(id, top)` in editor-core's `panelsFacet`: strips above or below the editor, outside the
+scrolling area, their content the registry's `panel:<id>` type, in precedence order. They take their
+own height; the viewport is what is left. Their input and focus are their own (M4's search field);
+Escape inside a panel gives the focus back to the editor. The surface is always one `Column`, so a
+panel coming or going never rebuilds it (its focus and state stay).
+
+## Linked views (side-by-side diff)
+
+`Editor(viewA, linked = s, linkedSide = LinkedSide.A)` and `Editor(viewB, linked = s, linkedSide =
+LinkedSide.B)` with one `LinkedScroll(mapping)`. Scrolling either (wheel, fling, drag, a handle's
+auto-scroll, scroll-into-view, page keys) scrolls the other so corresponding lines stay at the same
+y (`LinkedViewsTest`: within 1 px, both directions, flings, after an edit of B); horizontal scroll
+is shared.
+- **The position is a pair of corresponding lines** plus a pixel offset (`LinkedAnchor`, snapshot
+  state both layout passes observe: a scroll of one side relayouts the other in the same frame).
+  That is each side's scroll anchoring while linked: a line measured anywhere moves nothing.
+- **`LineMapping(hunks)`**: the diff's changed runs `Hunk(aFrom, aTo, bFrom, bTo)`; everything
+  between is equal line for line. A line in an equal run (or a changed run as long on both sides)
+  pairs with its counterpart at their TEXT tops; in a changed run of different lengths, the run's
+  first lines pair at their BOX tops.
+- **The gap convention** (what M4's diff plugin does, and the sample's side-by-side demo): the shorter
+  side of each changed run gets a gap `BlockWidget` of the missing lines, of a type nobody
+  registered (exact empty space), ABOVE the line after its run (below the last line when the run
+  ends the document). Then every row lines up exactly.
+- A is the side that does not change while linked (the base); B may be edited: its pair line
+  follows the edit at once, and a new `mapping` (with the new gaps) re-derives the pair from A's line.
 
 ## The theme contract
 
@@ -356,7 +469,10 @@ Chrome by the sample's in-app benchmark (`-Psample.bench=true`, `:editor-sample:
 | 10 MB file -> first frame | < 1 s | 41-54 ms | | |
 
 On a 60 Hz display a key event waits up to one frame for the next vsync; the edit is always painted
-in the next frame. The web cold start is asserted by `:editor-sample:webColdStartTest`.
+in the next frame. M3c on the same harness (Mac, loaded 6-16): keystroke p95 6.1-7.8 ms, scroll p95
+8.0-9.1 ms, 10 MB open 32-35 ms, 1 MB line 4.0-4.9 ms; the M3c demo scrolling through gutter markers,
+fold arrows and a review-thread widget p95 10.3-10.7 ms; two linked editors with gaps and diff tints
+p95 9.8-10.4 ms (`DemoRenderTest`, 1100x1400 / 1400x1200 px). The web cold start is asserted by `:editor-sample:webColdStartTest`.
 
 ## The device pass (M3b)
 
@@ -386,7 +502,7 @@ hardware-keyboard heuristic is a heuristic (override: `EditorView.webKeyboard`).
 a focus that starts with a trackpad or mouse click starts no input session (IME and dictation then
 need a tap); not yet checked on the iPad with its trackpad. Backgrounding and resuming the app was
 not tested for the caret bug (only document switching). Device frame times (120 Hz iPad, typing on
-the Fold) were not measured; that moves to M3c. The Smart Punctuation shim depends on Compose
+the Fold) were not measured; M3c added the in-app device bench (below). The Smart Punctuation shim depends on Compose
 internals (above): re-run `ios-sim.sh` on every Compose upgrade. Undo is M4's history plugin.
 
 ## The device pass (M3c)
@@ -433,10 +549,13 @@ pointer gestures, touch handles, the menu with a fake platform toolbar, zoom, th
 document switching, typing through the real field). Compose's harness cannot open an IME composing
 region, so composition is tested at `FieldSync`; the device checks live in
 `apps/editor-sample/device-checks/` and `:editor-sample:webInputTest`. Counts at the end of M3b:
-JVM 183, iOS simulator 74.
+JVM 183, iOS simulator 74. At the end of M3c: JVM 239 (measure before draw, gutter markers, block
+widgets, inline widgets and folds, panels, linked views; `Folds` / `LineMap` / `LineMapping` in
+commonTest), editor-sample JVM 8 (the perf suite, the demos' diff and their render-and-scroll budget).
 
 ## Not here yet
 
-M3c: gutter markers, block widgets (`HeightMap.setBlockHeight` exists), inline widgets, `Replace`
-(folds), panels, linked views, device frame times (120 Hz iPad), moving scroll writes out of draw.
-An accessory bar for soft keyboards (Tab / Shift-Tab, arrows).
+M4: the plugins that produce these decorations (fold, search, lsp, diff, history, basics+) and view
+settings. An accessory bar for soft keyboards (Tab / Shift-Tab, arrows). A gap widget draws plain
+background (a hatched diff gap is the diff plugin's registered content, if it wants one). Lines over
+10,000 units show no inline widgets or replaces.
