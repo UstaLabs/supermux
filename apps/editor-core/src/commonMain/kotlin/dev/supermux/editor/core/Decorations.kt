@@ -27,8 +27,13 @@ sealed class Decoration {
      */
     data class BlockWidget(val key: WidgetKey, val above: Boolean = false, val estimatedHeightLines: Float = 1f) : Decoration()
 
-    /** Hide a range, optionally showing a widget instead (a folded region's "…"). */
-    data class Replace(val widget: WidgetKey? = null) : Decoration()
+    /**
+     * Hide a range, optionally showing a widget instead (a folded region's "…"). The caret never
+     * lands inside it (the surface cannot show it there). [fold]: a fold (the fold plugin's), which
+     * is [atomic] by default; any other Replace is atomic only when it opts in (or when its range is
+     * in [atomicRangesFacet]).
+     */
+    data class Replace(val widget: WidgetKey? = null, val fold: Boolean = false, val atomic: Boolean = fold) : Decoration()
 }
 
 /** Identifies widget content: [type] picks the renderer, [id] the instance (a thread id, a fold). */
@@ -128,3 +133,12 @@ data class Panel(val id: String, val top: Boolean)
 
 /** Every plugin's panels, in precedence order (top ones top to bottom, then the bottom ones). */
 val panelsFacet: Facet<Panel, List<Panel>> = Facet.list("panels")
+
+/**
+ * Ranges that user edits treat as one unit (CM6's atomicRanges): an edit that reaches INTO one
+ * (a Backspace at its end, a soft keyboard deleting a character of it) never takes a piece of it;
+ * the editor asks its policy instead (the surface's atomic-delete handlers: unfold first, by
+ * default, or delete it whole). Folds (`Replace(fold = true)`) are atomic without being listed here.
+ * An edit whose selection covered the whole range deletes it as usual.
+ */
+val atomicRangesFacet: Facet<RangeSet<*>, List<RangeSet<*>>> = Facet.list("atomicRanges")

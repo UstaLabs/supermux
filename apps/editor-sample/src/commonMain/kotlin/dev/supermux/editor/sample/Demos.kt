@@ -141,7 +141,7 @@ object M3cDemo {
                 val start = doc.lineStart(line)
                 val existing = folds.firstOrNull { doc.lineIndexAt(it.from) == line }
                 folds = if (existing != null) folds.update(filter = { it !== existing })
-                else foldRange(doc, line)?.let { (a, b) -> folds.update(add = listOf(Ranged(a, b, Decoration.Replace(WidgetKey("fold", "f$start"))))) } ?: folds
+                else foldRange(doc, line)?.let { (a, b) -> folds.update(add = listOf(Ranged(a, b, Decoration.Replace(WidgetKey("fold", "f$start"), fold = true)))) } ?: folds
             }
             e.valueIf(unfoldAt)?.let { at -> folds = folds.update(filter = { it.from != at }) }
             e.valueIf(toggleThread)?.let { open = !open }
@@ -193,6 +193,10 @@ object M3cDemo {
         }),
         widgetClickFacet.of(WidgetClickHandler { t, key, from, _ ->
             if (key.type == "fold") { t.dispatch(TransactionSpec(effects = listOf(unfoldAt.of(from)))); true } else false
+        }),
+        // Backspace into a fold, a search landing inside one: unfold (the editor's unfold-first default).
+        dev.supermux.editor.compose.revealFacet.of(dev.supermux.editor.compose.RevealHandler { t, from, _ ->
+            t.dispatch(TransactionSpec(effects = listOf(unfoldAt.of(from)))); true
         }),
     )
 

@@ -7,8 +7,8 @@ import dev.supermux.editor.core.Rope
 import dev.supermux.editor.core.WidgetKey
 import dev.supermux.editor.core.decorationsFacet
 
-/** A hidden (replaced) range [from, to) and the widget shown in its place (null: nothing). */
-internal class ReplaceRange(val from: Int, val to: Int, val widget: WidgetKey?)
+/** A hidden (replaced) range [from, to), the widget shown in its place (null: nothing), and whether edits treat it as one unit. */
+internal class ReplaceRange(val from: Int, val to: Int, val widget: WidgetKey?, val atomic: Boolean = false)
 
 /** An inline widget at [pos]; [side] < 0 draws it before a cursor at [pos], else after. */
 internal class InlinePoint(val pos: Int, val key: WidgetKey, val side: Int, val order: Int)
@@ -84,6 +84,15 @@ internal class Folds private constructor(
             out += l
             l++
         }
+        return out
+    }
+
+    /** The replaces overlapping document range (from, to) (touching it only at an edge does not count). */
+    fun replacesInside(from: Int, to: Int): List<ReplaceRange> {
+        if (replaces.isEmpty()) return emptyList()
+        val out = ArrayList<ReplaceRange>()
+        var i = firstReplaceEndingAtOrAfter(from + 1)
+        while (i < replaces.size && replaces[i].from < to) { if (replaces[i].to > from) out += replaces[i]; i++ }
         return out
     }
 
@@ -165,7 +174,7 @@ internal class Folds private constructor(
             val pts = ArrayList<InlinePoint>()
             var order = 0
             for ((replaces, points) in per) {
-                for (r in replaces) rs += ReplaceRange(r.from.coerceIn(0, doc.length), r.to.coerceIn(0, doc.length), r.widget)
+                for (r in replaces) rs += ReplaceRange(r.from.coerceIn(0, doc.length), r.to.coerceIn(0, doc.length), r.widget, r.atomic)
                 for (p in points) pts += InlinePoint(p.pos.coerceIn(0, doc.length), p.key, p.side, order++)
             }
             if (rs.isEmpty() && pts.isEmpty()) return EMPTY
@@ -175,13 +184,20 @@ internal class Folds private constructor(
                 if (r.from >= r.to) continue
                 val last = merged.lastOrNull()
                 if (last != null && r.from < last.to) {
-                    if (r.to > last.to) merged[merged.size - 1] = ReplaceRange(last.from, r.to, last.widget)
+                    if (r.to > last.to || (r.atomic && !last.atomic)) merged[merged.size - 1] = ReplaceRange(last.from, maxOf(last.to, r.to), last.widget, last.atomic || r.atomic)
                 } else merged += r
             }
             // Replaces on a long line (laid out in pieces) are not shown: they hide nothing.
             val shown = merged.filter { !longLine(doc.lineIndexAt(it.from)) && !longLine(doc.lineIndexAt(it.to)) }
             pts.sortWith(compareBy({ it.pos }, { if (it.side < 0) 0 else 1 }, { it.order }))
-            val points = pts.filter { p -> !longLine(doc.lineIndexAt(p.pos)) && shown.none { p.pos > it.from && p.pos < it.to } }
+            // Inline widgets inside a shown replace are hidden: both sorted, one pass (not points x replaces).
+            val points = ArrayList<InlinePoint>(pts.size)
+            var ri = 0
+            for (p in pts) {
+                while (ri < shown.size && shown[ri].to <= p.pos) ri++
+                val inside = ri < shown.size && p.pos > shown[ri].from && p.pos < shown[ri].to
+                if (!inside && !longLine(doc.lineIndexAt(p.pos))) points += p
+            }
             val hf = ArrayList<Int>()
             val ht = ArrayList<Int>()
             for (r in shown) {
@@ -195,7 +211,7 @@ internal class Folds private constructor(
         }
 
         /** The replaced ranges of [state] (for commands on a target no surface shows). */
-        fun of(state: EditorState): Folds = build(state.doc, state.facet(decorationsFacet), Cache()) { false }
+        fun of(state: EditorState, cache: Cache = Cache()): Folds = build(state.doc, state.facet(decorationsFacet), cache) { false }
     }
 
     /** Per decoration set, the replaces and inline widgets found in it, kept while the set is the same instance. */
@@ -211,7 +227,7 @@ internal class Folds private constructor(
                     val rs = ArrayList<ReplaceRange>()
                     val ps = ArrayList<InlinePoint>()
                     for (r in set) when (val v = r.value) {
-                        is Decoration.Replace -> if (r.from < r.to) rs += ReplaceRange(r.from, r.to, v.widget)
+                        is Decoration.Replace -> if (r.from < r.to) rs += ReplaceRange(r.from, r.to, v.widget, v.atomic)
                         is Decoration.InlineWidget -> if (r.from == r.to) ps += InlinePoint(r.from, v.key, v.side, 0)
                         else -> Unit
                     }

@@ -744,7 +744,6 @@ internal class EditorController(
 
     // ------------------------------------------------------------------ folds, inline widgets --
 
-    private val foldCache = Folds.Cache()
     private var foldDecos: List<dev.supermux.editor.core.RangeSet<dev.supermux.editor.core.Decoration>>? = null
     private var foldDoc: dev.supermux.editor.core.Rope? = null
     private var foldHeights: HeightMap? = null
@@ -763,7 +762,7 @@ internal class EditorController(
         foldDecos = decos
         foldDoc = state.doc
         foldHeights = heights
-        val f = Folds.build(state.doc, decos, foldCache) { geometry.isLong(it) }
+        val f = Folds.build(state.doc, decos, view.sharedFoldCache) { geometry.isLong(it) }
         geometry.folds = f
         var changed = false
         for (r in appliedHidden) for (l in r) {

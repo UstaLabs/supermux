@@ -33,7 +33,7 @@ class InlineWidgetsAndFoldsTest {
     private fun inline(at: Int, side: Int, type: String = "pill", id: String = "p") =
         Ranged(at, at, Decoration.InlineWidget(WidgetKey(type, id), side) as Decoration)
 
-    private fun fold(from: Int, to: Int, id: String = "f") = Ranged(from, to, Decoration.Replace(WidgetKey("fold", id)) as Decoration)
+    private fun fold(from: Int, to: Int, id: String = "f") = Ranged(from, to, Decoration.Replace(WidgetKey("fold", id), fold = true) as Decoration)
 
     private fun pills() = WidgetRegistry().apply { register("pill") { Box(Modifier.width(30.dp).height(10.dp).testTag("pill")) } }
 
@@ -179,15 +179,19 @@ class InlineWidgetsAndFoldsTest {
         }
     }
 
-    @Test fun backspaceAtAFoldsEndDeletesItWhole() {
+    @Test fun backspaceAtAFoldsEndUnfoldsItAndDeletesNothing() {
         val base = EditorState.create(lines)
         val a = base.lineEnd(3)
         val b = base.lineEnd(8)
         val plugin = RangePlugin("fold", decorationsFacet, listOf(fold(a, b)))
-        editorTest(EditorState.create(lines, EditorSelection.cursor(b), extensions = plugin.extension)) { f ->
+        var revealed: Pair<Int, Int>? = null
+        val reveal = revealFacet.of(RevealHandler { t, from, to -> revealed = from to to; plugin.replace(t as EditorView, emptyList()); true })
+        editorTest(EditorState.create(lines, EditorSelection.cursor(b), extensions = dev.supermux.editor.core.extensionOf(plugin.extension, reveal))) { f ->
             DefaultCommands.deleteBackward.run(f.view)
             waitForIdle()
-            assertEquals(base.doc.slice(0, a) + base.doc.slice(b, base.doc.length), f.view.state.doc.toString(), "not the whole fold (CM6's atomic ranges)")
+            assertEquals(base.doc.toString(), f.view.state.doc.toString(), "a Backspace into a fold deleted text")
+            assertEquals(a to b, revealed)
+            for (l in 4..8) assertTrue(f.geometry.heights.height(l) > 0f, "line $l still folded")
         }
     }
 

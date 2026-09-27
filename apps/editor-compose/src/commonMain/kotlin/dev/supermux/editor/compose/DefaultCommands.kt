@@ -212,9 +212,9 @@ object DefaultCommands {
 
     // ------------------------------------------------------------------ helpers --
 
-    /** The replaced (folded) ranges [t] shows: the surface's, else the state's own. */
+    /** The replaced (folded) ranges [t] shows: the view's, else the state's own. */
     private fun folds(t: CommandTarget, st: EditorState): Folds =
-        (t as? EditorView)?.geometry?.folds ?: Folds.of(st)
+        (t as? EditorView)?.replaced(st) ?: Folds.of(st)
 
     /** A move to [head] from [from] never lands inside a replaced range: it goes to the range's far side. */
     private fun skipReplaced(folds: Folds, from: Int, head: Int): Int {
@@ -241,14 +241,8 @@ object DefaultCommands {
     private fun change(t: CommandTarget, userEvent: String, f: (EditorState, SelectionRange) -> ChangeSpec?): Boolean {
         val st = t.state
         val ranges = st.selection.ranges
-        // A deletion reaching into a replaced (folded) range takes all of it (CM6's atomic ranges):
-        // never a piece of text nobody can see.
-        val folds = if (userEvent.startsWith("delete")) folds(t, st) else null
-        val specs = ranges.map { r ->
-            val sp = f(st, r)
-            if (sp == null || folds == null || folds.replaces.isEmpty()) sp
-            else ChangeSpec(folds.replaceInside(sp.from)?.from ?: sp.from, folds.replaceInside(sp.to)?.to ?: sp.to, sp.insert)
-        }
+        // (A deletion reaching into an atomic range, a fold, is the view's to judge: EditorView.dispatch.)
+        val specs = ranges.map { f(st, it) }
         val merged = ArrayList<ChangeSpec>()
         for (s in specs.filterNotNull().sortedWith(compareBy({ it.from }, { it.to }))) {
             val last = merged.lastOrNull()

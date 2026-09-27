@@ -52,6 +52,62 @@ fun interface WidgetClickHandler {
 /** Every plugin's [WidgetClickHandler], highest precedence first; the first to return true wins. */
 val widgetClickFacet: Facet<WidgetClickHandler, List<WidgetClickHandler>> = Facet.list("widgetClick")
 
+/**
+ * The policy for a user edit that reaches INTO an atomic range (a fold, a range of
+ * `atomicRangesFacet`): a Backspace at its end, a Delete at its start, a soft keyboard deleting its
+ * placeholder, an autocorrect across its edge. The edit itself is never applied (it would take a
+ * piece of text nobody can see). The first handler returning true took it: [AtomicDelete.deleteWhole]
+ * deletes the range with the edit (CM6's behaviour, for a fold plugin that has undo). With none, the
+ * editor's default is **unfold first** (JetBrains): the [revealFacet] handlers are asked to show the
+ * range (the fold plugin unfolds), and the next Backspace deletes normally. [spec] is the edit.
+ */
+fun interface AtomicDeleteHandler {
+    fun deleteInto(target: CommandTarget, from: Int, to: Int, spec: dev.supermux.editor.core.TransactionSpec): Boolean
+}
+
+/** Every plugin's [AtomicDeleteHandler], highest precedence first. */
+val atomicDeleteFacet: Facet<AtomicDeleteHandler, List<AtomicDeleteHandler>> = Facet.list("atomicDelete")
+
+/**
+ * Show hidden range [from, to): its owner (the fold plugin) unfolds it, through its own state
+ * effect, and returns true. Asked when a user edit reaches into an atomic range (the default
+ * [AtomicDeleteHandler] policy), and when a transaction that scrolls into view puts the selection
+ * inside a replaced range (a search match, a go-to-definition in a fold): without a handler that
+ * shows it, the selection is moved out to the range's edge instead.
+ */
+fun interface RevealHandler {
+    fun reveal(target: CommandTarget, from: Int, to: Int): Boolean
+}
+
+/** Every plugin's [RevealHandler], highest precedence first; the first to return true wins. */
+val revealFacet: Facet<RevealHandler, List<RevealHandler>> = Facet.list("reveal")
+
+/** Ready-made [AtomicDeleteHandler]s. */
+object AtomicDelete {
+    /**
+     * CM6's policy: the edit goes ahead, grown to take the whole atomic range it reached into (a
+     * Backspace at a fold's end deletes the fold). For a fold plugin with undo.
+     */
+    val deleteWhole = AtomicDeleteHandler { t, from, to, spec ->
+        val st = t.state
+        val cs = spec.changeSet ?: dev.supermux.editor.core.ChangeSet.of(st.doc.length, spec.changes)
+        val grown = cs.iterChanges().map { c ->
+            val a = if (c.fromA < to && c.toA > from) minOf(c.fromA, from) else c.fromA
+            val b = if (c.fromA < to && c.toA > from) maxOf(c.toA, to) else c.toA
+            dev.supermux.editor.core.ChangeSpec(a, b, c.inserted)
+        }
+        val changes = dev.supermux.editor.core.ChangeSet.of(st.doc.length, grown)
+        t.dispatch(dev.supermux.editor.core.TransactionSpec(
+            changeSet = changes,
+            selection = st.selection.map(changes, 1),
+            scrollIntoView = true,
+            userEvent = spec.userEvent,
+            annotations = listOf(EditorAnnotations.atomicWhole.of(true)),
+        ))
+        true
+    }
+}
+
 /** Annotations the surface puts on the transactions it makes, for plugins (history, M4) to read. */
 object EditorAnnotations {
     /**
@@ -61,6 +117,9 @@ object EditorAnnotations {
      * two (and treats the first as IME input).
      */
     val imeJoinPrevious: dev.supermux.editor.core.AnnotationType<Boolean> = dev.supermux.editor.core.AnnotationType("imeJoinPrevious")
+
+    /** On an edit that deletes atomic ranges whole on purpose ([AtomicDelete.deleteWhole]): not asked again. */
+    val atomicWhole: dev.supermux.editor.core.AnnotationType<Boolean> = dev.supermux.editor.core.AnnotationType("atomicWhole")
 }
 
 /**

@@ -264,12 +264,109 @@ class EditorView(initial: EditorState) : CommandTarget {
     internal class Goal(val selection: EditorSelection, val xs: List<Float>)
 
     override fun dispatch(spec: TransactionSpec) {
-        if (readOnly && isUserEdit(spec)) return
-        val tr = current.update(spec)
+        val userEdit = isUserEdit(spec)
+        if (readOnly && userEdit) return
+        val start = current
+        var tr = start.update(spec)
+        // Atomic ranges (folds): a user edit never takes a piece of one, whatever path it came by
+        // (the hidden field, typeText, paste, a key command, the web's key path).
+        if (userEdit && tr.docChanged && tr.annotation(EditorAnnotations.atomicWhole) != true) {
+            val hit = atomicReachedInto(tr)
+            if (hit != null) { deleteInto(hit.first, hit.second, spec); return }
+        }
+        // The caret never lands inside a replaced range: moved out, unless a reveal handler shows it.
+        var reveal: ReplaceRange? = null
+        val folds = replaced(tr.state)
+        if (folds.replaces.isNotEmpty()) {
+            val inside = tr.state.selection.ranges.firstNotNullOfOrNull { r -> folds.replaceInside(r.head) ?: folds.replaceInside(r.anchor) }
+            if (inside != null) {
+                if (tr.selectionSet && tr.scrollIntoView && tr.state.facet(revealFacet).isNotEmpty()) reveal = inside
+                else tr = start.update(spec.copy(selection = clampOut(tr, folds)))
+            }
+        }
         current = tr.state
         surface?.onTransaction(tr)
         for (l in listeners) l(tr)
         if (tr.scrollIntoView) surface?.scrollIntoView()
+        if (reveal != null && !revealRange(reveal.from, reveal.to)) {
+            // Nobody showed it after all: out to its edge.
+            val f = replaced(current)
+            if (current.selection.ranges.any { f.replaceInside(it.head) != null || f.replaceInside(it.anchor) != null }) {
+                dispatch(TransactionSpec(selection = clampOut(current.update(TransactionSpec()), f), scrollIntoView = true, userEvent = "select"))
+            }
+        }
+    }
+
+    private val foldCache = Folds.Cache()
+    private var foldsOf: Pair<Any, Folds>? = null
+
+    /** [state]'s replaced ranges (cached by its decorations and document). */
+    internal fun replaced(state: EditorState): Folds {
+        val decos = state.facet(dev.supermux.editor.core.decorationsFacet)
+        val key = decos to state.doc
+        foldsOf?.let { (k, f) -> if (k is Pair<*, *> && k.first === decos && k.second === state.doc) return f }
+        val f = Folds.of(state, foldCache)
+        foldsOf = key to f
+        return f
+    }
+
+    /** The shared per-decoration-set extraction (the surface builds its own [Folds] from it too). */
+    internal val sharedFoldCache: Folds.Cache get() = foldCache
+
+    /**
+     * The first atomic range (a fold, a range of `atomicRangesFacet`) that one of [tr]'s changes
+     * deletes a part of, unless a selection range covered all of it (the user selected across it).
+     */
+    private fun atomicReachedInto(tr: Transaction): Pair<Int, Int>? {
+        val st = tr.startState
+        val folds = replaced(st)
+        val extra = st.facet(dev.supermux.editor.core.atomicRangesFacet)
+        if (folds.replaces.none { it.atomic } && extra.all { it.isEmpty }) return null
+        val sel = st.selection.ranges
+        fun covered(from: Int, to: Int) = sel.any { it.from <= from && it.to >= to && it.from < it.to }
+        for (c in tr.changes.iterChanges()) {
+            if (c.toA <= c.fromA) continue
+            for (r in folds.replacesInside(c.fromA, c.toA)) if (r.atomic && !covered(r.from, r.to)) return r.from to r.to
+            for (set in extra) for (r in set.between(c.fromA, c.toA)) {
+                if (r.from < r.to && r.from < c.toA && r.to > c.fromA && !covered(r.from, r.to)) return r.from to r.to
+            }
+        }
+        return null
+    }
+
+    /** A user edit reached into atomic range [from, to): the handlers' policy, else unfold first. */
+    private fun deleteInto(from: Int, to: Int, spec: TransactionSpec) {
+        for (h in current.facet(atomicDeleteFacet)) if (h.deleteInto(this, from, to, spec)) return
+        revealRange(from, to)
+    }
+
+    /** Ask the [revealFacet] handlers to show [from, to) (the fold plugin unfolds). */
+    private fun revealRange(from: Int, to: Int): Boolean {
+        for (h in current.facet(revealFacet)) if (h.reveal(this, from, to)) return true
+        return false
+    }
+
+    /**
+     * [tr]'s selection with every end inside a replaced range moved out: past it the way it moved
+     * (Right into a fold lands after it), else to its nearer edge (a fold made around the caret).
+     */
+    private fun clampOut(tr: Transaction, folds: Folds): EditorSelection {
+        val sel = tr.state.selection
+        val old = tr.startState.selection
+        fun out(pos: Int, was: Int): Int {
+            val r = folds.replaceInside(pos) ?: return pos
+            return when {
+                pos > was -> r.to
+                pos < was -> r.from
+                pos - r.from <= r.to - pos -> r.from
+                else -> r.to
+            }
+        }
+        val ranges = sel.ranges.mapIndexed { i, r ->
+            val o = old.ranges.getOrNull(i) ?: old.main
+            SelectionRange(out(r.anchor, tr.changes.mapPos(o.anchor, 1)), out(r.head, tr.changes.mapPos(o.head, 1)))
+        }
+        return EditorSelection.create(ranges, sel.mainIndex)
     }
 
     /** Replace the whole state (another file, a reload that is not an edit). Listeners are not called. */

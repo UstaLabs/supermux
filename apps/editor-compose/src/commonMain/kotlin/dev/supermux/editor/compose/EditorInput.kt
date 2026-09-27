@@ -78,19 +78,71 @@ fun diffField(before: String, after: String, selFrom: Int = before.length, selTo
     return FieldEdit(p, before.length - s, after.substring(p, after.length - s))
 }
 
-/** The slice of the document the hidden field holds: [text] starts at document offset [base]. */
-data class FieldWindow(val base: Int, val text: String) {
-    val end: Int get() = base + text.length
+/**
+ * The slice of the document the hidden field holds: [text] starts at document offset [base]. A
+ * replaced (folded) range inside it is ONE placeholder character (U+FFFC) in [text] ([holes]): the
+ * keyboard never sees hidden text, and deleting the placeholder is an edit of the whole range (which
+ * the view judges: an atomic one is never deleted by one keystroke). [end] is the document offset
+ * where it ends.
+ */
+data class FieldWindow(val base: Int, val text: String, val holes: List<FieldHole> = emptyList()) {
+    val end: Int get() = base + text.length + holes.sumOf { it.docTo - it.docFrom - 1 }
 
-    fun applyTo(doc: String, e: FieldEdit): String = doc.replaceRange(base + e.from, base + e.to, e.insert)
+    fun applyTo(doc: String, e: FieldEdit): String = doc.replaceRange(toDoc(e.from), toDoc(e.to), e.insert)
+
+    /** The document offset of field offset [k] (a placeholder's edges: its range's ends). */
+    fun toDoc(k: Int): Int {
+        var shift = 0
+        for (h in holes) {
+            if (k <= h.at) return base + k + shift
+            if (k == h.at + 1) return h.docTo
+            shift += h.docTo - h.docFrom - 1
+        }
+        return base + k + shift
+    }
+
+    /** The field offset of document offset [pos] (inside a hidden range: before its placeholder). */
+    fun toField(pos: Int): Int {
+        var shift = 0
+        for (h in holes) {
+            if (pos <= h.docFrom) return (pos - base - shift).coerceIn(0, text.length)
+            if (pos < h.docTo) return h.at
+            if (pos == h.docTo) return h.at + 1
+            shift += h.docTo - h.docFrom - 1
+        }
+        return (pos - base - shift).coerceIn(0, text.length)
+    }
 
     companion object {
+        /** What stands for a hidden range in the field. */
+        const val PLACEHOLDER = '\uFFFC'
+
+        /** [doc]'s [start, end) as the field shows it: every replaced range of [folds] inside it one [PLACEHOLDER]. */
+        internal fun of(doc: Rope, start: Int, end: Int, folds: Folds?): FieldWindow {
+            val inside = folds?.replacesInside(start, end)?.filter { it.from >= start && it.to <= end }.orEmpty()
+            if (inside.isEmpty()) return FieldWindow(start, doc.slice(start, end))
+            val sb = StringBuilder()
+            val holes = ArrayList<FieldHole>()
+            var pos = start
+            for (r in inside) {
+                sb.append(doc.slice(pos, r.from))
+                holes += FieldHole(sb.length, r.from, r.to)
+                sb.append(PLACEHOLDER)
+                pos = r.to
+            }
+            sb.append(doc.slice(pos, end))
+            return FieldWindow(start, sb.toString(), holes)
+        }
+
         /**
          * About [radius] units each side of [cursor], preferring whole lines (so autocorrect sees
          * whole words): an edge moves out to its line's boundary when that stays within twice the
-         * radius, else in to a line boundary, else to a word boundary; never inside a surrogate pair.
+         * radius, else in to a line boundary, else to a word boundary; never inside a surrogate pair,
+         * never inside a replaced range of [folds] (the range is taken whole, as its placeholder).
          */
-        fun around(doc: Rope, cursor: Int, radius: Int): FieldWindow {
+        fun around(doc: Rope, cursor: Int, radius: Int): FieldWindow = around(doc, cursor, radius, null)
+
+        internal fun around(doc: Rope, cursor: Int, radius: Int, folds: Folds?): FieldWindow {
             val len = doc.length
             val margin = maxOf(1, radius / 4)
             var start = maxOf(0, cursor - radius)
@@ -108,7 +160,11 @@ data class FieldWindow(val base: Int, val text: String) {
             }
             if (start > 0 && start < len && doc.charAt(start).isLowSurrogate()) start--
             if (end in 1 until len && doc.charAt(end).isLowSurrogate()) end++
-            return FieldWindow(start, doc.slice(start, end))
+            if (folds != null && folds.replaces.isNotEmpty()) {
+                folds.replaceInside(start)?.let { start = it.from }
+                folds.replaceInside(end)?.let { end = it.to }
+            }
+            return of(doc, start, end, folds)
         }
 
         /** The first line start (else word start) in [from, limit], or null. */
@@ -132,6 +188,9 @@ data class FieldWindow(val base: Int, val text: String) {
         }
     }
 }
+
+/** One placeholder of a [FieldWindow]: at field offset [at], standing for document [docFrom, docTo). */
+data class FieldHole(val at: Int, val docFrom: Int, val docTo: Int)
 
 /** What the platform field holds (or must be set to): its text and its selection. */
 data class FieldText(val text: String, val selStart: Int, val selEnd: Int)
@@ -183,7 +242,7 @@ internal class FieldSync(
     fun current(): FieldText {
         val main = view.state.selection.main
         val w = window
-        return FieldText(w.text, (main.anchor - w.base).coerceIn(0, w.text.length), (main.head - w.base).coerceIn(0, w.text.length))
+        return FieldText(w.text, w.toField(main.anchor), w.toField(main.head))
     }
 
     fun onFieldChange(rawText: String, rawSelStart: Int, rawSelEnd: Int, composition: IntRange?, deferRewindow: Boolean = false): FieldText? {
@@ -229,7 +288,7 @@ internal class FieldSync(
         val wasComposing = this.composition != null
         val w = window
         if (!deferRewindow) {
-            this.composition = composition?.let { (w.base + it.first) until (w.base + it.last + 1) }
+            this.composition = composition?.let { w.toDoc(it.first) until w.toDoc(it.last + 1) }
             // A composition appearing right after an edit that went out as plain input: that edit
             // was its first character (see [joined]).
             if (composition != null && !wasComposing && lastWasDeferredInput) joinNext = true
@@ -241,7 +300,7 @@ internal class FieldSync(
             // echo of a selection this class wrote (clamped to the window) is not a move.
             val moved = before != null && (before.selStart != selStart || before.selEnd != selEnd)
             if (composition == null && moved) {
-                val sel = SelectionRange(w.base + selStart, w.base + selEnd)
+                val sel = SelectionRange(w.toDoc(selStart), w.toDoc(selEnd))
                 val st = view.state
                 if (st.selection.ranges.size != 1 || st.selection.main != sel) {
                     if (sel.to <= st.doc.length) view.dispatch(TransactionSpec(selection = EditorSelection.single(sel.anchor, sel.head), userEvent = "select"))
@@ -264,8 +323,8 @@ internal class FieldSync(
         val atMain = prevFrom < prevTo ||
             (clamped.to - clamped.from == raw.to - raw.from && clamped.insert.length == raw.insert.length)
         val e = if (atMain) clamped else raw
-        val from = w.base + e.from
-        val to = w.base + e.to
+        val from = w.toDoc(e.from)
+        val to = w.toDoc(e.to)
         val st = view.state
         val sel = st.selection
         val main = sel.main
@@ -293,17 +352,21 @@ internal class FieldSync(
             val (spec, changes) = typed
             // The field now holds [text]; so does the document at the window moved through the edit
             // (the window holds no other range, so only ranges before it shift it).
-            window = FieldWindow(changes.mapPos(w.base, -1), text)
+            window = followed(w, e, text, changes)
             if (deferRewindow) lastWasDeferredInput = event == "input"
             view.dispatch(joined(spec, event))
+            // Refused (it reached into a fold) or changed by someone else: show the document again.
+            if (!docMatches(window)) return rewindow() ?: show(current())
         } else {
             // An edit away from the main range (an IME rewriting another word): as the field made
             // it, every range kept (mapped), never collapsed.
             val changes = dev.supermux.editor.core.ChangeSet.of(st.doc.length, listOf(ChangeSpec(from, to, e.insert)))
-            val next = if (sel.ranges.size == 1) EditorSelection.single(w.base + selStart, w.base + selEnd) else sel.map(changes)
-            window = FieldWindow(w.base, text)
+            val nw = followed(w, e, text, changes)
+            val next = if (sel.ranges.size == 1) EditorSelection.single(nw.toDoc(selStart), nw.toDoc(selEnd)) else sel.map(changes)
+            window = nw
             if (deferRewindow) lastWasDeferredInput = event == "input"
             view.dispatch(joined(TransactionSpec(changeSet = changes, selection = next, scrollIntoView = true, userEvent = event), event))
+            if (!docMatches(window)) return rewindow() ?: show(current())
         }
         // A huge edit (a paste) leaves a huge field: shrink it now, even inside the input event.
         if (window.text.length > 4 * radius) return rewindow()
@@ -350,6 +413,20 @@ internal class FieldSync(
         return show(current())
     }
 
+    /** [w] after the field's edit [e] (now showing [text]) went into the document as [changes]: its placeholders moved with it. */
+    private fun followed(w: FieldWindow, e: FieldEdit, text: String, changes: dev.supermux.editor.core.ChangeSet): FieldWindow {
+        if (w.holes.isEmpty()) return FieldWindow(changes.mapPos(w.base, -1), text)
+        val delta = e.insert.length - (e.to - e.from)
+        val holes = w.holes.mapNotNull { h ->
+            when {
+                h.at + 1 <= e.from -> h
+                h.at >= e.to -> FieldHole(h.at + delta, changes.mapPos(h.docFrom, 1), changes.mapPos(h.docTo, -1))
+                else -> null // the edit took its placeholder
+            }
+        }
+        return FieldWindow(changes.mapPos(w.base, -1), text, holes)
+    }
+
     /**
      * About [radius] around the main cursor, but holding no OTHER range: typing at several cursors
      * then changes the field's text only where the field itself changed it, so the field stays in
@@ -358,7 +435,8 @@ internal class FieldSync(
     private fun window(): FieldWindow {
         val st = view.state
         val main = st.selection.main
-        val w = FieldWindow.around(st.doc, main.head, radius)
+        val folds = view.replaced(st)
+        val w = FieldWindow.around(st.doc, main.head, radius, folds)
         var start = w.base
         var end = w.end
         for (r in st.selection.ranges) {
@@ -366,7 +444,7 @@ internal class FieldSync(
             if (r.to <= main.from) start = maxOf(start, r.to)
             if (r.from >= main.to) end = minOf(end, r.from)
         }
-        return if (start == w.base && end == w.end) w else FieldWindow(start, st.doc.slice(start, end))
+        return if (start == w.base && end == w.end) w else FieldWindow.of(st.doc, start, end, folds)
     }
 
     /** True when a range other than the main one lies inside [w] (the selection changed shape). */
@@ -378,8 +456,14 @@ internal class FieldSync(
     }
 
     private fun docMatches(w: FieldWindow): Boolean {
-        val doc = view.state.doc
-        return w.end <= doc.length && doc.slice(w.base, w.end) == w.text
+        val st = view.state
+        val doc = st.doc
+        if (w.end > doc.length) return false
+        if (w.holes.isEmpty()) {
+            val folds = view.replaced(st)
+            return (folds.replaces.isEmpty() || folds.replacesInside(w.base, w.end).isEmpty()) && doc.slice(w.base, w.end) == w.text
+        }
+        return FieldWindow.of(doc, w.base, w.end, view.replaced(st)) == w
     }
 
     /** The caret is within [margin] of an edge that has more document beyond it. */
