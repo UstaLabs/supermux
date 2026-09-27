@@ -145,6 +145,40 @@ class DefaultCommandsTest {
         assertEquals("\t|x", tabs.marked())
     }
 
+    @Test fun indentLessRemovesOneUnitFromEveryTouchedLine() {
+        check("    a|b", DefaultCommands.indentLess, "a|b")
+        check("      a|", DefaultCommands.indentLess, "  a|")
+        check("  a|", DefaultCommands.indentLess, "a|") // less than one unit: what there is
+        check("a|", DefaultCommands.indentLess, "a|")
+        check("    [a\n    b\n  c]", DefaultCommands.indentLess, "[a\nb\nc]")
+        // A selection ending at a line's start does not touch that line.
+        check("    [a\n]    b", DefaultCommands.indentLess, "[a\n]    b")
+        // Every cursor, each line once.
+        check("    a|\n    b|\n    c", DefaultCommands.indentLess, "a|\nb|\n    c")
+        check("    |a|", DefaultCommands.indentLess, "|a|")
+        // Tabs: a tab is one unit, whatever the unit is; spaces up to the tab size with a tab unit.
+        check("\t\ta|", DefaultCommands.indentLess, "\ta|")
+        val tabs = view("      x|", indentUnitFacet.of("\t"))
+        DefaultCommands.indentLess.run(tabs)
+        assertEquals("  x|", tabs.marked())
+        // Shift-Tab is bound everywhere; Tab with a selection is indentMore, a cursor still inserts.
+        fun run(apple: Boolean, marked: String, chord: KeyChord): String {
+            val v = view(marked, defaultKeymap(apple))
+            assertTrue(runKey(v, chord, apple), "$chord was not bound (apple=$apple)")
+            return v.marked()
+        }
+        assertEquals("a|", run(false, "    a|", KeyChord("Tab", shift = true)))
+        assertEquals("a|", run(true, "    a|", KeyChord("Tab", shift = true)))
+        assertEquals("    [a\n    b]", run(false, "[a\nb]", KeyChord("Tab")))
+        assertEquals("ab  |x", run(false, "ab|x", KeyChord("Tab")))
+    }
+
+    @Test fun indentMoreIndentsEveryTouchedLineEvenForACursor() {
+        check("a|b", DefaultCommands.indentMore, "    a|b")
+        check("[a\nb]\nc", DefaultCommands.indentMore, "    [a\n    b]\nc")
+        check("a|\nb|", DefaultCommands.indentMore, "    a|\n    b|")
+    }
+
     @Test fun deleteWordForwardAndItsKeys() {
         check("one| two three", DefaultCommands.deleteWordForward, "one| three")
         check("|abc def", DefaultCommands.deleteWordForward, "| def")

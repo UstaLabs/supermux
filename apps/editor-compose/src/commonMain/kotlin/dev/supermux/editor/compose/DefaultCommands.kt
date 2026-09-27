@@ -111,6 +111,34 @@ object DefaultCommands {
         }
     }
 
+    /** One indent unit at the start of every line a range touches, cursors included (`Mod-]`). */
+    val indentMore = Command { t -> indentLines(t, t.state.facet(indentUnitFacet).ifEmpty { "\t" }) }
+
+    /**
+     * Shift-Tab (and `Mod-[`): one indent unit off the start of every line a range touches, cursor
+     * or selection: a leading tab, else leading spaces up to the unit's width (a tab unit: the tab
+     * size), or as many as the line has. Hardware keys only: soft keyboards have no Tab.
+     */
+    val indentLess = Command { t ->
+        val st = t.state
+        val doc = st.doc
+        val unit = st.facet(indentUnitFacet)
+        val width = if (unit == "\t" || unit.isEmpty()) st.facet(tabSizeFacet) else unit.length
+        val specs = touchedLines(st).mapNotNull { l ->
+            val start = doc.lineStart(l)
+            val end = if (l + 1 < doc.lineCount) doc.lineStart(l + 1) - 1 else doc.length
+            if (start < end && doc.charAt(start) == '\t') return@mapNotNull ChangeSpec(start, start + 1)
+            var i = start
+            while (i < end && i - start < width && doc.charAt(i) == ' ') i++
+            if (i > start) ChangeSpec(start, i) else null
+        }
+        if (specs.isEmpty()) return@Command true
+        val changes = ChangeSet.of(doc.length, specs)
+        val sel = EditorSelection.create(st.selection.ranges.map { SelectionRange(changes.mapPos(it.anchor, 1), changes.mapPos(it.head, 1)) }, st.selection.mainIndex)
+        t.dispatch(TransactionSpec(changeSet = changes, selection = sel, scrollIntoView = true, userEvent = "delete.dedent"))
+        true
+    }
+
     /** Copy every non-empty range, one line per range (nothing when all are cursors). */
     val copy = Command { t ->
         selectedText(t.state)?.let { (t as? EditorView)?.clipboard?.write(it) }
@@ -227,15 +255,21 @@ object DefaultCommands {
         return true
     }
 
-    private fun indentLines(t: CommandTarget, unit: String): Boolean {
-        val st = t.state
+    /** Every line a range touches, once, in order (a selection ending at a line's start stops before it). */
+    private fun touchedLines(st: EditorState): List<Int> {
         val doc = st.doc
         val lines = HashSet<Int>()
         for (r in st.selection.ranges) {
             val last = doc.lineIndexAt(r.to).let { l -> if (!r.empty && l > doc.lineIndexAt(r.from) && doc.lineStart(l) == r.to) l - 1 else l }
             for (l in doc.lineIndexAt(r.from)..last) lines += l
         }
-        val changes = ChangeSet.of(doc.length, lines.sorted().map { ChangeSpec(doc.lineStart(it), doc.lineStart(it), unit) })
+        return lines.sorted()
+    }
+
+    private fun indentLines(t: CommandTarget, unit: String): Boolean {
+        val st = t.state
+        val doc = st.doc
+        val changes = ChangeSet.of(doc.length, touchedLines(st).map { ChangeSpec(doc.lineStart(it), doc.lineStart(it), unit) })
         val sel = EditorSelection.create(
             st.selection.ranges.map { SelectionRange(changes.mapPos(it.anchor, 1), changes.mapPos(it.head, 1)) },
             st.selection.mainIndex,
@@ -376,6 +410,9 @@ private fun buildDefaultBindings(apple: Boolean): List<KeyBinding> {
     bind("Enter", c.insertNewline)
     bind("Shift-Enter", c.insertNewline)
     bind("Tab", c.insertTab)
+    bind("Shift-Tab", c.indentLess)
+    bind("Mod-]", c.indentMore)
+    bind("Mod-[", c.indentLess)
     bind("Mod-a", c.selectAll)
     // Font zoom: "=" is the "+" key without Shift on most layouts; "+" is a key of its own on others
     // and on the number pad.

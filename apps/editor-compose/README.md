@@ -130,6 +130,18 @@ dictation and CJK composition work; the design passed all 8 checks on an iPhone 
 - `readOnly` makes the field read-only and drops user edits in the view (`input*`, `delete*`,
   `paste*`, `undo`, `redo`); the selection still moves, programmatic changes still apply.
 
+**Indentation.** Tab with only cursors inserts up to the next indent stop; Tab with a selection
+(and `Mod-]`) indents every touched line by one `indentUnitFacet`; Shift-Tab (and `Mod-[`) removes one
+unit (a tab, or leading spaces up to the unit's width) from every touched line, cursor or
+selection. These are hardware keys only: a soft keyboard has no Tab key, so an accessory-bar
+indent/outdent action is a later addition.
+
+**Smart Punctuation (iOS).** The hidden field answers `.no` for `smartQuotesType`,
+`smartDashesType` and `smartInsertDeleteType` (Compose Multiplatform 1.12 exposes none of them, so a
+small cinterop shim, `src/nativeInterop/cinterop/uikitTraits.def`, adds the getters to Compose's
+input view classes): a typed `"` stays U+0022. Autocorrect and suggestions are unchanged. Android has
+no platform setting for this; Gboard and Samsung Keyboard type straight quotes by default.
+
 **Hardware keys** are previewed by the surface (an ancestor of the field, so it sees them first):
 the state's keymap facet (`runKey`), then `defaultKeymap`'s bindings as the lowest-precedence
 fallback (a state needs no keymap of its own; a plugin overrides a default by binding the same
