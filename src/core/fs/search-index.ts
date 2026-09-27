@@ -45,12 +45,19 @@ function scoreHits(s: string, hits: number[], nameStart: number): number {
 export function fuzzyMatch(q: string, s: string): { score: number; hits: number[] } | null {
   if (!q || !q.trim()) return null
   const nameStart = s.lastIndexOf("/") + 1
-  const anywhere = greedy(q, s, 0)
-  if (!anywhere) return null
-  const inName = nameStart > 0 ? greedy(q, s, nameStart) : anywhere
-  const a = inName ? { hits: inName, score: scoreHits(s, inName, nameStart) } : null
-  const b = anywhere ? { hits: anywhere, score: scoreHits(s, anywhere, nameStart) } : null
-  return a && (!b || a.score >= b.score) ? a : b!
+  // Cheap pre-check: the leftmost greedy alignment succeeds iff q is a subsequence of s at all.
+  if (!greedy(q, s, 0)) return null
+  const sl = s.toLowerCase()
+  const c0 = q.toLowerCase()[0]!
+  let best: { hits: number[]; score: number } | null = null
+  for (let i = 0; i < sl.length; i++) {
+    if (sl[i] !== c0) continue
+    const hits = greedy(q, s, i)
+    if (!hits) continue
+    const score = scoreHits(s, hits, nameStart)
+    if (!best || score > best.score) best = { hits, score }
+  }
+  return best
 }
 
 interface Built { scope: string; rels: Array<{ rel: string; dir: boolean }>; builtAt: number; lastUsed: number }
@@ -58,8 +65,9 @@ interface Built { scope: string; rels: Array<{ rel: string; dir: boolean }>; bui
 async function walk(scope: string): Promise<Array<{ rel: string; dir: boolean }>> {
   const out: Array<{ rel: string; dir: boolean }> = []
   const queue = [scope]
-  while (queue.length && out.length < MAX_PATHS) {
-    const d = queue.shift()!
+  let head = 0
+  while (head < queue.length && out.length < MAX_PATHS) {
+    const d = queue[head++]!
     let ents: import("fs").Dirent[]
     try { ents = await readdir(d, { withFileTypes: true }) } catch { continue }
     for (const e of ents) {

@@ -15,6 +15,10 @@ test("fuzzyMatch prefers the file name, consecutive runs and word starts", () =>
   expect(hits.map((i) => "a/FileTree.kt"[i])).toEqual(["F", "T"])
 })
 
+test("fuzzyMatch tries every occurrence of the query's first character and keeps the best alignment", () => {
+  expect(fuzzyMatch("kt", "kit/testkit.kt")!.hits).toEqual([12, 13])
+})
+
 test("fuzzyMatch returns null for an empty or whitespace query", () => {
   expect(fuzzyMatch("", "apps/ui/editor/FileTree.kt")).toBeNull()
   expect(fuzzyMatch("   ", "apps/ui/editor/FileTree.kt")).toBeNull()
