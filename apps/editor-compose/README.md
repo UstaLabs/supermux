@@ -60,9 +60,21 @@ coordinates (x from the text area's left edge, y from the document top); the sur
 gutter and the scroll.
 
 **What is laid out.** Only the visible lines plus `EditorDefaults.OVERSCAN_LINES` (4) each side.
-A line's measured height goes into the height map; the painter looks at the visible range again
+A line's measured height goes into the height map; the layout pass looks at the visible range again
 after measuring, so a wrapped line that turned out taller moves the lines below it in the same
 frame. The viewport reported through `onViewport` / `view.viewport` is those lines' text.
+
+**Measure before draw.** The surface is a `SubcomposeLayout`. Its layout pass
+(`EditorController.layoutFrame`) does everything that measures or moves: the size, the pending
+scroll, the anchor, clamping, the visible lines' layouts (and the caret's and the handles' lines,
+before the anchor is restored), and it builds a `SurfaceFrame` in surface pixels (text runs,
+selection and cursor rects, gutter numbers, handles, the caret the hidden field is placed at). The
+canvas's draw pass only paints that frame; `DrawGuard` (strict in every UI test) fails a line
+measured or a scroll written inside a draw. The pass observes the state, the composition, the
+handles and `EditorScrollState.version` (bumped by every scroll it did not make itself), and reads
+the position unobserved: its own anchoring and clamping never cost a second layout or a second
+frame (`MeasureBeforeDrawTest`: one layout pass and one paint per scroll step, the anchored
+position in that paint).
 
 **Scroll anchoring.** The first visible line is the anchor: when heights change above it (a wrapped
 line measured for the first time, an edit above the viewport such as a disk reload), the scroll
@@ -258,8 +270,7 @@ and the desktop it is `hideFromAccessibility` (UI tests drive it as `hasSetTextA
 **Grapheme limits.** `TextBoundaries` follows the parts of UAX #29 an editor meets (combining marks,
 ZWJ sequences, flags, emoji modifiers), not all of it: Indic conjuncts (GB9c: consonant + virama +
 consonant in Devanagari and others) are not joined, so the caret can stop inside a conjunct and a
-Backspace takes one piece of it. The painter still writes the scroll position during draw when the
-anchor moves it (measuring happens there); a pre-draw measuring phase would move that out.
+Backspace takes one piece of it.
 
 **Pointer.** Mouse: click places the caret, Shift-click extends, drag selects with auto-scroll
 past an edge, double click selects a word, triple click a line, Alt-drag makes one range per line.

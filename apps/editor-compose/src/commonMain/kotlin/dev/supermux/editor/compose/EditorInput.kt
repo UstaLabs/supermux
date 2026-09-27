@@ -1,7 +1,6 @@
 package dev.supermux.editor.compose
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -35,7 +34,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import dev.supermux.editor.core.ChangeSpec
 import dev.supermux.editor.core.EditorSelection
@@ -603,7 +601,7 @@ private fun swallowedChords(apple: Boolean) = if (apple) swallowedApple else swa
 /**
  * The invisible text field: the surface's focus target and the IME's session. It draws nothing
  * (its decorator never places the inner text field); it sits at the caret, one pixel, so the
- * platform anchors candidate windows there.
+ * platform anchors candidate windows there (the surface places it: see `surfaceMeasurePolicy`).
  *
  * MultiLine, not SingleLine: iOS delivers Return as an inserted "\n", which a single-line field
  * turns into an IME action and drops (terminal-compose's lesson).
@@ -697,8 +695,8 @@ internal fun EditorInputField(controller: EditorController, readOnly: Boolean) {
     Box(if (expose) Modifier.semantics { hideFromAccessibility() } else Modifier.clearAndSetSemantics { }) {
     BasicTextField(
         state = field,
+        // Placed at the caret by the surface's layout pass (it knows where the caret is this frame).
         modifier = Modifier
-            .offset { controller.caretRectOnScreen(controller.view.state.selection.main.head).let { IntOffset(it.left.toInt(), it.top.toInt()) } }
             .size(1.dp)
             .focusRequester(controller.focusRequester)
             .then(LocalEditorFieldPointerSpy.current?.let { spy -> Modifier.pointerInput(spy) { awaitPointerEventScope { while (true) { awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial); spy() } } } } ?: Modifier),

@@ -1,6 +1,15 @@
 package dev.supermux.editor.compose
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.layout.SubcomposeMeasureScope
+import androidx.compose.ui.node.DrawModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.invalidateDraw
+import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.gestures.scrollable
@@ -14,9 +23,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -228,35 +235,118 @@ fun Editor(
             .editorMagnifier { controller.magnifierAt }
             .onGloballyPositioned { controller.coordinates = it },
     ) {
-        val paintHook by rememberUpdatedState(onPaint)
-        // The text node is its own layout node, a child of the scroll node: sharing one node with
-        // `scrollable` made macOS map it to an AXScrollArea with no text.
-        Canvas(Modifier.fillMaxSize().then(if (LocalEditorSurfaceText.current) Modifier.editorSemantics(controller, label, readOnly) else Modifier)) {
-            controller.paint(this)
-            paintHook?.invoke()
+        val paintHook = rememberUpdatedState(onPaint)
+        val surfaceText = LocalEditorSurfaceText.current
+        val testChild = LocalEditorTestChild.current
+        // The surface's children, each subcomposed by the layout pass below (M3c's widgets join them).
+        val slots = remember(controller, label, readOnly, surfaceText, testChild, clipboard, shownTheme) {
+            SurfaceSlots(
+                // The text node is its own layout node, a child of the scroll node: sharing one node
+                // with `scrollable` made macOS map it to an AXScrollArea with no text.
+                canvas = {
+                    Spacer(Modifier.fillMaxSize().editorCanvas(controller, paintHook)
+                        .then(if (surfaceText) Modifier.editorSemantics(controller, label, readOnly) else Modifier))
+                },
+                testChild = testChild?.let { child -> { Box(Modifier.fillMaxSize()) { child() } } },
+                field = { EditorInputField(controller, readOnly) },
+                // A pointer shield exactly over the hidden field's touch target: the topmost hit sibling
+                // takes a pointer, so the field (at the caret, its target expanded to 48 dp) never gets
+                // one. Its own touch selection crashed on iOS (a long press on an empty line: Compose's
+                // moveCaretByLongPress with offset -1) and moved its selection behind the editor's back
+                // everywhere. Only that square: other children of the surface (widgets) still get
+                // pointers. It consumes nothing: the surface's own gestures (this Box's pointerInput)
+                // see every event. (Android stylus handwriting INTO the field is blocked with it; the
+                // editor has none of its own yet.)
+                shield = {
+                    Box(
+                        Modifier.size(EditorDefaults.SHIELD_DP.dp)
+                            .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial) } },
+                    )
+                },
+                overlay = {
+                    EditorSelectionMenu(controller, readOnly, clipboard, shownTheme)
+                    LineAnnouncement(controller.announcer)
+                },
+            )
         }
-        LocalEditorTestChild.current?.invoke(this)
-        EditorInputField(controller, readOnly)
-        // A pointer shield exactly over the hidden field's touch target: the topmost hit sibling takes
-        // a pointer, so the field (at the caret, its target expanded to 48 dp) never gets one. Its own
-        // touch selection crashed on iOS (a long press on an empty line: Compose's
-        // moveCaretByLongPress with offset -1) and moved its selection behind the editor's back
-        // everywhere. Only that square: other children of the surface (M3c's widgets) still get
-        // pointers. It consumes nothing: the surface's own gestures (this Box's pointerInput) see
-        // every event. (Android stylus handwriting INTO the field is blocked with it; the editor
-        // has none of its own yet.)
-        Box(
-            Modifier
-                .offset {
-                    val r = controller.caretRectOnScreen(controller.view.state.selection.main.head)
-                    val half = EditorDefaults.SHIELD_DP.dp.roundToPx() / 2
-                    IntOffset(r.left.toInt() - half, r.top.toInt() - half)
-                }
-                .size(EditorDefaults.SHIELD_DP.dp)
-                .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial) } },
-        )
-        EditorSelectionMenu(controller, readOnly, clipboard, shownTheme)
-        LineAnnouncement(controller.announcer)
+        // Measure before draw: the layout pass positions the scroll, lays out the visible lines and
+        // places the children; the canvas then only paints what it decided.
+        val policy = remember(controller, slots, shownTheme, density, lineWrap, showLineNumbers) {
+            surfaceMeasurePolicy(controller, slots) { controller.configure(shownTheme, density, lineWrap, showLineNumbers) }
+        }
+        SubcomposeLayout(Modifier.fillMaxSize(), policy)
+    }
+}
+
+/** The surface's fixed children (see [surfaceMeasurePolicy]). */
+internal class SurfaceSlots(
+    val canvas: @Composable () -> Unit,
+    val testChild: (@Composable () -> Unit)?,
+    val field: @Composable () -> Unit,
+    val shield: @Composable () -> Unit,
+    val overlay: @Composable () -> Unit,
+)
+
+private enum class Slot { CANVAS, TEST, FIELD, SHIELD, OVERLAY }
+
+/**
+ * The surface's layout pass: [configure] (cheap when nothing changed), then
+ * [EditorController.layoutFrame] (the scroll, the visible lines, the frame), then the children:
+ * the canvas over the whole surface, the hidden field and its shield at the main caret, the menu.
+ */
+private fun surfaceMeasurePolicy(
+    c: EditorController,
+    slots: SurfaceSlots,
+    configure: () -> Unit,
+): SubcomposeMeasureScope.(Constraints) -> MeasureResult = { constraints ->
+    configure()
+    val w = if (constraints.hasBoundedWidth) constraints.maxWidth else constraints.minWidth
+    val h = if (constraints.hasBoundedHeight) constraints.maxHeight else constraints.minHeight
+    val frame = c.layoutFrame(w.toFloat(), h.toFloat())
+    val full = Constraints.fixed(w, h)
+    val canvas = subcompose(Slot.CANVAS, slots.canvas).map { it.measure(full) }
+    val test = slots.testChild?.let { t -> subcompose(Slot.TEST, t).map { it.measure(full) } }.orEmpty()
+    val field = subcompose(Slot.FIELD, slots.field).map { it.measure(Constraints()) }
+    val shield = subcompose(Slot.SHIELD, slots.shield).map { it.measure(Constraints()) }
+    val overlay = subcompose(Slot.OVERLAY, slots.overlay).map { it.measure(Constraints(maxWidth = w, maxHeight = h)) }
+    val caret = frame?.caret ?: Rect.Zero
+    layout(w, h) {
+        canvas.forEach { it.place(0, 0) }
+        test.forEach { it.place(0, 0) }
+        // The field sits at the caret, where the platform anchors the keyboard's candidates.
+        field.forEach { it.place(caret.left.toInt(), caret.top.toInt()) }
+        shield.forEach { it.place(caret.left.toInt() - it.width / 2, caret.top.toInt() - it.height / 2) }
+        overlay.forEach { it.place(0, 0) }
+    }
+}
+
+/** The canvas: paints the controller's last frame ([EditorController.draw]), then tells the host. */
+internal fun Modifier.editorCanvas(c: EditorController, onPaint: androidx.compose.runtime.State<(() -> Unit)?>): Modifier =
+    this then EditorCanvasElement(c, onPaint)
+
+private data class EditorCanvasElement(val c: EditorController, val onPaint: androidx.compose.runtime.State<(() -> Unit)?>) :
+    ModifierNodeElement<EditorCanvasNode>() {
+    override fun create() = EditorCanvasNode(c, onPaint)
+    override fun update(node: EditorCanvasNode) = node.bind(c, onPaint)
+}
+
+internal class EditorCanvasNode(private var c: EditorController, private var onPaint: androidx.compose.runtime.State<(() -> Unit)?>) :
+    Modifier.Node(), DrawModifierNode {
+    override fun onAttach() { c.canvasNode = this }
+    override fun onDetach() { if (c.canvasNode === this) c.canvasNode = null }
+
+    fun bind(c: EditorController, onPaint: androidx.compose.runtime.State<(() -> Unit)?>) {
+        if (c !== this.c) { if (this.c.canvasNode === this) this.c.canvasNode = null; this.c = c; c.canvasNode = this }
+        this.onPaint = onPaint
+        invalidate()
+    }
+
+    /** A new frame to paint (the layout pass built one). */
+    fun invalidate() { if (isAttached) invalidateDraw() }
+
+    override fun ContentDrawScope.draw() {
+        c.draw(this)
+        onPaint.value?.invoke()
     }
 }
 
@@ -433,7 +523,7 @@ internal class EditorController(
         private set
     private var showLineNumbers = true
 
-    /** The surface's size in pixels, from the last paint. */
+    /** The surface's size in pixels, from the last layout pass. */
     var viewportSize: Size = Size.Zero
         private set
 
@@ -443,7 +533,7 @@ internal class EditorController(
     var textLeft = 0f
         private set
 
-    /** The lines the last paint laid out (a test hook). */
+    /** The lines the last layout pass laid out (a test hook). */
     var drawnLines: IntRange = IntRange.EMPTY
         internal set
 
@@ -508,22 +598,62 @@ internal class EditorController(
     private var lastSize = Size.Zero
     private var lastDigits = 0
 
-    /** Paint one frame. */
-    fun paint(scope: androidx.compose.ui.graphics.drawscope.DrawScope) {
-        val theme = theme ?: return
+    /** The frame the last layout pass built: all the draw pass paints. */
+    internal var frame: SurfaceFrame? = null
+        private set
+
+    /** The canvas painting [frame], told when there is a new one. */
+    internal var canvasNode: EditorCanvasNode? = null
+
+    /** Layout passes so far (a test hook). */
+    var layoutPasses = 0
+        private set
+
+    /** The vertical scroll the last frame was built at (a test hook: what is on screen). */
+    val frameScrollY: Float get() = frame?.scrollY ?: scroll.y
+
+    /**
+     * The layout pass (measure before draw): the size, the scroll position (the anchor, clamping),
+     * the visible lines laid out and the frame decided. Observed: the state, a scroll that was not
+     * this pass's own ([EditorScrollState.version]), the composition, the touch handles; the rest is
+     * read unobserved, so the pass's own scroll writes never schedule another one.
+     */
+    fun layoutFrame(width: Float, height: Float): SurfaceFrame? {
+        layoutPasses++
         val state = view.state
-        val d = digits(state.doc.lineCount)
-        if (scope.size != lastSize || d != lastDigits) {
-            lastSize = scope.size
-            lastDigits = d
-            viewportSize = scope.size
-            relayout()
+        @Suppress("UNUSED_VARIABLE") val observed = Triple(scroll.version, composition, handles)
+        val theme = theme ?: return null
+        val f = Snapshot.withoutReadObservation {
+            scroll.layoutDepth++
+            try {
+                val size = Size(width, height)
+                val d = digits(state.doc.lineCount)
+                if (size != lastSize || d != lastDigits) {
+                    lastSize = size
+                    lastDigits = d
+                    viewportSize = size
+                    relayout()
+                }
+                buildFrame(state, theme)
+            } finally {
+                scroll.layoutDepth--
+            }
         }
-        scope.paintEditor(this, theme, state, focused = view.focused, cursorOn = cursorOn)
+        frame = f
+        canvasNode?.invalidate()
+        return f
+    }
+
+    /** The draw pass: the last frame as it is ([drawFrame]); it measures and scrolls nothing. */
+    fun draw(scope: androidx.compose.ui.graphics.drawscope.DrawScope) {
+        val theme = theme ?: return
+        val f = frame ?: return scope.drawRect(theme.background)
+        DrawGuard.drawing { scope.drawFrame(f, theme, focused = view.focused, cursorOn = cursorOn) }
     }
 
     /** A cached layout of line number [n]. */
     fun numberLayout(n: Int): TextLayoutResult = numberLayouts.getOrPut(n) {
+        DrawGuard.check("a line number layout")
         if (numberLayouts.size > 4096) numberLayouts.clear()
         measurer.measure(n.toString(), numberStyle, softWrap = false, density = density)
     }

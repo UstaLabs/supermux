@@ -188,6 +188,7 @@ class LineLayouts(
     }
 
     private fun measure(text: String, spans: List<LineSpan>, noWrap: Boolean): TextLayoutResult {
+        DrawGuard.check("a line layout")
         measureCount++
         val annotated = AnnotatedString(text, spanStyles = spans.map { AnnotatedString.Range(it.style, it.start, it.end) })
         val placeholders = if (text.indexOf('\t') < 0) emptyList() else tabPlaceholders(text)

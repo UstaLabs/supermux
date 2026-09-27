@@ -55,6 +55,8 @@ internal fun editorTest(
     toolbar: androidx.compose.ui.platform.TextToolbar? = null,
     body: ComposeUiTest.(SurfaceFixture) -> Unit,
 ) = runComposeUiTest {
+    // Measuring or scrolling inside a draw pass fails every surface test (M3c: measure before draw).
+    DrawGuard.strict = true
     val view = EditorView(state)
     val keyboard = RecordingKeyboard()
     val clipboard = FakeClipboard()
@@ -91,7 +93,7 @@ internal fun editorTest(
         }
     }
     waitForIdle()
-    body(fixture)
+    try { body(fixture) } finally { DrawGuard.strict = false }
 }
 
 /** The hidden input field (the surface's own text node has SetText too, and a content description). */

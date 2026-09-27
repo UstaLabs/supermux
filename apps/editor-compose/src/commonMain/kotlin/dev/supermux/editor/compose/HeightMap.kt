@@ -87,6 +87,18 @@ class HeightMap(
         return chunks[c].above?.get(local) ?: 0f
     }
 
+    /** The block height below [line]'s text. */
+    fun blockBelow(line: Int): Float {
+        val (c, local) = locate(line)
+        return chunks[c].below?.get(local) ?: 0f
+    }
+
+    /** [line]'s TEXT height (its box without the blocks). */
+    fun textHeight(line: Int): Float {
+        val (c, local) = locate(line)
+        return chunks[c].h[local]
+    }
+
     /** The line whose box contains [y], clamped to the document. */
     fun lineAt(y: Float): Int {
         if (lineCount == 0) return 0

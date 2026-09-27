@@ -70,6 +70,9 @@ class Geometry(
     /** Where [line]'s text starts (below any block widget above it). */
     fun lineTop(line: Int): Float = heights.top(line) + heights.blockAbove(line)
 
+    /** [line]'s text height (without its block widgets). */
+    fun textHeight(line: Int): Float = heights.textHeight(line)
+
     /**
      * The layouts to draw for [line] and where (line-local: from the line's text top-left), limited
      * to line-local x in [xFrom, xTo] and y in [yFrom, yTo] for a long line. A short line is one
