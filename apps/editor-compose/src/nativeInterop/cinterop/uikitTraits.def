@@ -1,33 +1,40 @@
 # The hidden field's UIKit text input traits Compose Multiplatform 1.12 does not expose:
 # Smart Punctuation (curly quotes, dashes, smart insert/delete) must be off in a code editor.
-# Compose's input views (ComposeTextInputView / NativeTextInputView) implement only the traits in
-# PlatformImeOptions, so the three getters are added to their classes at run time (a trait UIKit
-# asks with respondsToSelector:). Autocorrect and suggestions are untouched.
+# Compose's input views (subclasses of its ObjC classes CMPEditMenuView / CMPTextInputView) implement only
+# the traits in PlatformImeOptions, so the three getters are added to those classes at run time (a trait UIKit
+# asks with respondsToSelector:). They answer .no only while an editor's hidden field is focused, the
+# system default for any other Compose text field. Autocorrect and suggestions are untouched.
 language = Objective-C
 package = dev.supermux.editor.compose.uikit
 ---
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
-#include <string.h>
 
-static NSInteger editor_trait_no(id self, SEL _cmd) { return 1; } /* UITextSmart*TypeNo */
+/* 1 while an editor's hidden field is the text input in focus (Kotlin sets it on the editor's focus). */
+static int editor_smart_off = 0;
 
-/** Adds the three "No" getters to Compose's input view classes; returns how many classes were patched. */
-static int editor_disable_smart_punctuation(void) {
-    unsigned int n = 0;
-    Class *classes = objc_copyClassList(&n);
-    int patched = 0;
-    for (unsigned int i = 0; i < n; i++) {
-        const char *name = class_getName(classes[i]);
-        if (strstr(name, "ComposeTextInputView") == NULL && strstr(name, "NativeTextInputView") == NULL) continue;
-        class_replaceMethod(classes[i], @selector(smartQuotesType), (IMP)editor_trait_no, "q@:");
-        class_replaceMethod(classes[i], @selector(smartDashesType), (IMP)editor_trait_no, "q@:");
-        class_replaceMethod(classes[i], @selector(smartInsertDeleteType), (IMP)editor_trait_no, "q@:");
-        patched++;
+/* UITextSmart{Quotes,Dashes,InsertDelete}Type: 1 = No while an editor's field is focused, 0 = Default
+   (the system's setting) for every other Compose text field of the app. */
+static NSInteger editor_trait_answer(id self, SEL _cmd) { return editor_smart_off ? 1 : 0; }
+
+/**
+ * Adds the three getters to Compose's ObjC base classes of its input views: CMPEditMenuView (the base
+ * of ComposeTextInputView, the input view of BasicTextField in 1.12.0) and CMPTextInputView (the
+ * UITextInput base of the others). Named classes, no scan of the class list. Returns how many exist.
+ */
+static int editor_patch_smart_punctuation(void) {
+    int n = 0;
+    const char *names[] = { "CMPEditMenuView", "CMPTextInputView" };
+    for (int i = 0; i < 2; i++) {
+        Class c = objc_getClass(names[i]);
+        if (c == nil) continue;
+        class_replaceMethod(c, @selector(smartQuotesType), (IMP)editor_trait_answer, "q@:");
+        class_replaceMethod(c, @selector(smartDashesType), (IMP)editor_trait_answer, "q@:");
+        class_replaceMethod(c, @selector(smartInsertDeleteType), (IMP)editor_trait_answer, "q@:");
+        n++;
     }
-    free(classes);
-    return patched;
+    return n;
 }
 
 static UIView *editor_find_first_responder(UIView *v) {
@@ -45,6 +52,13 @@ static void editor_reload_input_traits(void) {
             if (r) { [r reloadInputViews]; return; }
         }
     }
+}
+
+/** An editor's field took (1) or left (0) the focus: the traits answer accordingly, re-read now. */
+static void editor_set_smart_punctuation_off(int off) {
+    if (editor_smart_off == off) return;
+    editor_smart_off = off;
+    editor_reload_input_traits();
 }
 
 /** A trait getter's answer on [v] (0 default, 1 no, 2 yes), or 15 when [v] does not answer it. */
@@ -83,15 +97,77 @@ static const char *editor_first_responder_class(void) {
     return "";
 }
 
-/** What the first responder answers for smartQuotesType (-1: none), for tests and diagnostics. */
-static long editor_first_responder_smart_quotes(void) {
+/* ---- The floating cursor (a long press on the space bar) --------------------------------------
+   Compose's ComposeTextInputView (a Kotlin subclass, its own ObjC class) moves the caret through the
+   hidden field's 1 dp layout. While an editor's field is focused, its three calls go to the editor
+   instead (the callback; phase 0 begin, 1 update, 2 end; points in the input view's space); any other
+   Compose text field keeps Compose's own handling. */
+typedef int (*editor_floating_cb_t)(int phase, double x, double y);
+static editor_floating_cb_t editor_floating_cb = 0;
+static Class editor_floating_class = nil;
+static IMP editor_orig_fc_begin = 0, editor_orig_fc_update = 0, editor_orig_fc_end = 0;
+
+static int editor_fc_forward(int phase, CGPoint p) {
+    return editor_smart_off && editor_floating_cb && editor_floating_cb(phase, p.x, p.y);
+}
+static void editor_fc_begin(id self, SEL _cmd, CGPoint p) {
+    if (!editor_fc_forward(0, p) && editor_orig_fc_begin) ((void (*)(id, SEL, CGPoint))editor_orig_fc_begin)(self, _cmd, p);
+}
+static void editor_fc_update(id self, SEL _cmd, CGPoint p) {
+    if (!editor_fc_forward(1, p) && editor_orig_fc_update) ((void (*)(id, SEL, CGPoint))editor_orig_fc_update)(self, _cmd, p);
+}
+static void editor_fc_end(id self, SEL _cmd) {
+    if (!editor_fc_forward(2, CGPointZero) && editor_orig_fc_end) ((void (*)(id, SEL))editor_orig_fc_end)(self, _cmd);
+}
+
+static UIView *editor_first_responder(void) {
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *w in ((UIWindowScene *)scene).windows) {
             UIView *r = editor_find_first_responder(w);
-            if (r && [r respondsToSelector:@selector(smartQuotesType)]) return (long)[(id<UITextInputTraits>)r smartQuotesType];
-            if (r) return -2;
+            if (r) return r;
         }
     }
-    return -1;
+    return nil;
+}
+
+static IMP editor_swap(Class c, SEL sel, IMP imp) {
+    Method m = class_getInstanceMethod(c, sel);
+    if (!m) return 0;
+    IMP orig = method_getImplementation(m); /* inherited or its own: called when not the editor's */
+    class_replaceMethod(c, sel, imp, method_getTypeEncoding(m));
+    return orig;
+}
+
+/**
+ * Patches the first responder's class (the editor's focused input view) once. 1 patched (now or
+ * before), -1 no first responder yet, 0 it has no floating cursor calls, 2 another class was patched.
+ */
+static int editor_patch_floating_cursor(editor_floating_cb_t cb) {
+    editor_floating_cb = cb;
+    UIView *r = editor_first_responder();
+    if (!r) return -1;
+    Class c = object_getClass(r);
+    if (c == editor_floating_class) return 1;
+    if (editor_floating_class != nil) return 2;
+    if (![r respondsToSelector:@selector(beginFloatingCursorAtPoint:)] || ![r respondsToSelector:@selector(endFloatingCursor)]) return 0;
+    editor_orig_fc_begin = editor_swap(c, @selector(beginFloatingCursorAtPoint:), (IMP)editor_fc_begin);
+    editor_orig_fc_update = editor_swap(c, @selector(updateFloatingCursorAtPoint:), (IMP)editor_fc_update);
+    editor_orig_fc_end = editor_swap(c, @selector(endFloatingCursor), (IMP)editor_fc_end);
+    editor_floating_class = c;
+    return 1;
+}
+
+/**
+ * Device checks: sends the first responder what a space-bar drag does, through UIKit's own dispatch:
+ * begin at (100, 100), updates in 8 steps to (100 + dx, 100 + dy), end. 1 sent, 0 no text input.
+ */
+static int editor_drive_floating_cursor(double dx, double dy) {
+    UIView *r = editor_first_responder();
+    if (!r || ![r respondsToSelector:@selector(beginFloatingCursorAtPoint:)]) return 0;
+    id<UITextInput> t = (id<UITextInput>)r;
+    [t beginFloatingCursorAtPoint:CGPointMake(100, 100)];
+    for (int i = 1; i <= 8; i++) [t updateFloatingCursorAtPoint:CGPointMake(100 + dx * i / 8, 100 + dy * i / 8)];
+    [t endFloatingCursor];
+    return 1;
 }

@@ -87,6 +87,8 @@ class SelectionMenuTest {
         assertFalse(has("Copy"), "Copy with nothing selected")
         tapItem("Paste")
         assertEquals("linesome 3 has some words", f.view.state.doc.lineText(3))
+        assertEquals(1, f.clipboard.syncReads, "Paste did not read inside the menu action")
+        assertEquals(0, f.clipboard.reads, "Paste read the clipboard later, from a coroutine (iOS asks every time)")
         assertEquals(EditorSelection.cursor(at + 4), f.view.state.selection)
         assertTrue(line > 0)
     }

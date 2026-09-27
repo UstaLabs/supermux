@@ -18,6 +18,9 @@ internal class FakeClipboard(var text: String? = null) : EditorClipboard {
     override fun write(text: String) { this.text = text }
     override suspend fun read(): String? { reads++; return text }
     override fun hasText(): Boolean = text != null
+    /** readNow() calls (the menu's synchronous paste). */
+    var syncReads = 0
+    override fun readNow(): String? { syncReads++; return text }
 }
 
 class ClipboardCommandsTest {

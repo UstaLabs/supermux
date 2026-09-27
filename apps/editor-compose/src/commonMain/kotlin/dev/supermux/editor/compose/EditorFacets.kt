@@ -42,8 +42,15 @@ object EditorAnnotations {
  * [smartPunctuation]: iOS only (elsewhere "n/a"): "off" once the focused input view answers `.no`
  * for all three Smart Punctuation traits; a message saying what is wrong otherwise (see the
  * README: it depends on Compose Multiplatform's internal iOS input view classes).
+ *
+ * Debug API: for device checks and debug screens. The fields and their strings may change; do not
+ * branch on them in production code.
  */
 object EditorDiagnostics {
     var smartPunctuation: String by androidx.compose.runtime.mutableStateOf("n/a")
+        internal set
+
+    /** iOS only (elsewhere "n/a"): "mapped" once the space-bar trackpad moves the editor's caret. */
+    var floatingCursor: String by androidx.compose.runtime.mutableStateOf("n/a")
         internal set
 }

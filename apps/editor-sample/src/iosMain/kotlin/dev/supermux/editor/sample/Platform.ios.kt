@@ -10,3 +10,5 @@ actual fun lastInputEventMs(): Double = -1.0
 actual fun insideKeyEvent(): Boolean = false
 
 actual fun lastInputKind(): String = ""
+
+actual val platformFloatingCursorDrag: ((dx: Double, dy: Double) -> Boolean)? = { dx, dy -> dev.supermux.editor.compose.debugDriveFloatingCursor(dx, dy) }

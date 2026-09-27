@@ -8,3 +8,5 @@ actual fun lastInputEventMs(): Double = js("(window.__keyTs === undefined ? -1 :
 actual fun insideKeyEvent(): Boolean = js("window.__inKey === true")
 
 actual fun lastInputKind(): String = js("String(window.__keyKind || '')")
+
+actual val platformFloatingCursorDrag: ((dx: Double, dy: Double) -> Boolean)? = null

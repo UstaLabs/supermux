@@ -113,6 +113,50 @@ flow long-press-on-caret "- tapOn: { point: \"120,138\" }
 - waitForAnimationToEnd
 - longPressOn: { point: \"120,138\" }
 - waitForAnimationToEnd"
+# The menu's Paste reads the clipboard inside iOS's own paste action: no permission prompt.
+printf 'MENUPASTE' | xcrun simctl pbcopy "$U"
+flow menu-paste-no-prompt "- tapOn: { point: \"200,121\" }
+- waitForAnimationToEnd
+- longPressOn: { point: \"200,121\" }
+- waitForAnimationToEnd
+- tapOn: \"Paste\"
+- waitForAnimationToEnd
+- assertNotVisible: \"Allow Paste\"
+- extendedWaitUntil: { visible: \".*MENUPASTE.*\", timeout: 5000 }"
+# A plain Compose text field of the app keeps the user's Smart Punctuation (the editor turns it off
+# only for itself): its " key types a curly quote.
+flow plain-field-keeps-smart-quotes "- swipe: { start: \"30,78\", end: \"380,78\", duration: 500 }
+- waitForAnimationToEnd
+- tapOn: \"settings\"
+- waitForAnimationToEnd
+- tapOn: \"plain field\"
+- waitForAnimationToEnd
+- inputText: \"a \"
+- tapOn: { id: \"more\" }
+- tapOn: \"\\\"\"
+- waitForAnimationToEnd"
+maestro --udid "$U" hierarchy > "$OUT/tree2.json" 2>/dev/null
+python3 - "$OUT/tree2.json" <<'PY' || FAILS=$((FAILS+1))
+import json, sys
+d = json.load(open(sys.argv[1]))
+vals = []
+def walk(n):
+    a = n.get("attributes", {})
+    if a.get("accessibilityText") == "plain field": vals.append(a.get("value") or a.get("text") or "")
+    for c in n.get("children", []): walk(c)
+walk(d)
+v = vals[0] if vals else ""
+ok = "\u201c" in v or "\u201d" in v
+print(("PASS" if ok else "FAIL") + " a plain Compose text field keeps smart quotes: " + repr(v))
+sys.exit(0 if ok else 1)
+PY
+# The space-bar trackpad (floating cursor): UIKit's calls on the focused input view move the editor's
+# caret through the editor's layout (Compose alone would use the 1 dp hidden field's). Maestro can't
+# long-press the space bar, so the sample's probe sends UIKit's own calls: 3 lines down, text intact.
+flow floating-cursor "- tapOn: { point: \"200,138\" }
+- waitForAnimationToEnd
+- tapOn: \"floating cursor drag\"
+- extendedWaitUntil: { visible: \"float: moved down .*, text unchanged, mapped\", timeout: 5000 }"
 sleep 2
 if xcrun simctl spawn "$U" launchctl list | grep -q editor.sample; then echo "PASS still running after the long presses"; else echo "FAIL the app is gone"; FAILS=$((FAILS+1)); fi
 if grep -q "Uncaught Kotlin exception" "$OUT/console.log"; then echo "FAIL an uncaught Kotlin exception:"; grep -A4 "Uncaught Kotlin exception" "$OUT/console.log" | head -8; FAILS=$((FAILS+1)); else echo "PASS no uncaught Kotlin exception in the console"; fi

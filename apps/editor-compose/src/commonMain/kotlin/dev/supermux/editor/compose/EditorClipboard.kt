@@ -31,6 +31,14 @@ interface EditorClipboard {
      * text is not). A clipboard that cannot tell says true.
      */
     fun hasText(): Boolean = true
+
+    /**
+     * The clipboard's text read NOW, synchronously, or null where that is not possible (the web's
+     * Clipboard API is async). The touch menu's Paste reads here, inside the platform's own paste
+     * action: on iOS a read there is the user's paste and shows no permission prompt, while one from a
+     * coroutine afterwards asks every time.
+     */
+    fun readNow(): String? = null
 }
 
 /** The host platform's clipboard. */
@@ -56,6 +64,7 @@ private class ComposeEditorClipboard(private val manager: ClipboardManager) : Ed
     override fun write(text: String) = manager.setText(AnnotatedString(text))
     override suspend fun read(): String? = manager.getText()?.text?.takeIf { it.isNotEmpty() }
     override fun hasText(): Boolean = platformClipboardHasText() ?: manager.hasText()
+    override fun readNow(): String? = manager.getText()?.text?.takeIf { it.isNotEmpty() }
 }
 
 /**

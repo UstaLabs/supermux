@@ -94,12 +94,17 @@ class EditorView(initial: EditorState) : CommandTarget {
      * The web only: whether a key-down comes from a hardware keyboard (served inside the DOM event)
      * or from a soft keyboard (left to the hidden field, for autocorrect and predictions).
      * [WebKeyboard.AUTO] is a heuristic (see the README); a host or a debug menu can force it.
+     *
+     * Debug API: an override for device passes and debug menus while the heuristic is tuned. It may
+     * change or go away; production hosts leave it at [WebKeyboard.AUTO].
      */
     var webKeyboard: WebKeyboard = WebKeyboard.AUTO
 
     /**
      * Debug: told the path every key-down took ([KeyPath]) with its key name, so a device pass
      * can check which keys went where. Null (the default) costs nothing.
+     *
+     * Debug API: for device passes and debug screens, not a stable hook; [KeyPath] may change.
      */
     var onKeyPath: ((key: String, path: KeyPath) -> Unit)? = null
 

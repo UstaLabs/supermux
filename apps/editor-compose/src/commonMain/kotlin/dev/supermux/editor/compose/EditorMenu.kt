@@ -77,7 +77,11 @@ internal fun runMenuItem(c: EditorController, item: MenuItem) {
     when (item) {
         MenuItem.CUT -> DefaultCommands.cut.run(view)
         MenuItem.COPY -> DefaultCommands.copy.run(view)
-        MenuItem.PASTE -> DefaultCommands.paste.run(view)
+        // Read inside the menu action itself (iOS grants the user's paste there without a prompt).
+        MenuItem.PASTE -> {
+            val now = view.clipboard?.readNow()
+            if (now == null) DefaultCommands.paste.run(view) else if (!view.readOnly) view.paste(now)
+        }
         MenuItem.SELECT_ALL -> DefaultCommands.selectAll.run(view)
     }
     if (item == MenuItem.SELECT_ALL) {

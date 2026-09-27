@@ -10,3 +10,5 @@ actual fun lastInputEventMs(): Double = lastKeyPostedMs
 actual fun insideKeyEvent(): Boolean = false
 
 actual fun lastInputKind(): String = "x"
+
+actual val platformFloatingCursorDrag: ((dx: Double, dy: Double) -> Boolean)? = null

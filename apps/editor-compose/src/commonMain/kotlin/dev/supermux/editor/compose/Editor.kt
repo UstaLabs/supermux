@@ -279,6 +279,9 @@ internal class EditorController(
         private set
 
 
+    /** iOS's space-bar trackpad, forwarded by the platform (see [FloatingCursor]). */
+    val floatingCursor = FloatingCursor(this)
+
     /** The caret's blink phase. */
     var cursorOn: Boolean by mutableStateOf(true)
 

@@ -28,6 +28,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import dev.supermux.editor.compose.EditorAnnotations
 import dev.supermux.editor.compose.EditorTheme
 import dev.supermux.editor.compose.EditorZoom
@@ -204,6 +207,7 @@ fun SampleApp(
                 webKeyboard = webKeyboard, onWebKeyboard = { webKeyboard = it },
                 onAddCursor = { session?.view?.let { addCursorBelow(it) } },
                 onSingleCursor = { session?.view?.let { v -> v.dispatch(TransactionSpec(selection = EditorSelection.single(v.state.selection.main.anchor, v.state.selection.main.head), userEvent = "select")) } },
+                onFloatingCursor = platformFloatingCursorDrag?.let { drag -> { session?.view?.let { v -> floatingCursorProbe(v, drag) } ?: "no editor" } },
                 onClose = { settings = false },
             )
         }
@@ -221,6 +225,7 @@ private fun SettingsSheet(
     logOn: Boolean, onLog: (Boolean) -> Unit,
     webKeyboard: WebKeyboard, onWebKeyboard: (WebKeyboard) -> Unit,
     onAddCursor: () -> Unit, onSingleCursor: () -> Unit,
+    onFloatingCursor: (() -> String)?,
     onClose: () -> Unit,
 ) {
     Column(
@@ -251,11 +256,41 @@ private fun SettingsSheet(
             }
         }
         Line {
+            // A plain Compose text field (not the editor): on iOS it keeps the user's Smart
+            // Punctuation, which the editor turns off only for itself (device-checks/ios-sim.sh).
+            BasicText("plain field:", style = TextStyle(color = ink, fontSize = 12.sp))
+            val plain = remember { androidx.compose.foundation.text.input.TextFieldState() }
+            androidx.compose.foundation.text.BasicTextField(
+                plain,
+                Modifier.widthIn(min = 160.dp).background(ink.copy(alpha = 0.12f)).padding(4.dp).testTag("plain-field")
+                    .semantics { contentDescription = "plain field" },
+                textStyle = TextStyle(color = ink, fontSize = 14.sp),
+            )
+        }
+        Line {
             Chip("add cursor below", false, ink, onAddCursor)
             Chip("single cursor", false, ink, onSingleCursor)
             Chip("close", false, ink, onClose)
         }
+        if (onFloatingCursor != null) Line {
+            // iOS: a space-bar trackpad drag of 3 lines down, sent through UIKit (device-checks/ios-sim.sh).
+            var result by remember { mutableStateOf("") }
+            Chip("floating cursor drag", false, ink) { result = onFloatingCursor() }
+            BasicText(result, style = TextStyle(color = ink, fontSize = 12.sp))
+        }
     }
+}
+
+/** Drags iOS's floating cursor 3 lines down and says where the caret went and whether the text changed. */
+private fun floatingCursorProbe(v: dev.supermux.editor.compose.EditorView, drag: (Double, Double) -> Boolean): String {
+    val doc = v.state.doc
+    val line0 = doc.lineIndexAt(v.state.selection.main.head)
+    val lineDp = v.effectiveFontSize * 1.45 // EditorTheme's default line height factor
+    if (!drag(0.0, 3 * lineDp)) return "float: no text input"
+    val line1 = v.state.doc.lineIndexAt(v.state.selection.main.head)
+    val text = if (v.state.doc.toString() == doc.toString()) "text unchanged" else "TEXT CHANGED"
+    val moved = if (line1 > line0) "moved down ${line1 - line0} lines" else "did not move down (${line1 - line0})"
+    return "float: $moved, $text, ${dev.supermux.editor.compose.EditorDiagnostics.floatingCursor}"
 }
 
 /**
