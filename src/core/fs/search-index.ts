@@ -99,10 +99,13 @@ function withDirs(files: string[]): Array<{ rel: string; dir: boolean }> {
 export class SearchIndexes {
   private readonly built = new Map<string, Built>()
   private readonly building = new Map<string, Promise<Built>>()
+  /** Bumped per scope by invalidation so a build already in flight does not store a stale index. */
+  private readonly epoch = new Map<string, number>()
 
   constructor(private readonly repo: RepoInfoCache) {}
 
   private async build(scope: string): Promise<Built> {
+    const startEpoch = this.epoch.get(scope) ?? 0
     const root = await this.repo.repoFor(scope)
     let rels: Array<{ rel: string; dir: boolean }>
     if (root) {
@@ -112,7 +115,7 @@ export class SearchIndexes {
       rels = await walk(scope)
     }
     const b: Built = { scope, rels, builtAt: Date.now(), lastUsed: Date.now() }
-    this.built.set(scope, b)
+    if ((this.epoch.get(scope) ?? 0) === startEpoch) this.built.set(scope, b)
     return b
   }
 
@@ -123,7 +126,7 @@ export class SearchIndexes {
     if (b && now - b.builtAt < REBUILD_AFTER_MS) { b.lastUsed = now; return b }
     const running = this.building.get(scope)
     if (running) return running
-    const p = this.build(scope).finally(() => this.building.delete(scope))
+    const p: Promise<Built> = this.build(scope).finally(() => { if (this.building.get(scope) === p) this.building.delete(scope) })
     this.building.set(scope, p)
     return p
   }
@@ -149,5 +152,16 @@ export class SearchIndexes {
   }
 
   /** Drop a scope's index (tests, or after a burst of changes). */
-  invalidate(scope: string): void { this.built.delete(scope) }
+  invalidate(scope: string): void {
+    this.built.delete(scope)
+    this.building.delete(scope) // later queries start a fresh build instead of joining a stale one
+    this.epoch.set(scope, (this.epoch.get(scope) ?? 0) + 1)
+  }
+
+  /** Something in folder `dir` changed: drop every index (built or building) whose scope contains it. */
+  invalidateContaining(dir: string): void {
+    for (const scope of new Set([...this.built.keys(), ...this.building.keys()])) {
+      if (dir === scope || scope === "/" || dir.startsWith(scope + sep)) this.invalidate(scope)
+    }
+  }
 }

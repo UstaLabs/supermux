@@ -65,16 +65,30 @@ function ancestorsOf(rel: string): string[] {
  */
 export class RepoInfoCache {
   private readonly slots = new Map<string, Slot>()
-  private readonly rootOf = new Map<string, string | null>()
+  /** folder → repo root (or null = "no repo", which expires after `noRepoTtlMs` so a later
+   *  `git init` is eventually noticed; a found root is kept). */
+  private readonly rootOf = new Map<string, { root: string | null; at: number }>()
   private readonly ttlMs: number
+  private readonly noRepoTtlMs: number
 
-  constructor(opts: { ttlMs?: number } = {}) {
+  constructor(opts: { ttlMs?: number; noRepoTtlMs?: number } = {}) {
     this.ttlMs = opts.ttlMs ?? 2_000
+    this.noRepoTtlMs = opts.noRepoTtlMs ?? 30_000
+  }
+
+  private cachedRoot(dirReal: string): string | null | undefined {
+    const c = this.rootOf.get(dirReal)
+    if (!c) return undefined
+    if (c.root === null && Date.now() - c.at >= this.noRepoTtlMs) {
+      this.rootOf.delete(dirReal)
+      return undefined
+    }
+    return c.root
   }
 
   /** Nearest folder at or above `dirReal` that contains a `.git` entry (folder or file), else null. */
   async repoFor(dirReal: string): Promise<string | null> {
-    const cached = this.rootOf.get(dirReal)
+    const cached = this.cachedRoot(dirReal)
     if (cached !== undefined) return cached
     let d = dirReal
     let found: string | null = null
@@ -89,13 +103,18 @@ export class RepoInfoCache {
         d = parent
       }
     }
-    this.rootOf.set(dirReal, found)
+    this.rootOf.set(dirReal, { root: found, at: Date.now() })
     return found
   }
 
   /** Cached repo root for a folder if known (no I/O). */
   knownRepoFor(dirReal: string): string | null | undefined {
-    return this.rootOf.get(dirReal)
+    return this.cachedRoot(dirReal)
+  }
+
+  /** Drop the cached repo answer for one folder (e.g. a `.git` entry just appeared in it). */
+  forgetRootOf(dirReal: string): void {
+    this.rootOf.delete(dirReal)
   }
 
   invalidate(root: string): void {

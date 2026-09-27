@@ -88,3 +88,30 @@ test("fuzzyMatch scores 100,000 paths well under 1500ms", () => {
   expect(matches).toBeGreaterThan(0)
   expect(elapsed).toBeLessThan(1500)
 })
+
+test("invalidateContaining drops indexes whose scope contains the changed folder, and only those", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "fs-search-inv-")))
+  mkdirSync(join(root, "a", "deep"), { recursive: true })
+  mkdirSync(join(root, "b"))
+  const idx = new SearchIndexes(new RepoInfoCache())
+  expect(await idx.query(root, "okapi", 50)).toEqual([])
+  expect(await idx.query(join(root, "a"), "okapi", 50)).toEqual([])
+  expect(await idx.query(join(root, "b"), "okapi", 50)).toEqual([])
+  writeFileSync(join(root, "a", "deep", "okapi.txt"), "")
+  writeFileSync(join(root, "b", "okapi.txt"), "")
+  idx.invalidateContaining(join(root, "a", "deep"))
+  expect((await idx.query(root, "okapi", 50)).length).toBe(2)
+  expect((await idx.query(join(root, "a"), "okapi", 50)).length).toBe(1)
+  expect(await idx.query(join(root, "b"), "okapi", 50)).toEqual([]) // unrelated scope kept its index
+})
+
+test("an index invalidated while it is being built is not stored", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "fs-search-inv-")))
+  const idx = new SearchIndexes(new RepoInfoCache())
+  const first = idx.query(root, "okapi", 50)
+  idx.invalidateContaining(root)
+  expect(await first).toEqual([])
+  writeFileSync(join(root, "okapi.txt"), "")
+  // Had the invalidated build been stored, this would reuse it (fresh for 30 s) and miss the file.
+  expect((await idx.query(root, "okapi", 50)).length).toBe(1)
+})
