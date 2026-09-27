@@ -17,7 +17,8 @@ export function toLegacyEntry(e: FsEntry): LegacyFsEntry {
 export class WorkdirFs {
   private rootReal?: Promise<string>
 
-  constructor(private readonly fss: FileSystemService, private readonly workdir: string) {}
+  // Only the request/response half is used, so any socket type will do.
+  constructor(private readonly fss: FileSystemService<any>, private readonly workdir: string) {}
 
   private root(): Promise<string> {
     this.rootReal ??= realpath(this.workdir)
