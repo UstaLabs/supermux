@@ -171,15 +171,22 @@ class Geometry(
             val len = to - from
             val k = pieceOf(from, len, at)
             val (a, b) = pieceBounds(from, len, k)
-            return a to (if (k == pieceCount(len) - 1) to else b)
+            // A row's end offset is the next row's start: the caret there shows on the next row.
+            return a to (if (k == pieceCount(len) - 1) to else maxOf(a, TextBoundaries.prevGrapheme(state().doc, b)))
         }
         val layout = lineLayout(line)
         if (layout.lineCount <= 1) return from to to
         val row = layout.getLineForOffset(at - from)
         val start = from + layout.getLineStart(row)
-        val end = if (row == layout.lineCount - 1) to else from + layout.getLineEnd(row, visibleEnd = true)
+        var end = if (row == layout.lineCount - 1) to else from + layout.getLineEnd(row, visibleEnd = true)
+        // A row broken inside a token (no space to end it) ends at the next row's first offset, where a
+        // caret shows at the next row's start: the row's end is the last position still on it.
+        if (row < layout.lineCount - 1 && end == from + layout.getLineStart(row + 1)) end = TextBoundaries.prevGrapheme(state().doc, end)
         return start to maxOf(start, end)
     }
+
+    /** Forget every long line's measured piece widths (another document). */
+    fun clearPieceWidths() = pieceWidths.clear()
 
     /** The lines to lay out for a viewport at [scrollY] of [viewportHeight] pixels, plus [overscan] each side. */
     fun visibleLines(scrollY: Float, viewportHeight: Float, overscan: Int): IntRange {

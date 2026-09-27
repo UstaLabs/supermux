@@ -13,6 +13,10 @@ import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -50,6 +54,9 @@ internal object EditorDefaults {
 
     /** The caret blink half-period. */
     const val BLINK_MILLIS = 530L
+
+    /** The pointer shield over the hidden field: its 48 dp touch target, with a margin. */
+    const val SHIELD_DP = 64
 }
 
 /** Whether an input session starts on any focus ([EditorController.inputOnAnyFocus]); tests switch it. */
@@ -65,6 +72,9 @@ internal val LocalEditorExposeField = staticCompositionLocalOf { !platformClears
 
 /** Whether the surface's own text node is the screen reader's ([platformSurfaceText]). */
 internal val LocalEditorSurfaceText = staticCompositionLocalOf { platformSurfaceText }
+
+/** Tests: a child of the surface under the hidden field (where M3c's widgets will be). */
+internal val LocalEditorTestChild = staticCompositionLocalOf<(@Composable androidx.compose.foundation.layout.BoxScope.() -> Unit)?> { null }
 
 /** Tests turn the caret blink off, so a pixel check is not a coin toss. */
 internal val LocalEditorCursorBlink = staticCompositionLocalOf { true }
@@ -105,7 +115,11 @@ fun Editor(
     // cacheSize = 0: the surface keeps its own bounded caches (LineLayouts).
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val density = LocalDensity.current
-    val controller = remember(view, measurer, scrollState) { EditorController(view, measurer, scrollState) }
+    // The surface's focus and keyboard request outlive a view (a host showing another document):
+    // the new view learns the focus, and the keyboard request carries over as it was (a
+    // programmatic or mouse focus keeps asking for none; a touch's keeps its session).
+    val surfaceInput = remember { SurfaceInput() }
+    val controller = remember(view, measurer, scrollState) { EditorController(view, measurer, scrollState, surfaceInput) }
     // The zoom is the view's (snapshot state): a change recomposes this with the theme at that size.
     val zoomed = view.fontSize
     val shownTheme = if (zoomed == null || zoomed == theme.fontSizeSp) theme else remember(theme, zoomed) { theme.copy(fontSizeSp = zoomed) }
@@ -119,13 +133,8 @@ fun Editor(
     // The surface's Compose focus, kept across views: a host showing another document gives this
     // Editor a new view while the hidden field keeps the focus, so no focus event ever tells the
     // new view it is focused (the caret was not painted and did not blink, typing still worked).
-    val surfaceFocus = remember { androidx.compose.runtime.mutableStateOf(false) }
     DisposableEffect(view, controller) {
-        view.focused = surfaceFocus.value
-        // The new document's field must keep the input session the focused field had: its options
-        // say so (a session is restarted only when they ask for the keyboard, see keyboardOnFocus),
-        // or the session would stay bound to the previous document's field.
-        if (surfaceFocus.value) controller.keepInputSession()
+        view.focused = surfaceInput.focused
         onDispose { view.focused = false }
     }
     DisposableEffect(view, controller) {
@@ -207,7 +216,7 @@ fun Editor(
             // field); this box is its ancestor, so `hasFocus` is the surface's focus and a key
             // preview reaches the keymap before the field could insert anything.
             .onFocusChanged {
-                surfaceFocus.value = it.hasFocus
+                surfaceInput.focused = it.hasFocus
                 view.focused = it.hasFocus
                 if (!it.hasFocus) { controller.handles = TouchHandles.NONE; controller.menuShown = false; controller.onBlur() }
             }
@@ -225,13 +234,26 @@ fun Editor(
             controller.paint(this)
             paintHook?.invoke()
         }
+        LocalEditorTestChild.current?.invoke(this)
         EditorInputField(controller, readOnly)
-        // A pointer shield above the hidden field: the topmost hit sibling takes a pointer, so the
-        // field (at the caret, its touch target expanded to 48 dp) never gets one. Its own touch
-        // selection crashed on iOS (a long press on an empty line: Compose's moveCaretByLongPress
-        // with offset -1) and moved its selection behind the editor's back everywhere. The shield
-        // consumes nothing: the surface's own gestures (this Box's pointerInput) see every event.
-        Box(Modifier.matchParentSize().pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial) } })
+        // A pointer shield exactly over the hidden field's touch target: the topmost hit sibling takes
+        // a pointer, so the field (at the caret, its target expanded to 48 dp) never gets one. Its own
+        // touch selection crashed on iOS (a long press on an empty line: Compose's
+        // moveCaretByLongPress with offset -1) and moved its selection behind the editor's back
+        // everywhere. Only that square: other children of the surface (M3c's widgets) still get
+        // pointers. It consumes nothing: the surface's own gestures (this Box's pointerInput) see
+        // every event. (Android stylus handwriting INTO the field is blocked with it; the editor
+        // has none of its own yet.)
+        Box(
+            Modifier
+                .offset {
+                    val r = controller.caretRectOnScreen(controller.view.state.selection.main.head)
+                    val half = EditorDefaults.SHIELD_DP.dp.roundToPx() / 2
+                    IntOffset(r.left.toInt() - half, r.top.toInt() - half)
+                }
+                .size(EditorDefaults.SHIELD_DP.dp)
+                .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial) } },
+        )
         EditorSelectionMenu(controller, readOnly, clipboard, shownTheme)
         LineAnnouncement(controller.announcer)
     }
@@ -243,7 +265,12 @@ fun Editor(
  * transaction ([EditorSurfaceHooks]).
  */
 @Stable
-internal class EditorController(val view: EditorView, private val measurer: TextMeasurer, val scroll: EditorScrollState) : EditorSurfaceHooks {
+internal class EditorController(
+    val view: EditorView,
+    private val measurer: TextMeasurer,
+    val scroll: EditorScrollState,
+    private val surfaceInput: SurfaceInput = SurfaceInput(),
+) : EditorSurfaceHooks {
     val layouts = LineLayouts(measurer)
     private var heights = HeightMap(view.state.doc.lineCount, layouts.lineHeightPx)
 
@@ -370,8 +397,9 @@ internal class EditorController(val view: EditorView, private val measurer: Text
      * `BasicTextField(TextFieldState)` (no session yet). A change while focused starts the session.
      * False after a blur, so a later mouse click or programmatic focus starts none and raises nothing.
      */
-    var keyboardOnFocus: Boolean by mutableStateOf(platformInputOnAnyFocus)
-        private set
+    var keyboardOnFocus: Boolean
+        get() = surfaceInput.keyboardOnFocus
+        private set(v) { surfaceInput.keyboardOnFocus = v }
 
     /**
      * Counts the keyboard requests (every touch): once the session exists, each one asks the
@@ -384,11 +412,6 @@ internal class EditorController(val view: EditorView, private val measurer: Text
     fun requestKeyboard() {
         keyboardOnFocus = true
         keyboardRequests++
-    }
-
-    /** The surface is already focused when this controller starts (another document in the same Editor). */
-    fun keepInputSession() {
-        keyboardOnFocus = true
     }
 
     /** The surface lost the focus: the next focus raises a keyboard only if a touch asks. */
@@ -537,6 +560,7 @@ internal class EditorController(val view: EditorView, private val measurer: Text
     override fun onStateReplaced() {
         handles = TouchHandles.NONE
         menuShown = false
+        geometry.clearPieceWidths()
         heights.reset(view.state.doc.lineCount)
         anchorValid = false
         scroll.scrollTo(0f, 0f)
@@ -640,4 +664,14 @@ internal class EditorController(val view: EditorView, private val measurer: Text
     override fun coordsAtPos(offset: Int): Rect = caretRectOnScreen(offset.coerceIn(0, view.state.doc.length))
 
     private fun digits(lines: Int): Int = maxOf(2, lines.toString().length)
+}
+
+/**
+ * What one composed `Editor` knows about its input across the views it shows: its Compose focus and
+ * the field's keyboard request ([EditorController.keyboardOnFocus]).
+ */
+@Stable
+internal class SurfaceInput {
+    var focused: Boolean by mutableStateOf(false)
+    var keyboardOnFocus: Boolean by mutableStateOf(platformInputOnAnyFocus)
 }

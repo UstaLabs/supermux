@@ -60,7 +60,14 @@ object EditorSemantics {
  * caret, or its start); segments are joined with "\n", which is the document's own line break
  * between neighbouring whole lines. Offsets map both ways ([toText], [toDoc]).
  */
-internal class AccessibleText private constructor(val text: String, private val docFrom: IntArray, private val docTo: IntArray, private val textFrom: IntArray) {
+internal class AccessibleText private constructor(
+    val text: String,
+    private val docFrom: IntArray,
+    private val docTo: IntArray,
+    private val textFrom: IntArray,
+    /** [adjacent][i]: the "\n" before segment i is the document's own (segment i-1 ends its line, i starts the next). */
+    private val adjacent: BooleanArray,
+) {
     val segments: Int get() = docFrom.size
 
     /** [offset] in the document as an offset in [text], clamped into the nearest segment. */
@@ -80,6 +87,21 @@ internal class AccessibleText private constructor(val text: String, private val 
         return docFrom[i] + (offset - textFrom[i]).coerceIn(0, docTo[i] - docFrom[i])
     }
 
+    /**
+     * The document range an edit of `text[from, to)` stands for, or null when it would reach across
+     * a "\n" that joins two segments that are NOT neighbours in the document (far-apart visible and
+     * caret lines, a partly exposed long line): that joiner is not in the document, and removing it
+     * would delete everything between them, which a screen reader never showed.
+     */
+    fun mapRange(from: Int, to: Int): Pair<Int, Int>? {
+        if (from > to) return null
+        for (i in 1 until segments) {
+            val joiner = textFrom[i] - 1
+            if (from <= joiner && joiner < to && !adjacent[i]) return null
+        }
+        return toDoc(from) to toDoc(to)
+    }
+
     companion object {
         /** A longer line is exposed in part. */
         const val MAX_LINE = 2_000
@@ -96,6 +118,7 @@ internal class AccessibleText private constructor(val text: String, private val 
             val df = IntArray(n)
             val dt = IntArray(n)
             val tf = IntArray(n)
+            val adj = BooleanArray(n)
             val sb = StringBuilder()
             for ((i, l) in lines.withIndex()) {
                 val from = doc.lineStart(l)
@@ -109,11 +132,16 @@ internal class AccessibleText private constructor(val text: String, private val 
                     a = TextBoundaries.snap(doc, a)
                     b = TextBoundaries.snap(doc, b)
                 }
-                if (i > 0) sb.append('\n')
+                if (i > 0) {
+                    sb.append('\n')
+                    // The document's own line break: the previous segment ends at its line's end
+                    // (the break) and this one starts right after it.
+                    adj[i] = dt[i - 1] < doc.length && doc.charAt(dt[i - 1]) == '\n' && a == dt[i - 1] + 1
+                }
                 df[i] = a; dt[i] = b; tf[i] = sb.length
                 sb.append(doc.slice(a, b))
             }
-            return AccessibleText(sb.toString(), df, dt, tf)
+            return AccessibleText(sb.toString(), df, dt, tf, adj)
         }
     }
 }
@@ -218,8 +246,8 @@ private class EditorSemanticsNode(private var e: EditorSemanticsElement) : Modif
             setText { replacement ->
                 val tx = text()
                 val edit = diffField(tx.text, replacement.text) ?: return@setText true
-                val from = tx.toDoc(edit.from)
-                val to = tx.toDoc(edit.to)
+                // Refused across a joiner of far-apart lines: it would delete text never exposed.
+                val (from, to) = tx.mapRange(edit.from, edit.to) ?: return@setText false
                 view.dispatch(TransactionSpec(changes = listOf(dev.supermux.editor.core.ChangeSpec(from, maxOf(from, to), edit.insert)), scrollIntoView = true, userEvent = "input"))
                 true
             }

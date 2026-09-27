@@ -278,7 +278,9 @@ internal class FieldSync(
             // A soft Return is the Enter key: the keymap's binding (a plugin's Enter between braces),
             // else the editor's newline (it keeps the indentation), at every cursor.
             if (!runBindings(view, KeyChord("Enter"), isApplePlatform)) DefaultCommands.insertNewline.run(view)
-            return null // the listener has re-synced the field
+            // The field holds the "\n" it typed: a binding that edited nothing (or something else)
+            // leaves it there unless the field is rewritten to the document now.
+            return rewindow() ?: show(current())
         }
         if (atMain && from <= clampedFrom && to >= clampedTo) {
             // The edit covers the main range (typing, Backspace, autocorrect, a composition step):
@@ -288,7 +290,8 @@ internal class FieldSync(
             val after0 = to - clampedTo
             val anchor = (selStart - e.from).coerceIn(0, e.insert.length)
             val head = (selEnd - e.from).coerceIn(0, e.insert.length)
-            val typed = view.typeSpec(e.insert, event, before0, after0, anchor, head) ?: return null // an input handler took it
+            // An input handler took it (it may have edited nothing): the field must show the document.
+            val typed = view.typeSpec(e.insert, event, before0, after0, anchor, head) ?: return rewindow() ?: show(current())
             val (spec, changes) = typed
             // The field now holds [text]; so does the document at the window moved through the edit
             // (the window holds no other range, so only ranges before it shift it).

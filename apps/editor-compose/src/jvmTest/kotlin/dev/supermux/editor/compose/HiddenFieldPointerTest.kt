@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.input.pointer.pointerInput
 import dev.supermux.editor.core.EditorSelection
 import dev.supermux.editor.core.EditorState
 import kotlin.test.Test
@@ -82,6 +83,24 @@ class HiddenFieldPointerTest {
                 waitForIdle()
             }
             assertEquals(0, reached, "pointer events reached the hidden field (its own touch selection runs: the iPhone crash)")
+        }
+    }
+
+    @Test fun anInteractiveChildOfTheSurfaceStillGetsPointers() {
+        var got = 0
+        val child: @androidx.compose.runtime.Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {
+            androidx.compose.foundation.layout.Box(
+                androidx.compose.ui.Modifier.matchParentSize().pointerInput(Unit) {
+                    awaitPointerEventScope { while (true) { awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial); got++ } }
+                },
+            )
+        }
+        editorTest(EditorState.create(text), child = child) { f ->
+            // Far from the caret (and so from the shield): the child is hit.
+            onNodeWithTag(EDITOR_TAG).performTouchInput { click(Offset(300f, 250f)) }
+            waitForIdle()
+            assertTrue(got > 0, "the pointer shield took a pointer far from the hidden field")
+            assertTrue(f.view.focused)
         }
     }
 }

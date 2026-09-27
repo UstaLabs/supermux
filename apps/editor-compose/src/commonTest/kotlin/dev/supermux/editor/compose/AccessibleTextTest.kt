@@ -39,4 +39,16 @@ class AccessibleTextTest {
         assertEquals(caret, t.toDoc(t.toText(caret)))
         assertTrue(t.text.startsWith("a\n") && t.text.endsWith("\nb"))
     }
+
+    @Test fun editsAcrossAJoinerOfFarApartLinesAreRefused() {
+        val caret = doc.lineStart(90) + 3
+        val t = AccessibleText.build(doc, 0..1, caret) // "line 0\nline 1\nline 90"
+        val far = "line 0\nline 1".length // the "\n" before "line 90": lines 2..89 are between
+        assertEquals(null, t.mapRange(far, far + 1), "removing the far joiner would delete 88 lines")
+        val near = "line 0".length // the document's own break between lines 0 and 1
+        assertEquals(doc.lineStart(1) - 1 to doc.lineStart(1), t.mapRange(near, near + 1))
+        // Inside a segment, exactly; an insertion at a joiner is fine.
+        assertEquals(doc.lineStart(90) + 2 to doc.lineStart(90) + 4, t.mapRange(far + 3, far + 5))
+        assertEquals(doc.lineStart(2) - 1 to doc.lineStart(2) - 1, t.mapRange(far, far))
+    }
 }
