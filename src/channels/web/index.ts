@@ -2556,9 +2556,8 @@ export class WebChannel implements Channel {
         return new Response(content, { headers: { "content-type": "text/plain; charset=utf-8" } })
       } catch (err: any) {
         const msg = err?.message ?? String(err)
-        if (msg.includes("too large")) return new Response(msg, { status: 413 })
-        if (msg.includes("binary")) return new Response(msg, { status: 415 })
-        return new Response(msg, { status: 400 })
+        const status = err?.code === "TOO_LARGE" ? 413 : err?.code === "BINARY" ? 415 : err?.code === "ENOENT" ? 404 : 400
+        return new Response(msg, { status })
       }
     }
     if (method === "PUT" && path.match(/^\/sessions\/[^/]+\/fs\/write$/)) {
@@ -2581,8 +2580,12 @@ export class WebChannel implements Channel {
       if (!workdir) return this.json({ error: "session not found" }, 404)
       const fs = new WorkdirFs(this.fss, workdir)
       const query = url.searchParams.get("q") ?? ""
-      const results = await fs.searchFiles(query)
-      return this.json(results)
+      try {
+        const results = await fs.searchFiles(query)
+        return this.json(results)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
+      }
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/fs\/diff$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -2637,9 +2640,8 @@ export class WebChannel implements Channel {
         return new Response(content, { headers: { "content-type": "text/plain; charset=utf-8" } })
       } catch (err: any) {
         const msg = err?.message ?? String(err)
-        if (msg.includes("too large")) return new Response(msg, { status: 413 })
-        if (msg.includes("binary")) return new Response(msg, { status: 415 })
-        return new Response(msg, { status: 400 })
+        const status = err?.code === "TOO_LARGE" ? 413 : err?.code === "BINARY" ? 415 : err?.code === "ENOENT" ? 404 : 400
+        return new Response(msg, { status })
       }
     }
     if (method === "PUT" && path.match(/^\/workspaces\/[^/]+\/fs\/write$/)) {
@@ -2662,8 +2664,12 @@ export class WebChannel implements Channel {
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
       const fs = new WorkdirFs(this.fss, workdir)
       const query = url.searchParams.get("q") ?? ""
-      const results = await fs.searchFiles(query)
-      return this.json(results)
+      try {
+        const results = await fs.searchFiles(query)
+        return this.json(results)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
+      }
     }
     if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/diff$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
