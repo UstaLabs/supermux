@@ -2541,6 +2541,57 @@ class BrokerApi(
     suspend fun fsSearch(sessionId: String, q: String): List<FsSearchResult> =
         getJson("$httpBase/sessions/$sessionId/fs/search?q=${urlEncode(q)}")
 
+    // ── Host file system (absolute paths; spec 2026-09-27) ─────────────────────
+
+    /** GET /fs/list?path=<abs> → a folder snapshot. */
+    suspend fun hostFsList(path: String): dev.supermux.fs.DirSnapshot =
+        getJson("$httpBase/fs/list?path=${urlEncode(path)}")
+
+    /** GET /fs/stat?path=<abs> → metadata for one entry. */
+    suspend fun hostFsStat(path: String): dev.supermux.fs.FsStat =
+        getJson("$httpBase/fs/stat?path=${urlEncode(path)}")
+
+    /** GET /fs/read?path=<abs> → file text. Throws FsException on non-2xx (413 too large / 415 binary / 404 / 403). */
+    suspend fun hostFsRead(path: String): String {
+        val resp = http.get("$httpBase/fs/read?path=${urlEncode(path)}") {
+            authHeader()
+        }
+        if (!resp.status.isSuccess()) {
+            val body = resp.bodyAsText()
+            throw FsException(resp.status.value, body.ifBlank { "read failed (${resp.status.value})" })
+        }
+        return resp.bodyAsText()
+    }
+
+    /** PUT /fs/write?path=<abs> (text/plain body) → { size, mtime }. Throws FsException on non-2xx. */
+    suspend fun hostFsWrite(path: String, content: String): dev.supermux.fs.FsWriteResult {
+        val resp = http.put("$httpBase/fs/write?path=${urlEncode(path)}") {
+            authHeader()
+            contentType(ContentType.Text.Plain)
+            setBody(content)
+        }
+        if (!resp.status.isSuccess()) {
+            throw FsException(resp.status.value, resp.bodyAsText())
+        }
+        return json.decodeFromString(resp.bodyAsText())
+    }
+
+    /** GET /fs/search?scope=<abs>&q=<query>&limit=<n> → fuzzy filename matches under scope. */
+    suspend fun hostFsSearch(scope: String, q: String, limit: Int = 50): List<dev.supermux.fs.SearchHit> =
+        getJson("$httpBase/fs/search?scope=${urlEncode(scope)}&q=${urlEncode(q)}&limit=$limit")
+
+    /** POST /fs/ops {op,path,to?} → 204. Throws FsException on non-2xx (400/403/404/409). */
+    suspend fun hostFsOp(op: dev.supermux.fs.FsOpRequest) {
+        val resp = http.post("$httpBase/fs/ops") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(op))
+        }
+        if (!resp.status.isSuccess()) {
+            throw FsException(resp.status.value, resp.bodyAsText())
+        }
+    }
+
     /** GET /sessions/<id>/fs/diff?base=<spec> → { repos: RepoDiff[], comments: ReviewComment[] }.
      *  [base] is the diff-base spec: null/"session-start" (default) · "head" · "commit:<sha>" · "branch:<name>". */
     suspend fun fsDiff(sessionId: String, base: String? = null): FsDiffResult =
