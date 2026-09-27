@@ -50,6 +50,9 @@ class BasicsTest {
         val y = view("a)", EditorSelection.cursor(1))
         y.typeText("[")
         assertEquals("a[|])", y.show())
+        val z = view("f(a, b)", EditorSelection.cursor(3))
+        z.typeText("(")
+        assertEquals("f(a(|, b)", z.show(), "before a comma a bracket is typed alone (CM6's default)")
     }
 
     @Test fun quotesPairOnlyAwayFromWords() {
@@ -79,6 +82,11 @@ class BasicsTest {
         val w = view("x", EditorSelection.cursor(1))
         w.typeText(")")
         assertEquals("x)|", w.show(), "a closer with nothing after it is just typed")
+        val q = view("say", EditorSelection.cursor(3))
+        q.typeText(" ")
+        q.typeText("'")
+        q.typeText("'")
+        assertEquals("say ''|", q.show(), "the second quote stepped over the inserted one")
     }
 
     @Test fun backspaceBetweenAnEmptyPairDeletesBoth() {
@@ -102,16 +110,33 @@ class BasicsTest {
         assertEquals("say (\"[hello]\") now", v.show())
     }
 
-    @Test fun everyCursorDecidesForItself() {
-        val v = view("a \nb\nc x", EditorSelection.create(listOf(SelectionRange(2), SelectionRange(4), SelectionRange(7))))
+    @Test fun everyCursorOrNone() {
+        val v = view("a \nb\nc ", EditorSelection.create(listOf(SelectionRange(2), SelectionRange(4), SelectionRange(7))))
         v.typeText("(")
-        // Line 1 and 2: before a line break, paired; line 3: before "x", only the bracket.
-        assertEquals("a (|)\nb(|)\nc (|x", v.show())
+        assertEquals("a (|)\nb(|)\nc (|)", v.show())
         v.typeText(")")
-        assertEquals("a ()|\nb()|\nc ()|x", v.show())
-        val w = view("{}{}", EditorSelection.create(listOf(SelectionRange(1), SelectionRange(3))))
-        CloseBrackets.deleteBracketPair.run(w)
-        assertEquals("|", w.show(), "both pairs deleted; the two cursors meet and merge")
+        assertEquals("a ()|\nb()|\nc ()|", v.show())
+        // One cursor before a word: the bracket is typed plainly at every cursor (CM6).
+        val w = view("a \nc x", EditorSelection.create(listOf(SelectionRange(2), SelectionRange(5))))
+        w.typeText("(")
+        assertEquals("a (|\nc (|x", w.show())
+        val y = view("{}{}", EditorSelection.create(listOf(SelectionRange(1), SelectionRange(3))))
+        CloseBrackets.deleteBracketPair.run(y)
+        assertEquals("|", y.show(), "both pairs deleted; the two cursors meet and merge")
+    }
+
+    @Test fun onlyClosersItInsertedAreSteppedOver() {
+        val v = view("f(x)", EditorSelection.cursor(3))
+        v.typeText(")")
+        assertEquals("f(x)|)", v.show(), "a closer the user typed is not stepped over")
+        val w = view("", EditorSelection.cursor(0))
+        w.typeText("(")
+        w.typeText("a")
+        w.typeText("b")
+        w.typeText(")")
+        assertEquals("(ab)|", w.show(), "the inserted closer moved with the typing and was stepped over")
+        w.typeText(")")
+        assertEquals("(ab))|", w.show(), "stepped over once; then it is the user's")
     }
 
     @Test fun emojiAroundTheCursor() {

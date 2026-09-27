@@ -46,8 +46,8 @@ object BlockIndent {
         true
     }
 
-    /** Enter (and Shift-Enter) above the default newline. */
-    fun extension(): Extension = Prec.high(keymapOf(KeyBinding("Enter", insertNewlineAndIndent)))
+    /** Enter and Shift-Enter (both a newline by default) above the default newline. */
+    fun extension(): Extension = Prec.high(keymapOf(KeyBinding("Enter", insertNewlineAndIndent), KeyBinding("Shift-Enter", insertNewlineAndIndent)))
 
     private fun between(doc: Rope, pos: Int): Boolean {
         if (pos <= 0 || pos >= doc.length) return false

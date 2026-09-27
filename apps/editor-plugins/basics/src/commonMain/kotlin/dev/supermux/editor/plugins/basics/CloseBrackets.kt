@@ -13,6 +13,8 @@ import dev.supermux.editor.core.KeyBinding
 import dev.supermux.editor.core.Prec
 import dev.supermux.editor.core.Rope
 import dev.supermux.editor.core.SelectionRange
+import dev.supermux.editor.core.StateEffectType
+import dev.supermux.editor.core.StateField
 import dev.supermux.editor.core.TransactionSpec
 import dev.supermux.editor.core.extensionOf
 import dev.supermux.editor.core.keymapOf
@@ -25,7 +27,8 @@ import dev.supermux.editor.core.keymapOf
  */
 data class CloseBracketsConfig(
     val brackets: List<Char> = listOf('(', '[', '{', '\'', '"', '`'),
-    val before: String = ")]}:;>,",
+    // CM6's default. (`,` is not in it: before a comma a bracket is typed alone, as in CM6.)
+    val before: String = ")]}:;>",
 )
 
 /** The [CloseBracketsConfig] in effect: the highest-precedence one, else the default. */
@@ -39,10 +42,12 @@ val closeBracketsConfig: Facet<CloseBracketsConfig, CloseBracketsConfig> = Facet
  *   whitespace, the line's end or one of [CloseBracketsConfig.before]; otherwise just the bracket;
  * - a quote pairs only when neither the character before nor the one after is a word character
  *   (so `don't` and `a"b` type plainly), and steps over a quote right after the cursor;
- * - typing a closing bracket that is already right after the cursor steps over it;
+ * - typing a closing bracket (or quote) steps over the one right after the cursor only when this
+ *   plugin inserted it (tracked in [insertedClosers], moved through every change, as CM6 does);
  * - with a selection, an opening character wraps it (the selection stays on the wrapped text);
  * - Backspace between an empty pair deletes both;
- * - at every cursor, each deciding for itself.
+ * - at every cursor, all or nothing (CM6): when any cursor would type the character plainly, it is
+ *   typed plainly at every cursor.
  *
  * Typed text reaches it from every input path (the hidden field of a soft or hardware keyboard,
  * the web's key path, [dev.supermux.editor.compose.EditorView.typeText]) through
@@ -56,8 +61,33 @@ object CloseBrackets {
     /** Backspace between an empty pair deletes both (false elsewhere: the default Backspace runs). */
     val deleteBracketPair: Command = Command { t -> deletePairs(t) }
 
+    /** Closers this plugin inserted, at their positions in the new document. */
+    private val insertedAt = StateEffectType<List<Int>>("closeBrackets.inserted")
+
+    /** A tracked closer was stepped over (it is the user's now). */
+    private val steppedOver = StateEffectType<List<Int>>("closeBrackets.steppedOver")
+
+    /**
+     * The positions of the closing characters this plugin inserted and the user has not stepped over
+     * yet, moved through every change (one deleted or replaced is forgotten).
+     */
+    val insertedClosers: StateField<List<Int>> = StateField("closeBrackets.closers", { emptyList() }, { value: List<Int>, tr: dev.supermux.editor.core.Transaction ->
+        var v = value
+        if (tr.docChanged && v.isNotEmpty()) v = v.mapNotNull { p ->
+            val a = tr.changes.mapPos(p, 1)
+            val b = tr.changes.mapPos(p + 1, -1)
+            if (b - a == 1) a else null
+        }
+        for (e in tr.effects) {
+            e.valueIf(steppedOver)?.let { gone -> v = v - gone.toSet() }
+            e.valueIf(insertedAt)?.let { added -> v = (v + added).distinct().sorted() }
+        }
+        v
+    })
+
     /** The plugin: the input handler, the Backspace binding (above the defaults) and, optionally, a config. */
     fun extension(config: CloseBracketsConfig? = null): Extension = extensionOf(
+        insertedClosers,
         inputHandlerFacet.of(inputHandler),
         Prec.high(keymapOf(KeyBinding("Backspace", deleteBracketPair))),
         if (config != null) closeBracketsConfig.of(config) else extensionOf(),
@@ -83,27 +113,27 @@ object CloseBrackets {
         val closer = !opening && config.brackets.any { closing(it) == ch }
         if (!opening && !closer) return false
         val doc = st.doc
-        var special = false
+        val tracked = st.fieldOrNull(insertedClosers).orEmpty()
         val specs = ArrayList<ChangeSpec>()
         val kinds = ArrayList<Kind>()
         for (r in st.selection.ranges) {
             val next = if (r.to < doc.length) doc.charAt(r.to) else null
             val kind = when {
                 opening && !r.empty -> Kind.WRAP
-                r.empty && next == ch && (closer || isQuote(ch, config)) -> Kind.STEP_OVER
+                r.empty && next == ch && (closer || isQuote(ch, config)) && r.head in tracked -> Kind.STEP_OVER
                 opening && r.empty && shouldPair(doc, r.head, ch, config) -> Kind.PAIR
                 else -> Kind.PLAIN
             }
+            // All or nothing (CM6): one cursor that would type it plainly makes it plain everywhere.
+            if (kind == Kind.PLAIN) return false
             when (kind) {
                 Kind.WRAP -> { specs += ChangeSpec(r.from, r.from, ch.toString()); specs += ChangeSpec(r.to, r.to, closing(ch).toString()) }
                 Kind.STEP_OVER -> Unit
                 Kind.PAIR -> specs += ChangeSpec(r.head, r.head, "$ch${closing(ch)}")
                 Kind.PLAIN -> specs += ChangeSpec(r.from, r.to, ch.toString())
             }
-            if (kind != Kind.PLAIN) special = true
             kinds += kind
         }
-        if (!special) return false
         val changes = ChangeSet.of(doc.length, specs.sortedWith(compareBy({ it.from }, { it.to })))
         val ranges = st.selection.ranges.mapIndexed { i, r ->
             when (kinds[i]) {
@@ -117,7 +147,20 @@ object CloseBrackets {
                 Kind.PLAIN -> SelectionRange(changes.mapPos(r.to, 1))
             }
         }
-        t.dispatch(TransactionSpec(changeSet = changes, selection = EditorSelection.create(ranges, st.selection.mainIndex), scrollIntoView = true, userEvent = "input.type"))
+        // Where the closers this inserts end up, and which tracked ones were stepped over.
+        val added = st.selection.ranges.mapIndexedNotNull { i, r ->
+            when (kinds[i]) {
+                Kind.PAIR -> changes.mapPos(r.head, -1) + 1
+                Kind.WRAP -> changes.mapPos(r.to, -1)
+                else -> null
+            }
+        }
+        val stepped = st.selection.ranges.filterIndexed { i, _ -> kinds[i] == Kind.STEP_OVER }.map { it.head }
+        val effects = buildList {
+            if (stepped.isNotEmpty()) add(steppedOver.of(stepped))
+            if (added.isNotEmpty()) add(insertedAt.of(added))
+        }
+        t.dispatch(TransactionSpec(changeSet = changes, selection = EditorSelection.create(ranges, st.selection.mainIndex), effects = effects, scrollIntoView = true, userEvent = "input.type"))
         return true
     }
 
