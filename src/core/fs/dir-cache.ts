@@ -108,7 +108,9 @@ export class DirCache {
     if (running) {
       const j = running.then(() => this.runRead(real))
       this.joiners.set(real, j)
-      j.finally(() => { if (this.joiners.get(real) === j) this.joiners.delete(real) })
+      // `.catch` keeps this bookkeeping branch from surfacing as an unhandled rejection; callers
+      // still get the error through `j` itself.
+      j.finally(() => { if (this.joiners.get(real) === j) this.joiners.delete(real) }).catch(() => {})
       return j
     }
     return this.runRead(real)

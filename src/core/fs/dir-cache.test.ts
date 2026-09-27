@@ -65,6 +65,33 @@ test("a load that arrives mid-read re-reads once for all joiners; the first call
   expect(c.readCount).toBe(2)
 })
 
+test("a joined read that fails rejects its callers without an unhandled rejection", async () => {
+  const root = fixture()
+  const sub = join(root, "b-dir")
+  let notifyReady!: () => void
+  const ready = new Promise<void>((r) => (notifyReady = r))
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  let first = true
+  const c = cache({ beforeRead: async () => { if (first) { first = false; notifyReady(); await gate } } })
+  const unhandled: unknown[] = []
+  const onUnhandled = (e: unknown) => { unhandled.push(e) }
+  process.on("unhandledRejection", onUnhandled)
+  try {
+    const a = c.load(sub)
+    await ready
+    rmSync(sub, { recursive: true })
+    const b = c.load(sub)
+    release()
+    await a
+    await expect(b).rejects.toMatchObject({ code: "ENOENT" })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(unhandled).toEqual([])
+  } finally {
+    process.off("unhandledRejection", onUnhandled)
+  }
+})
+
 test("forget during an in-flight read keeps that read from re-inserting into the cache", async () => {
   const root = fixture()
   let release!: () => void
