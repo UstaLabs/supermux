@@ -157,6 +157,38 @@ flow floating-cursor "- tapOn: { point: \"200,138\" }
 - waitForAnimationToEnd
 - tapOn: \"floating cursor drag\"
 - extendedWaitUntil: { visible: \"float: moved down .*, text unchanged, mapped\", timeout: 5000 }"
+# A text field INSIDE a block widget (the M3c demo's review thread): its own keyboard and typing, the
+# editor untouched; a tap on the code gives the editor its input back.
+flow widget-text-field "- tapOn: \"close\"
+- waitForAnimationToEnd
+- tapOn: \"M3c demo: gutter, fold, thread, panel\"
+- waitForAnimationToEnd
+- extendedWaitUntil: { visible: \"reply field\", timeout: 30000 }
+- tapOn: \"reply field\"
+- waitForAnimationToEnd
+- inputText: \"from the widget\"
+- waitForAnimationToEnd
+- tapOn: { point: \"70%,20%\" }
+- waitForAnimationToEnd
+- inputText: \"EDX\"
+- waitForAnimationToEnd"
+maestro --udid "$U" hierarchy > "$OUT/tree3.json" 2>/dev/null
+python3 - "$OUT/tree3.json" <<'PY' || FAILS=$((FAILS+1))
+import json, sys
+d = json.load(open(sys.argv[1]))
+reply, editor = [], []
+def walk(n):
+    a = n.get("attributes", {})
+    if a.get("accessibilityText") == "reply field": reply.append(a.get("value") or a.get("text") or "")
+    if a.get("accessibilityText") == "Sample editor": editor.append(a.get("value") or "")
+    for c in n.get("children", []): walk(c)
+walk(d)
+r = reply[0] if reply else ""
+e = editor[0] if editor else ""
+ok = "from the widget" in r and "EDX" not in r and "from the widget" not in e and "EDX" in e
+print(("PASS" if ok else "FAIL") + " a widget's text field types on its own, the editor gets its input back: reply=" + repr(r) + " editor has EDX=" + repr("EDX" in e))
+sys.exit(0 if ok else 1)
+PY
 sleep 2
 if xcrun simctl spawn "$U" launchctl list | grep -q editor.sample; then echo "PASS still running after the long presses"; else echo "FAIL the app is gone"; FAILS=$((FAILS+1)); fi
 if grep -q "Uncaught Kotlin exception" "$OUT/console.log"; then echo "FAIL an uncaught Kotlin exception:"; grep -A4 "Uncaught Kotlin exception" "$OUT/console.log" | head -8; FAILS=$((FAILS+1)); else echo "PASS no uncaught Kotlin exception in the console"; fi

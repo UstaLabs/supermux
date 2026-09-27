@@ -41,6 +41,7 @@ fun main() {
                     doc = { v.state.doc.toString() },
                     sel = { v.state.selection.main.let { "${it.anchor},${it.head}" } },
                     open = { name -> SampleFile.entries.firstOrNull { it.name == name }?.let { sampleFileOpener?.invoke(it) }; Unit },
+                    panel = { on -> M3cDemo.setPanel(v, on) },
                 )
             },
         )
@@ -59,9 +60,28 @@ private fun setTypeReady() { js("window.__editorTypeReady = true") }
 
 private fun typeDone(): Boolean = js("window.__editorTypeDone === true")
 
-private fun publishHooks(doc: () -> String, sel: () -> String, open: (String) -> Unit) {
+private fun publishHooks(doc: () -> String, sel: () -> String, open: (String) -> Unit, panel: (Boolean) -> Unit) {
+    publishEditorHooks(doc, sel, open)
+    publishPanelHook(panel)
+    publishDemoProbe {
+        // CSS pixels (Compose's root pixels over the device pixel ratio).
+        val c = DemoProbe.replyCenter
+        val r = window.devicePixelRatio
+        val fc = DemoProbe.findCenter
+        val find = if (fc == androidx.compose.ui.geometry.Offset.Unspecified) "" else ",\"fx\":${fc.x / r},\"fy\":${fc.y / r},\"find\":${jsonString(DemoProbe.find)}"
+        if (c == androidx.compose.ui.geometry.Offset.Unspecified) "{}" else "{\"x\":${c.x / r},\"y\":${c.y / r},\"draft\":${jsonString(DemoProbe.draft)}$find}"
+    }
+}
+
+private fun jsonString(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+
+private fun publishEditorHooks(doc: () -> String, sel: () -> String, open: (String) -> Unit) {
     js("{ window.__editorDoc = doc; window.__editorSel = sel; window.__editorOpen = open; }")
 }
+
+private fun publishPanelHook(panel: (Boolean) -> Unit) { js("{ window.__demoPanel = panel; }") }
+
+private fun publishDemoProbe(probe: () -> String) { js("{ window.__demoProbe = () => JSON.parse(probe()); }") }
 
 /**
  * `?two=1`: two editors on one page and a plain DOM `<input>` (web-bench/run.mjs `two`): typing

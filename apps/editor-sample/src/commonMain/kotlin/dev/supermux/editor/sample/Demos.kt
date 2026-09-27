@@ -30,6 +30,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -77,6 +81,14 @@ private class DemoValue(
     val threadOpen: Boolean,
     val hintAt: Int,
 )
+
+/** Device checks: what the demo's review-thread reply field holds, and where it is (root pixels). */
+object DemoProbe {
+    var draft: String = ""
+    var replyCenter: androidx.compose.ui.geometry.Offset = androidx.compose.ui.geometry.Offset.Unspecified
+    var find: String = ""
+    var findCenter: androidx.compose.ui.geometry.Offset = androidx.compose.ui.geometry.Offset.Unspecified
+}
 
 object M3cDemo {
     private val toggleFold = StateEffectType<Int>("demo.fold") // a line to fold / unfold
@@ -217,9 +229,12 @@ object M3cDemo {
                     BasicText("💬 review thread (a block widget)", style = TextStyle(color = ink.copy(alpha = 0.7f), fontSize = 11.sp))
                     for (c in comments) BasicText(c, style = TextStyle(color = ink, fontSize = 13.sp))
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        androidx.compose.runtime.LaunchedEffect(draft) { androidx.compose.runtime.snapshotFlow { draft.text.toString() }.collect { DemoProbe.draft = it } }
                         BasicTextField(
                             draft,
                             Modifier.weight(1f).background(ink.copy(alpha = 0.08f)).padding(6.dp).testTag("thread-reply")
+                                .semantics { contentDescription = "reply field" }
+                                .onGloballyPositioned { DemoProbe.replyCenter = it.boundsInRoot().center }
                                 .onPreviewKeyEvent { e -> if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) { focusEditor(); true } else false },
                             textStyle = TextStyle(color = ink, fontSize = 13.sp),
                         )
@@ -249,7 +264,9 @@ object M3cDemo {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     BasicText("find:", style = TextStyle(color = ink, fontSize = 13.sp))
-                    BasicTextField(query, Modifier.weight(1f).background(ink.copy(alpha = 0.08f)).padding(6.dp).testTag("find-field"), textStyle = TextStyle(color = ink, fontSize = 13.sp))
+                    androidx.compose.runtime.LaunchedEffect(query) { androidx.compose.runtime.snapshotFlow { query.text.toString() }.collect { DemoProbe.find = it } }
+                    BasicTextField(query, Modifier.weight(1f).background(ink.copy(alpha = 0.08f)).padding(6.dp).testTag("find-field")
+                        .onGloballyPositioned { DemoProbe.findCenter = it.boundsInRoot().center }, textStyle = TextStyle(color = ink, fontSize = 13.sp))
                     val n = if (query.text.isEmpty()) 0 else Regex(Regex.escape(query.text.toString())).findAll(editor.state.doc.slice(0, minOf(editor.state.doc.length, 500_000))).count()
                     BasicText("$n found · Esc: back to the editor", style = TextStyle(color = ink.copy(alpha = 0.7f), fontSize = 11.sp))
                     BasicText("✕", Modifier.clickable { setPanel(editor, false); focusEditor() }.padding(6.dp), style = TextStyle(color = ink, fontSize = 13.sp))

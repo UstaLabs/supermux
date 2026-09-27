@@ -181,9 +181,10 @@ tasks.register<Exec>("webInputTest") {
     dependsOn("wasmJsBrowserDistribution")
     workingDir = projectDir
     commandLine("node", "web-bench/run.mjs", "input", webDist.get().asFile.absolutePath)
-    // Then two editors and a plain <input> on one page.
+    // Then two editors and a plain <input> on one page, and a text field inside a block widget.
     doLast {
         project.providers.exec { commandLine("node", "web-bench/run.mjs", "two", webDist.get().asFile.absolutePath); workingDir = projectDir }.result.get().assertNormalExitValue()
+        project.providers.exec { commandLine("node", "web-bench/run.mjs", "widget", webDist.get().asFile.absolutePath); workingDir = projectDir }.result.get().assertNormalExitValue()
     }
 }
 

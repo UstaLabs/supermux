@@ -33,8 +33,8 @@ import { spawn } from 'node:child_process';
 
 const CHROME = process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const [mode, distArg, ...rest] = process.argv.slice(2);
-if (!['cold', 'bench', 'eval', 'input', 'two'].includes(mode) || !distArg) {
-  console.error('usage: node run.mjs cold|bench|input|two <dist> [--runs N] [--ceiling MS] [--syntax-ceiling MS] [--headed]');
+if (!['cold', 'bench', 'eval', 'input', 'two', 'widget'].includes(mode) || !distArg) {
+  console.error('usage: node run.mjs cold|bench|input|two|widget <dist> [--runs N] [--ceiling MS] [--syntax-ceiling MS] [--headed]');
   process.exit(2);
 }
 const opt = (name, dflt) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : dflt; };
@@ -282,6 +282,61 @@ try {
       await sleep(300);
       const plain = await page.value("document.getElementById('plain').value");
       check('a plain input on the page gets its own typing', plain === 'zz' && !(await doc(0)).includes('zz') && !(await doc(1)).includes('zz'), JSON.stringify([plain, await page.value("(() => { let a = document.activeElement; return a ? a.tagName + '#' + a.id : 'none'; })()")]));
+      page.close();
+    } finally {
+      await chrome.close();
+    }
+  } else if (mode === 'widget') {
+    // A text field INSIDE a block widget (the M3c demo's review thread): it takes the typing and its
+    // keys, the editor none of them; a click on the text gives the editor its input back.
+    const chrome = await launchChrome(flag('--headed'));
+    try {
+      const page = await openPage(chrome.port, base);
+      await waitFor(page, 'window.__cold', 120000);
+      await page.value("window.__editorOpen('DEMO')");
+      await waitFor(page, "window.__demoProbe && window.__demoProbe().x !== undefined", 30000);
+      await sleep(800);
+      const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ': ' + detail : ''}`); if (!ok) failed = true; };
+      const doc = () => page.value('window.__editorDoc()');
+      const probe = async () => JSON.parse(await page.value('JSON.stringify(window.__demoProbe())'));
+      const click = async (x, y) => { for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await page.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }); await sleep(500); };
+      const key = async (k, code, vk) => { await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: k, code, windowsVirtualKeyCode: vk }); await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: vk }); await sleep(80); };
+      const before = await doc();
+      const p0 = await probe();
+      // A phone: a touch into the field, then its keyboard's text.
+      await page.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: p0.x, y: p0.y }] });
+      await sleep(50);
+      await page.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await sleep(600);
+      await page.send('Input.insertText', { text: 'T' });
+      await sleep(400);
+      check('a touch into the widget field, then typing: the field has it', (await probe()).draft === 'T' && (await doc()) === before, JSON.stringify((await probe()).draft));
+      // A mouse and a hardware keyboard: typing, Backspace, an arrow.
+      await click(p0.x, p0.y);
+      await key('End', 'End', 35);
+      await page.send('Input.insertText', { text: 'from the widget' });
+      await sleep(300);
+      await key('Backspace', 'Backspace', 8);
+      await key('ArrowLeft', 'ArrowLeft', 37);
+      await sleep(300);
+      const p1 = await probe();
+      check('the widget field takes typing and keys', p1.draft === 'Tfrom the widge', JSON.stringify(p1.draft));
+      check('the editor took none of it', (await doc()) === before);
+      // (Not checked: a touch on a field a mouse focused loses the next text in Compose web 1.12 for
+      // ANY Compose text field, one outside the editor too; see the editor-compose README.)
+      // Back to the editor: a click on its text.
+      await click(300, 60);
+      await page.send('Input.insertText', { text: 'EDX' });
+      await sleep(300);
+      check('a click on the text gives the editor its input back', (await doc()).includes('EDX') && !(await probe()).draft.includes('EDX'), JSON.stringify((await probe()).draft));
+      // The find panel (outside the scrolling area) types on its own too.
+      await page.value('window.__demoPanel(true)');
+      await sleep(800);
+      const q = await probe();
+      await click(q.fx, q.fy);
+      await page.send('Input.insertText', { text: 'needle' });
+      await sleep(300);
+      check('the panel field types on its own', (await probe()).find === 'needle' && !(await doc()).includes('needle'), JSON.stringify((await probe()).find));
       page.close();
     } finally {
       await chrome.close();
