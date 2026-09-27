@@ -210,6 +210,3 @@ internal class BlockWidgets {
         if (measured.size > 2 * entries.size + 16) measured.keys.retainAll(byKey.keys)
     }
 }
-
-/** A widget's key for the saved-state holder (a String: a platform bundle can keep it). */
-internal fun WidgetKey.saveKey(): String = "$type\u0000$id"

@@ -177,6 +177,7 @@ fun Editor(
         val removeAnnouncer = view.addListener { controller.announcer.follow(it) }
         onDispose {
             removeAnnouncer()
+            controller.dropWidgetState()
             scrollState.surfaces -= controller
             removeFastTyping?.invoke()
             if (view.surface === controller) {
@@ -362,8 +363,15 @@ internal class SurfaceSlots(
 
 private enum class Slot { CANVAS, TEST, FIELD, SHIELD, OVERLAY }
 
-/** A gutter marker's accessibility node's slot. */
-internal data class MarkerSlot(val column: String, val line: Int, val marker: GutterMarker)
+/**
+ * A gutter marker's accessibility node's slot: the marker by IDENTITY (a plugin's RangeSet keeps its
+ * instances through edits, so an Enter above never recreates the nodes below), and its occurrence
+ * among the drawn ones (one instance on several lines).
+ */
+internal class MarkerSlot(val marker: GutterMarker, val n: Int) {
+    override fun equals(other: Any?) = other is MarkerSlot && other.marker === marker && other.n == n
+    override fun hashCode() = marker.hashCode() * 31 + n
+}
 
 /**
  * The surface's layout pass: [configure] (cheap when nothing changed), then
@@ -378,17 +386,20 @@ private fun surfaceMeasurePolicy(
     val w = if (constraints.hasBoundedWidth) constraints.maxWidth else constraints.minWidth
     val h = if (constraints.hasBoundedHeight) constraints.maxHeight else constraints.minHeight
     // Block widgets are subcomposed and measured INSIDE the layout pass (their heights move lines).
+    // Each slot is subcomposed at most once per pass: a widget measured early in the pass and then
+    // pushed out of the range (another one grew) is still subcomposed, never again as "retained".
     val widgetPlaceables = HashMap<WidgetSlot, List<Placeable>>()
     val measureWidget: WidgetMeasurer = { key, inline, cs ->
-        val slot = WidgetSlot(key, inline)
-        val ps = subcompose(slot, c.widgetContent(key)).map { it.measure(cs) }
+        val slot = c.widgetSlot(key, inline)
+        // Measured once per pass (a measurable may not be measured twice): a second ask reuses it.
+        val ps = widgetPlaceables[slot] ?: subcompose(slot, c.widgetContent(slot)).map { it.measure(cs) }
         widgetPlaceables[slot] = ps
         if (ps.isEmpty()) null else androidx.compose.ui.unit.IntSize(ps.maxOf { it.width }, ps.maxOf { it.height })
     }
     val frame = c.layoutFrame(w.toFloat(), h.toFloat(), configure, measureWidget)
-    val placed = frame?.widgets.orEmpty().filter { it.composed && widgetPlaceables.containsKey(WidgetSlot(it.key, it.inline)) }
+    val placed = frame?.widgets.orEmpty().filter { it.composed && widgetPlaceables.containsKey(c.widgetSlot(it.key, it.inline)) }
     // Out of view but near: still composed (not measured, not placed), so their state lives.
-    for (k in c.retainedWidgets(placed.filter { !it.inline }.map { it.key })) subcompose(WidgetSlot(k, false), c.widgetContent(k))
+    for (slot in c.retainedWidgets(widgetPlaceables.keys)) subcompose(slot, c.widgetContent(slot))
     val full = Constraints.fixed(w, h)
     val canvas = subcompose(Slot.CANVAS, slots.canvas).map { it.measure(full) }
     val test = slots.testChild?.let { t -> subcompose(Slot.TEST, t).map { it.measure(full) } }.orEmpty()
@@ -396,13 +407,18 @@ private fun surfaceMeasurePolicy(
     val shield = subcompose(Slot.SHIELD, slots.shield).map { it.measure(Constraints()) }
     val overlay = subcompose(Slot.OVERLAY, slots.overlay).map { it.measure(Constraints(maxWidth = w, maxHeight = h)) }
     // A node per visible marker with a tooltip, for screen readers (it takes no pointer).
+    val seen = HashMap<GutterMarker, Int>()
+    val markerSlots = HashSet<MarkerSlot>()
     val markers = frame?.markers.orEmpty().mapNotNull { m ->
-        val key = MarkerSlot(m.column, m.line, m.marker)
         if (m.marker.tooltip == null) return@mapNotNull null
+        val n = seen.getOrElse(m.marker) { 0 }.also { seen[m.marker] = it + 1 }
+        val key = MarkerSlot(m.marker, n)
+        markerSlots += key
+        c.markerPlaces[key] = m.column to m.line
         val size = Constraints.fixed(m.rect.width.toInt().coerceAtLeast(1), m.rect.height.toInt().coerceAtLeast(1))
         m to subcompose(key, c.markerNode(key)).map { it.measure(size) }
     }
-    c.pruneMarkerNodes(markers.mapTo(HashSet()) { MarkerSlot(it.first.column, it.first.line, it.first.marker) })
+    c.pruneMarkerNodes(markerSlots)
     val caret = frame?.caret ?: Rect.Zero
     layout(w, h) {
         canvas.forEach { it.place(0, 0) }
@@ -412,7 +428,7 @@ private fun surfaceMeasurePolicy(
         field.forEach { it.place(caret.left.toInt(), caret.top.toInt()) }
         shield.forEach { it.place(caret.left.toInt() - it.width / 2, caret.top.toInt() - it.height / 2) }
         // Widgets over the shield: a widget's text field right under the caret still gets its taps.
-        for (pw in placed) widgetPlaceables[WidgetSlot(pw.key, pw.inline)]?.forEach {
+        for (pw in placed) widgetPlaceables[c.widgetSlot(pw.key, pw.inline)]?.forEach {
             // An inline widget sits on its row, centred; a block across the text area.
             val y = if (pw.inline) pw.rect.top + (pw.rect.height - it.height) / 2 else pw.rect.top
             it.place(kotlin.math.round(pw.rect.left).toInt(), kotlin.math.round(y).toInt())
@@ -421,8 +437,14 @@ private fun surfaceMeasurePolicy(
     }
 }
 
-/** A widget's slot (a key may be shown as a block and inline at once: two slots). */
-private data class WidgetSlot(val key: dev.supermux.editor.core.WidgetKey, val inline: Boolean)
+/**
+ * A widget's slot: its key in a role (a key may be shown as a block and inline at once: two slots),
+ * scoped to the view showing it (another document's `thread/t1` is another widget).
+ */
+internal data class WidgetSlot(val view: Long, val key: dev.supermux.editor.core.WidgetKey, val inline: Boolean) {
+    /** The saveable state holder's key (a String: a platform bundle can keep it). */
+    val saveKey: String get() = "$view\u0000${if (inline) "i" else "b"}\u0000${key.type}\u0000${key.id}"
+}
 
 /** The canvas: paints the controller's last frame ([EditorController.draw]), then tells the host. */
 internal fun Modifier.editorCanvas(c: EditorController, onPaint: androidx.compose.runtime.State<(() -> Unit)?>): Modifier =
@@ -835,45 +857,85 @@ internal class EditorController(
         override fun focusEditor() { requestFocus() }
     }
 
-    private val widgetContents = HashMap<dev.supermux.editor.core.WidgetKey, @Composable () -> Unit>()
+    private val widgetContents = HashMap<WidgetSlot, @Composable () -> Unit>()
 
-    /** A widget's content for its slot, kept per key (so a scroll recomposes nothing). */
-    fun widgetContent(key: dev.supermux.editor.core.WidgetKey): @Composable () -> Unit = widgetContents.getOrPut(key) {
+    /** The slot of [key] in its role, in this view. */
+    fun widgetSlot(key: dev.supermux.editor.core.WidgetKey, inline: Boolean) = WidgetSlot(view.widgetStateId, key, inline)
+
+    /** The slots whose saveable state the holder may keep (removed when their decoration goes). */
+    private val savedSlots = HashSet<WidgetSlot>()
+
+    /** A widget's content for its slot, kept per slot (so a scroll recomposes nothing). */
+    fun widgetContent(slot: WidgetSlot): @Composable () -> Unit = widgetContents.getOrPut(slot) {
+        savedSlots += slot
         {
-            val content = registry?.content(key.type)
+            val content = registry?.content(slot.key.type)
             val holder = saveableHolder
             if (content != null && holder != null) {
-                holder.SaveableStateProvider(key.saveKey()) {
-                    Box(Modifier.fillMaxWidth()) { widgetScope.content(key) }
+                holder.SaveableStateProvider(slot.saveKey) {
+                    Box(if (slot.inline) Modifier else Modifier.fillMaxWidth()) { widgetScope.content(slot.key) }
                 }
             }
         }
     }
 
-    /** The widgets composed last frame, most recently shown last (the retained cache's order). */
-    private val composedWidgets = LinkedHashSet<dev.supermux.editor.core.WidgetKey>()
+    private var aliveBlocks: List<BlockEntry>? = null
+    private var aliveFolds: Folds? = null
 
     /**
-     * The widgets kept composed but not placed: shown recently, now out of view but within
-     * [EditorDefaults.RETAIN_SCREENS] screens of it, at most [EditorDefaults.RETAIN_WIDGETS]. So
-     * a scroll out and back keeps even their `remember` state; a widget further away is disposed
-     * (its `rememberSaveable` state, a draft, is kept by the saveable-state holder).
+     * Forget what belongs to widgets whose decoration is gone: their saved state (a draft of a thread
+     * that was resolved), their measured inline size. Cheap unless the widgets changed.
      */
-    fun retainedWidgets(shown: List<dev.supermux.editor.core.WidgetKey>): List<dev.supermux.editor.core.WidgetKey> {
-        val shownSet = shown.toHashSet()
+    fun pruneWidgetState() {
+        val entries = blocks.entries
+        val folds = geometry.folds
+        if (entries === aliveBlocks && folds === aliveFolds) return
+        aliveBlocks = entries
+        aliveFolds = folds
+        val alive = HashSet<WidgetSlot>()
+        for (e in entries) alive += widgetSlot(e.key, false)
+        val inlineKeys = HashSet<dev.supermux.editor.core.WidgetKey>()
+        for (p in folds.inline) { alive += widgetSlot(p.key, true); inlineKeys += p.key }
+        for (r in folds.replaces) r.widget?.let { alive += widgetSlot(it, true); inlineKeys += it }
+        inlineSizes.keys.retainAll(inlineKeys)
+        val gone = savedSlots.filter { it !in alive }
+        if (gone.isEmpty()) return
+        val holder = saveableHolder
+        for (slot in gone) { holder?.removeState(slot.saveKey); savedSlots -= slot; widgetContents -= slot }
+    }
+
+    /** This view is no longer shown: none of its widgets' saved state is kept. */
+    fun dropWidgetState() {
+        val holder = saveableHolder
+        for (slot in savedSlots) holder?.removeState(slot.saveKey)
+        savedSlots.clear()
+        widgetContents.clear()
+    }
+
+    /** The slots composed last pass, most recently shown last (the retained cache's order). */
+    private val composedWidgets = LinkedHashSet<WidgetSlot>()
+
+    /**
+     * The block widgets to keep composed but not placed: shown recently, now out of view but within
+     * [EditorDefaults.RETAIN_SCREENS] screens of it, at most [EditorDefaults.RETAIN_WIDGETS]; never
+     * one already subcomposed this pass ([subcomposed]). So a scroll out and back keeps even their
+     * `remember` state; a widget further away is disposed (its `rememberSaveable` state, a draft, is
+     * kept by the saveable-state holder until its decoration goes).
+     */
+    fun retainedWidgets(subcomposed: Set<WidgetSlot>): List<WidgetSlot> {
         val h = viewportSize.height
         // The frame's position, never the scroll state's (a read here, after the pass, is observed).
         val y = frame?.scrollY ?: return emptyList()
-        val near = composedWidgets.filter { k ->
-            if (k in shownSet) return@filter false
-            val e = blocks.entry(k) ?: return@filter false
-            if (registry?.contains(k.type) != true || e.line >= heights.lineCount || geometry.folds.isHidden(e.line)) return@filter false
+        val near = composedWidgets.filter { s ->
+            if (s in subcomposed || s.inline || s.view != view.widgetStateId) return@filter false
+            val e = blocks.entry(s.key) ?: return@filter false
+            if (registry?.contains(s.key.type) != true || e.line >= heights.lineCount || geometry.folds.isHidden(e.line)) return@filter false
             val top = heights.top(e.line)
             top + heights.height(e.line) >= y - EditorDefaults.RETAIN_SCREENS * h && top <= y + (1 + EditorDefaults.RETAIN_SCREENS) * h
         }.takeLast(EditorDefaults.RETAIN_WIDGETS)
         composedWidgets.clear()
         composedWidgets += near
-        composedWidgets += shown
+        composedWidgets += subcomposed
         widgetContents.keys.retainAll(composedWidgets)
         return near
     }
@@ -952,18 +1014,33 @@ internal class EditorController(
 
     private val markerNodes = HashMap<MarkerSlot, @Composable () -> Unit>()
 
+    /** Marker nodes created so far (a test hook). */
+    var markerNodesCreated = 0
+        private set
+
+    /** Widget states the saveable holder keeps (a test hook). */
+    val savedWidgetStates: Int get() = savedSlots.size
+
+    /** Where each marker node's marker is now (its click reports that line). */
+    val markerPlaces = HashMap<MarkerSlot, Pair<String, Int>>()
+
     /** A marker's accessibility node: its tooltip as its label, a click that reports it. Kept per slot, so scrolling recomposes nothing. */
     fun markerNode(slot: MarkerSlot): @Composable () -> Unit = markerNodes.getOrPut(slot) {
+        markerNodesCreated++
         {
             Box(Modifier.fillMaxSize().semantics {
                 contentDescription = slot.marker.tooltip.orEmpty()
-                onClick(slot.marker.tooltip) { reportGutterClick(GutterHit(slot.column, slot.line, slot.marker)); true }
+                onClick(slot.marker.tooltip) {
+                    markerPlaces[slot]?.let { (column, line) -> reportGutterClick(GutterHit(column, line, slot.marker)) }
+                    true
+                }
             })
         }
     }
 
     fun pruneMarkerNodes(keep: Set<MarkerSlot>) {
         if (markerNodes.size > keep.size) markerNodes.keys.retainAll(keep)
+        if (markerPlaces.size > keep.size) markerPlaces.keys.retainAll(keep)
     }
 
     /** A click or tap on a marker column: the plugins' handlers ([gutterClickFacet]) first, then the host's. */
@@ -1016,6 +1093,7 @@ internal class EditorController(
             }
             syncFolds(state)
             syncBlocks(state)
+            pruneWidgetState()
             inlineMeasured.clear()
             buildFrame(state, theme, measureWidget)
         } finally {

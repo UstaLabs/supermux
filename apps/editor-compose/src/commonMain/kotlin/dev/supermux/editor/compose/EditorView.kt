@@ -215,6 +215,9 @@ class EditorView(initial: EditorState) : CommandTarget {
         return TransactionSpec(changeSet = changes, selection = EditorSelection.create(next, sel.mainIndex), scrollIntoView = true, userEvent = userEvent) to changes
     }
 
+    /** Scopes this view's widgets' slots and saved state (a draft in one document never shows in another). */
+    internal val widgetStateId: Long = nextWidgetStateId++
+
     private val ownScroll = EditorScrollState()
 
     /** The scroll state the surface uses: this view's own, or the one passed to `Editor(scrollState = …)`. */
@@ -294,6 +297,7 @@ class EditorView(initial: EditorState) : CommandTarget {
 
     private companion object {
         val USER_EDITS = listOf("input", "delete", "paste", "undo", "redo", "drop")
+        var nextWidgetStateId = 1L
     }
 }
 
