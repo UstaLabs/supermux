@@ -15,6 +15,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        setContent { SampleApp(loadBackend = { NativeBackend() }) }
+        // `adb shell am start -n dev.supermux.editor.sample/.MainActivity --ez bench true`: the device bench.
+        val bench = intent?.getBooleanExtra("bench", false) == true
+        setContent { SampleApp(loadBackend = { NativeBackend() }, deviceBench = bench) }
     }
 }

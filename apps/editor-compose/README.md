@@ -389,6 +389,40 @@ not tested for the caret bug (only document switching). Device frame times (120 
 the Fold) were not measured; that moves to M3c. The Smart Punctuation shim depends on Compose
 internals (above): re-run `ios-sim.sh` on every Compose upgrade. Undo is M4's history plugin.
 
+## The device pass (M3c)
+
+Builds installed on 2026-09-28 ~00:50 (Istanbul), all from `mac:~/work/native-editor-m3b`:
+
+| Device | Build | State |
+|---|---|---|
+| iPhone 15 Pro (iOS 26) | **Release** (`CONFIG=Release iosApp/device.sh`; Kotlin/Native's debug framework is several times slower, so only Release is measured) | installed; launch refused: **locked** |
+| iPad Air 13" M2 (iOS 26) | Release, same build (`SKIP_BUILD=1`) | installed; launch refused: **locked** |
+| Galaxy Z Fold 7 (Android 16) | `:editor-sample:assembleRelease` (debug-signed, not debuggable) | installed; screen off, keyguard up: **locked** |
+| Mac desktop window, web page | from the same clone | restarted / rebuilt in place; `:editor-sample:webInputTest` passes on the new dist |
+
+**The device frame times are not measured yet**: every device was locked, and the pass needs the
+app in the foreground. The measurement needs nobody's hands once the app is open: settings →
+**device bench** (or launched with it: `adb shell am start -n dev.supermux.editor.sample/.MainActivity
+--ez bench true`; iOS `xcrun devicectl device process launch --console --terminate-existing --device
+<id> dev.supermux.editor.sample -bench`). It prints one line, `M3C-BENCH {json}` (device console /
+`adb logcat -s System.out`), and shows it in the status line:
+
+| spec §6.6 | what the bench measures | field |
+|---|---|---|
+| smooth 120 Hz scrolling (iPad Air) | four programmatic flings through the 10k-line file (9,000 px/s, iOS's normal deceleration): the frame interval (the display's pace; `hz` is its median) and each frame's work, frames over 1.5 vsync counted | `fling10k` |
+| keystroke -> painted frame <= 16 ms (the Fold) | 200 keystrokes in the middle of the 10k-line file through `EditorView.typeText` (the entry point the soft keyboard's field edits reach), dispatch to paint | `keystroke` |
+| a file opens fast | the switch to the 10k-line file to its first painted frame (syntax queries compiled first) | `open10kMs` |
+| scrolling with widgets and markers | the same flings in the M3c demo (gutter markers, fold arrows, a review-thread widget, an inline hint) | `flingDemo` |
+
+On Android, a real finger's fling can be timed from outside too: `adb shell dumpsys gfxinfo
+dev.supermux.editor.sample reset`, `adb shell input swipe 500 2000 500 400 80` a few times, then
+`dumpsys gfxinfo … | grep -E "Janky|percentile"`. ⚠️ The iPad Air M2's display is 60 Hz (ProMotion is
+the iPad Pro's): its target is a steady 16.7 ms interval; the iPhone 15 Pro and the Fold run 120 Hz.
+
+The same scenes on the Mac JVM (release-like, loaded 6-16, `DemoRenderTest` / `EditorPerfTest`): the
+M3c demo scrolls at p95 10.3-10.7 ms per frame with markers, fold arrows and the thread widget; two
+linked editors at 9.8-10.4 ms; keystroke p95 6.1-7.8 ms.
+
 ## Tests
 
 `./gradlew :editor-compose:jvmTest` (on the Mac: see `scripts/editor/mac-sync.sh`): the pure logic

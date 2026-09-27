@@ -10,4 +10,8 @@ import platform.UIKit.UIViewController
  * itself with the safe-drawing insets (a Compose screen without a background is black on iOS:
  * the M0 lesson).
  */
-fun sampleViewController(): UIViewController = ComposeUIViewController { SampleApp(loadBackend = { NativeBackend() }) }
+fun sampleViewController(): UIViewController {
+    // `devicectl device process launch … dev.supermux.editor.sample -bench`: the device bench.
+    val bench = platform.Foundation.NSProcessInfo.processInfo.arguments.any { it == "-bench" }
+    return ComposeUIViewController { SampleApp(loadBackend = { NativeBackend() }, deviceBench = bench) }
+}

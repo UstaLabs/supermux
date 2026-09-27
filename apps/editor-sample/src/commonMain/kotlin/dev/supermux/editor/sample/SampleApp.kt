@@ -75,6 +75,7 @@ fun isColoured(state: EditorState): Boolean = state.facet(decorationsFacet).any 
  * @param onView each opened document's view (the web page's test hooks read it).
  * @param onPhase startup milestones ("backend", "precompiled", "editor", "coloured") for the web's
  *   cold-start measurement.
+ * @param deviceBench run [runDeviceBench] once the app is up (a device launched with it).
  */
 @Composable
 fun SampleApp(
@@ -85,6 +86,7 @@ fun SampleApp(
     typeDriver: suspend () -> Unit = {},
     onPhase: (String) -> Unit = {},
     onView: (dev.supermux.editor.compose.EditorView) -> Unit = {},
+    deviceBench: Boolean = false,
 ) {
     val registry = LanguageRegistry.default
     var backend by remember { mutableStateOf<SyntaxBackend?>(null) }
@@ -143,6 +145,28 @@ fun SampleApp(
         remember(f, text, backend) { SampleSession(fakeWorkingCopy(text), f.language, backend!!, registry, scope, sideBySideExtension) { run -> scope.launch { run() } } }
     }
     if (sessionB != null) DisposableEffect(sessionB) { onDispose { sessionB.close() } }
+
+    // The device bench (settings, or launched with it): its JSON goes to the console and the status line.
+    var benchRuns by remember { mutableStateOf(if (deviceBench) 1 else 0) }
+    var benchResult by remember { mutableStateOf("") }
+    val currentSession = androidx.compose.runtime.rememberUpdatedState(session)
+    val currentLoaded = androidx.compose.runtime.rememberUpdatedState(loaded)
+    LaunchedEffect(benchRuns) {
+        if (benchRuns == 0) return@LaunchedEffect
+        snapshotFlow { backend }.first { it != null }
+        benchResult = "device bench running…"
+        val r = runDeviceBench(stats) { f ->
+            val t0 = stats.now()
+            file = f
+            snapshotFlow { currentSession.value?.takeIf { currentLoaded.value?.first == f } }.first { it != null }
+            val v = currentSession.value!!.view
+            while (v.viewport.value.isEmpty()) withFrameNanos { }
+            withFrameNanos { }
+            (stats.now() - t0) to v
+        }
+        benchResult = r
+        println("M3C-BENCH $r")
+    }
     if (session != null) {
         DisposableEffect(session) {
             val remove = session.view.addListener { if (it.docChanged || it.selectionSet) stats.changed() }
@@ -199,7 +223,8 @@ fun SampleApp(
                 val syntax = when { s.language == null -> "plain"; Syntax.isOff(st) -> "syntax off"; else -> s.language }
                 val sp = dev.supermux.editor.compose.EditorDiagnostics.smartPunctuation
                 "${st.doc.lineCount} lines · $syntax · ${stats.summary}" + (if (sp == "n/a") "" else " · smart punctuation: $sp") +
-                    (if (file == SampleFile.DEMO && demoNote.isNotEmpty()) " · $demoNote" else "")
+                    (if (file == SampleFile.DEMO && demoNote.isNotEmpty()) " · $demoNote" else "") +
+                    (if (benchResult.isNotEmpty()) "\n$benchResult" else "")
             } ?: ""
             BasicText(
                 status,
@@ -229,6 +254,7 @@ fun SampleApp(
                 onAddCursor = { session?.view?.let { addCursorBelow(it) } },
                 onSingleCursor = { session?.view?.let { v -> v.dispatch(TransactionSpec(selection = EditorSelection.single(v.state.selection.main.anchor, v.state.selection.main.head), userEvent = "select")) } },
                 onFloatingCursor = platformFloatingCursorDrag?.let { drag -> { session?.view?.let { v -> floatingCursorProbe(v, drag) } ?: "no editor" } },
+                onBench = { settings = false; benchRuns++ },
                 onClose = { settings = false },
             )
         }
@@ -247,6 +273,7 @@ private fun SettingsSheet(
     webKeyboard: WebKeyboard, onWebKeyboard: (WebKeyboard) -> Unit,
     onAddCursor: () -> Unit, onSingleCursor: () -> Unit,
     onFloatingCursor: (() -> String)?,
+    onBench: () -> Unit,
     onClose: () -> Unit,
 ) {
     Column(
@@ -291,6 +318,7 @@ private fun SettingsSheet(
         Line {
             Chip("add cursor below", false, ink, onAddCursor)
             Chip("single cursor", false, ink, onSingleCursor)
+            Chip("device bench", false, ink, onBench)
             Chip("close", false, ink, onClose)
         }
         if (onFloatingCursor != null) Line {

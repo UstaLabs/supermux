@@ -1,6 +1,8 @@
 #!/bin/bash
 # Signed Debug build of the editor sample + install/launch on a paired iPhone/iPad. Runs ON THE MAC.
 #   device.sh [devicectl id]   (default: the iPhone 15 Pro)   EDITOR_ROOT=<checkout>/apps to build another tree
+#   CONFIG=Release for an optimized build (Kotlin/Native's debug framework is several times slower:
+#   measure performance on Release only)
 # Adapted from docs/superpowers/notes/m0-artifacts/iosProbe/probe-device.sh: the dedicated signing
 # keychain (its password lives only on the Mac, ~/.smux-dist-kc-pass, never in git) and the team's
 # App Store Connect API key, because Xcode has "No Accounts" over SSH.
@@ -17,6 +19,7 @@ security set-keychain-settings "$KD"
 security list-keychains -d user -s "$KD" "$KC" "$HOME/Library/Keychains/login.keychain-db"
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KP" "$KD" >/dev/null 2>&1
 ROOT="${EDITOR_ROOT:-$HOME/work/native-editor/apps}"
+CONF="${CONFIG:-Debug}"
 APPDIR="$ROOT/editor-sample/iosApp"
 LOG="$ROOT/editor-sample/build/ios-device-build.log"
 mkdir -p "$(dirname "$LOG")"
@@ -24,7 +27,7 @@ cd "$APPDIR" && xcodegen generate >/dev/null || { echo "### XCODEGEN_FAILED"; ex
 if [ -z "$SKIP_BUILD" ]; then
   echo "### BUILD $(date)"
   # A new build number every time, or iOS keeps the old build on reinstall.
-  xcodebuild -project EditorSample.xcodeproj -scheme EditorSampleApp -configuration Debug \
+  xcodebuild -project EditorSample.xcodeproj -scheme EditorSampleApp -configuration "$CONF" \
     -destination "generic/platform=iOS" -derivedDataPath build/dd -allowProvisioningUpdates \
     -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_4RRH24653B.p8" \
     -authenticationKeyID 4RRH24653B -authenticationKeyIssuerID aff45cdc-2e54-499a-9195-4adc1109383e \
@@ -34,7 +37,7 @@ if [ -z "$SKIP_BUILD" ]; then
   if [ $RC -ne 0 ]; then grep -E "error:|failed|Undefined|FAILED" "$LOG" | sort -u | tail -40; echo "### BUILD_FAILED"; exit 1; fi
   echo "### BUILD_OK $(date)"
 fi
-APP=build/dd/Build/Products/Debug-iphoneos/EditorSampleApp.app
+APP=build/dd/Build/Products/$CONF-iphoneos/EditorSampleApp.app
 du -sh "$APP"
 ls "$APP/editor-syntax/tables" 2>/dev/null | wc -l | xargs echo "grammar tables bundled:"
 xcrun devicectl device install app --device "$DEV" "$APP" || { echo "### INSTALL_FAILED"; exit 1; }
