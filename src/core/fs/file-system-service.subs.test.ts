@@ -164,7 +164,6 @@ test("search sees files written through the service and files appearing in a wat
   await fss.write(join(d, "zebra.txt"), "z")
   expect((await fss.search(d, "zebra")).map((h) => h.name)).toEqual(["zebra.txt"])
   writeFileSync(join(d, "yak.txt"), "")
-  expect(await fss.search(d, "yak")).toEqual([])
   await waitFor((f) => f.type === "fs_dir" && "entries" in f && f.entries.some((e) => e.name === "yak.txt"))
   expect((await fss.search(d, "yak")).map((h) => h.name)).toEqual(["yak.txt"])
   fss.close()

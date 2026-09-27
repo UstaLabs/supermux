@@ -43,22 +43,6 @@ const dirFrame = (path: string, c: CachedDir): FsFrame => ({
 
 const isUnder = (root: string, p: string) => p === root || p.startsWith(root.endsWith(sep) ? root : root + sep)
 
-const GIT_STATE_NAMES = new Set([
-  "index", "HEAD", "packed-refs", "refs", "MERGE_HEAD", "ORIG_HEAD", "CHERRY_PICK_HEAD", "REBASE_HEAD", "COMMIT_EDITMSG",
-])
-
-/**
- * Names in a git dir whose change can alter status answers (objects/, logs/, hooks, config... never do).
- * Their `.lock` twins pass too: Bun's fs.watch sometimes reports only the FIRST event of an inotify batch,
- * so `git add` can arrive as just `index.lock` with the `index` rename dropped. The loop a lock would
- * otherwise feed is broken twice over: our reads take no locks (`--no-optional-locks`), and a git-dir
- * flush whose state fingerprint did not change is ignored.
- */
-export const isGitStateName = (name: string): boolean => {
-  const base = name.endsWith(".lock") ? name.slice(0, -5) : name
-  return GIT_STATE_NAMES.has(base) || base.startsWith("refs/")
-}
-
 const statKey = async (p: string) => {
   const st = await stat(p).catch(() => null)
   return st ? `${st.ino}:${st.size}:${st.mtimeMs}` : "-"
@@ -132,7 +116,8 @@ export class FileSystemService<S = unknown> {
     // No extra debounce here: the per-repo tick coalesces git-dir changes with folder changes.
     this.gitWatchers = new DirWatchers((gitDir) => this.background(this.onGitFlush(gitDir), gitDir), {
       debounceMs: opts.debounceMs,
-      filter: (_dir, name) => isGitStateName(name),
+      // No filename filter: Bun reports a rename only under its FROM name (tmp → index arrives as
+      // "tmp"), so a filter can drop real changes. The state fingerprint in onGitFlush decides.
     })
     this.subs = new SubscriptionRegistry<S>({
       onFirst: (real) => this.startWatching(real),
@@ -316,9 +301,10 @@ export class FileSystemService<S = unknown> {
     if (print === this.gitPrint.get(gitDir) && !this.gitWatchers.isDead(gitDir)) {
       // A git command still holds the index: its final rename may reach us as no event at all (Bun
       // reports only the first event of a batch), so look again shortly.
-      if (await stat(join(gitDir, "index.lock")).then(() => true, () => false)) this.recheckGit(gitDir, recheck)
+      if (this.gitDirOf.has(gitDir) && await stat(join(gitDir, "index.lock")).then(() => true, () => false)) this.recheckGit(gitDir, recheck)
       return
     }
+    if (!this.gitDirOf.has(gitDir)) return // the watch was dropped while we fingerprinted
     this.gitPrint.set(gitDir, print)
     const root = this.gitDirOf.get(gitDir)
     if (!root) return
