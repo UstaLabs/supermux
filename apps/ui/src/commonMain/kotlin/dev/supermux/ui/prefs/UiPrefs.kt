@@ -38,6 +38,11 @@ const val EDITOR_FONT_MIN = 10
 const val EDITOR_FONT_MAX = 24
 const val EDITOR_FONT_DEFAULT = 13
 
+/** Terminal font-size bounds, in sp; the default is the renderer's own. */
+const val TERMINAL_FONT_MIN = 8
+const val TERMINAL_FONT_MAX = 32
+const val TERMINAL_FONT_DEFAULT = 13
+
 /** Soft wrap is on by default (both apps agreed). */
 const val EDITOR_LINE_WRAP_DEFAULT = true
 
@@ -78,6 +83,15 @@ class UiPrefs(private val settings: SettingsStore) {
 
     suspend fun putEditorFontSize(px: Int) =
         settings.putString(SettingsKeys.EDITOR_FONT_SIZE, px.coerceIn(EDITOR_FONT_MIN, EDITOR_FONT_MAX).toString())
+
+    /** Terminal font size in sp, always clamped into [TERMINAL_FONT_MIN]..[TERMINAL_FONT_MAX]. */
+    val terminalFontSize: Flow<Int> =
+        settings.string(SettingsKeys.TERMINAL_FONT_SIZE).map { raw ->
+            (raw?.toIntOrNull() ?: TERMINAL_FONT_DEFAULT).coerceIn(TERMINAL_FONT_MIN, TERMINAL_FONT_MAX)
+        }
+
+    suspend fun putTerminalFontSize(sp: Int) =
+        settings.putString(SettingsKeys.TERMINAL_FONT_SIZE, sp.coerceIn(TERMINAL_FONT_MIN, TERMINAL_FONT_MAX).toString())
 
     /** Changes pane: nested folder tree (true) vs flat path list (false). */
     val editorDiffTreeView: Flow<Boolean> =
@@ -354,6 +368,13 @@ class InMemorySettingsStore : SettingsStore {
 
 /** Provided by each app's theme wrapper (`AndroidTheme` / `DesktopTheme`). */
 val LocalUiPrefs = staticCompositionLocalOf<UiPrefs> { error("No UiPrefs provided") }
+
+/**
+ * The same [UiPrefs], or null where no theme wrapper provided one — for a component that has a
+ * sensible default without it and is routinely mounted bare (the terminal pane, in its tests).
+ * Every theme wrapper provides it next to [LocalUiPrefs].
+ */
+val LocalUiPrefsOrNull = staticCompositionLocalOf<UiPrefs?> { null }
 
 /**
  * The stored theme mode, seeding it from a host's LEGACY value the first time (and only the first

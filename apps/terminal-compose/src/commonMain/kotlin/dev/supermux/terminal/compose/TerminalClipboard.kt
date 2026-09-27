@@ -33,6 +33,15 @@ interface TerminalClipboard {
 
     /** Put [text] on the clipboard. */
     suspend fun write(text: String)
+
+    /**
+     * A [read] is about to follow, called SYNCHRONOUSLY from inside the user's own key press or
+     * click. The default does nothing. A browser is why it exists: Safari hands a page clipboard
+     * text only inside the `paste` event of the user's own Cmd+V, so a browser clipboard uses this
+     * to claim that event (and to keep the browser from also typing the text into the hidden input
+     * field, which would send it a second time as keystrokes).
+     */
+    fun willRead() {}
 }
 
 /** The host platform's clipboard. */

@@ -33,6 +33,8 @@ object SettingsKeys {
     const val EDITOR_LINE_WRAP = "editor:lineWrap"
     /** Editor font size in px, clamped 10..24. Default 13. */
     const val EDITOR_FONT_SIZE = "editor:fontSize"
+    /** Terminal font size in sp, clamped 8..32. Default 13. Cmd/Ctrl +/−/0 and a pinch change it. */
+    const val TERMINAL_FONT_SIZE = "terminal:fontSize"
     /** "true"/"false" — desktop Changes pane: nested tree (true) vs flat list. Default true. */
     const val EDITOR_DIFF_TREE_VIEW = "editor:diffTreeView"
     /** `ChatDetailLevel.wire` ("low"/"medium"/"high"). Default "medium". */

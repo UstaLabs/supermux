@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -56,6 +58,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.net.TerminalClient
@@ -330,10 +333,22 @@ fun TerminalTabs(
     // Rebuilt in place each composition rather than reallocated (G3 review): the map is a plain
     // per-composition index into the surfaces the `key(id)` blocks below hand out, not state.
     val live = remember(sessionId) { LinkedHashMap<String, TerminalSurface>() }
+    // The last title each tab's program set. Kept here rather than read off the surface, because
+    // only the active and last-active tabs HAVE a surface: a tab that fell out of the live set
+    // keeps the name it had instead of flipping back to its id.
+    val titles = remember(sessionId) { mutableStateMapOf<String, String>() }
     live.clear()
     tabs.forEach { id ->
         key(id) {
-            if (id == activeId || id == lastActiveId) live[id] = surfaceFor(id) { connect(id) }
+            if (id == activeId || id == lastActiveId) {
+                val surface = surfaceFor(id) { connect(id) }
+                live[id] = surface
+                LaunchedEffect(surface) {
+                    snapshotFlow { surface.title }.collect { title ->
+                        if (!title.isNullOrBlank()) titles[id] = title
+                    }
+                }
+            }
         }
     }
 
@@ -353,7 +368,7 @@ fun TerminalTabs(
                 key(id) {
                     TerminalTabChip(
                         id = id,
-                        label = terminalTabLabel(id, index, LocalPointerAvailable.current),
+                        label = titles[id] ?: terminalTabLabel(id, index, LocalPointerAvailable.current),
                         selected = id == activeId,
                         onSelect = { selectTab(id) },
                         onClose = { closeTab(id) },
@@ -490,6 +505,10 @@ private fun TerminalTabChip(
                 fontFamily = MonoFontFamily,
                 fontSize = 11.sp,
                 fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                // A program's title can be a whole path; the chip stays a chip.
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 200.dp),
             )
             Box(Modifier.testTag("terminal_close_$id"), contentAlignment = Alignment.Center) {
                 Box(
