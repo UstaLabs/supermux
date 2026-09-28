@@ -19,6 +19,29 @@ val indentUnitFacet: Facet<String, String> = Facet.first("indentUnit", "    ")
 val lineNumbersFacet: Facet<Boolean, Boolean?> = Facet.define("lineNumbers") { it.firstOrNull() }
 
 /**
+ * Wrap long lines. When a plugin (the view settings) provides it, it overrides
+ * `Editor(lineWrap = …)`, and a reconfigure changes it at run time.
+ */
+val lineWrappingFacet: Facet<Boolean, Boolean?> = Facet.define("lineWrapping") { it.firstOrNull() }
+
+/**
+ * The font size (sp) a host's settings chose: shown unless the user zoomed since it was set (a
+ * reconfigure to a new size replaces the zoom). `Mod 0` still goes back to the theme's size
+ * ([EditorZoom.DEFAULT]), as today's editor does.
+ */
+val fontSizeFacet: Facet<Float, Float?> = Facet.define("fontSize") { it.firstOrNull() }
+
+/** Which of the packaged palettes to use ([EditorTheme.light] / [EditorTheme.dark]). */
+enum class EditorThemeMode { LIGHT, DARK, SYSTEM }
+
+/**
+ * The theme a host's settings chose. When set, the surface paints with [EditorTheme.light] or
+ * [EditorTheme.dark] (SYSTEM: after the platform's dark mode) in the `Editor(theme = …)` theme's font
+ * and size, instead of that theme itself.
+ */
+val themeModeFacet: Facet<EditorThemeMode, EditorThemeMode?> = Facet.define("themeMode") { it.firstOrNull() }
+
+/**
  * The surface's viewport as STATE, for plugins that decorate only what is on screen (selection
  * matches, fold arrows): CM6's `view.visibleRanges`. A plugin includes [extension]; the surface then
  * dispatches [set] with the UTF-16 range of the lines it lays out (the visible ones plus overscan)

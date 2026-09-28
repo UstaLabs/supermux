@@ -70,8 +70,11 @@ class EditorView(initial: EditorState) : CommandTarget {
     /** `Editor(onFontSize = …)`. */
     internal var onFontSize: ((Float) -> Unit)? = null
 
+    /** The size `fontSizeFacet` (a host's setting) asks for, as the surface last saw it; null: none. */
+    internal var settingFontSize: Float? = null
+
     /** The size the surface draws with now. */
-    val effectiveFontSize: Float get() = fontSize ?: baseFontSize
+    val effectiveFontSize: Float get() = fontSize ?: settingFontSize ?: baseFontSize
 
     /**
      * Zoom to [size] sp (clamped to [EditorZoom.MIN]..[EditorZoom.MAX]); [report] tells the host
@@ -84,9 +87,10 @@ class EditorView(initial: EditorState) : CommandTarget {
         return s
     }
 
-    /** Back to the theme's size (`Mod 0`). */
+    /** Back to the theme's size (`Mod 0`), also over a size the settings chose. */
     fun resetZoom() {
-        fontSize = null
+        val setting = settingFontSize
+        fontSize = if (setting != null && setting != baseFontSize) baseFontSize else null
         onFontSize?.invoke(baseFontSize)
     }
 

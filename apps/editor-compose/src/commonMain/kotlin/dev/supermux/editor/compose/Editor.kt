@@ -152,15 +152,37 @@ fun Editor(
     // programmatic or mouse focus keeps asking for none; a touch's keeps its session).
     val surfaceInput = remember { SurfaceInput() }
     val controller = remember(view, measurer, scrollState) { EditorController(view, measurer, scrollState, surfaceInput) }
+    // Settings a plugin (the view settings) put in the state override the parameters, and a
+    // reconfigure changes them live. Derived: a keystroke recomposes nothing here.
+    val settingWrap by remember(view) { androidx.compose.runtime.derivedStateOf { view.state.facet(lineWrappingFacet) } }
+    val settingSize by remember(view) { androidx.compose.runtime.derivedStateOf { view.state.facet(fontSizeFacet) } }
+    val settingMode by remember(view) { androidx.compose.runtime.derivedStateOf { view.state.facet(themeModeFacet) } }
+    val wrap = settingWrap ?: lineWrap
+    val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+    val baseTheme = when (val mode = settingMode) {
+        null -> theme
+        else -> remember(theme, mode, systemDark) {
+            val dark = mode == EditorThemeMode.DARK || (mode == EditorThemeMode.SYSTEM && systemDark)
+            (if (dark) EditorTheme.dark(theme.fontFamily) else EditorTheme.light(theme.fontFamily)).copy(fontSizeSp = theme.fontSizeSp)
+        }
+    }
     // The zoom is the view's (snapshot state): a change recomposes this with the theme at that size.
-    val zoomed = view.fontSize
-    val shownTheme = if (zoomed == null || zoomed == theme.fontSizeSp) theme else remember(theme, zoomed) { theme.copy(fontSizeSp = zoomed) }
+    // A size from the settings shows unless the user zoomed since it was set. (Read the setting
+    // unconditionally: behind `?:` a zoomed view would stop observing it.)
+    val setting = settingSize
+    val zoomed = view.fontSize ?: setting
+    val shownTheme = if (zoomed == null || zoomed == baseTheme.fontSizeSp) baseTheme else remember(baseTheme, zoomed) { baseTheme.copy(fontSizeSp = zoomed) }
     val reportFontSize by rememberUpdatedState(onFontSize)
     SideEffect {
         view.readOnly = readOnly
         view.baseFontSize = theme.fontSizeSp
         view.onFontSize = { reportFontSize(it) }
-        controller.configure(shownTheme, density, lineWrap, showLineNumbers)
+        // A new size from the settings (a reconfigure) replaces the user's zoom.
+        if (view.settingFontSize != setting) {
+            view.settingFontSize = setting
+            if (setting != null) view.fontSize = null
+        }
+        controller.configure(shownTheme, density, wrap, showLineNumbers)
     }
     // The surface's Compose focus, kept across views: a host showing another document gives this
     // Editor a new view while the hidden field keeps the focus, so no focus event ever tells the
@@ -266,7 +288,7 @@ fun Editor(
             .scrollable(
                 state = controller.scroll.horizontal,
                 orientation = Orientation.Horizontal,
-                enabled = !lineWrap,
+                enabled = !wrap,
                 reverseDirection = ScrollableDefaults.reverseDirection(layoutDirection, Orientation.Horizontal, false),
                 flingBehavior = ScrollableDefaults.flingBehavior(),
             )
@@ -344,8 +366,8 @@ fun Editor(
         // The registry is the controller's before the first layout pass (a SideEffect runs after it).
         controller.registry = widgets
         controller.saveableHolder = holder
-        val policy = remember(controller, slots, shownTheme, density, lineWrap, showLineNumbers) {
-            surfaceMeasurePolicy(controller, slots) { controller.configure(shownTheme, density, lineWrap, showLineNumbers) }
+        val policy = remember(controller, slots, shownTheme, density, wrap, showLineNumbers) {
+            surfaceMeasurePolicy(controller, slots) { controller.configure(shownTheme, density, wrap, showLineNumbers) }
         }
         SubcomposeLayout(Modifier.fillMaxSize(), policy)
     }
@@ -682,6 +704,8 @@ internal class EditorController(
         private set
     private var density: Density = Density(1f)
     var lineWrap = false
+    /** The tab size the layouts use (`tabSizeFacet`): a reconfigure of it relayouts. */
+    private var tabSize = -1
         private set
     private var showLineNumbers = true
 
@@ -707,7 +731,9 @@ internal class EditorController(
     fun configure(theme: EditorTheme, density: Density, lineWrap: Boolean, showLineNumbersParam: Boolean) {
         // A plugin's or a setting's facet overrides the parameter (and a reconfigure changes it).
         val showLineNumbers = view.state.facet(lineNumbersFacet) ?: showLineNumbersParam
-        val changed = theme != this.theme || density != this.density || lineWrap != this.lineWrap || showLineNumbers != this.showLineNumbers
+        val tabSize = view.state.facet(tabSizeFacet)
+        val changed = theme != this.theme || density != this.density || lineWrap != this.lineWrap || showLineNumbers != this.showLineNumbers ||
+            tabSize != this.tabSize
         if (!changed) return
         // A new font size (a zoom): the line at the top stays at the top, the same fraction of a
         // line into it (anchored to the visible top line, not to a pixel offset).
@@ -719,6 +745,7 @@ internal class EditorController(
         this.theme = theme
         this.density = density
         this.lineWrap = lineWrap
+        this.tabSize = tabSize
         this.showLineNumbers = showLineNumbers
         numberLayouts.clear()
         chipGlyph = null

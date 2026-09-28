@@ -48,4 +48,45 @@ class PluginFacetsTest {
             assertTrue(f.controller.numbersRight > 0f)
         }
     }
+
+    @Test fun wrapTabSizeThemeAndFontSizeReconfigureLive() {
+        val wrap = Compartment("wrap")
+        val tab = Compartment("tab")
+        val mode = Compartment("mode")
+        val size = Compartment("size")
+        val long = "\tx " + "word ".repeat(200)
+        val state = EditorState.create(long + "\n" + text, extensions = dev.supermux.editor.core.extensionOf(
+            wrap.of(lineWrappingFacet.of(false)), tab.of(tabSizeFacet.of(4)), mode.of(themeModeFacet.of(EditorThemeMode.DARK)), size.of(fontSizeFacet.of(13f)),
+        ))
+        editorTest(state, lineWrap = true) { f ->
+            assertEquals(false, f.controller.lineWrap, "the facet did not override Editor(lineWrap = true)")
+            val dark = EditorTheme.dark(f.theme!!.fontFamily)
+            assertEquals(dark.background, f.controller.theme!!.background)
+            val xTab4 = f.geometry.rectFor(1).left
+            f.view.dispatch(TransactionSpec(effects = listOf(
+                wrap.reconfigure(lineWrappingFacet.of(true)), tab.reconfigure(tabSizeFacet.of(8)),
+                mode.reconfigure(themeModeFacet.of(EditorThemeMode.LIGHT)), size.reconfigure(fontSizeFacet.of(18f)),
+            )))
+            waitForIdle()
+            assertEquals(true, f.controller.lineWrap)
+            assertEquals(0f, f.controller.maxScrollX())
+            assertEquals(EditorTheme.light(f.theme!!.fontFamily).background, f.controller.theme!!.background)
+            assertEquals(18f, f.controller.theme!!.fontSizeSp)
+            // A tab stop twice as far (in cells of the new size).
+            val cell = f.controller.geometry.layouts.charWidthPx
+            assertEquals(8 * cell, f.geometry.rectFor(1).left, cell / 2, "the tab size did not relayout (was $xTab4)")
+            // The user zooms; a new setting replaces the zoom; Mod 0 goes back to the theme's size.
+            f.view.zoomTo(20f)
+            waitForIdle()
+            assertEquals(20f, f.controller.theme!!.fontSizeSp)
+            f.view.dispatch(TransactionSpec(effects = listOf(size.reconfigure(fontSizeFacet.of(16f)))))
+            waitForIdle()
+            assertEquals(16f, f.controller.theme!!.fontSizeSp)
+            f.view.resetZoom()
+            waitForIdle()
+            assertEquals(EditorZoom.DEFAULT, f.controller.theme!!.fontSizeSp)
+            // The document and the selection were never touched.
+            assertEquals(long + "\n" + text, f.view.state.doc.toString())
+        }
+    }
 }

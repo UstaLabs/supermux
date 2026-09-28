@@ -62,8 +62,12 @@ passed to several `Editor`s to scroll them together (clamped to the largest; anc
 shared); side-by-side views that keep corresponding LINES aligned use `LinkedScroll` (below).
 `onGutterClick` and `onWidgetClick` hear the gutter and placeholder clicks no plugin took.
 
-**Editor-level facets for plugins.** `tabSizeFacet`, `indentUnitFacet`, `lineNumbersFacet` (set, it
-overrides `Editor(showLineNumbers = …)`; a reconfigure changes it live), and `EditorViewport`: a plugin
+**Editor-level facets for plugins.** `tabSizeFacet` (a reconfigure relayouts), `indentUnitFacet`,
+`lineNumbersFacet`, `lineWrappingFacet`, `themeModeFacet` (`EditorThemeMode`: the packaged light /
+dark palette in the `Editor(theme)` font) and `fontSizeFacet` (a host setting's size: shown unless
+the user zoomed since; a new one replaces the zoom; `Mod 0` still goes back to the theme's size).
+Set, each OVERRIDES the matching `Editor(...)` parameter, and a reconfigure changes it live
+(editor-plugins/view puts them in compartments). And `EditorViewport`: a plugin
 that decorates only what is on screen includes `EditorViewport.extension` and reads
 `EditorViewport.of(state)` / `rangeOf(state)`; the surface dispatches `EditorViewport.set` with the
 laid-out range whenever it changes (after the frame, no userEvent), and only when some plugin asked.
