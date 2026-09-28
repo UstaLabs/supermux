@@ -62,10 +62,11 @@ data class KeyChord(
  *
  * [key] is parsed here, once, for both platforms: a malformed spec throws
  * [IllegalArgumentException] when the binding is created (so at [keymapOf]), never on a keystroke,
- * and cannot break other bindings.
+ * and cannot break other bindings. [mac], when given, is the key on Apple platforms instead of
+ * [key] (CM6's `mac:`): redo is `KeyBinding("Mod-y", redo, mac = "Mod-Shift-z")`.
  */
-data class KeyBinding(val key: String, val command: Command) {
-    private val appleChord = KeyChord.parse(key, apple = true)
+data class KeyBinding(val key: String, val command: Command, val mac: String? = null) {
+    private val appleChord = KeyChord.parse(mac ?: key, apple = true)
     private val otherChord = KeyChord.parse(key, apple = false)
 
     /** The chord this binding matches on an Apple platform ([apple]) or elsewhere. */

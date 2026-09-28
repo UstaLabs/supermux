@@ -55,3 +55,5 @@ include(":editor-compose")
 include(":editor-sample")
 // The native editor's first plugin: closing brackets and Enter between braces (spec: editor-plugins/*).
 include(":editor-plugins:basics")
+// The native editor's M4a plugins: undo/redo, highlighting (the syntax host), folding, view settings.
+include(":editor-plugins:history")

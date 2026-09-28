@@ -107,6 +107,39 @@ class ChangeSet internal constructor(internal val ops: List<Op>) {
     }
 
     /**
+     * This change set moved over [other], a CONCURRENT change to the same document (operational
+     * transform, CM6's `ChangeSet.map`): the result applies to [other]'s result and makes this set's
+     * edits there. Text both delete is deleted once; an insertion inside text [other] deleted
+     * survives at the deletion; nothing either inserted is lost. [before]: at a position where both
+     * insert, this set's text goes first (default: [other]'s does, as if it happened first).
+     *
+     * The convergence law holds: `a.compose(b.map(a))` and `b.compose(a.map(b, before = true))`
+     * produce the same document. History maps its undo events over remote edits with it.
+     */
+    fun map(other: ChangeSet, before: Boolean = false): ChangeSet {
+        require(lengthBefore == other.lengthBefore) { "map: $lengthBefore != ${other.lengthBefore}" }
+        if (other.isEmpty) return this
+        val out = Builder()
+        val a = OpCursor(ops); val b = OpCursor(other.ops)
+        while (true) {
+            val opA = a.peek(); val opB = b.peek()
+            if (opA == null && opB == null) break
+            if (opA is Op.Insert && (opB !is Op.Insert || before)) { out.insert(opA.text); a.take(opA.text.length); continue }
+            if (opB is Op.Insert) { out.retain(opB.text.length); b.take(opB.text.length); continue }
+            checkNotNull(opA) { "map: this change set ran out" }
+            checkNotNull(opB) { "map: the other change set ran out" }
+            val k = minOf(a.size(opA), b.size(opB))
+            when {
+                opA is Op.Retain && opB is Op.Retain -> out.retain(k)
+                opA is Op.Delete && opB is Op.Retain -> out.delete(k)
+                else -> Unit // the other deleted this text: nothing left to retain or delete
+            }
+            a.take(k); b.take(k)
+        }
+        return out.build()
+    }
+
+    /**
      * Where [pos] (in the old document) ends up. [assoc] decides the ambiguous cases: for an
      * insertion exactly at [pos], `assoc < 0` stays before the inserted text and `assoc > 0` moves
      * after it; for a position strictly inside a replaced range, `assoc < 0` maps to the start of

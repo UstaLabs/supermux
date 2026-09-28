@@ -50,4 +50,12 @@ class CommandsTest {
         assertEquals(KeyChord("z", ctrl = true, shift = true), b.chord(apple = false))
         assertSame(b.chord(apple = true), b.chord(apple = true))
     }
+
+    @Test fun aBindingCanNameAnotherKeyForApplePlatforms() {
+        // CM6's `{key: "Mod-y", mac: "Mod-Shift-z"}`: redo is Ctrl-y elsewhere, Cmd-Shift-z on a Mac.
+        val b = KeyBinding("Mod-y", Command { true }, mac = "Mod-Shift-z")
+        assertEquals(KeyChord("y", ctrl = true), b.chord(apple = false))
+        assertEquals(KeyChord("z", meta = true, shift = true), b.chord(apple = true))
+        assertFailsWith<IllegalArgumentException> { KeyBinding("Mod-y", Command { true }, mac = "Hyper-y") }
+    }
 }
