@@ -134,6 +134,7 @@ import { AgentStateStore } from "./core/session-manager/agent-state-store"
 import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
 import { BackgroundTaskStore, type BgTaskKind } from "./core/session-manager/background-task-store"
 import { SubagentStore } from "./core/session-manager/subagent-store"
+import { subagentActionError, type SubagentActionResult } from "./core/session-manager/subagent-action-error"
 
 import { normalizeToolName } from "./core/agents/tool-normalize"
 import { gcOrphanAgentHomes, reclaimCursorHomes } from "./core/agents/shared-runtime"
@@ -1082,15 +1083,7 @@ function applyTaskEvent(sessionId: string, ev: TaskEvent): void {
   // "interacted" / "wake" move nothing the chips show.
 }
 
-type SubagentActionResult = { ok: true; via?: "direct" | "relay" } | { ok: false; status: number; error: string }
 
-function subagentActionError(err: unknown): SubagentActionResult {
-  const code = typeof err === "object" && err !== null && "code" in err ? String((err as { code: unknown }).code) : ""
-  const message = err instanceof Error ? err.message : String(err)
-  if (code === "unsupported_operation") return { ok: false, status: 409, error: message }
-  if (code === "invalid_input") return { ok: false, status: 400, error: message }
-  return { ok: false, status: 500, error: message }
-}
 
 /**
  * POST /sessions/:id/subagents/:subagentId/message. The transcript gets ONE compact line in

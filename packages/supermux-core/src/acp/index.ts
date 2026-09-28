@@ -7,7 +7,8 @@ import { ACTIVITY_OVERFLOW } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import { acpPermissionDecision, appliedFor, validatePermissionsSpec } from '../permissions.js'
 import { connectAcpProcess, type AcpKeeperLimits } from './process.js'
-import { createAcpNormalizer, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
+import { createAcpNormalizer, DRIVER_WARNING_METHOD, SUBAGENT_SESSION_METHOD, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
+import { freeLoopbackPort, newOpenCodeServerInfo, openCodeAskToAcp, openCodeServerClient, readOpenCodeServerInfo, type OpenCodePendingAsk, type OpenCodeServerClient, type OpenCodeServerInfo } from './opencode-server.js'
 import type { KeeperFrameEvent } from '../keeper/client.js'
 
 export type AcpActivityHint = { id?: string; phase: 'started' | 'completed' }
@@ -57,6 +58,8 @@ export type AcpOptions = {
   /** Normalizer to use instead of a private one (the Grok wrapper keeps one across respawns). */
   normalizer?: AcpNormalizer
   permissions: Extract<PermissionsSpec, { kind: "acp" }>
+  /** OpenCode only: how often the side channel polls OpenCode's HTTP server for subagent asks while work is live. Default 500 ms. */
+  openCodePollIntervalMs?: number
 }
 
 /**
@@ -173,10 +176,12 @@ export function acp(options: AcpOptions): AgentDriver {
         }
       } catch { /* ignore other stale ids */ }
     }
+    // OpenCode: pin its HTTP server's port and password so the side channel can reach it (see opencode-server.ts).
+    const plannedServer: OpenCodeServerInfo | undefined = options.vendor === 'opencode' ? newOpenCodeServerInfo(await freeLoopbackPort()) : undefined
     const io = await connectAcpProcess({
       command: options.command,
-      args: options.args,
-      env: { ...(options.inheritEnv ? globalThis.process.env : {}), ...options.env, ...context.profile?.env },
+      args: plannedServer ? [...options.args, '--port', String(plannedServer.port)] : options.args,
+      env: { ...(options.inheritEnv ? globalThis.process.env : {}), ...options.env, ...context.profile?.env, ...(plannedServer ? { OPENCODE_SERVER_PASSWORD: plannedServer.password } : {}) },
       cwd: session?.cwd ?? process.cwd(),
       sessionId,
       shutdownTimeoutMs: shutdownTimeout,
@@ -233,6 +238,55 @@ export function acp(options: AcpOptions): AgentDriver {
       const childSession = childToolSessions.get(callId)
       if (childSession) return subagentOfSession(childSession)
       return normalizer.subagentForTool(callId)
+    }
+    type PermissionAsk = { sessionId?: unknown; toolCall?: unknown; options?: unknown }
+    /** The live policy's automatic answer, or undefined when the user must be asked. */
+    function autoPermission(request: PermissionAsk, subagentId?: string): RequestPermissionResponse | undefined {
+      const rawOptions = Array.isArray(request.options) ? request.options as { optionId: string; kind: unknown }[] : []
+      const optionList = rawOptions.map(o => ({ optionId: o.optionId, kind: String(o.kind) }))
+      const toolKind = request.toolCall && typeof request.toolCall === 'object' && 'kind' in request.toolCall
+        ? String((request.toolCall as { kind?: unknown }).kind)
+        : undefined
+      const auto = acpPermissionDecision(livePermissions, toolKind, optionList)
+      if (!auto.auto) return
+      const toolCall = request.toolCall && typeof request.toolCall === 'object'
+        ? request.toolCall as { toolCallId?: string; title?: string; kind?: string; rawInput?: unknown }
+        : {}
+      if (session && !closed) {
+        session.onUpdate({
+          protocol: 'native',
+          value: {
+            method: 'permission-auto',
+            params: {
+              toolCall: {
+                callId: typeof toolCall.toolCallId === 'string' ? toolCall.toolCallId : '',
+                tool: typeof toolCall.kind === 'string' ? toolCall.kind : '',
+                title: typeof toolCall.title === 'string' ? toolCall.title : '',
+                input: toolCall.rawInput,
+              },
+              optionId: auto.optionId,
+              ...(subagentId ? { subagentId } : {}),
+            },
+          },
+        })
+      }
+      return { outcome: { outcome: 'selected', optionId: auto.optionId } }
+    }
+    /** Ask the user through the session's request path; `cancelled` when `signal` ends first. */
+    async function askPermission(request: PermissionAsk, signal: AbortSignal, subagentId: string | undefined): Promise<RequestPermissionResponse> {
+      if (!session || signal.aborted) return cancelled
+      let cancel!: () => void
+      const cancellation = new Promise<RequestPermissionResponse>(resolve => { cancel = () => resolve(cancelled); signal.addEventListener('abort', cancel, { once: true }) })
+      try {
+        if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'session/request_permission', params: request } })
+        // ACP option kinds map 1:1 (allow_once / allow_always / reject_once / reject_always).
+        // RequestAnswer.message is ignored: the SDK permission result has no message field.
+        const live = session
+        const result = await Promise.race([Promise.resolve().then(() => live.requestPermission({ ...(request as Parameters<typeof live.requestPermission>[0]), coreSessionId: live.sessionId, ...(subagentId ? { subagentId } : {}) }, signal)), cancellation])
+        if (signal.aborted) return cancelled
+        if (result?.outcome?.outcome === 'selected') return { outcome: { outcome: 'selected', optionId: result.outcome.optionId } }
+        return result as RequestPermissionResponse
+      } finally { signal.removeEventListener('abort', cancel) }
     }
     const nativePermission = new Map<string, AbortController>()
     let latestNativeId: string | undefined
@@ -392,35 +446,8 @@ export function acp(options: AcpOptions): AgentDriver {
     const connection = new ClientSideConnection(() => ({
       async requestPermission(request) {
         io.ackConsumed()
-        const rawOptions = Array.isArray(request.options) ? request.options : []
-        const optionList = rawOptions.map(o => ({ optionId: o.optionId, kind: String(o.kind) }))
-        const toolKind = request.toolCall && typeof request.toolCall === 'object' && 'kind' in request.toolCall
-          ? String((request.toolCall as { kind?: unknown }).kind)
-          : undefined
-        const auto = acpPermissionDecision(livePermissions, toolKind, optionList)
-        if (auto.auto) {
-          const toolCall = request.toolCall && typeof request.toolCall === 'object'
-            ? request.toolCall as { toolCallId?: string; title?: string; kind?: string; rawInput?: unknown }
-            : {}
-          if (session && !closed) {
-            session.onUpdate({
-              protocol: 'native',
-              value: {
-                method: 'permission-auto',
-                params: {
-                  toolCall: {
-                    callId: typeof toolCall.toolCallId === 'string' ? toolCall.toolCallId : '',
-                    tool: typeof toolCall.kind === 'string' ? toolCall.kind : '',
-                    title: typeof toolCall.title === 'string' ? toolCall.title : '',
-                    input: toolCall.rawInput,
-                  },
-                  optionId: auto.optionId,
-                },
-              },
-            })
-          }
-          return { outcome: { outcome: 'selected', optionId: auto.optionId } }
-        }
+        const auto = autoPermission(request)
+        if (auto) return auto
         const signals: AbortSignal[] = [lifetime.signal]
         const subagentId = subagentOfPermission(request)
         const childPrompt = typeof request.sessionId === 'string' ? childPrompts.get(request.sessionId) : undefined
@@ -447,19 +474,7 @@ export function acp(options: AcpOptions): AgentDriver {
           return cancelled
         }
         }
-        const signal = AbortSignal.any(signals)
-        if (!session || signal.aborted) return cancelled
-        let cancel!: () => void
-        const cancellation = new Promise<RequestPermissionResponse>(resolve => { cancel = () => resolve(cancelled); signal.addEventListener('abort', cancel, { once: true }) })
-        try {
-          if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'session/request_permission', params: request } })
-          // ACP option kinds map 1:1 (allow_once / allow_always / reject_once / reject_always).
-          // RequestAnswer.message is ignored: the SDK permission result has no message field.
-          const result = await Promise.race([Promise.resolve().then(() => session.requestPermission({ ...request, coreSessionId: session.sessionId, ...(subagentId ? { subagentId } : {}) }, signal)), cancellation])
-          if (signal.aborted) return cancelled
-          if (result?.outcome?.outcome === 'selected') return { outcome: { outcome: 'selected', optionId: result.outcome.optionId } }
-          return result
-        } finally { signal.removeEventListener('abort', cancel) }
+        return askPermission(request, AbortSignal.any(signals), subagentId)
       },
       async sessionUpdate(notification) { handleSessionUpdate(notification) },
       async extNotification() {},
@@ -544,6 +559,104 @@ export function acp(options: AcpOptions): AgentDriver {
     io.onExit(error => { stopCancelRetry(); lifetime.abort(); turn?.abort(); abortPermission(); resetNativeTracking(); if (runtimeReady && !closed) session?.onExit(error) })
     io.begin()
     const workKnown = () => Boolean(turn) || unmatched.size > 0 || pendingCapture
+
+    // ── OpenCode side channel ────────────────────────────────────────────────────────────
+    // OpenCode's ACP agent drops permission asks from task subagents' child sessions (it relays
+    // only sessions registered over ACP), so a child that asks would wait forever. While work
+    // is live, poll OpenCode's own HTTP server for pending asks from sessions ACP does not
+    // relay, answer them through the same live policy / request path as parent asks (labelled
+    // with the subagent), and learn each running task's child session early.
+    let openCodeServer: OpenCodeServerClient | undefined
+    let sideChannelTimer: ReturnType<typeof setInterval> | undefined
+    let sideChannelBusy = false
+    let sideChannelFailures = 0
+    let sideChannelWarned = false
+    const sideChannelAbort = new AbortController()
+    /** Asks being answered (or answered) by the side channel; aborted and pruned once OpenCode drops them. */
+    const sideAsks = new Map<string, AbortController>()
+    const childParents = new Map<string, string | null>()
+    function warnSideChannel(message: string) {
+      if (sideChannelWarned || !session || closed) return
+      sideChannelWarned = true
+      session.onUpdate({ protocol: 'native', value: { method: DRIVER_WARNING_METHOD, params: { message } } })
+    }
+    async function subagentOfChildSession(sessionId: string, server: OpenCodeServerClient): Promise<string | undefined> {
+      let current: string | undefined = sessionId
+      for (let depth = 0; current && depth < 6; depth++) {
+        if (current === agentSessionId) return
+        const known = normalizer.subagentForSession(current)
+        if (known) return known
+        let parent = childParents.get(current)
+        if (parent === undefined) {
+          parent = await server.parentOf(current, sideChannelAbort.signal).catch(() => undefined) ?? null
+          childParents.set(current, parent)
+          if (childParents.size > 256) childParents.delete(childParents.keys().next().value as string)
+        }
+        current = parent ?? undefined
+      }
+      return
+    }
+    async function answerChildAsk(ask: OpenCodePendingAsk, server: OpenCodeServerClient, gone: AbortSignal) {
+      const request = openCodeAskToAcp(ask)
+      const subagentId = await subagentOfChildSession(ask.sessionID, server)
+      // The ask is withdrawn when OpenCode drops it (the child was aborted or answered elsewhere).
+      const signals: AbortSignal[] = [lifetime.signal, sideChannelAbort.signal, gone]
+      if (turn) signals.push(turn.signal)
+      const result = autoPermission(request, subagentId) ?? await askPermission(request, AbortSignal.any(signals), subagentId)
+      if (closed || lifetime.signal.aborted || gone.aborted) return
+      const chosen = result.outcome.outcome === 'selected' ? result.outcome.optionId : 'reject'
+      const reply = chosen === 'once' || chosen === 'always' ? chosen : 'reject'
+      await server.reply(ask.id, reply, sideChannelAbort.signal).catch(() => { /* already answered or gone */ })
+    }
+    async function pollSideChannel() {
+      if (sideChannelBusy || closed || !runtimeReady || !session || !agentSessionId) return
+      if (!workKnown() && childPrompts.size === 0) return
+      const server = openCodeServer
+      if (!server) {
+        if (normalizer.openSubagents().length) warnSideChannel('This OpenCode session cannot relay its subagents\' permission requests (it was started before supermux could reach OpenCode\'s server). A subagent that needs approval will wait; restart the session to fix this.')
+        return
+      }
+      sideChannelBusy = true
+      try {
+        const unbound = normalizer.openSubagents().filter(sub => !sub.nativeId)
+        if (unbound.length) {
+          const children = await server.runningTaskChildren(agentSessionId, sideChannelAbort.signal)
+          for (const sub of unbound) {
+            const child = children.get(sub.id)
+            if (child && session && !closed) session.onUpdate({ protocol: 'native', value: { method: SUBAGENT_SESSION_METHOD, params: { subagentId: sub.id, nativeId: child } } })
+          }
+        }
+        const asks = await server.pendingAsks(sideChannelAbort.signal)
+        const present = new Set(asks.map(a => a.id))
+        for (const [id, gone] of sideAsks) if (!present.has(id)) { gone.abort(); sideAsks.delete(id) }
+        for (const ask of asks) {
+          // The parent's own asks, and a child we loaded over ACP, arrive as session/request_permission.
+          if (ask.sessionID === agentSessionId || loadedChildren.has(ask.sessionID) || loadingChildren.has(ask.sessionID) || sideAsks.has(ask.id)) continue
+          const gone = new AbortController()
+          sideAsks.set(ask.id, gone)
+          void answerChildAsk(ask, server, gone.signal).catch(() => { if (sideAsks.get(ask.id) === gone) sideAsks.delete(ask.id) })
+        }
+        sideChannelFailures = 0
+      } catch {
+        if (closed || sideChannelAbort.signal.aborted) return
+        if (++sideChannelFailures >= 10 && normalizer.openSubagents().length) {
+          warnSideChannel('supermux cannot reach this OpenCode session\'s server, so subagent permission requests are not relayed. A subagent that needs approval will wait until the session is interrupted.')
+        }
+      } finally { sideChannelBusy = false }
+    }
+    function startSideChannel(info: OpenCodeServerInfo | undefined) {
+      if (options.vendor !== 'opencode' || !session || sideChannelTimer) return
+      openCodeServer = info ? openCodeServerClient(info, session.cwd) : undefined
+      sideChannelTimer = setInterval(() => { void pollSideChannel() }, options.openCodePollIntervalMs ?? 500)
+      sideChannelTimer.unref?.()
+    }
+    lifetime.signal.addEventListener('abort', () => {
+      if (sideChannelTimer) clearInterval(sideChannelTimer)
+      sideChannelTimer = undefined
+      sideChannelAbort.abort()
+      for (const gone of sideAsks.values()) gone.abort()
+      sideAsks.clear()
+    }, { once: true })
     const shouldRetry = (epoch: number, deadline: number) => {
       if (closed || lifetime.signal.aborted || epoch !== cancelEpoch || Date.now() >= deadline) return false
       if (pendingCapture) return true
@@ -746,6 +859,7 @@ export function acp(options: AcpOptions): AgentDriver {
         advertisedModes = io.welcome.meta.advertisedModes === true
         hasModeConfig = io.welcome.meta.hasModeConfig === true
         cursorSubagents = io.welcome.meta.cursorSubagents === true
+        startSideChannel(readOpenCodeServerInfo(io.welcome.meta.opencodeServer))
         runtimeReady = true
       } else {
       const clientCapabilities = options.vendor === 'cursor' ? { _meta: { subagents: true } } : {}
@@ -795,7 +909,11 @@ export function acp(options: AcpOptions): AgentDriver {
       }
       hasModeConfig = configOptions.some(o => o.id === 'mode')
       if (livePermissions.nativeMode != null) await setup(applyNativeMode(livePermissions, false))
-      io.setMeta({ agentSessionId, permissions: livePermissions, advertisedModes, hasModeConfig, cursorSubagents, ...(options.sessionConfig ? { sessionConfig: appliedConfig } : {}), ...(configOptions.length ? { configOptions } : {}) })
+      // A process this connect spawned uses the planned server; one we re-attached without an
+      // agent session keeps whatever server it recorded (none when an older build spawned it).
+      const serverInfo = readOpenCodeServerInfo(io.welcome.meta.opencodeServer) ?? (io.welcome.meta.agentSessionId === undefined ? plannedServer : undefined)
+      io.setMeta({ agentSessionId, permissions: livePermissions, advertisedModes, hasModeConfig, cursorSubagents, ...(options.sessionConfig ? { sessionConfig: appliedConfig } : {}), ...(configOptions.length ? { configOptions } : {}), ...(serverInfo ? { opencodeServer: serverInfo } : {}) })
+      startSideChannel(serverInfo)
       finishSetup()
       runtimeReady = true
       return { runtime: makeRuntime({ resume: canResume || canLoad, steer: false, fork: false, detach: true, permissions: true }), close, finishSetup }

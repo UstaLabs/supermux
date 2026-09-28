@@ -97,10 +97,16 @@ export type AcpNormalizer = ((update: AgentUpdate) => NormalizedBody[]) & {
   /** Subagent a child session id belongs to. */
   subagentForSession: (sessionId: string) => string | undefined
   subagent: (id: string) => AcpSubagentInfo | undefined
+  /** Open subagents (OpenCode side channel: which running tasks still lack a child session). */
+  openSubagents: () => AcpSubagentInfo[]
 }
 
 /** Driver-synthesized native frame for a turn the client started directly on a child session. */
 export const SUBAGENT_TURN_METHOD = "supermux/subagent-turn"
+/** Driver-synthesized native frame: a running subagent's child session became known ({subagentId, nativeId}). */
+export const SUBAGENT_SESSION_METHOD = "supermux/subagent-session"
+/** Driver-synthesized native frame: a warning the driver wants shown ({message}). */
+export const DRIVER_WARNING_METHOD = "supermux/warning"
 
 type Scope = {
   subagentId?: string
@@ -692,6 +698,18 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
     }
     if (method === "cursor/task") return cursorTask(rec(params) ?? {})
     if (method === SUBAGENT_TURN_METHOD) return subagentTurn(rec(params) ?? {})
+    if (method === SUBAGENT_SESSION_METHOD) {
+      const sub = lookup(str(rec(params)?.subagentId))
+      const nativeId = str(rec(params)?.nativeId)
+      if (!sub || !nativeId || sub.nativeId === nativeId) return []
+      sub.nativeId = nativeId
+      remember(aliases, nativeId, sub.id)
+      return progress(sub, undefined, undefined, { nativeId })
+    }
+    if (method === DRIVER_WARNING_METHOD) {
+      const message = str(rec(params)?.message)
+      return message ? [{ kind: "warning", source: "acp", message }] : []
+    }
     if (method === "session/request_permission" || method === "_x.ai/ask_user_question") {
       // Drivers answer these via context.requestPermission / requestAnswers; Session emits the event.
       return []
@@ -710,7 +728,7 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
           ...(tool?.input !== undefined ? { input: tool.input } : {}),
         },
         optionId,
-      } as NormalizedBody, childTools.get(callId))]
+      } as NormalizedBody, childTools.get(callId) ?? str(recParams?.subagentId))]
     }
     return []
   }
@@ -752,6 +770,7 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   }
   normalize.subagentForTool = (toolCallId: string) => childTools.get(toolCallId)
   normalize.subagentForSession = (sessionId: string) => (isMain(sessionId) ? undefined : lookup(sessionId)?.id)
+  normalize.openSubagents = () => [...subs.values()].filter(sub => sub.open).map(sub => ({ id: sub.id, ...(sub.nativeId ? { nativeId: sub.nativeId } : {}), open: true }))
   normalize.subagent = (id: string) => {
     const sub = lookup(id)
     return sub ? { id: sub.id, ...(sub.nativeId ? { nativeId: sub.nativeId } : {}), open: sub.open } : undefined
