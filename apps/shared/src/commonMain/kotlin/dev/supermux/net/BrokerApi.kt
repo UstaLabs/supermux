@@ -2545,7 +2545,18 @@ class BrokerApi(
 
     /** GET /fs/list?path=<abs> → a folder snapshot. */
     suspend fun hostFsList(path: String): dev.supermux.fs.DirSnapshot =
-        getJson("$httpBase/fs/list?path=${urlEncode(path)}")
+        hostFsGet("$httpBase/fs/list?path=${urlEncode(path)}")
+
+    /**
+     * GET + decode for the host fs routes. Not [getJson]: that maps a non-2xx to a
+     * CancellationException (SKIE contract), which FileSystemService.call rethrows — so a 404/403
+     * would cancel the caller instead of reaching it as a failure.
+     */
+    private suspend inline fun <reified T> hostFsGet(url: String): T {
+        val resp = http.get(url) { authHeader() }
+        if (!resp.status.isSuccess()) throw FsException(resp.status.value, resp.bodyAsText())
+        return json.decodeFromString(resp.bodyAsText())
+    }
 
     /** GET /fs/stat?path=<abs> → metadata for one entry. Throws FsException on non-2xx (404 = no such entry). */
     suspend fun hostFsStat(path: String): dev.supermux.fs.FsStat {
@@ -2585,7 +2596,7 @@ class BrokerApi(
 
     /** GET /fs/search?scope=<abs>&q=<query>&limit=<n> → fuzzy filename matches under scope. */
     suspend fun hostFsSearch(scope: String, q: String, limit: Int = 50): List<dev.supermux.fs.SearchHit> =
-        getJson("$httpBase/fs/search?scope=${urlEncode(scope)}&q=${urlEncode(q)}&limit=$limit")
+        hostFsGet("$httpBase/fs/search?scope=${urlEncode(scope)}&q=${urlEncode(q)}&limit=$limit")
 
     /** POST /fs/ops {op,path,to?} → 204. Throws FsException on non-2xx (400/403/404/409). */
     suspend fun hostFsOp(op: dev.supermux.fs.FsOpRequest) {

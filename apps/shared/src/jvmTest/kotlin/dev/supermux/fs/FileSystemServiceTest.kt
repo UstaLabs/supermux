@@ -206,4 +206,13 @@ class FileSystemServiceTest {
         assertEquals(DirState.Loading(null), fs.dir("/q").value)
         a.close(); b.close()
     }
+
+    @Test fun httpErrorsFromListAndSearchAreFailuresNotCancellations() = runTest {
+        val http = HttpClient(MockEngine { respond("""{"error":"ENOENT","message":"nope"}""", HttpStatusCode.NotFound, headersOf(HttpHeaders.ContentType, "application/json")) })
+        val fs = FileSystemService(BrokerApi("http://h", "t", http), send = {}, scope = backgroundScope)
+        val listed = fs.list("/missing")
+        assertTrue(listed.isFailure)
+        assertEquals(404, (listed.exceptionOrNull() as dev.supermux.net.FsException).status)
+        assertTrue(fs.search("/w", "q").isFailure)
+    }
 }
