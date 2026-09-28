@@ -14,6 +14,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.ScrollWheel
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
@@ -140,5 +143,46 @@ class ReviewUiTest {
         // The lines below the thread are pushed down on both sides by the thread's height.
         val below = a.coordsAtPos(a.state.doc.lineStart(12))!!.top - a.coordsAtPos(a.state.doc.lineStart(11))!!.top
         assertTrue(below > 60, "A padded under line 12 for B's thread: $below px")
+    }
+
+    @Test fun theDraftReachesTheHostDebouncedAndIsFlushedOnClose() = runComposeUiTest {
+        val host = RecordingHost()
+        val v = show(host)
+        Review.openComposer(v, 20)
+        waitForIdle()
+        mainClock.autoAdvance = false
+        onNodeWithTag(ReviewTags.COMPOSER_FIELD).performTextInput("one")
+        mainClock.advanceTimeBy(100)
+        onNodeWithTag(ReviewTags.COMPOSER_FIELD).performTextInput(" two")
+        mainClock.advanceTimeBy(100)
+        assertEquals(listOf("open 20"), host.log, "nothing while typing")
+        mainClock.advanceTimeBy(DRAFT_DEBOUNCE_MS + 50)
+        assertEquals(listOf("open 20", "draft 20 one two"), host.log, "one draft once the typing stopped")
+        onNodeWithTag(ReviewTags.COMPOSER_FIELD).performTextInput("!")
+        mainClock.advanceTimeBy(50)
+        onNodeWithTag(ReviewTags.COMPOSER_FIELD).performKeyInput { pressKey(Key.Escape) }
+        mainClock.autoAdvance = true
+        waitForIdle()
+        assertEquals(listOf("open 20", "draft 20 one two", "draft 20 one two!", "closed"), host.log, "flushed before the close")
+    }
+
+    @Test fun aSidewaysWheelPagesTheWalkthrough() = runComposeUiTest {
+        val pages = ArrayList<DiffPage>()
+        val host = object : DiffHost { override fun onDiffPage(direction: DiffPage) { pages += direction } }
+        val view = EditorView(EditorState.create(working, extensions = extensionOf(inlineDiff(base, DiffConfig(editable = false), host))))
+        setContent { Box(Modifier.size(800.dp, 600.dp).testTag("host")) { InlineDiffEditor(view, Modifier.fillMaxSize()) } }
+        waitForIdle()
+        onNodeWithTag("host").performMouseInput { moveTo(center); scroll(6f, ScrollWheel.Horizontal) }
+        waitForIdle()
+        assertEquals(listOf(DiffPage.NEXT), pages)
+        mainClock.advanceTimeBy(600)
+        onNodeWithTag("host").performMouseInput { scroll(-6f, ScrollWheel.Horizontal) }
+        waitForIdle()
+        assertEquals(listOf(DiffPage.NEXT, DiffPage.PREVIOUS), pages)
+        // Vertical scrolling never pages.
+        mainClock.advanceTimeBy(600)
+        onNodeWithTag("host").performMouseInput { scroll(10f) }
+        waitForIdle()
+        assertEquals(2, pages.size)
     }
 }

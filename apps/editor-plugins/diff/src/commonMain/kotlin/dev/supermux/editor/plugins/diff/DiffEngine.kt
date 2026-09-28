@@ -147,18 +147,33 @@ object CharDiff {
     /** More than this share of both sides changed: the run is rewritten, no character marks. */
     private const val REWRITTEN = 0.7
 
-    /** A replaced pair of short runs, character by character, when more than half of it is common. */
+    /**
+     * A replaced pair of short runs, grapheme by grapheme (the caret's rules: an emoji, its skin tone,
+     * a flag or a letter with its accent is one unit, never split), when more than half of it is common.
+     */
     private suspend fun refine(a: String, af: Int, aTo: Int, b: String, bf: Int, bTo: Int, t: Ticker): List<CharChange>? {
-        val ca = IntArray(aTo - af) { a[af + it].code }
-        val cb = IntArray(bTo - bf) { b[bf + it].code }
+        val ga = graphemes(a, af, aTo)
+        val gb = graphemes(b, bf, bTo)
+        val ids = HashMap<String, Int>()
+        val ca = IntArray(ga.size - 1) { ids.getOrPut(a.substring(ga[it], ga[it + 1])) { ids.size } }
+        val cb = IntArray(gb.size - 1) { ids.getOrPut(b.substring(gb[it], gb[it + 1])) { ids.size } }
         val sub = ArrayList<CharChange>()
         var changed = 0
         Myers.diff(ca, 0, ca.size, cb, 0, cb.size, Int.MAX_VALUE, t) { a0, a1, b0, b1 ->
-            sub += CharChange(af + a0, af + a1, bf + b0, bf + b1)
+            sub += CharChange(ga[a0], ga[a1], gb[b0], gb[b1])
             changed += maxOf(a1 - a0, b1 - b0)
         }
         val common = maxOf(ca.size, cb.size) - changed
         return if (common * 2 >= maxOf(ca.size, cb.size)) sub else null
+    }
+
+    /** The grapheme boundaries of [s] from [from] to [to]: from, ..., to. */
+    private fun graphemes(s: String, from: Int, to: Int): IntArray {
+        val out = ArrayList<Int>()
+        var i = from
+        out += i
+        while (i < to) { i = minOf(to, dev.supermux.editor.compose.Graphemes.next(s, i)); out += i }
+        return out.toIntArray()
     }
 
     /** Changes separated only by up to 3 spaces (no line break) become one. */
@@ -209,11 +224,13 @@ object CharDiff {
         var i = 0
         while (i < s.length) {
             val c = s[i]
-            var j = i + 1
+            var j: Int
             when {
-                isWord(c) -> while (j < s.length && isWord(s[j])) j++
-                c == ' ' || c == '\t' -> while (j < s.length && (s[j] == ' ' || s[j] == '\t')) j++
-                c.isHighSurrogate() && j < s.length && s[j].isLowSurrogate() -> j++
+                // A word: graphemes starting with a letter, digit or `_` (its accents come with it).
+                isWord(c) -> { j = next(s, i); while (j < s.length && isWord(s[j])) j = next(s, j) }
+                c == ' ' || c == '\t' -> { j = i + 1; while (j < s.length && (s[j] == ' ' || s[j] == '\t')) j++ }
+                // Anything else is one grapheme (an emoji with its skin tone, a flag).
+                else -> j = next(s, i)
             }
             add(j)
             i = j
@@ -222,6 +239,8 @@ object CharDiff {
     }
 
     private fun isWord(c: Char) = c.isLetterOrDigit() || c == '_'
+
+    private fun next(s: String, i: Int) = maxOf(i + 1, dev.supermux.editor.compose.Graphemes.next(s, i))
 }
 
 /** Work counting: [pause] every [EVERY] steps (a slice's end, a cancellation check). */

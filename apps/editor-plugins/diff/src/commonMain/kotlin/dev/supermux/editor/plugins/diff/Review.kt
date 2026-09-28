@@ -84,6 +84,10 @@ object Review {
             if (host != null) diffHostFacet.of(host) else extensionOf(),
             decorationsFacet.compute(FacetDep.field(f)) { st -> st.field(f)?.let { widgets(st, it) } ?: RangeSet.empty() },
             gutterMarkersFacet.compute(FacetDep.field(f)) { st -> st.field(f)?.let { markers(st, it) } ?: RangeSet.empty() },
+            // The diff keeps these lines open (a thread or the composer never hides in a folded run).
+            Diff.pinnedLinesFacet.compute(FacetDep.field(f)) { st ->
+                st.field(f)?.let { r -> r.threads.map { st.doc.lineIndexAt(it.pos) } + listOfNotNull(r.composer?.let { st.doc.lineIndexAt(it.pos) }) }.orEmpty()
+            },
             gutterClickFacet.of(GutterClickHandler { t, column, line, _ ->
                 if (column != COLUMN) return@GutterClickHandler false
                 openComposer(t, line)
@@ -141,10 +145,16 @@ object Review {
 
     // ---------------------------------------------------------------- what the widgets do --
 
+    /** The composer's text changed: kept in the state at once (the host hears it debounced: [reportDraft]). */
     internal fun typed(target: CommandTarget, text: String) {
         val c = state(target.state)?.composer ?: return
         if (c.draft == text) return
         target.dispatch(TransactionSpec(effects = listOf(draft.of(text))))
+    }
+
+    /** Tell the host the composer's draft [text] (the widget calls it ~300 ms after the typing stops, and before a close or submit). */
+    internal fun reportDraft(target: CommandTarget, text: String) {
+        val c = state(target.state)?.composer ?: return
         target.state.facet(diffHostFacet)?.onComposerDraft(target.state.doc.lineIndexAt(c.pos), text)
     }
 

@@ -69,9 +69,19 @@ interface DiffHost {
     /** The composer was closed without submitting (today's `onComposerState(0, "")`: the host drops the draft). */
     fun onComposerClosed() {}
 
-    /** A hunk was reverted in the working copy (after the edit). */
+    /** A hunk was reverted in the working copy (after the edit applied; never for a dropped one). */
     fun onRevert(hunk: DiffHunk) {}
+
+    /**
+     * The user asked for the next or the previous walkthrough step (today's `onDiffPage`): a
+     * horizontal wheel / trackpad swipe over the view ([diffPaging]), or [Diff.pageNext] /
+     * [Diff.pagePrevious].
+     */
+    fun onDiffPage(direction: DiffPage) {}
 }
+
+/** Which way [DiffHost.onDiffPage] pages. */
+enum class DiffPage { PREVIOUS, NEXT }
 
 /** The host of the diff views of this state (the first given). */
 val diffHostFacet: Facet<DiffHost, DiffHost?> = Facet.define("diffHost") { it.firstOrNull() }
@@ -112,7 +122,7 @@ object Diff {
             f,
             EditorViewport.extension,
             decorationsFacet.compute(FacetDep.field(f), FacetDep.field(EditorViewport.field)) { st -> visibleDecorations(st, st.field(f), Side.B, inline) },
-            decorationsFacet.compute(FacetDep.field(f)) { st -> blockDecorations(st.doc, st.field(f), Side.B, inline) },
+            decorationsFacet.compute(FacetDep.field(f), FacetDep.facet(pinnedLinesFacet)) { st -> blockDecorations(st.doc, st.field(f), Side.B, inline, st.facet(pinnedLinesFacet)) },
             gutterMarkersFacet.compute(FacetDep.field(f), FacetDep.field(EditorViewport.field)) { st -> markers(st, st.field(f), Side.B, inline) },
             // Side by side: which lines pair, for the linked views (none yet: line for line).
             if (inline) extensionOf() else lineMappingFacet.compute(FacetDep.field(f)) { st -> st.field(f).let { m -> if (m.ready) m.lineMapping else LineMapping.IDENTITY } },
@@ -131,6 +141,16 @@ object Diff {
     /** The hunks shown now (aligned with the working copy's text). */
     fun hunks(state: EditorState): List<DiffHunk> = sideModel(state)?.hunks.orEmpty()
 
+    /** The folded runs shown now on this side (the review's lines kept open or counted). */
+    fun collapsed(state: EditorState): List<CollapsedRun> = sideModel(state)?.collapsedFor(pinnedOf(state)).orEmpty()
+
+    /** Working-copy lines the review keeps open (threads, the composer): the review plugin provides them. */
+    internal val pinnedLinesFacet: Facet<List<Int>, List<Int>> = Facet.define("diff.pinned") { it.flatten() }
+
+    /** The pinned lines of this side's view (B: the review's; A: the ones its pair pushed). */
+    internal fun pinnedOf(state: EditorState): List<Int> =
+        if (model(state) != null) state.facet(pinnedLinesFacet) else state.fieldOrNull(baseField)?.pinned.orEmpty()
+
     // ---------------------------------------------------------------- effects --
 
     /** A new base for the working copy in [target] (a new slice: what was expanded is folded again). */
@@ -140,22 +160,24 @@ object Diff {
 
     /**
      * Load a new pair: [base] and the working text [working] (replacing the document, userEvent
-     * `disk`: never an undo step), one transaction. A new slice.
+     * `disk`: never an undo step), one transaction. A new slice. [config]: another configuration
+     * with it (the next walkthrough step's [DiffConfig.range], a `not_in_diff` step's
+     * [DiffConfig.plain]); null keeps the current one.
      */
-    fun load(target: CommandTarget, base: String, working: String) {
+    fun load(target: CommandTarget, base: String, working: String, config: DiffConfig? = null) {
         val doc = target.state.doc
         val same = doc.length == working.length && doc.toString() == working
         target.dispatch(TransactionSpec(
             changes = if (same) emptyList() else listOf(ChangeSpec(0, doc.length, working)),
             selection = if (same) null else EditorSelection.cursor(0),
-            effects = listOf(DiffEffects.setBase.of(SetBase(base))),
+            effects = listOf(DiffEffects.setBase.of(SetBase(base, config))),
             userEvent = if (same) null else "disk",
         ))
     }
 
     /** Reveal (part of) the folded unchanged run [run]: ↑ its last [DiffConfig.expandStep] lines, ↓ its first, or all. */
     fun expand(target: CommandTarget, run: CollapsedRun, dir: Expand) {
-        val spec = TransactionSpec(effects = listOf(DiffEffects.expand.of(ExpandRun(run.bFrom, run.bTo, dir))))
+        val spec = TransactionSpec(effects = listOf(DiffEffects.expand.of(ExpandRun(run.bFrom, run.bTo, dir, pinnedOf(target.state)))))
         val forward = target.state.facet(forwardFacet)
         if (forward != null) forward(spec) else target.dispatch(spec)
     }
@@ -182,6 +204,8 @@ object Diff {
         }
         val at = minOf(change.from, doc.length)
         target.dispatch(TransactionSpec(changes = listOf(change), selection = EditorSelection.cursor(at), userEvent = REVERT_EVENT))
+        // A view that dropped the edit (read-only) changed nothing: nothing to report.
+        if (target.state.doc === doc) return false
         state.facet(diffHostFacet)?.onRevert(h)
         return true
     }
@@ -213,6 +237,16 @@ object Diff {
         return true
     }
 
+    /** The next / previous walkthrough step: the host's [DiffHost.onDiffPage] (false without a host). */
+    val pageNext: Command = Command { t -> page(t, DiffPage.NEXT) }
+    val pagePrevious: Command = Command { t -> page(t, DiffPage.PREVIOUS) }
+
+    internal fun page(t: CommandTarget, dir: DiffPage): Boolean {
+        val host = t.state.facet(diffHostFacet) ?: return false
+        host.onDiffPage(dir)
+        return true
+    }
+
     /** F7 / Shift-F7 (VS Code's diff review) and Alt-F5 / Shift-Alt-F5 (VS Code's "next change"). */
     val keymap: List<KeyBinding> = listOf(
         KeyBinding("F7", nextHunk), KeyBinding("Shift-F7", prevHunk),
@@ -223,6 +257,8 @@ object Diff {
         NamedCommand("diff.nextHunk", "Next change", nextHunk),
         NamedCommand("diff.prevHunk", "Previous change", prevHunk),
         NamedCommand("diff.revertHunk", "Revert this change", revertHunk),
+        NamedCommand("diff.pageNext", "Next walkthrough step", pageNext),
+        NamedCommand("diff.pagePrevious", "Previous walkthrough step", pagePrevious),
     )
 
     // ---------------------------------------------------------------- shared by both sides --
@@ -232,8 +268,11 @@ object Diff {
     /** Which side this state is: B (the working copy, the default) or A (a pair's base). */
     internal val sideFacet: Facet<Side, Side> = Facet.first("diff.side", Side.B)
 
+    /** What the pair pushes to A after every B transaction: B's model and the review's lines. */
+    internal class Pushed(val model: DiffModel, val pinned: List<Int>)
+
     /** A's copy of the working side's model (the pair pushes it). */
-    internal val baseField: StateField<DiffModel?> = StateField(
+    internal val baseField: StateField<Pushed?> = StateField(
         "diff.base",
         { null },
         { m, tr ->
@@ -242,10 +281,10 @@ object Diff {
             out
         },
     )
-    internal val pushModel = dev.supermux.editor.core.StateEffectType<DiffModel>("diff.pushModel")
+    internal val pushModel = dev.supermux.editor.core.StateEffectType<Pushed>("diff.pushModel")
 
     /** The model this side shows (B: its own; A: the one its pair pushed). */
-    internal fun sideModel(state: EditorState): DiffModel? = model(state) ?: state.fieldOrNull(baseField)
+    internal fun sideModel(state: EditorState): DiffModel? = model(state) ?: state.fieldOrNull(baseField)?.model
 
     /** Gutter, chip, reveal: the same on both sides. */
     private val common: Extension = extensionOf(
@@ -260,18 +299,18 @@ object Diff {
         }),
         widgetClickFacet.of(WidgetClickHandler { t, key, _, _ ->
             if (key.type != COLLAPSED) return@WidgetClickHandler false
-            val run = sideModel(t.state)?.collapsedRun(key.id) ?: return@WidgetClickHandler false
+            val run = collapsed(t.state).firstOrNull { it.id == key.id } ?: return@WidgetClickHandler false
             expand(t, run, Expand.ALL)
             true
         }),
         // A search match or a definition inside a folded run: open that run.
         revealFacet.of(RevealHandler { t, from, to ->
             val st = t.state
-            val m = sideModel(st) ?: return@RevealHandler false
+            if (sideModel(st) == null) return@RevealHandler false
             val a = st.facet(sideFacet) == Side.A
             val l0 = st.lineOf(from)
             val l1 = st.lineOf(to)
-            val run = m.collapsed.firstOrNull { r -> val f = if (a) r.aFrom else r.bFrom; l1 >= f && l0 < f + r.lines } ?: return@RevealHandler false
+            val run = collapsed(st).firstOrNull { r -> val f = if (a) r.aFrom else r.bFrom; l1 >= f && l0 < f + r.lines } ?: return@RevealHandler false
             expand(t, run, Expand.ALL)
             true
         }),
@@ -281,9 +320,9 @@ object Diff {
         baseField,
         sideFacet.of(Side.A),
         EditorViewport.extension,
-        decorationsFacet.compute(FacetDep.field(baseField), FacetDep.field(EditorViewport.field)) { st -> st.field(baseField)?.let { visibleDecorations(st, it, Side.A, false) } ?: RangeSet.empty() },
-        decorationsFacet.compute(FacetDep.field(baseField)) { st -> st.field(baseField)?.let { blockDecorations(st.doc, it, Side.A, false) } ?: RangeSet.empty() },
-        gutterMarkersFacet.compute(FacetDep.field(baseField), FacetDep.field(EditorViewport.field)) { st -> st.field(baseField)?.let { markers(st, it, Side.A, false) } ?: RangeSet.empty() },
+        decorationsFacet.compute(FacetDep.field(baseField), FacetDep.field(EditorViewport.field)) { st -> st.field(baseField)?.let { visibleDecorations(st, it.model, Side.A, false) } ?: RangeSet.empty() },
+        decorationsFacet.compute(FacetDep.field(baseField)) { st -> st.field(baseField)?.let { blockDecorations(st.doc, it.model, Side.A, false, it.pinned) } ?: RangeSet.empty() },
+        gutterMarkersFacet.compute(FacetDep.field(baseField), FacetDep.field(EditorViewport.field)) { st -> st.field(baseField)?.let { markers(st, it.model, Side.A, false) } ?: RangeSet.empty() },
         common,
     )
 
@@ -338,10 +377,10 @@ object Diff {
     }
 
     /** The folded unchanged runs (whole document: they change its height) and, inline, the deleted lines' widgets. */
-    internal fun blockDecorations(doc: Rope, m: DiffModel, side: Side, inline: Boolean): RangeSet<Decoration> {
+    internal fun blockDecorations(doc: Rope, m: DiffModel, side: Side, inline: Boolean, pinned: List<Int>): RangeSet<Decoration> {
         if (!m.ready) return RangeSet.empty()
         val out = ArrayList<Ranged<Decoration>>()
-        for (r in m.collapsed) {
+        for (r in m.collapsedFor(pinned)) {
             val f = if (side == Side.A) r.aFrom else r.bFrom
             val t = f + r.lines
             if (t > doc.lineCount) continue
@@ -404,19 +443,24 @@ object Diff {
 
         private fun check(state: EditorState) {
             val m = model(state) ?: return
-            if (!m.pending) { if (job?.isActive == true && jobSlice != m.slice) job?.cancel(); return }
+            // Due: a first diff, or one after an edit too big for the transaction. Idle: a diff shaped
+            // by region re-diffs, redone whole once the typing has stopped.
+            val due = m.pending
+            val idle = !due && m.spliced && m.config.idleRediffMs > 0 && !m.config.plain
+            if (!due && !idle) { if (job?.isActive == true && (jobSlice != m.slice || jobDoc !== state.doc)) job?.cancel(); return }
             if (job?.isActive == true && jobDoc === state.doc && jobSlice == m.slice) return
             job?.cancel()
             val doc = state.doc
             val slice = m.slice
-            val first = !m.ready
+            val wait = when { due && !m.ready -> 0L; due -> m.config.recomputeDelayMs; else -> m.config.idleRediffMs }
             jobDoc = doc
             jobSlice = slice
             job = host.scope.launch {
-                if (!first) delay(m.config.recomputeDelayMs)
-                val r = DiffJobs.diff(m.baseLines, LineDiff.lines(doc), m.config.options, offThread = m.config.offThread)
+                if (wait > 0) delay(wait)
+                // Splitting a big text into lines is work too: it happens off the UI thread, with the diff.
+                val (baseLines, r) = DiffJobs.diffDoc(m.baseLines.ifEmpty { null }, m.base, doc, m.config.options, offThread = m.config.offThread)
                 val now = host.target.state
-                if (now.doc === doc && model(now)?.slice == slice) host.target.dispatch(TransactionSpec(effects = listOf(DiffEffects.computed.of(Computed(doc, slice, r)))))
+                if (now.doc === doc && model(now)?.slice == slice) host.target.dispatch(TransactionSpec(effects = listOf(DiffEffects.computed.of(Computed(doc, slice, r, baseLines)))))
             }
         }
 

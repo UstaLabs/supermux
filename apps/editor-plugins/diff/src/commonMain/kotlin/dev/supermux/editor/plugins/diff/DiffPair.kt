@@ -46,13 +46,19 @@ class DiffPair(
     private val removers = ArrayList<() -> Unit>()
 
     init {
+        // A base view shown by another pair before (the host reuses it): that pair lets go of it.
+        pairs[base]?.dispose()
+        pairs[base] = this
         if (Diff.model(working.state) == null) working.dispatch(TransactionSpec(effects = listOf(StateEffect.appendConfig.of(
             Diff.extension(base.state.doc.toString(), config, host, inline = false),
         ))))
-        if (base.state.fieldOrNull(Diff.baseField) == null) base.dispatch(TransactionSpec(effects = listOf(StateEffect.appendConfig.of(extensionOf(
-            Diff.baseSide,
-            Diff.forwardFacet.of { spec -> working.dispatch(spec) },
-        )))))
+        val forward = Diff.forwardFacet.of { spec -> working.dispatch(spec) }
+        base.dispatch(TransactionSpec(effects = listOf(
+            if (base.state.fieldOrNull(Diff.baseField) == null && base.state.facet(Diff.forwardFacet) == null)
+                StateEffect.appendConfig.of(extensionOf(Diff.baseSide, forwardSlot.of(forward)))
+            // Wired to another working view before: this pair's working view now gets A's requests.
+            else forwardSlot.reconfigure(forward),
+        )))
         removers += working.addListener { push() }
         removers += working.addReplaceListener { push() }
         push()
@@ -63,7 +69,9 @@ class DiffPair(
 
     private fun push() {
         val m = Diff.model(working.state) ?: return
-        if (base.state.fieldOrNull(Diff.baseField) !== m) base.dispatch(TransactionSpec(effects = listOf(Diff.pushModel.of(m))))
+        val pinned = working.state.facet(Diff.pinnedLinesFacet)
+        val was = base.state.fieldOrNull(Diff.baseField)
+        if (was == null || was.model !== m || was.pinned != pinned) base.dispatch(TransactionSpec(effects = listOf(Diff.pushModel.of(Diff.Pushed(m, pinned)))))
     }
 
     /**
@@ -80,6 +88,15 @@ class DiffPair(
     fun dispose() {
         for (r in removers) r()
         removers.clear()
+        if (pairs[base] === this) pairs.remove(base)
+    }
+
+    private companion object {
+        /** Where A's requests go: one slot, re-wired when a new pair takes the base view. */
+        val forwardSlot = dev.supermux.editor.core.Compartment("diff.forward")
+
+        /** The live pair of each base view (a new pair on the same base disposes the old one). */
+        val pairs = HashMap<EditorView, DiffPair>()
     }
 }
 

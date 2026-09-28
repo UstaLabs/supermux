@@ -64,7 +64,7 @@ class SideBySideTest {
         p.working.dispatch(TransactionSpec(changes = listOf(ChangeSpec(at, at, "new line\n"))))
         val m = assertNotNull(p.model)
         assertEquals(LineMapping.Hunk(20, 20, 20, 21), p.working.state.facet(lineMappingFacet)!!.hunks.first())
-        assertTrue(p.base.state.field(Diff.baseField) === m, "A follows B's model")
+        assertTrue(p.base.state.field(Diff.baseField)?.model === m, "A follows B's model")
         assertValidDiff(base.split('\n'), p.working.state.doc.toString().split('\n'), m.hunks)
     }
 
@@ -86,7 +86,7 @@ class SideBySideTest {
         assertTrue(p.working.state.facet(gutterClickFacet).any { it.click(p.working, Diff.REVERT_COLUMN, 49, null) })
         assertEquals(2, p.model!!.hunks.size)
         assertEquals("line 50", p.working.state.doc.line(50).text)
-        assertEquals(2, p.base.state.field(Diff.baseField)!!.hunks.size, "A follows")
+        assertEquals(2, p.base.state.field(Diff.baseField)?.model!!.hunks.size, "A follows")
         assertTrue(History.undo.run(p.working))
         assertEquals("line 50 changed", p.working.state.doc.line(50).text)
         assertEquals(3, p.model!!.hunks.size)
@@ -106,7 +106,7 @@ class SideBySideTest {
         p.load("x\ny\nz", "x\nY\nz")
         assertEquals("x\ny\nz", p.base.state.doc.toString())
         assertEquals(listOf(DiffHunk(1, 2, 1, 2)), p.model!!.hunks.map { it.copy(chars = null) })
-        assertEquals(p.model, p.base.state.field(Diff.baseField))
+        assertEquals(p.model, p.base.state.field(Diff.baseField)?.model)
         assertEquals(0, History.undoDepth(p.working.state), "a load is never undone")
     }
 }

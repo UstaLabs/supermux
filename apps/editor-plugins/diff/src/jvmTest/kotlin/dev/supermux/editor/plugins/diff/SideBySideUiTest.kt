@@ -145,7 +145,7 @@ class SideBySideUiTest {
             if (p95(t) < p95) { p95 = p95(t); times = t }
         }
         println("DIFF-PERF side-by-side scroll, 2 x 10k lines, $hunks hunks: frame p95 ${"%.2f".format(p95)} ms, max ${"%.2f".format(times.drop(10).max())} ms over ${times.size} frames (the same two linked editors without the diff: ${"%.2f".format(plain)} ms)")
-        assertTrue(p95 < 16.0, "side-by-side scroll p95 $p95 ms")
+        assertBudget(p95, 16.0, "side-by-side scroll p95")
     }
 
     @Test fun rendersForALook() {

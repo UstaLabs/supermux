@@ -27,7 +27,7 @@ class DiffPerfTest {
         println("DIFF-PERF cold first diff: ${"%.1f".format(cold)} ms")
         println("DIFF-PERF 10k lines / 1k changes: ${"%.2f".format(ms)} ms (lines only ${"%.2f".format(linesOnly)} ms), ${r!!.hunks.size} hunks, coarse=${r!!.coarse}")
         assertValidDiff(a, b, r!!.hunks)
-        assertTrue(ms < 50, "10k lines with 1k changes took $ms ms (budget 50)")
+        assertBudget(ms, 50.0, "10k lines with 1k changes")
     }
 
     @Test fun aKeystrokeReDiffsInWellUnderAMillisecond() {
@@ -41,7 +41,7 @@ class DiffPerfTest {
         val next = cs.apply(doc)
         val ms = best(20) { Splice.apply(a, hunks, doc, next, cs, DiffOptions()) }
         println("DIFF-PERF keystroke splice (10k lines, ${hunks.size} hunks): ${"%.3f".format(ms)} ms")
-        assertTrue(ms < 4, "a keystroke's re-diff took $ms ms")
+        assertBudget(ms, 4.0, "a keystroke's re-diff")
     }
 
     @Test fun pathologicalInputsStayBounded() {
@@ -52,7 +52,7 @@ class DiffPerfTest {
         val ms = best(3) { r = LineDiff.diff(a, b) }
         println("DIFF-PERF 20k lines over a 2-line alphabet: ${"%.1f".format(ms)} ms, coarse=${r!!.coarse}")
         assertValidDiff(a, b, r!!.hunks)
-        assertTrue(ms < 500, "pathological input took $ms ms")
+        assertBudget(ms, 500.0, "pathological input")
     }
 
     @Test fun aKeystrokeInASideBySidePairStaysCheap() {
@@ -74,7 +74,7 @@ class DiffPerfTest {
         }
         val p95 = times.drop(50).sorted().let { it[it.size * 95 / 100] }
         println("DIFF-PERF keystroke in a side-by-side pair (10k lines, ${pair.model!!.hunks.size} hunks, a thread): dispatch p95 ${"%.3f".format(p95)} ms")
-        assertTrue(p95 < 4, "keystroke dispatch p95 $p95 ms")
+        assertBudget(p95, 4.0, "keystroke dispatch p95 in a pair")
         assertValidDiff(a, working.state.doc.toString().split('\n'), pair.model!!.hunks)
     }
 }

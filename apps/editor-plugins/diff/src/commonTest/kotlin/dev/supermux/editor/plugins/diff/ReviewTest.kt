@@ -81,11 +81,13 @@ class ReviewTest {
         Review.typed(v, "hel")
         Review.typed(v, "hello")
         assertEquals(ReviewComposer(20, "hello"), Review.composer(v.state))
+        // The host hears the draft when the widget reports it (debounced there), not per keystroke.
+        Review.reportDraft(v, "hello")
         // An edit above moves the open composer with its line.
         v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 0, "new\n"))))
         assertTrue(Review.submit(v, "  hello  "))
         assertNull(Review.composer(v.state))
-        assertEquals(listOf("open 20", "draft 20 hel", "draft 20 hello", "submit 21 hello"), host.log)
+        assertEquals(listOf("open 20", "draft 20 hello", "submit 21 hello"), host.log)
     }
 
     @Test fun cancelClosesAndTellsTheHost() {

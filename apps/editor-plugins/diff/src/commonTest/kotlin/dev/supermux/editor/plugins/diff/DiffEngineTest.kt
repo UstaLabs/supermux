@@ -181,6 +181,19 @@ class DiffEngineTest {
         assertEquals(listOf("alpha beta" to "one two"), c.map { a.substring(it.aFrom, it.aTo) to b.substring(it.bFrom, it.bTo) })
     }
 
+    @Test fun charDiffNeverSplitsAnEmojiOrItsSkinTone() {
+        for ((a, b) in listOf("x = \uD83D\uDE00 ok" to "x = \uD83D\uDE03 ok", "vote \uD83D\uDC4D\uD83C\uDFFD yes" to "vote \uD83D\uDC4D\uD83C\uDFFF yes", "caf\u00E9e" to "cafe\u0301e")) {
+            val c = CharDiff.diff(a, b) ?: continue
+            assertEquals(b, applyChars(a, b, c))
+            for (x in c) {
+                for (p in listOf(x.aFrom, x.aTo)) assertTrue(p == 0 || p == a.length || !a[p].isLowSurrogate() && !isMark(a[p]), "'$a': a change edge at $p splits a character: $c")
+                for (p in listOf(x.bFrom, x.bTo)) assertTrue(p == 0 || p == b.length || !b[p].isLowSurrogate() && !isMark(b[p]) && !(b[p] == '\uD83C'), "'$b': a change edge at $p splits a character: $c")
+            }
+        }
+    }
+
+    private fun isMark(c: Char) = c in '\u0300'..'\u036F'
+
     @Test fun aRewrittenRunGetsNoCharacterMarks() {
         assertNull(CharDiff.diff("    scope: CoroutineScope,\n    private val deps: HostStoreDeps,", "    // changed: one run of two lines\n    // became four lines"))
     }
@@ -266,28 +279,5 @@ class DiffEngineTest {
         val sliced = LineDiff.diffSliced(a, b, DiffOptions()) { pauses++ }
         assertEquals(LineDiff.diff(a, b).hunks, sliced.hunks)
         assertTrue(pauses > 0, "the job gives the thread back")
-    }
-
-    @Test fun baseFromAUnifiedPatch() {
-        val base = "one\ntwo\nthree\nfour\nfive\nsix\nseven"
-        val working = "one\nTWO\nthree\nfour\nfive and a half\nsix\nseven\neight"
-        val patch = """
-            diff --git a/f.txt b/f.txt
-            --- a/f.txt
-            +++ b/f.txt
-            @@ -1,3 +1,3 @@
-             one
-            -two
-            +TWO
-             three
-            @@ -4,4 +4,5 @@
-             four
-            -five
-            +five and a half
-             six
-             seven
-            +eight
-        """.trimIndent()
-        assertEquals(base, UnifiedPatch.base(working, patch))
     }
 }

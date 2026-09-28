@@ -21,7 +21,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.abs
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -68,8 +71,40 @@ fun InlineDiffEditor(
     onFontSize: (Float) -> Unit = {},
 ) {
     val editable = Diff.model(view.state)?.config?.editable ?: true
-    Editor(view, modifier, theme = theme, readOnly = !editable, widgets = widgets, label = label, lineWrap = lineWrap, onFontSize = onFontSize)
+    Editor(view, modifier.diffPaging(view), theme = theme, readOnly = !editable, widgets = widgets, label = label, lineWrap = lineWrap, onFontSize = onFontSize)
 }
+
+/**
+ * Walkthrough paging (today's CM6 `wheel` handler): a horizontal wheel or trackpad swipe over the
+ * view, clearly more sideways than up or down, pages to the next step (to the right) or the previous
+ * one ([DiffHost.onDiffPage]), at most one page per [PAGE_COOLDOWN_MS]. The editor still scrolls:
+ * the events are only watched, never consumed.
+ */
+fun Modifier.diffPaging(view: EditorView): Modifier = pointerInput(view) {
+    var dx = 0f
+    var dy = 0f
+    var lastPage = -PAGE_COOLDOWN_MS
+    var lastEvent = 0L
+    awaitPointerEventScope {
+        while (true) {
+            val e = awaitPointerEvent(PointerEventPass.Initial)
+            if (e.type != PointerEventType.Scroll) continue
+            val now = e.changes.firstOrNull()?.uptimeMillis ?: continue
+            if (now - lastEvent > 250) { dx = 0f; dy = 0f }
+            lastEvent = now
+            for (c in e.changes) { dx += c.scrollDelta.x; dy += c.scrollDelta.y }
+            if (abs(dx) >= PAGE_SCROLL && abs(dx) > 2 * abs(dy) && now - lastPage >= PAGE_COOLDOWN_MS) {
+                lastPage = now
+                Diff.page(view, if (dx > 0) DiffPage.NEXT else DiffPage.PREVIOUS)
+                dx = 0f; dy = 0f
+            }
+        }
+    }
+}
+
+/** A horizontal scroll this long (Compose's scroll units: wheel notches, trackpad steps) pages. */
+internal const val PAGE_SCROLL = 3f
+internal const val PAGE_COOLDOWN_MS = 450L
 
 /** A text button that never takes the editor's focus (a tap, not `clickable`: see the README). */
 @Composable
@@ -86,7 +121,7 @@ internal fun accent(theme: EditorTheme): Color = theme.cursor
 @Composable
 private fun WidgetScope.CollapsedRow(key: WidgetKey) {
     val st = editor.state
-    val run = Diff.sideModel(st)?.collapsedRun(key.id) ?: return
+    val run = Diff.collapsed(st).firstOrNull { it.id == key.id } ?: return
     val ink = theme.foreground.copy(alpha = 0.7f)
     val small = TextStyle(color = ink, fontSize = (theme.fontSizeSp * 0.85f).sp, fontFamily = theme.fontFamily)
     val step = Diff.sideModel(st)?.config?.expandStep ?: 20
@@ -96,8 +131,10 @@ private fun WidgetScope.CollapsedRow(key: WidgetKey) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        val label = "⋯ $n unchanged ${if (n == 1) "line" else "lines"}"
-        BasicText(label, Modifier.press("Show $n unchanged lines") { Diff.expand(editor, run, Expand.ALL) }, style = small)
+        val what = if (run.hasChanges) "" else "unchanged "
+        val threads = if (run.comments > 0) " · ${run.comments} ${if (run.comments == 1) "thread" else "threads"}" else ""
+        val label = "⋯ $n $what${if (n == 1) "line" else "lines"}$threads"
+        BasicText(label, Modifier.press("Show $n ${what}lines$threads") { Diff.expand(editor, run, Expand.ALL) }, style = small)
         val link = small.copy(color = accent(theme))
         if (!run.atStart && n > step) BasicText("↓ $step", Modifier.press("Show $step more lines below") { Diff.expand(editor, run, Expand.DOWN) }.padding(horizontal = 4.dp).testTag("diff-expand-down"), style = link)
         if (!run.atEnd && n > step) BasicText("↑ $step", Modifier.press("Show $step more lines above") { Diff.expand(editor, run, Expand.UP) }.padding(horizontal = 4.dp).testTag("diff-expand-up"), style = link)

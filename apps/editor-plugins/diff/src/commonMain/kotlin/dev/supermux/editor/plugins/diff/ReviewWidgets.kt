@@ -20,6 +20,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +54,9 @@ fun Review.registerWidgets(registry: WidgetRegistry) {
     registry.register(THREAD) { key -> ThreadBlock(key) }
     registry.register(COMPOSER) { key -> ComposerBlock(key) }
 }
+
+/** How long the composer's typing must stop before its draft goes to the host. */
+const val DRAFT_DEBOUNCE_MS = 300L
 
 /** Test tags of the review widgets. */
 object ReviewTags {
@@ -183,11 +188,14 @@ private fun WidgetScope.ComposerBlock(key: WidgetKey) {
         withFrameNanos {}
         runCatching { focus.requestFocus() }
     }
+    // The draft is the state's at once; the host hears it debounced (300 ms), and before a close or submit.
+    val reported = remember(key.id) { arrayOf(c.draft) }
+    fun flush() { val t = text.text.toString(); if (t != reported[0]) { reported[0] = t; Review.reportDraft(editor, t) } }
     LaunchedEffect(text) {
-        snapshotFlow { text.text.toString() }.collect { Review.typed(editor, it) }
+        snapshotFlow { text.text.toString() }.collectLatest { Review.typed(editor, it); delay(DRAFT_DEBOUNCE_MS); flush() }
     }
-    fun submit() { if (Review.submit(editor, text.text.toString())) focusEditor() }
-    fun cancel() { Review.cancel(editor); focusEditor() }
+    fun submit() { flush(); if (Review.submit(editor, text.text.toString())) focusEditor() }
+    fun cancel() { flush(); Review.cancel(editor); focusEditor() }
     Card(p, "review-composer-card") {
         ProseField(p, text, "Leave a comment…", ReviewTags.COMPOSER_FIELD, 3, Modifier.fillMaxWidth().heightIn(min = 48.dp), onSend = ::submit, onEscape = ::cancel, fieldModifier = Modifier.focusRequester(focus))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {

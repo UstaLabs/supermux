@@ -98,45 +98,79 @@ internal object Splice {
  */
 object UnifiedPatch {
     /**
-     * The base text: [working] with [patch] applied in reverse (its `+` lines taken out, its `-`
-     * lines put back), for a patch of ONE file whose new side is [working]. Lines outside the hunks
-     * are the working copy's. Throws [IllegalArgumentException] when a hunk's context does not match.
+     * The base text: [working] with [patch] applied in reverse, for a patch of ONE file whose new
+     * side is [working]. Each hunk's body is exactly what its `@@ -a,b +c,d @@` header counts (so a
+     * removed `-- comment` line, `--- comment` in the patch, or an added `++ x` is body, never a
+     * file header); a `\ No newline at end of file` marker applies to the side of the line it
+     * follows. Lines outside the hunks are the working copy's. Throws [IllegalArgumentException]
+     * when a hunk does not match the working copy (its context or added lines), is shorter than its
+     * header, or the patch holds a second file.
      */
     fun base(working: String, patch: String): String {
-        val w = working.split('\n')
-        val out = ArrayList<String>(w.size)
-        var at = 0 // next working line (0-based)
-        var inHunk = false
-        for (raw in patch.trimEnd('\n').split('\n')) {
-            if (raw.startsWith("@@")) {
-                val start = HEADER.find(raw)?.groupValues?.get(1)?.toIntOrNull() ?: throw IllegalArgumentException("bad hunk header: $raw")
-                val count = HEADER.find(raw)?.groupValues?.get(2)?.takeIf { it.isNotEmpty() }?.toIntOrNull() ?: 1
-                // "+0,0": an insertion into an empty file starts before line 1.
-                val from = if (count == 0) start else start - 1
-                require(from >= at && from <= w.size) { "hunk at line $start is out of order or beyond the text" }
-                while (at < from) out += w[at++]
-                inHunk = true
-                continue
-            }
-            if (!inHunk || raw.startsWith("\\")) continue
-            if (raw.startsWith("diff ") || raw.startsWith("--- ") || raw.startsWith("+++ ")) { inHunk = false; continue }
-            when (raw.firstOrNull()) {
-                ' ', null -> {
-                    val text = if (raw.isEmpty()) "" else raw.substring(1)
-                    require(at < w.size && w[at] == text) { "context line ${at + 1} does not match: '$text'" }
-                    out += w[at++]
+        // Lines as git counts them: text + whether a newline ends it.
+        val w = gitLines(working)
+        val out = ArrayList<Pair<String, Boolean>>(w.size)
+        var at = 0
+        val lines = patch.split('\n').let { if (patch.endsWith("\n")) it.dropLast(1) else it }
+        var i = 0
+        var files = 0
+        var hunks = 0
+        while (i < lines.size) {
+            val raw = lines[i]
+            if (raw.startsWith("diff --git ")) { files++; require(files <= 1 || hunks == 0) { "the patch holds more than one file" }; i++; continue }
+            if (!raw.startsWith("@@")) { i++; continue }
+            val m = HEADER.find(raw) ?: throw IllegalArgumentException("bad hunk header: $raw")
+            val oldCount = m.groupValues[2].ifEmpty { "1" }.toInt()
+            val newStart = m.groupValues[3].toInt()
+            val newCount = m.groupValues[4].ifEmpty { "1" }.toInt()
+            // "+0,0": nothing on the new side, the hunk sits before line 1.
+            val from = if (newCount == 0) newStart else newStart - 1
+            require(from >= at && from <= w.size) { "hunk at line $newStart is out of order or beyond the text" }
+            while (at < from) out += w[at++]
+            hunks++
+            i++
+            var oldLeft = oldCount
+            var newLeft = newCount
+            var last = ' '
+            while (i < lines.size && (oldLeft > 0 || newLeft > 0 || lines[i].startsWith("\\"))) {
+                val l = lines[i]
+                val tag = l.firstOrNull() ?: ' '
+                val text = if (l.isEmpty()) "" else l.substring(1)
+                when (tag) {
+                    ' ' -> {
+                        require(oldLeft > 0 && newLeft > 0) { "hunk at line $newStart is longer than its header" }
+                        require(at < w.size && w[at].first == text) { "context line ${at + 1} does not match: '$text'" }
+                        out += text to w[at].second
+                        at++; oldLeft--; newLeft--
+                    }
+                    '-' -> { require(oldLeft > 0) { "hunk at line $newStart removes more than its header" }; out += text to true; oldLeft-- }
+                    '+' -> {
+                        require(newLeft > 0) { "hunk at line $newStart adds more than its header" }
+                        require(at < w.size && w[at].first == text) { "added line ${at + 1} does not match: '$text'" }
+                        at++; newLeft--
+                    }
+                    '\\' -> {
+                        // "\ No newline at end of file": the line before it has none, on its side(s).
+                        if (last == '-' || last == ' ') out[out.size - 1] = out.last().first to false
+                        if (last == '+' || last == ' ') require(at > 0 && !w[at - 1].second) { "the working copy's last line ends with a newline, the patch says it does not" }
+                    }
+                    else -> throw IllegalArgumentException("unexpected line in a hunk: '$l'")
                 }
-                '-' -> out += raw.substring(1)
-                '+' -> {
-                    require(at < w.size && w[at] == raw.substring(1)) { "added line ${at + 1} does not match: '${raw.substring(1)}'" }
-                    at++
-                }
-                else -> inHunk = false
+                if (tag != '\\') last = tag
+                i++
             }
+            require(oldLeft == 0 && newLeft == 0) { "hunk at line $newStart is shorter than its header" }
         }
         while (at < w.size) out += w[at++]
-        return out.joinToString("\n")
+        return buildString { for ((t, nl) in out) { append(t); if (nl) append('\n') } }
     }
 
-    private val HEADER = Regex("""^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d*))? @@""")
+    private fun gitLines(text: String): List<Pair<String, Boolean>> {
+        if (text.isEmpty()) return emptyList()
+        val parts = text.split('\n')
+        return if (text.endsWith("\n")) parts.dropLast(1).map { it to true }
+        else parts.dropLast(1).map { it to true } + (parts.last() to false)
+    }
+
+    private val HEADER = Regex("""^@@ -(\d+)(?:,(\d*))? \+(\d+)(?:,(\d*))? @@""")
 }
