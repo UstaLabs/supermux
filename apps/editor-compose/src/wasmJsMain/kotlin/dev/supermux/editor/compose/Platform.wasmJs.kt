@@ -30,6 +30,7 @@ internal actual fun installFastTyping(view: EditorView, controller: EditorContro
     // label): per editor, never a page global, so several editors (and plain inputs) share a page.
     val st = newWebInputState()
     controller.platformInput = st
+    controller.fieldSync.platformAhead = { text -> domAhead(st, text) }
     val handle = installListeners(
         st = st,
         onKey = { e ->
@@ -43,12 +44,19 @@ internal actual fun installFastTyping(view: EditorView, controller: EditorContro
             if (!view.focused || controller.composing) false
             else { controller.fieldSync.onDomInsert(start, end, data).let { u -> controller.fieldWriter?.invoke(u) }; true }
         },
+        fieldText = { controller.fieldSync.current().text },
     )
     return {
         removeListeners(handle)
         if (controller.platformInput === st) controller.platformInput = null
+        controller.fieldSync.platformAhead = null
     }
 }
+
+/** This editor's TEXTAREA is composing, or holds text other than [text] (the field has not caught up). */
+private fun domAhead(st: JsAny, text: String): Boolean = js(
+    "(() => { const t = st.ta; if (!t || !t.isConnected || t.__editorState !== st) return false; return st.composing || t.value !== text; })()"
+)
 
 /** The key-down is aimed at Compose's own text input: the TEXTAREA in the canvas's shadow root. */
 private fun aimedAtEditorField(e: JsAny): Boolean = js(
@@ -115,7 +123,7 @@ private fun newWebInputState(): JsAny = js(
     })()"""
 )
 
-private fun installListeners(st: JsAny, onKey: (JsAny) -> Int, onCopy: (Boolean) -> String?, onPaste: (String) -> Boolean, focused: () -> Boolean, onInsert: (Int, Int, String) -> Boolean): JsAny = js(
+private fun installListeners(st: JsAny, onKey: (JsAny) -> Int, onCopy: (Boolean) -> String?, onPaste: (String) -> Boolean, focused: () -> Boolean, onInsert: (Int, Int, String) -> Boolean, fieldText: () -> String): JsAny = js(
     """(() => {
       // A mouse press focuses the CANVAS by default, after Compose moved the focus to its TEXTAREA
       // for the editor's input session: give it back, or the next keys and IME text go nowhere.
@@ -167,6 +175,20 @@ private fun installListeners(st: JsAny, onKey: (JsAny) -> Int, onCopy: (Boolean)
         if (e.inputType !== 'insertReplacementText') st.resync();
       };
       const cstart = (e) => { if (!mine(e)) return; st.resync(); st.composing = true; };
+      // Compose web turns every document 'selectionchange' into a SetSelectionCommand from the
+      // TEXTAREA's caret. After an IME edit the browser moves that caret (にk: 114 -> 115) BEFORE
+      // Compose has processed the edit (it does at its next frame): taken first, the new caret was
+      // applied over the OLD text and the edit then landed at it, one unit right (webInputTest
+      // "IME composition lands at the caret", about 1 run in 30, a real IME the same). While the
+      // TEXTAREA's value is ahead of the field Compose reported, the caret move is stale: Compose
+      // never sees it, applies the edit at its own caret, and the caret is synced from that.
+      const selChange = () => {
+        const ta = st.ta;
+        if (!ta || !ta.isConnected || ta.__editorState !== st || st.deepActive() !== ta) return false;
+        return ta.value !== fieldText();
+      };
+      const onSelChange = (e) => { if (selChange()) e.stopImmediatePropagation(); };
+      window.addEventListener('selectionchange', onSelChange, true);
       const cend = (e) => { if (st.isMine(e)) st.composing = false; };
       window.addEventListener('compositionstart', cstart, true);
       window.addEventListener('compositionend', cend, true);
@@ -177,7 +199,7 @@ private fun installListeners(st: JsAny, onKey: (JsAny) -> Int, onCopy: (Boolean)
       window.addEventListener('copy', onCopyEvent, true);
       window.addEventListener('cut', onCutEvent, true);
       window.addEventListener('paste', paste, true);
-      return { key, pointer, onCopyEvent, onCutEvent, paste, cstart, cend, beforeInput, refocus };
+      return { key, pointer, onCopyEvent, onCutEvent, paste, cstart, cend, beforeInput, refocus, onSelChange };
     })()"""
 )
 
@@ -187,7 +209,8 @@ private fun removeListeners(h: JsAny) {
          window.removeEventListener('copy', h.onCopyEvent, true); window.removeEventListener('cut', h.onCutEvent, true);
          window.removeEventListener('paste', h.paste, true);
          window.removeEventListener('compositionstart', h.cstart, true); window.removeEventListener('compositionend', h.cend, true);
-         window.removeEventListener('beforeinput', h.beforeInput, true); window.removeEventListener('pointerup', h.refocus, true); }"""
+         window.removeEventListener('beforeinput', h.beforeInput, true); window.removeEventListener('pointerup', h.refocus, true);
+         window.removeEventListener('selectionchange', h.onSelChange, true); }"""
     )
 }
 

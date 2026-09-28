@@ -229,6 +229,13 @@ internal class FieldSync(
     var composition: IntRange? = null
         private set
 
+    /**
+     * The platform's text input is AHEAD of this field (the web: its TEXTAREA composes, or holds text
+     * the field has not reported yet), given the field's text: a selection-only change then is stale
+     * (the new caret over the old text) and is not followed; the edit comes next with its own caret.
+     */
+    var platformAhead: ((String) -> Boolean)? = null
+
     /** What the platform field holds, as last reported or written. */
     private var shown: FieldText? = null
 
@@ -347,7 +354,10 @@ internal class FieldSync(
             // Only the caret moved (an IME cursor gesture): follow it, unless mid-composition. The
             // echo of a selection this class wrote (clamped to the window) is not a move.
             val moved = before != null && (before.selStart != selStart || before.selEnd != selEnd)
-            if (composition == null && moved) {
+            // On the web, Compose can report the TEXTAREA's caret after an IME's edit BEFORE that
+            // edit's text (the DOM's selectionchange first): following it put the caret one unit
+            // right, and the composition's text landed there (webInputTest, 1 run in 30).
+            if (composition == null && moved && platformAhead?.invoke(w.text) != true) {
                 val sel = SelectionRange(w.toDoc(selStart), w.toDoc(selEnd))
                 val st = view.state
                 if (st.selection.ranges.size != 1 || st.selection.main != sel) {
@@ -638,9 +648,11 @@ internal fun webKeyPath(view: EditorView, composing: Boolean, f: WebKeyFacts, st
 internal fun runBindings(view: EditorView, chord: KeyChord, apple: Boolean, altGrChar: Boolean = false): Boolean {
     val altGr = !apple && altGrChar && chord.ctrl && chord.alt
     fun matches(b: KeyBinding) = b.chord(apple) == chord && (!altGr || b.key.contains("Ctrl"))
+    // A command that throws consumes its key and changes nothing more (never a crash).
+    fun run(b: KeyBinding) = view.guarded("key binding ${b.key}", true) { b.command.run(view) }
     return view.runningCommand(key = true) {
-        view.state.facet(keymapFacet).any { b -> matches(b) && b.command.run(view) } ||
-            defaultBindings(apple).any { b -> matches(b) && b.command.run(view) }
+        view.state.facet(keymapFacet).any { b -> matches(b) && run(b) } ||
+            defaultBindings(apple).any { b -> matches(b) && run(b) }
     }
 }
 

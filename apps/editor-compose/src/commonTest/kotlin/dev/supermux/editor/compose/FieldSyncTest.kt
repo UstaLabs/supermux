@@ -354,6 +354,26 @@ class FieldSyncTest {
         h.assertInSync()
     }
 
+    @Test fun aCaretMoveReportedAheadOfItsTextIsNotFollowed() {
+        // The web race: the IME typed at 4, the TEXTAREA's caret moved to 5, and Compose reported the
+        // NEW caret over the OLD text first. Following it put the composition one unit right.
+        val h = Harness("abcdefgh", 4)
+        var ahead = true
+        h.sync.platformAhead = { ahead }
+        val t = h.field.text
+        h.ime(t, h.field.selStart + 1)
+        assertEquals(4, h.head, "a stale caret move was followed")
+        // The composition's text then arrives with its own caret: it lands at the real caret.
+        h.ime(t.substring(0, 4) + "に" + t.substring(4), 5, composition = 4..4)
+        assertEquals("abcdにefgh", h.doc)
+        // Without the platform ahead, a caret move (an IME cursor gesture) is followed as before.
+        ahead = false
+        val k = Harness("abcdefgh", 4)
+        k.sync.platformAhead = { ahead }
+        k.ime(k.field.text, k.field.selStart + 2)
+        assertEquals(6, k.head)
+    }
+
     private fun Harness.cursors(vararg at: Int) =
         view.dispatch(dev.supermux.editor.core.TransactionSpec(selection = EditorSelection.create(at.map { SelectionRange(it) }, 0)))
 

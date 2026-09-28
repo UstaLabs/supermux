@@ -82,9 +82,12 @@ async function launchChrome(headed) {
   return {
     port,
     async close() {
+      // Wait for Chrome to EXIT (its helpers write into the profile while they shut down) before
+      // removing the profile: a fixed sleep lost that race (ENOTEMPTY in rmSync).
+      const exited = proc.exitCode !== null || proc.signalCode !== null ? Promise.resolve() : new Promise((r) => proc.once('exit', r));
       proc.kill();
-      await sleep(300);
-      fs.rmSync(profile, { recursive: true, force: true });
+      await exited;
+      fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     },
   };
 }
@@ -202,6 +205,16 @@ try {
       await insertedAtCaret('Input.insertText lands at the caret', () => page.send('Input.insertText', { text: 'ğüş' }), 'ğüş');
       for (let i = 0; i < 5; i++) await key('ArrowLeft', 'ArrowLeft', 37);
       await insertedAtCaret('after the editor moved the caret, insertText follows it', () => page.send('Input.insertText', { text: 'X' }), 'X');
+      // Trace the DOM around the composition (printed when the check fails): the TEXTAREA's events
+      // with its value and selection, frames, and the editor's own transactions and key paths.
+      await page.value(`(() => { window.__trace = []; const roots = [document]; for (let i = 0; i < roots.length; i++) for (const el of roots[i].querySelectorAll('*')) if (el.shadowRoot) roots.push(el.shadowRoot);
+        let t = null; for (const r of roots) t = t || r.querySelector('textarea');
+        const at = () => t.selectionStart + '-' + t.selectionEnd + ' ' + JSON.stringify(t.value.slice(Math.max(0, t.selectionStart - 4), t.selectionStart + 4));
+        for (const type of ['keydown', 'keyup', 'beforeinput', 'input', 'compositionstart', 'compositionupdate', 'compositionend', 'select', 'focus', 'blur'])
+          t.addEventListener(type, (e) => window.__trace && window.__trace.push(performance.now().toFixed(1) + ' dom ' + type + ' ' + (e.inputType || '') + ' ' + JSON.stringify(e.data ?? e.key ?? '') + ' | ' + at()), true);
+        document.addEventListener('selectionchange', () => window.__trace && window.__trace.push(performance.now().toFixed(1) + ' dom selectionchange | ' + at()));
+        const frame = () => { if (!window.__trace) return; window.__trace.push(performance.now().toFixed(1) + ' frame | ' + at()); requestAnimationFrame(frame); }; requestAnimationFrame(frame);
+        return true; })()`);
       await key('ArrowUp', 'ArrowUp', 38);
       await insertedAtCaret('IME composition lands at the caret', async () => {
         await page.send('Input.imeSetComposition', { text: 'に', selectionStart: 1, selectionEnd: 1 });
@@ -210,6 +223,8 @@ try {
         await sleep(100);
         await page.send('Input.insertText', { text: '日本' });
       }, '日本');
+      if (failed || flag('--trace')) console.log('TRACE (key ArrowUp before it, then the composition):\n  ' + (await page.value('window.__trace.join("\\n  ")')));
+      await page.value('window.__trace = null');
       await key('Home', 'Home', 36);
       await insertedAtCaret('a paste event pastes at the caret', () => page.value(`(() => { const dt = new DataTransfer(); dt.setData('text/plain', 'PASTED'); const roots = [document]; for (let i = 0; i < roots.length; i++) for (const el of roots[i].querySelectorAll('*')) if (el.shadowRoot) roots.push(el.shadowRoot);
         let t = null; for (const r of roots) t = t || r.querySelector('textarea'); (t || document).dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, composed: true, cancelable: true })); return !!t; })()`), 'PASTED');

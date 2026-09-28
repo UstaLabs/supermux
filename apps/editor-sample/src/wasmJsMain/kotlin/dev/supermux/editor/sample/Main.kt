@@ -36,6 +36,13 @@ fun main() {
             },
             onPhase = ::phase,
             onView = { v ->
+                // Trace hook (web-bench/run.mjs, only while window.__trace exists): every transaction
+                // and every key's path, next to the DOM events the harness records.
+                v.addListener { tr ->
+                    if (tracing()) trace("tx ${tr.annotation(dev.supermux.editor.core.Transaction.userEvent) ?: "-"} ${tr.changes} sel ${tr.state.selection}" +
+                        (if (tr.annotation(dev.supermux.editor.compose.EditorAnnotations.imeJoinPrevious) == true) " joinPrev" else ""))
+                }
+                v.onKeyPath = { k, p -> if (tracing()) trace("key $k ${p.label}") }
                 // Test hooks (web-bench/input-check.mjs): the document, the main selection, the file.
                 publishHooks(
                     doc = { v.state.doc.toString() },
@@ -47,6 +54,10 @@ fun main() {
         )
     }
 }
+
+private fun tracing(): Boolean = js("!!window.__trace")
+
+private fun trace(line: String) { js("window.__trace && window.__trace.push(performance.now().toFixed(1) + ' ' + line)") }
 
 private fun phase(name: String) { js("if (window.__coldPhase) window.__coldPhase(name)") }
 
