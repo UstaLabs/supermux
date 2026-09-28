@@ -84,6 +84,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
+import dev.supermux.ui.prefs.FILES_REVEAL_ACTIVE_DEFAULT
+import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.editor.engine.EditorScrollReader
 import dev.supermux.fs.FileSystemService
@@ -161,6 +163,9 @@ fun ExplorerPane(
     val activePath = activeRelativePath?.takeIf { it.isNotEmpty() && it != "." }?.let { rel ->
         rel.split('/').filter { it.isNotEmpty() }.fold(workdir) { acc, seg -> childOf(acc, seg) }
     }
+    val prefs = LocalUiPrefs.current
+    val scope = rememberCoroutineScope()
+    val revealActive by prefs.filesRevealActive.collectAsState(FILES_REVEAL_ACTIVE_DEFAULT)
 
     // The tag goes on an INNER node, never on the caller's modifier: two testTag calls on one
     // modifier chain keep the OUTER one, so a pane that tagged `modifier` would be invisible to
@@ -177,7 +182,12 @@ fun ExplorerPane(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            FileTreeHeader(view = view, fileSystem = fileSystem)
+            FileTreeHeader(
+                view = view,
+                fileSystem = fileSystem,
+                revealActive = revealActive,
+                onRevealActiveChange = { on -> scope.launch { prefs.putFilesRevealActive(on) } },
+            )
             HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
             // FileTreeView tags its own list `editor_tree`; the offline hint carries the tag itself
             // so the pane has exactly one `editor_tree` node either way.
@@ -192,6 +202,7 @@ fun ExplorerPane(
                         view = view,
                         onOpenFile = openAbsolute,
                         activePath = activePath,
+                        revealActive = revealActive,
                         compact = !LocalPointerAvailable.current || LocalWindowWidthClass.current == WindowWidthClass.Compact,
                     )
                 }

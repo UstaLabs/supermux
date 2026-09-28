@@ -52,6 +52,9 @@ const val SIDEBAR_WIDTH_DEFAULT = 320f
 /** Desktop Changes pane starts as a nested folder tree. */
 const val EDITOR_DIFF_TREE_VIEW_DEFAULT = true
 
+/** The Files tree reveals the active editor file by default. */
+const val FILES_REVEAL_ACTIVE_DEFAULT = true
+
 /**
  * Typed accessors over the persisted UI preferences. One `Flow` read + one `suspend put` per
  * value; the reads carry the same defaults the two apps used before the move, so nothing changes
@@ -85,6 +88,13 @@ class UiPrefs(private val settings: SettingsStore) {
 
     suspend fun putEditorDiffTreeView(value: Boolean) =
         settings.putString(SettingsKeys.EDITOR_DIFF_TREE_VIEW, value.toString())
+
+    /** Files tree: expand to and select the active editor file. */
+    val filesRevealActive: Flow<Boolean> =
+        settings.string(SettingsKeys.FILES_REVEAL_ACTIVE).map { it?.toBooleanStrictOrNull() ?: FILES_REVEAL_ACTIVE_DEFAULT }
+
+    suspend fun putFilesRevealActive(value: Boolean) =
+        settings.putString(SettingsKeys.FILES_REVEAL_ACTIVE, value.toString())
 
     /** Chat transcript density (web `cmux:chat-detail` parity). Unknown/absent → MEDIUM. */
     val chatDetailLevel: Flow<ChatDetailLevel> =

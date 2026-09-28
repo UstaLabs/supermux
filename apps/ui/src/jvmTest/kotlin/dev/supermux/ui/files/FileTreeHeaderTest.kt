@@ -89,4 +89,29 @@ class FileTreeHeaderTest {
         waitForIdle()
         assertEquals("/home/u/p/q", view.rootPath)
     }
+
+    @Test fun theMenuTogglesRevealActiveFile() = runComposeUiTest {
+        val fs = FileSystemService(
+            BrokerApi("http://h", "t", HttpClient(MockEngine { respond("{}") })),
+            send = {},
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            graceMs = 0,
+        )
+        val view = TreeViewState("/w")
+        val changes = mutableListOf<Boolean>()
+        setContent(host { FileTreeHeader(view, fs, revealActive = true, onRevealActiveChange = { changes += it }) })
+        onNodeWithTag("tree_menu").performClick()
+        waitForIdle()
+        onNodeWithText("Reveal active file").assertIsDisplayed()
+        onNodeWithTag("tree_menu_reveal_active").performClick()
+        waitForIdle()
+        assertEquals(listOf(false), changes)
+        onNodeWithText("Reveal active file").assertDoesNotExist()
+    }
+
+    @Test fun noMenuWithoutAToggleCallback() = runComposeUiTest {
+        val view = TreeViewState("/w")
+        setContent(host { FileTreeHeader(view, null) })
+        onNodeWithTag("tree_menu").assertDoesNotExist()
+    }
 }

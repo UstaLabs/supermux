@@ -165,6 +165,28 @@ class FileTreeViewTest {
         onNodeWithTag("tree_row:x.kt").assertIsDisplayed()
     }
 
+    @Test fun activePathSubscribesItsAncestorsAndSelectsIt() = runComposeUiTest {
+        val sent = mutableListOf<ClientFrame>()
+        val fs = service(sent)
+        val view = TreeViewState("/w")
+        setContent(host { FileTreeView(fs, view, onOpenFile = {}, activePath = "/w/src/ui/A.kt") })
+        waitForIdle()
+        val frames = sentCopy(sent)
+        assertTrue(ClientFrame.FsSub("/w/src") in frames && ClientFrame.FsSub("/w/src/ui") in frames)
+        assertEquals("/w/src/ui/A.kt", view.selected)
+    }
+
+    @Test fun revealActiveOffLeavesTheTreeAlone() = runComposeUiTest {
+        val sent = mutableListOf<ClientFrame>()
+        val fs = service(sent)
+        val view = TreeViewState("/w")
+        setContent(host { FileTreeView(fs, view, onOpenFile = {}, activePath = "/w/src/ui/A.kt", revealActive = false) })
+        waitForIdle()
+        assertTrue(ClientFrame.FsSub("/w/src") !in sentCopy(sent))
+        assertEquals(emptySet(), view.expanded)
+        assertEquals(null, view.selected)
+    }
+
     @Test fun theChevronCollapsesAFailedFolderWhileTheRowRetries() = runComposeUiTest {
         val sent = mutableListOf<ClientFrame>()
         val fs = service(sent)

@@ -72,6 +72,10 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.chat.rememberChatActions
 import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.editor.WalkthroughState
+import dev.supermux.ui.files.activeFilePath
+import dev.supermux.ui.files.filePathOrNull
+import dev.supermux.ui.files.isFilesTreeView
+import dev.supermux.ui.files.nextFocusedFileView
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
@@ -201,6 +205,7 @@ fun WorkspacePanes(
     var walkthroughSessionId by remember(current.id) { mutableStateOf<String?>(null) }
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
+    TrackFocusedFileView(ws)
 
     PaneHost(
         layout = layout,
@@ -275,6 +280,7 @@ fun WorkspacePanes(
                         }
                     }
                 } else {
+                    Box(Modifier.observePress(itemId) { ws.focusedFileViewId = itemId }) {
                     WorkspaceFileTab(
                         itemId = itemId,
                         title = filePath.substringAfterLast('/'),
@@ -290,6 +296,7 @@ fun WorkspacePanes(
                         onClose = { _ -> onCloseCandidate(v) },
                         onMoveToNewWindow = { onTearOutTab(itemId) },
                     )
+                    }
                 }
             }
         },
@@ -634,12 +641,10 @@ private fun WorkspacePaneContent(
                 drafts = drafts,
                 documents = documents,
                 treeStates = ws.treeStates,
-                // The first group (in layout order) whose active tab is a document — cheap, and
-                // good enough until Task 7 tracks the focused group.
-                activeFilePath = if (v.kind == "editor") {
-                    collectActiveViewIds(layoutSync.tree).firstNotNullOfOrNull { id ->
-                        viewsById[id]?.takeIf { it.kind == "editor" && it.stateString("mode") == "file" }?.stateString("path")
-                    }
+                // Only a Files (tree) pane reads it: the file the user last worked in, else the
+                // first group (layout order) showing a file.
+                activeFilePath = if (v.isFilesTreeView()) {
+                    activeFilePath(layoutSync.tree, viewsById, ws.focusedFileViewId)
                 } else null,
                 onOpenFile = { p, line, endLine ->
                     fileOpener.open(
@@ -690,8 +695,40 @@ private fun WorkspacePaneContent(
                 pasteImageFor = ui.selectedId,
                 pasteImageRequestNonce = ui.pasteImageRequestNonce,
                 onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().then(
+                    // A press anywhere in a file pane makes it the file the Files tree follows. (The
+                    // desktop JCEF editor is heavyweight and never reports presses; its tab does.)
+                    if (v.filePathOrNull() != null) Modifier.observePress(viewId) { ws.focusedFileViewId = viewId } else Modifier,
+                ),
             )
+        }
+    }
+}
+
+/**
+ * Keeps [WorkspaceSession.focusedFileViewId] on the file the user last activated: a file tab that
+ * just became active in its group (a tab click, a file opened from the tree) takes over.
+ */
+@Composable
+private fun TrackFocusedFileView(ws: WorkspaceSession) {
+    val tree = ws.layoutSync.tree
+    val activeIds = remember(tree) { collectActiveViewIds(tree) }
+    val previous = remember(ws) { arrayOf<List<String>>(emptyList()) }
+    val views = ws.viewsById
+    LaunchedEffect(ws, activeIds, views) {
+        ws.focusedFileViewId = nextFocusedFileView(previous[0], activeIds, views, ws.focusedFileViewId)
+        // Only ids whose view is known: one whose row lands later still counts as "newly active".
+        previous[0] = activeIds.filter { it in views }
+    }
+}
+
+/** Runs [onPress] on every press inside this element without consuming anything. */
+private fun Modifier.observePress(key: Any?, onPress: () -> Unit): Modifier = composed {
+    val latest by rememberUpdatedState(onPress)
+    pointerInput(key) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            latest()
         }
     }
 }

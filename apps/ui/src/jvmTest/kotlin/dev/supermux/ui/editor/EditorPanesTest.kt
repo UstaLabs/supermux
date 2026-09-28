@@ -27,6 +27,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import androidx.compose.ui.test.performClick
 import dev.supermux.fs.FileSystemService
 import dev.supermux.net.BrokerApi
@@ -124,6 +130,35 @@ class EditorPanesTest {
         onNodeWithTag("tree_workspace_chip").performClick()
         waitForIdle()
         assertEquals("/w", view.rootPath)
+    }
+
+    @Test
+    fun the_explorer_reveals_the_active_file_until_the_menu_turns_it_off() = runComposeUiTest {
+        val prefs = UiPrefs(InMemorySettingsStore())
+        val view = TreeViewState("/w")
+        var active by mutableStateOf<String?>("src/a.kt")
+        setContent {
+            CompositionLocalProvider(
+                LocalUiPrefs provides prefs,
+                LocalPlatform provides FakePlatform(caps = NO_CAPS, editorEngine = FakeEditorEngineFactory()),
+            ) {
+                SupermuxTheme(appearance = AppearanceMode.DARK) {
+                    ExplorerPane(fileSystem = fakeFs(), view = view, workdir = "/w", onOpenFile = {}, activeRelativePath = active)
+                }
+            }
+        }
+        waitForIdle()
+        assertEquals("/w/src/a.kt", view.selected)
+        assertTrue("/w/src" in view.expanded)
+
+        onNodeWithTag("tree_menu").performClick()
+        waitForIdle()
+        onNodeWithTag("tree_menu_reveal_active").performClick()
+        waitUntil(timeoutMillis = 5_000) { runBlocking { !prefs.filesRevealActive.first() } }
+        active = "lib/b.kt"
+        waitForIdle()
+        assertEquals("/w/src/a.kt", view.selected)
+        assertTrue("/w/lib" !in view.expanded)
     }
 
     private fun fakeFs() = FileSystemService(

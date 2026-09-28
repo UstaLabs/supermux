@@ -5,6 +5,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -32,7 +35,13 @@ class WorkspaceSession(
     val newId: () -> String = { "" },
     /** Per-view Files-tree state (open folders, root, selection, scroll), outliving the panes. */
     val treeStates: TreeViewStates = TreeViewStates(),
-)
+) {
+    /**
+     * The `file` view the user last worked in (pressed its tab or pane, or it just became active in
+     * its group) — what the Files tree reveals. See `dev.supermux.ui.files.activeFilePath`.
+     */
+    var focusedFileViewId by mutableStateOf<String?>(null)
+}
 
 /**
  * The broker ALWAYS wins on a collision — its row is the real one, and ours
