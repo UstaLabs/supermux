@@ -65,3 +65,6 @@ include(":editor-plugins:search")
 // The native editor's M4c plugins: autocompletion, lint (diagnostics), the LSP client.
 include(":editor-plugins:autocomplete")
 include(":editor-plugins:lint")
+include(":editor-plugins:lsp")
+// The in-process toy language server the LSP plugin's tests and the sample run against (never a production host's).
+include(":editor-plugins:lsp-fake")
