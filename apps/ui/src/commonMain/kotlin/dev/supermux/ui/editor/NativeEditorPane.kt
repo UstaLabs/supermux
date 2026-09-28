@@ -52,13 +52,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Give [documents] native views for as long as this composition lives, on [scope] (the owner's UI
- * scope: plugins, syntax hosts and LSP clients run there). Idempotent: a store another composition
- * already equipped keeps its environment. False when the native editor is switched off
- * ([NativeEditor.enabled]).
+ * Give [documents] native views, on [scope]: by default the store's own (its owner's UI scope, the
+ * one it was made with: the workspace session's, a panel's), so the views, their plugins, syntax
+ * hosts and LSP clients live as long as the store and not as long as the pane that asked first.
+ * Idempotent: a store already equipped keeps its environment. False when the native editor is
+ * switched off ([NativeEditor.enabled]).
  */
 @Composable
-fun rememberNativeDocuments(documents: DocumentStore, scope: CoroutineScope = rememberCoroutineScope()): Boolean {
+fun rememberNativeDocuments(documents: DocumentStore, scope: CoroutineScope = documents.ownerScope): Boolean {
     if (!NativeEditor.enabled) return false
     val syntax = LocalPlatform.current.editorSyntax
     remember(documents) {

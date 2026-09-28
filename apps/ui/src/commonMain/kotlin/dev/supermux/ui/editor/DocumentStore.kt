@@ -153,6 +153,9 @@ class DocumentStore(
         return LspHub(this, env.scope, env.lspParseOnWorker).also { hub = it }
     }
 
+    /** The scope the store was made with: its owner's (the native views' plugins run on it). */
+    internal val ownerScope: CoroutineScope get() = scope
+
     /** The store's own reader and writer (an LSP edit to a file nobody has open). */
     internal suspend fun readFile(path: String): Result<String> = fsRead(path)
     internal suspend fun writeFile(path: String, text: String): Boolean = fsWrite(path, text)

@@ -597,7 +597,6 @@ private fun rememberWorkspaceDocuments(actions: ShellActions, workspaceId: Strin
             scope = scope,
         )
     }
-    dev.supermux.ui.editor.rememberNativeDocuments(store, scope)
     androidx.compose.runtime.DisposableEffect(store) { onDispose { store.disposeNative() } }
     return store
 }

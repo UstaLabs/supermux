@@ -68,6 +68,7 @@ import dev.supermux.net.WalkthroughStep
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.prefs.LocalUiPrefs
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 /** The diff views' widget content: expanders, deleted lines, threads, the composer, the search panel. */
@@ -183,7 +184,12 @@ internal fun NativeWalkthroughRegion(
         }
         state.position(anchor)?.let(view::restoreScroll)
     }
-    DisposableEffect(view, anchor) { onDispose { state.setPosition(anchor, view.scrollPosition) } }
+    // Kept as the view scrolls (a laid-out range that moved), not on dispose: by then the surface
+    // may already have left and the position would read as the top. After the restore above.
+    LaunchedEffect(view, anchor) {
+        // drop(1): the replayed value is the PREVIOUS step's range (the restore is still pending).
+        view.viewport.drop(1).collect { r -> if (!r.isEmpty()) state.setPosition(anchor, view.scrollPosition) }
+    }
     val threads = remember(state.comments, repo, path) { reviewThreads(state.comments, repo, path) }
     LaunchedEffect(view, threads) { Review.setThreads(view, threads) }
     LaunchedEffect(view, fontSize) { ViewSettings.update(view) { it.copy(fontSize = fontSize.toFloat()) } }

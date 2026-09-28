@@ -90,7 +90,6 @@ fun rememberWorkspaceSession(
     }
     // The native editor's views live as long as the store, not as long as a pane (M5): they go
     // with it, so every language server gets its didClose and every syntax worker is freed.
-    dev.supermux.ui.editor.rememberNativeDocuments(documents, overlayScope)
     androidx.compose.runtime.DisposableEffect(documents) { onDispose { documents.disposeNative() } }
 
     // Opening a file is a layout edit plus a POST that carries the id

@@ -223,8 +223,7 @@ fun FilePane(
     // path still issue ONE fsRead.
     LaunchedEffect(path) { documents.open(path) }
     val doc = documents.get(path)
-    // The owner (the workspace) gives its store native views on ITS scope; a store nobody equipped
-    // gets them on this pane's (they then live as long as the pane).
+    // Native views on the STORE's scope (the workspace's), never this pane's: they outlive it.
     val nativeEditor = rememberNativeDocuments(documents)
 
     val reader = remember { EditorScrollReader() }
