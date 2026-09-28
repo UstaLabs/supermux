@@ -39,6 +39,8 @@ export function buildNamingRule(name: string): string {
     `On your FIRST substantive turn, as soon as you know what this session is for, ` +
     `rename it to something descriptive by calling the \`rename_session\` tool. ` +
     `Don't keep working under the placeholder name. You may rename only ONCE — pick a ` +
-    `name that stays accurate for the whole session; a second rename will be rejected.`
+    `name that stays accurate for the whole session; a second rename will be rejected. ` +
+    `This is the main agent's job only: if you are a subagent (started by another agent's ` +
+    `task/spawn tool), never call \`rename_session\` or \`spawn_session\`.`
   )
 }
