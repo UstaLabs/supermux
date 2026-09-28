@@ -181,6 +181,10 @@ class DiffEngineTest {
         assertEquals(listOf("alpha beta" to "one two"), c.map { a.substring(it.aFrom, it.aTo) to b.substring(it.bFrom, it.bTo) })
     }
 
+    @Test fun aRewrittenRunGetsNoCharacterMarks() {
+        assertNull(CharDiff.diff("    scope: CoroutineScope,\n    private val deps: HostStoreDeps,", "    // changed: one run of two lines\n    // became four lines"))
+    }
+
     @Test fun charDiffsAcrossLinesOfAHunk() {
         val a = listOf("x", "fun f(a: Int) {", "    return a", "}", "y")
         val b = listOf("x", "fun f(a: Long) {", "    return a * 2", "}", "y")

@@ -77,9 +77,9 @@ object LineDiff {
         val t = Ticker(pause)
         val ids = HashMap<String, Int>()
         val ai = IntArray(a.size) { ids.getOrPut(a[it]) { ids.size } }
-        t.tick(a.size)
+        if (t.due(a.size)) t.pause()
         val bi = IntArray(b.size) { ids.getOrPut(b[it]) { ids.size } }
-        t.tick(b.size)
+        if (t.due(b.size)) t.pause()
         val d = LineDiffer(ai, bi, ids.size, options.maxCost, t)
         d.run(0, ai.size, 0, bi.size, 0)
         val hunks = ArrayList<DiffHunk>(d.out.size)
@@ -112,7 +112,7 @@ object LineDiff {
  * one replacement), and changes split only by a little whitespace are merged into one.
  */
 object CharDiff {
-    /** The changes from [a] to [b], or null when the run is over the cost cap. */
+    /** The changes from [a] to [b], or null when the run is over the cost cap or rewritten through and through (over 70 % of both sides). */
     fun diff(a: String, b: String, maxCost: Int = DiffOptions().charMaxCost): List<CharChange>? = runNow { compute(a, b, maxCost, Ticker {}) }
 
     private const val REFINE_MAX = 64
@@ -120,9 +120,9 @@ object CharDiff {
     internal suspend fun compute(a: String, b: String, maxCost: Int, t: Ticker): List<CharChange>? {
         val ta = tokens(a)
         val tb = tokens(b)
-        val ids = HashMap<String, Int>()
-        val ia = IntArray(ta.size - 1) { ids.getOrPut(a.substring(ta[it], ta[it + 1])) { ids.size } }
-        val ib = IntArray(tb.size - 1) { ids.getOrPut(b.substring(tb[it], tb[it + 1])) { ids.size } }
+        val ids = Interner(ta.size + tb.size)
+        val ia = IntArray(ta.size - 1) { ids.id(a, ta[it], ta[it + 1]) }
+        val ib = IntArray(tb.size - 1) { ids.id(b, tb[it], tb[it + 1]) }
         val runs = ArrayList<IntArray>()
         if (!Myers.diff(ia, 0, ia.size, ib, 0, ib.size, maxCost, t) { a0, a1, b0, b1 -> runs += intArrayOf(a0, a1, b0, b1) }) return null
         val out = ArrayList<CharChange>()
@@ -135,8 +135,17 @@ object CharDiff {
             }
             out += CharChange(af, aTo, bf, bTo)
         }
-        return merge(a, out)
+        val merged = merge(a, out)
+        // A run rewritten through and through: marking nearly every character says nothing the
+        // line tint does not (the few spaces and colons in common would only fragment the marks).
+        val changedA = merged.sumOf { it.aTo - it.aFrom }
+        val changedB = merged.sumOf { it.bTo - it.bFrom }
+        if (changedA > a.length * REWRITTEN && changedB > b.length * REWRITTEN) return null
+        return merged
     }
+
+    /** More than this share of both sides changed: the run is rewritten, no character marks. */
+    private const val REWRITTEN = 0.7
 
     /** A replaced pair of short runs, character by character, when more than half of it is common. */
     private suspend fun refine(a: String, af: Int, aTo: Int, b: String, bf: Int, bTo: Int, t: Ticker): List<CharChange>? {
@@ -167,10 +176,36 @@ object CharDiff {
         return out
     }
 
+    /** Ids for text ranges, equal text equal id (open addressing; no substring per token). */
+    private class Interner(expected: Int) {
+        // At least twice the tokens: never more than half full, no growing.
+        private val cap = maxOf(16, expected * 2).takeHighestOneBit() * 2
+        private val keys = arrayOfNulls<String>(cap)
+        private val from = IntArray(cap)
+        private val to = IntArray(cap)
+        private val ids = IntArray(cap)
+        private var size = 0
+
+        fun id(s: String, f: Int, t: Int): Int {
+            var h = 0
+            for (i in f until t) h = 31 * h + s[i].code
+            var k = (h xor (h ushr 16)) and (cap - 1)
+            while (true) {
+                val key = keys[k] ?: break
+                if (to[k] - from[k] == t - f && key.regionMatches(from[k], s, f, t - f)) return ids[k]
+                k = (k + 1) and (cap - 1)
+            }
+            keys[k] = s; from[k] = f; to[k] = t; ids[k] = size
+            return size++
+        }
+    }
+
     /** Token boundaries of [s]: 0, each token's end, ..., s.length. */
     private fun tokens(s: String): IntArray {
-        val out = ArrayList<Int>()
-        out += 0
+        var out = IntArray(minOf(s.length, 64) + 2)
+        var n = 0
+        fun add(v: Int) { if (n == out.size) out = out.copyOf(out.size * 2); out[n++] = v }
+        add(0)
         var i = 0
         while (i < s.length) {
             val c = s[i]
@@ -180,10 +215,10 @@ object CharDiff {
                 c == ' ' || c == '\t' -> while (j < s.length && (s[j] == ' ' || s[j] == '\t')) j++
                 c.isHighSurrogate() && j < s.length && s[j].isLowSurrogate() -> j++
             }
-            out += j
+            add(j)
             i = j
         }
-        return out.toIntArray()
+        return out.copyOf(n)
     }
 
     private fun isWord(c: Char) = c.isLetterOrDigit() || c == '_'
@@ -192,9 +227,16 @@ object CharDiff {
 /** Work counting: [pause] every [EVERY] steps (a slice's end, a cancellation check). */
 internal class Ticker(val pause: suspend () -> Unit) {
     private var n = 0
-    suspend fun tick(steps: Int = 1) {
+
+    /**
+     * Count [steps]; true when a pause is due (the caller then calls [pause]). Not a suspend
+     * function itself: a suspend call per Myers step would allocate its continuation every time.
+     */
+    fun due(steps: Int = 1): Boolean {
         n += steps
-        if (n >= EVERY) { n = 0; pause() }
+        if (n < EVERY) return false
+        n = 0
+        return true
     }
 
     companion object { const val EVERY = 8_192 }
@@ -229,7 +271,7 @@ private class LineDiffer(private val a: IntArray, private val b: IntArray, ids: 
         var a0 = a0In; var a1 = a1In; var b0 = b0In; var b1 = b1In
         while (a0 < a1 && b0 < b1 && a[a0] == b[b0]) { a0++; b0++ }
         while (a1 > a0 && b1 > b0 && a[a1 - 1] == b[b1 - 1]) { a1--; b1-- }
-        t.tick(a0 - a0In + a1In - a1)
+        if (t.due(a0 - a0In + a1In - a1)) t.pause()
         if (a0 == a1 || b0 == b1) { emit(a0, a1, b0, b1); return }
         if (depth < MAX_DEPTH && (a1 - a0) + (b1 - b0) > PATIENCE_MIN) {
             val anchors = anchors(a0, a1, b0, b1)
@@ -256,7 +298,7 @@ private class LineDiffer(private val a: IntArray, private val b: IntArray, ids: 
         val g = gen++
         for (i in a0 until a1) { val id = a[i]; if (stamp[id] != g) { stamp[id] = g; countA[id] = 0; countB[id] = 0 }; countA[id]++ }
         for (j in b0 until b1) { val id = b[j]; if (stamp[id] != g) { stamp[id] = g; countA[id] = 0; countB[id] = 0 }; countB[id]++; posB[id] = j }
-        t.tick((a1 - a0) + (b1 - b0))
+        if (t.due((a1 - a0) + (b1 - b0))) t.pause()
         // Candidates in A's order, their B positions: the longest increasing subsequence (patience sort).
         val candA = ArrayList<Int>()
         var common = false
@@ -275,7 +317,7 @@ private class LineDiffer(private val a: IntArray, private val b: IntArray, ids: 
             tails[lo] = x
             if (lo == len) len++
         }
-        t.tick(n)
+        if (t.due(n)) t.pause()
         val out = IntArray(len * 2)
         var x = tails[len - 1]
         for (k in len - 1 downTo 0) { out[2 * k] = candA[x]; out[2 * k + 1] = js[x]; x = prev[x] }
@@ -320,7 +362,7 @@ internal object Myers {
                 v[off + k] = xx
                 if (xx >= n && yy >= m) { found = d; break@loop }
                 k += 2
-                t.tick(1 + xx - sx)
+                if (t.due(1 + xx - sx)) t.pause()
             }
         }
         if (found < 0) return false

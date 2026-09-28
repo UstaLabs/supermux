@@ -33,8 +33,13 @@ data class ReviewComment(val id: String, val author: String, val body: String, v
  */
 data class ReviewThread(val id: String, val line: Int, val resolved: Boolean = false, val comments: List<ReviewComment> = emptyList())
 
-/** An open (or restored) composer on 0-based [line] with its [draft] (today's `DiffRegionComposer`). */
-data class ReviewComposer(val line: Int, val draft: String = "")
+/**
+ * An open (or restored) composer on 0-based [line] with its [draft] (today's `DiffRegionComposer`).
+ * [focus]: it takes the keyboard focus when it appears (on a phone: the keyboard rises), as a
+ * composer the user opens does; false for one a host shows on its own (a walkthrough step opening
+ * with a kept draft).
+ */
+data class ReviewComposer(val line: Int, val draft: String = "", val focus: Boolean = true)
 
 /** [canComment]: the gutter's comment column and the comment command open a composer (a host with no posting hides them). */
 data class ReviewConfig(val canComment: Boolean = true)
@@ -58,7 +63,7 @@ object Review {
     class Anchored internal constructor(val thread: ReviewThread, internal val pos: Int, internal val hostLine: Int)
 
     /** The open composer: its line's start [pos], its [draft] as last typed, and [gen] (a new composer, a new widget). */
-    class Composer internal constructor(internal val pos: Int, val draft: String, internal val gen: Int)
+    class Composer internal constructor(internal val pos: Int, val draft: String, internal val gen: Int, internal val focus: Boolean = true)
 
     /** The review's state: the threads, the composer, the resolved threads the user expanded (per view). */
     class State internal constructor(val threads: List<Anchored>, val composer: Composer?, val expanded: Set<String>, internal val config: ReviewConfig)
@@ -96,7 +101,7 @@ object Review {
     fun threads(state: EditorState): List<Pair<ReviewThread, Int>> = state(state)?.threads.orEmpty().map { it.thread to state.doc.lineIndexAt(it.pos) }
 
     /** The open composer's current line and draft, or null. */
-    fun composer(state: EditorState): ReviewComposer? = state(state)?.composer?.let { ReviewComposer(state.doc.lineIndexAt(it.pos), it.draft) }
+    fun composer(state: EditorState): ReviewComposer? = state(state)?.composer?.let { ReviewComposer(state.doc.lineIndexAt(it.pos), it.draft, it.focus) }
 
     // ---------------------------------------------------------------- the host's data --
 
@@ -188,7 +193,7 @@ object Review {
             // line above), snapped back to a line start.
             fun map(pos: Int) = doc.lineStart(doc.lineIndexAt(tr.changes.mapPos(pos, 1).coerceIn(0, doc.length)))
             threads = threads.map { a -> Anchored(a.thread, map(a.pos), a.hostLine) }
-            composer = composer?.let { Composer(map(it.pos), it.draft, it.gen) }
+            composer = composer?.let { Composer(map(it.pos), it.draft, it.gen, it.focus) }
         }
         for (e in tr.effects) {
             e.valueIf(setThreads)?.let { list ->
@@ -202,15 +207,15 @@ object Review {
             e.valueIf(setComposer)?.let { c ->
                 composer = when {
                     composer != null && doc.lineIndexAt(composer!!.pos) == c.line ->
-                        if (composer!!.draft.isEmpty() && c.draft.isNotEmpty()) Composer(composer!!.pos, c.draft, ++gens) else composer
-                    else -> Composer(lineStartAt(doc, c.line), c.draft, ++gens)
+                        if (composer!!.draft.isEmpty() && c.draft.isNotEmpty()) Composer(composer!!.pos, c.draft, ++gens, composer!!.focus || c.focus) else composer
+                    else -> Composer(lineStartAt(doc, c.line), c.draft, ++gens, c.focus)
                 }
             }
             // (valueIf is null for a null value too: the host closing the composer.)
             if (e.isOf(setComposer) && e.value == null) composer = null
             e.valueIf(open)?.let { l -> composer = Composer(lineStartAt(doc, l), "", ++gens) }
             if (e.isOf(close)) composer = null
-            e.valueIf(draft)?.let { d -> composer = composer?.let { Composer(it.pos, d, it.gen) } }
+            e.valueIf(draft)?.let { d -> composer = composer?.let { Composer(it.pos, d, it.gen, it.focus) } }
             e.valueIf(toggle)?.let { id -> expanded = if (id in expanded) expanded - id else expanded + id }
         }
         return if (threads === this.threads && composer === this.composer && expanded === this.expanded) this else State(threads, composer, expanded, config)

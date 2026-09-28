@@ -122,10 +122,11 @@ a line's start): data, like every decoration. The gutter is the line numbers (a 
 facet input it first came from, then first seen). A column appears with its first marker and KEEPS
 its place after its last one goes, so a lint dot coming and going never shifts the text (a replaced
 state starts over). Widths are `EditorTheme.gutterColumns[column]` (dp; `diff` 6, `lint` 12,
-`comment` 16, `fold` 14; unknown: one cell). `EditorTheme.gutterMarkers[kind]` draws it as a shape
+`comment` 16, `fold` 14, `revert` 16; unknown: one cell). `EditorTheme.gutterMarkers[kind]` draws it as a shape
 (the web has no emoji font): `BAR` (the line's full height: `diff-add`, `diff-remove`,
 `diff-change`), `DOT` (`lint-error`, `lint-warning`), `BUBBLE` (`comment`), `OPEN` / `CLOSED`
-(`fold-open`, `fold-closed`); a kind the theme lacks draws nothing. Markers move with edits because
+(`fold-open`, `fold-closed`), `REVERT` (a hook arrow: the diff plugin's `diff-revert`); a kind the
+theme lacks draws nothing (the review's invisible `comment-add` keeps its column there). Markers move with edits because
 the plugin maps its `RangeSet`; a marker's line deleted, it goes.
 
 A click or tap on a marker column's cell (never a caret move, never a keyboard) goes to
@@ -385,8 +386,11 @@ see it; they put semantic class names on decorations:
   in the theme's class for it, else `currentLine` (so a host theme without the class still shows it).
   Chosen: no built-in active line. A host without `basics()` (or `ActiveLine.extension`) gets none. `light` / `dark` also style basics' `matching-bracket`,
   `nonmatching-bracket` and `selection-match` (`EditorTheme.pluginClasses`), and the search plugin's
-  `search-match` / `search-match-selected` (`EditorTheme.searchClasses`), and autocomplete's
-  `snippet-field` (`EditorTheme.completionClasses`).
+  `search-match` / `search-match-selected` (`EditorTheme.searchClasses`), autocomplete's
+  `snippet-field` (`EditorTheme.completionClasses`), and the diff plugin's line tints `diff-add`,
+  `diff-change`, `diff-remove` and character marks `diff-add-text`, `diff-remove-text`
+  (`EditorTheme.diffClasses`, M4d). A theme mode's palette carries these, so a host's own colours
+  for them are replaced by the palette's on a mode switch (a host class no palette defines is kept).
 - `EditorTheme.squiggles` (`SquiggleStyle(color, dotted)`): mark classes drawn as an underline under
   their text, per row, decided in the layout pass: the lint plugin's `lint-error` / `lint-warning` /
   `lint-info` (wavy) and `lint-hint` (dotted), in `light` and `dark` (`EditorTheme.lintSquiggles`).
@@ -789,7 +793,8 @@ iOS simulator 96 (commonTest: `Folds`, `LineMap`, `AtomicFoldsTest`, `Accessible
 
 M4a built the first plugins on this surface (`editor-plugins/`: history, basics+, highlight, fold,
 view settings), M4b search/replace, M4c the tooltip layer, view plugins, autocompletion, lint and the
-LSP client. Still to come: M4d diff and review threads, M5's host adapter from `LspBridge` to
-`LspTransport` and cross-file navigation. An accessory bar for soft keyboards (Tab / Shift-Tab, arrows, undo). A gap widget
+LSP client, M4d the diff (inline and side by side on the linked views) and review threads. Still to
+come: M5's host adapter from `LspBridge` to `LspTransport`, the walkthrough and diff panes on the
+diff plugin, and cross-file navigation. An accessory bar for soft keyboards (Tab / Shift-Tab, arrows, undo). A gap widget
 draws plain background (a hatched diff gap is the diff plugin's registered content, if it wants
 one). Lines over 10,000 units show no inline widgets or replaces.

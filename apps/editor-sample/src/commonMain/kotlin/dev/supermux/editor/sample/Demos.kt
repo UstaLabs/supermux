@@ -7,11 +7,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
@@ -40,9 +38,6 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.editor.compose.Editor
 import dev.supermux.editor.compose.EditorTheme
 import dev.supermux.editor.compose.GutterClickHandler
-import dev.supermux.editor.core.LineMapping
-import dev.supermux.editor.compose.LinkedScroll
-import dev.supermux.editor.compose.LinkedSide
 import dev.supermux.editor.compose.WidgetClickHandler
 import dev.supermux.editor.compose.WidgetRegistry
 import dev.supermux.editor.compose.gutterClickFacet
@@ -227,160 +222,19 @@ object M3cDemo {
     }
 }
 
-// ------------------------------------------------------------------ side by side --
+// ------------------------------------------------------------------ the diff demos' texts --
 
 /**
- * Line diff (Myers, O((N+M)·D)) of [a] against [b], as [LineMapping] hunks: what M4's diff plugin
- * will compute (this one is the sample's own, to feel linked scrolling on a real edit).
- */
-fun lineDiff(a: List<String>, b: List<String>, maxD: Int = 2000): List<LineMapping.Hunk> {
-    var p = 0
-    while (p < a.size && p < b.size && a[p] == b[p]) p++
-    var s = 0
-    while (s < a.size - p && s < b.size - p && a[a.size - 1 - s] == b[b.size - 1 - s]) s++
-    val n = a.size - p - s
-    val m = b.size - p - s
-    if (n == 0 && m == 0) return emptyList()
-    if (n == 0 || m == 0) return listOf(LineMapping.Hunk(p, p + n, p, p + m))
-    val max = n + m
-    val off = max + 1
-    val v = IntArray(2 * max + 3)
-    val trace = ArrayList<IntArray>()
-    var found = -1
-    loop@ for (d in 0..minOf(max, maxD)) {
-        trace += v.copyOf()
-        var k = -d
-        while (k <= d) {
-            var x = if (k == -d || (k != d && v[off + k - 1] < v[off + k + 1])) v[off + k + 1] else v[off + k - 1] + 1
-            var y = x - k
-            while (x < n && y < m && a[p + x] == b[p + y]) { x++; y++ }
-            v[off + k] = x
-            if (x >= n && y >= m) { found = d; break@loop }
-            k += 2
-        }
-    }
-    if (found < 0) return listOf(LineMapping.Hunk(p, p + n, p, p + m))
-    // Walk back: every diagonal step is a matched pair of lines.
-    val match = IntArray(n) { -1 }
-    var x = n
-    var y = m
-    for (d in found downTo 1) {
-        val vv = trace[d]
-        val k = x - y
-        val prevK = if (k == -d || (k != d && vv[off + k - 1] < vv[off + k + 1])) k + 1 else k - 1
-        val prevX = vv[off + prevK]
-        val prevY = prevX - prevK
-        while (x > prevX && y > prevY) { x--; y--; match[x] = y }
-        x = prevX
-        y = prevY
-    }
-    while (x > 0 && y > 0) { x--; y--; match[x] = y }
-    val hunks = ArrayList<LineMapping.Hunk>()
-    var i = 0
-    var j = 0
-    while (i < n || j < m) {
-        if (i < n && match[i] == j) { i++; j++; continue }
-        var i2 = i
-        while (i2 < n && match[i2] < 0) i2++
-        val j2 = if (i2 < n) match[i2] else m
-        hunks += LineMapping.Hunk(p + i, p + i2, p + j, p + j2)
-        i = i2
-        j = j2
-    }
-    return hunks
-}
-
-/** The side-by-side demo's per-side decorations (diff line tints, markers) and, in B, the line mapping. */
-private class DiffSide(val decos: RangeSet<Decoration>, val markers: RangeSet<GutterMarker>, val mapping: dev.supermux.editor.core.LineMapping? = null)
-
-private val setDiff = StateEffectType<DiffSide>("demo.diff")
-
-private val diffField: StateField<DiffSide> = StateField(
-    "demo.diffSide",
-    { DiffSide(RangeSet.empty(), RangeSet.empty()) },
-    { v, tr ->
-        var out = DiffSide(v.decos.map(tr.changes), v.markers.map(tr.changes), v.mapping)
-        for (e in tr.effects) e.valueIf(setDiff)?.let { out = it }
-        out
-    },
-    { f ->
-        extensionOf(
-            decorationsFacet.compute(FacetDep.field(f)) { it.field(f).decos },
-            gutterMarkersFacet.compute(FacetDep.field(f)) { it.field(f).markers },
-            // What M4's diff plugin will do: the mapping as data; the surface aligns the rows itself.
-            dev.supermux.editor.core.lineMappingFacet.compute(FacetDep.field(f)) { it.field(f).mapping ?: dev.supermux.editor.core.LineMapping.IDENTITY },
-        )
-    },
-)
-
-/** The extension each side of the side-by-side demo carries. */
-val sideBySideExtension: Extension get() = diffField
-
-/**
- * B: the sample file with a few fake edits (a deleted run, an inserted run, a changed run of
- * another length), so the demo opens with every kind of hunk on screen.
+ * B: the sample file with a few fake edits (a line edited in place, a deleted run, an inserted
+ * run, a changed run of another length), so the diff demos open with every kind of hunk on screen.
  */
 fun fakeWorkingCopy(text: String): String {
     val lines = text.split('\n').toMutableList()
     if (lines.size < 200) return text + "\n// an added line\n"
+    // Edited in place: the character diff marks just what changed.
+    lines[25] = lines[25].replace("val ", "var ").let { if (it == lines[25]) "$it // edited" else it }
     lines.subList(150, 152).let { it.clear(); it.addAll(listOf("    // changed: one run of two lines", "    // became four lines", "    // in the working copy", "    // (side-by-side demo)")) }
     lines.addAll(101, listOf("    // inserted in the working copy (1/3)", "    // inserted in the working copy (2/3)", "    // inserted in the working copy (3/3)"))
     lines.subList(40, 45).clear()
     return lines.joinToString("\n")
-}
-
-/**
- * Recompute the diff of [a] against [b] and put it in both: diff tints and markers, and the line
- * mapping (in B's state: `lineMappingFacet`). No gap widgets: the linked surfaces pad the rows
- * from their measured heights.
- */
-fun applyDiff(a: dev.supermux.editor.compose.EditorView, b: dev.supermux.editor.compose.EditorView) {
-    val da = a.state.doc
-    val db = b.state.doc
-    val hunks = lineDiff(da.toString().split('\n'), db.toString().split('\n'))
-    fun side(doc: Rope, isA: Boolean): DiffSide {
-        val decos = ArrayList<Ranged<Decoration>>()
-        val markers = ArrayList<Ranged<GutterMarker>>()
-        for (h in hunks) {
-            val from = if (isA) h.aFrom else h.bFrom
-            val to = if (isA) h.aTo else h.bTo
-            val other = if (isA) h.bTo - h.bFrom else h.aTo - h.aFrom
-            val kind = when { to == from -> null; other == 0 -> if (isA) "diff-remove" else "diff-add"; else -> "diff-change" }
-            if (kind != null) for (l in from until to) {
-                val s = doc.lineStart(l)
-                decos += Ranged(s, s, Decoration.LineStyle(setOf(kind)))
-                markers += Ranged(s, s, GutterMarker("diff", kind, kind.removePrefix("diff-")))
-            }
-        }
-        return DiffSide(RangeSet.of(decos), RangeSet.of(markers), if (isA) null else dev.supermux.editor.core.LineMapping(hunks.map { dev.supermux.editor.core.LineMapping.Hunk(it.aFrom, it.aTo, it.bFrom, it.bTo) }))
-    }
-    a.dispatch(TransactionSpec(effects = listOf(setDiff.of(side(da, true)))))
-    b.dispatch(TransactionSpec(effects = listOf(setDiff.of(side(db, false)))))
-}
-
-/** The side-by-side pane: A (the file, read-only) and B (its working copy) linked line by line. */
-@Composable
-fun SideBySidePane(a: SampleSession, b: SampleSession, theme: EditorTheme, stats: FrameStats?, onFontSize: (Float) -> Unit) {
-    val link = remember(a, b) { LinkedScroll() }
-    val tinted = remember(theme) {
-        val dark = theme.background.red < 0.5f
-        theme.copy(lineClassBackgrounds = theme.lineClassBackgrounds + mapOf(
-            "diff-add" to (if (dark) Color(0x2E3FB950) else Color(0x333FB950)),
-            "diff-remove" to (if (dark) Color(0x33F85149) else Color(0x33F85149)),
-            "diff-change" to (if (dark) Color(0x2E58A6FF) else Color(0x2E2F6FD6)),
-        ))
-    }
-    // B is the working copy: every edit recomputes the diff, a frame later (never from inside B's
-    // own dispatch; M4's diff plugin will debounce and run off the UI thread).
-    androidx.compose.runtime.LaunchedEffect(a, b, link) {
-        androidx.compose.runtime.snapshotFlow { b.view.state.doc }.collect { applyDiff(a.view, b.view) }
-    }
-    Row(Modifier.fillMaxSize()) {
-        val widgets = rememberSearchWidgets()
-        Editor(a.view, Modifier.weight(1f).fillMaxHeight(), theme = tinted, readOnly = true,
-            onFontSize = onFontSize, label = "Base (A)", linked = link, linkedSide = LinkedSide.A, widgets = widgets)
-        Box(Modifier.width(1.dp).fillMaxHeight().background(theme.gutterForeground.copy(alpha = 0.5f)))
-        Editor(b.view, Modifier.weight(1f).fillMaxHeight(), theme = tinted,
-            onPaint = stats?.let { s -> { s.drawEnd() } }, onFontSize = onFontSize, label = "Working copy (B)", linked = link, linkedSide = LinkedSide.B, widgets = widgets)
-    }
 }

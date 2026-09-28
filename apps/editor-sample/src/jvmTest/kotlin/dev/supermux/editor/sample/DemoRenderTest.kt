@@ -28,7 +28,7 @@ class DemoRenderTest {
         val scope = CoroutineScope(SupervisorJob())
         val backend = NativeBackend().also { it.ensureLanguageNow("kotlin") }
         val a = SampleSession(kotlin, "kotlin", backend, LanguageRegistry.default, scope, extraA) { queue.add(it) }
-        val sb = b?.let { SampleSession(it, "kotlin", backend, LanguageRegistry.default, scope, sideBySideExtension) { r -> queue.add(r) } }
+        val sb = b?.let { SampleSession(it, "kotlin", backend, LanguageRegistry.default, scope) { r -> queue.add(r) } }
         val scene = ImageComposeScene(width, height, Density(2f)) { content(a, sb) }
         var time = 0L
         fun frame(): Double {
@@ -76,21 +76,49 @@ class DemoRenderTest {
         var a: SampleSession? = null
         // The hunks: a deletion (a gap in B), an insertion (a gap in A), a changed run of another length.
         for ((name, line) in listOf("side-by-side-deleted" to 32, "side-by-side-inserted" to 92, "side-by-side-changed" to 140)) {
-            render(name, 1400, 1200, sideBySideExtension, b = fakeWorkingCopy(kotlin), frames = 3, scroll = { i ->
+            render(name, 1400, 1200, dev.supermux.editor.core.extensionOf(), b = fakeWorkingCopy(kotlin), frames = 3, scroll = { i ->
                 if (i == 0) a?.view?.let { v -> v.restoreScroll(dev.supermux.editor.compose.EditorScrollPosition(v.state.doc.lineStart(line))) }
             }) { sa, sb ->
                 a = sa
                 val theme = EditorTheme.dark(packagedEditorFontFamily())
-                SideBySidePane(sa!!, sb!!, theme, null) {}
+                SideBySideDemo(sa!!, sb!!, theme)
             }
         }
-        val times = render("side-by-side", 1400, 1200, sideBySideExtension, b = fakeWorkingCopy(kotlin), frames = 300, scroll = { a?.view?.scrollState?.scrollBy(0f, 45f) }) { sa, sb ->
+        val times = render("side-by-side", 1400, 1200, dev.supermux.editor.core.extensionOf(), b = fakeWorkingCopy(kotlin), frames = 300, scroll = { a?.view?.scrollState?.scrollBy(0f, 45f) }) { sa, sb ->
             a = sa
             val theme = EditorTheme.dark(packagedEditorFontFamily())
-            SideBySidePane(sa!!, sb!!, theme, null) {}
+            SideBySideDemo(sa!!, sb!!, theme)
         }
         val p95 = times.drop(10).sorted().let { it[it.size * 95 / 100] }
-        println("PERF side-by-side scroll (two linked editors, gaps, tints): frame p95 ${"%.2f".format(p95)} ms over ${times.size} frames")
+        println("PERF side-by-side scroll (the diff plugin's DiffPair: two linked editors, tints, folded runs, a thread): frame p95 ${"%.2f".format(p95)} ms over ${times.size} frames")
         assertTrue(p95 <= 16.0, "side-by-side scroll frame p95 $p95 ms")
+    }
+
+    /** The sample's side-by-side pane: the diff plugin's pair of A and B, with a review thread on B. */
+    @Composable
+    private fun SideBySideDemo(a: SampleSession, b: SampleSession, theme: EditorTheme) {
+        val pair = androidx.compose.runtime.remember(a, b) {
+            val host = SampleReviewHost(SampleReviewHost.demoThreads().take(1))
+            b.view.dispatch(dev.supermux.editor.core.TransactionSpec(effects = listOf(dev.supermux.editor.core.StateEffect.appendConfig.of(dev.supermux.editor.plugins.diff.review(host)))))
+            dev.supermux.editor.plugins.diff.DiffPair(a.view, b.view, dev.supermux.editor.plugins.diff.DiffConfig(), host).also { host.view = b.view }
+        }
+        dev.supermux.editor.plugins.diff.SideBySideDiff(pair, androidx.compose.ui.Modifier, theme = theme, widgets = rememberSearchWidgets(dev.supermux.editor.plugins.diff.rememberDiffWidgets()))
+    }
+
+    @Test fun theWalkthroughRenders() {
+        render("walkthrough", 1100, 1400, dev.supermux.editor.core.extensionOf()) { a, _ ->
+            val theme = EditorTheme.dark(packagedEditorFontFamily())
+            val host = androidx.compose.runtime.remember { SampleReviewHost(SampleReviewHost.demoThreads()) }
+            val view = androidx.compose.runtime.remember {
+                dev.supermux.editor.compose.EditorView(dev.supermux.editor.core.EditorState.create(fakeWorkingCopy(kotlin), extensions = dev.supermux.editor.core.extensionOf(
+                    dev.supermux.editor.plugins.diff.inlineDiff(kotlin, dev.supermux.editor.plugins.diff.DiffConfig(editable = false, context = 20)),
+                    dev.supermux.editor.plugins.diff.review(host),
+                ))).also { v ->
+                    host.view = v
+                    v.restoreScroll(dev.supermux.editor.compose.EditorScrollPosition(v.state.doc.lineStart(80)))
+                }
+            }
+            dev.supermux.editor.plugins.diff.InlineDiffEditor(view, androidx.compose.ui.Modifier, theme = theme)
+        }
     }
 }

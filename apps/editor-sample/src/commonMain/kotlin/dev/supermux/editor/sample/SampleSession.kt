@@ -31,6 +31,7 @@ enum class SampleFile(val label: String, val language: String?) {
     KOTLIN("HostStore.kt (2k lines)", "kotlin"),
     DEMO("M3c demo: gutter, fold, thread, panel", "kotlin"),
     SIDE_BY_SIDE("side-by-side diff", "kotlin"),
+    WALKTHROUGH("walkthrough (inline diff, threads)", "kotlin"),
     KOTLIN_10K("10k lines of Kotlin", "kotlin"),
     MARKDOWN("the editor spec (Markdown)", "markdown"),
     TURKISH("Türkçe + emoji", null),
@@ -72,7 +73,7 @@ object SampleFiles {
     }
 
     suspend fun load(file: SampleFile, kotlin: String, markdown: String): String = when (file) {
-        SampleFile.KOTLIN, SampleFile.DEMO, SampleFile.SIDE_BY_SIDE -> kotlin
+        SampleFile.KOTLIN, SampleFile.DEMO, SampleFile.SIDE_BY_SIDE, SampleFile.WALKTHROUGH -> kotlin
         SampleFile.KOTLIN_10K -> tenK(kotlin)
         SampleFile.MARKDOWN -> markdown
         SampleFile.TURKISH -> TURKISH_TEXT
@@ -136,10 +137,12 @@ class SampleSession(
     extra: dev.supermux.editor.core.Extension = extensionOf(),
     settings: EditorSettings = EditorSettings(lineWrap = false),
     deleteFoldWhole: Boolean = false,
+    /** False for a diff's read-only base (DiffPair: the base keeps no undo stack). */
+    withHistory: Boolean = true,
     hop: (() -> Unit) -> Unit,
 ) : AutoCloseable {
     val view = EditorView(EditorState.create(text, extensions = extensionOf(
-        highlight(language), basics(), history(), foldSlot.of(fold(FoldConfig(deleteFoldWhole))), viewSettings(settings), search(), extra,
+        highlight(language), basics(), if (withHistory) history() else extensionOf(), foldSlot.of(fold(FoldConfig(deleteFoldWhole))), viewSettings(settings), search(), extra,
     )))
     val host = SyntaxHost(view, backend, registry, scope, hop = hop)
     val worker: SyntaxWorker get() = host.worker

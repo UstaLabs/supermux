@@ -60,6 +60,7 @@ kotlin {
             implementation(project(":editor-plugins:lsp"))
             // The sample's documents talk to the in-process toy language server (M4c; M5's host uses the broker).
             implementation(project(":editor-plugins:lsp-fake"))
+            implementation(project(":editor-plugins:diff"))
             implementation(compose.runtime)
             implementation(compose.foundation)
             implementation(compose.ui)

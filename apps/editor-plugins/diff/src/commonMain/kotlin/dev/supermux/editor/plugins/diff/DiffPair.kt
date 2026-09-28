@@ -97,6 +97,7 @@ fun SideBySideDiff(
     onFontSize: (Float) -> Unit = {},
     baseLabel: String = "Base",
     workingLabel: String = "Working copy",
+    onPaint: (() -> Unit)? = null,
 ) {
     val editable = pair.model?.config?.editable ?: true
     Row(modifier) {
@@ -104,6 +105,6 @@ fun SideBySideDiff(
             onFontSize = onFontSize, label = baseLabel, linked = pair.link, linkedSide = LinkedSide.A, widgets = widgets)
         Box(Modifier.width(1.dp).fillMaxHeight().background(theme.gutterForeground.copy(alpha = 0.5f)))
         Editor(pair.working, Modifier.weight(1f).fillMaxHeight(), theme = theme, readOnly = !editable, lineWrap = lineWrap,
-            onFontSize = onFontSize, label = workingLabel, linked = pair.link, linkedSide = LinkedSide.B, widgets = widgets)
+            onFontSize = onFontSize, label = workingLabel, linked = pair.link, linkedSide = LinkedSide.B, widgets = widgets, onPaint = onPaint)
     }
 }

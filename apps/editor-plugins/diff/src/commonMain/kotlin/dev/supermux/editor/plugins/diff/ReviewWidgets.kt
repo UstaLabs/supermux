@@ -178,6 +178,7 @@ private fun WidgetScope.ComposerBlock(key: WidgetKey) {
     val text = remember(key.id) { TextFieldState(c.draft) }
     val focus = remember(key.id) { FocusRequester() }
     LaunchedEffect(key.id) {
+        if (!c.focus) return@LaunchedEffect
         // Inside a layout-pass subcomposition: the requester is attached a frame later.
         withFrameNanos {}
         runCatching { focus.requestFocus() }
