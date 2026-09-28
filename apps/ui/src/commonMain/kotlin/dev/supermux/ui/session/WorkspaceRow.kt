@@ -133,8 +133,11 @@ fun WorkspaceRow(
     childrenExpanded: Boolean = false,
     onToggleChildren: (() -> Unit)? = null,
     onChildClick: (String) -> Unit = {},
+    /** Running subagents across the workspace's chats — the "2 agents" tag. */
+    runningAgents: Int = 0,
 ) {
     PointerWorkspaceRow(
+        runningAgents = runningAgents,
         model = model,
         active = active,
         modifier = modifier,
@@ -161,6 +164,7 @@ fun WorkspaceRow(
 /** Desktop's sidebar row, verbatim. */
 @Composable
 private fun PointerWorkspaceRow(
+    runningAgents: Int,
     model: WorkspaceRowModel,
     active: Boolean,
     modifier: Modifier,
@@ -265,6 +269,10 @@ private fun PointerWorkspaceRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
+                    if (runningAgents > 0) {
+                        Spacer(Modifier.width(Space.sm))
+                        RunningAgentsTag(runningAgents)
+                    }
                     if (model.multiAgent) {
                         Box(
                             Modifier

@@ -705,6 +705,8 @@ fun TimelineItemRow(
     onOpenFile: (FilePathRef) -> Unit = {},
     highDetail: Boolean = false,
     onOpenWalkthrough: () -> Unit = {},
+    /** Expansion + actions for subagent cards; null = local expansion, no actions (previews). */
+    subagentUi: SubagentUi? = null,
 ) {
     when (item) {
         is TimelineItem.Msg -> {
@@ -761,10 +763,18 @@ fun TimelineItemRow(
                 ActivityKindCard(item.event)
             }
         }
-        // Until the subagent card lands (S3), a subagent shows as its spawning tool row; its own
-        // rows stay out of the parent's stream.
-        is TimelineItem.SubagentCard -> item.spawn?.let {
-            TimelineItemRow(it, loadBytes, onOpenFile, highDetail, onOpenWalkthrough)
+        is TimelineItem.SubagentCard -> {
+            val id = item.subagent.id
+            var localOpen by remember(id) { mutableStateOf(false) }
+            SubagentCard(
+                item = item,
+                expanded = subagentUi?.isExpanded?.invoke(id) ?: localOpen,
+                onToggle = { if (subagentUi != null) subagentUi.onToggle(id) else localOpen = !localOpen },
+                actions = subagentUi?.actions ?: SubagentActions(),
+                loadBytes = loadBytes,
+                onOpenFile = onOpenFile,
+                highDetail = highDetail,
+            )
         }
     }
 }
@@ -774,9 +784,16 @@ fun ActivityKindCard(event: ActivityEvent) {
     when (event.kind) {
         "reasoning" -> ReasoningCard(event)
         "plan" -> PlanCard(event)
-        "task" -> TaskCard(event)
+        // Agent-kind tasks are subagents, which have their own card now (S3).
+        "task" -> if (!isAgentTask(event)) TaskCard(event)
         else -> {}
     }
+}
+
+/** `agent` / `subagent` / `collab` task rows (the broker writes "<kind> <phase>" in detail). */
+internal fun isAgentTask(event: ActivityEvent): Boolean {
+    val kind = event.taskKind ?: event.detail?.substringBefore(' ')
+    return kind == "agent" || kind == "subagent" || kind == "collab"
 }
 
 @Composable

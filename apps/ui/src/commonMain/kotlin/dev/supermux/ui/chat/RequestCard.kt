@@ -222,6 +222,8 @@ private fun RequestHeader(
     val permission = request.kind != "question"
     val name = requestName(request)
     val meta = buildList {
+        // A subagent asking, not the main agent: say which one, first — it changes the answer.
+        subagentLabel(request)?.let { add("from $it") }
         if (permission) name.qualifier?.let { add(it) }
         // A non-blocking ask comes from a turn the user is not watching; say so, or the card looks
         // like it appeared out of nowhere.
@@ -294,6 +296,14 @@ private fun WaitingChip(disabled: Boolean) {
             modifier = Modifier.padding(horizontal = Space.sm, vertical = 3.dp),
         )
     }
+}
+
+/** Who asked, when it was a subagent: its description, else its type, else a short id. */
+internal fun subagentLabel(request: PromptRequest): String? {
+    if (request.subagentId == null && request.subagentName == null && request.subagentDescription == null) return null
+    return request.subagentDescription?.takeIf { it.isNotBlank() }
+        ?: request.subagentName?.takeIf { it.isNotBlank() }
+        ?: request.subagentId?.take(8)
 }
 
 /** What the header says: a tool name, plus the server/agent it belongs to when there is one. */
@@ -415,9 +425,9 @@ private fun PromptRequestOption.isAllow(): Boolean =
 
 /** Visual height of a card button: desktop-dialog compact; a touch screen gets a little more. */
 @Composable
-private fun buttonHeight() = if (LocalInputMode.current == InputMode.Touch) 40.dp else 34.dp
+internal fun buttonHeight() = if (LocalInputMode.current == InputMode.Touch) 40.dp else 34.dp
 
-private enum class CardButtonStyle { Primary, Secondary, Danger, Ghost }
+internal enum class CardButtonStyle { Primary, Secondary, Danger, Ghost }
 
 /**
  * The one button both request cards use: compact, 8dp corners (a pill reads as a phone FAB-row),
@@ -426,7 +436,7 @@ private enum class CardButtonStyle { Primary, Secondary, Danger, Ghost }
  * is text only. Material still pads the touch target to 48dp on touch, invisibly.
  */
 @Composable
-private fun CardButton(
+internal fun CardButton(
     label: String,
     style: CardButtonStyle,
     enabled: Boolean,
@@ -474,7 +484,7 @@ private fun CardButton(
 /** Right-aligned buttons that wrap onto a second right-aligned line rather than squeeze. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ActionRow(content: @Composable () -> Unit) {
+internal fun ActionRow(content: @Composable () -> Unit) {
     FlowRow(
         Modifier.fillMaxWidth().padding(top = Space.xs),
         horizontalArrangement = Arrangement.spacedBy(Space.sm, Alignment.End),

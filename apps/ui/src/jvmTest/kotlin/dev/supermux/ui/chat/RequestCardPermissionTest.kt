@@ -60,6 +60,13 @@ class RequestCardPermissionTest {
     }
 
     @Test
+    fun a_subagent_request_says_who_is_asking() = runComposeUiTest {
+        val req = bash.copy(subagentId = "sa1", subagentName = "general-purpose", subagentDescription = "Run the test suite")
+        setContent { Card { RequestCard(req, disabled = false, onRespond = {}) } }
+        onNodeWithText("from Run the test suite").assertExists()
+    }
+
+    @Test
     fun allow_once_is_one_tap() = runComposeUiTest {
         var sent: JsonObject? = null
         setContent { Card { RequestCard(bash, disabled = false, onRespond = { sent = it }) } }

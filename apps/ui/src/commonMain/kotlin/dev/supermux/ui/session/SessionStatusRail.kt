@@ -100,6 +100,24 @@ fun SessionStatusRail(
     }
 }
 
+/**
+ * "2 agents" beside a session's name while its subagents run — mono, small, accent-muted: the
+ * list is a 100+/day surface, so it states a fact rather than animating. Nothing at zero.
+ */
+@Composable
+fun RunningAgentsTag(count: Int, modifier: Modifier = Modifier) {
+    if (count <= 0) return
+    Text(
+        if (count == 1) "1 agent" else "$count agents",
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+        fontFamily = MonoFontFamily,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+        modifier = modifier.testTag("session_running_agents"),
+    )
+}
+
 @Composable private fun StatusIcon(icon: ImageVector, color: Color) {
     Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
 }

@@ -180,6 +180,8 @@ data class ChatState(
     val closedRequests: List<dev.supermux.state.ClosedRequest> = emptyList(),
     val lastError: String? = null,
     val permissionModes: List<dev.supermux.proto.PermissionModeInfo> = emptyList(),
+    /** The session's subagents (running + recently finished), ordered by start. */
+    val subagents: List<dev.supermux.proto.Subagent> = emptyList(),
 )
 
 /**
@@ -208,6 +210,11 @@ class ChatActions(
     val loadProxies: suspend () -> List<ProxyDto> = { emptyList() },
     val respondRequest: (requestId: String, answer: JsonObject) -> Unit = { _, _ -> },
     val setPermissionMode: (String) -> Unit = {},
+    /** Send text to one subagent / stop it; a host without the seam answers "not available". */
+    val messageSubagent: suspend (subagentId: String, text: String) -> dev.supermux.net.SubagentActionResult =
+        { _, _ -> dev.supermux.net.SubagentActionResult(ok = false, error = "Not available on this client") },
+    val stopSubagent: suspend (subagentId: String) -> dev.supermux.net.SubagentActionResult =
+        { dev.supermux.net.SubagentActionResult(ok = false, error = "Not available on this client") },
 )
 
 /** [ChatActions] wired to a [HostStore] for one session — desktop's ergonomics, kept. */
@@ -238,6 +245,8 @@ fun rememberChatActions(
             loadProxies = loadProxies ?: { app.proxies() },
             respondRequest = { requestId, answer -> app.respondRequest(session.id, requestId, answer) },
             setPermissionMode = { mode -> app.setPermissionMode(session.id, mode) },
+            messageSubagent = { id, text -> app.messageSubagent(session.id, id, text) },
+            stopSubagent = { id -> app.stopSubagent(session.id, id) },
         )
     }
 }
@@ -257,6 +266,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val closedRequestsMap by app.closedRequests.collectAsState()
     val lastError by app.lastError.collectAsState()
     val permissionModesMap by app.permissionModes.collectAsState()
+    val subagentsMap by app.subagents.collectAsState()
     val sessions by app.sessions.collectAsState()
     val sessionAgent = sessions.find { it.id == sessionId }?.agent
     return ChatState(
@@ -273,6 +283,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         closedRequests = closedRequestsMap[sessionId].orEmpty(),
         lastError = lastError,
         permissionModes = sessionAgent?.let { permissionModesMap[it] }.orEmpty(),
+        subagents = subagentsMap[sessionId].orEmpty(),
     )
 }
 
@@ -413,8 +424,9 @@ fun ChatPanel(
     val highDetail = detailMode == ChatDetailLevel.HIGH
     val messages = state.messages
     val activity = state.activity
-    val timelineItems = remember(messages, activity, hideTools) {
-        mergeTimeline(messages, activity, hideTools = hideTools)
+    val subagents = state.subagents
+    val timelineItems = remember(messages, activity, hideTools, subagents) {
+        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents)
     }
 
     // The live agent state is carried by the header status line when there IS a header, and by the
@@ -432,6 +444,24 @@ fun ChatPanel(
 
     // ── Autoscroll ────────────────────────────────────────────────────────────────────────────
     val listState = rememberLazyListState()
+
+    // ── Subagents ─────────────────────────────────────────────────────────────────────────────
+    // Cards are collapsed by default; the set of open ones is hoisted here so the running strip can
+    // open one and scroll to it.
+    var openSubagents by remember(session.id) { mutableStateOf(setOf<String>()) }
+    val subagentActions = remember(actions) {
+        SubagentActions(message = actions.messageSubagent, stop = actions.stopSubagent)
+    }
+    val subagentUi = SubagentUi(
+        isExpanded = { it in openSubagents },
+        onToggle = { id -> openSubagents = if (id in openSubagents) openSubagents - id else openSubagents + id },
+        actions = subagentActions,
+    )
+    val openSubagentCard: (String) -> Unit = { id ->
+        openSubagents = openSubagents + id
+        val index = timelineItems.indexOfFirst { it is TimelineItem.SubagentCard && it.subagent.id == id }
+        if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
+    }
 
     run {
         // One rule on every host (was desktop's): instant jump on the first content for a session, then follow new items
@@ -714,14 +744,11 @@ fun ChatPanel(
                         onOpenFile = onOpenFile,
                         highDetail = highDetail,
                         onOpenWalkthrough = { onOpenWalkthrough(null) },
+                        subagentUi = subagentUi,
                     )
                 }
-                // Background-task chips: only RUNNING tasks get a chip, so a chip clears the moment
-                // its task finishes and they never accumulate. The outcome lives in the stream.
-                val visibleBgTasks = state.bgTasks.filter { it.status == "running" }
-                if (visibleBgTasks.isNotEmpty()) {
-                    item(key = "__bgtasks__") { BgTaskChipsRow(visibleBgTasks) }
-                }
+                // Running background tasks live in the strip over the composer (with the running
+                // subagents), not as chips in the transcript: one place for "still going".
                 if (showStatusRows) {
                     if (working && agent != null) {
                         item(key = "__working__") {
@@ -815,6 +842,11 @@ fun ChatPanel(
                                 .widthIn(max = CONTENT_MAX_WIDTH)
                                 .padding(start = Space.lg, end = Space.lg, bottom = Space.sm),
                         ) {
+                            RunningStrip(
+                                subagents = subagents,
+                                bgTasks = state.bgTasks,
+                                onOpenSubagent = openSubagentCard,
+                            )
                             RequestCards(
                                 requests = state.requests,
                                 closed = state.closedRequests,
@@ -962,49 +994,6 @@ private fun StatusRow(label: String, color: androidx.compose.ui.graphics.Color, 
                     modifier = Modifier.size(10.dp),
                 )
                 Text("stop", fontFamily = MonoFontFamily, fontSize = 11.sp, color = cs.error)
-            }
-        }
-    }
-}
-
-/**
- * Background-task chips: one mono chip per RUNNING bg shell / subagent / workflow, with its own
- * live elapsed. Chips clear the moment their task finishes (the caller passes running-only).
- */
-@Composable
-private fun BgTaskChipsRow(tasks: List<ServerFrame.BgTask>) {
-    val cs = MaterialTheme.colorScheme
-    var now by remember { mutableLongStateOf(nowMs()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(1000)
-            now = nowMs()
-        }
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(top = Space.xs, bottom = Space.xs),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        tasks.forEach { t ->
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .border(1.dp, cs.outlineVariant, RoundedCornerShape(999.dp))
-                    .padding(horizontal = 10.dp, vertical = 3.dp),
-            ) {
-                Text(
-                    text = t.label + " · " + formatDuration(((now - t.startedAt).coerceAtLeast(0)) / 1000),
-                    fontFamily = MonoFontFamily,
-                    fontSize = 11.sp,
-                    color = cs.onSurfaceVariant,
-                    maxLines = 1,
-                )
             }
         }
     }

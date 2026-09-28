@@ -91,6 +91,22 @@ class TimelineMergeSubagentTest {
         assertTrue(card.children[0] is TimelineItem.Activity)
     }
 
+    @Test fun theSameSubagentsTaskRowIsFoldedIntoTheCard() {
+        val sub = Subagent(id = "a1", parentCallId = "spawn", description = "Background explore", startedAt = 0)
+        val items = mergeTimeline(
+            emptyList(),
+            listOf(
+                tool("2026-09-28T10:00:01.000Z", "spawn", tool = "Agent"),
+                ActivityEvent(ts = "2026-09-28T10:00:01.500Z", kind = "task", title = "Background explore", detail = "agent started", phase = "started", callId = "spawn"),
+                ActivityEvent(ts = "2026-09-28T10:00:02.000Z", kind = "task", title = "npm run dev", detail = "shell started", phase = "started", callId = "other"),
+            ),
+            subagents = listOf(sub),
+        )
+        assertEquals(2, items.size)
+        assertTrue(items[0] is TimelineItem.SubagentCard)
+        assertEquals("other", (items[1] as TimelineItem.Activity).event.callId)
+    }
+
     @Test fun epochMillisFormatsLikeToIsoString() {
         assertEquals("1970-01-01T00:00:00.000Z", epochMillisToIso(0))
         assertEquals("2026-09-28T10:00:05.000Z", epochMillisToIso(1_790_589_605_000L))

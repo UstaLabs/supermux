@@ -119,6 +119,9 @@ fun mergeTimeline(
             if (spawnOf !in spawnRows) spawnRows[spawnOf] = e
             continue
         }
+        // The same subagent reported through the task channel (Claude background agents): the
+        // card already says it started/finished, a task row beside it would say it twice.
+        if (spawnOf != null && e.kind == "task") continue
         if (hideTools && e.kind == "tool") continue
         fold(e)?.let(items::add)
     }

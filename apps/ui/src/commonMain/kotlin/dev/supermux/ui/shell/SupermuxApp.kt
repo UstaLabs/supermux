@@ -295,6 +295,10 @@ fun SupermuxApp(
     val archivedWorkspaces by fleet.archivedWorkspaces.collectAsState()
     val messages by fleet.messages.collectAsState()
     val agentState by fleet.agentState.collectAsState()
+    val subagentsBySession by fleet.subagents.collectAsState()
+    val runningAgents = remember(subagentsBySession) {
+        subagentsBySession.mapValues { dev.supermux.ui.chat.runningSubagentCount(it.value) }.filterValues { it > 0 }
+    }
     val lastRead by fleet.lastRead.collectAsState()
     val hostViews by fleet.hostViews.collectAsState()
     val sessionHost by fleet.sessionHost.collectAsState()
@@ -747,6 +751,7 @@ fun SupermuxApp(
                                 lastBySession = lastBySession,
                                 lastRead = lastRead,
                                 agentState = agentState,
+                                runningAgents = runningAgents,
                                 onOpenSession = { _, sid -> ui.focusChatTab(sid) },
                                 actions = remember(listActions, workspaces) {
                                     listActions.withWorkspaceOps(
