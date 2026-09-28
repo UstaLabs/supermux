@@ -100,9 +100,15 @@ class RangeSet<T> private constructor(internal val ranges: List<Ranged<T>>) : It
             val to = changes.mapPos(r.to, endAssoc)
             // A range whose text was all deleted carries nothing any more.
             if (r.from < r.to && from >= to) continue
-            out += Ranged(from, to, v)
+            // Unmoved (before the edit): the same instance, so comparing the old and new sets is cheap there.
+            out += if (from == r.from && to == r.to) r else Ranged(from, to, v)
         }
-        return of(out)
+        // Mapping almost always keeps the order: then no sort (10k diagnostics per keystroke).
+        for (i in 1 until out.size) {
+            val a = out[i - 1]; val b = out[i]
+            if (a.from > b.from || a.from == b.from && a.to > b.to) return of(out)
+        }
+        return RangeSet(out)
     }
 
     fun update(add: List<Ranged<T>> = emptyList(), filter: ((Ranged<T>) -> Boolean)? = null): RangeSet<T> =

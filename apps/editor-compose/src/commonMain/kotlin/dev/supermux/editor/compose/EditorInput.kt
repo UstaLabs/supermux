@@ -390,6 +390,19 @@ internal class FieldSync(
         val clampedTo = main.to.coerceIn(w.base, w.end)
         val event = if (composition != null || wasComposing) "input.ime" else "input"
         if (e.insert.indexOf(FieldWindow.PLACEHOLDER) >= 0) return applyAroundPlaceholders(w, e, text, selStart, selEnd, event)
+        // A soft Return that ENDS a composition (Gboard: Enter commits the word and types "\n" in one
+        // step, or right after): the composition's last text goes in as its own step, then Return is
+        // the Enter key as below: a completion list's Enter accepts, with no stray newline.
+        if (composition == null && wasComposing && main.empty && e.insert.endsWith("\n") && e.insert.indexOf('\n') == e.insert.length - 1 &&
+            from <= main.from && to >= main.to && selStart == selEnd && selEnd == e.from + e.insert.length
+        ) {
+            val word = e.insert.dropLast(1)
+            if (word.isNotEmpty() || from != to) {
+                view.typeSpec(word, "input.ime", main.from - from, to - main.to, word.length, word.length)?.let { (spec, _) -> view.dispatch(spec) }
+            }
+            if (!runBindings(view, KeyChord("Enter"), isApplePlatform)) DefaultCommands.insertNewline.run(view)
+            return rewindow() ?: show(current())
+        }
         if (composition == null && !wasComposing && e.insert == "\n" && e.from == e.to && from == main.head && main.empty) {
             // A soft Return is the Enter key: the keymap's binding (a plugin's Enter between braces),
             // else the editor's newline (it keeps the indentation), at every cursor.

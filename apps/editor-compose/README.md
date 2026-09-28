@@ -295,7 +295,8 @@ the user's setting.
 its content the registry's `key.type` (by convention `tooltip:<name>`: `tooltip:completion`,
 `tooltip:lint`, `tooltip:lsp-hover`), `key.id` the instance. The layer is part of the surface's layout
 pass (measure before draw): after the frame, each tooltip is subcomposed, measured at most as tall as
-the room on its better side, and placed over everything else of the surface (`TooltipLayout`,
+the room on its better side, and placed over the text and the widgets but UNDER the touch handles
+(a handle is never hidden by a list and keeps taking its finger) (`TooltipLayout`,
 `TooltipPlacementTest`):
 - below the anchor's row (`above`: over it), FLIPPED to the other side when it does not fit, else the
   side with more room; never over the anchor's row nor the main caret's line (when the caret is on a
@@ -318,7 +319,8 @@ pointer stops over a character (never past a line's end), on the UI scope (it ma
 request; a newer hover cancels it; a result for a document that changed meanwhile is dropped). Its
 `HoverResult(from, to, key, above = true)` is shown as a `hideOnScroll` tooltip until the pointer
 leaves both that range and the tooltip (250 ms grace, to reach the tooltip), Escape (`Hover.closeHover`,
-bound at high precedence), a scroll, or an edit. **Touch has no hover and long press selects**, so
+bound at high precedence), a press anywhere but on a tooltip (a tap elsewhere), a scroll, or an
+edit; the LSP and lint hovers also have a × (and speak their text as a polite live region). **Touch has no hover and long press selects**, so
 touch gets an explicit command instead: `Hover.showHover` asks every source at the main cursor at once
 (a host's button or menu item; the sample's toolbar), and the LSP flows put their information where
 touch sees it anyway (the completion list's documentation, signature help above the caret).
@@ -329,7 +331,8 @@ touch sees it anyway (the completion list's documentation, signature help above 
 A plugin's per-view WORK (CM6's `ViewPlugin`): `viewPluginsFacet.of(ViewPlugin { host -> instance })`.
 One instance per view per plugin value (identity), with `host.target` (the command API) and
 `host.scope` (a UI-thread scope of its own, cancelled when the instance goes). `update(tr)` runs after
-every transaction, before the view's listeners (outside any command's scope: its dispatches are judged
+every transaction, before the view's listeners (never for the transaction that created the instance: a
+reconfigure that adds the plugin starts it from that transaction's state, CM6's rule) (outside any command's scope: its dispatches are judged
 on their own); `destroy()` when a reconfigure removes the plugin, when `setState` replaces the state
 (another document: the new state's instances start fresh), or when the view stops. A composed `Editor`
 runs its view's plugins (`EditorView.startPlugins(scope)`, shared between callers); a host or a test

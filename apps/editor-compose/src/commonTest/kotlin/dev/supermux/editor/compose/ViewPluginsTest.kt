@@ -50,7 +50,17 @@ class ViewPluginsTest {
         view.dispatch(TransactionSpec(effects = listOf(c.reconfigure(viewPluginsFacet.of(b)))))
         view.dispatch(TransactionSpec(effects = listOf(c.reconfigure(extensionOf()))))
         assertEquals(listOf("create a", "update a 0", "update a 0"), la.events, "a kept throughout")
-        assertEquals(listOf("create b", "update b 0", "destroy b"), lb.events)
+        assertEquals(listOf("create b", "destroy b"), lb.events, "created by a transaction: not handed that transaction")
+    }
+
+    @Test fun aPluginEnabledByAnEditingTransactionStartsFromItsResult() {
+        val log = Log()
+        val c = Compartment()
+        val view = EditorView(EditorState.create("ab", extensions = c.of(extensionOf())))
+        view.startPlugins(CoroutineScope(Dispatchers.Unconfined))
+        view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 0, "xyz")), effects = listOf(c.reconfigure(viewPluginsFacet.of(plugin("a", log))))))
+        view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 0, "1"))))
+        assertEquals(listOf("create a", "update a 6"), log.events, "the enabling edit is part of its start, only later ones are updates")
     }
 
     @Test fun anotherStateStartsFresh() {

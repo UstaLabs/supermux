@@ -97,6 +97,49 @@ class FieldSyncTest {
         }
     }
 
+    /** A completion list's Enter: takes the key, edits the document its own way (replaces the word). */
+    private fun acceptingEnter(accepted: MutableList<String>) = dev.supermux.editor.core.keymapOf(dev.supermux.editor.core.KeyBinding("Enter", dev.supermux.editor.core.Command { t ->
+        val head = t.state.selection.main.head
+        accepted += t.state.doc.toString()
+        t.dispatch(dev.supermux.editor.core.TransactionSpec(changes = listOf(dev.supermux.editor.core.ChangeSpec(0, head, "println")), selection = EditorSelection.cursor(7), userEvent = "input.complete"))
+        true
+    }))
+
+    @Test fun aSoftReturnThatEndsACompositionIsTheEnterKeyWithNoStrayNewline() {
+        val accepted = ArrayList<String>()
+        val h = Harness("", 0, ext = acceptingEnter(accepted))
+        h.ime("p", 1, composition = 0..0)
+        h.ime("pri", 3, composition = 0..2)
+        // Gboard's Enter while composing: the word committed and "\n" typed in ONE step.
+        h.ime("pri\n", 4, composition = null)
+        assertEquals(listOf("pri"), accepted, "Enter reached the binding with the composed word in the document")
+        assertEquals("println", h.doc, "no newline")
+        assertNull(h.sync.composition)
+        h.assertInSync()
+    }
+
+    @Test fun aSoftReturnThatCommitsADifferentWordCommitsItFirst() {
+        val accepted = ArrayList<String>()
+        val h = Harness("", 0, ext = acceptingEnter(accepted))
+        h.ime("pr", 2, composition = 0..1)
+        h.ime("print\n", 6, composition = null)
+        assertEquals(listOf("print"), accepted)
+        assertEquals("println", h.doc)
+        h.assertInSync()
+    }
+
+    @Test fun anAcceptTappedWhileComposingEndsTheCompositionAndTheFieldFollows() {
+        val h = Harness("", 0)
+        h.ime("pri", 3, composition = 0..2)
+        // A tap on a completion row: an edit from outside the field while it composes.
+        h.view.dispatch(dev.supermux.editor.core.TransactionSpec(changes = listOf(dev.supermux.editor.core.ChangeSpec(0, 3, "println")), selection = EditorSelection.cursor(7), userEvent = "input.complete"))
+        assertNull(h.sync.composition, "the composition ended at the accept")
+        h.assertInSync()
+        assertEquals("println", h.field.text)
+        h.type("(")
+        assertEquals("println(", h.doc)
+    }
+
     @Test fun typingBecomesInputTransactions() {
         val h = Harness("hello world", 5)
         h.type(",")

@@ -46,22 +46,25 @@ val viewPluginsFacet: Facet<ViewPlugin, List<ViewPlugin>> = Facet.list("viewPlug
 
 /** The running instances of one view's [viewPluginsFacet]. */
 internal class ViewPlugins(private val target: EditorView, private val parent: CoroutineScope) {
-    private class Running(val plugin: ViewPlugin, val instance: ViewPluginInstance, val job: Job)
+    internal class Running(val plugin: ViewPlugin, val instance: ViewPluginInstance, val job: Job)
 
     private var running: List<Running> = emptyList()
     private var plugins: List<ViewPlugin> = emptyList()
 
-    fun sync(state: EditorState) {
+    /** Sync the instances with [state]'s plugins; returns the ones it created (they start FROM [state]). */
+    fun sync(state: EditorState): Set<Running> {
         val want = state.facet(viewPluginsFacet)
-        if (want === plugins) return
+        if (want === plugins) return emptySet()
         plugins = want
         val keep = running.filter { r -> want.any { it === r.plugin } }
         for (r in running) if (keep.none { it === r }) stop(r)
         val next = ArrayList<Running>(want.size)
+        val created = HashSet<Running>()
         for (p in want) {
-            next += keep.firstOrNull { it.plugin === p } ?: start(p) ?: continue
+            next += keep.firstOrNull { it.plugin === p } ?: (start(p)?.also { created += it } ?: continue)
         }
         running = next
+        return created
     }
 
     private fun start(p: ViewPlugin): Running? {
@@ -81,8 +84,10 @@ internal class ViewPlugins(private val target: EditorView, private val parent: C
     }
 
     fun update(tr: Transaction) {
-        if (tr.reconfigured) sync(tr.state)
-        for (r in running) target.guarded("view plugin update", Unit) { r.instance.update(tr) }
+        // An instance created by this transaction (a reconfigure adding its plugin) started from its
+        // NEW state: it never gets the transaction itself (CM6), or it would count its changes twice.
+        val created = if (tr.reconfigured) sync(tr.state) else emptySet()
+        for (r in running) if (r !in created) target.guarded("view plugin update", Unit) { r.instance.update(tr) }
     }
 
     /** Another state (a document switch): every instance goes, the new state's start fresh. */

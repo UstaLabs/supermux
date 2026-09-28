@@ -217,6 +217,13 @@ internal class HoverEngine(private val c: EditorController) {
         start(at.first, at.second, delayed = true)
     }
 
+    /** A press (a tap, a click) off every tooltip: a shown hover closes. */
+    fun pressedOutside() {
+        job?.cancel(); job = null; pending = -1
+        closeJob?.cancel(); closeJob = null
+        if (anyShown()) Hover.closeHover.run(c.view)
+    }
+
     fun exit() {
         job?.cancel(); job = null; pending = -1
         if (anyShown() && closeJob == null) scheduleClose()

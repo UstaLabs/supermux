@@ -557,10 +557,12 @@ private fun surfaceMeasurePolicy(
             val y = if (pw.inline) pw.rect.top + (pw.rect.height - it.height) / 2 else pw.rect.top
             it.place(kotlin.math.round(pw.rect.left).toInt(), kotlin.math.round(y).toInt())
         }
+        // Tooltips over the text and widgets, UNDER the touch handles (a handle is never hidden by a
+        // completion list or a hover, and its target keeps taking the finger).
+        for ((_, r, ps) in tips) ps.forEach { it.place(kotlin.math.round(r.left).toInt(), kotlin.math.round(r.top).toInt()) }
         handles.forEach { it.place(0, 0) }
         for ((spot, ps) in handleShields) ps.forEach { it.place(spot.touch.left.toInt(), spot.touch.top.toInt()) }
         overlay.forEach { it.place(0, 0) }
-        for ((_, r, ps) in tips) ps.forEach { it.place(kotlin.math.round(r.left).toInt(), kotlin.math.round(r.top).toInt()) }
     }
 }
 
