@@ -46,7 +46,7 @@ Same as M3c:
 - **README note:** only folds get the safe two-step Backspace. A non-atomic `Replace` is deleted whole in one
   keystroke.
 - Tests: a plugin command without a userEvent, bound to a key, cannot take part of a fold.
-- [ ] Commit: `fix(editor-compose): police command dispatches regardless of userEvent`.
+- [x] Commit: `fix(editor-compose): police command dispatches regardless of userEvent`.
 
 ### Task 1: history (`apps/editor-plugins/history`)
 - **Model:** CM6's `@codemirror/commands` history, redone in Kotlin.
@@ -81,7 +81,7 @@ Same as M3c:
   - undo of a whole-fold delete restores the fold's text
   - the history depth cap: 100 events by default, configurable
   - the `ChangeSet.map` property tests
-- [ ] Commit: `feat(editor-plugins): history (undo/redo) with remote-change mapping`.
+- [x] Commit: `feat(editor-plugins): history (undo/redo) with remote-change mapping`.
 
 ### Task 2: basics+ (extend `apps/editor-plugins/basics`)
 - **Active line:** a `LineStyle` "active-line" on every cursor's line when its range is empty. It replaces the
@@ -99,7 +99,7 @@ Same as M3c:
   does. Limit it to the viewport.
 - **Line numbers:** already built in; add a plugin-level `lineNumbers(enabled)` facet so the host can toggle them.
 - **Tests:** each feature, including multi-cursor, emoji, and that a large file never stalls (bounded scans).
-- [ ] Commit: `feat(editor-plugins): basics+ (active line, bracket matching, indent on input, selection matches)`.
+- [x] Commit: `feat(editor-plugins): basics+ (active line, bracket matching, indent on input, selection matches)`.
 
 ### Task 3: highlight (`apps/editor-plugins/highlight`)
 - A `SyntaxHost` that owns a `SyntaxWorker` per `EditorView`:
@@ -118,7 +118,7 @@ Same as M3c:
   - A worker hookup test on JVM: open, type, spans arrive.
   - Dispose frees native handles (`ses_debug_live_trees` returns to 0).
   - A document switch resets the worker.
-- [ ] Commit: `feat(editor-plugins): highlight plugin (syntax host + worker wiring)`.
+- [x] Commit: `feat(editor-plugins): highlight plugin (syntax host + worker wiring)`.
 
 ### Task 4: fold (`apps/editor-plugins/fold`)
 - **Fold ranges** come from `Syntax.folds` (tree-sitter `folds.scm`) when highlight is on, and otherwise from
@@ -138,7 +138,7 @@ Same as M3c:
 - **Tests:** fold/unfold via command, gutter and placeholder; folds survive edits outside them; an edit inside a
   fold's range unfolds it (as CM6 does); `foldAll` over a 10k-line file stays under 100 ms; reveal on a search-like
   selection; undo interplay with history.
-- [ ] Commit: `feat(editor-plugins): fold (syntax/indent folds, gutter, commands, reveal)`.
+- [x] Commit: `feat(editor-plugins): fold (syntax/indent folds, gutter, commands, reveal)`.
 
 ### Task 5: view settings (`apps/editor-plugins/view`)
 - **Settings as data:** `EditorSettings(fontSize, lineWrap, tabSize, indentUnit, showLineNumbers, theme)` as a facet
@@ -148,14 +148,14 @@ Same as M3c:
   so M5 can map it one-to-one.
 - **Tests:** reconfigure at runtime changes wrap, tab size and theme without losing state; zoom round-trips through
   the callback.
-- [ ] Commit: `feat(editor-plugins): view settings (wrap, zoom, tab size, theme) as runtime-configurable facets`.
+- [x] Commit: `feat(editor-plugins): view settings (wrap, zoom, tab size, theme) as runtime-configurable facets`.
 
 ### Task 6: sample, devices, docs
-- [ ] `editor-sample` uses all the plugins. Add a settings toggle for "delete fold whole".
-- [ ] Reinstall on the devices and restart the samples.
-- [ ] Prepare a short checklist for Ahmet (the controller relays it): undo/redo on the phone keyboard and a hardware
+- [x] `editor-sample` uses all the plugins. Add a settings toggle for "delete fold whole".
+- [x] Reinstall on the devices and restart the samples.
+- [x] Prepare a short checklist for Ahmet (the controller relays it): undo/redo on the phone keyboard and a hardware
   keyboard, bracket matching, indent on `}`, selection matches, fold via gutter and commands, fold + undo.
-- [ ] READMEs for each plugin module. Append a dated entry to `~/.mux/domains/editor.md`. Commit.
+- [x] READMEs for each plugin module. Append a dated entry to `~/.mux/domains/editor.md`. Commit.
 
 ## Not in M4a
 - **M4b:** search/replace. **M4c:** LSP. **M4d:** diff + review threads.
