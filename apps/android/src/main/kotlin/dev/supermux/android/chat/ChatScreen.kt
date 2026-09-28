@@ -607,9 +607,9 @@ fun ChatScreen(
         var openedPanels by remember { mutableStateOf(setOf(SessionPanel.Chat)) }
         // The just-tapped panel must compose in the SAME frame: openedPanels only catches up an
         // effect later, and that in-between frame — old panel already alpha-0, new panel not yet
-        // composed — draws the bare background. On the editor's first open the synchronous WebView
-        // creation freezes that blank frame on screen for seconds (the "whole page goes black"
-        // flash). openedPanels still persists visited panels for keep-alive after switching away.
+        // composed — draws the bare background (with the old CodeMirror editor, a WebView built on
+        // first open froze that frame for seconds: the "whole page goes black" flash; any slow first
+        // composition shows it). openedPanels still persists visited panels for keep-alive.
         val shownPanels = openedPanels + activePanel
         LaunchedEffect(activePanel) { openedPanels = openedPanels + activePanel }
 

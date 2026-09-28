@@ -10,15 +10,16 @@ import androidx.compose.ui.window.DialogProperties
  *
  * ── Why this exists ─────────────────────────────────────────────────────────
  *
- * Compose Desktop cannot paint over a heavyweight AWT child (the JCEF editor), so on desktop every
- * dialog and every open menu has to make those children step aside while it is on screen — see
- * `desktop/ui/ModalPresence.kt` (`ModalPresence`, `ModalOpen`, `HeavyweightModalShield`), which is
- * a genuine desktop actual and stays there. Android has no such problem and needs nothing.
+ * Compose cannot paint over a heavyweight platform child (an AWT component, a UIKit view, a DOM
+ * element), so a host that embeds one needs every dialog and open menu to make it step aside while
+ * the modal is on screen. Since the M5 native editor no host embeds one under a modal (desktop's old
+ * JCEF editor shield was deleted with it), so every host uses the identity default today; the seam
+ * stays for the next interop child.
  *
  * The Material3 half of a dialog is identical on both, so it lives here, and the platform half is
  * reached through this local: a wrapper that is composed around (or alongside) the modal for
  * exactly as long as the modal is open. The default is the identity wrapper — Android, previews and
- * tests simply render the content. `DesktopTheme` provides `{ content -> ModalOpen(); content() }`.
+ * tests simply render the content.
  */
 val LocalModalHost = staticCompositionLocalOf<@Composable (@Composable () -> Unit) -> Unit> {
     { content -> content() }

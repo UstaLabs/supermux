@@ -2,14 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   Hardened-runtime entitlements for the notarized macOS build. Notarization REQUIRES the hardened
-  runtime, and the hardened runtime breaks three things this app needs unless they're granted here:
+  runtime, and the hardened runtime breaks things this app needs unless they're granted here:
 
-  • allow-jit + allow-unsigned-executable-memory — the JVM JITs, and CEF/V8 does too. Without these
-    the app dies the moment HotSpot writes an executable page.
-  • disable-library-validation — LOAD-BEARING for the editor. Library validation normally allows dylibs
-    signed by the SAME team (or Apple). The bundled JBR/JCEF framework originates with JetBrains and
-    is loaded dynamically by Chromium; this entitlement keeps that load valid in the notarized app.
-  • allow-dyld-environment-variables — CEF's helper processes are launched with DYLD_* set.
+  • allow-jit + allow-unsigned-executable-memory — the JVM JITs. Without these the app dies the
+    moment HotSpot writes an executable page.
+  • disable-library-validation — library validation normally allows only dylibs signed by the SAME
+    team (or Apple). The JNI engines (terminal-core, editor-syntax) are extracted from their jars
+    into a cache and System.load'ed from there, and Compose/skiko do the same with their natives.
+  • allow-dyld-environment-variables — added for the JCEF editor's helper processes (removed in the
+    M5 native-editor cutover). Kept until a notarized release proves the app runs without it.
 -->
 <plist version="1.0">
 <dict>

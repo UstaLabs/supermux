@@ -33,7 +33,7 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
-/** Editor font-size bounds — the cm6 bundle's own range, shared by both editor engines. */
+/** Editor font-size bounds (the old CodeMirror editor's range, kept by the native one). */
 const val EDITOR_FONT_MIN = 10
 const val EDITOR_FONT_MAX = 24
 const val EDITOR_FONT_DEFAULT = 13

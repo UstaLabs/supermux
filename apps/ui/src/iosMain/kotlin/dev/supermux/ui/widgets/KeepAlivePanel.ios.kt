@@ -17,7 +17,7 @@ import androidx.compose.ui.zIndex
  * real `UIView` into a UIKit container that Compose positions but does NOT paint: the view is
  * composited by UIKit, above the Compose canvas. `Modifier.alpha(0f)` sets the alpha of the COMPOSE
  * layer, which the interop child is not part of — so an alpha-hidden pane would keep its
- * `WKWebView` fully visible on top of whatever replaced it, and still take touches.
+ * UIKit view fully visible on top of whatever replaced it, and still take touches.
  * That is the same class of problem the desktop actual was written for; only the toolkit differs
  * (heavyweight AWT there, UIKit compositing here), so the same fix applies.
  *

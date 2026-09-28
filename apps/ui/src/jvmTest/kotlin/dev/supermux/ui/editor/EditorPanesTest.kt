@@ -42,7 +42,7 @@ class EditorPanesTest {
     ): @Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
-            LocalPlatform provides FakePlatform(caps = caps, editorEngine = FakeEditorEngineFactory()),
+            LocalPlatform provides FakePlatform(caps = caps),
         ) {
             SupermuxTheme(appearance = AppearanceMode.DARK) { content() }
         }

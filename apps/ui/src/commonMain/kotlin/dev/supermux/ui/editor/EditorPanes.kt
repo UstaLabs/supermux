@@ -16,9 +16,9 @@
 //     shows the same unsaved text on both sides, and dragging a file tab between groups cannot
 //     lose an edit (the pane is destroyed and rebuilt; the document never moves).
 //  2. A pane is composed only while it is the ACTIVE tab of its group — PaneHost guarantees that,
-//     and it is load-bearing, not an optimisation. [FilePane] therefore builds its JCEF engine on
-//     composition; one live engine per background tab would exhaust memory. Nothing here may
-//     pre-warm a surface for a tab the user is not looking at.
+//     and it is load-bearing, not an optimisation. [FilePane] borrows its document's view on
+//     composition and gives it back on disposal; nothing here may pre-warm a surface for a tab
+//     the user is not looking at.
 package dev.supermux.ui.editor
 
 import androidx.compose.foundation.background
@@ -65,7 +65,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.LocalPanes
-import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.FilePathRef
@@ -86,7 +85,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
-import dev.supermux.ui.editor.engine.EditorScrollReader
 
 // ── Explorer ──────────────────────────────────────────────────────────────────────────────────
 
@@ -178,9 +176,8 @@ fun ExplorerPane(
  * file (text, dirty state, scroll, pending reveal) lives in that store, so this composable can be
  * destroyed and rebuilt — by a drag, a split, a tab switch — without the file noticing.
  *
- * The markdown preview is a SWAP, not an overlay, for the same reason it is in [EditorPanel]:
- * JCEF's heavyweight AWT child always paints above lightweight Compose siblings, so an overlay is
- * invisible while the engine is live. While the preview shows, [EditorSurface] is not composed.
+ * The markdown preview is an OVERLAY: the native editor stays composed (read-only, unfocused) under
+ * it, so the view, its LSP and its scroll survive a toggle.
  */
 @Composable
 fun FilePane(
@@ -201,9 +198,6 @@ fun FilePane(
     lineWrap: Boolean = EDITOR_LINE_WRAP_DEFAULT,
     fontSize: Int = EDITOR_FONT_DEFAULT,
     onFontSize: (Int) -> Unit = {},
-    /** The engine seam. Null → this platform's (`LocalPlatform.current.editorEngine`); tests inject
-     *  a factory that never boots a browser. */
-    engineFactory: EditorEngineFactory? = null,
     /**
      * Markdown preview, hoisted. It used to be local state driven by a button in this pane's action
      * row; that row is gone (the tab carries the per-file controls now), so the caller holds it.
@@ -217,7 +211,6 @@ fun FilePane(
     val cs = MaterialTheme.colorScheme
     val c = LocalPanes.current
     val scope = rememberCoroutineScope()
-    val engines = engineFactory ?: LocalPlatform.current.editorEngine
 
     // Ask the store for the document. Already open (another pane, an earlier visit) → an immediate
     // hit and no read; otherwise the store's in-flight guard means two panes racing on one cold
@@ -225,11 +218,8 @@ fun FilePane(
     LaunchedEffect(path) { documents.open(path) }
     val doc = documents.get(path)
     // Native views on the STORE's scope (the workspace's), never this pane's: they outlive it.
-    val nativeEditor = rememberNativeDocuments(documents)
+    rememberNativeDocuments(documents)
 
-    val reader = remember { EditorScrollReader() }
-    val lspHandle = remember(lspSessionId) { EditorLspHandle() }
-    var engineReady by remember(lspSessionId) { mutableStateOf(false) }
     val bridge = remember(lspSessionId, lspStatus, lspRpc) {
         lspSessionId?.let {
             LspBridge(
@@ -246,25 +236,6 @@ fun FilePane(
 
     val previewGate = editorPreviewGate(path, previewMode, showDiff = false)
     val showPreview = previewGate.showPreview
-
-    // LSP connect sequencing — the EditorPanel effect with the tab lookup removed (this pane IS the
-    // tab). Cancellation on a key change tears down the previous connection.
-    LaunchedEffect(lspSessionId, path, showPreview, engineReady) {
-        lspHandle.disconnect()
-        if (bridge == null || showPreview || workdir.isEmpty() || !engineReady) return@LaunchedEffect
-        val status = bridge.queryStatus(path)
-        val serverId = status.serverId
-        if (!status.supported || serverId == null || status.state != "ready") {
-            println("[lsp] '$path' not ready for LSP (state=${status.state}, supported=${status.supported})")
-            return@LaunchedEffect
-        }
-        launch { bridge.pumpRpcIn(serverId) { sid, msg -> lspHandle.message(sid, msg) } }
-        if (!bridge.open(serverId)) {
-            println("[lsp] open($serverId) failed for '$path'")
-            return@LaunchedEffect
-        }
-        lspHandle.connect(serverId, dirUri(workdir), pathToUri(joinPath(workdir, path)), status.languageId ?: "")
-    }
 
     val dirty = documents.isDirty(path)
     val stale = documents.isStale(path)
@@ -314,35 +285,22 @@ fun FilePane(
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (nativeEditor) {
-                // The native editor stays composed under the preview: an OVERLAY now (no heavyweight
-                // child to paint over it), so the view, its LSP and its scroll survive a toggle.
-                if (doc != null) {
-                    NativeDocumentEditor(
-                        documents = documents,
-                        doc = doc,
-                        lineWrap = lineWrap,
-                        fontSize = fontSize,
-                        onFontSize = onFontSize,
-                        modifier = Modifier.fillMaxSize(),
-                        lsp = remember(bridge, workdir) { bridge?.let { b -> LspLink(b.session, workdir, b) } },
-                        onNavigate = onNavigate,
-                        covered = showPreview,
-                    )
-                }
-                if (showPreview) {
-                    Column(
-                        Modifier
-                            .fillMaxSize()
-                            .background(Color(c.code))
-                            .verticalScroll(rememberScrollState())
-                            .padding(Space.lg)
-                            .testTag("editor_preview"),
-                    ) {
-                        MarkdownBody(doc?.content ?: "", linkify = true, onOpenFile = onOpenFile)
-                    }
-                }
-            } else if (showPreview) {
+            // The native editor stays composed under the preview (an overlay), so the view, its LSP
+            // and its scroll survive a toggle. The LSP connection is the view's (LspLink).
+            if (doc != null) {
+                NativeDocumentEditor(
+                    documents = documents,
+                    doc = doc,
+                    lineWrap = lineWrap,
+                    fontSize = fontSize,
+                    onFontSize = onFontSize,
+                    modifier = Modifier.fillMaxSize(),
+                    lsp = remember(bridge, workdir) { bridge?.let { b -> LspLink(b.session, workdir, b) } },
+                    onNavigate = onNavigate,
+                    covered = showPreview,
+                )
+            }
+            if (showPreview) {
                 Column(
                     Modifier
                         .fillMaxSize()
@@ -353,27 +311,6 @@ fun FilePane(
                 ) {
                     MarkdownBody(doc?.content ?: "", linkify = true, onOpenFile = onOpenFile)
                 }
-            } else {
-                EditorSurface(
-                    factory = engines,
-                    // An empty filename means "no document" to the surface, which lays the browser
-                    // out at 0×0. Hold it back until the read lands so the engine is born full-size.
-                    content = doc?.content ?: "",
-                    filename = if (doc != null) path else "",
-                    lineWrap = lineWrap,
-                    fontSize = fontSize,
-                    scrollTop = doc?.scrollTop ?: 0,
-                    revealLine = doc?.revealLine,
-                    onChange = { documents.update(path, it) },
-                    onSave = { doc?.let { d -> documents.save(d) } },
-                    onRevealConsumed = { doc?.revealLine = null },
-                    onFontSize = onFontSize,
-                    scrollReader = reader,
-                    onLspOut = { serverId, message -> bridge?.rpcOut(serverId, message) },
-                    onEngineReadyChange = { engineReady = it },
-                    lspHandle = lspHandle,
-                    modifier = Modifier.fillMaxSize(),
-                )
             }
 
             if (doc == null) {

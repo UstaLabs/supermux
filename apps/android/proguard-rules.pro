@@ -6,7 +6,6 @@
 # crashed/misbehaved because these were incomplete: R8 renames code that JNI / WebView /
 # Tink resolve BY NAME. Every rule below marked "[required]" fixed a real runtime break:
 #  - the terminal engine's JNI class [required] native crash opening Terminal
-#  - @JavascriptInterface methods [required] cm6 editor/LSP bridge calls silently no-op
 #  - com.google.crypto.tink.**    [required] EncryptedSharedPreferences lost the pairing
 # If re-enabling minify, re-verify EVERY subsystem (terminal, voice, editor/LSP, VNC/scrcpy,
 # QR pairing, chat) on the minified build — static analysis cannot catch these.
@@ -63,12 +62,10 @@
 #       kept by the AGP-generated rules; this is belt-and-suspenders) ----
 -keep class dev.supermux.android.MainActivity { *; }
 
-# ---- WebView JS bridge — [required] cm6 editor + LSP shim ----
-# R8 renames @JavascriptInterface methods (EditorEngine onChange/onSave/onReady/lspOut)
-# unless kept, so the WebView's JS calls into them silently no-op.
--keepclassmembers class * {
-    @android.webkit.JavascriptInterface <methods>;
-}
+# ---- The native editor's syntax engine (JNI) ----
+# libsupermux_syntax_jni.so binds its natives BY NAME to the Ses object (editor-syntax); a renamed
+# class or method makes every editor fall back to plain text.
+-keep class dev.supermux.editor.syntax.Ses { *; }
 
 # ---- Google Tink + EncryptedSharedPreferences (SecureTokenStore) — [required] ----
 # Tink loads keyset managers/primitives reflectively; renaming them breaks the encrypted

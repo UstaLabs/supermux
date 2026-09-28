@@ -532,8 +532,8 @@ jobs:
     # jpackage (dpkg-deb/fakeroot are preinstalled on ubuntu-latest). Runs on tag pushes
     # AND workflow_dispatch dry runs (builds + uploads; publishes nothing) — like the
     # other build-* jobs. The app carries its OWN packageVersion (independent of the v*
-    # tag), so the asset name is stable: supermux-linux.deb. Unsigned; the pinned JBR/JCEF
-    # runtime is bundled so the CodeMirror editor works offline on first launch.
+    # tag), so the asset name is stable: supermux-linux.deb. Unsigned; the pinned JetBrains
+    # Runtime is bundled as the app's runtime image (desktop/build.gradle.kts).
     needs: editor-syntax-natives
     # A SHIPPED client must carry the native editor's grammars: :web:stageForBroker, the desktop
     # jar staging and the iOS tables phase fail without them (instead of a plain-text editor).
@@ -852,8 +852,8 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          # JDK 21 jpackage supplies --app-content, used to merge JBR's sibling JCEF
-          # Frameworks/helpers into Contents/runtime before signing the app bundle.
+          # JDK 21 was needed for jpackage --app-content (the JCEF frameworks, gone since the M5
+          # native editor). Kept: it packages the bundled JBR 21 image and is the known-good release JDK.
           java-version: "21"
       # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
       # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.

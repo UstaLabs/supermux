@@ -79,8 +79,6 @@ import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
-import dev.supermux.ui.editor.engine.EditorScrollReader
-import dev.supermux.ui.editor.engine.captureOutgoingScroll
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalPanes
@@ -174,7 +172,7 @@ fun EditorPanel(
     val editor = remember(sessionId) { EditorState(actions.fsRead, actions.fsWrite, scope) }
     // The native editor (M5): one view per open document, living as long as this session's
     // state, not as long as the active tab's surface.
-    val nativeEditor = rememberNativeDocuments(editor.documents, scope)
+    rememberNativeDocuments(editor.documents, scope)
     DisposableEffect(editor) { onDispose { editor.documents.disposeNative() } }
 
     if (editor.treeVisible == null) {
@@ -195,8 +193,7 @@ fun EditorPanel(
     }
 
     // Editor prefs come from the shared SettingsStore (ui/prefs/UiPrefs.kt), whose reads are
-    // asynchronous. The engine no longer rebuilds on a wrap change (the surface pushes
-    // `cmSetLineWrap` into the live editor), so this wait is now only about not flashing the
+    // asynchronous. The view takes a wrap change live, so this wait is only about not flashing the
     // default: nothing renders until the persisted values have landed (a single DataStore read —
     // the panel is already mounted asynchronously anyway).
     val prefs = LocalUiPrefs.current
@@ -209,7 +206,7 @@ fun EditorPanel(
     val fontSize by prefs.editorFontSize.collectAsState(initialFontSize)
     val liveLineWrap by prefs.editorLineWrap.collectAsState(lineWrap)
 
-    // LSP bridge — orchestrates the cm6 LSPClient over the Phase-2 flows, filtered by session.
+    // LSP bridge — the native editor's LSP transport over the Phase-2 flows, filtered by session.
     val bridge = remember(sessionId, state.lspStatus, state.lspRpc) {
         LspBridge(
             sessionId = sessionId,
@@ -224,12 +221,6 @@ fun EditorPanel(
 
     // The native editor's code intelligence: this session's language servers, over the same bridge.
     val lspLink = remember(bridge, workdir) { LspLink(sessionId, workdir, bridge) }
-
-    // The engine itself is owned by the shared [EditorSurface]; the panel reaches the live one
-    // through these seams (scroll reads for a tab switch, the LSP push channel, its ready gate).
-    val reader = remember { EditorScrollReader() }
-    val lspHandle = remember(sessionId) { EditorLspHandle() }
-    var engineReady by remember(sessionId) { mutableStateOf(false) }
 
     val activeIsMarkdown = editor.activeTab?.path?.let(::isMarkdownPath) == true
     val showPreviewToggle = activeIsMarkdown && !editor.showDiff
@@ -247,31 +238,8 @@ fun EditorPanel(
         state.fsChanges.collect { f -> if (f.session == sessionId) editor.markChanged(f.paths) }
     }
 
-    // (Re)wire code intelligence whenever the active file (or diff/preview mode) changes.
-    // LaunchedEffect cancellation tears down the prior client on a fast tab switch, and the
-    // engine's OWN ready gate is a key — desktop's rule, replacing a fixed 1.2s "the WebView is
-    // probably up by now" sleep, so a slow first paint no longer loses code intelligence.
-    LaunchedEffect(editor.activeTabPath, editor.showDiff, showPreview, engineReady) {
-        lspHandle.disconnect()
-        val tab = editor.activeTab
-        if (editor.showDiff || showPreview || tab == null || workdir.isEmpty() || !engineReady) {
-            return@LaunchedEffect
-        }
-        val status = bridge.queryStatus(tab.path)
-        val serverId = status.serverId
-        // Status.isReady: supported && serverId != null && state == "ready" (LspBridge.swift:18).
-        if (!status.supported || serverId == null || status.state != "ready") return@LaunchedEffect
-        // Pump inbound RPC for this server in a child coroutine (cancelled with this effect).
-        launch { bridge.pumpRpcIn(serverId) { sid, msg -> lspHandle.message(sid, msg) } }
-        if (!bridge.open(serverId)) return@LaunchedEffect
-        val rootUri = dirUri(workdir)
-        val fileUri = pathToUri(joinPath(workdir, tab.path))
-        lspHandle.connect(serverId, rootUri, fileUri, status.languageId ?: "")
-    }
-
     fun revealFile(path: String, line: Int? = null, endLine: Int? = null) {
         focusManager.clearFocus()
-        captureOutgoingScroll(editor, reader)
         editor.openFileAtLine(path, line, endLine)
         editor.searchQuery = ""
         searchResults.clear()
@@ -477,10 +445,7 @@ fun EditorPanel(
                             activeTabPath = editor.activeTabPath,
                             loadingPath = if (loadingNew) editor.loadingPath else null,
                             isDirty = editor::isDirty,
-                            onSelect = { path ->
-                                captureOutgoingScroll(editor, reader)
-                                editor.selectTab(path)
-                            },
+                            onSelect = { path -> editor.selectTab(path) },
                             onClose = editor::closeTab,
                         )
                         HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
@@ -518,48 +483,26 @@ fun EditorPanel(
                         }
 
                         Box(Modifier.weight(1f).fillMaxWidth()) {
-                            if (nativeEditor) {
-                                if (activeTab != null) {
-                                    // key: a tab switch is another document, another borrowed view.
-                                    androidx.compose.runtime.key(activeTab.path) {
-                                        NativeDocumentEditor(
-                                            documents = editor.documents,
-                                            doc = activeTab,
-                                            lineWrap = liveLineWrap,
-                                            fontSize = fontSize,
-                                            onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
-                                            modifier = Modifier.fillMaxSize(),
-                                            lsp = lspLink,
-                                            onNavigate = { path, line -> revealFile(path, line) },
-                                            covered = showPreview,
-                                        )
-                                    }
+                            if (activeTab != null) {
+                                // key: a tab switch is another document, another borrowed view.
+                                androidx.compose.runtime.key(activeTab.path) {
+                                    NativeDocumentEditor(
+                                        documents = editor.documents,
+                                        doc = activeTab,
+                                        lineWrap = liveLineWrap,
+                                        fontSize = fontSize,
+                                        onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
+                                        modifier = Modifier.fillMaxSize(),
+                                        lsp = lspLink,
+                                        onNavigate = { path, line -> revealFile(path, line) },
+                                        covered = showPreview,
+                                    )
                                 }
-                            } else EditorSurface(
-                                content = activeTab?.content ?: "",
-                                filename = activeTab?.path ?: "",
-                                lineWrap = lineWrap,
-                                fontSize = fontSize,
-                                scrollTop = activeTab?.scrollTop ?: 0,
-                                revealLine = activeTab?.revealLine,
-                                onRevealConsumed = { activeTab?.revealLine = null },
-                                onChange = { content ->
-                                    activeTab?.path?.let { editor.updateContent(it, content) }
-                                },
-                                onSave = { editor.saveActive() },
-                                // A pinch / keyboard zoom already applied itself in-page; this only
-                                // persists it so it survives reopen (no rebuild).
-                                onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
-                                scrollReader = reader,
-                                onLspOut = { sid, msg -> bridge.rpcOut(sid, msg) },
-                                onEngineReadyChange = { engineReady = it },
-                                lspHandle = lspHandle,
-                                modifier = Modifier.fillMaxSize(),
-                            )
+                            }
 
                             // Markdown preview overlay — covers (but keeps warm) the code surface
                             // when toggled on a .md tab (parity EditorPane.swift:240-245). Opaque so
-                            // the editor underneath is hidden; the engine stays alive in remember.
+                            // the editor underneath is hidden; its view stays alive under it.
                             if (showPreview && activeTab != null) {
                                 Column(
                                     Modifier

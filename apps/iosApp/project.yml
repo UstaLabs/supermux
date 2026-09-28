@@ -51,14 +51,6 @@ targets:
       # on every platform; the native macOS app was retired), and so is the Swift terminal host —
       # the terminal is the shared Compose renderer now.
       - path: Supermux
-        excludes:
-          - "EditorWeb/**"
-      # Bundled CodeMirror 6 editor assets (index.html + cm6.js) as a folder
-      # reference so the directory structure is preserved in the .app bundle
-      # (Bundle.main … subdirectory: "EditorWeb"). Loaded by the WKWebView editor.
-      - path: Supermux/EditorWeb
-        type: folder
-        buildPhase: resources
       # Shared with the watch app: relay wire-format + transport logic, compiled into the
       # iOS app so BrokerRelay (phone side) and SupermuxTests can use them.
       - path: SupermuxWatch/Watch/RelayEnvelope.swift
@@ -162,11 +154,7 @@ targets:
           # which is why the `:ios` module applies the org.jetbrains.compose plugin even though it
           # declares no resources of its own. Without the plugin there is no such hook, the fonts
           # never reach the bundle, and every screen falls back to the system face SILENTLY.
-          #
-          # :ios:syncEditorWeb refreshes Supermux/EditorWeb from apps/android/src/main/assets/editor
-          # (the ONE source of truth for the CodeMirror bundle — desktop copies from there too).
-          # It runs BEFORE the resources phase, so the .app can never ship a stale cm6.js again.
-          ./gradlew --no-daemon :ios:syncEditorWeb :ios:embedAndSignAppleFrameworkForXcode
+          ./gradlew --no-daemon :ios:embedAndSignAppleFrameworkForXcode
       - name: Copy the native editor's grammar tables (only once :editor-syntax is linked)
         basedOnDependencyAnalysis: false
         script: |

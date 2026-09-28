@@ -31,11 +31,9 @@ import dev.supermux.android.chat.VoiceRecorder
 import dev.supermux.android.chat.createImageUri
 import dev.supermux.android.chat.createVideoUri
 import dev.supermux.android.display.AndroidVideoSurfaceFactory
-import dev.supermux.android.editor.AndroidEditorEngineFactory
 import dev.supermux.android.push.AndroidPushRegistrar
 import dev.supermux.android.windows.AndroidWindowHostController
 import dev.supermux.android.update.AndroidAppUpdater
-import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.android.pairing.rememberQrScanLauncher
 import dev.supermux.ui.display.VideoSurfaceFactory
 import dev.supermux.ui.platform.AppUpdater
@@ -112,10 +110,6 @@ class AndroidPlatform(
 
     /** FCM channel + POST_NOTIFICATIONS + relay registration. */
     override val push: PushRegistrar = AndroidPushRegistrar(context)
-
-    /** The WebView that hosts CodeMirror. Built from the ACTIVITY context so the editor's CSS px
-     *  match the display the window is actually on (DeX / external displays differ in density). */
-    override val editorEngine: EditorEngineFactory = AndroidEditorEngineFactory(context = { context })
 
     /** ACTION_VIEW into whatever the user set as their browser. Swallows the "no activity" case. */
     override fun openUrl(url: String) {

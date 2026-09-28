@@ -91,7 +91,7 @@ class FoldTest {
         assertEquals(text, v.doc)
     }
 
-    @Test fun cm6sFoldKeys() {
+    @Test fun codeMirrorsFoldKeys() {
         val v = view(cursor = 2)
         assertTrue(runKey(v, KeyChord("[", ctrl = true, shift = true), apple = false))
         assertEquals(1, v.folds().size)

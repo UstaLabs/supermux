@@ -1,7 +1,6 @@
 package dev.supermux.web
 
 import dev.supermux.ui.display.VideoSurfaceFactory
-import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.ClipboardAccess
@@ -21,7 +20,6 @@ import dev.supermux.ui.terminal.SharedTerminal
 import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
-import dev.supermux.web.editor.WebEditorEngineFactory
 import dev.supermux.web.seams.WebClipboard
 import dev.supermux.web.seams.WebFiles
 import dev.supermux.web.seams.WebMic
@@ -104,9 +102,6 @@ class WebPlatform(
     override val updates: AppUpdater = NoAppUpdater
     override val notifications: NotificationManager = NoopNotificationManager
     override val windows: WindowHostController? = null
-    // The committed cm6 bundle in a same-origin iframe, driven by desktop's bridge protocol.
-    override val editorEngine: EditorEngineFactory = WebEditorEngineFactory()
-
     /**
      * The native editor's syntax module (M5): fetched the first time an editor opens a file (never
      * with the shell), and the code-only grammars' tables from the digest-named directory

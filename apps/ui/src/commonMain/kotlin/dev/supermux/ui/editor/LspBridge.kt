@@ -12,8 +12,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * Flow-based LSP control-plane + relay — the shared counterpart to iOS `LspBridge.swift` / the
  * web `stores/lsp.ts`. The broker is a dumb JSON-RPC pipe; the real LSP protocol (initialize,
- * didOpen, completion, hover…) runs inside cm6's `LSPClient` in the editor engine's web view
- * (JCEF on desktop, `WebView` on Android).
+ * didOpen, completion, hover…) runs in the native editor's LSP client (`:editor-plugins` lsp),
+ * reached through [BrokerLspTransport].
  *
  * [HostStore] already folds every inbound frame into app-wide flows ([lspStatus] keyed
  * "session|path", [lspRpc] a SharedFlow) — so this bridge just sends the outbound control frames
@@ -90,7 +90,7 @@ class LspBridge(
         return failure == null
     }
 
-    /** Send an outbound JSON-RPC message from the cm6 LSP client to the broker. */
+    /** Send an outbound JSON-RPC message from the editor's LSP client to the broker. */
     fun rpcOut(serverId: String, message: String) = lspRpcOut(sessionId, serverId, message)
 
     /** Stop [serverId] for this session at the broker. */
@@ -122,7 +122,7 @@ class LspBridge(
 
     /**
      * Inbound RPC pump — collect [lspRpc] filtered to this session (and a single server),
-     * delivering each message into the cm6 client via [deliver]. Suspends until cancelled (the
+     * delivering each message into the LSP client via [deliver]. Suspends until cancelled (the
      * caller runs it in a child coroutine of the connect LaunchedEffect, so a tab switch tears
      * it down). Filtering by session + serverId prevents cross-wiring.
      */

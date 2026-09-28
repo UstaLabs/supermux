@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
 
 /**
  * The native editor's LSP client over the broker's `lsp` channel (M5 A4): [LspBridge] adapted to
- * [LspTransport]. No broker change: the same frames CodeMirror's client used.
+ * [LspTransport]. No broker change: the same frames the old CodeMirror client used.
  *
  * - [send] is `lsp_rpc` out ([LspBridge.rpcOut]); [incoming] the `lsp_rpc` frames of this session
  *   and server only ([LspBridge.rpcIn]).

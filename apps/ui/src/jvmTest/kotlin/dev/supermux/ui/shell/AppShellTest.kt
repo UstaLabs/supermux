@@ -54,9 +54,9 @@ import dev.supermux.net.BrokerApi
  * what desktop's `app` was resolved from anyway).
  *
  * M4a Task 5 — wiring the launcher into the app shell. The shell wasn't previously
- * UI-tested (its detail pane, [SessionDetail], drags in the JCEF-backed editor); this suite adds
+ * UI-tested (its detail pane, [SessionDetail], drags in the editor); this suite adds
  * the minimal harness needed to exercise the launcher overlay without ever selecting a session
- * (so [SessionDetail]/JCEF never mounts): a real [HostStore] (connectOnInit=false, HTTP via
+ * (so [SessionDetail] never mounts): a real [HostStore] (connectOnInit=false, HTTP via
  * a ktor MockEngine, outbound WS frames captured through `sendFrameOverride`) and a real
  * [ShellUiState]; the prefs are the in-memory settings store, so no test ever touches a real
  * profile directory.

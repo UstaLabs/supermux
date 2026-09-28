@@ -9,13 +9,6 @@ plugins {
     alias(libs.plugins.serialization)
 }
 
-// The iframe bridge shim, copied where the Karma test can FETCH it. `EditorBridgeIframeTest` builds
-// its stub editor page out of the real file, so the shim and the engine can never drift apart
-// unnoticed — an inlined copy in the test would assert against itself. Karma serves the test
-// compilation's processed resources under the run's base path; `karma.config.d/editor-shim.js`
-// registers this one file and proxies it to `/editor-shim.js`, which is what the test fetches.
-val editorShimTestResourceDir = layout.buildDirectory.dir("editorShimTestResource")
-
 // The browser host of the shared Compose app. Thin by design, like apps/ios: entry point,
 // WebPlatform + browser actuals, and the packaging that puts the bundle where the broker serves it.
 kotlin {
@@ -59,9 +52,6 @@ kotlin {
             }
         }
         wasmJsTest {
-            // `EditorBridgeIframeTest` mounts the REAL `editor/editor-shim.js` in its stub frame
-            // rather than a copy of it — see [editorShimTestResource] below.
-            resources.srcDir(editorShimTestResourceDir)
             dependencies {
                 implementation(kotlin("test"))
                 implementation(libs.coroutines.test)
@@ -229,9 +219,6 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // remains a bloat catch, NOT a target to grow into — one more feature the size of this one would
 // put the ceiling in reach.
 //
-// The staged `editor/` bundle (CodeMirror, 1.3 MB raw) sits outside assets/ and is deliberately not
-// counted: it is a separate, lazily-loaded page.
-//
 // NEITHER ARE THE FONTS, and that is now worth a number rather than a clause. `assets.listFiles()`
 // below is top level only, so everything under `assets/composeResources/` is outside this ceiling
 // by construction:
@@ -255,7 +242,7 @@ val maxGzipBytes = 8L * 1024 * 1024
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
 // with the shell it would leave -1.2 MiB of the 1.43 MiB headroom above. It is also not part of the
 // shell's download: `WasmBackend.load` fetches it the first time an editor opens a file, never at
-// page load, exactly like the old CodeMirror page that sat outside `assets/`. So it is measured on
+// page load. So it is measured on
 // its own against [maxSyntaxGzipBytes] (today's 2.56 MiB plus room for a few grammars), and the
 // guard fails if it is missing rather than silently counting nothing. The file reaches the dist
 // twice (the resource copy that lets webpack resolve the loader's URL, and webpack's emitted
@@ -280,24 +267,8 @@ fun gzipSize(bytes: ByteArray): Long {
     return bos.size().toLong()
 }
 
-// Extra sources `stageForBroker` copies in beside the webpack dist. Hoisted out of the task action
-// so they can be declared as INPUTS: editing the CodeMirror bundle must re-run the task, not leave
-// a stale copy published under an up-to-date check.
-//
-// The editor bundle's single source of truth is the committed android assets dir (desktop reads
-// the same files). There is no stylesheet to lift out of KGP's yarn workspace any more — the
-// terminal was the only npm package this app had, and the Compose renderer needs no CSS.
-val editorSrcDir: File = rootProject.projectDir.resolve("android/src/main/assets/editor")
-
-// NOT under `src/wasmJsMain/resources/`: everything there is copied to the webpack dist root, where
-// the hashing pass below would rename it into `assets/editor-shim-<hash>.js` and rewrite its bare
-// name inside app.js — the iframe page would then ask for a file that no longer exists at that name.
-// This lives outside the Kotlin source set precisely so the build treats it as a plain data file.
-val editorShimFile: File = layout.projectDirectory.file("editor/editor-shim.js").asFile
-
 // The PWA shell: `sw.js`, `manifest.webmanifest`, `favicon.ico` and `icons/`. Committed (no build
-// step) and staged to the ROOT of the served tree, outside `assets/` — same reason as the editor
-// bundle and emphatically NOT `src/wasmJsMain/resources/`: the hashing pass above renames every
+// step) and staged to the ROOT of the served tree, outside `assets/` — and emphatically NOT `src/wasmJsMain/resources/`: the hashing pass above renames every
 // .js in the dist root, and a service worker that moves to `assets/sw-<hash>.js` has neither its
 // registered URL nor its `/` scope any more.
 val pwaDir = layout.projectDirectory.dir("pwa")
@@ -307,13 +278,8 @@ val stageForBroker by tasks.registering {
     description = "Build the wasm bundle and stage it (content-hashed) into src/channels/web/static"
     dependsOn(tasks.named("wasmJsBrowserDistribution"))
     inputs.dir(distDir)
-    // `files(...).optional()` rather than `file(...)`: a missing input must fail in the task action
-    // with its own explanatory message, not as an opaque Gradle snapshotting error. The shim is
-    // genuinely optional until task 4 creates it.
-    inputs.dir(editorSrcDir).withPropertyName("editorBundle")
-    inputs.files(editorShimFile).withPropertyName("editorShim").optional()
-    // `.optional()` like the editor shim above: a missing `pwa/` must fail in the task action
-    // with the explanatory check below, not as an opaque Gradle snapshotting error.
+    // `.optional()`: a missing `pwa/` must fail in the task action with the explanatory check
+    // below, not as an opaque Gradle snapshotting error.
     inputs.dir(pwaDir).withPropertyName("pwa").optional()
     inputs.property("maxGzipBytes", maxGzipBytes)
     inputs.property("maxSyntaxGzipBytes", maxSyntaxGzipBytes)
@@ -385,38 +351,6 @@ val stageForBroker by tasks.registering {
             if (f.name == "index.html") dst.writeText(rewrite(f.readText(), "")) else f.copyTo(dst, overwrite = true)
         }
 
-        // The CodeMirror editor bundle, staged at `editor/` in the ROOT, not under assets/: the page
-        // references `cm6.js` by a relative bare name, so content-hashing would break it. 1.3 MB
-        // revalidated per editor open is acceptable (plan 5 may hash the pair together). Being
-        // outside assets/ also keeps it out of the hashing pass AND out of the gzip guard.
-        check(editorSrcDir.resolve("index.html").isFile && editorSrcDir.resolve("cm6.js").isFile) {
-            "editor bundle missing from $editorSrcDir"
-        }
-        val editorOut = staging.resolve("editor").apply { mkdirs() }
-        editorSrcDir.resolve("cm6.js").copyTo(editorOut.resolve("cm6.js"), overwrite = true)
-        // The iframe shim republishes the bundle's `window.AndroidEditor` / webkit hooks as
-        // postMessage to the parent frame. It arrives in a later task of this plan; until then the
-        // editor page is staged exactly as Android ships it.
-        val editorHtml = editorSrcDir.resolve("index.html").readText()
-        editorOut.resolve("index.html").writeText(
-            if (editorShimFile.isFile) {
-                editorShimFile.copyTo(editorOut.resolve("editor-shim.js"), overwrite = true)
-                // Must load BEFORE cm6.js: the bundle looks its host objects up at evaluation time.
-                val injected = editorHtml.replace(
-                    "<script src=\"cm6.js\">",
-                    "<script src=\"editor-shim.js\"></script><script src=\"cm6.js\">",
-                )
-                // A silent no-op here ships an editor whose bridge is never installed, and the only
-                // symptom is an iframe that never reports ready. Fail the build instead.
-                check(injected != editorHtml) {
-                    "editor/index.html no longer contains `<script src=\"cm6.js\">` — the shim injection point moved"
-                }
-                injected
-            } else {
-                editorHtml
-            }
-        )
-
         // The PWA shell, copied verbatim into the staged root: `sw.js` must be served from `/`
         // (its registration scope), the manifest and favicon are linked by bare name from
         // index.html, and `icons/` is referenced absolutely (`/icons/icon-192.png`) by both the
@@ -474,7 +408,6 @@ val stageForBroker by tasks.registering {
             "supermux-syntax.wasm gzip ${syntaxGz / 1024} KB exceeds its ${maxSyntaxGzipBytes / 1024} KB ceiling"
         }
         check(staging.resolve("index.html").exists()) { "index.html missing from the staged bundle" }
-        check(staging.resolve("editor/index.html").exists()) { "editor bundle missing from the staged tree" }
         check(staging.resolve("sw.js").exists() && staging.resolve("icons/icon-192.png").exists()) {
             "PWA shell missing from the staged tree"
         }
@@ -490,11 +423,3 @@ val stageForBroker by tasks.registering {
         )
     }
 }
-
-val editorShimTestResource by tasks.registering(Copy::class) {
-    description = "Stage editor/editor-shim.js as a wasmJsTest resource so Karma can serve it"
-    from(editorShimFile)
-    into(editorShimTestResourceDir)
-}
-
-tasks.named("wasmJsTestProcessResources") { dependsOn(editorShimTestResource) }

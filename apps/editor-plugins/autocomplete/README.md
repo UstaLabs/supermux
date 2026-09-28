@@ -96,7 +96,7 @@ marked `snippet-field` (`EditorTheme.completionClasses`).
 
 - `Tab` accepts (configurable); ties sort by a locale-free approximation of `localeCompare`.
 - The fuzzy matcher keeps CM6's sticky `byWord` buffer (a later label's gap penalty depends on the
-  earlier ones'), tested against CM6's own scores (`cm6OrderingFixtures`, run under node).
+  earlier ones'), tested against CM6's own scores (`codeMirrorOrderingFixtures`, run under node).
 - The documentation pane goes below the list on an editor under 560 dp (a phone); the selected option
   is announced (label, detail, type) by a polite live region.
 - No sections, no `commitCharacters`, no `closeOnBlur` (the list stays while a widget or panel has

@@ -1,5 +1,5 @@
-# The two NATIVE surfaces on an iPhone, under COMPOSE_SHELL (cluster H5): the SwiftTerm terminal
-# hosted by `UIKitView`, and the `WKWebView` CodeMirror editor.
+# The terminal and the editor on an iPhone, under COMPOSE_SHELL (cluster H5; the editor is the
+# native Compose editor since M5, which replaced the `WKWebView` CodeMirror one).
 #
 # Run:  maestro --udid <iphone-sim-udid> -e SESSION="<a session's title>" \
 #          test apps/iosApp/maestro/surfaces.yaml
@@ -15,11 +15,10 @@
 #    Ctrl/Alt — which only draws inside `TerminalPane`, under Touch, for the ACTIVE pane. So "the
 #    key bar is visible" is exactly "a live terminal surface is mounted and foreground", and its
 #    disappearance is exactly "that pane is no longer active". That is what this flow asserts on.
-#  • The editor is a `WKWebView`; its content is not in the tree either. The tab title is, and the
-#    surface only mounts the host once cm6 has first-painted (`ready`), so reaching an editor tab
-#    at all is the proof that the bundle loaded and `cmInit` ran.
-#  • Neither the terminal running a command nor the editor rendering a diff region can be asserted
-#    by this toolchain. They are screenshot proofs; see the H5 execution log (`h5-*.png`).
+#  • The editor's text is drawn on a canvas; the flow asserts on the editor tab's title (the
+#    document opened) rather than on its content.
+#  • Neither the terminal running a command nor the editor rendering a diff region is asserted
+#    by this flow. They are screenshot proofs; see the H5 execution log (`h5-*.png`).
 #
 # Terminal tabs are named by a generated id (`t428714`), so they are matched by the regex `t[0-9]+`
 # — Maestro treats `tapOn`/`assertVisible` text as a regex.
@@ -69,7 +68,7 @@ env:
 
 # ── The editor.
 #
-# Opening a file switches to an editor tab, which only exists once cm6 has first-painted.
+# Opening a file switches to an editor tab.
 - swipe:
     start: 80%, 12%
     end: 20%, 12%

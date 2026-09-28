@@ -27,8 +27,8 @@ import kotlin.test.assertEquals
 
 /**
  * The walkthrough slideshow, now shared (Android gains it in cluster C4). Steps here carry no
- * `path`, so the slide is pure markdown and no code surface — and therefore no engine — is needed;
- * the diff-region half is covered by [WalkthroughRegionTest] and `EditorSurfaceTest`.
+ * `path`, so the slide is pure markdown and no code surface is needed; the code half (the diff
+ * plugin's walkthrough region) is covered by `ReviewHostsTest`.
  */
 @OptIn(ExperimentalTestApi::class)
 class WalkthroughViewTest {
@@ -52,7 +52,7 @@ class WalkthroughViewTest {
     ): @Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
-            LocalPlatform provides FakePlatform(editorEngine = FakeEditorEngineFactory()),
+            LocalPlatform provides FakePlatform(),
         ) {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 WalkthroughView(

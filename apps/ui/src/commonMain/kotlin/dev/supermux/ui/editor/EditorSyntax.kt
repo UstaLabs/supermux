@@ -65,12 +65,3 @@ internal expect suspend fun loadPlatformSyntaxBackend(): SyntaxBackend?
 
 /** The app's one syntax backend by default ([dev.supermux.ui.platform.Platform.editorSyntax]). */
 val DefaultEditorSyntax: EditorSyntax = EditorSyntax { loadPlatformSyntaxBackend() }
-
-/**
- * The editor surface the panes draw (M5, until Part C deletes CodeMirror): true = the native
- * Compose editor, false = the old engine seam (`EditorEngineFactory`). The panes read it at
- * composition, so a host (or a test of the old path) sets it once, before the first editor.
- */
-object NativeEditor {
-    var enabled: Boolean = true
-}

@@ -9,11 +9,11 @@ class LanguagesTest {
     private val registry = LanguageRegistry.default
 
     /**
-     * Transcribed from apps/android/codemirror/cm6-entry.mjs, langFor's `switch (ext)`: every
-     * extension today's bundle recognises, with the grammar it gets here (null: no tree-sitter
+     * Transcribed from the old CodeMirror bundle's langFor `switch (ext)` (deleted in the M5
+     * cutover): every extension it recognised, with the grammar it gets here (null: no tree-sitter
      * grammar, plain text; listed in native/README.md).
      */
-    private val cm6 = listOf(
+    private val codeMirror = listOf(
         "js" to "javascript", "mjs" to "javascript", "cjs" to "javascript", "jsx" to "javascript",
         "ts" to "typescript", "mts" to "typescript", "cts" to "typescript", "tsx" to "tsx",
         "py" to "python", "pyi" to "python", "java" to "java",
@@ -36,8 +36,8 @@ class LanguagesTest {
     )
 
     @Test fun forFileCoversTheCm6Extensions() {
-        assertEquals(cm6.map { it.first }.toSet(), LanguageRegistry.CM6_EXTENSIONS.keys, "the registry's cm6 table")
-        for ((ext, lang) in cm6) {
+        assertEquals(codeMirror.map { it.first }.toSet(), LanguageRegistry.CM6_EXTENSIONS.keys, "the registry's CodeMirror table")
+        for ((ext, lang) in codeMirror) {
             assertEquals(lang, registry.forFile("src/Main.$ext"), ".$ext")
             assertEquals(lang, registry.forFile("DIR\\FILE.${ext.uppercase()}"), ".${ext.uppercase()}")
             if (lang != null) assertTrue(lang in registry.languages, lang)

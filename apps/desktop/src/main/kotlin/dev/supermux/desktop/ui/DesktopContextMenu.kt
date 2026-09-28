@@ -46,10 +46,6 @@ import dev.supermux.ui.widgets.MenuStyle
  * It reuses [MenuStyle] and [DropdownMenuItem] wholesale, so a right-click menu
  * and an in-app dropdown are the same object with different contents — which is
  * the entire reason to do this rather than hand-styling one popup.
- *
- * [ModalOpen] matters here as much as it does for the dropdowns: a right-click
- * inside a text field that sits over the JCEF editor would otherwise open a menu
- * nobody can see (ModalPresence.kt has the measurements).
  */
 class SupermuxContextMenuRepresentation : ContextMenuRepresentation {
     @Composable
@@ -59,7 +55,6 @@ class SupermuxContextMenuRepresentation : ContextMenuRepresentation {
         val entries = items()
         if (entries.isEmpty()) return
 
-        ModalOpen()
         val close = { state.status = ContextMenuState.Status.Closed }
         Popup(
             popupPositionProvider = remember(status.rect) { ContextMenuPositionProvider(status.rect) },
@@ -83,7 +78,7 @@ class SupermuxContextMenuRepresentation : ContextMenuRepresentation {
                         DropdownMenuItem(
                             text = { Text(item.label) },
                             // Close first: an item that opens a dialog must not leave
-                            // the menu (and therefore a retained ModalPresence) behind it.
+                            // the menu behind it.
                             onClick = {
                                 close()
                                 item.onClick()

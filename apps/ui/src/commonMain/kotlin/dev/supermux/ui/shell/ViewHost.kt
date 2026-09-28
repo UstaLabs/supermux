@@ -65,7 +65,6 @@ import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerPane
 import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.ui.editor.FilePane
-import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
@@ -107,8 +106,8 @@ fun defaultChatHeaderMode(): ChatHeaderMode = ChatHeaderMode.PANEL
  * Draw one view's body.
  *
  * Only the ACTIVE view of each group reaches here — PaneHost composes nothing else. That is
- * load-bearing, not an optimization: the terminal and the editor are heavyweight native children,
- * and one live browser per background tab would exhaust memory. Do not compose an inactive tab.
+ * load-bearing, not an optimization: a terminal renders and an editor pane borrows its document's
+ * view only while shown. Do not compose an inactive tab.
  *
  * An unknown kind draws a hint rather than throwing. A future view kind must degrade to "this
  * client does not draw that yet".
@@ -198,11 +197,6 @@ fun ViewHost(
     pasteImageFor: String? = null,
     pasteImageRequestNonce: Long = 0L,
     onPasteImageRequestConsumed: () -> Unit = {},
-    /**
-     * Test seam for the `file` pane's code surface: a browser cannot boot under runComposeUiTest,
-     * so tests inject a factory that never builds an engine. Null → this platform's own.
-     */
-    editorEngineFactory: EditorEngineFactory? = null,
 ) {
     when (view.kind) {
         "chat" -> {
@@ -266,7 +260,6 @@ fun ViewHost(
                         // LSP is still keyed by session. A workspace with no chat view gets no code
                         // intelligence — say so rather than looking broken.
                         lspSessionId = primarySessionId,
-                        engineFactory = editorEngineFactory,
                         onNavigate = { p, line -> onOpenFile(p, line, null) },
                         modifier = modifier.testTag("editor-$workdir"),
                     )
@@ -638,7 +631,6 @@ private fun FilePaneForWorkspace(
     path: String,
     documents: DocumentStore,
     lspSessionId: String?,
-    engineFactory: EditorEngineFactory?,
     onNavigate: (path: String, line: Int) -> Unit,
     modifier: Modifier,
 ) {
@@ -670,7 +662,6 @@ private fun FilePaneForWorkspace(
         lineWrap = lineWrap,
         fontSize = fontSize,
         onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
-        engineFactory = engineFactory,
         onNavigate = onNavigate,
         modifier = modifier.fillMaxSize(),
     )

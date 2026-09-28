@@ -44,16 +44,14 @@ export function _gzipCacheStats(): { size: number; hits: number } {
 function maybeGzip(candidate: string, body: Buffer, acceptEncoding: string | undefined, mtimeMs?: number): { body: Buffer | Uint8Array; encoding?: string } {
   if (!acceptEncoding?.includes("gzip") || !COMPRESSIBLE.test(candidate)) return { body }
   // Cache content-addressed /assets/ files (hashed filenames change with
-  // content) and /editor/ (cm6.js is 1.3 MB and was re-gzipped per editor
-  // open otherwise — its filename isn't hashed, so we key on the path alone
-  // and compare mtimeMs on lookup: a redeployed file's stale entry is
-  // overwritten in place rather than orphaned under a new key (which would
-  // otherwise leak one stale ~400 KB entry per deploy). Embedded
-  // (compiled-binary) files have no mtime, so mtimeMs is undefined for them —
-  // stable as long as the embedded map itself doesn't change underneath us.
+  // content). The key is the path and mtimeMs is compared on lookup, so a
+  // file rewritten in place (a local restage of an unhashed name) replaces
+  // its entry instead of serving stale bytes. Embedded (compiled-binary)
+  // files have no mtime, so mtimeMs is undefined for them — stable as long
+  // as the embedded map itself doesn't change underneath us.
   // Entry points (index.html, sw.js) are small and may change on live-deploy,
   // so they stay out of this cache and are always re-compressed.
-  const cacheable = candidate.startsWith("/assets/") || candidate.startsWith("/editor/")
+  const cacheable = candidate.startsWith("/assets/")
   if (cacheable) {
     const cached = gzipCache.get(candidate)
     if (cached && cached.mtimeMs === mtimeMs) {
@@ -78,12 +76,10 @@ function cacheControlFor(candidate: string): string {
   return "no-cache, must-revalidate"
 }
 
-// Who may put this origin's pages in a frame: only this origin. The editor page (/editor/index.html)
-// hands `eval` to its parent through a postMessage bridge (apps/web/editor/editor-shim.js), and the
-// shim's own origin check is the inner half of that guard. This header is the outer half: a foreign
-// page cannot frame the editor at all, so it never gets to be the `window.parent` the shim talks to.
-// Applied to EVERY static response rather than just the editor page — the app shell has no business
-// being framed either, and one header on one helper cannot drift from a per-path list.
+// Who may put this origin's pages in a frame: only this origin. It was added for the old CodeMirror
+// editor iframe (which took `eval` from its parent over postMessage) and is kept for the whole site:
+// the app shell has no business being framed (clickjacking), and one header on one helper cannot
+// drift from a per-path list.
 const SECURITY_HEADERS: Record<string, string> = { "content-security-policy": "frame-ancestors 'self'" }
 
 export function serveStatic(opts: { staticDir: string | undefined; embedded: Record<string, string>; path: string; acceptEncoding?: string }): Response | null {

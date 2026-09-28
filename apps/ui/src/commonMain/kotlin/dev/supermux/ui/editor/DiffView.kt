@@ -145,7 +145,7 @@ fun DiffView(
     /**
      * Reads a changed file's working copy (repo, path) so its diff is drawn by the native editor's
      * diff plugin (M5): inline, or side by side with the header's toggle, with the plugin's threads
-     * and composer. Null (or [NativeEditor] off) keeps the patch rows.
+     * and composer. Null keeps the patch rows.
      */
     readFile: (suspend (repo: String, path: String) -> Result<String>)? = null,
     /** Writes a working copy back: offers hunk revert in the native diff. Null: no revert. */
@@ -174,7 +174,7 @@ fun DiffView(
     // Kept by the pane, not the (lazy) file items: a rebuilt item finds its drafts and its scroll.
     val nativeDrafts = remember { HashMap<String, MapReviewDrafts>() }
     val nativeScroll = remember { HashMap<String, dev.supermux.editor.compose.EditorScrollPosition>() }
-    val native = if (readFile != null && NativeEditor.enabled) {
+    val native = if (readFile != null) {
         NativeDiffSupport(
             readFile = readFile,
             writeFile = writeFile,

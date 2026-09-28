@@ -41,7 +41,7 @@ import kotlinx.coroutines.launch
  *
  *  With the native editor (M5) the text IS the [native] view's rope: [content] is derived from it
  *  (read it for a save or the preview, not per keystroke) and [isDirty] compares ropes. Without
- *  one (the CodeMirror path, tests) it is a plain String as before. [content] never holds a
+ *  one (tests) it is a plain String as before. [content] never holds a
  *  `\r\n`: the store normalizes on load and restores the ending ([crlf]) on save (spec §8). */
 class Document(path: String, content: String, crlf: Boolean = false) {
     val path = path
@@ -141,7 +141,7 @@ class DocumentStore(
 
     /**
      * Set by the store's owner to give documents native views: panes then call [nativeFor]. Null
-     * (the CodeMirror path, a test) keeps every document a plain String.
+     * (a test) keeps every document a plain String.
      */
     var native: NativeEditorEnv? = null
 

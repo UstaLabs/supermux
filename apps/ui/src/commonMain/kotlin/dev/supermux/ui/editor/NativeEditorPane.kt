@@ -1,5 +1,4 @@
-// The native editor inside the app's panes (M5 A3): what `EditorSurface` + the CodeMirror engine
-// did for one document, on the Compose editor. The pane BORROWS the document's view from its
+// The native editor inside the app's panes (M5 A3): one document on the Compose editor. The pane BORROWS the document's view from its
 // NativeDocument (the view outlives the pane: see NativeDocuments.kt); everything around it (header,
 // tabs, stale banner, preview, empty/error/loading states) stays the host's.
 package dev.supermux.ui.editor
@@ -55,21 +54,18 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Give [documents] native views, on [scope]: by default the store's own (its owner's UI scope, the
  * one it was made with: the workspace session's, a panel's), so the views, their plugins, syntax
  * hosts and LSP clients live as long as the store and not as long as the pane that asked first.
- * Idempotent: a store already equipped keeps its environment. False when the native editor is
- * switched off ([NativeEditor.enabled]).
+ * Idempotent: a store already equipped keeps its environment.
  */
 @Composable
-fun rememberNativeDocuments(documents: DocumentStore, scope: CoroutineScope = documents.ownerScope): Boolean {
-    if (!NativeEditor.enabled) return false
+fun rememberNativeDocuments(documents: DocumentStore, scope: CoroutineScope = documents.ownerScope) {
     val syntax = LocalPlatform.current.editorSyntax
     remember(documents) {
         if (documents.native == null) documents.native = NativeEditorEnv(scope = scope, syntax = syntax)
         Unit
     }
-    return true
 }
 
-/** The editor's theme, following the app's light / dark scheme (decided 2026-09-28; CM6 was always dark). */
+/** The editor's theme, following the app's light / dark scheme (decided 2026-09-28; the old editor was always dark). */
 @Composable
 fun rememberAppEditorTheme(): EditorTheme {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f

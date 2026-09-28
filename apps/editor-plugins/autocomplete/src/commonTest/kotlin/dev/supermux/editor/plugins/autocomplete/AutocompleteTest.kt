@@ -302,7 +302,7 @@ class AutocompleteTest {
         assertEquals("ab xyz // imported", v.text)
     }
 
-    @Test fun cm6OrderingFixtures() {
+    @Test fun codeMirrorOrderingFixtures() {
         // Ties: localeCompare-like (case-insensitive, then lower first; punctuation, digits, letters).
         val labels = listOf("b", "A", "a", "B", "_x", "1a", "Ab", "ab")
         assertEquals(listOf("_x", "1a", "a", "A", "ab", "Ab", "b", "B"), labels.sortedWith { x, y -> Autocomplete.localeCompare(x, y) })

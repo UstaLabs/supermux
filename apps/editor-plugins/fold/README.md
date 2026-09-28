@@ -74,8 +74,8 @@ CM6's `foldKeymap`:
 | `Ctrl-Alt-[` | `Fold.foldAll`: every top-level range (past each fold it makes) |
 | `Ctrl-Alt-]` | `Fold.unfoldAll` |
 
-`Fold.toggleFold` too; all five are `NamedCommand`s (`fold.fold`, …). Today's CM6 editor does not
-bind foldKeymap at all (it is not in `cm6-entry.mjs`'s keymap); these are CM6's defaults.
+`Fold.toggleFold` too; all five are `NamedCommand`s (`fold.fold`, …). The old CodeMirror editor did
+not bind foldKeymap at all (it was not in its bundle's keymap); these are CM6's defaults.
 
 ## Deliberate differences from CM6
 

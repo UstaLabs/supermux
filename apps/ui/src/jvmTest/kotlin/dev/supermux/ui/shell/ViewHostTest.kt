@@ -31,7 +31,6 @@ import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.chat.testHostStore
 import dev.supermux.ui.editor.DocumentStore
-import dev.supermux.ui.editor.engine.UnavailableEditorEngineFactory
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.NO_CAPS
 import dev.supermux.workspace.viewTitle
@@ -57,9 +56,7 @@ private fun view(kind: String, state: Map<String, String>) = ViewDto(
  * Workspace terminals inject a pure-Compose stand-in: a SwingPanel/AndroidView engine cannot be
  * hosted under runComposeUiTest.
  *
- * The `file` pane injects an engine factory instead: an unavailable one makes `EditorSurface` draw
- * its native BasicTextField fallback, which is pure Compose AND shows the document's text — so a
- * test can read the buffer a pane is displaying without booting a browser.
+ * The `file` pane needs no seam: the native editor is pure Compose.
  */
 @OptIn(ExperimentalTestApi::class)
 class ViewHostTest {
@@ -68,9 +65,6 @@ class ViewHostTest {
 
     /** A machine with the walkthrough seam installed, which is what both real hosts ship. */
     private fun platform() = FakePlatform(caps = NO_CAPS.copy(walkthrough = true))
-
-    /** No engine is ever built under test. Error picks the visible native fallback. */
-    private val noJcef = UnavailableEditorEngineFactory("no chromium under test")
 
     /**
      * Unconfined so a non-suspending fsRead resolves inside [DocumentStore.open] itself — the
@@ -106,7 +100,6 @@ class ViewHostTest {
             chatState = { sid -> rememberChatState(app, sid) },
             chatActions = { s -> rememberChatActions(app, s) },
             onOpenFile = onOpenFile,
-            editorEngineFactory = noJcef,
             workspaceTerminalContent = workspaceTerminalContent
                 ?: { _, mod -> Box(mod.fillMaxSize()) { Text("term-stand-in") } },
         )
@@ -385,7 +378,6 @@ class ViewHostTest {
                 drafts = mutableStateMapOf(),
                 documents = store(),
                 primarySessionId = "ghost",
-                editorEngineFactory = noJcef,
             )
         }
         onNodeWithTag("editor-no-lsp").assertIsDisplayed()
@@ -405,7 +397,6 @@ class ViewHostTest {
                 drafts = mutableStateMapOf(),
                 documents = store(),
                 primarySessionId = "s1",
-                editorEngineFactory = noJcef,
             )
         }
         onNodeWithTag("editor-no-lsp").assertDoesNotExist()

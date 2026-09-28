@@ -1,11 +1,9 @@
 package dev.supermux.desktop.platform
 
-import dev.supermux.desktop.editor.DesktopEditorEngineFactory
 import dev.supermux.desktop.notify.DesktopNotifications
 import dev.supermux.desktop.shell.DesktopWindowHostController
 import dev.supermux.desktop.update.DesktopAppUpdater
 import dev.supermux.desktop.upload.FileChunkSource
-import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.ClipboardAccess
@@ -92,10 +90,6 @@ class DesktopPlatform : Platform {
 
     /** No FCM off Android; desktop's own tray notifications cover the live process. */
     override val push: PushRegistrar? = null
-
-    /** The direct-JCEF browser that hosts CodeMirror; one per app, wrapping the process-global
-     *  [dev.supermux.desktop.editor.JcefRuntime]. */
-    override val editorEngine: EditorEngineFactory = DesktopEditorEngineFactory.shared
 
     /** Delegates to [openInBrowser], which keeps the daemon-thread hand-off and the
      *  `openInBrowserOverride` / `supermux.tests` guards every desktop test relies on. */

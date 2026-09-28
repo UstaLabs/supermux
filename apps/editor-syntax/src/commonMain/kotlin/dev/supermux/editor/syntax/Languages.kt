@@ -95,8 +95,8 @@ class LanguageRegistry(private val queries: (language: String, kind: QueryKind) 
         )
 
         /**
-         * Extension -> language id. Every extension today's cm6 bundle recognises
-         * (apps/android/codemirror/cm6-entry.mjs, langFor) is here; "" marks the ones tree-sitter has
+         * Extension -> language id. Every extension the old CodeMirror bundle recognised
+         * (its `langFor`, deleted in the M5 cutover) is here; "" marks the ones tree-sitter has
          * no grammar for here, which stay plain text. A few common extras follow.
          */
         val CM6_EXTENSIONS: Map<String, String> = linkedMapOf(

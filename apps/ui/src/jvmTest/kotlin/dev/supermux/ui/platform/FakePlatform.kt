@@ -11,8 +11,6 @@ import dev.supermux.net.ByteArrayChunkSource
 import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.TerminalClient
 import dev.supermux.ui.display.VideoSurfaceFactory
-import dev.supermux.ui.editor.engine.EditorEngineFactory
-import dev.supermux.ui.editor.engine.UnavailableEditorEngineFactory
 import androidx.compose.runtime.remember
 import dev.supermux.ui.terminal.LazyTerminalClient
 import dev.supermux.ui.terminal.TerminalKeySink
@@ -42,9 +40,6 @@ internal open class FakePlatform(
     var qrResult: String? = null,
     /** What [pickFiles] hands back; the default is one small text file. */
     var pickResult: List<PickedFile>? = null,
-    /** The editor seam. Defaults to "this machine has no browser", which is what every screen test
-     *  that never opens an editor wants; an editor test passes its own recording factory. */
-    override val editorEngine: EditorEngineFactory = UnavailableEditorEngineFactory("no engine under test"),
 ) : Platform {
     val openedUrls = mutableListOf<String>()
     val copied = mutableListOf<String>()

@@ -240,4 +240,50 @@ class NativeEditorPaneTest {
         val top = view.state.doc.lineIndexAt(view.scrollPosition.anchor)
         kotlin.test.assertTrue(top in 55..79, "line 80 revealed but the view shows line ${top + 1} at the top")
     }
+
+    /**
+     * The workspace keep-alive hides a pane by laying it out at 0×0 (KeepAlivePanel.jvm). With the
+     * native editor inside that must not lose the view, its scroll or its selection, and a wrapped
+     * document must come back laid out at full width (a 0-wide pass turns wrapping off, not on
+     * with a zero wrap width).
+     */
+    @Test fun a_keep_alive_hide_at_zero_size_keeps_the_view_its_scroll_and_its_selection() = runComposeUiTest {
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined)
+        val store = storeWith(scope, "a.kt" to (1..300).joinToString("\n") { "line $it " + "word ".repeat(30) })
+        val doc = store.get("a.kt")!!
+        var visible by mutableStateOf(true)
+        setContent {
+            CompositionLocalProvider(LocalUiPrefs provides UiPrefs(InMemorySettingsStore())) {
+                SupermuxTheme(appearance = AppearanceMode.DARK) {
+                    androidx.compose.foundation.layout.Box(Modifier.size(400.dp, 300.dp)) {
+                        dev.supermux.ui.widgets.KeepAlivePanel(visible = visible) {
+                            NativeDocumentEditor(store, doc, lineWrap = true, fontSize = 13, onFontSize = {}, modifier = Modifier.fillMaxSize())
+                        }
+                    }
+                }
+            }
+        }
+        waitForIdle()
+        val view = doc.native!!.primary
+        val line120 = view.state.doc.lineStart(119)
+        runOnIdle {
+            view.restoreScroll(dev.supermux.editor.compose.EditorScrollPosition(line120))
+            view.dispatch(dev.supermux.editor.core.TransactionSpec(selection = dev.supermux.editor.core.EditorSelection.cursor(line120 + 3)))
+        }
+        waitForIdle()
+        val before = view.scrollPosition
+        assertEquals(119, view.state.doc.lineIndexAt(before.anchor))
+
+        visible = false
+        waitForIdle()
+        visible = true
+        waitForIdle()
+
+        assertSame(view, doc.native!!.primary)
+        assertEquals(line120 + 3, view.state.selection.main.head)
+        assertEquals(before.anchor, view.scrollPosition.anchor)
+        val shown = runBlocking { view.viewport.first { !it.isEmpty() } }
+        kotlin.test.assertTrue(line120 in shown, "line 120 is laid out again after the re-show: $shown")
+        onNodeWithTag("editor_native").assertIsDisplayed()
+    }
 }

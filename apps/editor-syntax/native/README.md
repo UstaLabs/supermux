@@ -303,7 +303,7 @@ node names and no query set anywhere.
 
 ### Plain text
 
-`LanguageRegistry.forFile` covers every extension cm6's `langFor` recognises.
+`LanguageRegistry.forFile` covers every extension the old CodeMirror bundle's `langFor` recognised.
 These have no tree-sitter grammar here and open as plain text: `.erl` `.hrl`
 (erlang), `.cr` (crystal), `.coffee`, `.ini`, `.properties`, `.ps1` `.psm1`
 `.psd1` (PowerShell), `.proto`, `.tex` `.latex`, `.diff` `.patch`, `.pug`

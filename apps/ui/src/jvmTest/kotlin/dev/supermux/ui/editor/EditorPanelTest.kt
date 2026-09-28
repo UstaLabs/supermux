@@ -26,9 +26,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The composite panel — the phone/SessionDetail shape of the editor. Everything below is driven
- * through the [FakeEditorEngineFactory] seam, so the code surface is real shared code with no
- * browser behind it.
+ * The composite panel — the phone/SessionDetail shape of the editor, on the native editor.
  */
 @OptIn(ExperimentalTestApi::class)
 class EditorPanelTest {
@@ -45,7 +43,7 @@ class EditorPanelTest {
         CompositionLocalProvider(
             LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
             LocalWindowWidthClass provides widthClass,
-            LocalPlatform provides FakePlatform(editorEngine = FakeEditorEngineFactory()),
+            LocalPlatform provides FakePlatform(),
         ) {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 EditorPanel(

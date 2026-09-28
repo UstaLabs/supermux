@@ -1,7 +1,7 @@
 # editor-plugins/lsp
 
-A Language Server Protocol client on the public API: CM6's `@codemirror/lsp-client` (today's
-`cm6-entry.mjs` feature set) in Kotlin, on the tooltip layer, `editor-plugins/autocomplete` and
+A Language Server Protocol client on the public API: CM6's `@codemirror/lsp-client` (the feature set
+of the CodeMirror editor it replaced) in Kotlin, on the tooltip layer, `editor-plugins/autocomplete` and
 `editor-plugins/lint`.
 
 ```kotlin
