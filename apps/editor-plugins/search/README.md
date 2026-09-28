@@ -96,7 +96,7 @@ big document runs on a keystroke (below).
 
 **Off the keystroke (`SearchRunner`).** The panel's work: what the find field commits, its buttons'
 and keys' finds, and the count. On a document of at most 256K units (`Search.ASYNC_LIMIT`) a find is
-done at once. On a bigger one it runs in slices of at most 4 ms of work (the cursors stop every 8K
+done at once. On a bigger one it runs in slices of at most 3 ms of work (the cursors stop every 8K
 units read; `yield()` between slices), the panel says "searching…", the selection jumps when the
 match is found, and a newer find cancels an older one; `Mod-g` / `F3` in the editor go to the runner
 too while the panel is composed (`Search.requestSearch`). The count is sliced the same way ("…"
