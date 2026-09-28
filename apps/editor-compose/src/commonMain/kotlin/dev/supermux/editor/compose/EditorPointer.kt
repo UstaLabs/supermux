@@ -244,6 +244,10 @@ internal class EditorPointer(private val c: EditorController, private val scope:
     private fun AwaitPointerEventScope.onMove(event: PointerEvent, slop: Float) {
         val change = event.changes.firstOrNull() ?: return
         eventTime = change.uptimeMillis
+        // A mouse moving with no button: the hover tooltips' (CM6's hoverTooltip).
+        if (change.type == PointerType.Mouse && !change.pressed && drag == null) {
+            if (event.type == PointerEventType.Exit) c.hover.exit() else c.hover.move(change.position)
+        }
         val h = handleDrag
         if (h != null) {
             val moving = event.changes.firstOrNull { it.id.value == h.id } ?: return

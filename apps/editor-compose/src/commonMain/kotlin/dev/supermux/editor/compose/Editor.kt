@@ -64,6 +64,8 @@ import dev.supermux.editor.core.EditorState
 import dev.supermux.editor.core.GutterMarker
 import dev.supermux.editor.core.gutterMarkersFacet
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.ime
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -227,6 +229,11 @@ fun Editor(
             if (controller.linked === linked) controller.scroll.onOwnScroll = null
         }
     }
+    // The hover engine hears the "show hover" requests; it stops with the view.
+    DisposableEffect(view, controller) {
+        val remove = view.addListener { controller.hover.follow(it) }
+        onDispose { remove(); controller.hover.dispose() }
+    }
     val reportViewport by rememberUpdatedState(onViewport)
     LaunchedEffect(view) {
         // Plugins that asked for the viewport as state (EditorViewport, viewportEffectsFacet) get it
@@ -388,6 +395,7 @@ fun Editor(
                 overlay = {
                     EditorSelectionMenu(controller, readOnly, clipboard, shownTheme)
                     LineAnnouncement(controller.announcer)
+                    KeyboardInsets(controller)
                 },
             )
         }
@@ -419,6 +427,21 @@ private fun androidx.compose.foundation.layout.ColumnScope.EditorPanel(c: Editor
             if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && e.key == androidx.compose.ui.input.key.Key.Escape) { c.requestFocus(); true } else false
         },
     ) { c.widgetScope.content(key) }
+}
+
+/**
+ * The soft keyboard's height and the window's, for the tooltips (kept above the keyboard). Its own
+ * small scope: the keyboard's animation recomposes only this.
+ */
+@Composable
+private fun KeyboardInsets(c: EditorController) {
+    val density = LocalDensity.current
+    val ime = androidx.compose.foundation.layout.WindowInsets.ime.getBottom(density)
+    val window = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.height
+    SideEffect {
+        c.imeBottomPx = ime
+        c.windowHeightPx = window
+    }
 }
 
 /** The surface's fixed children (see [surfaceMeasurePolicy]). */
@@ -498,6 +521,23 @@ private fun surfaceMeasurePolicy(
     }
     c.pruneMarkerNodes(markerSlots)
     val caret = frame?.caret ?: Rect.Zero
+    // Tooltips (completion, hover, signature help, lint): measured after the frame, where the caret
+    // rects are known, and placed over everything else of the surface.
+    val tips = if (frame == null) emptyList() else {
+        val hf = h.toFloat()
+        val gap = 3f * c.densityValue
+        val bounds = Rect(0f, 0f, w.toFloat(), hf - c.keyboardOverlap(hf))
+        val mainCaret = caret.takeIf { it.bottom >= 0f && it.top <= hf }
+        c.tooltipsToShow(w.toFloat(), hf).map { (t, anchor) ->
+            val maxH = TooltipLayout.maxHeight(anchor, mainCaret, bounds, gap).toInt().coerceAtLeast(0)
+            val ps = subcompose(TooltipSlot(c.view.widgetStateId, t.key), c.tooltipContent(t.key)).map { it.measure(Constraints(maxWidth = w, maxHeight = maxH)) }
+            val tw = ps.maxOfOrNull { it.width } ?: 0
+            val th = ps.maxOfOrNull { it.height } ?: 0
+            val at = TooltipLayout.place(anchor, mainCaret, tw, th, bounds, t.above, gap)
+            Triple(t.key, Rect(at.x, at.y, at.x + tw, at.y + th), ps)
+        }
+    }
+    c.placedTooltips = tips.associate { it.first to it.second }
     layout(w, h) {
         canvas.forEach { it.place(0, 0) }
         for ((m, p) in markers) p.forEach { it.place(m.rect.left.toInt(), m.rect.top.toInt()) }
@@ -514,8 +554,12 @@ private fun surfaceMeasurePolicy(
         handles.forEach { it.place(0, 0) }
         for ((spot, ps) in handleShields) ps.forEach { it.place(spot.touch.left.toInt(), spot.touch.top.toInt()) }
         overlay.forEach { it.place(0, 0) }
+        for ((_, r, ps) in tips) ps.forEach { it.place(kotlin.math.round(r.left).toInt(), kotlin.math.round(r.top).toInt()) }
     }
 }
+
+/** A tooltip's slot, scoped to its view like a widget's. */
+internal data class TooltipSlot(val view: Long, val key: dev.supermux.editor.core.WidgetKey)
 
 /**
  * A widget's slot: its key in a role (a key may be shown as a block and inline at once: two slots),
@@ -954,6 +998,14 @@ internal class EditorController(
     }
 
     private val widgetContents = HashMap<WidgetSlot, @Composable () -> Unit>()
+    private val tooltipContents = HashMap<dev.supermux.editor.core.WidgetKey, @Composable () -> Unit>()
+
+    /** A tooltip's content for its key (the registry's `key.type`), kept per key. */
+    fun tooltipContent(key: dev.supermux.editor.core.WidgetKey): @Composable () -> Unit = tooltipContents.getOrPut(key) {
+        if (tooltipContents.size > 64) tooltipContents.clear()
+        val content: @Composable () -> Unit = { registry?.content(key.type)?.let { c -> Box { widgetScope.c(key) } } }
+        content
+    }
 
     /** The slot of [key] in its role, in this view. */
     fun widgetSlot(key: dev.supermux.editor.core.WidgetKey, inline: Boolean) = WidgetSlot(view.widgetStateId, key, inline)
@@ -1036,8 +1088,79 @@ internal class EditorController(
         return near
     }
 
-    /** True when [p] (surface pixels) is on a block widget's content: that pointer is the widget's. */
-    fun widgetAt(p: androidx.compose.ui.geometry.Offset): Boolean = frame?.widgets?.any { !it.inline && it.composed && it.rect.contains(p) } == true
+    /** True when [p] (surface pixels) is on a block widget's content or a tooltip: that pointer is theirs. */
+    fun widgetAt(p: androidx.compose.ui.geometry.Offset): Boolean =
+        tooltipAt(p) || frame?.widgets?.any { !it.inline && it.composed && it.rect.contains(p) } == true
+
+    // ------------------------------------------------------------------ tooltips --
+
+    /** The tooltips placed by the last layout pass (surface pixels), by key. */
+    var placedTooltips: Map<dev.supermux.editor.core.WidgetKey, Rect> = emptyMap()
+        internal set
+
+    /** True when [p] (surface pixels) is on a tooltip placed in the last layout pass. */
+    fun tooltipAt(p: androidx.compose.ui.geometry.Offset): Boolean = placedTooltips.values.any { it.contains(p) }
+
+    /** The mouse hover engine ([hoverTooltip]'s sources). */
+    val hover = HoverEngine(this)
+
+    /** The soft keyboard's height over the window's bottom (px), and the window's height: observed by the layout pass. */
+    var imeBottomPx: Int by androidx.compose.runtime.mutableIntStateOf(0)
+    var windowHeightPx: Int by androidx.compose.runtime.mutableIntStateOf(0)
+
+    /** How much of the surface's bottom a soft keyboard covers (px): the tooltips stay above it. */
+    fun keyboardOverlap(height: Float): Float {
+        val ime = imeBottomPx
+        val win = windowHeightPx
+        if (ime <= 0 || win <= 0) return 0f
+        val co = coordinates?.takeIf { it.isAttached } ?: return 0f
+        val bottom = co.localToRoot(androidx.compose.ui.geometry.Offset(0f, height)).y
+        return (bottom - (win - ime)).coerceIn(0f, height)
+    }
+
+    /** Where each hideOnScroll tooltip's anchor was last pass (to see the text move under it), and the ones already dismissed. */
+    private val tooltipAnchors = HashMap<dev.supermux.editor.core.WidgetKey, Pair<dev.supermux.editor.core.Rope, Rect>>()
+    private val dismissedTooltips = HashSet<dev.supermux.editor.core.WidgetKey>()
+
+    /**
+     * The tooltips to show this pass: each with its anchor (the caret rect at its position, surface
+     * pixels) and the bounds it may take. A strict one whose position is out of view is left out; a
+     * hideOnScroll one whose text moved on screen (a scroll, not an edit) is dismissed (dispatched
+     * after the pass).
+     */
+    fun tooltipsToShow(width: Float, height: Float): List<Pair<dev.supermux.editor.core.Tooltip, Rect>> {
+        val st = view.state
+        val list = st.facet(dev.supermux.editor.core.tooltipsFacet)
+        if (list.isEmpty()) { tooltipAnchors.clear(); dismissedTooltips.clear(); return emptyList() }
+        val reg = registry ?: return emptyList()
+        val out = ArrayList<Pair<dev.supermux.editor.core.Tooltip, Rect>>()
+        val keys = HashSet<dev.supermux.editor.core.WidgetKey>()
+        for (t in list) {
+            keys += t.key
+            if (t.key.type !in reg || t.key in dismissedTooltips) continue
+            val a = caretRectOnScreen(t.pos.coerceIn(0, st.doc.length))
+            if (t.hideOnScroll) {
+                val last = tooltipAnchors[t.key]
+                tooltipAnchors[t.key] = st.doc to a
+                if (last != null && last.first === st.doc && (kotlin.math.abs(last.second.top - a.top) > 0.5f || kotlin.math.abs(last.second.left - a.left) > 0.5f)) {
+                    dismissedTooltips += t.key
+                    val key = t.key
+                    view.scope?.launch { view.dispatch(TransactionSpec(effects = listOf(dev.supermux.editor.core.Tooltip.dismissed.of(key)))) }
+                    continue
+                }
+            }
+            val out0 = a.bottom < 0f || a.top > height || a.left < gutterWidth - 1f || a.left > width
+            if (out0 && t.strict) continue
+            val clamped = if (!out0) a else Rect(
+                a.left.coerceIn(gutterWidth, width), a.top.coerceIn(0f, maxOf(0f, height - a.height)),
+                a.left.coerceIn(gutterWidth, width) + a.width, a.top.coerceIn(0f, maxOf(0f, height - a.height)) + a.height,
+            )
+            out += t to clamped
+        }
+        tooltipAnchors.keys.retainAll(keys)
+        dismissedTooltips.retainAll(keys)
+        return out
+    }
 
     /** True when [p] is on an inline widget's content (a tap there is the text's unless the widget took it). */
     fun inlineWidgetAt(p: androidx.compose.ui.geometry.Offset): Boolean = frame?.widgets?.any { it.inline && it.composed && it.rect.contains(p) } == true

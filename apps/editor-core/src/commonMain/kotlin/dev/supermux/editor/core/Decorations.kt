@@ -150,6 +150,39 @@ data class Panel(val id: String, val top: Boolean)
 val panelsFacet: Facet<Panel?, List<Panel>> = Facet.define("panels") { it.filterNotNull() }
 
 /**
+ * A popup anchored at a document position (a completion list, a hover, signature help, a lint
+ * message), as DATA: its content is the widget type [key]`.type` in the surface's widget registry
+ * (by convention `tooltip:<name>`), [key]`.id` the instance. The surface (editor-compose's tooltip
+ * layer) places it next to the text at [pos]: below the line by default, [above] it when asked,
+ * flipped to the other side when it does not fit in the editor, clamped horizontally, never over
+ * the main caret's line, and above a soft keyboard.
+ *
+ * - [strict]: shown only while [pos] is in view (CM6 hides a tooltip whose position scrolled out);
+ *   false keeps it at the editor's edge instead.
+ * - [hideOnScroll]: the user scrolling the text under it dismisses it (a hover): the surface then
+ *   dispatches [Tooltip.dismissed] with [key], and its owner drops it. Otherwise it follows the text.
+ */
+data class Tooltip(
+    val pos: Int,
+    val key: WidgetKey,
+    val above: Boolean = false,
+    val strict: Boolean = true,
+    val hideOnScroll: Boolean = false,
+) {
+    companion object {
+        /** The surface dismissed the tooltip with this key (scrolled away): its owner's field drops it. */
+        val dismissed: StateEffectType<WidgetKey> = StateEffectType("tooltip.dismissed")
+    }
+}
+
+/**
+ * Every plugin's tooltips, in precedence order (a later one is drawn over an earlier one). An input
+ * may be null, no tooltip: `tooltipsFacet.compute(FacetDep.field(f)) { st -> st.field(f)?.let { Tooltip(...) } }`
+ * (CM6's `showTooltip.from`).
+ */
+val tooltipsFacet: Facet<Tooltip?, List<Tooltip>> = Facet.define("tooltips") { it.filterNotNull() }
+
+/**
  * Ranges that user edits treat as one unit (CM6's atomicRanges): an edit that reaches INTO one
  * (a Backspace at its end, a soft keyboard deleting a character of it) never takes a piece of it;
  * the editor asks its policy instead (the surface's atomic-delete handlers: unfold first, by

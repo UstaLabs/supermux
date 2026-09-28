@@ -41,6 +41,7 @@ DefaultCommands       movement, selection, insert/delete/newline/tab, select all
 | `LineLayouts.kt`, `Geometry.kt` | layout cache, tab stops, offset/position mapping |
 | `Painter.kt` | the frame: `buildFrame` (layout pass) and `drawFrame` (draw pass), gutter marker shapes |
 | `EditorWidgets.kt` | `WidgetRegistry`, `WidgetScope`, `BlockWidgets` (block heights in the height map) |
+| `EditorTooltips.kt` | the tooltip layer's placement (`TooltipLayout`), `hoverTooltip`, `Hover`, the hover engine |
 | `EditorFolds.kt` | `Folds` (replaced ranges, inline widgets, hidden lines), `LineMap` (row offsets <-> document offsets) |
 | `LinkedScroll.kt` | `LinkedScroll`, `LinkedSide`: side-by-side alignment from both sides' measured heights (`LineMapping` is editor-core's) |
 | `EditorScroll.kt`, `EditorPointer.kt` | scrolling, pointer gestures |
@@ -285,6 +286,42 @@ For a panel's own fields: `keyChordOf(keyEvent)` names a Compose key event as ed
 `Modifier.codeTextInput()` turns iOS Smart Punctuation off while that field has the focus (the
 editor's own switch and owner rule; a search string is code), every other field of the app keeping
 the user's setting.
+
+## Tooltips
+
+`Tooltip(pos, key, above = false, strict = true, hideOnScroll = false)` in editor-core's
+`tooltipsFacet` (data, like a panel; a computed input may be null): a popup next to the text at `pos`,
+its content the registry's `key.type` (by convention `tooltip:<name>`: `tooltip:completion`,
+`tooltip:lint`, `tooltip:lsp-hover`), `key.id` the instance. The layer is part of the surface's layout
+pass (measure before draw): after the frame, each tooltip is subcomposed, measured at most as tall as
+the room on its better side, and placed over everything else of the surface (`TooltipLayout`,
+`TooltipPlacementTest`):
+- below the anchor's row (`above`: over it), FLIPPED to the other side when it does not fit, else the
+  side with more room; never over the anchor's row nor the main caret's line (when the caret is on a
+  neighbouring row both are kept clear; a far caret only decides between two sides that fit);
+- left-aligned with the anchor, clamped into the editor horizontally;
+- above a soft keyboard: the bounds end where `WindowInsets.ime` begins (the part of the surface the
+  keyboard covers, from the window's height), read in a small composable of its own so the keyboard's
+  animation recomposes only that;
+- `strict`: hidden while `pos` is out of view (CM6 hides such tooltips); false: kept at the editor's
+  edge. It follows its text through edits (its owner maps `pos`).
+- `hideOnScroll`: when the text under it moves on screen without an edit (a wheel, a fling, a drag),
+  the surface dispatches `Tooltip.dismissed` (key) after the pass; the owner's field drops it.
+- A press or tap on a tooltip is the tooltip's (never a caret, a focus or a keyboard), like a block
+  widget's: content that must keep the focus in the editor (a completion row, a lint action) uses
+  `detectTapGestures`, never `clickable` (which takes the focus on the desktop).
+
+**Hover** (`hoverTooltip(id, hoverTime = 300, hideOnChange = true) { state, pos, side -> HoverResult? }`,
+CM6's `hoverTooltip`): with a mouse, the surface's hover engine asks the source `hoverTime` ms after the
+pointer stops over a character (never past a line's end), on the UI scope (it may suspend: an LSP
+request; a newer hover cancels it; a result for a document that changed meanwhile is dropped). Its
+`HoverResult(from, to, key, above = true)` is shown as a `hideOnScroll` tooltip until the pointer
+leaves both that range and the tooltip (250 ms grace, to reach the tooltip), Escape (`Hover.closeHover`,
+bound at high precedence), a scroll, or an edit. **Touch has no hover and long press selects**, so
+touch gets an explicit command instead: `Hover.showHover` asks every source at the main cursor at once
+(a host's button or menu item; the sample's toolbar), and the LSP flows put their information where
+touch sees it anyway (the completion list's documentation, signature help above the caret).
+`Hover.shown(state, id)` reads what a source shows.
 
 ## Linked views (side-by-side diff)
 
