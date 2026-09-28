@@ -664,9 +664,9 @@ fun main() {
                     }
                     Menu("Edit", mnemonic = 'E') {
                         // Same paste-image path as Ctrl/Cmd+V / right-click in the composer.
-                        // Accelerator label documents the chord; the composer's onPreviewKeyEvent
-                        // owns the live key handling when the field is focused.
-                        Item("Paste image", shortcut = KeyShortcut(Key.V, ctrl = true)) {
+                        // The accelerator exists only while a chat composer has the focus: a
+                        // window-wide Ctrl+V would steal every paste from the code editor (M5 B2).
+                        Item("Paste image", shortcut = pasteImageShortcut(dev.supermux.ui.chat.ChatInputFocus.focused)) {
                             ui.requestPasteImage()
                         }
                     }
@@ -1905,3 +1905,7 @@ private fun ProvideDesktopAdaptiveLocals(content: @Composable () -> Unit) {
         content = content,
     )
 }
+
+/** Edit ▸ Paste image's accelerator: Ctrl+V while a chat composer is focused, none otherwise (the editor's paste stays its own). */
+internal fun pasteImageShortcut(chatInputFocused: Boolean): KeyShortcut? =
+    if (chatInputFocused) KeyShortcut(Key.V, ctrl = true) else null

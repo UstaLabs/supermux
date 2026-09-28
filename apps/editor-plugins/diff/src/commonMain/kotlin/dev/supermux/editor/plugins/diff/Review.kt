@@ -73,7 +73,14 @@ object Review {
     )
 
     /** The review's state: the threads, the composer, the resolved threads the user expanded (per view). */
-    class State internal constructor(val threads: List<Anchored>, val composer: Composer?, val expanded: Set<String>, internal val config: ReviewConfig)
+    class State internal constructor(
+        val threads: List<Anchored>,
+        val composer: Composer?,
+        val expanded: Set<String>,
+        internal val config: ReviewConfig,
+        /** Each open thread's reply being typed (by thread id): kept here, so a widget scrolled far away and disposed comes back with it. */
+        val replyDrafts: Map<String, String> = emptyMap(),
+    )
 
     internal val setThreads = StateEffectType<List<ReviewThread>>("review.setThreads")
     internal val setComposer = StateEffectType<ReviewComposer?>("review.setComposer")
@@ -82,6 +89,7 @@ object Review {
     internal val draft = StateEffectType<String>("review.draft")
     internal val reported = StateEffectType<String>("review.reported")
     internal val toggle = StateEffectType<String>("review.toggle")
+    internal val replyDraft = StateEffectType<Pair<String, String>>("review.replyDraft")
     private var gens = 0
 
     internal fun extension(host: DiffHost?, config: ReviewConfig): Extension {
@@ -197,6 +205,15 @@ object Review {
         target.state.facet(diffHostFacet)?.onComposerClosed()
     }
 
+    /** The reply being typed in thread [threadId] ("" when none). */
+    fun replyDraft(state: EditorState, threadId: String): String = state(state)?.replyDrafts?.get(threadId).orEmpty()
+
+    /** The reply field of [threadId] changed: kept in the state (no userEvent, not an edit). */
+    internal fun typedReply(target: CommandTarget, threadId: String, text: String) {
+        if (replyDraft(target.state, threadId) == text) return
+        target.dispatch(TransactionSpec(effects = listOf(replyDraft.of(threadId to text))))
+    }
+
     internal fun reply(target: CommandTarget, threadId: String, text: String): Boolean {
         val body = text.trim()
         if (body.isEmpty()) return false
@@ -220,6 +237,7 @@ object Review {
         var threads = threads
         var composer = composer
         var expanded = expanded
+        var replies = replyDrafts
         val doc = tr.state.doc
         if (tr.docChanged) {
             // Each thread keeps its line: its start mapped (text typed at the start stays below the
@@ -236,6 +254,8 @@ object Review {
                     if (was != null && was.hostLine == t.line) Anchored(t, was.pos, t.line) else Anchored(t, lineStartAt(doc, t.line), t.line)
                 }
                 expanded = expanded.filterTo(HashSet()) { id -> list.any { it.id == id } }
+                // A thread that went (or was resolved) takes its unsent reply with it.
+                if (replies.isNotEmpty()) replies = replies.filterKeys { id -> list.any { it.id == id && !it.resolved } }
             }
             e.valueIf(setComposer)?.let { c ->
                 composer = when {
@@ -251,8 +271,10 @@ object Review {
             if (e.isOf(close)) composer = null
             e.valueIf(draft)?.let { d -> composer = composer?.let { Composer(it.pos, d, it.gen, it.focus, it.reported) } }
             e.valueIf(toggle)?.let { id -> expanded = if (id in expanded) expanded - id else expanded + id }
+            e.valueIf(replyDraft)?.let { (id, text) -> replies = if (text.isEmpty()) replies - id else replies + (id to text) }
         }
-        return if (threads === this.threads && composer === this.composer && expanded === this.expanded) this else State(threads, composer, expanded, config)
+        return if (threads === this.threads && composer === this.composer && expanded === this.expanded && replies === this.replyDrafts) this
+        else State(threads, composer, expanded, config, replies)
     }
 
     // ---------------------------------------------------------------- decorations --

@@ -907,6 +907,9 @@ fun Composer(
     val cs = MaterialTheme.colorScheme
     val inputInteraction = remember { MutableInteractionSource() }
     val inputFocused by inputInteraction.collectIsFocusedAsState()
+    // Where Ctrl/Cmd+V means "paste an image" (desktop's Edit ▸ Paste image accelerator): only here.
+    androidx.compose.runtime.LaunchedEffect(inputFocused) { ChatInputFocus.report(inputInteraction, inputFocused) }
+    androidx.compose.runtime.DisposableEffect(inputInteraction) { onDispose { ChatInputFocus.report(inputInteraction, false) } }
     var dragOver by remember(sessionKey) { mutableStateOf(false) }
 
     val cardShape = RoundedCornerShape(Radii.lg + 8.dp) // ~24dp — matches the mock capsule

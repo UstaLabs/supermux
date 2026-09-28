@@ -198,4 +198,24 @@ class ReviewTest {
         assertTrue(runs.none { 90 in it.bFrom until it.bTo }, "the composer's line is shown: $runs")
         assertEquals(1, runs.sumOf { it.comments }, "only the thread is counted")
     }
+
+    /** M5 B2: a reply being typed lives in the review state (a disposed widget gets it back); a thread that goes takes it along. */
+    @Test fun replyDraftsLiveInTheStateAndLeaveWithTheirThread() {
+        val v = view()
+        Review.setThreads(v, listOf(t1, t2))
+        Review.typedReply(v, "t1", "half a reply")
+        assertEquals("half a reply", Review.replyDraft(v.state, "t1"))
+        // Edits and a threads-only update keep it.
+        v.dispatch(dev.supermux.editor.core.TransactionSpec(changes = listOf(dev.supermux.editor.core.ChangeSpec(0, 0, "x"))))
+        Review.setThreads(v, listOf(t1.copy(comments = t1.comments + ReviewComment("c9", "agent", "more")), t2))
+        assertEquals("half a reply", Review.replyDraft(v.state, "t1"))
+        // Sent (the field cleared): gone.
+        Review.typedReply(v, "t1", "")
+        assertEquals("", Review.replyDraft(v.state, "t1"))
+        // A thread resolved or removed drops its draft.
+        Review.typedReply(v, "t1", "again")
+        Review.setThreads(v, listOf(t1.copy(resolved = true), t2))
+        assertEquals("", Review.replyDraft(v.state, "t1"))
+    }
 }
+

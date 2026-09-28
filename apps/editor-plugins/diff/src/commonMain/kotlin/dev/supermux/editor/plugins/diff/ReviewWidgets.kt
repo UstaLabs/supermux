@@ -159,7 +159,11 @@ private fun WidgetScope.ThreadBlock(key: WidgetKey) {
             BasicText(c.body, style = p.prose)
         }
         if (!t.resolved) {
-            val reply = rememberTextFieldState()
+            // The reply being typed is the review state's (not the widget's): a thread scrolled far
+            // away (its widget disposed) or re-rendered comes back with it.
+            val reply = remember(key.id) { TextFieldState(Review.replyDraft(st, t.id)) }
+            val target = editor
+            LaunchedEffect(reply) { snapshotFlow { reply.text.toString() }.collect { Review.typedReply(target, t.id, it) } }
             fun send() { if (Review.reply(editor, t.id, reply.text.toString())) reply.clearText() }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
                 ProseField(p, reply, "Reply…", ReviewTags.REPLY_FIELD, 1, Modifier.weight(1f), onSend = ::send, onEscape = { focusEditor() })

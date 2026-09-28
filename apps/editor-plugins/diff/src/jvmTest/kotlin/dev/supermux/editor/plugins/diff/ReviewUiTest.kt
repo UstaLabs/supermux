@@ -216,4 +216,22 @@ class ReviewUiTest {
         assertEquals("abcd", Review.composer(view.state)?.draft)
         assertEquals(listOf("open 10", "draft 10 abc", "draft 10 abcd"), host.log)
     }
+
+    /** M5 B2: a reply typed into a thread survives the thread's widget being disposed (the editor gone and back). */
+    @Test fun aReplyDraftSurvivesItsWidgetsDisposal() = runComposeUiTest {
+        val view = EditorView(EditorState.create(working, extensions = extensionOf(inlineDiff(base, DiffConfig(collapseUnchanged = false)), review(RecordingHost()))))
+        Review.setThreads(view, listOf(open, resolved))
+        var shown by androidx.compose.runtime.mutableStateOf(true)
+        setContent { Box(Modifier.size(800.dp, 900.dp)) { if (shown) InlineDiffEditor(view, Modifier.fillMaxSize()) } }
+        waitForIdle()
+        onNodeWithTag(ReviewTags.REPLY_FIELD).performClick()
+        onNodeWithTag(ReviewTags.REPLY_FIELD).performTextInput("not sent yet")
+        waitForIdle()
+        shown = false
+        waitForIdle()
+        shown = true
+        waitForIdle()
+        assertEquals("not sent yet", onNodeWithTag(ReviewTags.REPLY_FIELD).fetchSemanticsNode().config[SemanticsProperties.EditableText].text)
+    }
 }
+
