@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
@@ -71,6 +72,7 @@ import dev.supermux.ui.theme.NoHaptics
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.widgets.AlertDialog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -118,6 +120,13 @@ class DictationController(
     /** Desktop's inline composer error line. Same text as [banner]; kept as a separate hook because
      *  the pointer composer renders it under the card rather than as a takeover strip. */
     var errorMessage by mutableStateOf<String?>(null)
+
+    /**
+     * The recording whose transcription just FAILED, kept so the user can [retryTranscription] or
+     * send it as an audio attachment ([takeFailedAudio]) instead of losing what they said. Null
+     * when there is nothing to recover. While set, the banner does not auto-clear.
+     */
+    var failedAudio by mutableStateOf<CapturedAudio?>(null); private set
 
     /** Project/agent names biasing on-device recognition. */
     val glossary = mutableStateListOf<String>()
@@ -176,21 +185,71 @@ class DictationController(
     /** The cleanup POST and what to do with its answer. Split out of [runTranscription] so the
      *  on-device path can await [LiveTranscript.stop] and then this in ONE coroutine — two would
      *  mean two jobs, and [cancelMic] can only cancel the one it is holding. */
-    private suspend fun transcribeAndAppend(rawFallback: String?, call: suspend () -> String?) {
-        val cleaned = call()?.trim()
+    private suspend fun transcribeAndAppend(
+        rawFallback: String?,
+        audio: CapturedAudio? = null,
+        call: suspend () -> String?,
+    ) {
+        // A throwing seam is a failed transcription too — never lose the recording to it.
+        val cleaned = try {
+            call()?.trim()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
         when {
             !cleaned.isNullOrEmpty() -> appendToDraft(cleaned)
             // On-device already produced usable text — keep it rather than losing the turn.
             !rawFallback.isNullOrBlank() -> appendToDraft(rawFallback)
-            else -> fail("Transcription failed")
+            else -> {
+                failedAudio = audio
+                fail("Transcription failed")
+            }
         }
+    }
+
+    /** Re-POST the [failedAudio] through the same transcribe seam. No-op when there is none. */
+    fun retryTranscription() {
+        val audio = failedAudio ?: return
+        if (active || transcribing) return
+        haptic.perform(HapticKind.Tick)
+        failedAudio = null
+        banner = null
+        errorMessage = null
+        transcribing = true
+        transcribeJob = scope.launch {
+            try {
+                transcribeAndAppend(rawFallback = null, audio = audio) {
+                    transcribeAudio(audio.bytes, audio.filename, audio.mime)
+                }
+            } finally {
+                transcribing = false
+            }
+        }
+    }
+
+    /** Hand over the [failedAudio] (to stage as an attachment) and clear the failure. */
+    fun takeFailedAudio(): CapturedAudio? {
+        val audio = failedAudio ?: return null
+        failedAudio = null
+        banner = null
+        errorMessage = null
+        return audio
+    }
+
+    /** Drop the [failedAudio] and its error line. */
+    fun dismissFailure() {
+        failedAudio = null
+        banner = null
+        errorMessage = null
     }
 
     private fun runTranscription(rawFallback: String?, call: suspend () -> String?) {
         transcribeJob = scope.launch {
             transcribing = true
             try {
-                transcribeAndAppend(rawFallback, call)
+                transcribeAndAppend(rawFallback, call = call)
             } finally {
                 transcribing = false
             }
@@ -203,6 +262,7 @@ class DictationController(
         haptic.perform(HapticKind.Tick)
         banner = null
         errorMessage = null
+        failedAudio = null
         micUnavailable = false
         val live = mic.liveTranscript
         if (live != null && live.start(glossary.toList())) {
@@ -266,7 +326,7 @@ class DictationController(
                         fail("Didn't catch that")
                         return@launch
                     }
-                    transcribeAndAppend(rawFallback = null) {
+                    transcribeAndAppend(rawFallback = null, audio = audio) {
                         transcribeAudio(audio.bytes, audio.filename, audio.mime)
                     }
                 } finally {
@@ -362,8 +422,9 @@ fun rememberDictation(
             }
         }
     }
-    LaunchedEffect(controller, controller.banner) {
-        if (controller.banner != null) {
+    LaunchedEffect(controller, controller.banner, controller.failedAudio) {
+        // A recoverable failure stays up until the user retries, attaches or dismisses it.
+        if (controller.banner != null && controller.failedAudio == null) {
             delay(4000)
             controller.banner = null
             controller.errorMessage = null
@@ -549,6 +610,47 @@ fun RecordingBar(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * A failed transcription with its recording still in hand: the error text plus Retry, "Send as
+ * audio" (stage the recording as an attachment) and dismiss. Replaces the transient banner while
+ * [DictationController.failedAudio] is set, so what the user said is never silently lost.
+ */
+@Composable
+fun DictationFailureBar(
+    message: String,
+    onRetry: () -> Unit,
+    onAttach: (() -> Unit)?,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 4.dp)
+            .testTag("composer_dictation_failed"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(message, color = cs.error, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        TextButton(onClick = onRetry, modifier = Modifier.testTag("dictation_retry")) {
+            Text("Retry", fontSize = 12.sp)
+        }
+        if (onAttach != null) {
+            TextButton(onClick = onAttach, modifier = Modifier.testTag("dictation_attach")) {
+                Text("Send as audio", fontSize = 12.sp)
+            }
+        }
+        IconButton(onClick = onDismiss, modifier = Modifier.testTag("dictation_dismiss")) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Dismiss",
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
         }
     }
 }
