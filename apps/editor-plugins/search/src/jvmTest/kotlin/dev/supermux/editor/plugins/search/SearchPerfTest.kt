@@ -56,4 +56,26 @@ class SearchPerfTest {
         println("SEARCH-PERF 10 MB count: capped ${"%.1f".format(ms)} ms, no match ${"%.1f".format(none)} ms")
         assertTrue(none < 50, "a full count: $none ms")
     }
+
+    @Test fun marksOnATenMegabyteLineCostWhatTheViewportShows() {
+        val line = Rope.of("val x = computeSomething(argument, 42); ".repeat(250_000)) // one 10 MB line
+        fun state(q: SearchQuery): dev.supermux.editor.core.EditorState {
+            val st = dev.supermux.editor.core.EditorState.create(line.toString(), dev.supermux.editor.core.EditorSelection.cursor(5_000_000), search())
+            val mid = 5_000_000
+            return st.update(dev.supermux.editor.core.TransactionSpec(effects = listOf(
+                Search.togglePanel.of(true), Search.setQueryEffect.of(q),
+                dev.supermux.editor.compose.EditorViewport.set.of(mid until mid + 8_000),
+            ))).state
+        }
+        val out = ArrayList<String>()
+        for (q in listOf(SearchQuery("some\\w+", regexp = true), SearchQuery("(?<=x )=", regexp = true), SearchQuery("\\s+", regexp = true), SearchQuery("something"))) {
+            val st = state(q)
+            repeat(3) { Search.marks(st) }
+            val ms = best { Search.marks(st) }
+            assertTrue(Search.marks(st).size > 0, "marks for $q")
+            out += "${q.search} ${"%.2f".format(ms)} ms"
+            assertTrue(ms < 2.0, "${q.search}: $ms ms")
+        }
+        println("SEARCH-PERF marks on a 10 MB line: " + out.joinToString(", "))
+    }
 }

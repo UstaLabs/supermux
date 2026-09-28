@@ -40,6 +40,7 @@ kotlin {
             implementation(project(":editor-plugins:fold"))
         }
         wasmJsMain { languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop") }
+        wasmJsTest { languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop") }
         jvmTest.dependencies {
             // The panel in a composed Editor: focus, Escape, typing, the buttons.
             @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)

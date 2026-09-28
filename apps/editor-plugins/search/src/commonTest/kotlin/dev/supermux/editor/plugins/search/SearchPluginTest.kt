@@ -256,6 +256,21 @@ class SearchPluginTest {
         assertFalse(runKey(w, KeyChord("d", ctrl = true), false))
     }
 
+    @Test fun modDNeverGrowsARange() {
+        // The wrap-around scan stops before the last range (CM6's `ranges[last].from - 1`): "aa" at 1
+        // in "aaaa" has no other occurrence that does not overlap it.
+        val v = view("aaaa", EditorSelection.single(1, 3))
+        assertFalse(runKey(v, KeyChord("d", ctrl = true), false))
+        assertEquals(listOf(1 to 3), v.ranges)
+    }
+
+    @Test fun modDScrollsTheNewRangeIntoView() {
+        val v = view(sel = EditorSelection.single(4, 7))
+        val log = v.log()
+        assertTrue(runKey(v, KeyChord("d", ctrl = true), false))
+        assertEquals(listOf(15), log.last().effects.mapNotNull { it.valueIf(dev.supermux.editor.compose.EditorEffects.scrollTo) })
+    }
+
     @Test fun modDOnApple() {
         val v = view(sel = EditorSelection.cursor(5))
         assertTrue(runKey(v, KeyChord("d", meta = true), true))
@@ -281,10 +296,44 @@ class SearchPluginTest {
         val v = view(t, EditorSelection.cursor(0), fold(), history())
         Fold.foldCode.run(v)
         v.query(SearchQuery("needle", replace = "pin"))
+        val fold = Fold.folded(v.state).single()
         assertTrue(Search.replaceAll.run(v))
         assertEquals("fun a() {\n    x pin\n}\npin\n", v.doc)
+        assertTrue(Fold.folded(v.state).isEmpty(), "the fold holding a match opened")
+        assertEquals(1, History.undoDepth(v.state), "opening the fold and replacing are ONE undo step")
         assertTrue(History.undo.run(v))
         assertEquals(t, v.doc)
+        assertEquals(listOf(fold), Fold.folded(v.state), "undo folds it again")
+        assertTrue(History.redo.run(v))
+        assertEquals("fun a() {\n    x pin\n}\npin\n", v.doc)
+    }
+
+    @Test fun readOnlyReplacesNothingAndUnfoldsNothing() {
+        val t = "fun a() {\n    x needle\n}\nneedle\n"
+        val v = view(t, EditorSelection.cursor(0), fold())
+        v.readOnly = true
+        Fold.foldCode.run(v)
+        v.query(SearchQuery("needle", replace = "pin"))
+        v.dispatch(dev.supermux.editor.core.TransactionSpec(selection = EditorSelection.single(t.lastIndexOf("needle"), t.lastIndexOf("needle") + 6)))
+        assertFalse(Search.replaceNext.run(v))
+        assertFalse(Search.replaceAll.run(v))
+        assertEquals(t, v.doc)
+        assertEquals(1, Fold.folded(v.state).size, "nothing unfolded")
+    }
+
+    @Test fun anEmptyMatchAtTheCursorIsReplaced() {
+        // CM6: "^" with the cursor at a line start: replace prefixes that line, then the next.
+        val v = view("a\nb\n")
+        v.query(SearchQuery("^", regexp = true, replace = "> "))
+        assertTrue(Search.replaceNext.run(v))
+        assertEquals("> a\nb\n", v.doc)
+        assertTrue(Search.replaceNext.run(v))
+        assertEquals("> a\n> b\n", v.doc)
+        // Replace all prefixes every line, the empty last one too (CM6).
+        val w = view("a\nb\n")
+        w.query(SearchQuery("^", regexp = true, replace = "> "))
+        assertTrue(Search.replaceAll.run(w))
+        assertEquals("> a\n> b\n> ", w.doc)
     }
 
     // ------------------------------------------------------------------------ go to line --
@@ -299,6 +348,19 @@ class SearchPluginTest {
         assertEquals(EditorSelection.cursor(st.doc.line(100).from), Search.gotoLineSelection(st, "999"))
         assertEquals(EditorSelection.cursor(l10 + 7), Search.gotoLineSelection(st, "10:99"), "the column is clamped to the line")
         assertNull(Search.gotoLineSelection(st, "ten"))
+        // Numbers too big for an Int go to the last line (its end for a column), never an overflow.
+        assertEquals(EditorSelection.cursor(st.doc.line(100).from), Search.gotoLineSelection(st, "99999999999"))
+        assertEquals(EditorSelection.cursor(st.doc.line(100).from), Search.gotoLineSelection(st, "+99999999999999999999"))
+        assertEquals(EditorSelection.cursor(0), Search.gotoLineSelection(st, "-99999999999"))
+        assertEquals(EditorSelection.cursor(l10 + 7), Search.gotoLineSelection(st, "10:99999999999"))
+    }
+
+    @Test fun anInvalidLineKeepsTheGotoPanelOpen() {
+        val v = view((1..30).joinToString("\n") { "l$it" })
+        Search.gotoLine.run(v)
+        assertFalse(Search.goToLine(v, "ten"))
+        assertEquals(listOf(Panel(Search.GOTO_PANEL, top = true)), v.state.facet(panelsFacet))
+        assertEquals(listOf(0 to 0), v.ranges)
     }
 
     @Test fun gotoLineOpensItsPanelAndGoes() {

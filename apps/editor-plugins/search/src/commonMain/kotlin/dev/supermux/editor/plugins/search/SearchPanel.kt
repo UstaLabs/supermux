@@ -1,6 +1,15 @@
 package dev.supermux.editor.plugins.search
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,7 +35,11 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndSelectAll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,7 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
@@ -50,6 +63,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -84,6 +98,7 @@ object SearchPanelTags {
     const val REPLACE = "search.replace"
     const val COUNT = "search.count"
     const val GOTO = "search.gotoLine"
+    const val GOTO_ERROR = "search.gotoLine.error"
 }
 
 /** Put the panels' content in [registry]: `panel:search` and `panel:goto-line`. */
@@ -105,10 +120,21 @@ private fun chords(spec: String, mac: String? = null): KeyChord = KeyBinding(spe
 private val ESCAPE = chords("Escape")
 private val ENTER = chords("Enter")
 private val SHIFT_ENTER = chords("Shift-Enter")
+private val TAB = chords("Tab")
+private val SHIFT_TAB = chords("Shift-Tab")
 private val NEXT = listOf(chords("F3"), chords("Mod-g"))
 private val PREVIOUS = listOf(chords("Shift-F3"), chords("Mod-Shift-g"))
 private val SELECT_ALL_MATCHES = chords("Alt-Enter", mac = "Mod-Alt-Enter")
 private val FIND_AGAIN = chords("Mod-f")
+// VS Code's find widget toggles (CM6 has none): Alt-C / Alt-W / Alt-R, Apple Cmd-Alt-C / W / R.
+private val TOGGLE_CASE = chords("Alt-c", mac = "Mod-Alt-c")
+private val TOGGLE_WORD = chords("Alt-w", mac = "Mod-Alt-w")
+private val TOGGLE_REGEX = chords("Alt-r", mac = "Mod-Alt-r")
+
+/** Test support: how many times the panel's body composed. */
+internal object SearchPanelDebug {
+    var compositions = 0
+}
 
 /**
  * The search panel (CM6's, in supermux's look: `:ui`'s search field): the find field, the replace
@@ -117,21 +143,47 @@ private val FIND_AGAIN = chords("Mod-f")
  * Compose text fields (the soft keyboard types into them; on iOS Smart Punctuation is off in them,
  * search strings being code). Typing searches after [SEARCH_DEBOUNCE_MS] and selects the first match
  * from the cursor, scrolled into view; Enter / Shift-Enter move between matches, Enter in the
- * replace field replaces, Escape closes and gives the focus back to the editor.
+ * replace field replaces, Escape closes and gives the focus back to the editor. Tab moves through
+ * the fields, toggles and buttons. The work runs in a [SearchRunner] (sliced on a big document).
+ *
+ * It reads only the plugin's state (derived: an edit or a caret move recomposes nothing here), and
+ * the runner's count in its own small scope.
  */
 @Composable
 internal fun SearchPanel(scope: WidgetScope) {
     val editor = scope.editor
     val theme = scope.theme
     val s by remember(editor) { derivedStateOf { Search.state(editor.state) } }
+    val coroutines = rememberCoroutineScope()
+    val runner = remember(editor) { SearchRunner(editor, coroutines) }
+    DisposableEffect(runner) { runner.attach(); onDispose { runner.close() } }
+    SideEffect { SearchPanelDebug.compositions++ }
     val find = rememberTextFieldState(s.query.search)
     val replace = rememberTextFieldState(s.query.replace)
     val findFocus = remember { FocusRequester() }
-    var replaceFocused by remember { mutableStateOf(false) }
+    var fieldFocused by remember { mutableStateOf(0) } // 1 find, 2 replace, 0 neither
+    var hasFocus by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
 
-    // The query changed from outside (Mod-f with a new selection): the fields show it.
-    LaunchedEffect(s.query.search) { if (find.text.toString() != s.query.search) find.setTextAndSelectAll(s.query.search) }
-    LaunchedEffect(s.query.replace) { if (replace.text.toString() != s.query.replace) replace.setTextAndSelectAll(s.query.replace) }
+    // Closed (or gone) while it held the focus: the focus goes back to the editor.
+    val latestHasFocus by rememberUpdatedState(hasFocus)
+    DisposableEffect(Unit) { onDispose { if (latestHasFocus) scope.focusEditor() } }
+
+    // The query changed from OUTSIDE (Mod-f with a new selection), not by what this panel committed:
+    // only then do the fields show it (comparing with the field's text would drop a keystroke typed
+    // just before the debounce fired).
+    LaunchedEffect(s.query.search) {
+        if (s.query.search != runner.committedSearch) {
+            runner.committedSearch = s.query.search
+            find.setTextAndSelectAll(s.query.search)
+        }
+    }
+    LaunchedEffect(s.query.replace) {
+        if (s.query.replace != runner.committedReplace) {
+            runner.committedReplace = s.query.replace
+            replace.setTextAndSelectAll(s.query.replace)
+        }
+    }
     // Each open (or Mod-f again) takes the focus and selects the field's text.
     LaunchedEffect(s.focusRequest) {
         if (s.focusRequest > 0) {
@@ -142,38 +194,30 @@ internal fun SearchPanel(scope: WidgetScope) {
         }
     }
     // Incremental search, debounced.
-    LaunchedEffect(find) {
+    LaunchedEffect(find, runner) {
         snapshotFlow { find.text.toString() }.collectLatest { text ->
-            if (text == Search.query(editor.state).search) return@collectLatest
+            if (text == runner.committedSearch) return@collectLatest
             delay(SEARCH_DEBOUNCE_MS)
-            commitFind(editor, text)
+            runner.commitFind(text)
         }
     }
-    LaunchedEffect(replace) {
+    LaunchedEffect(replace, runner) {
         snapshotFlow { replace.text.toString() }.collectLatest { text ->
-            if (text == Search.query(editor.state).replace) return@collectLatest
+            if (text == runner.committedReplace) return@collectLatest
             delay(SEARCH_DEBOUNCE_MS)
-            Search.setQuery(editor, Search.query(editor.state).copy(replace = text))
+            runner.setReplace(text)
         }
     }
 
     // What the fields hold, now (a button or key right after typing must not use the old query).
     fun flush() {
-        commitFind(editor, find.text.toString())
-        val q = Search.query(editor.state)
-        if (replace.text.toString() != q.replace) Search.setQuery(editor, q.copy(replace = replace.text.toString()))
+        runner.setSearch(find.text.toString())
+        runner.setReplace(replace.text.toString())
     }
     fun run(c: Command, focusEditor: Boolean = false) { flush(); c.run(editor); if (focusEditor) scope.focusEditor() }
+    fun go(dir: Int) { flush(); runner.find(dir) }
     fun close() { Search.closeSearchPanel.run(editor); scope.focusEditor() }
     fun setFlags(q: SearchQuery) { flush(); Search.setQuery(editor, q.copy(search = find.text.toString(), replace = replace.text.toString())) }
-
-    // Counted after the document, the query or the selection changed (a big file waits a moment).
-    var info by remember(editor) { mutableStateOf<MatchInfo?>(null) }
-    val st = editor.state
-    LaunchedEffect(st.doc, s.query, st.selection) {
-        if (st.doc.length > 1_000_000) delay(100)
-        info = Search.matchInfo(editor.state)
-    }
 
     val fg = theme.foreground
     val muted = theme.gutterForeground
@@ -187,16 +231,26 @@ internal fun SearchPanel(scope: WidgetScope) {
             .background(theme.gutterBackground)
             .drawBehind { drawLine(muted.copy(alpha = 0.35f), Offset(0f, size.height - 0.5f), Offset(size.width, size.height - 0.5f), 1f) }
             .padding(horizontal = 4.dp, vertical = 2.dp)
+            .onFocusChanged { hasFocus = it.hasFocus }
             .onPreviewKeyEvent { e ->
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 val chord = keyChordOf(e) ?: return@onPreviewKeyEvent false
+                val q = Search.query(editor.state)
                 when {
                     chord == ESCAPE -> { close(); true }
+                    chord == TAB -> focusManager.moveFocus(FocusDirection.Next)
+                    chord == SHIFT_TAB -> focusManager.moveFocus(FocusDirection.Previous)
+                    chord == TOGGLE_CASE -> { setFlags(q.copy(caseSensitive = !q.caseSensitive)); true }
+                    chord == TOGGLE_WORD -> { setFlags(q.copy(wholeWord = !q.wholeWord)); true }
+                    chord == TOGGLE_REGEX -> { setFlags(q.copy(regexp = !q.regexp)); true }
                     chord == SELECT_ALL_MATCHES -> { run(Search.selectMatches, focusEditor = true); true }
-                    chord == ENTER && replaceFocused -> { run(Search.replaceNext); true }
-                    chord == ENTER || chord in NEXT -> { run(Search.findNext); true }
-                    chord == SHIFT_ENTER || chord in PREVIOUS -> { run(Search.findPrevious); true }
+                    chord in NEXT -> { go(1); true }
+                    chord in PREVIOUS -> { go(-1); true }
                     chord == FIND_AGAIN -> { findFocus.requestFocus(); find.setTextAndSelectAll(find.text.toString()); true }
+                    // Enter in a field; on a focused button or toggle, Enter is the button's.
+                    chord == ENTER && fieldFocused == 2 -> { run(Search.replaceNext); true }
+                    chord == ENTER && fieldFocused == 1 -> { go(1); true }
+                    chord == SHIFT_ENTER && fieldFocused != 0 -> { go(-1); true }
                     else -> false
                 }
             },
@@ -206,27 +260,31 @@ internal fun SearchPanel(scope: WidgetScope) {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ChevronButton(s.replaceOpen, target, muted) { editor.dispatch(TransactionSpec(effects = listOf(Search.toggleReplace.of(!s.replaceOpen)))) }
-                    PanelField(find, "Find", theme, text, Modifier.weight(1f).focusRequester(findFocus).testTag(SearchPanelTags.FIND), error = info?.error != null) { run(Search.findNext) }
+                    PanelField(
+                        find, "Find", theme, text,
+                        Modifier.weight(1f).focusRequester(findFocus).testTag(SearchPanelTags.FIND).onFocusChanged { if (it.hasFocus) fieldFocused = 1 else if (fieldFocused == 1) fieldFocused = 0 },
+                        error = s.query.error != null,
+                    ) { go(1) }
                     if (wide) {
                         Toggles(s.query, theme, target, ::setFlags)
-                        CountLabel(info, small, Modifier.padding(horizontal = 6.dp))
+                        CountLabel(runner, s.query, small, Modifier.padding(horizontal = 6.dp))
                     }
-                    PanelButton("↑", "Previous match", theme, target) { run(Search.findPrevious) }
-                    PanelButton("↓", "Next match", theme, target) { run(Search.findNext) }
+                    PanelButton("↑", "Previous match", theme, target) { go(-1) }
+                    PanelButton("↓", "Next match", theme, target) { go(1) }
                     if (wide) PanelButton("All", "Select all matches", theme, target) { run(Search.selectMatches, focusEditor = true) }
                     PanelButton("×", "Close", theme, target) { close() }
                 }
                 if (!wide) Row(verticalAlignment = Alignment.CenterVertically) {
                     Spacer(Modifier.width(target))
                     Toggles(s.query, theme, target, ::setFlags)
-                    CountLabel(info, small, Modifier.weight(1f).padding(horizontal = 6.dp))
+                    CountLabel(runner, s.query, small, Modifier.weight(1f).padding(horizontal = 6.dp))
                     PanelButton("All", "Select all matches", theme, target) { run(Search.selectMatches, focusEditor = true) }
                 }
                 if (s.replaceOpen) Row(verticalAlignment = Alignment.CenterVertically) {
                     Spacer(Modifier.width(target))
                     PanelField(
                         replace, "Replace", theme, text,
-                        Modifier.weight(1f).testTag(SearchPanelTags.REPLACE).onFocusChanged { replaceFocused = it.hasFocus },
+                        Modifier.weight(1f).testTag(SearchPanelTags.REPLACE).onFocusChanged { if (it.hasFocus) fieldFocused = 2 else if (fieldFocused == 2) fieldFocused = 0 },
                     ) { run(Search.replaceNext) }
                     PanelButton("Replace", "Replace", theme, target) { run(Search.replaceNext) }
                     PanelButton("All", "Replace all", theme, target) { run(Search.replaceAll) }
@@ -236,26 +294,6 @@ internal fun SearchPanel(scope: WidgetScope) {
     }
 }
 
-/**
- * The find field's text is the query: set it and select the first match at or after the main
- * selection's start (VS Code's incremental search; CM6 only marks), in one transaction.
- */
-internal fun commitFind(editor: CommandTarget, text: String) {
-    val st = editor.state
-    val old = Search.query(st)
-    if (text == old.search) return
-    val q = old.copy(search = text)
-    val main = st.selection.main
-    val m = if (q.valid) q.nextMatch(st.doc, main.from, main.from) else null
-    val moves = m != null && !(m.from == main.from && m.to == main.to && st.selection.ranges.size == 1)
-    editor.dispatch(TransactionSpec(
-        effects = listOf(Search.setQueryEffect.of(q)),
-        selection = if (moves) EditorSelection.single(m!!.from, m.to) else null,
-        scrollIntoView = moves,
-        userEvent = if (moves) "select.search" else null,
-    ))
-}
-
 @Composable
 private fun Toggles(q: SearchQuery, theme: EditorTheme, target: Dp, set: (SearchQuery) -> Unit) {
     PanelToggle("Aa", "Match case", q.caseSensitive, theme, target) { set(q.copy(caseSensitive = it)) }
@@ -263,13 +301,20 @@ private fun Toggles(q: SearchQuery, theme: EditorTheme, target: Dp, set: (Search
     PanelToggle(".*", "Regular expression", q.regexp, theme, target) { set(q.copy(regexp = it)) }
 }
 
+/** The count, in its own scope: the runner's changes recompose only this. */
 @Composable
-private fun CountLabel(info: MatchInfo?, style: TextStyle, modifier: Modifier) {
-    val label = info?.label.orEmpty()
+private fun CountLabel(runner: SearchRunner, query: SearchQuery, style: TextStyle, modifier: Modifier) {
+    val info = runner.info
+    val label = when {
+        query.error != null -> "Invalid regex: ${query.error}"
+        runner.searching -> "searching…"
+        info == null -> "…"
+        else -> info.label
+    }
     BasicText(
         label,
         modifier.testTag(SearchPanelTags.COUNT).semantics { liveRegion = LiveRegionMode.Polite; contentDescription = label },
-        style = if (info?.error != null) style.copy(color = Color(0xFFE06C75)) else style,
+        style = if (query.error != null) style.copy(color = Color(0xFFE06C75)) else style,
         maxLines = 1,
     )
 }
@@ -310,15 +355,17 @@ private fun PanelField(
     )
 }
 
-/** A button that never takes the focus (the field keeps it, so a soft keyboard stays up). */
+/**
+ * A button: keyboard-focusable (Tab reaches it; Enter or Space presses it), but a click or a tap
+ * never moves the focus (the field keeps it, so a soft keyboard stays up).
+ */
 @Composable
 private fun PanelButton(label: String, description: String, theme: EditorTheme, target: Dp, onClick: () -> Unit) {
     Box(
         Modifier
             .sizeIn(minWidth = target, minHeight = target)
-            .focusProperties { canFocus = false }
             .clip(RoundedCornerShape(6.dp))
-            .clickable(remember { MutableInteractionSource() }, LocalIndication.current, role = Role.Button, onClick = onClick)
+            .panelPress(Role.Button, onClick)
             .semantics { contentDescription = description }
             .padding(horizontal = 6.dp),
         contentAlignment = Alignment.Center,
@@ -330,14 +377,38 @@ private fun PanelToggle(label: String, description: String, on: Boolean, theme: 
     Box(
         Modifier
             .sizeIn(minWidth = target, minHeight = target)
-            .focusProperties { canFocus = false }
             .padding(2.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(if (on) theme.cursor.copy(alpha = 0.28f) else Color.Transparent)
-            .toggleable(on, remember { MutableInteractionSource() }, LocalIndication.current, role = Role.Checkbox, onValueChange = onChange)
+            .panelPress(Role.Checkbox, { onChange(!on) }, toggled = on)
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) { BasicText(label, style = TextStyle(color = if (on) theme.foreground else theme.gutterForeground, fontFamily = theme.fontFamily, fontSize = 13.sp)) }
+}
+
+/**
+ * A panel button's input: focusable, so Tab reaches it, and Enter or Space presses it; a tap or a
+ * click presses it WITHOUT taking the focus (Compose's `clickable` focuses on a desktop click, which
+ * took the focus out of the find field). A ring shows the keyboard focus. Semantics: a button (or a
+ * checkbox showing [toggled]) with a click action.
+ */
+@Composable
+private fun Modifier.panelPress(role: Role, onClick: () -> Unit, toggled: Boolean? = null): Modifier {
+    var focused by remember { mutableStateOf(false) }
+    val latest by rememberUpdatedState(onClick)
+    return this
+        .drawBehind { if (focused) drawRoundRect(Color(0x994BBAA7), style = Stroke(2f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(6.dp.toPx())) }
+        .onFocusChanged { focused = it.isFocused }
+        .focusable()
+        .onKeyEvent { e ->
+            if (e.type == KeyEventType.KeyDown && (e.key == Key.Enter || e.key == Key.NumPadEnter || e.key == Key.Spacebar)) { latest(); true } else false
+        }
+        .pointerInput(Unit) { detectTapGestures(onTap = { latest() }) }
+        .semantics {
+            this.role = role
+            if (toggled != null) toggleableState = androidx.compose.ui.state.ToggleableState(toggled)
+            onClick { latest(); true }
+        }
 }
 
 /** The replace row's chevron: pointing right (closed) or down (open). */
@@ -346,9 +417,8 @@ private fun ChevronButton(open: Boolean, target: Dp, color: Color, onClick: () -
     Box(
         Modifier
             .size(target)
-            .focusProperties { canFocus = false }
             .clip(RoundedCornerShape(6.dp))
-            .clickable(remember { MutableInteractionSource() }, LocalIndication.current, role = Role.Button, onClick = onClick)
+            .panelPress(Role.Button, onClick)
             .semantics { contentDescription = if (open) "Hide replace" else "Show replace" },
         contentAlignment = Alignment.Center,
     ) {
@@ -363,7 +433,10 @@ private fun ChevronButton(open: Boolean, target: Dp, color: Color, onClick: () -
     }
 }
 
-/** CM6's go-to-line dialog as a panel: a line (`12`, `+3`, `50%`, `12:5`), Enter goes, Escape closes. */
+/**
+ * CM6's go-to-line dialog as a panel: a line (`12`, `+3`, `50%`, `12:5`), Enter goes and closes,
+ * Escape closes; input that is no line keeps it open with an error.
+ */
 @Composable
 internal fun GotoLinePanel(scope: WidgetScope) {
     val editor = scope.editor
@@ -371,20 +444,26 @@ internal fun GotoLinePanel(scope: WidgetScope) {
     val s by remember(editor) { derivedStateOf { Search.state(editor.state) } }
     val field = rememberTextFieldState()
     val focus = remember { FocusRequester() }
+    var error by remember { mutableStateOf(false) }
+    var hasFocus by remember { mutableStateOf(false) }
+    val latestHasFocus by rememberUpdatedState(hasFocus)
+    DisposableEffect(Unit) { onDispose { if (latestHasFocus) scope.focusEditor() } }
     LaunchedEffect(s.gotoLineFocusRequest) {
         val st = editor.state
         field.setTextAndSelectAll(st.doc.lineAt(st.selection.main.head).number.toString())
         withFrameNanos { }
         focus.requestFocus()
     }
+    LaunchedEffect(field) { snapshotFlow { field.text.toString() }.collectLatest { error = false } }
     val text = TextStyle(color = theme.foreground, fontFamily = theme.fontFamily, fontSize = 13.sp)
-    fun go() { Search.goToLine(editor, field.text.toString()); scope.focusEditor() }
+    fun go() { if (Search.goToLine(editor, field.text.toString())) scope.focusEditor() else error = true }
     fun close() { Search.closeSearchPanel.run(editor); scope.focusEditor() }
     Row(
         Modifier
             .fillMaxWidth()
             .background(theme.gutterBackground)
             .padding(horizontal = 8.dp, vertical = 2.dp)
+            .onFocusChanged { hasFocus = it.hasFocus }
             .onPreviewKeyEvent { e ->
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (keyChordOf(e)) { ESCAPE -> { close(); true }; ENTER -> { go(); true }; else -> false }
@@ -392,7 +471,13 @@ internal fun GotoLinePanel(scope: WidgetScope) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BasicText("Go to line", style = text.copy(color = theme.gutterForeground), modifier = Modifier.padding(end = 8.dp))
-        PanelField(field, "line[:column]", theme, text, Modifier.weight(1f).focusRequester(focus).testTag(SearchPanelTags.GOTO)) { go() }
+        PanelField(field, "line[:column]", theme, text, Modifier.weight(1f).focusRequester(focus).testTag(SearchPanelTags.GOTO), error = error) { go() }
+        if (error) BasicText(
+            "Not a line: use 12, +3, -2, 50% or 12:5",
+            Modifier.padding(horizontal = 6.dp).testTag(SearchPanelTags.GOTO_ERROR).semantics { liveRegion = LiveRegionMode.Polite },
+            style = text.copy(color = Color(0xFFE06C75), fontSize = 12.sp),
+            maxLines = 1,
+        )
         PanelButton("Go", "Go to line", theme, targetSize) { go() }
         PanelButton("×", "Close", theme, targetSize) { close() }
         Spacer(Modifier.height(targetSize))

@@ -8,13 +8,21 @@ import dev.supermux.editor.core.Rope
  * - [search]: a literal text, where `\n`, `\r`, `\t` and `\\` stand for a line break, a carriage
  *   return, a tab and a backslash (CM6's escapes; any other backslash is itself), or with [regexp]
  *   a Kotlin [Regex] pattern (java.util.regex on the JVM and Android, Kotlin/Native's and
- *   Kotlin/Wasm's own engines elsewhere; `SearchEngineTest`'s golden holds on all of them). `^` and
- *   `$` are line anchors. A pattern that can match a line break (`\n`, `\r`, `\s`, `\W`, `\D`, `[^`,
- *   a literal line break: CM6's test) searches across lines, in a bounded window; any other runs line
- *   by line.
- * - [caseSensitive] false (the default) folds case locale-free, the same for literal and regex: a
- *   character's uppercase, then lowercase ([fold]). So Turkish `i`, `I`, `İ` and `ı` are ONE letter
- *   then; match case tells them apart.
+ *   Kotlin/Wasm's own engine elsewhere; `SearchEngineTest`'s golden holds on all of them). `^` and
+ *   `$` are line anchors; the input anchors `\A`, `\z`, `\Z` and `\G` are refused (the document is
+ *   searched in windows, where they would answer at a window's edge). A pattern that can match a
+ *   line break (`\n`, `\r`, `\s`, `\W`, `\D`, `\v`, `\R`, `\X`, any `\x`, `\u`, `\0`, `\c` escape,
+ *   `\P{…}`, a control or space `\p{…}`, `[^`, the `s` flag, a literal line break) searches across
+ *   lines; any other runs line by line.
+ * - [caseSensitive] false (the default) ignores case, locale-free:
+ *   - a LITERAL search folds each UTF-16 unit to its uppercase's lowercase ([fold]), so Turkish `i`,
+ *     `I`, `İ` and `ı` are one letter; a letter outside the Basic Multilingual Plane (Deseret,
+ *     Adlam: two units) is not folded;
+ *   - a REGEX runs with the engine's IGNORE_CASE: every engine matches `i`, `I`, `İ`, `ı` as one
+ *     letter too (they compare uppercase and lowercase, like [fold]); outside the BMP the JVM's
+ *     engine folds (`𐐨` finds `𐐀`), the Kotlin/Native and Kotlin/Wasm engine does not
+ *     (`CaseFoldingTest`); `\p{Lu}` / `\p{Ll}` with ignore case also follow each engine.
+ *   Match case tells every one of them apart, the same everywhere.
  * - [wholeWord]: CM6's rule: a match's first character or the one before it is not a word
  *   character, and its last or the one after it neither. Word characters are the editor's (letters,
  *   digits, `_`; a surrogate pair, an emoji, is not one).
@@ -35,7 +43,13 @@ data class SearchQuery(
     /** The literal text [search] stands for (escapes resolved). */
     internal val unquoted: String = unquote(search)
 
-    private val compiled: Any? = if (regexp && search.isNotEmpty()) compile(search, caseSensitive) else null
+    private val facts: PatternFacts? = if (regexp && search.isNotEmpty()) patternFacts(search) else null
+
+    private val compiled: Any? = when {
+        !regexp || search.isEmpty() -> null
+        facts!!.inputAnchor -> "\\A, \\z, \\Z and \\G are not supported: use ^ and $ (line anchors)"
+        else -> compile(search, caseSensitive)
+    }
 
     /** The pattern's compile error, or null. */
     val error: String? = (compiled as? String)
@@ -45,39 +59,68 @@ data class SearchQuery(
 
     internal val regex: Regex? = compiled as? Regex
 
-    /** A regex that can match a line break searches across lines (CM6's test). */
-    internal val multiline: Boolean = regexp && MULTILINE_HINT.containsMatchIn(search)
+    /**
+     * The pattern without MULTILINE, for an empty last line: java.util.regex's multi-line `^` never
+     * matches at the input's end (nor on an empty input); as input anchors on "" they are that
+     * line's start and end.
+     */
+    internal val emptyLineRegex: Regex? by lazy {
+        if (regex == null) null else try { Regex(unicodeWordClasses(search), if (caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE)) } catch (e: Throwable) { null }
+    }
+
+    /** A regex that can match a line break searches across lines. */
+    internal val multiline: Boolean = facts?.multiline == true
 
     /** The folded needle for a literal search. */
     internal val needle: String = if (caseSensitive) unquoted else fold(unquoted)
 
     /** Every match in [from, to), in document order, not overlapping. */
-    fun cursor(doc: Rope, from: Int = 0, to: Int = doc.length): Iterator<SearchMatch> {
+    fun cursor(doc: Rope, from: Int = 0, to: Int = doc.length): Iterator<SearchMatch> = scanner(doc, from, to)
+
+    internal fun scanner(doc: Rope, from: Int = 0, to: Int = doc.length): MatchScanner {
         val a = from.coerceIn(0, doc.length)
         val b = to.coerceIn(a, doc.length)
         return when {
-            !valid -> emptyList<SearchMatch>().iterator()
-            regex != null -> RegexCursor(doc, regex, multiline, wholeWord, a, b)
+            !valid -> LiteralCursor(doc, "", false, false, a, b) // an empty needle finds nothing
+            regex != null -> RegexCursor(doc, regex, { emptyLineRegex }, multiline, wholeWord, a, b)
             else -> LiteralCursor(doc, needle, !caseSensitive, wholeWord, a, b)
         }
     }
 
     /**
      * The first match after [curTo] (the current selection is [curFrom, curTo)), wrapping to the
-     * document's start; never the current selection itself. Null when there is no other (CM6's
-     * `nextMatch`).
+     * document's start and scanning only up to where it began; never the current selection itself.
+     * Null when there is no other (CM6's `nextMatch`).
      */
-    fun nextMatch(doc: Rope, curFrom: Int, curTo: Int): SearchMatch? {
+    fun nextMatch(doc: Rope, curFrom: Int, curTo: Int): SearchMatch? = nextImpl(doc, curFrom, curTo, exclude = true) {}
+
+    /** The first match starting at or after [from], wrapping; an empty match AT [from] included (replace). */
+    internal fun matchFrom(doc: Rope, from: Int): SearchMatch? = nextImpl(doc, from, from, exclude = false) {}
+
+    /** [nextMatch], giving the thread back ([pause]) every [STEP_UNITS] units read. */
+    internal suspend fun nextMatchSliced(doc: Rope, curFrom: Int, curTo: Int, pause: suspend () -> Unit): SearchMatch? =
+        nextImpl(doc, curFrom, curTo, exclude = true) { pause() }
+
+    internal inline fun nextImpl(doc: Rope, curFrom: Int, curTo: Int, exclude: Boolean, pause: () -> Unit): SearchMatch? {
         if (!valid) return null
-        val c = cursor(doc, curTo, doc.length)
-        while (c.hasNext()) { val m = c.next(); if (!m.isAt(curFrom, curTo)) return m }
-        val w = cursor(doc, 0, doc.length)
-        while (w.hasNext()) {
-            val m = w.next()
-            if (m.from >= curTo) break // the scan from curTo found nothing else there
-            if (!m.isAt(curFrom, curTo)) return m
+        val c = scanner(doc, curTo, doc.length)
+        while (true) {
+            val m = c.step(STEP_UNITS)
+            if (m === MatchScanner.PAUSED) { pause(); continue }
+            if (m == null) break
+            if (!exclude || !m.isAt(curFrom, curTo)) return m
         }
-        return null
+        // Wrapped: from the start up to where the first scan began (a literal a needle further, so a
+        // match across that point is found; a regex's match may end at most there).
+        val bound = if (regex == null) minOf(doc.length, curTo + needle.length - 1) else curTo
+        val w = scanner(doc, 0, bound)
+        while (true) {
+            val m = w.step(STEP_UNITS)
+            if (m === MatchScanner.PAUSED) { pause(); continue }
+            if (m == null) return null
+            if (m.from >= curTo) return null // the first scan saw it
+            if (!exclude || !m.isAt(curFrom, curTo)) return m
+        }
     }
 
     /**
@@ -85,9 +128,14 @@ data class SearchQuery(
      * current selection [curFrom, curTo) itself (CM6's `prevMatch`: forward scans of chunks going
      * back from the position).
      */
-    fun prevMatch(doc: Rope, curFrom: Int, curTo: Int): SearchMatch? {
+    fun prevMatch(doc: Rope, curFrom: Int, curTo: Int): SearchMatch? = prevImpl(doc, curFrom, curTo) {}
+
+    internal suspend fun prevMatchSliced(doc: Rope, curFrom: Int, curTo: Int, pause: suspend () -> Unit): SearchMatch? =
+        prevImpl(doc, curFrom, curTo) { pause() }
+
+    internal inline fun prevImpl(doc: Rope, curFrom: Int, curTo: Int, pause: () -> Unit): SearchMatch? {
         if (!valid) return null
-        return lastIn(doc, 0, curFrom, curFrom, curTo) ?: lastIn(doc, minOf(curFrom, curTo), doc.length, curFrom, curTo)
+        return lastIn(doc, 0, curFrom, curFrom, curTo, pause) ?: lastIn(doc, minOf(curFrom, curTo), doc.length, curFrom, curTo, pause)
     }
 
     /** Every match, or null when there are more than [limit] (CM6's `matchAll`). */
@@ -103,15 +151,27 @@ data class SearchQuery(
     }
 
     /** How many matches, counting at most [limit] ("10,000+" past it). */
-    fun count(doc: Rope, limit: Int = MATCH_LIMIT): MatchCount {
+    fun count(doc: Rope, limit: Int = MATCH_LIMIT): MatchCount = infoImpl(doc, -1, -1, limit) {}.total
+
+    /** Which match [selFrom, selTo) is (1-based, 0: none) and how many there are, counting at most [limit]. */
+    internal fun info(doc: Rope, selFrom: Int, selTo: Int, limit: Int = MATCH_LIMIT): MatchInfo = infoImpl(doc, selFrom, selTo, limit) {}
+
+    internal suspend fun infoSliced(doc: Rope, selFrom: Int, selTo: Int, limit: Int = MATCH_LIMIT, pause: suspend () -> Unit): MatchInfo =
+        infoImpl(doc, selFrom, selTo, limit) { pause() }
+
+    internal inline fun infoImpl(doc: Rope, selFrom: Int, selTo: Int, limit: Int, pause: () -> Unit): MatchInfo {
+        if (error != null) return MatchInfo(0, MatchCount(0, false), error)
         var n = 0
-        val c = cursor(doc)
-        while (c.hasNext()) {
-            c.next()
-            if (n == limit) return MatchCount(limit, true)
+        var current = 0
+        val c = scanner(doc)
+        while (true) {
+            val m = c.step(STEP_UNITS)
+            if (m === MatchScanner.PAUSED) { pause(); continue }
+            if (m == null) return MatchInfo(current, MatchCount(n, false))
+            if (n == limit) return MatchInfo(current, MatchCount(limit, true))
             n++
+            if (m.from == selFrom && m.to == selTo) current = n
         }
-        return MatchCount(n, false)
     }
 
     /** What replaces [match] (see the class comment for templates). */
@@ -152,7 +212,7 @@ data class SearchQuery(
     }
 
     /** The last match in [from, to) that is not [exFrom, exTo), scanning chunks backwards. */
-    private fun lastIn(doc: Rope, from: Int, to: Int, exFrom: Int, exTo: Int): SearchMatch? {
+    internal inline fun lastIn(doc: Rope, from: Int, to: Int, exFrom: Int, exTo: Int, pause: () -> Unit): SearchMatch? {
         if (to < from) return null
         var size = PREV_CHUNK
         var pos = to
@@ -160,12 +220,18 @@ data class SearchQuery(
             val overlap = if (regex == null) needle.length else 0
             val start = maxOf(from, pos - size - overlap)
             var last: SearchMatch? = null
-            val c = cursor(doc, start, pos)
-            while (c.hasNext()) { val m = c.next(); if (!m.isAt(exFrom, exTo)) last = m }
+            val c = scanner(doc, start, pos)
+            while (true) {
+                val m = c.step(STEP_UNITS)
+                if (m === MatchScanner.PAUSED) { pause(); continue }
+                if (m == null) break
+                if (!m.isAt(exFrom, exTo)) last = m
+            }
             // A regex scan starting mid-way may find a match the full scan would not (inside an
             // earlier, longer one): CM6 trusts one well past the chunk's start.
             if (last != null && (regex == null || start == from || last.from > start + 10)) return last
             if (start == from) return null
+            pause()
             if (regex == null) pos = start + overlap else size *= 2
         }
     }
@@ -174,9 +240,67 @@ data class SearchQuery(
         /** Matches counted (and marked, selected, replaced one by one) at most: "10,000+" past it. */
         const val MATCH_LIMIT = 10_000
 
-        private const val PREV_CHUNK = 10_000
+        internal const val PREV_CHUNK = 10_000
 
-        private val MULTILINE_HINT = Regex("""\\[sWDnr]|\n|\r|\[\^""")
+        /** A sliced scan's step: it may give the thread back after reading this much. */
+        internal const val STEP_UNITS = 8192
+
+        /** What a pattern needs from the windows: whether it can match a line break, whether it anchors to the input. */
+        internal class PatternFacts(val multiline: Boolean, val inputAnchor: Boolean)
+
+        private val LINE_BREAK_PROPERTY = Regex("^(C|Cc|Z|Zl|Zp|Space|Cntrl|javaWhitespace|javaISOControl|IsWhite_?Space|IsControl|All|Any|javaSpaceChar)$", RegexOption.IGNORE_CASE)
+
+        /** A small scanner over the pattern: escapes, classes, `\Q…\E` and inline flags. */
+        internal fun patternFacts(p: String): PatternFacts {
+            var multiline = false
+            var anchor = false
+            var inClass = false
+            var i = 0
+            while (i < p.length) {
+                val c = p[i]
+                if (c == '\n' || c == '\r') multiline = true
+                if (c == '\\' && i + 1 < p.length) {
+                    val n = p[i + 1]
+                    when (n) {
+                        'Q' -> {
+                            val e = p.indexOf("\\E", i + 2)
+                            val quoted = if (e < 0) p.substring(i + 2) else p.substring(i + 2, e)
+                            if (quoted.indexOf('\n') >= 0 || quoted.indexOf('\r') >= 0) multiline = true
+                            i = if (e < 0) p.length else e + 2
+                            continue
+                        }
+                        'A', 'z', 'Z', 'G' -> if (!inClass) anchor = true
+                        's', 'W', 'D', 'n', 'r', 'v', 'R', 'X', 'x', 'u', '0', 'c', 'P' -> multiline = true
+                        'p' -> {
+                            val name = if (i + 2 < p.length && p[i + 2] == '{') p.substring(i + 3, p.indexOf('}', i + 3).let { if (it < 0) p.length else it })
+                            else if (i + 2 < p.length) p[i + 2].toString() else ""
+                            if (LINE_BREAK_PROPERTY.matches(name)) multiline = true
+                        }
+                    }
+                    i += 2
+                    continue
+                }
+                if (!inClass && c == '[') {
+                    inClass = true
+                    i++
+                    if (i < p.length && p[i] == '^') { multiline = true; i++ }
+                    if (i < p.length && p[i] == ']') i++
+                    continue
+                }
+                if (inClass && c == ']') inClass = false
+                if (!inClass && c == '(' && i + 1 < p.length && p[i + 1] == '?') {
+                    // Inline flags: (?s), (?is), (?s:...), not after a '-' (turned off).
+                    var j = i + 2
+                    var on = true
+                    while (j < p.length && (p[j].isLetter() || p[j] == '-')) {
+                        if (p[j] == '-') on = false else if (p[j] == 's' && on) multiline = true
+                        j++
+                    }
+                }
+                i++
+            }
+            return PatternFacts(multiline, anchor)
+        }
 
         /** CM6's escapes: `\n`, `\r`, `\t`, `\\`; any other backslash is itself. */
         internal fun unquote(s: String): String {

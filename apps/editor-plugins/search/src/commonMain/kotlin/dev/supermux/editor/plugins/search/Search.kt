@@ -1,7 +1,6 @@
 package dev.supermux.editor.plugins.search
 
 import dev.supermux.editor.compose.EditorViewport
-import dev.supermux.editor.compose.revealFacet
 import dev.supermux.editor.core.ChangeSpec
 import dev.supermux.editor.core.Command
 import dev.supermux.editor.core.CommandTarget
@@ -50,6 +49,11 @@ data class SearchState(
     val focusRequest: Int = 0,
     val gotoLineOpen: Boolean = false,
     val gotoLineFocusRequest: Int = 0,
+    /** A find the panel's runner does off the keystroke (a big document): counter and direction. */
+    val searchRequest: Int = 0,
+    val requestDirection: Int = 1,
+    /** How many panels (runners) are composed: only then does a big document's find go to one. */
+    val runners: Int = 0,
 )
 
 /** "3 of 17": the [current] match (1-based; 0: the selection is none), of [total]; [error]: a bad pattern. */
@@ -78,7 +82,10 @@ data class MatchInfo(val current: Int, val total: MatchCount, val error: String?
  * - **userEvents**: `select.search` (moving between matches), `select.search.matches` (every match
  *   selected), `input.replace` (one), `input.replace.all` (one transaction: one undo step).
  * - **Folds**: a match is selected with `scrollIntoView`, so a fold holding it opens (the surface
- *   asks editor-compose's `revealFacet`); replace all asks the same for every match first.
+ *   asks editor-compose's `revealFacet`); replace all edits inside folds in its one transaction
+ *   (the fold plugin opens them with it, and undo folds them again).
+ * - **Big documents**: past [ASYNC_LIMIT] units, the panel's runner ([SearchRunner]) finds and counts
+ *   in slices, so no keystroke holds the UI thread for a whole-document scan.
  */
 object Search {
     const val PANEL = "search"
@@ -95,6 +102,18 @@ object Search {
     val focusPanel: StateEffectType<Unit> = StateEffectType("search.focusPanel")
     val toggleGotoLine: StateEffectType<Boolean> = StateEffectType("search.toggleGotoLine")
 
+    /** Ask the composed panel to find the next (+1) or previous (-1) match, sliced (a big document). */
+    val requestSearch: StateEffectType<Int> = StateEffectType("search.request")
+
+    /** A panel's runner came (true) or went (false). */
+    val runnerAttached: StateEffectType<Boolean> = StateEffectType("search.runner")
+
+    /**
+     * Above this many units a find from a key or a button goes to the panel's runner (when one is
+     * composed): it scans in slices, giving the UI thread back, and the selection jumps when found.
+     */
+    const val ASYNC_LIMIT = 262_144
+
     internal val config: Facet<SearchConfig, SearchConfig> = Facet.first("search.config", SearchConfig())
 
     val field: StateField<SearchState> = StateField(
@@ -108,6 +127,8 @@ object Search {
                 e.valueIf(toggleReplace)?.let { s = s.copy(replaceOpen = it) }
                 e.valueIf(focusPanel)?.let { s = s.copy(focusRequest = s.focusRequest + 1) }
                 e.valueIf(toggleGotoLine)?.let { s = s.copy(gotoLineOpen = it, gotoLineFocusRequest = if (it) s.gotoLineFocusRequest + 1 else s.gotoLineFocusRequest) }
+                e.valueIf(requestSearch)?.let { s = s.copy(searchRequest = s.searchRequest + 1, requestDirection = it) }
+                e.valueIf(runnerAttached)?.let { s = s.copy(runners = maxOf(0, s.runners + if (it) 1 else -1)) }
             }
             s
         },
@@ -166,17 +187,33 @@ object Search {
         return true
     }
 
-    /** Select the next match after the main selection, wrapping (the panel opens without a query). */
+    /** A big document with a composed, open panel: its runner finds, in slices. */
+    private fun toRunner(t: CommandTarget, dir: Int): Boolean {
+        val st = t.state
+        val s = state(st)
+        if (s.runners <= 0 || !s.open || st.doc.length <= ASYNC_LIMIT) return false
+        t.dispatch(TransactionSpec(effects = listOf(requestSearch.of(dir))))
+        return true
+    }
+
+    /**
+     * Select the next match after the main selection, wrapping (the panel opens without a query).
+     * On a document over [ASYNC_LIMIT] with the panel composed, the panel's runner does it in slices.
+     */
     val findNext: Command = searchCommand { t, q ->
+        if (toRunner(t, 1)) return@searchCommand true
         val main = t.state.selection.main
         q.nextMatch(t.state.doc, main.from, main.to)?.let { select(t, it) } ?: false
     }
 
-    /** Select the match before the main selection, wrapping to the end. */
+    /** Select the match before the main selection, wrapping to the end (sliced as [findNext]). */
     val findPrevious: Command = searchCommand { t, q ->
+        if (toRunner(t, -1)) return@searchCommand true
         val main = t.state.selection.main
         q.prevMatch(t.state.doc, main.from, main.to)?.let { select(t, it) } ?: false
     }
+
+    internal fun readOnly(t: CommandTarget) = (t as? dev.supermux.editor.compose.EditorView)?.readOnly == true
 
     /**
      * Every match a selection range (multi-cursor), the one at or after the main cursor the main
@@ -218,9 +255,11 @@ object Search {
      * else select the next match (the first press selects, each next one replaces).
      */
     val replaceNext: Command = searchCommand { t, q ->
+        if (readOnly(t)) return@searchCommand false
         val st = t.state
         val main = st.selection.main
-        val match = q.nextMatch(st.doc, main.from, main.from) ?: return@searchCommand false
+        // From the selection's start, an empty match AT it included (a `^` at the cursor, CM6).
+        val match = q.matchFrom(st.doc, main.from) ?: return@searchCommand false
         if (match.from == main.from && match.to == main.to) {
             val insert = q.replacement(match)
             val change = dev.supermux.editor.core.ChangeSet.of(st.doc.length, listOf(ChangeSpec(match.from, match.to, insert)))
@@ -234,24 +273,23 @@ object Search {
         true
     }
 
-    /** Replace every match, in ONE transaction (one undo step). Folds holding a match open first. */
+    /**
+     * Replace every match, in ONE transaction (one undo step). It reaches into folds on purpose
+     * (`EditorAnnotations.atomicWhole`: the surface lets it through): the fold plugin opens each fold
+     * it edits in that same transaction, and undo folds them again (editor-core's
+     * `invertedEffectsFacet`). False when read-only or nothing matches.
+     */
     val replaceAll: Command = searchCommand { t, q ->
+        if (readOnly(t)) return@searchCommand false
         val ms = q.matchAll(t.state.doc, Int.MAX_VALUE).orEmpty()
         if (ms.isEmpty()) return@searchCommand false
-        reveal(t, ms)
         val st = t.state
-        t.dispatch(TransactionSpec(changes = ms.map { ChangeSpec(it.from, it.to, q.replacement(it)) }, userEvent = "input.replace.all"))
+        t.dispatch(TransactionSpec(
+            changes = ms.map { ChangeSpec(it.from, it.to, q.replacement(it)) },
+            userEvent = "input.replace.all",
+            annotations = listOf(dev.supermux.editor.compose.EditorAnnotations.atomicWhole.of(true)),
+        ))
         st !== t.state
-    }
-
-    /**
-     * Ask the reveal handlers (the fold plugin) to show every match: local input never edits inside
-     * a fold (the surface refuses it), so the folds holding one open first, as a search into them does.
-     */
-    private fun reveal(t: CommandTarget, ms: List<SearchMatch>) {
-        val handlers = t.state.facet(revealFacet)
-        if (handlers.isEmpty()) return
-        for (m in ms) for (h in handlers) if (h.reveal(t, m.from, maxOf(m.to, m.from))) break
     }
 
     /**
@@ -273,7 +311,11 @@ object Search {
         val text = st.doc.slice(first.from, first.to)
         if (sel.ranges.any { st.doc.slice(it.from, it.to) != text }) return@Command false
         val m = findNextOccurrence(st, text) ?: return@Command false
-        t.dispatch(TransactionSpec(selection = sel.addRange(SelectionRange(m.from, m.to), makeMain = false), scrollIntoView = false, userEvent = "select"))
+        t.dispatch(TransactionSpec(
+            selection = sel.addRange(SelectionRange(m.from, m.to), makeMain = false),
+            effects = listOf(dev.supermux.editor.compose.EditorEffects.scrollTo.of(m.to)),
+            userEvent = "select",
+        ))
         true
     }
 
@@ -290,10 +332,11 @@ object Search {
         }
         val after = LiteralCursor(doc, text, fold = false, wholeWord = false, from = ranges.last().to, to = doc.length)
         while (after.hasNext()) { val m = after.next(); if (ok(m)) return m }
-        val wrap = LiteralCursor(doc, text, fold = false, wholeWord = false, from = 0, to = doc.length)
+        // Wrapped: only up to the last range's start (CM6's `ranges[last].from - 1`), so an occurrence
+        // overlapping a selected one never grows it.
+        val wrap = LiteralCursor(doc, text, fold = false, wholeWord = false, from = 0, to = maxOf(0, ranges.last().from - 1))
         while (wrap.hasNext()) {
             val m = wrap.next()
-            if (m.from >= ranges.last().from) break
             if (ranges.any { it.from == m.from }) continue
             if (ok(m)) return m
         }
@@ -316,14 +359,15 @@ object Search {
         val (sign, ln, cl, percent) = m.destructured
         val doc = st.doc
         val start = doc.lineAt(st.selection.main.head)
-        val col = if (cl.isNotEmpty()) cl.drop(1).toIntOrNull() ?: 0 else 0
-        var line = ln.toIntOrNull() ?: start.number
+        // Huge numbers are clamped (to the last line, the line's end), never an overflow.
+        val col = if (cl.isNotEmpty()) (cl.drop(1).toLongOrNull() ?: Long.MAX_VALUE).coerceAtMost(Int.MAX_VALUE.toLong()).toInt() else 0
+        var line = if (ln.isEmpty()) start.number else (ln.toLongOrNull() ?: Long.MAX_VALUE).coerceAtMost(1_000_000_000L).toInt()
         if (ln.isNotEmpty() && percent.isNotEmpty()) {
             var pc = line / 100.0
             if (sign.isNotEmpty()) pc = pc * (if (sign == "-") -1 else 1) + start.number.toDouble() / doc.lineCount
             line = kotlin.math.round(doc.lineCount * pc).toInt()
         } else if (ln.isNotEmpty() && sign.isNotEmpty()) {
-            line = line * (if (sign == "-") -1 else 1) + start.number
+            line = (line.toLong() * (if (sign == "-") -1 else 1) + start.number).coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
         }
         val target = doc.line(line.coerceIn(1, doc.lineCount))
         return EditorSelection.cursor(target.from + col.coerceIn(0, target.length))
@@ -331,31 +375,22 @@ object Search {
 
     private val GOTO = Regex("""^([+-])?(\d+)?(:\d+)?(%)?$""")
 
-    /** Go to [input] (see [gotoLineSelection]), scrolled into view, and close the go-to-line panel. */
+    /**
+     * Go to [input] (see [gotoLineSelection]), scrolled into view, and close the go-to-line panel.
+     * False, and nothing happens (the panel stays open, showing an error), when it is not a line.
+     */
     fun goToLine(target: CommandTarget, input: String): Boolean {
-        val sel = gotoLineSelection(target.state, input)
-        target.dispatch(TransactionSpec(selection = sel, scrollIntoView = sel != null, effects = listOf(toggleGotoLine.of(false)), userEvent = if (sel != null) "select" else null))
-        return sel != null
+        val sel = gotoLineSelection(target.state, input) ?: return false
+        target.dispatch(TransactionSpec(selection = sel, scrollIntoView = true, effects = listOf(toggleGotoLine.of(false)), userEvent = "select"))
+        return true
     }
 
     // --------------------------------------------------------------------- match info --
 
     /** Which match the main selection is, of how many (counting stops at 10,000). */
     fun matchInfo(st: EditorState): MatchInfo {
-        val q = query(st)
-        if (q.error != null) return MatchInfo(0, MatchCount(0, false), q.error)
-        if (!q.valid) return MatchInfo(0, MatchCount(0, false))
         val main = st.selection.main
-        var n = 0
-        var current = 0
-        val c = q.cursor(st.doc)
-        while (c.hasNext()) {
-            val m = c.next()
-            if (n == SearchQuery.MATCH_LIMIT) return MatchInfo(current, MatchCount(n, true))
-            n++
-            if (m.from == main.from && m.to == main.to) current = n
-        }
-        return MatchInfo(current, MatchCount(n, false))
+        return query(st).info(st.doc, main.from, main.to)
     }
 
     // ---------------------------------------------------------------------- the query --
@@ -393,9 +428,9 @@ object Search {
     private val NONE: RangeSet<Decoration> = RangeSet.empty()
 
     /** Characters searched for marks at most (a viewport on a minified file's one line can be megabytes). */
-    private const val MAX_SCAN = 200_000
+    internal const val MAX_SCAN = 50_000
 
-    private fun marks(st: EditorState): RangeSet<Decoration> {
+    internal fun marks(st: EditorState): RangeSet<Decoration> {
         val s = state(st)
         if (!s.open || !s.query.valid) return NONE
         val doc = st.doc

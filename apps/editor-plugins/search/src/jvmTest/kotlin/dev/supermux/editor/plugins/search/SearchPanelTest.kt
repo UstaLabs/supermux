@@ -17,6 +17,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.runComposeUiTest
@@ -178,5 +179,84 @@ class SearchPanelTest {
         editorField().performTextInput("Z")
         waitForIdle()
         assertEquals("val Z = 1\nZ(Z)\n\nZd = Z + bar\n", view.state.doc.toString())
+    }
+
+    @Test fun noKeystrokeIsDroppedWhateverTheGapToTheDebounce() = runComposeUiTest {
+        val view = editor(cursor = text.indexOf("\n\n") + 1)
+        openWithModF()
+        val find = onNodeWithTag(SearchPanelTags.FIND)
+        val lost = ArrayList<Long>()
+        mainClock.autoAdvance = false
+        for (gap in 0L..120L step 4) {
+            find.performTextReplacement("")
+            mainClock.advanceTimeBy(300)
+            find.performTextInput("f")
+            mainClock.advanceTimeBy(gap)
+            find.performTextInput("o")
+            mainClock.advanceTimeBy(400)
+            if (fieldText(SearchPanelTags.FIND) != "fo" || Search.query(view.state).search != "fo") lost += gap
+        }
+        mainClock.autoAdvance = true
+        assertTrue(lost.isEmpty(), "gaps (ms) that dropped a keystroke: $lost")
+    }
+
+    @Test fun tabReachesTheTogglesAndButtonsAndAltKeysToggle() = runComposeUiTest {
+        val view = editor(cursor = 5)
+        openWithModF()
+        val find = onNodeWithTag(SearchPanelTags.FIND)
+        find.performKeyInput { pressKey(Key.Tab) }
+        waitForIdle()
+        onNodeWithContentDescription("Match case").assertIsFocused()
+        onNodeWithContentDescription("Match case").performKeyInput { pressKey(Key.Enter) }
+        waitForIdle()
+        assertTrue(Search.query(view.state).caseSensitive, "Enter on the focused toggle")
+        onNodeWithContentDescription("Match case").performKeyInput { withKeyDown(Key.ShiftLeft) { pressKey(Key.Tab) } }
+        waitForIdle()
+        find.assertIsFocused()
+        // VS Code's Alt-C / Alt-W / Alt-R (Apple Cmd-Alt-…).
+        fun alt(k: Key) = find.performKeyInput { if (isApplePlatform) withKeyDown(Key.MetaLeft) { withKeyDown(Key.AltLeft) { pressKey(k) } } else withKeyDown(Key.AltLeft) { pressKey(k) } }
+        alt(Key.C); waitForIdle(); assertFalse(Search.query(view.state).caseSensitive)
+        alt(Key.W); waitForIdle(); assertTrue(Search.query(view.state).wholeWord)
+        alt(Key.R); waitForIdle(); assertTrue(Search.query(view.state).regexp)
+        assertEquals("foo", fieldText(SearchPanelTags.FIND), "a toggle key typed nothing")
+    }
+
+    @Test fun closingThePanelWhileItsFieldHasTheFocusGivesItBack() = runComposeUiTest {
+        val view = editor(cursor = 5)
+        openWithModF()
+        onNodeWithTag(SearchPanelTags.FIND).assertIsFocused()
+        // Closed from outside (a toolbar, a command), not by Escape in it.
+        Search.closeSearchPanel.run(view)
+        waitForIdle()
+        assertTrue(view.focused, "the focus went nowhere")
+    }
+
+    @Test fun editsAndCaretMovesDoNotRecomposeThePanel() = runComposeUiTest {
+        val view = editor(cursor = 5)
+        openWithModF()
+        waitForIdle()
+        val before = SearchPanelDebug.compositions
+        repeat(10) { i ->
+            view.dispatch(dev.supermux.editor.core.TransactionSpec(changes = listOf(dev.supermux.editor.core.ChangeSpec(0, 0, "x")), userEvent = "input"))
+            view.dispatch(dev.supermux.editor.core.TransactionSpec(selection = EditorSelection.cursor(i + 3), userEvent = "select"))
+            waitForIdle()
+        }
+        assertEquals(before, SearchPanelDebug.compositions, "the panel recomposed for editor changes")
+    }
+
+    @Test fun aBigDocumentsFindRunsInSlicesAndSaysSo() = runComposeUiTest {
+        val big = "    val someIdentifier = computeSomething(argument, 42) // comment\n".repeat(20_000) + "needle\n"
+        val view = EditorView(EditorState.create(big, EditorSelection.cursor(0), extensionOf(search(), history())))
+        val registry = WidgetRegistry().also { Search.registerWidgets(it) }
+        setContent { Box(Modifier.size(700.dp, 400.dp)) { Editor(view, Modifier.fillMaxSize(), widgets = registry) } }
+        waitForIdle()
+        openWithModF()
+        onNodeWithTag(SearchPanelTags.FIND).performTextInput("needle")
+        waitUntil(timeoutMillis = 10_000) { view.state.selection.main.from == big.indexOf("needle") }
+        waitUntil(timeoutMillis = 10_000) { onNodeWithTag(SearchPanelTags.COUNT).fetchSemanticsNode().config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }.firstOrNull() == "1 of 1" }
+        // Mod-g from the editor goes to the panel's runner too (a big document): still found.
+        view.dispatch(dev.supermux.editor.core.TransactionSpec(selection = EditorSelection.cursor(0), userEvent = "select"))
+        assertTrue(Search.findNext.run(view))
+        waitUntil(timeoutMillis = 10_000) { view.state.selection.main.from == big.indexOf("needle") }
     }
 }
