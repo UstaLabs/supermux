@@ -49,6 +49,12 @@ COPY apps ./apps
 # unless its output dir's sibling `static-serve.ts` exists, so that the task can
 # never scribble a bundle into some unrelated directory. Copy that one file.
 COPY src/channels/web/static-serve.ts ./src/channels/web/static-serve.ts
+# The native editor's grammars (the Mac-built syntax wasm + tables; release.yml downloads them into
+# .docker/editor-syntax). A local build has only the committed .keep there: the web editor then shows
+# plain text, which the release build refuses (SUPERMUX_REQUIRE_EDITOR_SYNTAX=1).
+COPY .docker/editor-syntax/ ./apps/editor-syntax/build/
+ARG SUPERMUX_REQUIRE_EDITOR_SYNTAX=0
+ENV SUPERMUX_REQUIRE_EDITOR_SYNTAX=${SUPERMUX_REQUIRE_EDITOR_SYNTAX}
 RUN cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain
 
 # ── 0b. Workspace-terminal backend build stage ───────────────────────────────

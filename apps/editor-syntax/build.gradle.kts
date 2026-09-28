@@ -241,7 +241,10 @@ val stageJvmNativeResources by tasks.registering {
             )
         }
         if (missing.isNotEmpty()) {
-            logger.warn("editor-syntax: no desktop JNI library for ${missing.joinToString()} (build with native/build.sh <target>)")
+            val message = "editor-syntax: no desktop JNI library for ${missing.joinToString()} (build with native/build.sh <target>)"
+            // A shipped desktop app must not fall back to plain text on those OSes (release.yml sets it).
+            if (System.getenv("SUPERMUX_REQUIRE_EDITOR_SYNTAX") == "1") throw GradleException("$message; required by SUPERMUX_REQUIRE_EDITOR_SYNTAX=1")
+            logger.warn(message)
         }
     }
 }

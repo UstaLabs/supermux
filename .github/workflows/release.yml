@@ -23,10 +23,6 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  # A release web client MUST carry the native editor's syntax module and grammar tables
-  # (:web:stageForBroker fails without them). Dev and CI lanes without the Mac-built natives stage
-  # a placeholder instead and the editors open files as plain text (apps/web/build.gradle.kts).
-  SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
 
 jobs:
   classify:
@@ -75,6 +71,11 @@ jobs:
             os: darwin
             arch: arm64
     needs: editor-syntax-natives
+    # A SHIPPED client must carry the native editor's grammars: :web:stageForBroker, the desktop
+    # jar staging and the iOS tables phase fail without them (instead of a plain-text editor).
+    # Set per packaging job, not workflow-wide: the update-flow e2e builds throwaway binaries.
+    env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -180,13 +181,18 @@ jobs:
         run: scripts/test-update-flow.sh
 
   docker:
-    needs: classify
+    needs: [classify, editor-syntax-natives]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars for the image's web client (Dockerfile: .docker/editor-syntax).
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: .docker/editor-syntax
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
@@ -216,6 +222,8 @@ jobs:
           push: ${{ github.ref_type == 'tag' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SUPERMUX_REQUIRE_EDITOR_SYNTAX=1
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -335,9 +343,21 @@ jobs:
           packages: platform-tools
       - name: Install the pinned zig and NDK
         run: |
-          zv="$(python3 -c "import json;print(json.load(open('native/upstream.lock.json'))['zig']['version'])")"
-          brew install zig || true
-          [ "$(zig version)" = "$zv" ] || { echo "::error::editor-syntax needs zig $zv (native/upstream.lock.json), brew has $(zig version)"; exit 1; }
+          # zig from ziglang.org, sha256-checked against the terminal engine's host pins (the same
+          # 0.16.0 editor-syntax requires), never whatever brew has today.
+          read -r url sha < <(python3 - <<'PY'
+          import json
+          lock = json.load(open("../terminal-core/native/upstream.lock.json"))["zig"]
+          want = json.load(open("native/upstream.lock.json"))["zig"]["version"]
+          assert lock["version"] == want, f"terminal-core pins zig {lock['version']}, editor-syntax needs {want}"
+          h = lock["hosts"]["aarch64-macos"]
+          print(h["url"], h["sha256"])
+          PY
+          )
+          curl -fsSL "$url" -o /tmp/zig.tar.xz
+          echo "$sha  /tmp/zig.tar.xz" | shasum -a 256 -c -
+          mkdir -p "$HOME/.local/zig" && tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/zig"
+          echo "$(ls -d "$HOME"/.local/zig/zig-aarch64-macos-*)" >> "$GITHUB_PATH"
           sdkmanager "ndk;26.1.10909125"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
           echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
@@ -378,6 +398,7 @@ jobs:
     needs: editor-syntax-natives
     runs-on: ubuntu-latest
     env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
       # Keep above any versionCode ever shipped from apps/android/build.gradle.kts
       # defaults (currently 32). Raise only if a manual/local build ever exceeds it.
       ANDROID_VERSION_CODE_FLOOR: "1000"
@@ -514,6 +535,11 @@ jobs:
     # tag), so the asset name is stable: supermux-linux.deb. Unsigned; the pinned JBR/JCEF
     # runtime is bundled so the CodeMirror editor works offline on first launch.
     needs: editor-syntax-natives
+    # A SHIPPED client must carry the native editor's grammars: :web:stageForBroker, the desktop
+    # jar staging and the iOS tables phase fail without them (instead of a plain-text editor).
+    # Set per packaging job, not workflow-wide: the update-flow e2e builds throwaway binaries.
+    env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -603,6 +629,9 @@ jobs:
           unzip -l "$jar" | grep -q 'META-INF/dev.supermux.terminal/LICENSE' \
             || { echo "packaged terminal-core jar carries no licence files" >&2; exit 1; }
           echo "client engine + licences present in $jar"
+      - name: Assert the packaged editor grammars
+        working-directory: .
+        run: python3 scripts/check-packaged-editor-syntax.py "$(find apps/desktop/build/compose/binaries/main/app -maxdepth 3 -type d -path '*/lib/app' | head -1)" linux-x64
       - name: Stage .deb + checksum
         run: |
           mkdir -p ../dist
@@ -658,6 +687,11 @@ jobs:
     # MSI, so this is the only place it's produced. Same Gradle task + JDK 17 as the .deb.
     # Unsigned v1 (SmartScreen "unknown publisher" warning accepted). Stable asset name:
     # supermux-windows.msi.
+    # A SHIPPED client must carry the native editor's grammars: :web:stageForBroker, the desktop
+    # jar staging and the iOS tables phase fail without them (instead of a plain-text editor).
+    # Set per packaging job, not workflow-wide: the update-flow e2e builds throwaway binaries.
+    env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
     runs-on: windows-latest
     needs: [build-terminal-jni-windows, editor-syntax-natives]
     defaults:
@@ -797,6 +831,7 @@ jobs:
     needs: editor-syntax-natives
     runs-on: macos-26
     env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
       DEVELOPER_ID_APPLICATION: "Developer ID Application: AHMET HUSEYIN DOK (57L7J9XA89)"
       MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
       MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
@@ -944,6 +979,10 @@ jobs:
             || { echo "packaged terminal-core jar carries no licence files" >&2; exit 1; }
           echo "client engine + licences present in $jar"
 
+      - name: Assert the packaged editor grammars
+        # The re-signed dylib's digest must be the one native.properties records, or the editor is plain text.
+        working-directory: .
+        run: python3 scripts/check-packaged-editor-syntax.py "$(ls -d apps/desktop/build/compose/binaries/main/app/*.app)/Contents/app" macos-arm64
       - name: Stage DMG
         working-directory: .
         run: |
@@ -1035,6 +1074,7 @@ jobs:
       upload: ${{ steps.signing.outputs.upload }}
       build: ${{ steps.ver.outputs.build }}
     env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
       TESTFLIGHT_BUILD_OFFSET: "1000"
       # Apple Distribution signing certificate (App Store), exported as a password-protected
       # .p12 and base64-encoded. This is a DIFFERENT cert from the Compose macOS job's Developer ID.

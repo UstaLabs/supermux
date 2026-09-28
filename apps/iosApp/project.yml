@@ -184,11 +184,14 @@ targets:
           fi
           export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)}"
           cd "$SRCROOT/.."
-          ./gradlew --no-daemon :editor-syntax:stageTables || { echo "warning: :editor-syntax:stageTables failed (stale natives?): no grammar tables bundled"; exit 0; }
+          # A release build (SUPERMUX_REQUIRE_EDITOR_SYNTAX=1) fails instead of shipping plain text.
+          missing_exit=0
+          [ "${SUPERMUX_REQUIRE_EDITOR_SYNTAX:-0}" = "1" ] && missing_exit=1
+          ./gradlew --no-daemon :editor-syntax:stageTables || { echo "warning: :editor-syntax:stageTables failed (stale natives?): no grammar tables bundled"; exit $missing_exit; }
           TABLES="$SRCROOT/../editor-syntax/build/gradle/generated/tables/editor-syntax"
           if ! ls "$TABLES/tables"/*.sesz >/dev/null 2>&1; then
             echo "warning: no $TABLES/tables/*.sesz (run native/build.sh on the Mac): no grammar tables bundled"
-            exit 0
+            exit $missing_exit
           fi
           DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/editor-syntax"
           mkdir -p "$DEST"
