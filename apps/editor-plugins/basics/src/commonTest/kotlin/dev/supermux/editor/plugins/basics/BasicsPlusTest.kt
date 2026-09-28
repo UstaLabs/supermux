@@ -146,6 +146,28 @@ class BasicsPlusTest {
         assertEquals("a {\n}|\n}\nb {\n}|", v.show())
     }
 
+    @Test fun twoCursorsInOneLinesIndentationReindentItOnce() {
+        // Both cursors in the same line's leading whitespace: the line is re-indented once (by the
+        // first cursor), the other types the closer as it is. This threw "overlapping changes".
+        val v = view("a {\n  |  |")
+        v.typeText("}")
+        assertEquals("a {\n}|  }|", v.show())
+    }
+
+    @Test fun multiCursorClosersNeverThrow() {
+        val rnd = kotlin.random.Random(7)
+        repeat(400) {
+            val lines = (0 until rnd.nextInt(1, 6)).map { " ".repeat(rnd.nextInt(0, 6)) + listOf("", "{", "(", "[", "x", "}").random(rnd) + " ".repeat(rnd.nextInt(0, 3)) }
+            val text = lines.joinToString("\n")
+            val cursors = (0 until rnd.nextInt(1, 5)).map { SelectionRange(rnd.nextInt(0, text.length + 1)) }
+            val v = EditorView(EditorState.create(text, EditorSelection.create(cursors, 0), extensionOf(basics())))
+            val typed = listOf("}", ")", "]").shuffled(rnd).take(rnd.nextInt(1, 4))
+            for (c in typed) v.typeText(c)
+            fun closers(s: String) = s.count { it in "})]" }
+            assertTrue(closers(v.state.doc.toString()) >= closers(text) + typed.size, "the closers were not typed into '$text' at $cursors")
+        }
+    }
+
     @Test fun indentOnInputIsOneUndoStepWithTheBrace() {
         val v = view("{\n    x\n    |")
         v.typeText("}")

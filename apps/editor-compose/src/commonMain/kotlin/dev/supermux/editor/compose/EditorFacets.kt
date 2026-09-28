@@ -233,6 +233,18 @@ object EditorDiagnostics {
     var unlabeledCommandEdits: Int = 0
         private set
 
+    /**
+     * How many times a plugin's input handler threw (a bad change plan): the keystroke was typed
+     * plainly instead. The first is logged with its exception.
+     */
+    var pluginFailures: Int = 0
+        private set
+
+    internal fun reportPluginFailure(what: String, e: Throwable) {
+        pluginFailures++
+        if (pluginFailures == 1) println("editor-compose: a plugin's $what failed; typed plainly instead: $e")
+    }
+
     internal fun reportUnlabeledCommandEdit(changes: String) {
         unlabeledCommandEdits++
         if (unlabeledCommandEdits == 1) println("editor-compose: a key-bound command dispatched an edit without a userEvent ($changes); give it one (\"input.*\", \"delete.*\", ...)")

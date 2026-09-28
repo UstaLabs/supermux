@@ -704,9 +704,9 @@ internal class EditorController(
         private set
     private var density: Density = Density(1f)
     var lineWrap = false
+        private set
     /** The tab size the layouts use (`tabSizeFacet`): a reconfigure of it relayouts. */
     private var tabSize = -1
-        private set
     private var showLineNumbers = true
 
     /** The surface's size in pixels, from the last layout pass. */

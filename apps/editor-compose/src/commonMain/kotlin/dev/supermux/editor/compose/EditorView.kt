@@ -174,7 +174,18 @@ class EditorView(initial: EditorState) : CommandTarget {
         if (userEvent == "input" && !readOnly) {
             val from = (main.from - before).coerceAtLeast(0)
             val to = (main.to + after).coerceAtMost(st.doc.length)
-            for (h in st.facet(inputHandlerFacet)) if (runningCommand { h.handle(this, from, to, text) }) return null
+            for (h in st.facet(inputHandlerFacet)) {
+                // A plugin's bad plan (an exception) never loses the keystroke: it is typed plainly.
+                val took = try {
+                    runningCommand { h.handle(this, from, to, text) }
+                } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    EditorDiagnostics.reportPluginFailure("input handler", e)
+                    current !== st // it dispatched before failing: that stands
+                }
+                if (took) return null
+            }
         }
         // The main range takes the edit with its extension. Another range takes the SAME extension
         // only when the text around it is the text replaced around the main range (CM6); else a

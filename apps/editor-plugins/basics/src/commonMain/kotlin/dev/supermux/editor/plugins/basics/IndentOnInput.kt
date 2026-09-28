@@ -37,7 +37,12 @@ object IndentOnInput {
         val doc = st.doc
         val ranges = st.selection.ranges
         // Where each cursor's line starts and what indentation it gets (null: typed as is).
-        val plans = ranges.map { r -> if (r.empty) reindent(t, doc, r.head, text[0]) else null }
+        // One re-indent per line: the line's first cursor plans it, the others type the closer as is
+        // (two plans for one line would overlap).
+        val planned = HashSet<Int>()
+        val plans = ranges.map { r ->
+            if (!r.empty || !planned.add(doc.lineIndexAt(r.head))) null else reindent(t, doc, r.head, text[0])
+        }
         if (plans.all { it == null }) return false
         val specs = ArrayList<ChangeSpec>()
         for ((i, r) in ranges.withIndex()) {

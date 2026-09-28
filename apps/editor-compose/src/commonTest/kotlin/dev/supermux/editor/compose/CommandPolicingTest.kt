@@ -102,4 +102,13 @@ class CommandPolicingTest {
             assertEquals(before, EditorDiagnostics.unlabeledCommandEdits, "an exempt edit was reported as unlabeled")
         }
     }
+
+    @Test fun aThrowingInputHandlerFallsBackToPlainInput() {
+        val bad = InputHandler { t, _, _, _ -> t.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 2), ChangeSpec(1, 3)))); true }
+        val before = EditorDiagnostics.pluginFailures
+        val view = EditorView(EditorState.create("abcdef", EditorSelection.cursor(6), inputHandlerFacet.of(bad)))
+        assertTrue(view.typeText("x"))
+        assertEquals("abcdefx", view.state.doc.toString(), "the typed text was lost")
+        assertEquals(before + 1, EditorDiagnostics.pluginFailures)
+    }
 }
