@@ -58,3 +58,4 @@ include(":editor-plugins:basics")
 // The native editor's M4a plugins: undo/redo, highlighting (the syntax host), folding, view settings.
 include(":editor-plugins:history")
 include(":editor-plugins:highlight")
+include(":editor-plugins:fold")

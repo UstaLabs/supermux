@@ -6,6 +6,9 @@ import dev.supermux.editor.core.EditorState
 import dev.supermux.editor.core.Extension
 import dev.supermux.editor.core.Facet
 import dev.supermux.editor.core.FacetDep
+import dev.supermux.editor.core.FoldRange
+import dev.supermux.editor.core.FoldService
+import dev.supermux.editor.core.foldServiceFacet
 import dev.supermux.editor.core.RangeSet
 import dev.supermux.editor.core.Ranged
 import dev.supermux.editor.core.Rope
@@ -96,13 +99,45 @@ object Syntax {
     /**
      * The extension for one document. [language] null = plain text (no parsing). It also answers
      * editor-core's language hooks: `tokenContextFacet` (strings and comments, for bracket matching;
-     * a new provider with every new syntax value, so what depends on it follows the spans).
+     * a new provider with every new syntax value, so what depends on it follows the spans) and
+     * `foldServiceFacet` (folds from `folds.scm`, see [foldAt]).
      */
     fun extension(language: String?): Extension = extensionOf(
         languageFacet.of(language),
         field,
         tokenContextFacet.compute(FacetDep.field(field)) { st -> st.field(field).let { v -> TokenContextProvider { _, pos -> contextIn(v, pos) } } },
+        foldServiceFacet.compute(FacetDep.field(field)) { st -> st.field(field).folds.let { f -> FoldService { s, lf, lt -> foldAt(f, s.doc, lf, lt) } } },
     )
+
+    /**
+     * The fold for the line [lineFrom, lineTo] from tree-sitter's `folds.scm` ranges [folds]
+     * (packed, sorted): the OUTERMOST node starting on the line and ending on a later one (CM6's
+     * syntaxFolding picks the outermost too), made line-based: it hides from the line's end to the
+     * start of the node's last line when that line starts with its closing token (`}` `)` `]` or
+     * `end`: `fun f() {⋯}`), else to the node's end (`def f():⋯`). Null when none is known here.
+     */
+    fun foldAt(folds: IntArray, doc: Rope, lineFrom: Int, lineTo: Int): FoldRange? {
+        if (folds.isEmpty()) return null
+        // The first node starting at or after the line's start (starts are sorted).
+        var lo = 0; var hi = folds.size / 2
+        while (lo < hi) { val mid = (lo + hi) ushr 1; if (folds[mid * 2] < lineFrom) lo = mid + 1 else hi = mid }
+        var end = -1
+        var i = lo
+        while (i < folds.size / 2 && folds[i * 2] <= lineTo) {
+            val e = folds[i * 2 + 1]
+            if (e > lineTo && e > end) end = e
+            i++
+        }
+        if (end < 0 || end > doc.length) return null
+        val lastLine = doc.lineIndexAt(end - 1)
+        if (lastLine <= doc.lineIndexAt(lineFrom)) return null
+        val lastStart = doc.lineStart(lastLine)
+        var p = lastStart
+        while (p < end && (doc.charAt(p) == ' ' || doc.charAt(p) == '\t')) p++
+        val closing = p < end && (doc.charAt(p) in "})]" || doc.slice(p, end) == "end")
+        val to = if (closing) p else end
+        return if (to > lineTo) FoldRange(lineTo, to) else null
+    }
 
     /** What the character at [pos] is in [state] (see [contextIn]); null without syntax. */
     fun tokenContext(state: EditorState, pos: Int): TokenContext? = state.fieldOrNull(field)?.let { contextIn(it, pos) }

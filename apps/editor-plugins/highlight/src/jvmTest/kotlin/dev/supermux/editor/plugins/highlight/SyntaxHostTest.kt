@@ -128,6 +128,23 @@ class SyntaxHostTest {
         host.join()
     }
 
+    @Test fun foldsFromFoldsScmAreLineBasedAndKeepTheClosingBraceVisible() = run { scope ->
+        val view = withContext(ui) { EditorView(EditorState.create(kotlinText, extensions = highlight("kotlin"))) }
+        val host = withContext(ui) { SyntaxHost(view, backend, scope = scope).also { it.start() } }
+        until("folds") { Syntax.folds(view.state).isNotEmpty() }
+        val st = withContext(ui) { view.state }
+        val lineFrom = kotlinText.indexOf("fun main")
+        val lineTo = kotlinText.indexOf('\n', lineFrom)
+        val service = st.facet(dev.supermux.editor.core.foldServiceFacet).single()
+        // fun main() {⋯}: from the line's end to the "}" (the function_body node).
+        assertEquals(dev.supermux.editor.core.FoldRange(lineTo, kotlinText.lastIndexOf('}')), service.foldable(st, lineFrom, lineTo))
+        // A line inside with no block of its own has none.
+        val inner = kotlinText.indexOf("println")
+        assertEquals(null, service.foldable(st, inner, kotlinText.indexOf('\n', inner)))
+        withContext(ui) { host.close() }
+        host.join()
+    }
+
     @Test fun everyTokenClassTheSyntaxLayerEmitsIsColouredInBothThemes() = run { scope ->
         val samples = mapOf(
             "kotlin" to kotlinText + "class A<T>(val x: Int = 0x1F) { /* c */ @Deprecated(\"d\") fun f() = listOf(1.5, true, null, \"\\n\") }\n",

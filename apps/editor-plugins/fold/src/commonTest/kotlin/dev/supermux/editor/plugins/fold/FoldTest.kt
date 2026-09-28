@@ -1,0 +1,228 @@
+package dev.supermux.editor.plugins.fold
+
+import dev.supermux.editor.compose.DefaultCommands
+import dev.supermux.editor.compose.EditorView
+import dev.supermux.editor.compose.EditorViewport
+import dev.supermux.editor.compose.gutterClickFacet
+import dev.supermux.editor.compose.widgetClickFacet
+import dev.supermux.editor.core.ChangeSpec
+import dev.supermux.editor.core.Decoration
+import dev.supermux.editor.core.EditorSelection
+import dev.supermux.editor.core.EditorState
+import dev.supermux.editor.core.Extension
+import dev.supermux.editor.core.FoldRange
+import dev.supermux.editor.core.FoldService
+import dev.supermux.editor.core.KeyChord
+import dev.supermux.editor.core.TransactionSpec
+import dev.supermux.editor.core.WidgetKey
+import dev.supermux.editor.core.extensionOf
+import dev.supermux.editor.core.foldServiceFacet
+import dev.supermux.editor.core.gutterMarkersFacet
+import dev.supermux.editor.core.runKey
+import dev.supermux.editor.plugins.history.History
+import dev.supermux.editor.plugins.history.history
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+import kotlin.time.TimeSource
+
+class FoldTest {
+    private val text = "fun a() {\n    one\n    two\n}\n\nfun b() {\n    three\n}\nend\n"
+    private val aLineEnd = text.indexOf('\n')
+    private val aTo = text.indexOf("\n}\n\nfun b") + 1 // the "}" of a()
+
+    private fun view(t: String = text, cursor: Int = 0, vararg ext: Extension) =
+        EditorView(EditorState.create(t, EditorSelection.cursor(cursor), extensionOf(fold(), *ext)))
+
+    private fun EditorView.folds() = Fold.folded(state)
+    private val EditorView.doc get() = state.doc.toString()
+
+    // ------------------------------------------------------------------------ fold ranges --
+
+    @Test fun indentationGivesLineBasedRanges() {
+        val st = EditorState.create(text)
+        // "fun a() {": hides from its end to the end of the last deeper line ("    two").
+        assertEquals(FoldRange(aLineEnd, text.indexOf("two") + 3), Fold.foldable(st, 0, aLineEnd))
+        // A line with nothing deeper after it does not fold; neither does a blank one.
+        val oneEnd = text.indexOf("one") + 3
+        assertEquals(null, Fold.foldable(st, oneEnd - 7, oneEnd))
+        val blank = text.indexOf("\n\n") + 1
+        assertEquals(null, Fold.foldable(st, blank, blank))
+    }
+
+    @Test fun aLanguageFoldServiceComesFirst() {
+        val service = foldServiceFacet.of(FoldService { _, lf, _ -> if (lf == 0) FoldRange(aLineEnd, aTo) else null })
+        val st = EditorState.create(text, extensions = service)
+        assertEquals(FoldRange(aLineEnd, aTo), Fold.foldable(st, 0, aLineEnd))
+        // Where it has nothing, indentation still answers.
+        val b = text.indexOf("fun b")
+        assertNotNull(Fold.foldable(st, b, text.indexOf('\n', b)))
+    }
+
+    // ------------------------------------------------------------------ commands and keys --
+
+    @Test fun foldAndUnfoldAtTheCursor() {
+        val v = view(cursor = 2)
+        assertTrue(Fold.foldCode.run(v))
+        assertEquals(listOf(FoldRange(aLineEnd, text.indexOf("two") + 3)), v.folds())
+        val replace = v.state.field(Fold.field).first().value as Decoration.Replace
+        assertTrue(replace.fold)
+        assertEquals(Fold.WIDGET_TYPE, replace.widget?.type)
+        assertTrue(Fold.unfoldCode.run(v))
+        assertTrue(v.folds().isEmpty())
+        assertFalse(Fold.unfoldCode.run(v), "nothing left to unfold")
+        // toggle does both.
+        Fold.toggleFold.run(v); assertEquals(1, v.folds().size)
+        Fold.toggleFold.run(v); assertEquals(0, v.folds().size)
+        assertEquals(text, v.doc)
+    }
+
+    @Test fun cm6sFoldKeys() {
+        val v = view(cursor = 2)
+        assertTrue(runKey(v, KeyChord("[", ctrl = true, shift = true), apple = false))
+        assertEquals(1, v.folds().size)
+        assertTrue(runKey(v, KeyChord("]", meta = true, alt = true), apple = true))
+        assertEquals(0, v.folds().size)
+        assertTrue(runKey(v, KeyChord("[", ctrl = true, alt = true), apple = false))
+        assertEquals(2, v.folds().size, "fold all")
+        assertTrue(runKey(v, KeyChord("]", ctrl = true, alt = true), apple = true))
+        assertEquals(0, v.folds().size, "unfold all")
+    }
+
+    @Test fun foldAllFoldsTopLevelRangesAndUnfoldAllClears() {
+        val v = view()
+        assertTrue(Fold.foldAll.run(v))
+        assertEquals(2, v.folds().size)
+        assertTrue(Fold.unfoldAll.run(v))
+        assertTrue(v.folds().isEmpty())
+    }
+
+    @Test fun foldAllOn10kLinesStaysUnder100ms() {
+        val block = "class C {\n    fun f() {\n        if (x) {\n            y()\n        }\n    }\n}\n"
+        val big = block.repeat(1500) // 10,500 lines
+        val v = view(big)
+        // Warm up once (JIT), then measure the best of three.
+        Fold.foldAll.run(v); Fold.unfoldAll.run(v)
+        var best = Long.MAX_VALUE
+        repeat(3) {
+            val t = TimeSource.Monotonic.markNow()
+            Fold.foldAll.run(v)
+            best = minOf(best, t.elapsedNow().inWholeMilliseconds)
+            assertEquals(1500, v.folds().size)
+            Fold.unfoldAll.run(v)
+        }
+        assertTrue(best < 100, "foldAll over 10k lines took $best ms")
+    }
+
+    // ------------------------------------------------------------------ gutter and chip --
+
+    private fun markers(v: EditorView) = v.state.facet(gutterMarkersFacet).flatMap { it.toList() }.filter { it.value.column == Fold.COLUMN }
+
+    @Test fun theGutterShowsOpenAndClosedArrowsAndAClickToggles() {
+        val v = view()
+        val open = markers(v)
+        assertEquals(listOf(0, text.indexOf("fun b")), open.map { it.from })
+        assertTrue(open.all { it.value.kind == "fold-open" })
+        val click = v.state.facet(gutterClickFacet).first()
+        assertTrue(click.click(v, Fold.COLUMN, 0, open[0].value))
+        assertEquals(1, v.folds().size)
+        assertEquals("fold-closed", markers(v).first { it.from == 0 }.value.kind)
+        assertTrue(v.state.facet(gutterClickFacet).first().click(v, Fold.COLUMN, 0, markers(v).first().value))
+        assertTrue(v.folds().isEmpty())
+        // Another column is not the fold plugin's.
+        assertFalse(v.state.facet(gutterClickFacet).first().click(v, "lint", 0, null))
+    }
+
+    @Test fun markersStayInTheViewport() {
+        val big = "fun f() {\n    x\n}\n".repeat(2000)
+        val v = view(big)
+        v.dispatch(TransactionSpec(effects = listOf(EditorViewport.set.of(big.length / 2 until big.length / 2 + 600))))
+        val m = markers(v)
+        assertTrue(m.size in 1..60, "markers outside the viewport: ${m.size}")
+        assertTrue(m.all { it.from >= big.length / 2 - 20 && it.from <= big.length / 2 + 600 })
+    }
+
+    @Test fun clickingThePlaceholderUnfolds() {
+        val v = view(cursor = 2)
+        Fold.foldCode.run(v)
+        val f = v.folds().single()
+        val handler = v.state.facet(widgetClickFacet).first()
+        assertFalse(handler.click(v, WidgetKey("thread", "t1"), f.from, f.to), "another widget type is not the fold plugin's")
+        assertTrue(handler.click(v, WidgetKey(Fold.WIDGET_TYPE, "x"), f.from, f.to))
+        assertTrue(v.folds().isEmpty())
+    }
+
+    // --------------------------------------------------------------------- edits and folds --
+
+    @Test fun foldsSurviveEditsOutsideThem() {
+        val v = view(cursor = 2)
+        Fold.foldCode.run(v)
+        val before = v.folds().single()
+        v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 0, "// top\n")), userEvent = "input"))
+        assertEquals(FoldRange(before.from + 7, before.to + 7), v.folds().single(), "an edit above did not move the fold")
+        val endAt = v.state.doc.length
+        v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(endAt, endAt, "more\n")), userEvent = "input"))
+        assertEquals(FoldRange(before.from + 7, before.to + 7), v.folds().single(), "an edit below moved the fold")
+    }
+
+    @Test fun anEditInsideAFoldUnfoldsIt() {
+        val v = view(cursor = 2)
+        Fold.foldCode.run(v)
+        val f = v.folds().single()
+        // A remote (or programmatic) edit inside the hidden text: the fold opens (CM6).
+        v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(f.from + 6, f.from + 6, "X")), userEvent = "remote"))
+        assertTrue(v.folds().isEmpty())
+        assertTrue(v.doc.contains("X"))
+    }
+
+    @Test fun aSelectionScrolledIntoAFoldUnfoldsItAndStays() {
+        val v = view(cursor = 0)
+        Fold.foldAll.run(v)
+        val inside = text.indexOf("two")
+        // What a search does: the match selected, scrolled into view.
+        v.dispatch(TransactionSpec(selection = EditorSelection.single(inside, inside + 3), scrollIntoView = true))
+        assertEquals(1, v.folds().size, "the fold with the match did not open (or the other one did)")
+        assertEquals(inside to inside + 3, v.state.selection.main.let { it.from to it.to })
+    }
+
+    // ---------------------------------------------------------------- deletion and undo --
+
+    @Test fun backspaceAtAFoldsEndUnfoldsByDefaultAndUndoRestores() {
+        val v = view(text, 2, history())
+        Fold.foldCode.run(v)
+        val f = v.folds().single()
+        v.dispatch(TransactionSpec(selection = EditorSelection.cursor(f.to), userEvent = "select"))
+        DefaultCommands.deleteBackward.run(v)
+        assertEquals(text, v.doc, "the first Backspace deleted hidden text")
+        assertTrue(v.folds().isEmpty(), "not unfolded")
+        DefaultCommands.deleteBackward.run(v)
+        assertEquals(text.removeRange(f.to - 1, f.to), v.doc)
+        History.undo.run(v)
+        assertEquals(text, v.doc)
+    }
+
+    @Test fun deleteFoldWholeIsAnOptionAndUndoBringsTheTextBack() {
+        val v = EditorView(EditorState.create(text, EditorSelection.cursor(2), extensionOf(fold(FoldConfig(deleteFoldWhole = true)), history())))
+        Fold.foldCode.run(v)
+        val f = v.folds().single()
+        v.dispatch(TransactionSpec(selection = EditorSelection.cursor(f.to), userEvent = "select"))
+        DefaultCommands.deleteBackward.run(v)
+        assertEquals(text.removeRange(f.from, f.to), v.doc, "the fold was not deleted whole")
+        assertTrue(v.folds().isEmpty())
+        History.undo.run(v)
+        assertEquals(text, v.doc, "undo did not restore the fold's text")
+    }
+
+    @Test fun undoAcrossAFoldIsNotPoliced() {
+        // Type inside a block, fold it, undo: the undo edits hidden text; it applies (and unfolds).
+        val v = view(text, text.indexOf("two") + 3, history())
+        v.typeText("!")
+        v.dispatch(TransactionSpec(selection = EditorSelection.cursor(2), userEvent = "select"))
+        Fold.foldCode.run(v)
+        assertEquals(1, v.folds().size)
+        History.undo.run(v)
+        assertEquals(text, v.doc)
+    }
+}
