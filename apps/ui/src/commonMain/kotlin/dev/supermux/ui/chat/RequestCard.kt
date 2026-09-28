@@ -8,9 +8,11 @@
  *  - the thing being asked about (a command, a path, MCP arguments) is quoted verbatim in mono,
  *    wrapped, copyable, and clipped to [COLLAPSED_BODY_LINES] lines so a 200-line diff cannot push
  *    the buttons off screen.
- *  - the answers are ranked the way M3 ranks actions: filled for the safe one-off, tonal for the
- *    standing grant, a plain text button for the refusal (tinted with the error role, never a red
- *    filled button — refusing is not the destructive-emphasis case, it is the cautious one).
+ *  - the answers read like a desktop approval prompt (Claude Code, Codex, Cursor), not a phone
+ *    sheet: a row of compact, right-aligned [CardButton]s — Reject (outlined, error-role label),
+ *    the standing grant (outlined), the one-off (filled) at the far right. They wrap onto a second
+ *    right-aligned line on a narrow phone rather than turning into full-width slabs.
+ *  - the header asks the question ("Allow Bash?"); the body never repeats the tool name.
  *  - the moment an answer is tapped the whole card goes inert with a spinner, because the round
  *    trip to the agent is not instant and a second tap would be a different answer.
  *  - answering does not make the card vanish under the user's thumb: it leaves a one-line receipt
@@ -43,8 +45,11 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -72,16 +77,15 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -96,6 +100,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
@@ -112,6 +117,8 @@ import dev.supermux.proto.PromptRequest
 import dev.supermux.proto.PromptRequestOption
 import dev.supermux.proto.parsedQuestions
 import dev.supermux.state.ClosedRequest
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.IconSize
 import dev.supermux.ui.theme.LocalSemantics
@@ -128,9 +135,6 @@ import kotlinx.serialization.json.buildJsonObject
 
 /** Lines of the quoted body shown before "Show more" takes over. */
 private const val COLLAPSED_BODY_LINES = 6
-
-/** Every tap target in the card clears the 44dp minimum, tonal buttons included. */
-private val TAP_TARGET = 44.dp
 
 /**
  * The open prompts for one session, oldest on top (the order the broker opened them), with the
@@ -250,7 +254,7 @@ private fun RequestHeader(
         }
         Column(Modifier.weight(1f)) {
             Text(
-                title ?: name.title,
+                title ?: "Allow ${name.title}?",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -319,9 +323,10 @@ private fun PermissionBody(
     onRespond: (JsonObject) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    if (request.body.isNotBlank()) {
-        val args = argumentRows(request.body)
-        if (args != null) ArgumentRows(args, request.requestId) else QuotedBody(request, expanded, onToggleExpand)
+    val body = permissionBodyText(request)
+    if (body.isNotBlank()) {
+        val args = argumentRows(body)
+        if (args != null) ArgumentRows(args, request.requestId) else QuotedBody(request, body, expanded, onToggleExpand)
     }
 
     val allows = request.options.filter { it.isAllow() }
@@ -341,57 +346,62 @@ private fun PermissionBody(
         )
     }
 
-    if (allows.isNotEmpty()) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Space.sm),
-        ) {
-            allows.forEachIndexed { index, opt ->
-                val mod = Modifier.weight(1f).heightIn(min = TAP_TARGET).testTag("request-option:${opt.id}")
-                val label = @Composable { Text(opt.label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                // First allow = the one-off; the rest are standing grants, which get less weight.
-                if (index == 0) {
-                    Button(onClick = { onRespond(allowAnswer(opt)) }, enabled = !disabled, modifier = mod) { label() }
-                } else {
-                    // Explicit container: the scheme's secondaryContainer is the card's own tone, so
-                    // the default tonal button rendered as bare text beside the filled one.
-                    FilledTonalButton(
-                        onClick = { onRespond(allowAnswer(opt)) },
-                        enabled = !disabled,
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = cs.surfaceContainerHighest,
-                            contentColor = cs.onSurface,
-                        ),
-                        modifier = mod,
-                    ) { label() }
-                }
-            }
-        }
-    }
     if (noteOpen) {
         NoteField(
             value = note,
             placeholder = "Tell the agent why (optional)",
             enabled = !disabled,
             onChange = { note = it },
-            onSend = { rejects.firstOrNull()?.let { reject(it) } },
+            onSubmit = { rejects.firstOrNull()?.let { reject(it) } },
         )
-    }
-    rejects.forEach { opt ->
-        TextButton(
-            onClick = { if (noteOpen) reject(opt) else noteOpen = true },
-            enabled = !disabled,
-            colors = ButtonDefaults.textButtonColors(contentColor = cs.error),
-            modifier = Modifier.fillMaxWidth().heightIn(min = TAP_TARGET).testTag("request-option:${opt.id}"),
-        ) { Text(opt.label) }
-    }
-    if (noteOpen) {
         Text(
-            "Tap ${rejects.firstOrNull()?.label ?: "Reject"} again to send it without a note.",
+            "${rejects.firstOrNull()?.label ?: "Reject"} again sends it, with or without a note.",
             style = MaterialTheme.typography.labelMedium,
             color = cs.onSurfaceVariant,
         )
     }
+    // Desktop-dialog order, right-aligned: refusals, then standing grants, then the one-off as
+    // the filled primary at the far right — where the eye lands last and the thumb lands first.
+    // On a phone that runs out of room the row wraps (primary keeps the right edge) instead of
+    // turning into full-width slabs.
+    ActionRow {
+        rejects.forEach { opt ->
+            CardButton(
+                label = opt.label,
+                style = CardButtonStyle.Danger,
+                enabled = !disabled,
+                testTag = "request-option:${opt.id}",
+            ) { if (noteOpen) reject(opt) else noteOpen = true }
+        }
+        allows.drop(1).forEach { opt ->
+            CardButton(
+                label = opt.label,
+                style = CardButtonStyle.Secondary,
+                enabled = !disabled,
+                testTag = "request-option:${opt.id}",
+            ) { onRespond(allowAnswer(opt)) }
+        }
+        allows.firstOrNull()?.let { opt ->
+            CardButton(
+                label = opt.label,
+                style = CardButtonStyle.Primary,
+                enabled = !disabled,
+                testTag = "request-option:${opt.id}",
+            ) { onRespond(allowAnswer(opt)) }
+        }
+    }
+}
+
+/**
+ * The body minus the tool name the broker prefixes it with ("Bash git status" under a "Bash"
+ * header said "Bash" twice). Client-side so it also holds against an older broker.
+ */
+private fun permissionBodyText(request: PromptRequest): String {
+    val body = request.body.trim()
+    val tool = request.title.trim()
+    if (tool.isEmpty() || !body.startsWith(tool)) return body
+    val rest = body.removePrefix(tool)
+    return if (rest.firstOrNull()?.isWhitespace() == true) rest.trimStart() else body
 }
 
 private fun allowAnswer(option: PromptRequestOption): JsonObject =
@@ -401,44 +411,141 @@ private fun allowAnswer(option: PromptRequestOption): JsonObject =
 private fun PromptRequestOption.isAllow(): Boolean =
     kind?.startsWith("allow") == true || (kind == null && id.startsWith("allow"))
 
+// ── buttons ───────────────────────────────────────────────────────────────────────────────────
+
+/** Visual height of a card button: desktop-dialog compact; a touch screen gets a little more. */
+@Composable
+private fun buttonHeight() = if (LocalInputMode.current == InputMode.Touch) 40.dp else 34.dp
+
+private enum class CardButtonStyle { Primary, Secondary, Danger, Ghost }
+
+/**
+ * The one button both request cards use: compact, 8dp corners (a pill reads as a phone FAB-row),
+ * sized to its label. Primary is filled accent; Secondary a hairline outline; Danger the same
+ * outline with the error role on the label (refusing is the cautious act, not a red slab); Ghost
+ * is text only. Material still pads the touch target to 48dp on touch, invisibly.
+ */
+@Composable
+private fun CardButton(
+    label: String,
+    style: CardButtonStyle,
+    enabled: Boolean,
+    testTag: String,
+    leading: ImageVector? = null,
+    trailing: ImageVector? = null,
+    onClick: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(Radii.sm)
+    val padding = PaddingValues(start = if (leading != null) 10.dp else 14.dp, end = if (trailing != null) 10.dp else 14.dp)
+    val mod = Modifier.heightIn(min = buttonHeight()).pointerHoverIcon(PointerIcon.Hand).testTag(testTag)
+    val content: @Composable RowScope.() -> Unit = {
+        if (leading != null) {
+            Icon(leading, contentDescription = null, modifier = Modifier.size(IconSize.md))
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (trailing != null) {
+            Spacer(Modifier.width(6.dp))
+            Icon(trailing, contentDescription = null, modifier = Modifier.size(IconSize.md))
+        }
+    }
+    when (style) {
+        CardButtonStyle.Primary -> Button(
+            onClick = onClick, enabled = enabled, shape = shape, contentPadding = padding,
+            modifier = mod, content = content,
+        )
+        CardButtonStyle.Secondary, CardButtonStyle.Danger -> OutlinedButton(
+            onClick = onClick, enabled = enabled, shape = shape, contentPadding = padding,
+            border = BorderStroke(Stroke.hairline, if (enabled) cs.outline else cs.outlineVariant),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = if (style == CardButtonStyle.Danger) cs.error else cs.onSurface,
+            ),
+            modifier = mod, content = content,
+        )
+        CardButtonStyle.Ghost -> TextButton(
+            onClick = onClick, enabled = enabled, shape = shape, contentPadding = padding,
+            colors = ButtonDefaults.textButtonColors(contentColor = cs.onSurfaceVariant),
+            modifier = mod, content = content,
+        )
+    }
+}
+
+/** Right-aligned buttons that wrap onto a second right-aligned line rather than squeeze. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ActionRow(content: @Composable () -> Unit) {
+    FlowRow(
+        Modifier.fillMaxWidth().padding(top = Space.xs),
+        horizontalArrangement = Arrangement.spacedBy(Space.sm, Alignment.End),
+        verticalArrangement = Arrangement.spacedBy(Space.sm),
+    ) { content() }
+}
+
 /** The command / path, quoted verbatim: mono, wrapping, copyable, clipped until asked. */
 @Composable
-private fun QuotedBody(request: PromptRequest, expanded: Boolean, onToggleExpand: () -> Unit) {
+private fun QuotedBody(request: PromptRequest, body: String, expanded: Boolean, onToggleExpand: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val platform = LocalPlatform.current
+    // A shell prompt glyph says "this will be run" without a word of chrome.
+    val shell = request.title.equals("Bash", ignoreCase = true) || request.title.equals("shell", ignoreCase = true)
     // Sticky: with maxLines lifted the layout no longer overflows, and the toggle must not vanish.
     var overflowed by remember(request.requestId) { mutableStateOf(false) }
-    Surface(shape = RoundedCornerShape(Radii.sm), color = cs.surfaceContainerLowest) {
-        Column(Modifier.fillMaxWidth().padding(start = Space.sm, top = Space.sm, bottom = Space.xs)) {
-            Row(Modifier.fillMaxWidth()) {
+    val shape = RoundedCornerShape(Radii.sm)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(cs.surfaceContainerLowest)
+            .border(Stroke.hairline, cs.outlineVariant.copy(alpha = 0.6f), shape),
+    ) {
+        // The copy button floats in the corner so a one-line command stays a one-line block.
+        Box(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth().padding(start = Space.md, top = 10.dp, bottom = 10.dp, end = 36.dp)) {
+                // bodySmall, not body: a command is read character by character, and at body size
+                // a phone wrapped every pipe onto its own line.
+                // Ligatures off: the mono face fused " --short" into an arrow-ish glyph that read as
+                // "status--short" — in a command being approved, every character must be literal.
+                val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFontFamily, fontFeatureSettings = "liga 0, calt 0")
+                if (shell) {
+                    Text("$", style = mono, color = cs.onSurfaceVariant, modifier = Modifier.padding(end = Space.sm))
+                }
                 Text(
-                    request.body,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = MonoFontFamily,
+                    body,
+                    style = mono,
                     color = cs.onSurface,
                     maxLines = if (expanded) Int.MAX_VALUE else COLLAPSED_BODY_LINES,
                     overflow = TextOverflow.Ellipsis,
                     onTextLayout = { if (it.hasVisualOverflow) overflowed = true },
-                    modifier = Modifier.weight(1f).padding(top = Space.xs).testTag("request-body:${request.requestId}"),
+                    modifier = Modifier.weight(1f).testTag("request-body:${request.requestId}"),
                 )
-                IconButton(
-                    onClick = { platform.copyToClipboard(request.body); platform.notices.show("Copied") },
-                    modifier = Modifier.size(TAP_TARGET).testTag("request-copy:${request.requestId}"),
-                ) {
-                    Icon(
-                        Icons.Filled.ContentCopy,
-                        contentDescription = "Copy to clipboard",
-                        tint = cs.onSurfaceVariant,
-                        modifier = Modifier.size(IconSize.md),
-                    )
-                }
             }
-            if (overflowed) {
-                TextButton(
-                    onClick = onToggleExpand,
-                    modifier = Modifier.heightIn(min = TAP_TARGET).testTag("request-expand:${request.requestId}"),
-                ) { Text(if (expanded) "Show less" else "Show more") }
+            IconButton(
+                onClick = { platform.copyToClipboard(body); platform.notices.show("Copied") },
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 4.dp).size(28.dp)
+                    .pointerHoverIcon(PointerIcon.Hand).testTag("request-copy:${request.requestId}"),
+            ) {
+                Icon(
+                    Icons.Filled.ContentCopy,
+                    contentDescription = "Copy to clipboard",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(IconSize.sm),
+                )
             }
+        }
+        if (overflowed) {
+            Text(
+                if (expanded) "Show less" else "Show more",
+                style = MaterialTheme.typography.labelMedium,
+                color = cs.primary,
+                modifier = Modifier
+                    .padding(start = Space.xs, bottom = Space.xs)
+                    .clip(RoundedCornerShape(Radii.sm))
+                    .clickable(onClick = onToggleExpand)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .padding(horizontal = Space.sm, vertical = 6.dp)
+                    .testTag("request-expand:${request.requestId}"),
+            )
         }
     }
 }
@@ -447,9 +554,10 @@ private fun QuotedBody(request: PromptRequest, expanded: Boolean, onToggleExpand
 @Composable
 private fun ArgumentRows(args: List<Pair<String, String>>, requestId: String) {
     val cs = MaterialTheme.colorScheme
-    Surface(shape = RoundedCornerShape(Radii.sm), color = cs.surfaceContainerLowest) {
+    val shape = RoundedCornerShape(Radii.sm)
+    Surface(shape = shape, color = cs.surfaceContainerLowest, border = BorderStroke(Stroke.hairline, cs.outlineVariant.copy(alpha = 0.6f))) {
         Column(
-            Modifier.fillMaxWidth().padding(Space.sm).testTag("request-body:$requestId"),
+            Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = 10.dp).testTag("request-body:$requestId"),
             verticalArrangement = Arrangement.spacedBy(Space.xs),
         ) {
             for ((key, value) in args) {
@@ -999,7 +1107,7 @@ private fun OtherRow(
 
 /**
  * Back on the left (only past the first question); Decline and the one primary action on the
- * right, at their natural size — the answer is what matters, not the button.
+ * right, the same compact buttons as the permission card.
  */
 @Composable
 private fun QuestionActions(
@@ -1012,48 +1120,37 @@ private fun QuestionActions(
     onPrimary: () -> Unit,
     onDecline: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().padding(top = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         if (showBack) {
-            TextButton(
-                onClick = onBack,
+            CardButton(
+                label = "Back",
+                style = CardButtonStyle.Ghost,
                 enabled = !disabled,
-                contentPadding = PaddingValues(start = Space.sm, end = Space.md),
-                modifier = Modifier.heightIn(min = TAP_TARGET).testTag("request-back"),
-            ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(IconSize.md))
-                Spacer(Modifier.width(Space.xs))
-                Text("Back")
-            }
+                testTag = "request-back",
+                leading = Icons.AutoMirrored.Filled.ArrowBack,
+                onClick = onBack,
+            )
         }
         Spacer(Modifier.weight(1f))
-        OutlinedButton(
-            onClick = onDecline,
-            enabled = !disabled,
-            border = BorderStroke(Stroke.hairline, cs.outline),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = cs.onSurface),
-            modifier = Modifier.heightIn(min = TAP_TARGET).testTag("request-decline"),
-        ) { Text("Decline") }
-        Button(
-            onClick = onPrimary,
+        CardButton(label = "Decline", style = CardButtonStyle.Secondary, enabled = !disabled, testTag = "request-decline", onClick = onDecline)
+        CardButton(
+            label = primaryLabel,
+            style = CardButtonStyle.Primary,
             enabled = primaryEnabled,
-            modifier = Modifier.heightIn(min = TAP_TARGET).testTag(primaryTag),
-        ) {
-            Text(primaryLabel)
-            if (primaryTag == "request-next") {
-                Spacer(Modifier.width(Space.xs))
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(IconSize.md))
-            }
-        }
+            testTag = primaryTag,
+            trailing = if (primaryTag == "request-next") Icons.AutoMirrored.Filled.ArrowForward else null,
+            onClick = onPrimary,
+        )
     }
 }
 
 /**
- * The one-line field a refusal's note is typed into, with its inline Send.
+ * The one-line field a refusal's note is typed into — a row surface like the question card's
+ * "Other" row; Enter sends the refusal.
  */
 @Composable
 private fun NoteField(
@@ -1061,31 +1158,41 @@ private fun NoteField(
     placeholder: String,
     enabled: Boolean,
     onChange: (String) -> Unit,
-    onSend: (() -> Unit)?,
+    onSubmit: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.sm),
-    ) {
-        OutlinedTextField(
-            value = value,
-            onValueChange = onChange,
-            enabled = enabled,
-            singleLine = true,
-            placeholder = { Text(placeholder, style = MaterialTheme.typography.bodyMedium) },
-            textStyle = MaterialTheme.typography.bodyMedium,
-            shape = RoundedCornerShape(Radii.sm),
-            modifier = Modifier.weight(1f).testTag("request-freetext"),
-        )
-        if (onSend != null) {
-            Button(
-                onClick = onSend,
-                enabled = enabled && value.isNotBlank(),
-                modifier = Modifier.heightIn(min = TAP_TARGET).testTag("request-send"),
-            ) { Text("Send") }
-        }
-    }
+    val cs = MaterialTheme.colorScheme
+    var focused by remember { mutableStateOf(false) }
+    val focus = remember { FocusRequester() }
+    val (container, border) = optionColors(selected = false, hovered = false, focused = focused)
+    val shape = RoundedCornerShape(Radii.sm)
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    BasicTextField(
+        value = value,
+        onValueChange = onChange,
+        enabled = enabled,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyLarge.copy(color = cs.onSurface),
+        cursorBrush = SolidColor(cs.primary),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+        keyboardActions = KeyboardActions(onSend = { onSubmit() }),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(container)
+            .border(Stroke.hairline, border, shape)
+            .focusRequester(focus)
+            .onFocusChanged { focused = it.isFocused }
+            .padding(horizontal = Space.md, vertical = 10.dp)
+            .testTag("request-freetext"),
+        decorationBox = { inner ->
+            Box(contentAlignment = Alignment.CenterStart) {
+                if (value.isEmpty()) {
+                    Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = cs.onSurfaceVariant, maxLines = 1)
+                }
+                inner()
+            }
+        },
+    )
 }
 
 // ── receipt ───────────────────────────────────────────────────────────────────────────────────

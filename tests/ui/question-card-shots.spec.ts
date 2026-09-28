@@ -90,9 +90,20 @@ async function shot(page: Page, v: Variant, name: string, tag: string): Promise<
   console.log(`shot ${file}`)
 }
 
-async function waitRespond(page: Page, requestId: string): Promise<Record<string, unknown>> {
+/**
+ * Wait for the answer frame. [retap] re-presses once after 5 s: the a11y mirror is rebuilt on a
+ * debounce, and a tap dispatched while it is mid-rebuild occasionally lands on a stale node. A
+ * second press is harmless — the card goes inert after the first one that registers.
+ */
+async function waitRespond(page: Page, requestId: string, retap?: () => Promise<void>): Promise<Record<string, unknown>> {
   const deadline = Date.now() + 15_000
+  const retapAt = Date.now() + 5_000
+  let retapped = false
   while (Date.now() < deadline) {
+    if (retap && !retapped && Date.now() > retapAt) {
+      retapped = true
+      await retap().catch(() => {})
+    }
     const frames = await lastClientFrames(page)
     const hit = frames.find((f) => {
       const row = f as { type?: string; requestId?: string }
@@ -169,7 +180,7 @@ async function runVariant(browser: Browser, storage: Awaited<ReturnType<import("
 
     if (await exists(page, "request-send")) {
       await tap(byTag(page, "request-send"))
-      const respond = await waitRespond(page, rid)
+      const respond = await waitRespond(page, rid, () => tap(byTag(page, "request-send")))
       console.log(`[${v.width}-${v.theme}] respond ${JSON.stringify(respond)}`)
       if (LABEL === "after") {
         const answers = (respond.answer as { answers?: Record<string, unknown> })?.answers
@@ -212,30 +223,59 @@ async function runVariant(browser: Browser, storage: Awaited<ReturnType<import("
     await injectServerFrame(page, { type: "request_closed", session: sessionId, requestId: rid2, outcome: "answered", answerLabel: "Declined" })
     await page.locator(`[id="request-card:${rid2}"]`).first().waitFor({ state: "detached", timeout: 15_000 })
 
-    // Permission card, for consistency.
-    const rid3 = `perm-${v.width}-${v.theme}`
-    await injectServerFrame(page, {
-      type: "request_open",
-      session: sessionId,
-      request: {
-        requestId: rid3, kind: "permission", title: "Bash",
-        body: "git status --short && ls -la apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat",
+    // Permission cards: a short command with two options, a long one with three, then an MCP
+    // tool (arguments as rows). The broker prefixes the body with the tool name ("Bash <cmd>"),
+    // which the card must not repeat under its "Allow Bash?" header.
+    const perms = [
+      {
+        name: "08-permission-short-2opt", title: "Bash", body: "Bash git status --short",
+        options: [
+          { id: "allow_once", label: "Allow once", kind: "allow_once" },
+          { id: "reject_once", label: "Reject once", kind: "reject_once" },
+        ],
+      },
+      {
+        name: "09-permission-long-3opt", title: "Bash",
+        body: "Bash printf 'hello from deneme-3\\nwritten at %s\\n' \"$(date)\" > bashtest.md && cat bashtest.md && find apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat -name '*.kt' -newer bashtest.md | xargs wc -l | sort -n | tail -20",
         options: [
           { id: "allow_once", label: "Allow once", kind: "allow_once" },
           { id: "allow_always", label: "Always allow", kind: "allow_always" },
           { id: "reject_once", label: "Reject", kind: "reject_once" },
         ],
-        allowFreeText: false, blocking: true,
       },
-    })
-    await byTag(page, `request-card:${rid3}`).waitFor({ state: "attached", timeout: 15_000 })
-    await settle(page)
-    await shot(page, v, "08-permission", `request-card:${rid3}`)
-    await page.screenshot({ path: `${OUT}/${v.width}-${v.theme}-08-permission-full.png` })
-    console.log(`shot ${OUT}/${v.width}-${v.theme}-08-permission-full.png`)
-    await tap(byTag(page, "request-option:allow_once"))
-    await waitRespond(page, rid3)
-    await injectServerFrame(page, { type: "request_closed", session: sessionId, requestId: rid3, outcome: "answered", answerLabel: "Allow once" })
+      {
+        name: "10-permission-mcp", title: "mcp__mux-shim__rename_session",
+        body: '{"name":"question-card-redesign","session":"ahmet"}',
+        options: [
+          { id: "allow_once", label: "Allow once", kind: "allow_once" },
+          { id: "allow_always", label: "Always allow", kind: "allow_always" },
+          { id: "reject_once", label: "Reject", kind: "reject_once" },
+        ],
+      },
+    ]
+    for (const perm of perms) {
+      const rid3 = `perm-${perm.name}-${v.width}-${v.theme}`
+      await injectServerFrame(page, {
+        type: "request_open",
+        session: sessionId,
+        request: { requestId: rid3, kind: "permission", title: perm.title, body: perm.body, options: perm.options, allowFreeText: false, blocking: true },
+      })
+      await byTag(page, `request-card:${rid3}`).waitFor({ state: "attached", timeout: 15_000 })
+      await settle(page)
+      await shot(page, v, perm.name, `request-card:${rid3}`)
+      if (perm.name.startsWith("09")) {
+        await page.screenshot({ path: `${OUT}/${v.width}-${v.theme}-${perm.name}-full.png` })
+        console.log(`shot ${OUT}/${v.width}-${v.theme}-${perm.name}-full.png`)
+        // First Reject tap opens the optional note.
+        await tap(byTag(page, "request-option:reject_once"))
+        await settle(page)
+        await shot(page, v, "11-permission-reject-note", `request-card:${rid3}`)
+      }
+      await tap(byTag(page, perm.name.startsWith("09") ? "request-option:reject_once" : "request-option:allow_once"))
+      await waitRespond(page, rid3)
+      await injectServerFrame(page, { type: "request_closed", session: sessionId, requestId: rid3, outcome: "answered", answerLabel: "Allow once" })
+      await page.locator(`[id="request-card:${rid3}"]`).first().waitFor({ state: "detached", timeout: 15_000 })
+    }
   } finally {
     await context.close()
   }
