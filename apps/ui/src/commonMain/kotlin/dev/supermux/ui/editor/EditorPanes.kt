@@ -90,7 +90,7 @@ import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.editor.engine.EditorScrollReader
 import dev.supermux.fs.FileSystemService
 import dev.supermux.ui.files.FileTreeHeader
-import dev.supermux.ui.files.FileTreeView
+import dev.supermux.ui.files.FileTreeWithActions
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -197,7 +197,7 @@ fun ExplorerPane(
                         Text("Host offline", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("editor_tree_offline"))
                     }
                 } else {
-                    FileTreeView(
+                    FileTreeWithActions(
                         fileSystem = fileSystem,
                         view = view,
                         onOpenFile = openAbsolute,

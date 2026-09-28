@@ -14,6 +14,15 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.isSpecified
+import dev.supermux.ui.adaptive.isSecondaryButtonPress
+import dev.supermux.ui.widgets.DropdownMenu
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -162,6 +171,12 @@ fun FileTreeView(
     onRename: ((TreeRow) -> Unit)? = null,
     /** Delete on the selected row. Null → the key is not handled. */
     onDelete: ((TreeRow) -> Unit)? = null,
+    /**
+     * The row's context menu (long-press on touch, right-click with a pointer), shown as a
+     * dropdown anchored at the row / pointer. The tree owns open/closed; the slot owns the items
+     * and calls `dismiss` after picking one. Null → no menu.
+     */
+    rowMenu: (@Composable ColumnScope.(row: TreeRow, dismiss: () -> Unit) -> Unit)? = null,
 ) {
     // ── subscriptions (owned here, never by rows) ────────────────────────────────────────────
     val wanted by remember(view) {
@@ -291,8 +306,39 @@ fun FileTreeView(
             }
         }
     }
-    val onLongClick: (TreeRow) -> Unit = remember { { row -> contextMenu?.invoke(row) } }
-    val hasMenu = onRowContextMenu != null
+    // The open row menu: which row, and where in it (y unspecified → under the row).
+    var menuOpen by remember(view) { mutableStateOf<Pair<String, DpOffset>?>(null) }
+    val menuSlot by rememberUpdatedState(rowMenu)
+    val hasRowMenu = rowMenu != null
+    val openMenu: (TreeRow, DpOffset) -> Unit = remember(view) {
+        { row, at ->
+            view.selected = row.path
+            menuOpen = row.path to at
+        }
+    }
+    val onLongClick: (TreeRow) -> Unit = remember(openMenu, haptics) {
+        { row ->
+            contextMenu?.invoke(row)
+            if (menuSlot != null) {
+                haptics.perform(HapticKind.Confirm)
+                openMenu(row, DpOffset(IndentStep * row.depth + IndentBase + ChevronSize + RowGap, Dp.Unspecified))
+            }
+        }
+    }
+    val onSecondaryClick: (TreeRow, DpOffset) -> Unit = remember(openMenu) {
+        { row, at -> contextMenu?.invoke(row); openMenu(row, at) }
+    }
+    val dismissMenu: () -> Unit = remember { { menuOpen = null } }
+    val menuContent: @Composable ColumnScope.(TreeRow) -> Unit = remember(dismissMenu) {
+        { row -> menuSlot?.invoke(this, row, dismissMenu) }
+    }
+    val hasMenu = onRowContextMenu != null || hasRowMenu
+    // A menu whose row went away (deleted, renamed, its folder collapsed) closes rather than
+    // popping back up when a row with that path reappears.
+    val menuRowGone by remember(view, states) {
+        derivedStateOf { menuOpen?.let { m -> lines.none { !it.isError && it.row.path == m.first } } ?: false }
+    }
+    if (menuRowGone) LaunchedEffect(Unit) { menuOpen = null }
 
     Box(modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -322,6 +368,10 @@ fun FileTreeView(
                         onClick = onClick,
                         onToggle = onToggle,
                         onLongClick = if (hasMenu) onLongClick else null,
+                        onSecondaryClick = if (hasRowMenu) onSecondaryClick else null,
+                        menuAt = menuOpen?.takeIf { it.first == row.path }?.second,
+                        onMenuDismiss = dismissMenu,
+                        menuContent = menuContent,
                     )
                 }
             }
@@ -444,6 +494,11 @@ private fun TreeRowLine(
     onClick: (TreeRow) -> Unit,
     onToggle: (TreeRow) -> Unit,
     onLongClick: ((TreeRow) -> Unit)?,
+    onSecondaryClick: ((TreeRow, DpOffset) -> Unit)? = null,
+    /** Non-null while this row's menu is open: its anchor inside the row (y unspecified → bottom). */
+    menuAt: DpOffset? = null,
+    onMenuDismiss: () -> Unit = {},
+    menuContent: @Composable ColumnScope.(TreeRow) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val row = line.row
@@ -459,78 +514,115 @@ private fun TreeRowLine(
         RowStatus.CLOSED -> "Expand"
         else -> "Collapse"
     }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .testTag("tree_row:${entry.name}")
-            .then(if (selected) Modifier.background(cs.secondaryContainer) else Modifier)
-            .combinedClickable(
-                role = Role.Button,
-                onClickLabel = clickLabel,
-                onLongClickLabel = onLongClick?.let { "More actions" },
-                onClick = { onClick(row) },
-                onLongClick = onLongClick?.let { { it(row) } },
-            )
-            .semantics { if (isDir) stateDescription = if (expanded) "Expanded" else "Collapsed" }
-            .pointerHoverIcon(PointerIcon.Hand)
-            .drawBehind { drawIndentGuides(depth, guide) }
-            .heightIn(min = if (compact) RowMinTouch else RowMinDense)
-            .height(IntrinsicSize.Min)
-            .padding(start = IndentStep * depth, end = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(RowGap),
-    ) {
-        // The chevron's hit area spans the leading inset and the full row height, so it's more than
-        // a 14dp speck; the icon itself stays where the indent guides expect it.
-        Box(
+    val density = LocalDensity.current
+    Box(Modifier.fillMaxWidth()) {
+        Row(
             Modifier
-                .fillMaxHeight()
-                .width(IndentBase + ChevronSize)
+                .fillMaxWidth()
+                .testTag("tree_row:${entry.name}")
                 .then(
-                    if (isDir) {
-                        Modifier
-                            .testTag("tree_chevron:${entry.name}")
-                            .clickable(role = Role.Button, onClickLabel = if (expanded) "Collapse" else "Expand") { onToggle(row) }
+                    if (onSecondaryClick != null) {
+                        // Right-click: read on the Initial pass and drain the gesture so it doesn't also
+                        // click the row (the PointerAnchoredMenu idiom).
+                        Modifier.pointerInput(row.path, onSecondaryClick) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val down = awaitPointerEvent(PointerEventPass.Initial)
+                                    if (!down.isSecondaryButtonPress()) continue
+                                    val pos = down.changes.firstOrNull()?.position ?: continue
+                                    down.changes.forEach { it.consume() }
+                                    onSecondaryClick(row, with(density) { DpOffset(pos.x.toDp(), pos.y.toDp()) })
+                                    do {
+                                        val ev = awaitPointerEvent(PointerEventPass.Initial)
+                                        ev.changes.forEach { it.consume() }
+                                    } while (ev.changes.any { it.pressed })
+                                }
+                            }
+                        }
                     } else {
                         Modifier
                     },
                 )
-                .padding(start = IndentBase),
-            contentAlignment = Alignment.CenterStart,
+                .then(if (selected) Modifier.background(cs.secondaryContainer) else Modifier)
+                .combinedClickable(
+                    role = Role.Button,
+                    onClickLabel = clickLabel,
+                    onLongClickLabel = onLongClick?.let { "More actions" },
+                    onClick = { onClick(row) },
+                    onLongClick = onLongClick?.let { { it(row) } },
+                )
+                .semantics { if (isDir) stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                .pointerHoverIcon(PointerIcon.Hand)
+                .drawBehind { drawIndentGuides(depth, guide) }
+                .heightIn(min = if (compact) RowMinTouch else RowMinDense)
+                .height(IntrinsicSize.Min)
+                .padding(start = IndentStep * depth, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(RowGap),
         ) {
-            if (isDir) FolderChevron(line, alpha)
-        }
-        if (isDir) {
-            Icon(
-                if (expanded) Icons.Filled.FolderOpen else Icons.Filled.Folder,
-                contentDescription = null,
-                tint = cs.onSurfaceVariant.copy(alpha = alpha),
-                modifier = Modifier.size(16.dp),
-            )
-        } else {
-            FileBadgeBox(fileBadge(entry.name, isDir = false), alpha)
-        }
-        Text(
-            entry.name,
-            color = cs.onSurface.copy(alpha = alpha),
-            fontFamily = MonoFontFamily,
-            fontSize = 13.sp,
-            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(vertical = 3.dp),
-        )
-        if (row.status == RowStatus.LOOP) {
+            // The chevron's hit area spans the leading inset and the full row height, so it's more than
+            // a 14dp speck; the icon itself stays where the indent guides expect it.
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .width(IndentBase + ChevronSize)
+                    .then(
+                        if (isDir) {
+                            Modifier
+                                .testTag("tree_chevron:${entry.name}")
+                                .clickable(role = Role.Button, onClickLabel = if (expanded) "Collapse" else "Expand") { onToggle(row) }
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .padding(start = IndentBase),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (isDir) FolderChevron(line, alpha)
+            }
+            if (isDir) {
+                Icon(
+                    if (expanded) Icons.Filled.FolderOpen else Icons.Filled.Folder,
+                    contentDescription = null,
+                    tint = cs.onSurfaceVariant.copy(alpha = alpha),
+                    modifier = Modifier.size(16.dp),
+                )
+            } else {
+                FileBadgeBox(fileBadge(entry.name, isDir = false), alpha)
+            }
             Text(
-                "↻",
-                color = cs.onSurfaceVariant.copy(alpha = alpha),
-                fontSize = 12.sp,
+                entry.name,
+                color = cs.onSurface.copy(alpha = alpha),
+                fontFamily = MonoFontFamily,
+                fontSize = 13.sp,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
                 maxLines = 1,
-                modifier = Modifier.clearAndSetSemantics { contentDescription = "Symlink loop" },
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(vertical = 3.dp),
             )
+            if (row.status == RowStatus.LOOP) {
+                Text(
+                    "↻",
+                    color = cs.onSurfaceVariant.copy(alpha = alpha),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    modifier = Modifier.clearAndSetSemantics { contentDescription = "Symlink loop" },
+                )
+            }
+            val git = entry.git
+            if (git != null) GitMark(git, alpha)
         }
-        val git = entry.git
-        if (git != null) GitMark(git, alpha)
+        if (menuAt != null) {
+            // A zero-size anchor at the pointer (or under the row's name), so the menu drops from there.
+            Box(
+                Modifier
+                    .align(if (menuAt.y.isSpecified) Alignment.TopStart else Alignment.BottomStart)
+                    .offset(x = menuAt.x, y = if (menuAt.y.isSpecified) menuAt.y else 0.dp)
+                    .size(0.dp),
+            ) {
+                DropdownMenu(expanded = true, onDismissRequest = onMenuDismiss) { menuContent(row) }
+            }
+        }
     }
 }
 

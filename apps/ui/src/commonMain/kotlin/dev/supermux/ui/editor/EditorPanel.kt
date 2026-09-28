@@ -82,7 +82,7 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.editor.engine.EditorScrollReader
 import dev.supermux.ui.editor.engine.captureOutgoingScroll
-import dev.supermux.ui.files.FileTreeView
+import dev.supermux.ui.files.FileTreeWithActions
 import dev.supermux.ui.files.TreeViewState
 import dev.supermux.ui.files.childOf
 import dev.supermux.ui.files.relativeToWorkdir
@@ -700,7 +700,7 @@ private fun EditorTreeSidebar(
     val activePath = activeRelativePath?.takeIf { it.isNotEmpty() && it != "." }?.let { rel ->
         rel.split('/').filter { it.isNotEmpty() }.fold(workdir) { acc, seg -> childOf(acc, seg) }
     }
-    FileTreeView(
+    FileTreeWithActions(
         fileSystem = fileSystem,
         view = view,
         onOpenFile = { abs ->
