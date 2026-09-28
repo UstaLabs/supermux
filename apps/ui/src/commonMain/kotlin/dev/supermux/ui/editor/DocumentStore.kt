@@ -37,13 +37,40 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** One open file's text + per-view scroll/reveal state. Owned by [DocumentStore], never duplicated
- *  per tab: the tab strip holds references to these, so N tabs over one path share one buffer. */
-class Document(path: String, content: String) {
+ *  per tab: the tab strip holds references to these, so N tabs over one path share one buffer.
+ *
+ *  With the native editor (M5) the text IS the [native] view's rope: [content] is derived from it
+ *  (read it for a save or the preview, not per keystroke) and [isDirty] compares ropes. Without
+ *  one (the CodeMirror path, tests) it is a plain String as before. [content] never holds a
+ *  `\r\n`: the store normalizes on load and restores the ending ([crlf]) on save (spec §8). */
+class Document(path: String, content: String, crlf: Boolean = false) {
     val path = path
-    var content by mutableStateOf(content)
+    private var plain by mutableStateOf(content)
+    var content: String
+        get() = native?.text() ?: plain
+        set(value) {
+            val n = native
+            if (n != null) n.replaceText(value) else plain = value
+        }
     var savedContent by mutableStateOf(content)
+    /** Saved back with `\r\n` line endings (the file had them). */
+    var crlf by mutableStateOf(crlf)
     var scrollTop by mutableStateOf(0)
     var revealLine by mutableStateOf<Pair<Int, Int?>?>(null)
+
+    /** The native editor's views of this document, once a pane asked ([DocumentStore.nativeFor]). */
+    var native: NativeDocument? by mutableStateOf(null)
+        internal set
+
+    val isDirty: Boolean get() = native?.isDirty ?: (plain != savedContent)
+
+    /** The native views go (the store's owner left): the text they held stays as a plain String. */
+    internal fun dropNative() {
+        val n = native ?: return
+        plain = n.text()
+        native = null
+        n.dispose()
+    }
 }
 
 class DocumentStore(
@@ -81,9 +108,38 @@ class DocumentStore(
 
     fun get(path: String): Document? = docs[path]
 
-    fun isDirty(path: String): Boolean {
-        val doc = docs[path] ?: return false
-        return doc.content != doc.savedContent
+    fun isDirty(path: String): Boolean = docs[path]?.isDirty == true
+
+    // ── The native editor (M5) ──────────────────────────────────────────────────────────────
+
+    /**
+     * Set by the store's owner to give documents native views: panes then call [nativeFor]. Null
+     * (the CodeMirror path, a test) keeps every document a plain String.
+     */
+    var native: NativeEditorEnv? = null
+
+    /**
+     * [doc]'s native editor, made on first ask (a pane showing it) and kept until the document
+     * closes: panes only borrow its views. Null without a [native] environment.
+     */
+    fun nativeFor(doc: Document): NativeDocument? {
+        doc.native?.let { return it }
+        val env = native ?: return null
+        if (docs[doc.path] !== doc) return null // closed meanwhile
+        return NativeDocument(doc, env, onSave = { save(doc) }).also { doc.native = it }
+    }
+
+    /** New editor settings for every native view of this store (and the ones made later). */
+    fun applySettings(settings: dev.supermux.editor.plugins.view.EditorSettings) {
+        val env = native ?: return
+        if (env.settings == settings) return
+        env.settings = settings
+        for (d in docs.values) d.native?.applySettings(settings)
+    }
+
+    /** The owner goes: every native view stops (didClose, syntax workers freed); the texts stay. */
+    fun disposeNative() {
+        for (d in docs.values) d.dropNative()
     }
 
     fun open(path: String) {
@@ -111,7 +167,7 @@ class DocumentStore(
                     // so two overlapping cross-path loads both complete — gating on `loadingPath ==
                     // path` keeps the LAST-opened file active (not the last-to-return over the
                     // network) and stops an earlier load from wiping a newer one's loading indicator.
-                    val doc = docs.getOrPut(path) { Document(path, content) }
+                    val doc = docs.getOrPut(path) { LineEndings.load(content).let { Document(path, it.text, it.crlf) } }
                     val current = loadingPath == path
                     onOpened(doc, current)
                     if (current) loadingPath = null
@@ -178,7 +234,7 @@ class DocumentStore(
             cancelledPaths.add(path)
             loadingPath = null
         }
-        docs.remove(path)
+        docs.remove(path)?.dropNative()
     }
 
     fun update(path: String, content: String) {
@@ -188,9 +244,15 @@ class DocumentStore(
     fun save(doc: Document) {
         if (saving) return
         saving = true
+        // What is written is what is marked saved: the text NOW, not whatever the document holds
+        // when the (networked) write returns — an edit typed meanwhile stays dirty.
+        val native = doc.native
+        val rope = native?.primary?.state?.doc
+        val text = rope?.toString() ?: doc.content
         scope.launch {
-            if (fsWrite(doc.path, doc.content)) {
-                doc.savedContent = doc.content
+            if (fsWrite(doc.path, LineEndings.save(text, doc.crlf))) {
+                doc.savedContent = text
+                if (rope != null) native.markSaved(rope)
             }
             saving = false
         }
@@ -227,9 +289,12 @@ class DocumentStore(
             return
         }
         result
-            .onSuccess { content ->
-                doc.content = content
-                doc.savedContent = content
+            .onSuccess { raw ->
+                val loaded = LineEndings.load(raw)
+                doc.crlf = loaded.crlf
+                val native = doc.native
+                if (native != null) native.replaceFromDisk(loaded.text) else doc.content = loaded.text
+                doc.savedContent = loaded.text
                 changedPaths = changedPaths - normPath(path)
             }
             .onFailure { err -> loadError = err.message ?: "Could not reload file" }

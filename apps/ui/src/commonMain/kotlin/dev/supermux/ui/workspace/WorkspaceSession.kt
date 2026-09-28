@@ -88,6 +88,9 @@ fun rememberWorkspaceSession(
             scope = overlayScope,
         )
     }
+    // The native editor's views live as long as the store, not as long as a pane (M5): they go
+    // with it, so every language server gets its didClose and every syntax worker is freed.
+    androidx.compose.runtime.DisposableEffect(documents) { onDispose { documents.disposeNative() } }
 
     // Opening a file is a layout edit plus a POST that carries the id
     // we already used — see WorkspaceFileOpen.kt. Rebuilt every
