@@ -11,9 +11,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.proto.stateString
 import dev.supermux.ui.editor.DocumentStore
+import dev.supermux.ui.files.affectedOpenPaths
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.WorkspaceFileOpener
+import dev.supermux.workspace.groupIdOf
+import dev.supermux.workspace.isFileView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.JsonObject
 
@@ -41,6 +45,93 @@ class WorkspaceSession(
      * its group) — what the Files tree reveals. See `dev.supermux.ui.files.activeFilePath`.
      */
     var focusedFileViewId by mutableStateOf<String?>(null)
+}
+
+// ── A rename / delete in the Files tree vs the open file tabs ────────────────────────────────
+//
+// A file tab keeps its document keyed by PATH, and Save writes to that path. Left alone, a tab over
+// a file the tree just deleted would silently recreate it on the next Save, and a tab over a
+// renamed file would write a second copy at the old name. So after every successful rename/delete
+// the host walks its open `file` views (see [planMovedFileViews]) and, per document:
+//
+//  - CLEAN (nothing unsaved): nothing can be lost, so the tab follows the file. Deleted → the tab
+//    closes (the same broker close as its × button). Renamed / inside a renamed folder → the new
+//    path opens in the tab's OWN group and the old tab closes, so it looks like the tab was renamed.
+//  - DIRTY (unsaved edits): we never throw edits away and never guess a destination. The tab stays
+//    on the OLD path and is marked stale (DocumentStore.markChanged), which shows the existing
+//    "changed on disk" banner: the user sees the file is gone/moved and a Save — which would
+//    recreate the old path — is an explicit choice (they can also copy the text, or close the tab).
+
+/** What to do with one open `file` view after a tree entry moved. */
+sealed interface MovedFileStep {
+    val viewId: String
+
+    /** Clean, and its file is gone: close the tab. */
+    data class Close(override val viewId: String, val path: String) : MovedFileStep
+
+    /** Clean, and its file now lives at [newPath]: open that in [groupId] (the tab's own group), then close this tab. */
+    data class Reopen(override val viewId: String, val oldPath: String, val newPath: String, val groupId: String?) : MovedFileStep
+
+    /** Unsaved edits: keep the tab on its old path and flag it stale (the "changed on disk" banner). */
+    data class MarkStale(override val viewId: String, val path: String) : MovedFileStep
+}
+
+/**
+ * The steps for the open `file` views in [views] after the tree entry [oldAbs] moved to [newAbs]
+ * (null = deleted). Pure; see the block comment above for the rules. [isDirty] takes a
+ * workdir-relative path.
+ */
+fun planMovedFileViews(
+    workdir: String,
+    oldAbs: String,
+    newAbs: String?,
+    views: Map<String, ViewDto>,
+    tree: LayoutNode,
+    isDirty: (String) -> Boolean,
+): List<MovedFileStep> {
+    val fileViews = views.values.filter { it.isFileView() && it.stateString("path") != null }
+    val moved = affectedOpenPaths(workdir, oldAbs, newAbs, fileViews.map { it.stateString("path")!! })
+        .associateBy { it.oldPath }
+    return fileViews.mapNotNull { v ->
+        val path = v.stateString("path")!!
+        val m = moved[path] ?: return@mapNotNull null
+        when {
+            isDirty(path) -> MovedFileStep.MarkStale(v.id, path)
+            m.newPath == null -> MovedFileStep.Close(v.id, path)
+            else -> MovedFileStep.Reopen(v.id, path, m.newPath, groupIdOf(tree, v.id))
+        }
+    }
+}
+
+/**
+ * Apply [planMovedFileViews] to this workspace. [closeView] is the broker close the tab's × button
+ * uses; [onPlaced] gets each view a Reopen placed (a host with windows claims it there).
+ */
+fun WorkspaceSession.applyEntryMoved(
+    workdir: String,
+    oldAbs: String,
+    newAbs: String?,
+    closeView: (viewId: String) -> Unit,
+    onPlaced: (viewId: String) -> Unit = {},
+) {
+    val steps = planMovedFileViews(workdir, oldAbs, newAbs, viewsById, layoutSync.tree, documents::isDirty)
+    val stale = ArrayList<String>()
+    for (step in steps) {
+        when (step) {
+            is MovedFileStep.MarkStale -> stale += step.path
+            is MovedFileStep.Close -> {
+                closeView(step.viewId)
+                documents.close(step.path)
+            }
+            is MovedFileStep.Reopen -> {
+                // Open FIRST, so the group never goes empty (and collapses) between the two.
+                fileOpener.open(step.newPath, sourceViewId = step.viewId, onPlaced = onPlaced, intoGroupId = step.groupId)
+                closeView(step.viewId)
+                documents.close(step.oldPath)
+            }
+        }
+    }
+    if (stale.isNotEmpty()) documents.markChanged(stale.distinct())
 }
 
 /**

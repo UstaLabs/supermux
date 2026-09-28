@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.UnfoldLess
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -78,6 +79,11 @@ fun FileTreeHeader(
     /** "Reveal active file" in the pane menu; the menu is only drawn when [onRevealActiveChange] is set. */
     revealActive: Boolean = true,
     onRevealActiveChange: ((Boolean) -> Unit)? = null,
+    /**
+     * "New file…" / "New folder…" in the pane menu, creating at the tree's root ([view] rootPath).
+     * The caller opens the dialog (ExplorerPane sets [TreeViewState.dialog]). Null → not offered.
+     */
+    onNewEntry: ((folder: Boolean) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val crumbs = breadcrumbsOf(view.rootPath, inferHomeDir(view.workdir))
@@ -150,7 +156,7 @@ fun FileTreeHeader(
         ) {
             Icon(Icons.Filled.Refresh, contentDescription = "Refresh", tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
         }
-        if (onRevealActiveChange != null) {
+        if (onRevealActiveChange != null || onNewEntry != null) {
             var menuOpen by remember { mutableStateOf(false) }
             Box {
                 IconButton(
@@ -160,7 +166,30 @@ fun FileTreeHeader(
                     Icon(Icons.Filled.MoreVert, contentDescription = "Files options", tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
+                    if (onNewEntry != null) {
+                        DropdownMenuItem(
+                            text = { Text("New file…", fontSize = 13.sp) },
+                            leadingIcon = { Box(Modifier.size(18.dp)) },
+                            onClick = {
+                                menuOpen = false
+                                onNewEntry(false)
+                            },
+                            modifier = Modifier.testTag("tree_menu_root_new_file"),
+                        )
+                        DropdownMenuItem(
+                            text = { Text("New folder…", fontSize = 13.sp) },
+                            leadingIcon = { Box(Modifier.size(18.dp)) },
+                            onClick = {
+                                menuOpen = false
+                                onNewEntry(true)
+                            },
+                            modifier = Modifier.testTag("tree_menu_root_new_folder"),
+                        )
+                        if (onRevealActiveChange != null) {
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp), thickness = 0.5.dp, color = cs.outlineVariant)
+                        }
+                    }
+                    if (onRevealActiveChange != null) DropdownMenuItem(
                         text = { Text("Reveal active file", fontSize = 13.sp) },
                         leadingIcon = {
                             // A fixed-width slot either way, so the label doesn't jump when toggled.

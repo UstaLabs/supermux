@@ -150,6 +150,11 @@ fun ViewHost(
      * path tapped in a chat transcript. The workspace decides which group it lands in.
      */
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit = { _, _, _ -> },
+    /**
+     * A Files pane renamed (`old → new`) or deleted (`old → null`) an entry; ABSOLUTE host paths.
+     * The workspace retargets or flags the file tabs open under it (WorkspaceSession.applyEntryMoved).
+     */
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit = { _, _ -> },
     /** Reveal/create the singleton Changes pane and switch it into walkthrough mode. */
     onOpenWalkthrough: (sessionId: String, stepId: String?) -> Unit = { _, _ -> },
     /** Session whose walkthrough the singleton Changes pane currently presents. */
@@ -297,6 +302,7 @@ fun ViewHost(
                     treeStates = treeStates ?: remember(workspaceId) { TreeViewStates() },
                     activeRelativePath = activeFilePath,
                     onOpenFile = { p -> onOpenFile(p, null, null) },
+                    onEntryMoved = onEntryMoved,
                     modifier = modifier.testTag("editor-$workdir"),
                 )
             }
@@ -619,6 +625,7 @@ private fun ExplorerPaneForWorkspace(
     treeStates: TreeViewStates,
     activeRelativePath: String?,
     onOpenFile: (String) -> Unit,
+    onEntryMoved: (String, String?) -> Unit,
     modifier: Modifier,
 ) {
     // Per-VIEW state held outside the pane (the holder outlives it): two explorer panes may sit at
@@ -632,6 +639,7 @@ private fun ExplorerPaneForWorkspace(
         onOpenFile = onOpenFile,
         activeRelativePath = activeRelativePath,
         onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
+        onEntryMoved = onEntryMoved,
         modifier = modifier.fillMaxSize(),
     )
 }

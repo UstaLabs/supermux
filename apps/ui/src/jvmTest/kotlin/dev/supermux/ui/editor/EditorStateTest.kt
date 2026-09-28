@@ -106,6 +106,46 @@ class EditorStateTest {
         assertNull(s.loadingPath)
     }
 
+    // ── a rename / delete in the Files tree ─────────────────────────────────────────────────
+
+    @Test fun deleting_a_folder_closes_its_clean_tabs_and_flags_dirty_ones() {
+        val s = state()
+        s.openFile("src/a.kt")
+        s.openFile("src/b.kt")
+        s.openFile("top.kt")
+        s.updateContent("src/b.kt", "unsaved")
+
+        s.applyEntryMoved("/w", "/w/src", null)
+
+        assertEquals(listOf("src/b.kt", "top.kt"), s.tabs.map { it.path })
+        assertEquals("unsaved", s.tabs.first().content)
+        assertTrue(s.isStale("src/b.kt"))
+        assertFalse(s.isStale("top.kt"))
+    }
+
+    @Test fun renaming_a_clean_file_reopens_it_at_the_new_path() {
+        val s = state()
+        s.openFile("src/a.kt")
+        s.openFile("top.kt")
+
+        s.applyEntryMoved("/w", "/w/src/a.kt", "/w/src/z.kt")
+
+        assertEquals(listOf("top.kt", "src/z.kt"), s.tabs.map { it.path })
+        assertEquals("body:src/z.kt", s.tabs.last().content)
+        assertFalse(s.isStale("src/z.kt"))
+    }
+
+    @Test fun renaming_a_dirty_file_keeps_its_tab_and_flags_it() {
+        val s = state()
+        s.openFile("src/a.kt")
+        s.updateContent("src/a.kt", "unsaved")
+
+        s.applyEntryMoved("/w", "/w/src", "/w/lib")
+
+        assertEquals(listOf("src/a.kt"), s.tabs.map { it.path })
+        assertTrue(s.isStale("src/a.kt"))
+    }
+
     // ── close (parity: testCloseTabRemovesAndSelectsNeighbor / testClosingInactiveTabKeepsActive) ─
 
     @Test fun close_tab_removes_and_selects_neighbor() {

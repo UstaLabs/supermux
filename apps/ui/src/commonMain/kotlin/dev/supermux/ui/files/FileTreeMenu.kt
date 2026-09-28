@@ -18,6 +18,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -57,10 +58,12 @@ sealed interface FileTreeDialog {
 /**
  * Why [name] can't be used as a new name in a folder holding [siblings], or null when it can.
  * [current] is the entry's own name on a rename (keeping it is not a clash). An empty name is
- * invalid but gets an empty message: the dialog just keeps its button disabled.
+ * invalid but gets an empty message: the dialog just keeps its button disabled. Leading/trailing
+ * whitespace is refused rather than trimmed, so what is created is exactly what was typed.
  */
 fun validateNewName(name: String, siblings: Collection<String>, current: String? = null): String? = when {
     name.isBlank() -> ""
+    name != current && name != name.trim() -> "A name can't start or end with a space"
     '/' in name -> "A name can't contain “/”"
     '\u0000' in name -> "A name can't contain a null character"
     name == "." || name == ".." -> "“$name” isn't a valid name"
@@ -91,6 +94,14 @@ fun newEntryParent(row: TreeRow): String =
 /**
  * [FileTreeView] plus its row actions: the context menu, F2 → rename, Delete → move to trash, and
  * the dialogs. [onOpenFile] gets an absolute path (the host decides what "outside the workdir" means).
+ *
+ * [onEntryMoved] fires after a SUCCESSFUL rename (`old → new`) or delete (`old → null`), with
+ * absolute paths, so the host can deal with editor tabs open on or under the old path (see
+ * `applyEntryMoved` in WorkspaceSession.kt / EditorState.kt) — otherwise their next Save would
+ * write to a path that no longer exists.
+ *
+ * The open dialog is [TreeViewState.dialog], so the pane header can open one too (New file… /
+ * New folder… at the tree's root).
  */
 @Composable
 fun FileTreeWithActions(
@@ -101,8 +112,8 @@ fun FileTreeWithActions(
     activePath: String? = null,
     revealActive: Boolean = true,
     compact: Boolean = false,
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit = { _, _ -> },
 ) {
-    var dialog by remember(view) { mutableStateOf<FileTreeDialog?>(null) }
     FileTreeView(
         fileSystem = fileSystem,
         view = view,
@@ -111,14 +122,17 @@ fun FileTreeWithActions(
         activePath = activePath,
         revealActive = revealActive,
         compact = compact,
-        onRename = { dialog = FileTreeDialog.Rename(it.path) },
-        onDelete = { dialog = FileTreeDialog.Delete(it.path, folder = it.status != RowStatus.FILE) },
+        onRename = { view.dialog = FileTreeDialog.Rename(it.path) },
+        onDelete = { view.dialog = FileTreeDialog.Delete(it.path, folder = it.status != RowStatus.FILE) },
         rowMenu = { row, dismiss ->
-            FileTreeMenuItems(row, workdir = view.workdir, dismiss = dismiss, onDialog = { dialog = it })
+            FileTreeMenuItems(row, workdir = view.workdir, dismiss = dismiss, onDialog = { view.dialog = it })
         },
     )
-    dialog?.let { d ->
-        FileTreeDialogs(d, fileSystem, view, onOpenFile, onDismiss = { dialog = null })
+    view.dialog?.let { d ->
+        // Keyed, so one dialog's typed name / error / busy flag never leaks into the next.
+        key(d) {
+            FileTreeDialogs(d, fileSystem, view, onOpenFile, onDismiss = { view.dialog = null }, onEntryMoved = onEntryMoved)
+        }
     }
 }
 
@@ -187,6 +201,7 @@ fun FileTreeDialogs(
     view: TreeViewState,
     onOpenFile: (absolutePath: String) -> Unit,
     onDismiss: () -> Unit,
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit = { _, _ -> },
 ) {
     when (dialog) {
         is FileTreeDialog.NewEntry -> {
@@ -236,13 +251,14 @@ fun FileTreeDialogs(
                         if (wasOpen) view.expand(new)
                         val sel = view.selected
                         if (sel != null && isWithin(old, sel)) view.selected = new + sel.removePrefix(old)
+                        onEntryMoved(old, new)
                     }
                     onDismiss()
                 },
                 onDismiss = onDismiss,
             )
         }
-        is FileTreeDialog.Delete -> DeleteDialog(dialog, fileSystem, view, onDismiss)
+        is FileTreeDialog.Delete -> DeleteDialog(dialog, fileSystem, view, onDismiss, onEntryMoved)
     }
 }
 
@@ -290,7 +306,9 @@ private fun NameDialog(
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     AlertDialog(
-        onDismissRequest = onDismiss,
+        // While the op is in flight the dialog can't be dismissed: it owns the op's completion
+        // (selection, expansion, onEntryMoved), and a dialog closed mid-op would orphan it.
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(title) },
         text = {
             OutlinedTextField(
@@ -317,7 +335,9 @@ private fun NameDialog(
                 modifier = Modifier.testTag("tree_dialog_confirm"),
             ) { Text(confirmLabel) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.testTag("tree_dialog_cancel")) { Text("Cancel") }
+        },
     )
 }
 
@@ -327,6 +347,7 @@ private fun DeleteDialog(
     fileSystem: FileSystemService,
     view: TreeViewState,
     onDismiss: () -> Unit,
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val path = dialog.path
@@ -334,7 +355,8 @@ private fun DeleteDialog(
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     AlertDialog(
-        onDismissRequest = onDismiss,
+        // Not while the delete is in flight — see NameDialog.
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text("Move “${displayName(path)}” to the trash?") },
         text = {
             val what = if (dialog.folder) "This folder and everything in it" else "This file"
@@ -357,6 +379,7 @@ private fun DeleteDialog(
                             view.prune(path)
                             val sel = view.selected
                             if (sel != null && isWithin(path, sel)) view.selected = parentOf(path)?.takeIf { it != view.rootPath }
+                            onEntryMoved(path, null)
                             onDismiss()
                         }.onFailure { error = fsOpErrorMessage(it) }
                     }
@@ -364,6 +387,8 @@ private fun DeleteDialog(
                 modifier = Modifier.testTag("tree_dialog_confirm"),
             ) { Text("Move to Trash", color = cs.error) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.testTag("tree_dialog_cancel")) { Text("Cancel") }
+        },
     )
 }

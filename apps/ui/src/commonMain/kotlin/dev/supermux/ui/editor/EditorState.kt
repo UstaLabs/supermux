@@ -41,6 +41,7 @@ import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.RepoDiff
 import dev.supermux.net.RepoRefs
+import dev.supermux.ui.files.affectedOpenPaths
 import dev.supermux.net.ReviewComment
 import kotlinx.coroutines.CoroutineScope
 
@@ -127,6 +128,28 @@ class EditorState(
             activeTabPath = tabs.getOrNull(idx.coerceAtMost(tabs.lastIndex))?.path
         }
         if (activeTabPath == null) loadError = null
+    }
+
+    /**
+     * The Files tree renamed or deleted [oldAbs] (→ [newAbs]; null = deleted). Same rule as the
+     * workspace's `applyEntryMoved` (WorkspaceSession.kt): a CLEAN tab under the path follows the
+     * file — closed if it is gone, reopened at its new path if it moved (the reopened tab becomes
+     * active, like any open) — while a DIRTY tab keeps its old path and unsaved text and is marked
+     * stale, so the "changed on disk" banner shows and a Save (which would recreate the old path)
+     * is the user's explicit choice. Nothing is silently discarded.
+     */
+    fun applyEntryMoved(workdir: String, oldAbs: String, newAbs: String?) {
+        val moved = affectedOpenPaths(workdir, oldAbs, newAbs, tabs.map { it.path })
+        val stale = ArrayList<String>()
+        for (m in moved) {
+            if (isDirty(m.oldPath)) {
+                stale += m.oldPath
+                continue
+            }
+            closeTab(m.oldPath)
+            m.newPath?.let(::openFile)
+        }
+        if (stale.isNotEmpty()) markChanged(stale)
     }
 
     fun selectTab(path: String) {

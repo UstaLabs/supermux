@@ -91,6 +91,7 @@ import dev.supermux.ui.widgets.KeepAlivePanel
 import dev.supermux.ui.worktree.WorktreeDeleteAction
 import dev.supermux.ui.worktree.reportWorktreeDelete
 import dev.supermux.ui.workspace.WorkspaceSession
+import dev.supermux.ui.workspace.applyEntryMoved
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.NewViewPlacement
@@ -654,6 +655,18 @@ private fun WorkspacePaneContent(
                         onPlaced = { newId ->
                             ui.windows.expandClaim(hostId, setOf(newId), layoutSync.tree)
                         },
+                    )
+                },
+                // Tabs open on a renamed/deleted path must not keep writing to it: clean ones follow
+                // the file (or close), dirty ones stay and show the stale banner — see
+                // applyEntryMoved. Closing is the same broker close as the tab's × button.
+                onEntryMoved = { old, new ->
+                    ws.applyEntryMoved(
+                        workdir = current.workdir,
+                        oldAbs = old,
+                        newAbs = new,
+                        closeView = { id -> app.closeWorkspaceView(current.id, id) },
+                        onPlaced = { newId -> ui.windows.expandClaim(hostId, setOf(newId), layoutSync.tree) },
                     )
                 },
                 onOpenWalkthrough = { sessionId, stepId ->

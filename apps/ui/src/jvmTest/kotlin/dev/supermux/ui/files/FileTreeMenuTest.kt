@@ -1,5 +1,16 @@
 package dev.supermux.ui.files
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.rightClick
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
+import kotlin.test.assertNotNull
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -50,6 +61,15 @@ class FileTreeMenuValidationTest {
         assertEquals("A file with that name already exists", validateNewName("src", listOf("a.kt", "src")))
     }
 
+    @Test fun rejectsLeadingOrTrailingWhitespace() {
+        assertEquals("A name can't start or end with a space", validateNewName(" a.kt", emptyList()))
+        assertEquals("A name can't start or end with a space", validateNewName("a.kt ", emptyList()))
+        assertEquals("A name can't start or end with a space", validateNewName("a.kt\t", emptyList()))
+        assertNull(validateNewName("my file.kt", emptyList()))
+        // A rename that keeps an existing odd name is not a new mistake.
+        assertNull(validateNewName("odd ", listOf("odd "), current = "odd "))
+    }
+
     @Test fun renameMayKeepItsOwnName() {
         assertNull(validateNewName("a.kt", listOf("a.kt", "b.kt"), current = "a.kt"))
         assertEquals("A file with that name already exists", validateNewName("b.kt", listOf("a.kt", "b.kt"), current = "a.kt"))
@@ -79,6 +99,34 @@ class FileTreeMenuTest {
         ) {
             SupermuxTheme(appearance = AppearanceMode.DARK) { content() }
         }
+    }
+
+    /** A Files service over a mock broker: `/fs/ops` bodies land in [bodies]; [gate] holds each op's reply. */
+    private class Fs(val gate: CompletableDeferred<Unit>? = null) {
+        val bodies = mutableListOf<String>()
+        val service = FileSystemService(
+            BrokerApi(
+                "http://h", "t",
+                HttpClient(
+                    MockEngine { req ->
+                        if (req.method == HttpMethod.Post && req.url.encodedPath.endsWith("/fs/ops")) {
+                            val text = String(req.body.toByteArray())
+                            synchronized(bodies) { bodies += text }
+                            gate?.await()
+                        }
+                        respond("{}")
+                    },
+                ),
+            ),
+            send = {},
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            graceMs = 0,
+        )
+        fun ops(): List<JsonObject> = synchronized(bodies) { bodies.map { Json.parseToJsonElement(it) as JsonObject } }
+    }
+
+    private fun Fs.list(vararg entries: FsEntry) {
+        service.onFrame(ServerFrame.FsDir(path = "/w", version = "1", entries = entries.toList()))
     }
 
     @Test fun longPressNewFolderPostsMkdir() = runComposeUiTest {
@@ -118,5 +166,130 @@ class FileTreeMenuTest {
         assertEquals(JsonPrimitive("/w/src/x"), body["path"])
         waitUntil(timeoutMillis = 5_000) { view.selected == "/w/src/x" }
         assertEquals(true, "/w/src" in view.expanded)
+    }
+
+    @Test fun renameReportsTheMoveToTheHost() = runComposeUiTest {
+        val fs = Fs()
+        val view = TreeViewState("/w")
+        val moves = mutableListOf<Pair<String, String?>>()
+        setContent(host { FileTreeWithActions(fs.service, view, onOpenFile = {}, onEntryMoved = { o, n -> moves += o to n }) })
+        waitForIdle()
+        fs.list(FsEntry(name = "a.kt", type = "file"))
+        waitForIdle()
+
+        onNodeWithTag("tree_row:a.kt").performTouchInput { longClick() }
+        waitForIdle()
+        onNodeWithTag("tree_menu_rename").performClick()
+        waitForIdle()
+        onNodeWithTag("tree_dialog_name").performTextReplacement("b.kt")
+        waitForIdle()
+        onNodeWithTag("tree_dialog_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) { moves.isNotEmpty() }
+
+        assertEquals(listOf<Pair<String, String?>>("/w/a.kt" to "/w/b.kt"), moves)
+        assertEquals(JsonPrimitive("rename"), fs.ops().single()["op"])
+    }
+
+    @Test fun deleteReportsTheMoveAsGone() = runComposeUiTest {
+        val fs = Fs()
+        val view = TreeViewState("/w")
+        val moves = mutableListOf<Pair<String, String?>>()
+        setContent(host { FileTreeWithActions(fs.service, view, onOpenFile = {}, onEntryMoved = { o, n -> moves += o to n }) })
+        waitForIdle()
+        fs.list(FsEntry(name = "src", type = "dir"))
+        waitForIdle()
+
+        onNodeWithTag("tree_row:src").performTouchInput { longClick() }
+        waitForIdle()
+        onNodeWithTag("tree_menu_delete").performClick()
+        waitForIdle()
+        onNodeWithTag("tree_dialog_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) { moves.isNotEmpty() }
+
+        assertEquals(listOf<Pair<String, String?>>("/w/src" to null), moves)
+    }
+
+    @Test fun cancelIsDisabledWhileTheOpIsInFlight() = runComposeUiTest {
+        val gate = CompletableDeferred<Unit>()
+        val fs = Fs(gate)
+        val view = TreeViewState("/w")
+        setContent(host { FileTreeWithActions(fs.service, view, onOpenFile = {}) })
+        waitForIdle()
+        fs.list(FsEntry(name = "a.kt", type = "file"))
+        waitForIdle()
+
+        onNodeWithTag("tree_row:a.kt").performTouchInput { longClick() }
+        waitForIdle()
+        onNodeWithTag("tree_menu_delete").performClick()
+        waitForIdle()
+        onNodeWithTag("tree_dialog_cancel").assertIsEnabled()
+        onNodeWithTag("tree_dialog_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) { fs.ops().isNotEmpty() }
+        waitForIdle()
+        onNodeWithTag("tree_dialog_cancel").assertIsNotEnabled()
+        onNodeWithTag("tree_dialog_cancel").performClick() // ignored
+        waitForIdle()
+        assertNotNull(view.dialog)
+
+        gate.complete(Unit)
+        waitUntil(timeoutMillis = 5_000) { view.dialog == null }
+    }
+
+    @Test fun rightClickOpensTheMenuWithoutOpeningTheRow() = runComposeUiTest {
+        val fs = Fs()
+        val view = TreeViewState("/w")
+        val opened = mutableListOf<String>()
+        setContent(host { FileTreeWithActions(fs.service, view, onOpenFile = { opened += it }) })
+        waitForIdle()
+        fs.list(FsEntry(name = "a.kt", type = "file"))
+        waitForIdle()
+
+        onNodeWithTag("tree_row:a.kt").performMouseInput { rightClick(center) }
+        waitForIdle()
+
+        onNodeWithTag("tree_menu_rename").assertExists()
+        assertEquals(emptyList<String>(), opened)
+    }
+
+    @Test fun theMenuClosesForGoodWhenItsRowScrollsOutOfView() = runComposeUiTest {
+        val fs = Fs()
+        val view = TreeViewState("/w")
+        setContent(host { Box(Modifier.height(240.dp)) { FileTreeWithActions(fs.service, view, onOpenFile = {}) } })
+        waitForIdle()
+        fs.list(*Array(80) { FsEntry(name = "f%02d.kt".format(it), type = "file") })
+        waitForIdle()
+
+        onNodeWithTag("tree_row:f00.kt").performTouchInput { longClick() }
+        waitForIdle()
+        onNodeWithTag("tree_menu_rename").assertExists()
+
+        runOnIdle { runBlocking { view.list.scrollToItem(60) } }
+        waitForIdle()
+        onNodeWithTag("tree_menu_rename").assertDoesNotExist()
+
+        runOnIdle { runBlocking { view.list.scrollToItem(0) } }
+        waitForIdle()
+        onNodeWithTag("tree_row:f00.kt").assertExists()
+        onNodeWithTag("tree_menu_rename").assertDoesNotExist()
+    }
+
+    @Test fun aDialogSetOnTheViewCreatesAtTheRoot() = runComposeUiTest {
+        val fs = Fs()
+        val view = TreeViewState("/w")
+        setContent(host { FileTreeWithActions(fs.service, view, onOpenFile = {}) })
+        waitForIdle()
+        fs.list(FsEntry(name = "a.kt", type = "file"))
+        waitForIdle()
+
+        view.dialog = FileTreeDialog.NewEntry("/w", folder = false)
+        waitForIdle()
+        onNodeWithTag("tree_dialog_name").performTextInput("n.kt")
+        waitForIdle()
+        onNodeWithTag("tree_dialog_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) { fs.ops().isNotEmpty() }
+
+        val op = fs.ops().single()
+        assertEquals(JsonPrimitive("touch"), op["op"])
+        assertEquals(JsonPrimitive("/w/n.kt"), op["path"])
     }
 }

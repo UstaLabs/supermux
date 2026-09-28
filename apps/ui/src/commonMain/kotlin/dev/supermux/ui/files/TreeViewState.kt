@@ -19,6 +19,11 @@ class TreeViewState(rootPath: String) {
         private set
     var selected by mutableStateOf<String?>(null)
     var query by mutableStateOf("")
+    /**
+     * The row-action dialog this pane has open (New file / Rename / Delete), or null. Here rather
+     * than inside the tree so the pane header's ⋮ menu can open New file… / New folder… too.
+     */
+    var dialog by mutableStateOf<FileTreeDialog?>(null)
     val list = LazyListState()
 
     // The last [RecentMax] files opened from this pane (workdir-relative, newest first): what the

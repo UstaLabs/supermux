@@ -85,6 +85,7 @@ import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.editor.engine.EditorScrollReader
 import dev.supermux.fs.FileSystemService
+import dev.supermux.ui.files.FileTreeDialog
 import dev.supermux.ui.files.FileTreeHeader
 import dev.supermux.ui.files.FileTreeWithActions
 import dev.supermux.ui.adaptive.LocalPointerAvailable
@@ -113,6 +114,10 @@ import dev.supermux.ui.files.relativeToWorkdir
  *
  * [onOpenFile] is a REQUEST, not an action: the pane does not know where the file will land. The
  * workspace decides that (see WorkspaceFileOpen.kt) and owns the document.
+ *
+ * [onEntryMoved] reports a successful rename/delete from the tree (absolute paths; new = null for a
+ * delete) so the workspace can retarget or flag the file tabs open under it — see
+ * `applyEntryMoved` in WorkspaceSession.kt.
  */
 @Composable
 fun ExplorerPane(
@@ -123,6 +128,7 @@ fun ExplorerPane(
     modifier: Modifier = Modifier,
     activeRelativePath: String? = null,
     onOutsideWorkdir: (absolutePath: String) -> Unit = {},
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit = { _, _ -> },
 ) {
     val cs = MaterialTheme.colorScheme
     val searchFocus = remember { FocusRequester() }
@@ -177,6 +183,10 @@ fun ExplorerPane(
                 fileSystem = fileSystem,
                 revealActive = revealActive,
                 onRevealActiveChange = { on -> scope.launch { prefs.putFilesRevealActive(on) } },
+                // Creates at the tree's root; the tree below draws the dialog (it reads view.dialog).
+                onNewEntry = if (fileSystem == null) null else { folder ->
+                    view.dialog = FileTreeDialog.NewEntry(view.rootPath, folder)
+                },
             )
             HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
             // FileTreeView tags its own list `editor_tree`; the offline hint carries the tag itself
@@ -194,6 +204,7 @@ fun ExplorerPane(
                         activePath = activePath,
                         revealActive = revealActive,
                         compact = !LocalPointerAvailable.current || LocalWindowWidthClass.current == WindowWidthClass.Compact,
+                        onEntryMoved = onEntryMoved,
                     )
                 }
             }

@@ -46,3 +46,35 @@ fun relativeToWorkdir(workdir: String, path: String): String? {
 }
 
 fun displayName(path: String): String = trimEnd(path).substringAfterLast('/').ifEmpty { "/" }
+
+/**
+ * One open document hit by a rename/delete in the tree: its workdir-relative path as the caller
+ * gave it ([oldPath]) and where it lives now ([newPath], workdir-relative; null = gone — deleted,
+ * or moved out of the workdir where the editor can't follow it).
+ */
+data class MovedOpenPath(val oldPath: String, val newPath: String?)
+
+/**
+ * Which of the [open] workdir-relative paths a move of the tree entry [oldAbs] → [newAbs] touches
+ * ([newAbs] null = deleted): the entry itself and, for a folder, everything under it — never a
+ * sibling that merely shares a name prefix (`src` vs `srcx`). Order follows [open]; duplicates
+ * collapse. A no-op rename, an entry outside [workdir], or `/` itself touch nothing.
+ */
+fun affectedOpenPaths(workdir: String, oldAbs: String, newAbs: String?, open: Collection<String>): List<MovedOpenPath> {
+    val from = trimEnd(oldAbs)
+    val to = newAbs?.let(::trimEnd)
+    if (from == "/" || from == to) return emptyList()
+    val out = ArrayList<MovedOpenPath>()
+    val seen = HashSet<String>()
+    for (rel in open) {
+        if (!seen.add(rel)) continue
+        val segs = rel.split('/').filter { it.isNotEmpty() }
+        if (segs.isEmpty() || segs == listOf(".")) continue
+        val abs = segs.fold(trimEnd(workdir)) { acc, seg -> childOf(acc, seg) }
+        if (!isWithin(from, abs)) continue
+        val moved = to?.let { it + abs.substring(from.length) }
+        val newRel = moved?.let { relativeToWorkdir(workdir, it) }?.takeIf { it != "." }
+        out += MovedOpenPath(rel, newRel)
+    }
+    return out
+}

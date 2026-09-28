@@ -460,6 +460,7 @@ fun EditorPanel(
                                 activeRelativePath = editor.activeTabPath,
                                 onOpenFile = { revealFile(it) },
                                 onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
+                                onEntryMoved = { old, new -> editor.applyEntryMoved(workdir, old, new) },
                             )
                         }
                         Box(
@@ -652,6 +653,7 @@ fun EditorPanel(
                                 activeRelativePath = editor.activeTabPath,
                                 onOpenFile = { revealFile(it) },
                                 onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
+                                onEntryMoved = { old, new -> editor.applyEntryMoved(workdir, old, new) },
                             )
                         }
                     }
@@ -689,6 +691,8 @@ private fun EditorTreeSidebar(
     activeRelativePath: String?,
     onOpenFile: (relativePath: String) -> Unit,
     onOutsideWorkdir: (absolutePath: String) -> Unit,
+    /** A rename/delete succeeded in the tree — see [EditorState.applyEntryMoved]. */
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     if (fileSystem == null) {
@@ -709,5 +713,6 @@ private fun EditorTreeSidebar(
         },
         activePath = activePath,
         compact = !LocalPointerAvailable.current || LocalWindowWidthClass.current == WindowWidthClass.Compact,
+        onEntryMoved = onEntryMoved,
     )
 }

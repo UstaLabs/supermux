@@ -333,12 +333,19 @@ fun FileTreeView(
         { row -> menuSlot?.invoke(this, row, dismissMenu) }
     }
     val hasMenu = onRowContextMenu != null || hasRowMenu
-    // A menu whose row went away (deleted, renamed, its folder collapsed) closes rather than
-    // popping back up when a row with that path reappears.
-    val menuRowGone by remember(view, states) {
-        derivedStateOf { menuOpen?.let { m -> lines.none { !it.isError && it.row.path == m.first } } ?: false }
+    // The menu is drawn INSIDE its row's lazy item, so it only exists while that item is composed.
+    // When the row stops being on screen — it went away (deleted, renamed, its folder collapsed) or
+    // merely scrolled out of the list's visible window — the menu closes for good, rather than
+    // popping back open with no gesture when the row (or a row with that path) comes back.
+    val menuPath = menuOpen?.first
+    LaunchedEffect(menuPath, view) {
+        if (menuPath == null) return@LaunchedEffect
+        snapshotFlow {
+            val index = lines.indexOfFirst { !it.isError && it.row.path == menuPath }
+            index >= 0 && view.list.layoutInfo.visibleItemsInfo.any { it.index == index }
+        }.first { onScreen -> !onScreen }
+        if (menuOpen?.first == menuPath) menuOpen = null
     }
-    if (menuRowGone) LaunchedEffect(Unit) { menuOpen = null }
 
     Box(modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {

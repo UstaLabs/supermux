@@ -114,4 +114,20 @@ class FileTreeHeaderTest {
         setContent(host { FileTreeHeader(view, null) })
         onNodeWithTag("tree_menu").assertDoesNotExist()
     }
+
+    @Test fun menuOffersNewFileAndFolderAtTheRoot() = runComposeUiTest {
+        val view = TreeViewState("/w")
+        val asked = mutableListOf<Boolean>()
+        setContent(host { FileTreeHeader(view, null, onNewEntry = { asked += it }) })
+        onNodeWithTag("tree_menu").performClick()
+        waitForIdle()
+        onNodeWithTag("tree_menu_reveal_active").assertDoesNotExist()
+        onNodeWithTag("tree_menu_root_new_file").performClick()
+        waitForIdle()
+        onNodeWithTag("tree_menu").performClick()
+        waitForIdle()
+        onNodeWithTag("tree_menu_root_new_folder").performClick()
+        waitForIdle()
+        assertEquals(listOf(false, true), asked)
+    }
 }
