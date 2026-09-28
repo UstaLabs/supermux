@@ -43,8 +43,8 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            // TRIAL: native Mermaid rendering for ```mermaid fences (mux/mermaid-trial).
-            implementation(libs.cmp.mermaid.compose)
+            // Native Mermaid rendering for ```mermaid fences (vendored cmp-mermaid, see mermaid-compose/README.md).
+            implementation(project(":mermaid-compose"))
             // `api`, not `implementation`: these types are in this module's OWN public signatures —
             // PaneHost takes a LayoutNode, PaneStripChrome returns a Modifier, PaneDragController exposes
             // Rect/Offset, Motion returns a FiniteAnimationSpec. Under `implementation` a second consumer

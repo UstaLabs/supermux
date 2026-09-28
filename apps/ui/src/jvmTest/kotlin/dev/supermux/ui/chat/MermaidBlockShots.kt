@@ -16,9 +16,9 @@ import java.io.File
 import javax.imageio.ImageIO
 import kotlin.test.Test
 
-/** TRIAL: screenshots of ```mermaid fences through MarkdownBody. No-op unless MERMAID_SHOTS_DIR is set. */
+/** Design screenshots of ```mermaid fences through MarkdownBody. No-op unless MERMAID_SHOTS_DIR is set. */
 @OptIn(ExperimentalTestApi::class)
-class MermaidTrialShots {
+class MermaidBlockShots {
     private val cases = linkedMapOf(
         "flowchart" to """
             flowchart TD
