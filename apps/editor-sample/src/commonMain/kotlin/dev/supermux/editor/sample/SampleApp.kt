@@ -320,6 +320,11 @@ fun SampleApp(
                 )
             }
         }
+        // The mobile accessory bar (editor-compose): above the soft keyboard (this column is padded
+        // by the IME insets), for the editor that has the focus, only while a soft keyboard is up.
+        listOfNotNull(session?.view, sessionB?.view).firstOrNull { it.focused }?.let { focusedView ->
+            dev.supermux.editor.compose.EditorAccessories(focusedView, theme = theme)
+        }
         if (settings) {
             SettingsSheet(
                 chrome = chrome, ink = ink,

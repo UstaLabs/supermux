@@ -349,4 +349,14 @@ class HistoryTest {
         assertEquals(text, h.doc)
         assertEquals(to, h.view.state.selection.main.head)
     }
+
+    @Test fun undoAndRedoSayWhetherTheyCanRun() {
+        val v = EditorView(EditorState.create("abc", extensions = history()))
+        fun enabled(id: String) = dev.supermux.editor.core.commandEnabled(v.state, id)
+        assertFalse(enabled("history.undo")); assertFalse(enabled("history.redo"))
+        v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(3, 3, "d")), userEvent = "input.type"))
+        assertTrue(enabled("history.undo")); assertFalse(enabled("history.redo"))
+        History.undo.run(v)
+        assertFalse(enabled("history.undo")); assertTrue(enabled("history.redo"))
+    }
 }

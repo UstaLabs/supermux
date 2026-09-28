@@ -27,11 +27,16 @@ flow() { # name, yaml
 xcrun simctl terminate "$U" dev.supermux.editor.sample 2>/dev/null
 ( xcrun simctl launch --console-pty --terminate-running-process "$U" dev.supermux.editor.sample > "$OUT/console.log" 2>&1 & )
 sleep 5
+# (The toolbar grew with M4c's LSP chips and M4d's files: swipe it until the file's chip shows.)
 flow launch "- waitForAnimationToEnd
 - waitForAnimationToEnd
-- extendedWaitUntil: { visible: \"HostStore.kt (2k lines)\", timeout: 60000 }
-- swipe: { start: \"380,78\", end: \"30,78\", duration: 500 }
-- waitForAnimationToEnd
+- extendedWaitUntil: { visible: \"settings\", timeout: 60000 }
+- repeat:
+    while: { notVisible: \"Türkçe + emoji\" }
+    times: 8
+    commands:
+      - swipe: { start: \"380,78\", end: \"100,78\", duration: 500 }
+      - waitForAnimationToEnd
 - tapOn: \"Türkçe + emoji\"
 - waitForAnimationToEnd
 - assertNotVisible: \"shift\""
@@ -53,6 +58,30 @@ flow soft-keys-type "- tapOn: { id: \"Return\" }
 - tapOn: { id: \"delete\" }
 - tapOn: { id: \"space\" }
 - waitForAnimationToEnd"
+# The accessory bar (M4b task 3): with the software keyboard up, its keys run editor commands and
+# never take the focus: the keyboard is still there after them; its last key hides the keyboard.
+# (A headless simulator shows the software keyboard again only after typing: "a", then erased.)
+flow accessory-bar "- extendedWaitUntil: { visible: \"Move right\", timeout: 8000 }
+- tapOn: \"Move right\"
+- tapOn: \"Move right\"
+- tapOn: \"Tab\"
+- tapOn: \"Shift-Tab\"
+- waitForAnimationToEnd
+- assertVisible: \"shift\"
+- swipe: { start: \"70%,59%\", end: \"10%,59%\", duration: 400 }
+- waitForAnimationToEnd
+- tapOn: \"Move down\"
+- waitForAnimationToEnd
+- assertVisible: \"shift\"
+- tapOn: \"Hide keyboard\"
+- waitForAnimationToEnd
+- assertNotVisible: \"shift\"
+- assertNotVisible: \"Move right\"
+- tapOn: { point: \"50%,90%\" }
+- waitForAnimationToEnd
+- inputText: \"a\"
+- extendedWaitUntil: { visible: \"shift\", timeout: 8000 }
+- eraseText: 1"
 # Smart Punctuation off: the keyboard's " key types U+0022 and closing brackets pair it ("" with the
 # cursor between), never “ ”.
 flow straight-quotes "- tapOn: { point: \"200,450\" }
@@ -125,8 +154,12 @@ flow menu-paste-no-prompt "- tapOn: { point: \"200,121\" }
 - extendedWaitUntil: { visible: \".*MENUPASTE.*\", timeout: 5000 }"
 # A plain Compose text field of the app keeps the user's Smart Punctuation (the editor turns it off
 # only for itself): its " key types a curly quote.
-flow plain-field-keeps-smart-quotes "- swipe: { start: \"30,78\", end: \"380,78\", duration: 500 }
-- waitForAnimationToEnd
+flow plain-field-keeps-smart-quotes "- repeat:
+    while: { notVisible: \"settings\" }
+    times: 8
+    commands:
+      - swipe: { start: \"30,78\", end: \"310,78\", duration: 500 }
+      - waitForAnimationToEnd
 - tapOn: \"settings\"
 - waitForAnimationToEnd
 - tapOn: \"plain field\"
@@ -161,6 +194,12 @@ flow floating-cursor "- tapOn: { point: \"200,138\" }
 # editor untouched; a tap on the code gives the editor its input back.
 flow widget-text-field "- tapOn: \"close\"
 - waitForAnimationToEnd
+- repeat:
+    while: { notVisible: \"M3c demo: gutter, fold, thread, panel\" }
+    times: 8
+    commands:
+      - swipe: { start: \"380,78\", end: \"100,78\", duration: 500 }
+      - waitForAnimationToEnd
 - tapOn: \"M3c demo: gutter, fold, thread, panel\"
 - waitForAnimationToEnd
 - extendedWaitUntil: { visible: \"reply field\", timeout: 30000 }

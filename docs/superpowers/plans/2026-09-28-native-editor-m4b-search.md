@@ -104,7 +104,7 @@ Same as M4a:
   - `Mod-d` behaviour matching CM6
 - [x] Commit: `feat(editor-plugins): search & replace plugin with panel`.
 
-### Task 3: The mobile accessory bar (only if Ahmet approves; the controller will say) — NOT BUILT (no approval yet)
+### Task 3: The mobile accessory bar (only if Ahmet approves; the controller will say) — APPROVED 2026-09-28, built after M4d
 - **The bar:** above the soft keyboard on phones and tablets without a hardware keyboard, shown while the editor has
   focus. Buttons: Undo, Redo, Tab, Shift-Tab, ←, →, ↑, ↓, and Find (opens the search panel).
 - **Style:** match the terminal's accessory bar (`apps/terminal-compose/.../TerminalAccessories.kt`) and its
@@ -116,7 +116,7 @@ Same as M4a:
 - **Where it lives:** in `editor-compose`, as an optional `EditorAccessories` composable the host places. On by
   default in the sample.
 - **Tests:** the buttons run commands; the field keeps focus; the keyboard stays up (UI harness plus an emulator check).
-- [ ] Commit: `feat(editor-compose): mobile accessory bar`.
+- [x] Commit: `feat(editor-compose): mobile accessory bar`.
 
 ### Task 4: Sample, devices, docs
 - [x] Wire search (and the accessory bar, if built) into `editor-sample`. Reinstall on devices and restart the samples.

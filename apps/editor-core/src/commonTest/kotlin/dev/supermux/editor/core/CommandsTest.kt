@@ -58,4 +58,16 @@ class CommandsTest {
         assertEquals(KeyChord("z", meta = true, shift = true), b.chord(apple = true))
         assertFailsWith<IllegalArgumentException> { KeyBinding("Mod-y", Command { true }, mac = "Hyper-y") }
     }
+
+    @Test fun aNamedCommandIsEnabledUnlessItsPluginSaysNot() {
+        val c = Command { true }
+        val st = EditorState.create("x", extensions = extensionOf(
+            commandsFacet.of(listOf(NamedCommand("a.go", "Go", c), NamedCommand("a.stop", "Stop", c))),
+            commandAvailabilityFacet.of(CommandAvailability { _, id -> if (id == "a.stop") false else null }),
+        ))
+        assertTrue(commandEnabled(st, "a.go"), "no answer: enabled")
+        assertFalse(commandEnabled(st, "a.stop"))
+        assertFalse(commandEnabled(st, "b.missing"), "a command nobody provides is not enabled")
+        assertEquals("Go", namedCommand(st, "a.go")?.title)
+    }
 }

@@ -61,7 +61,7 @@ Same as M4c:
   when text is inserted at its point. Drop empty non-point marks, or clamp them.
   - Add a randomized `RangeSet.map` property test to core: ranges and edits compared against a freshly sorted set,
     and `between()` compared against a full scan.
-- [ ] Commit: `fix(editor-core,lsp): M4c review follow-ups`.
+- [x] Commit: `fix(editor-core,lsp): M4c review follow-ups`.
 
 ### Task 1: The diff engine (pure)
 - **Line diff:** Myers or histogram diff over lines.
@@ -79,7 +79,7 @@ Same as M4c:
   - char diffs
   - pathological cases (all lines identical, all lines different, very long lines)
   - performance
-- [ ] Commit: `feat(editor-plugins): diff engine (line + char, sliced recompute)`.
+- [x] Commit: `feat(editor-plugins): diff engine (line + char, sliced recompute)`.
 
 ### Task 2: Inline mode
 - Decorations on the working-copy editor:
@@ -95,7 +95,7 @@ Same as M4c:
   - `nextHunk` / `prevHunk` (CM6 merge: `Alt-ArrowDown`/`Up`? Check; VS Code uses `F7`/`Shift-F7`; pick one and document it).
   - `revertHunk`.
 - **Tests:** decorations match the hunks, expand logic, revert as one undo step, and next/prev.
-- [ ] Commit: `feat(editor-plugins): inline diff mode`.
+- [x] Commit: `feat(editor-plugins): inline diff mode`.
 
 ### Task 3: Side-by-side mode
 - **API:** `DiffPair(base: EditorView, working: EditorView)` sets up both views.
@@ -112,7 +112,7 @@ Same as M4c:
   - fold sync
   - revert
   - scrolling performance for two 10k-line files with 500 hunks (p95 frame < 16 ms on the JVM)
-- [ ] Commit: `feat(editor-plugins): side-by-side diff mode`.
+- [x] Commit: `feat(editor-plugins): side-by-side diff mode`.
 
 ### Task 4: Review threads
 - **`ReviewThread(id, line, status, comments)`** as data from the host.
@@ -137,20 +137,20 @@ Same as M4c:
   - mapping through edits
   - a thread update doesn't reset expanded context
   - focus behaviour
-- [ ] Commit: `feat(editor-plugins): review threads in diff views`.
+- [x] Commit: `feat(editor-plugins): review threads in diff views`.
 
 ### Task 5: Sample, devices, docs
-- [ ] Replace the sample's hand-made `applyDiff` demo with the plugin, in both modes. Add a demo "walkthrough" (inline
+- [x] Replace the sample's hand-made `applyDiff` demo with the plugin, in both modes. Add a demo "walkthrough" (inline
   read-only with 2 threads and the composer) and a side-by-side demo (editable).
-- [ ] Reinstall on devices and restart the samples.
-- [ ] Write the checklist for Ahmet (relayed by the controller):
+- [x] Reinstall on devices and restart the samples.
+- [x] Write the checklist for Ahmet (relayed by the controller):
   - both modes
   - expanding context
   - revert
   - next/prev hunk
   - threads: open composer, type, submit, reply, resolve, collapse/expand
   - on a phone, with the soft keyboard
-- [ ] Write READMEs and append a dated entry to `~/.mux/domains/editor.md`. Commit.
+- [x] Write READMEs and append a dated entry to `~/.mux/domains/editor.md`. Commit.
 
 ## After M4d
 - **M5:** the `:ui` integration (EditorEngine → Editor, `LspBridge` → `LspTransport`, `DiffView`/`WalkthroughView` →

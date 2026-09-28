@@ -16,6 +16,8 @@ import dev.supermux.editor.core.StateField
 import dev.supermux.editor.core.Transaction
 import dev.supermux.editor.core.TransactionSpec
 import dev.supermux.editor.core.commandsFacet
+import dev.supermux.editor.core.CommandAvailability
+import dev.supermux.editor.core.commandAvailabilityFacet
 import dev.supermux.editor.core.extensionOf
 import dev.supermux.editor.core.keymapFacet
 import kotlin.time.TimeSource
@@ -132,6 +134,8 @@ object History {
         this.config.of(config),
         keymapFacet.of(keymap),
         commandsFacet.of(commands),
+        // The accessory bar's Undo / Redo show whether there is anything to take back.
+        commandAvailabilityFacet.of(availability),
     )
 
     val undo: Command = Command { t -> pop(t, Side.DONE, onlySelection = false) }
@@ -155,6 +159,15 @@ object History {
         NamedCommand("history.undoSelection", "Undo Selection", undoSelection),
         NamedCommand("history.redoSelection", "Redo Selection", redoSelection),
     )
+
+    /** Undo and redo are enabled when a step is there (`commandEnabled(state, "history.undo")`). */
+    val availability: CommandAvailability = CommandAvailability { st, id ->
+        when (id) {
+            "history.undo" -> undoDepth(st) > 0
+            "history.redo" -> redoDepth(st) > 0
+            else -> null
+        }
+    }
 
     /** How many steps [undo] can take back. */
     fun undoDepth(state: EditorState): Int = state.fieldOrNull(field)?.done?.count { it.changes != null } ?: 0

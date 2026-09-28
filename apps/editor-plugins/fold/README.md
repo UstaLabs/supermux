@@ -60,8 +60,8 @@ it. Folds survive edits outside them, and a deletion covering one removes it.
 - **Deleting into a fold** (Backspace at its end, Delete at its start, a soft keyboard deleting its
   placeholder): by default the surface's policy unfolds it first (JetBrains-style) and the next
   Backspace deletes normally. `FoldConfig(deleteFoldWhole = true)` is CM6's policy instead: the
-  whole folded text goes with that one keystroke, and undo (history) brings it back. The default
-  stays unfold-first until Ahmet decides (asked 2026-09-28, no answer yet).
+  whole folded text goes with that one keystroke, and undo (history) brings it back. **Ahmet chose
+  unfold-first, 2026-09-28**: it stays the default, `deleteFoldWhole` an opt-in (default false).
 
 ## Commands and keys
 

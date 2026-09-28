@@ -624,6 +624,34 @@ scrolls (for `EditorMenu.SCROLL_SETTLE_MILLIS`) and comes back after; typing or 
   inside its paste action. `ios-sim.sh` (`menu-paste-no-prompt`) asserts the prompt never shows. On the web Compose's clipboard reads nothing: the menu uses the
   async Clipboard API; the keys use the browser's own copy/cut/paste events.
 
+## The mobile accessory bar
+
+`EditorAccessories(view, modifier, theme, visibility)`: the keys a soft keyboard lacks, in a row the
+HOST places above the keyboard (the bottom of a column padded by the IME insets, as the sample does):
+`Undo · Redo | Tab · ⇧Tab | ← → ↑ ↓ | Find` scrolling sideways on a narrow phone, and a pinned
+hide-keyboard key. Styled like the terminal's accessory bar (40 dp keys, at least 44 wide, rounded,
+dividers between groups, the terminal's hide-keyboard key of commit 8b0a6653: iOS has no back
+gesture), in the editor theme's tones. Ahmet approved it on 2026-09-28 (M4b task 3).
+- **When**: `AccessoryVisibility.AUTO` shows it only while the editor has the focus AND a soft
+  keyboard is up (an IME inset of at least `MIN_KEYBOARD`, 100 dp: an iPad's hardware-keyboard
+  shortcut strip does not count, and a hardware keyboard on Android hides the IME); a touch-first
+  browser, whose keyboard gives no inset, counts a focused editor. `ALWAYS` is the host's call.
+- **Commands, not key events**: Tab, ⇧Tab and the arrows run what that key is BOUND to (the state's
+  keymap, then the defaults, guarded and policed like a key: a completion list's ↑/↓, a snippet's Tab
+  work); Undo / Redo / Find run the named commands `history.undo`, `history.redo`, `search.open`.
+  A key is dimmed (and `disabled` for a screen reader) when no plugin provides its command or
+  editor-core's `commandEnabled(state, id)` says it cannot run: `commandAvailabilityFacet`
+  (`CommandAvailability`), which the history plugin answers from its stacks.
+- **Never the focus**: the keys are taps (`detectTapGestures`), never `clickable` / `focusable`, so the
+  hidden field keeps the focus, the keyboard stays up and the IME keeps its session. The arrows
+  repeat while held (after 400 ms, every 50 ms). Hide keyboard asks the platform to dismiss it and
+  leaves the focus alone: a tap on the text brings it back.
+- Tests: `EditorAccessoriesTest` (the harness: commands run, the focus stays, a held arrow repeats,
+  Undo disabled until something can be undone, a plugin's Tab wins, hide keeps the focus, AUTO shows
+  nothing without a soft keyboard); `device-checks/android-keyboard.sh` (emulator + Gboard: the bar
+  shows with the keyboard, the keyboard is still up after its keys, its hide key hides both, a tap
+  brings them back); `device-checks/ios-sim.sh` (`accessory-bar`: the same on the iOS Simulator).
+
 ## Zoom
 
 `Mod +` / `Mod −` / `Mod 0` (also the number pad's) step the font size one point, 10 to 24
@@ -795,6 +823,6 @@ M4a built the first plugins on this surface (`editor-plugins/`: history, basics+
 view settings), M4b search/replace, M4c the tooltip layer, view plugins, autocompletion, lint and the
 LSP client, M4d the diff (inline and side by side on the linked views) and review threads. Still to
 come: M5's host adapter from `LspBridge` to `LspTransport`, the walkthrough and diff panes on the
-diff plugin, and cross-file navigation. An accessory bar for soft keyboards (Tab / Shift-Tab, arrows, undo). A gap widget
+diff plugin, and cross-file navigation. A gap widget
 draws plain background (a hatched diff gap is the diff plugin's registered content, if it wants
 one). Lines over 10,000 units show no inline widgets or replaces.

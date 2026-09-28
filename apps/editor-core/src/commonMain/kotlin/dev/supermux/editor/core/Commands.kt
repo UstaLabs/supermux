@@ -82,6 +82,25 @@ val commandsFacet: Facet<List<NamedCommand>, List<NamedCommand>> = Facet.define(
 fun keymapOf(vararg bindings: KeyBinding): Extension = keymapFacet.of(bindings.toList())
 
 /**
+ * Whether a named command can do something NOW (undo with an empty stack cannot): a plugin
+ * answers for its own ids, null for any other. For a button that shows its command's state (the
+ * mobile accessory bar's Undo and Redo); a key binding just runs and returns false.
+ */
+fun interface CommandAvailability {
+    fun enabled(state: EditorState, id: String): Boolean?
+}
+
+/** Every plugin's [CommandAvailability], highest precedence first. */
+val commandAvailabilityFacet: Facet<CommandAvailability, List<CommandAvailability>> = Facet.list("commandAvailability")
+
+/** The named command [id] of [state]'s plugins, or null when none provides it. */
+fun namedCommand(state: EditorState, id: String): NamedCommand? = state.facet(commandsFacet).firstOrNull { it.id == id }
+
+/** True when some plugin provides [id] and no [CommandAvailability] says it cannot run now. */
+fun commandEnabled(state: EditorState, id: String): Boolean =
+    namedCommand(state, id) != null && state.facet(commandAvailabilityFacet).firstNotNullOfOrNull { it.enabled(state, id) } != false
+
+/**
  * Run the first binding for [chord] whose command returns true. This is the whole key-dispatch
  * rule; the surface only turns a platform key event into a [KeyChord].
  */
