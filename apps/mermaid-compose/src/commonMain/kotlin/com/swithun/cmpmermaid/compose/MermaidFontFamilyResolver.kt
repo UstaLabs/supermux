@@ -7,12 +7,8 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import com.swithun.cmpmermaid.compose.generated.resources.Res
 import com.swithun.cmpmermaid.compose.generated.resources.arimo_bold
-import com.swithun.cmpmermaid.compose.generated.resources.arimo_bolditalic
-import com.swithun.cmpmermaid.compose.generated.resources.arimo_italic
 import com.swithun.cmpmermaid.compose.generated.resources.arimo_regular
-import com.swithun.cmpmermaid.compose.generated.resources.droid_sans_fallback
 import com.swithun.cmpmermaid.compose.generated.resources.droid_sans_mono
-import com.swithun.cmpmermaid.compose.generated.resources.noto_sans_symbols2_regular
 import org.jetbrains.compose.resources.Font
 
 fun interface MermaidFontFamilyResolver {
@@ -20,36 +16,18 @@ fun interface MermaidFontFamilyResolver {
 }
 
 /**
- * Returns the bundled CJK fallback used by the Mermaid renderer.
- *
- * The font resource is loaded lazily when text actually references this family.
+ * CJK fallback. supermux: the bundled Droid Sans Fallback (3.4 MB) was dropped to keep the app
+ * small; CJK text uses the platform's default family, like the rest of the app.
  */
 @Composable
-fun rememberMermaidCjkFontFamily(): FontFamily {
-    val font = Font(
-        Res.font.droid_sans_fallback,
-        FontWeight.Normal,
-        FontStyle.Normal,
-    )
-    return remember(font) {
-        FontFamily(font)
-    }
-}
+fun rememberMermaidCjkFontFamily(): FontFamily = FontFamily.Default
 
 /**
- * Returns the bundled symbol fallback used for Unicode glyphs missing from Arimo.
+ * Symbol fallback for glyphs missing from Arimo. supermux: the bundled Noto Sans Symbols 2
+ * (0.6 MB) was dropped; the platform's default family is used instead.
  */
 @Composable
-fun rememberMermaidSymbolFontFamily(): FontFamily {
-    val font = Font(
-        Res.font.noto_sans_symbols2_regular,
-        FontWeight.Normal,
-        FontStyle.Normal,
-    )
-    return remember(font) {
-        FontFamily(font)
-    }
-}
+fun rememberMermaidSymbolFontFamily(): FontFamily = FontFamily.Default
 
 /**
  * Returns the bundled monospace family used for HTML code-style spans.
@@ -74,9 +52,10 @@ internal fun rememberMermaidFontFamilyResolver(
         Font(Res.font.arimo_regular, FontWeight.Normal, FontStyle.Normal),
         Font(Res.font.arimo_regular, FontWeight.Medium, FontStyle.Normal),
         Font(Res.font.arimo_bold, FontWeight.Bold, FontStyle.Normal),
-        Font(Res.font.arimo_italic, FontWeight.Normal, FontStyle.Italic),
-        Font(Res.font.arimo_italic, FontWeight.Medium, FontStyle.Italic),
-        Font(Res.font.arimo_bolditalic, FontWeight.Bold, FontStyle.Italic),
+        // supermux: Arimo italic/bold-italic files dropped (0.7 MB); italics are synthesized.
+        Font(Res.font.arimo_regular, FontWeight.Normal, FontStyle.Italic),
+        Font(Res.font.arimo_regular, FontWeight.Medium, FontStyle.Italic),
+        Font(Res.font.arimo_bold, FontWeight.Bold, FontStyle.Italic),
     )
     return remember(customResolver, arialCompatible) {
         MermaidFontFamilyResolver { cssFontFamily ->

@@ -85,6 +85,12 @@ class MermaidBlockShots {
               "state" : 9
               "other" : 8
         """.trimIndent(),
+        "i18n" to """
+            flowchart LR
+              A[Şube müdürü] -->|onaylar ✓| B[Öğrenci işleri]
+              B --> C[日本語 ラベル]
+              C -. "*italik* **kalın**" .-> A
+        """.trimIndent(),
         "broken" to "flowchart TD\n  A --> \n  B -->> [[[",
     )
 

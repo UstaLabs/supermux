@@ -19,3 +19,7 @@ so upstream fixes still apply cleanly.
 ## Local changes
 
 - Build script rewritten for the supermux Gradle build (our version catalog, no publishing / CocoaPods).
+- Fonts trimmed from 5.5 MB to 0.7 MB: dropped Droid Sans Fallback (CJK, 3.4 MB), Noto Sans
+  Symbols 2 (0.6 MB) and Arimo Italic / Bold Italic (0.7 MB). CJK and symbol glyphs fall back to the
+  platform default family; italics are synthesized from Arimo Regular / Bold. Arimo (Arial-metric)
+  and Droid Sans Mono stay because Mermaid's layout metrics assume them.
