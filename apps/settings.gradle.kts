@@ -66,5 +66,7 @@ include(":editor-plugins:search")
 include(":editor-plugins:autocomplete")
 include(":editor-plugins:lint")
 include(":editor-plugins:lsp")
+// The native editor's M4d plugin: diff (side-by-side + inline) and review threads.
+include(":editor-plugins:diff")
 // The in-process toy language server the LSP plugin's tests and the sample run against (never a production host's).
 include(":editor-plugins:lsp-fake")
