@@ -283,7 +283,9 @@ fun MarkdownBody(
                         )
                     }
                 }
-                is MdBlock.Code -> FencedCodeBlock(block.code)
+                is MdBlock.Code ->
+                    if (block.lang.equals("mermaid", ignoreCase = true)) MermaidBlock(block.code)
+                    else FencedCodeBlock(block.code)
                 is MdBlock.Heading -> Text(
                     text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
                     color = cs.onSurface,

@@ -28,3 +28,16 @@ val LocalInputMode = compositionLocalOf { InputMode.Pointer }
  * touchpad only, never the keyboard.
  */
 val LocalPointerAvailable = compositionLocalOf { true }
+
+/**
+ * Whether a hardware keyboard is available to type with — the third question, next to
+ * [LocalInputMode] and [LocalPointerAvailable]. It picks EDITING affordances that only pay off
+ * with real keys: the Files tree renames and creates entries in place (VS Code-style: Enter
+ * commits, Esc cancels) instead of in a dialog. It says nothing about hit-target size.
+ *
+ * Defaults to `true` (desktop, previews, tests). Per host: desktop → true; web → a fine pointer
+ * (a desktop browser; a phone PWA stays false); Android → a QWERTY keyboard that isn't hidden
+ * (`rememberHardwareKeyboard()`); iOS → false (GameController reports the Mac's keyboard on every
+ * simulator, the same trap `IosTheme` documents for the input mode).
+ */
+val LocalHardwareKeyboard = compositionLocalOf { true }

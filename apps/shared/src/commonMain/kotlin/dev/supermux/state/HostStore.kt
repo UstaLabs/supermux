@@ -4,7 +4,7 @@
 // BrokerApi (HTTP) and reduces inbound ServerFrames into StateFlows the Compose UI observes.
 // The Milestone-1 surface is ported here — sessions / messages / activity / agentState / bgTasks /
 // commands + the send/viewing/control paths — plus the M3 editor filesystem surface (fsList/fsRead/
-// fsWrite/fsSearch, editorOpen/editorClose, and the fs_changed → [fsChanges] fold) and the M4b finish
+// fsWrite/fsSearch) and the M4b finish
 // surface (the finish_job + session_git reducer branches + finish/finishReadiness/verifySuggest/
 // verifySave/clearFinishJob). Still-out-of-scope frames (LSP, displays) and features (uploads beyond
 // Send args, dictation, models/reasoning, drafts, push, notifications) are deliberately no-op'd so the
@@ -23,6 +23,7 @@ import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
+import dev.supermux.util.StartupTrace
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.CuratorConfig
@@ -34,7 +35,6 @@ import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.FsDiffResult
-import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.GitOpResult
@@ -82,6 +82,8 @@ import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.net.MoveViewBody
 import dev.supermux.net.PatchViewBody
 import kotlinx.serialization.json.JsonObject
+import kotlinx.coroutines.flow.getAndUpdate
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -109,6 +111,7 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -175,7 +178,11 @@ class HostStore(
     internal val projectionsActive: Boolean get() = projectionJob.isActive
 
     private val http = deps.httpFactory(null)
-    val client = BrokerClient(baseUrl, token, http, onConnectionChange = onConnectionChange)
+    val client = BrokerClient(
+        baseUrl, token, http,
+        onConnectionChange = onConnectionChange,
+        subscribeFrame = { subscribeFrameJson(viewingSessionIds) },
+    )
     val api = apiOverride ?: BrokerApi(baseUrl, token, http)
 
     // CIO's default per-request timeout is 15s — too short for the mic-dictation POST (M5-1): the
@@ -199,6 +206,9 @@ class HostStore(
     private val httpWorktreeDelete = lazy { deps.httpFactory(WORKTREE_DELETE_TIMEOUT_MS) }
     private val apiWorktreeDelete by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpWorktreeDelete.value) }
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
+
+    /** The host's file-system service (spec 2026-09-27): shared folder listings for every pane. */
+    val fileSystem = dev.supermux.fs.FileSystemService(api, send = { sendFrame(it) }, scope = stateScope)
 
     // ── Viewing presence (mirrors iOS BrokerSession / web useViewing) ──────────────
     /** Session ids of chats currently on screen (one per visible group), or empty. */
@@ -268,25 +278,11 @@ class HostStore(
     private val _ackedFinish = MutableStateFlow<Map<String, Double>>(emptyMap())
     val ackedFinish: StateFlow<Map<String, Double>> = _ackedFinish
 
-    // ── Editor file-watch (M3) ─────────────────────────────────────────────────────
-    // The reducer folds inbound fs_changed frames into this app-wide SharedFlow (mirrors Android's
-    // AppViewModel.fsChanges). Each EditorPanel collects it and calls its EditorState.markChanged
-    // FILTERED to its own session — the stale-on-disk banner is dead without this stream. A replay
-    // of 0 (transient signal, not state) + a 64-deep buffer with DROP_OLDEST: the default overflow
-    // policy (SUSPEND) makes tryEmit fail on a full buffer, dropping the NEWEST pulse — exactly the
-    // one the banner needs. DROP_OLDEST keeps the freshest change flowing instead (trivially better
-    // than Android's default-policy flow — backport candidate).
-    private val _fsChanges = MutableSharedFlow<ServerFrame.FsChanged>(
-        extraBufferCapacity = 64,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
-    val fsChanges: SharedFlow<ServerFrame.FsChanged> = _fsChanges.asSharedFlow()
-
     // ── Notifications (M5-3) ────────────────────────────────────────────────────────
     // Raw agent-reply pulses (direction="outbound", op="reply" MessageAppend entries only),
     // folded by [reduce] and consumed by AppShell's NotificationController — see
-    // NotifyDecision.kt for the PURE viewed/muted decision this flow feeds. Same replay-0 +
-    // bounded-buffer shape as [fsChanges]: DROP_OLDEST keeps the freshest reply flowing rather
+    // NotifyDecision.kt for the PURE viewed/muted decision this flow feeds. A replay-0 +
+    // bounded buffer with DROP_OLDEST (transient signal, not state): DROP_OLDEST keeps the freshest reply flowing rather
     // than suspending the reducer on a full buffer — a burst of replies while the collector is
     // briefly busy shouldn't block message delivery, and NotificationDedup coalesces the burst
     // into one toast regardless.
@@ -361,6 +357,7 @@ class HostStore(
     val connected: Boolean get() = client.sync.synced
 
     init {
+        StartupTrace.mark("host.init")
         attachMessageTts()
         if (connectOnInit) {
             // Guarded per-frame: one poison frame drops one update, never the whole collector.
@@ -411,7 +408,11 @@ class HostStore(
 
     /** Fold one inbound frame into HostState plus side effects. Public for reducer tests. */
     fun reduce(frame: ServerFrame) {
+        val start = StartupTrace.elapsedMs()
         _state.update { reduceHostFrame(it, frame) }
+        if (frame is ServerFrame.Snapshot) {
+            StartupTrace.mark("state.snapshot.reduced", "ms=${StartupTrace.elapsedMs() - start} sessions=${frame.sessions.size}")
+        }
         onFrameEffects(frame)
     }
 
@@ -422,7 +423,10 @@ class HostStore(
                 lastSentViewing = null
                 sendViewingIfChanged()
                 refreshAgentModels()
+                if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
+                fileSystem.onReconnect()
             }
+            is ServerFrame.FsDir, is ServerFrame.FsGone, is ServerFrame.FsErr -> fileSystem.onFrame(frame)
             ServerFrame.AgentModelsChanged -> refreshAgentModels()
             is ServerFrame.SessionRemoved -> {
                 walkthroughs.remove(frame.id)
@@ -436,7 +440,9 @@ class HostStore(
             is ServerFrame.AgentState -> {
                 _pendingSend.update { it - frame.session }
             }
-            is ServerFrame.FsChanged -> _fsChanges.tryEmit(frame)
+            // Legacy per-session watcher pulse from an older broker. The "changed on disk" banner
+            // now comes from fs_sub folder subscriptions (FileSystemService), so it is ignored.
+            is ServerFrame.FsChanged -> Unit
             is ServerFrame.WalkthroughUpdated -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.ReviewCommentFrame -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
@@ -951,6 +957,10 @@ class HostStore(
     suspend fun saveVoiceTts(engine: String?): Boolean =
         runApi("saveVoiceTts") { api.saveConfig(voiceTtsEngine = engine); true } ?: false
 
+    /** Persist the dictation languages (empty = auto-detect). False on failure. */
+    suspend fun saveVoiceLanguages(languages: List<String>): Boolean =
+        runApi("saveVoiceLanguages") { api.saveConfig(voiceLanguages = languages); true } ?: false
+
     /** Persist cleanup engine and/or model. False on failure. */
     suspend fun saveVoiceCleanup(engine: String?, model: String?): Boolean =
         runApi("saveVoiceCleanup") {
@@ -1127,50 +1137,10 @@ class HostStore(
         runApi("stopDisplay") { api.stopDisplay(id) }
     }
 
-    // ── Editor filesystem + lifecycle (M3; mirrors AppViewModel.fsList/fsRead/fsWrite/fsSearch
-    //    + editorOpen/editorClose) ─────────────────────────────────────────────────────
+    // ── Editor filesystem (M3; mirrors AppViewModel.fsList/fsRead/fsWrite/fsSearch) ────────────────────────────────────────────────────────────────
     // The EditorPanel binds these to path-only lambdas capturing the session, exactly as Android's
     // ChatScreen binds the AppViewModel wrappers. All broker calls run through [runApi] EXCEPT
     // [fsRead] (see its note — it must preserve the FsException message for the editor's error UI).
-
-    /** GET /sessions/<id>/fs → directory listing (workdir-relative). Empty on any failure — use
-     *  [fsListResult] where a failed listing must be TOLD APART from an empty directory. */
-    suspend fun fsList(session: SessionInfo, path: String): List<FsEntry> =
-        fsListResult(session, path).getOrElse { emptyList() }
-
-    /**
-     * GET /sessions/<id>/fs as a Result — same shape and rationale as [fsRead]: NOT run through
-     * [runApi], because the failure message has to reach the file tree's error row (a swallowed
-     * failure renders as an empty directory, which is what made that row unreachable until cluster
-     * C1). runApi's cancellation discipline is preserved inline.
-     */
-    suspend fun fsListResult(session: SessionInfo, path: String): Result<List<FsEntry>> =
-        try {
-            Result.success(api.fsList(session.id, path))
-        } catch (c: CancellationException) {
-            currentCoroutineContext().ensureActive() // real cancel → propagate
-            Result.failure(c)
-        } catch (e: Throwable) {
-            println("[HostStore] fsList failed: $e") // runApi's log, kept now that runApi is bypassed
-            Result.failure(e)
-        }
-
-    /** GET /workspaces/<id>/fs → directory listing (workspace workdir). Empty on any failure — use
-     *  [workspaceFsListResult] where a failed listing must be told apart from an empty directory. */
-    suspend fun workspaceFsList(workspaceId: String, path: String): List<FsEntry> =
-        workspaceFsListResult(workspaceId, path).getOrElse { emptyList() }
-
-    /** GET /workspaces/<id>/fs as a Result — the workspace twin of [fsListResult]. */
-    suspend fun workspaceFsListResult(workspaceId: String, path: String): Result<List<FsEntry>> =
-        try {
-            Result.success(api.workspaceFsList(workspaceId, path))
-        } catch (c: CancellationException) {
-            currentCoroutineContext().ensureActive()
-            Result.failure(c)
-        } catch (e: Throwable) {
-            println("[HostStore] workspaceFsList failed: $e")
-            Result.failure(e)
-        }
 
     /**
      * GET /workspaces/<id>/fs/read → file text. Same Result shape as [fsRead] (preserves
@@ -1189,10 +1159,6 @@ class HostStore(
     /** PUT /workspaces/<id>/fs/write → true on success. */
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
         runApi("workspaceFsWrite") { api.workspaceFsWrite(workspaceId, path, content) } ?: false
-
-    /** GET /workspaces/<id>/fs/search → filename matches. Empty on any failure. */
-    suspend fun workspaceFsSearch(workspaceId: String, q: String): List<FsSearchResult> =
-        runApi("workspaceFsSearch") { api.workspaceFsSearch(workspaceId, q) } ?: emptyList()
 
     /** GET /workspaces/<id>/fs/diff. Null on any failure. */
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =
@@ -1267,16 +1233,6 @@ class HostStore(
      *  fire it outside an explicit user "Submit review" click (see DiffView's submit bar). */
     suspend fun reviewSubmit(session: SessionInfo): ReviewSubmitResult? =
         runApi("reviewSubmit") { api.reviewSubmit(session.id) }
-
-    /** Start the broker fs-watcher for this session (so fs_changed fires → the stale banner works).
-     *  Sent on EditorPanel mount; the [editorClose] counterpart stops it on dispose. */
-    fun editorOpen(session: SessionInfo) {
-        stateScope.launch { runApi("editorOpen") { sendFrame(ClientFrame.EditorOpen(session.id)) } }
-    }
-
-    fun editorClose(session: SessionInfo) {
-        stateScope.launch { runApi("editorClose") { sendFrame(ClientFrame.EditorClose(session.id)) } }
-    }
 
     // ── LSP control-plane senders (M4g-3; mirrors AppViewModel.lspStatusQuery/lspOpen/lspRpcOut/
     //    lspClose:832-843) ───────────────────────────────────────────────────────────────────────
@@ -1541,23 +1497,86 @@ class HostStore(
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         runApi("archivedLogs") { api.archivedLogs(sessionId) } ?: emptyList()
 
+    /** Sessions whose chat fetch is in flight, so a chat pane and the shell asking for the same
+     *  session at once make one request. */
+    private val logFetches = MutableStateFlow<Set<String>>(emptySet())
+    private var prefetchJob: Job? = null
+
+    /** Holds everything an open chat shows: the full history page and its activity/commands. */
+    private fun chatLoaded(st: HostState, id: String) = id in st.completeLogs && id in st.completeExtras
+
     /**
-     * Lazily fetch a session's transcript when we don't already have it. The WS Snapshot seeds
-     * [messages] for every session live at connect time, and MessageAppend keeps them current —
-     * but a session resumed from archive arrives via SessionAdded (no history), so its transcript
-     * stays empty until the next snapshot. Calling this on chat-open closes that gap. No-op when
-     * the snapshot already populated it. Web/iOS parity: ChatView.loadMessages /
+     * Fetch what a chat needs that we don't already hold: its history unless we have the full
+     * page ([HostState.completeLogs]), its activity + slash commands unless they are current
+     * ([HostState.completeExtras]). A trimmed snapshot carries neither for sessions that were not
+     * on screen at connect, and a session resumed from archive arrives via SessionAdded with no
+     * history at all; opening its chat calls this. Web/iOS parity: ChatView.loadMessages /
      * BrokerSession.ensureMessagesLoaded (GET /sessions/:id/messages).
      */
     fun ensureMessagesLoaded(sessionId: String) {
-        if (_state.value.messages[sessionId]?.isNotEmpty() == true) return
-        stateScope.launch {
-            val fetched = archivedLogs(sessionId)
-            // Re-check after the await: a live MessageAppend / optimistic send / fresh snapshot may
-            // have populated the buffer while the fetch was in flight — don't clobber it.
-            if (fetched.isNotEmpty() && _state.value.messages[sessionId]?.isNotEmpty() != true) {
-                _state.update { it.copy(messages = it.messages + (sessionId to fetched)) }
+        stateScope.launch { loadChat(sessionId) }
+    }
+
+    private suspend fun loadChat(sessionId: String) {
+        val st = _state.value
+        if (chatLoaded(st, sessionId)) return
+        if (sessionId in logFetches.getAndUpdate { it + sessionId }) return
+        val start = StartupTrace.elapsedMs()
+        try {
+            coroutineScope {
+                if (sessionId !in st.completeLogs) launch { loadFullLog(sessionId) }
+                if (sessionId !in st.completeExtras) launch { loadExtras(sessionId) }
             }
+        } finally {
+            logFetches.update { it - sessionId }
+            StartupTrace.mark("chat.loaded", "session=${sessionId.take(8)} ms=${StartupTrace.elapsedMs() - start}")
+        }
+    }
+
+    private suspend fun loadFullLog(sessionId: String) {
+        val fetched = runApi("loadFullLog") { api.archivedLogs(sessionId) } ?: return
+        // Live MessageAppends / optimistic sends may have landed while the fetch was in flight.
+        _state.update {
+            it.copy(
+                messages = it.messages + (sessionId to mergeFetchedLog(fetched, it.messages[sessionId].orEmpty())),
+                completeLogs = it.completeLogs + sessionId,
+            )
+        }
+    }
+
+    private suspend fun loadExtras(sessionId: String) {
+        val fetched = runApi("loadExtras") { api.chatExtras(sessionId) } ?: return
+        _state.update {
+            it.copy(
+                activity = it.activity +
+                    (sessionId to mergeFetchedActivity(fetched.activity, it.activity[sessionId].orEmpty())),
+                commands = it.commands + (sessionId to fetched.commands),
+                commandsResolved = it.commandsResolved + (sessionId to fetched.commandsResolved),
+                completeExtras = it.completeExtras + sessionId,
+            )
+        }
+    }
+
+    /**
+     * After a trimmed snapshot: reload the chats on screen whose extras it left out (opened in
+     * the moment between our `subscribe` and its answer), then quietly load the few most
+     * recently active sessions so switching to one of them is instant — one at a time, behind
+     * whatever the UI asked for first. The most recent N overall, minus those already loaded —
+     * NOT the next N unloaded ones, or every reconnect would warm four more sessions until the
+     * whole fleet was fetched.
+     */
+    private fun prefetchRecentLogs() {
+        for (id in viewingSessionIds) if (!chatLoaded(_state.value, id)) ensureMessagesLoaded(id)
+        prefetchJob?.cancel()
+        prefetchJob = stateScope.launch {
+            delay(PREFETCH_DELAY_MS)
+            val st = _state.value
+            val recent = st.messages.entries
+                .filter { (_, log) -> log.isNotEmpty() }
+                .sortedByDescending { (_, log) -> log.last().ts }
+                .take(PREFETCH_SESSIONS)
+                .filter { (id, _) -> !chatLoaded(st, id) }
+            for ((id, _) in recent) loadChat(id)
         }
     }
 
@@ -2229,3 +2248,25 @@ class HostStore(
 internal fun resolveSpawnId(resp: SpawnResponse, sessions: List<SessionInfo>): String? =
     if (resp.id.isNotBlank()) resp.id
     else sessions.firstOrNull { it.name == resp.name }?.id
+
+/** How many recent sessions [HostStore] prefetches after a trimmed snapshot, and after how long. */
+private const val PREFETCH_SESSIONS = 4
+private const val PREFETCH_DELAY_MS = 1_000L
+
+/** Entries the snapshot carries for a session that is not on screen: its sidebar preview. */
+internal const val SNAPSHOT_LOG_TAIL = 1
+
+/**
+ * The `subscribe` frame: full logs, activity and slash commands only for the chats on screen
+ * ([fullLogs]); a [SNAPSHOT_LOG_TAIL]-entry tail and nothing else for every other session; and
+ * archived workspaces without their views/layout. A broker that predates these fields ignores
+ * them and sends everything.
+ */
+internal fun subscribeFrameJson(fullLogs: Collection<String>): String = buildJsonObject {
+    put("type", "subscribe")
+    put("logTail", SNAPSHOT_LOG_TAIL)
+    put("fullLogs", JsonArray(fullLogs.distinct().map(::JsonPrimitive)))
+    // Activity + slash commands only for [fullLogs] too; archived workspaces without views/layout.
+    put("trimExtras", true)
+    put("slimArchived", true)
+}.toString()

@@ -304,6 +304,17 @@ sealed interface ServerFrame {
         val projects: List<ProjectDto> = emptyList(),
         /** workspaceId → projectId for active AND archived workspaces. Empty on older brokers. */
         val projectMembership: Map<String, String> = emptyMap(),
+        /**
+         * Sessions whose [logs] entry is only the newest few entries, because the `subscribe`
+         * asked for a `logTail` and did not list them in `fullLogs`. Null from a broker that
+         * ignores `logTail` (every log is the full page).
+         */
+        val partialLogs: List<String>? = null,
+        /**
+         * Sessions the snapshot sent without [activity] / [commands] (the `subscribe` asked for
+         * `trimExtras`); fetched on chat open. Null from a broker that ignores `trimExtras`.
+         */
+        val partialExtras: List<String>? = null,
     ) : ServerFrame
 
     /**
@@ -462,6 +473,9 @@ sealed interface ServerFrame {
         val resolved: Boolean = false,
     ) : ServerFrame
 
+    /** Legacy: the per-session recursive watcher's pulse, removed from the broker. Kept decodable
+     *  because an older broker still sends it; the app ignores it (the stale banner comes from
+     *  [FsDir] folder subscriptions now). */
     @Serializable @SerialName("fs_changed")
     data class FsChanged(
         val session: String,
@@ -469,6 +483,26 @@ sealed interface ServerFrame {
         val workspace: String? = null,
         val paths: List<String> = emptyList(),
     ) : ServerFrame
+
+    /** Host fs service: a folder snapshot, or `unchanged` when the client's `since` is current. */
+    @Serializable @SerialName("fs_dir")
+    data class FsDir(
+        val path: String,
+        /** realpath of [path] (the broker's sharing key); null from an older broker. */
+        val real: String? = null,
+        val version: String,
+        val entries: List<dev.supermux.net.FsEntry> = emptyList(),
+        val unchanged: Boolean = false,
+        val truncated: dev.supermux.fs.FsTruncated? = null,
+    ) : ServerFrame
+
+    /** The subscribed folder was deleted or moved; the broker dropped the subscription. */
+    @Serializable @SerialName("fs_gone")
+    data class FsGone(val path: String) : ServerFrame
+
+    /** A subscription could not be made (ENOENT, EACCES, ENOTDIR, EINVAL, TOO_MANY_SUBS). */
+    @Serializable @SerialName("fs_err")
+    data class FsErr(val path: String, val code: String, val message: String = "") : ServerFrame
 
     /** The session's current walkthrough was created, replaced, or re-anchored. */
     @Serializable @SerialName("walkthrough_updated")
@@ -593,11 +627,11 @@ sealed interface ClientFrame {
         val args: SendArgs,
     ) : ClientFrame
 
-    @Serializable @SerialName("editor_open")
-    data class EditorOpen(val session: String) : ClientFrame
+    @Serializable @SerialName("fs_sub")
+    data class FsSub(val path: String, val since: String? = null) : ClientFrame
 
-    @Serializable @SerialName("editor_close")
-    data class EditorClose(val session: String) : ClientFrame
+    @Serializable @SerialName("fs_unsub")
+    data class FsUnsub(val path: String) : ClientFrame
 
     @Serializable @SerialName("lsp_status_query")
     data class LspStatusQuery(val session: String, val path: String) : ClientFrame

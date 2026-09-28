@@ -16,11 +16,13 @@ import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.platform.PushRegistrar
 import dev.supermux.ui.platform.TtsEngine
 import dev.supermux.ui.platform.WindowHostController
+import dev.supermux.ui.terminal.GhosttyTerminalViewFactory
 import dev.supermux.ui.terminal.SharedTerminal
 import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
 import dev.supermux.web.seams.WebClipboard
+import dev.supermux.web.seams.WebTerminalClipboard
 import dev.supermux.web.seams.WebFiles
 import dev.supermux.web.seams.WebMic
 import dev.supermux.web.seams.WebTts
@@ -66,6 +68,7 @@ class WebPlatform(
     init {
         // The `paste` hook has to be listening before the user pastes — see [WebClipboard].
         WebClipboard.install()
+        WebTerminalClipboard.install()
     }
 
     override val caps: Caps = WEB_CAPS
@@ -93,11 +96,12 @@ class WebPlatform(
      *  very instance to `NoticeOverlay`, which takes the concrete bus. */
     override val notices: FlowNotices = FlowNotices()
 
-    /** The shared Compose terminal, exactly as every other host mounts it. The browser needs no
+    /** The shared Compose terminal, as every other host mounts it except for its CLIPBOARD, which
+     *  in a browser has to come from the user's own `paste` event ([WebTerminalClipboard]). No
      *  wasm URL of its own: webpack emits the engine binary from the loader's
      *  `new URL("./supermux-terminal.wasm", import.meta.url)` and `:web:stageForBroker` content-
      *  hashes it, so the package default already resolves to the hashed asset. */
-    override fun terminalView(): TerminalViewFactory = SharedTerminal
+    override fun terminalView(): TerminalViewFactory = WebTerminal
     override fun videoDecoder(): VideoSurfaceFactory? = null
     override val updates: AppUpdater = NoAppUpdater
     override val notifications: NotificationManager = NoopNotificationManager
@@ -117,3 +121,6 @@ private val webEditorSyntax = dev.supermux.ui.editor.EditorSyntax {
 
 @Suppress("UNUSED_PARAMETER")
 private fun copyTextJs(text: String): Unit = js("{ if (navigator.clipboard) navigator.clipboard.writeText(text); }")
+
+/** [SharedTerminal]'s configuration with the browser's clipboard; see [WebPlatform.terminalView]. */
+private val WebTerminal: TerminalViewFactory = GhosttyTerminalViewFactory(clipboardOf = { WebTerminalClipboard })

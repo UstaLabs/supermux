@@ -9,6 +9,7 @@
 // shell needs for viewing presence, the push-tap route, and the `AppViewModel` that owns the fleet.
 package dev.supermux.android
 
+import dev.supermux.util.StartupTrace
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -106,8 +107,13 @@ class MainActivity : ComponentActivity() {
 
     @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
+        StartupTrace.mark(
+            "activity.onCreate",
+            "sinceProcessStart=${android.os.SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime()}ms",
+        )
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        StartupTrace.mark("activity.superOnCreate")
         SecureTokenStoreContext.init(applicationContext)
         // Native push: ensure the notification channel exists and ask for POST_NOTIFICATIONS
         // (API 33+) so decrypted session pushes can be shown. Must run before the activity is
@@ -147,7 +153,9 @@ class MainActivity : ComponentActivity() {
             shellSeed = prefs.seedShellState()
         }
 
+        StartupTrace.mark("activity.prefsSeeded")
         setContent {
+            StartupTrace.first("compose.firstComposition")
             val themeUiPrefs = remember { UiPrefs(settingsStore) }
             val appearance by themeUiPrefs.appearance(AppearanceMode.SYSTEM)
                 .collectAsState(appearanceSeed.appearance)
@@ -209,6 +217,7 @@ class MainActivity : ComponentActivity() {
                 // sit hostless after its first pairing until the process restarts. See
                 // `launchOrder(paired)` / `MainActivityLaunchOrderTest`.
                 val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application))
+                StartupTrace.first("vm.ready")
 
                 // The shell's own state, saveable so a rotation AND process death keep the back
                 // stack, the selection and the sidebar chrome (desktop keeps its copy in Main.kt

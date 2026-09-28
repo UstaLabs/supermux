@@ -38,7 +38,6 @@ function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
     backend: { runtimeTargetIdOf: async () => null, kill: async () => {} },
     cleanup: {
       terminals: { killAllForSession: async () => {} },
-      fsWatcher: { killSession: () => {} },
       stopClaudeTailer: () => {},
       releaseDraftAttachments: () => {},
       syncGitStatus: () => {},

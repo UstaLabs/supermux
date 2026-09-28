@@ -104,6 +104,12 @@ private fun viewIdsOfGroup(node: LayoutNode, groupId: String): List<String> = wh
     } ?: emptyList()
 }
 
+/** True when [node] holds a group with id [groupId] (empty or not). */
+private fun hasGroup(node: LayoutNode, groupId: String): Boolean = when (node) {
+    is LayoutNode.Group -> node.id == groupId
+    is LayoutNode.Split -> node.children.any { hasGroup(it, groupId) }
+}
+
 /** The view state of a `file` pane. */
 fun fileViewState(path: String): JsonObject = buildJsonObject {
     put("mode", JsonPrimitive("file"))
@@ -163,12 +169,27 @@ class WorkspaceFileOpener(
         sourceViewId: String? = null,
         scope: LayoutNode? = null,
         onPlaced: (viewId: String) -> Unit = {},
+        /**
+         * Put the tab in THIS group rather than where [planFileOpen] would — used when a file the
+         * user had open is renamed in the Files tree and its tab is replaced in place. A tab for
+         * [path] already in that group is just activated. An unknown group → the normal plan.
+         */
+        intoGroupId: String? = null,
     ) {
         // The document first, always: the pane reads it out of the store, and a re-open of an
         // already-open file is only ever about the reveal.
         reveal(path, line, endLine)
 
         val views = viewsOf()
+
+        if (intoGroupId != null && hasGroup(treeOf(), intoGroupId)) {
+            val here = viewIdsOfGroup(treeOf(), intoGroupId).firstOrNull { id ->
+                views[id]?.let { it.isFileView() && it.stateString("path") == path } == true
+            }
+            if (here != null) edit { setActiveViewInGroup(it, intoGroupId, here) }
+            else place(path, intoGroupId, split = false, onPlaced = onPlaced)
+            return
+        }
 
         // Already placed by an earlier click that this `views` snapshot cannot see yet? Then this
         // is an activate, not a new pane — exactly what planFileOpen would decide with fresh eyes.

@@ -77,7 +77,7 @@ class DocumentStore(
     private val fsRead: suspend (String) -> Result<String>,
     private val fsWrite: suspend (String, String) -> Boolean,
     private val scope: CoroutineScope,
-) {
+) : WatchedDocuments {
     /** Open documents by path. A snapshot map so a composable reading [get]/[isDirty] is
      *  invalidated when a document appears or is closed, exactly as the old `tabs` list was. */
     private val docs = mutableStateMapOf<String, Document>()
@@ -113,7 +113,8 @@ class DocumentStore(
         return gone
     }
 
-    /** Workdir-relative paths the broker reported changed on disk (fs_changed) → reload banner. */
+    /** Workdir-relative paths changed on disk behind an open document → reload banner. Fed by
+     *  [dev.supermux.ui.files.FileStaleWatcher]'s folder subscriptions. */
     var changedPaths by mutableStateOf(setOf<String>())
 
     /** Paths whose in-flight load was cancelled by [close] — the load result is dropped, never
@@ -134,6 +135,16 @@ class DocumentStore(
     var onOpened: (doc: Document, current: Boolean) -> Unit = { _, _ -> }
 
     fun get(path: String): Document? = docs[path]
+
+    /** Paths of the open documents (a snapshot read: a composable reading it follows opens/closes). */
+    override val openPaths: Set<String> get() = docs.keys.toSet()
+
+    private val writeObservers = mutableListOf<WatchedDocuments.WriteObserver>()
+
+    override fun observeWrites(observer: WatchedDocuments.WriteObserver): () -> Unit {
+        writeObservers += observer
+        return { writeObservers -= observer }
+    }
 
     fun isDirty(path: String): Boolean = docs[path]?.isDirty == true
 
@@ -291,6 +302,7 @@ class DocumentStore(
         // Snapshot the text NOW (before the launch): an edit typed while the write is in flight stays dirty.
         val snapshot = snapshotOf(doc)
         savingPaths = savingPaths + doc.path
+        writeObservers.toList().forEach { it.writeStarted(doc.path) }
         scope.launch { write(doc, snapshot) }
     }
 
@@ -299,6 +311,7 @@ class DocumentStore(
         if (doc.path in savingPaths) return false
         val snapshot = snapshotOf(doc)
         savingPaths = savingPaths + doc.path
+        writeObservers.toList().forEach { it.writeStarted(doc.path) }
         return write(doc, snapshot)
     }
 
@@ -310,8 +323,9 @@ class DocumentStore(
 
     private suspend fun write(doc: Document, snapshot: Pair<String, dev.supermux.editor.core.Rope?>): Boolean {
         val (text, rope) = snapshot
+        var ok = false
         try {
-            val ok = fsWrite(doc.path, LineEndings.save(text, doc.crlf))
+            ok = fsWrite(doc.path, LineEndings.save(text, doc.crlf))
             if (ok) {
                 doc.savedContent = text
                 if (rope != null) doc.native?.markSaved(rope)
@@ -319,13 +333,15 @@ class DocumentStore(
             return ok
         } finally {
             savingPaths = savingPaths - doc.path
+            // The stale-banner tracker: our own write must not read as "changed on disk".
+            writeObservers.toList().forEach { it.writeFinished(doc.path, ok) }
         }
     }
 
     // ── Live file-watch reload (ports EditorState.swift:79-84, 130-144) ─────────
 
     /** Record disk-change notifications (workdir-relative paths, leading slash optional). */
-    fun markChanged(paths: List<String>) {
+    override fun markChanged(paths: List<String>) {
         changedPaths = changedPaths + paths.map(::normPath)
     }
 

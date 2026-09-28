@@ -179,7 +179,8 @@ fun ChatScreen(
     loadDraft: suspend (String) -> String = { "" },
     saveDraft: (String, String) -> Unit = { _, _ -> },
     loadBytes: suspend (String) -> ByteArray? = { null },
-    fsList: suspend (String) -> Result<List<dev.supermux.net.FsEntry>> = { Result.success(emptyList()) },
+    /** The session host's file-system service (the editor sidebar's tree). */
+    fileSystem: dev.supermux.fs.FileSystemService? = null,
     fsRead: suspend (String) -> Result<String> = { Result.success("") },
     fsWrite: suspend (String, String) -> Boolean = { _, _ -> false },
     fsSearch: suspend (String) -> List<dev.supermux.net.FsSearchResult> = { emptyList() },
@@ -189,15 +190,11 @@ fun ChatScreen(
     reviewAddComment: suspend (dev.supermux.net.AddCommentBody) -> dev.supermux.net.ReviewComment? = { null },
     reviewResolve: suspend (String) -> Boolean = { false },
     reviewSubmit: suspend () -> dev.supermux.net.ReviewSubmitResult? = { null },
-    // Editor LSP + live file-watch — app-wide flows + session-bound senders.
-    fsChanges: kotlinx.coroutines.flow.Flow<dev.supermux.proto.ServerFrame.FsChanged> =
-        kotlinx.coroutines.flow.MutableSharedFlow(),
+    // Editor LSP — app-wide flows + session-bound senders.
     lspStatus: kotlinx.coroutines.flow.StateFlow<Map<String, dev.supermux.proto.ServerFrame.LspStatus>> =
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap()),
     lspRpc: kotlinx.coroutines.flow.Flow<dev.supermux.proto.ServerFrame.LspRpcIn> =
         kotlinx.coroutines.flow.MutableSharedFlow(),
-    editorOpen: (String) -> Unit = {},
-    editorClose: (String) -> Unit = {},
     lspStatusQuery: (String, String) -> Unit = { _, _ -> },
     lspOpen: (String, String) -> Unit = { _, _ -> },
     lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
@@ -240,14 +237,22 @@ fun ChatScreen(
     var activePanel by remember { mutableStateOf(SessionPanel.Chat) }
 
     var pendingEditorOpen by remember(session.id) { mutableStateOf<PendingEditorOpen?>(null) }
-    val onOpenFile: (FilePathRef) -> Unit = remember(session.id) {
+    val tapScope = rememberCoroutineScope()
+    val onOpenFile: (FilePathRef) -> Unit = remember(session.id, fileSystem) {
         { ref ->
             val rel = toWorkdirRelativePath(ref.path, session.workdir, inferHomeDir(session.workdir))
             if (rel == null) {
                 Toast.makeText(context, "File is outside this session's project", Toast.LENGTH_SHORT).show()
             } else {
-                pendingEditorOpen = PendingEditorOpen(rel, ref.line, ref.endLine)
-                activePanel = SessionPanel.Editor
+                tapScope.launch {
+                    val abs = dev.supermux.ui.files.absoluteInWorkdir(session.workdir, rel)
+                    if (dev.supermux.ui.files.tappedFileMissing(fileSystem, abs)) {
+                        Toast.makeText(context, dev.supermux.ui.files.fileNotFoundNotice(ref.path), Toast.LENGTH_SHORT).show()
+                    } else {
+                        pendingEditorOpen = PendingEditorOpen(rel, ref.line, ref.endLine)
+                        activePanel = SessionPanel.Editor
+                    }
+                }
             }
         }
     }
@@ -690,12 +695,11 @@ fun ChatScreen(
                     state = EditorPanelState(
                         sessionId = session.id,
                         workdir = session.workdir,
-                        fsChanges = fsChanges,
                         lspStatus = lspStatus,
                         lspRpc = lspRpc,
                     ),
                     actions = EditorPanelActions(
-                        fsList = fsList,
+                        fileSystem = fileSystem,
                         fsRead = fsRead,
                         fsWrite = fsWrite,
                         fsSearch = fsSearch,
@@ -704,8 +708,6 @@ fun ChatScreen(
                         reviewAddComment = reviewAddComment,
                         reviewResolve = reviewResolve,
                         reviewSubmit = reviewSubmit,
-                        editorOpen = editorOpen,
-                        editorClose = editorClose,
                         lspStatusQuery = lspStatusQuery,
                         lspOpen = lspOpen,
                         lspRpcOut = lspRpcOut,

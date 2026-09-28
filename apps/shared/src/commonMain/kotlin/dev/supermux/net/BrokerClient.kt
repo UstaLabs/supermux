@@ -2,6 +2,7 @@ package dev.supermux.net
 
 import dev.supermux.proto.ClientFrame
 import dev.supermux.proto.ServerFrame
+import dev.supermux.util.StartupTrace
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.webSocket
@@ -40,6 +41,9 @@ class BrokerClient(
     // right after the socket opens and `false` when it drops. Default null keeps every existing
     // single-host / iOS / desktop caller unchanged.
     private val onConnectionChange: ((Boolean) -> Unit)? = null,
+    // The `subscribe` frame sent on every (re)connect, built at connect time so it can carry the
+    // caller's current state (e.g. which chats are on screen). Default: a plain subscribe.
+    private val subscribeFrame: () -> String = { "{\"type\":\"subscribe\"}" },
 ) {
     private val json = Json { ignoreUnknownKeys = true; classDiscriminator = "type" }
     private val _frames = MutableSharedFlow<ServerFrame>(extraBufferCapacity = 256)
@@ -52,6 +56,7 @@ class BrokerClient(
         while (true) {
             try {
                 println("[BrokerClient] connecting $baseUrl/ws")
+                StartupTrace.mark("ws.connecting", "attempt=$attempt")
                 val wsUrl = wsBaseUrl(baseUrl)
                 http.webSocket(
                     urlString = "$wsUrl/ws",
@@ -59,11 +64,13 @@ class BrokerClient(
                 ) {
                     attempt = 0
                     println("[BrokerClient] connected")
+                    StartupTrace.mark("ws.open", "ext=${call.response.headers["Sec-WebSocket-Extensions"] ?: "none"}")
                     onConnectionChange?.invoke(true)
                     try {
                         liveSession = this
                         // The broker sends the full snapshot only in reply to a `subscribe`.
-                        send(Frame.Text("{\"type\":\"subscribe\"}"))
+                        send(Frame.Text(subscribeFrame()))
+                        StartupTrace.mark("ws.subscribe.sent")
                         for (frame in incoming) {
                             if (frame is Frame.Text) {
                                 val text = frame.readText()
@@ -74,8 +81,16 @@ class BrokerClient(
                                 }
                                 // Decode per-frame: an unmodeled `type` (the broker sends many
                                 // frames we don't model yet) must NOT drop the whole connection.
+                                val decodeStart = StartupTrace.elapsedMs()
                                 val parsed = try {
-                                    json.decodeFromString<ServerFrame>(text)
+                                    json.decodeFromString<ServerFrame>(text).also {
+                                        if (it is ServerFrame.Snapshot) {
+                                            StartupTrace.mark(
+                                                "ws.snapshot.received",
+                                                "chars=${text.length} decodeMs=${StartupTrace.elapsedMs() - decodeStart}",
+                                            )
+                                        }
+                                    }
                                 } catch (e: Throwable) {
                                     println("[BrokerClient] skip frame (${e.message}) :: ${text.take(60)}")
                                     null

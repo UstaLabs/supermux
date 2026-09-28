@@ -172,7 +172,7 @@ export async function spawnOpenCodeServer(opts: {
   // the readiness budget must comfortably exceed that or every spawn times out.
   // Race readiness against child death so a missing/broken binary fails fast
   // (ENOENT → instant, accurate error) instead of waiting out the full timeout.
-  if (!opts.skipReady) await awaitServerReady(child, waitForReady(real, opts.readyTimeoutMs ?? 45_000))
+  if (!opts.skipReady) await awaitServerReady(child, waitForReady(real, opts.readyTimeoutMs ?? 90_000))
 
   return {
     pid: child.pid ?? -1,

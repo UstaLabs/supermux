@@ -42,6 +42,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -121,6 +122,31 @@ private val STT_ENGINES = listOf(
 private const val DEFAULT_STT_ENGINE = "codex-realtime"
 internal fun sttEngineLabel(id: String): String = STT_ENGINES.firstOrNull { it.id == id }?.label ?: id
 
+// Dictation languages (ISO-639-1) — the broker's `voiceLanguages`. Several at once is the point:
+// codex-realtime turns them into a "mixes Turkish and English" prompt rather than a pin.
+private val VOICE_LANGUAGES = listOf(
+    "tr" to "Turkish",
+    "en" to "English",
+    "de" to "German",
+    "fr" to "French",
+    "es" to "Spanish",
+    "it" to "Italian",
+    "pt" to "Portuguese",
+    "nl" to "Dutch",
+    "ru" to "Russian",
+    "uk" to "Ukrainian",
+    "ar" to "Arabic",
+    "fa" to "Persian",
+    "bs" to "Bosnian",
+    "sq" to "Albanian",
+    "zh" to "Chinese",
+    "ja" to "Japanese",
+)
+internal fun voiceLanguageLabel(code: String): String =
+    VOICE_LANGUAGES.firstOrNull { it.first == code }?.second ?: code
+internal fun voiceLanguagesSummary(codes: List<String>): String =
+    if (codes.isEmpty()) "Auto-detect" else codes.joinToString(" + ") { voiceLanguageLabel(it) }
+
 // Read-aloud engines — MessageTts uses platform (say/espeak/Android TTS) or codex (broker /speak).
 private val TTS_ENGINES = listOf(
     SttEngine("platform", "Device (system voice)"),
@@ -175,6 +201,7 @@ class VoiceSettingsActions(
     val loadModels: suspend (family: String) -> List<ModelInfo> = { emptyList() },
     val saveVoiceStt: suspend (engine: String?) -> Boolean = { false },
     val saveVoiceTts: suspend (engine: String?) -> Boolean = { false },
+    val saveVoiceLanguages: suspend (languages: List<String>) -> Boolean = { false },
     val saveVoiceCleanup: suspend (engine: String?, model: String?) -> Boolean = { _, _ -> false },
     /** Null = failure; empty = no terms; never collapse failure into empty. */
     val glossaryLoad: suspend () -> List<String>? = { null },
@@ -189,6 +216,7 @@ fun rememberVoiceSettingsActions(app: HostStore): VoiceSettingsActions = remembe
         loadModels = { family -> app.launcherModels(family) },
         saveVoiceStt = { engine -> app.saveVoiceStt(engine) },
         saveVoiceTts = { engine -> app.saveVoiceTts(engine) },
+        saveVoiceLanguages = { languages -> app.saveVoiceLanguages(languages) },
         saveVoiceCleanup = { engine, model -> app.saveVoiceCleanup(engine, model) },
         glossaryLoad = { app.fetchGlossary() },
         glossarySave = { terms -> app.updateGlossary(terms) },
@@ -203,6 +231,7 @@ fun rememberVoiceSettingsActions(fleet: FleetStore): VoiceSettingsActions = reme
         loadModels = { family -> fleet.launcherModels(family) },
         saveVoiceStt = { engine -> fleet.saveVoiceStt(engine) },
         saveVoiceTts = { engine -> fleet.saveVoiceTts(engine) },
+        saveVoiceLanguages = { languages -> fleet.saveVoiceLanguages(languages) },
         saveVoiceCleanup = { engine, model -> fleet.saveVoiceCleanup(engine, model) },
         glossaryLoad = { fleet.fetchGlossary() },
         glossarySave = { terms -> fleet.updateGlossary(terms) },
@@ -385,6 +414,8 @@ private fun VoiceMainPage(
     var models by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
     var sttEngine by remember { mutableStateOf(DEFAULT_STT_ENGINE) }
     var ttsEngine by remember { mutableStateOf(DEFAULT_TTS_ENGINE) }
+    var languages by remember { mutableStateOf<List<String>>(emptyList()) }
+    var showLanguages by remember { mutableStateOf(false) }
     var engine by remember { mutableStateOf(DEFAULT_VOICE_ENGINE) }
     var selectedModel by remember { mutableStateOf("") }
     var loadState by remember { mutableStateOf<VoiceLoadState>(VoiceLoadState.Loading) }
@@ -405,6 +436,7 @@ private fun VoiceMainPage(
             return
         }
         sttEngine = cfg.voiceSttEngine?.ifBlank { null } ?: DEFAULT_STT_ENGINE
+        languages = cfg.voiceLanguages.orEmpty()
         ttsEngine = cfg.voiceTtsEngine?.ifBlank { null } ?: DEFAULT_TTS_ENGINE
         engine = cfg.voiceCleanupEngine?.ifBlank { null } ?: DEFAULT_VOICE_ENGINE
         selectedModel = cfg.voiceCleanupModel ?: ""
@@ -422,6 +454,7 @@ private fun VoiceMainPage(
             val cfg = actions.loadConfig()
             if (cfg != null) {
                 sttEngine = cfg.voiceSttEngine?.ifBlank { null } ?: DEFAULT_STT_ENGINE
+                languages = cfg.voiceLanguages.orEmpty()
                 ttsEngine = cfg.voiceTtsEngine?.ifBlank { null } ?: DEFAULT_TTS_ENGINE
                 engine = cfg.voiceCleanupEngine?.ifBlank { null } ?: DEFAULT_VOICE_ENGINE
                 selectedModel = cfg.voiceCleanupModel ?: ""
@@ -509,6 +542,34 @@ private fun VoiceMainPage(
                             }
                         },
                         testTag = "voice_stt_chip",
+                    )
+                }
+                HorizontalDivider(color = cs.outlineVariant)
+
+                VoiceSettingRow(
+                    label = "Languages",
+                    desc = "What you dictate in. Pick several if you mix them — Codex is told to expect " +
+                        "the mix, along with your glossary.",
+                    testTag = "voice_languages_row",
+                ) {
+                    LanguagesChip(
+                        selected = languages,
+                        expanded = showLanguages,
+                        onExpand = { showLanguages = true },
+                        onDismiss = { showLanguages = false },
+                        onChange = { next ->
+                            val previous = languages
+                            languages = next
+                            scope.launch {
+                                val ok = actions.saveVoiceLanguages(next)
+                                if (!ok) {
+                                    languages = previous
+                                    saveError = "Couldn't save languages."
+                                } else {
+                                    saveError = null
+                                }
+                            }
+                        },
                     )
                 }
                 HorizontalDivider(color = cs.outlineVariant)
@@ -981,6 +1042,77 @@ private fun VoiceSettingRow(
             )
         }
         trailing()
+    }
+}
+
+/** Multi-select sibling of [ValueChip]: items toggle with a check and the menu stays open. */
+@Composable
+private fun LanguagesChip(
+    selected: List<String>,
+    expanded: Boolean,
+    onExpand: () -> Unit,
+    onDismiss: () -> Unit,
+    onChange: (List<String>) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val pointer = LocalPointerAvailable.current
+    // A stored code outside the curated list still shows (and can be unticked).
+    val options = VOICE_LANGUAGES + selected.filter { c -> VOICE_LANGUAGES.none { it.first == c } }.map { it to it }
+    Box {
+        Row(
+            Modifier
+                .then(if (pointer) Modifier else Modifier.heightIn(min = TouchTargetMin))
+                .clip(RoundedCornerShape(Radii.sm))
+                .background(cs.surfaceContainer)
+                .border(Stroke.thin, cs.outline, RoundedCornerShape(Radii.sm))
+                .clickable(onClick = onExpand)
+                .padding(horizontal = Space.md, vertical = Space.sm)
+                .testTag("voice_languages_chip"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.xs),
+        ) {
+            Text(
+                voiceLanguagesSummary(selected).take(28),
+                color = cs.onSurface,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+            )
+            Text("▾", color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        "Auto-detect",
+                        fontWeight = if (selected.isEmpty()) FontWeight.SemiBold else FontWeight.Normal,
+                    )
+                },
+                onClick = {
+                    if (selected.isNotEmpty()) onChange(emptyList())
+                    onDismiss()
+                },
+                leadingIcon = { CheckSlot(selected.isEmpty()) },
+                modifier = Modifier.testTag("voice_languages_chip_option_auto"),
+            )
+            options.forEach { (code, label) ->
+                val on = code in selected
+                DropdownMenuItem(
+                    text = { Text(label, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal) },
+                    // Stay open: picking a mix is several taps.
+                    onClick = { onChange(if (on) selected - code else selected + code) },
+                    leadingIcon = { CheckSlot(on) },
+                    modifier = Modifier.testTag("voice_languages_chip_option_$code"),
+                )
+            }
+        }
+    }
+}
+
+/** Fixed-width check column so ticked and unticked labels line up. */
+@Composable
+private fun CheckSlot(on: Boolean) {
+    Box(Modifier.size(Space.lg), contentAlignment = Alignment.Center) {
+        if (on) Icon(Icons.Filled.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
     }
 }
 

@@ -73,6 +73,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -289,6 +290,15 @@ fun SupermuxApp(
     val openByWorkspace = sessionListMode == SessionListMode.Workspaces
 
     val sessions by fleet.sessions.collectAsState()
+    // First frame that draws real sessions — the end of the cold-start path ([StartupTrace]) —
+    // and the frames after the next session-list changes (the cache, then the live snapshot).
+    var sessionFrames by remember { mutableStateOf(0) }
+    LaunchedEffect(sessions) {
+        if (sessions.isEmpty() || sessionFrames >= 3) return@LaunchedEffect
+        withFrameNanos { }
+        sessionFrames++
+        dev.supermux.util.StartupTrace.mark("ui.sessions.drawn", "n=$sessionFrames sessions=${sessions.size}")
+    }
     val archivedSessions by fleet.archivedSessions.collectAsState()
     val workspaces by fleet.workspaces.collectAsState()
     val archivedWorkspaces by fleet.archivedWorkspaces.collectAsState()
@@ -1241,7 +1251,6 @@ private fun ShellHome(
                     compact = compact,
                     wsApp = wsApp,
                     appFor = { id -> appFor(id) ?: wsApp },
-                    fleet = fleet,
                     ui = ui,
                     drafts = drafts,
                     overlayScope = overlayScope,
@@ -1538,7 +1547,6 @@ private fun WorkspacePanel(
     compact: Boolean,
     wsApp: HostStore,
     appFor: (String) -> HostStore,
-    fleet: FleetStore,
     ui: ShellUiState,
     drafts: androidx.compose.runtime.snapshots.SnapshotStateMap<String, String>,
     overlayScope: kotlinx.coroutines.CoroutineScope,
@@ -1605,22 +1613,19 @@ private fun WorkspacePanel(
     }
     LaunchedEffect(current.id, localLayout) { ui.windows.onWorkspaceTree(current.id, localLayout) }
 
-    val lspSession = ws.let { current.primarySessionId }
-    val hasEditorView = ws.viewsById.values.any { it.kind == "editor" }
-    androidx.compose.runtime.DisposableEffect(lspSession, hasEditorView) {
-        if (lspSession != null && hasEditorView) fleet.editorOpen(lspSession)
-        onDispose { if (lspSession != null && hasEditorView) fleet.editorClose(lspSession) }
-    }
-    LaunchedEffect(ws.documents, lspSession) {
-        val sid = lspSession ?: return@LaunchedEffect
-        wsApp.fsChanges.collect { f -> if (f.session == sid) ws.documents.markChanged(f.paths) }
-    }
+    // The "changed on disk" banner of the workspace's open documents, from subscriptions to their
+    // folders on the workspace's host.
+    dev.supermux.ui.files.FileStaleWatcher(wsApp.fileSystem, current.workdir, ws.documents)
+    val notices = LocalPlatform.current.notices
     LaunchedEffect(ui.externalOpen, current.id, isActive) {
         if (!isActive) return@LaunchedEffect
         val req = ui.externalOpen ?: return@LaunchedEffect
         val rel = workspaceOpenPath(req.second, current.workdir)
+        // Cleared only AFTER the host check: clearing it restarts (cancels) this effect.
         if (rel == null) {
             println("[SupermuxApp] externalOpen: '${req.second.path}' is outside '${current.workdir}' — dropped")
+        } else if (dev.supermux.ui.files.tappedFileMissing(wsApp.fileSystem, dev.supermux.ui.files.absoluteInWorkdir(current.workdir, rel))) {
+            notices.show(dev.supermux.ui.files.fileNotFoundNotice(req.second.path))
         } else {
             ws.fileOpener.open(rel, req.second.line, req.second.endLine, sourceViewId = null)
         }

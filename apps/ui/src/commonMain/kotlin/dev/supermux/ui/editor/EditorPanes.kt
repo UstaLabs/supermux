@@ -50,7 +50,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -60,7 +59,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -71,96 +69,146 @@ import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
-import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
-import dev.supermux.net.FsSearchResult
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.proto.ServerFrame
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
+import dev.supermux.ui.prefs.FILES_REVEAL_ACTIVE_DEFAULT
+import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
+import dev.supermux.fs.FileSystemService
+import dev.supermux.ui.files.FileTreeDialog
+import dev.supermux.ui.adaptive.LocalHardwareKeyboard
+import dev.supermux.ui.files.FileTreeHeader
+import dev.supermux.ui.files.FileTreeWithActions
+import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.files.TreeViewState
+import dev.supermux.ui.files.FileSearch
+import dev.supermux.ui.files.GoToEntry
+import dev.supermux.ui.files.goToFileShortcut
+import androidx.compose.ui.focus.FocusRequester
+import dev.supermux.ui.files.childOf
+import dev.supermux.ui.files.relativeToWorkdir
 
 // ── Explorer ──────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The file tree and the filename search, as a pane.
+ * The file tree and its "Go to file…" fuzzy search ([FileSearch]; ⌘P / Ctrl+P), as a pane.
  *
- * This is [EditorPanel]'s 192dp sidebar plus its search field, with the sidebar's fixed width
- * removed: a pane is sized by the splitter around it, which is the point of the change — the tree
- * is a real split, not a strip nailed to the side of the editor.
+ * The tree is the live host tree ([FileTreeView]) over [fileSystem]; its paths are ABSOLUTE. What
+ * leaves the pane is workdir-relative: [onOpenFile] gets a path relative to [workdir], and a file
+ * outside the workdir (reachable by browsing up via the breadcrumbs) goes to [onOutsideWorkdir]
+ * instead — the document/editor code cannot open it yet.
+ *
+ * [view] is held by the caller (per view id, outliving the pane), so a drag/split/re-tab keeps the
+ * open folders, selection and scroll.
  *
  * [onOpenFile] is a REQUEST, not an action: the pane does not know where the file will land. The
  * workspace decides that (see WorkspaceFileOpen.kt) and owns the document.
+ *
+ * [onEntryMoved] reports a successful rename/delete from the tree (absolute paths; new = null for a
+ * delete) so the workspace can retarget or flag the file tabs open under it — see
+ * `applyEntryMoved` in WorkspaceSession.kt.
  */
 @Composable
 fun ExplorerPane(
-    fsList: suspend (String) -> Result<List<FsEntry>>,
-    explorer: ExplorerState,
+    fileSystem: FileSystemService?,
+    view: TreeViewState,
     workdir: String,
-    onOpenFile: (String) -> Unit,
+    onOpenFile: (relativePath: String) -> Unit,
     modifier: Modifier = Modifier,
-    fsSearch: suspend (String) -> List<FsSearchResult> = { emptyList() },
+    activeRelativePath: String? = null,
+    onOutsideWorkdir: (absolutePath: String) -> Unit = {},
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit = { _, _ -> },
 ) {
     val cs = MaterialTheme.colorScheme
-    val focusManager = LocalFocusManager.current
-    val searchResults = remember { mutableStateListOf<FsSearchResult>() }
+    val searchFocus = remember { FocusRequester() }
 
-    // Same 200ms debounce as the composite panel — a keystroke must not be a broker round trip.
-    LaunchedEffect(explorer.searchQuery) {
-        delay(200)
-        val q = explorer.searchQuery.trim()
-        if (q.isEmpty()) {
-            searchResults.clear()
-            return@LaunchedEffect
+    val openAbsolute: (String) -> Unit = { abs ->
+        val rel = relativeToWorkdir(workdir, abs)?.takeIf { it != "." }
+        if (rel != null) {
+            view.noteOpened(rel)
+            onOpenFile(rel)
+        } else {
+            onOutsideWorkdir(abs)
         }
-        searchResults.clear()
-        searchResults.addAll(fsSearch(q))
     }
 
-    fun open(path: String) {
-        focusManager.clearFocus()
-        explorer.searchQuery = ""
-        searchResults.clear()
-        onOpenFile(path)
+    val onGoTo: (GoToEntry) -> Unit = { e ->
+        if (e.isDir) {
+            // A folder hit is shown, not opened: open it in the tree and select it.
+            view.reveal(e.absolutePath)
+            view.expand(e.absolutePath)
+        } else {
+            openAbsolute(e.absolutePath)
+        }
     }
+
+    val activePath = activeRelativePath?.takeIf { it.isNotEmpty() && it != "." }?.let { rel ->
+        rel.split('/').filter { it.isNotEmpty() }.fold(workdir) { acc, seg -> childOf(acc, seg) }
+    }
+    val prefs = LocalUiPrefs.current
+    val scope = rememberCoroutineScope()
+    val hardwareKeyboard = LocalHardwareKeyboard.current
+    val revealActive by prefs.filesRevealActive.collectAsState(FILES_REVEAL_ACTIVE_DEFAULT)
 
     // The tag goes on an INNER node, never on the caller's modifier: two testTag calls on one
     // modifier chain keep the OUTER one, so a pane that tagged `modifier` would be invisible to
     // any caller that had already tagged it.
-    Box(modifier.fillMaxSize().background(cs.surfaceContainerHigh)) {
-        Column(Modifier.fillMaxSize().testTag("editor_explorer_pane")) {
-            Row(
-                Modifier.fillMaxWidth().height(40.dp).padding(horizontal = Space.xs),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                EditorSearchField(
-                    query = explorer.searchQuery,
-                    onQueryChange = { explorer.searchQuery = it },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
-            Box(Modifier.weight(1f).fillMaxWidth().testTag("editor_tree")) {
-                FileTree(fsList = fsList, explorer = explorer, workdir = workdir, onOpenFile = { open(it) })
-            }
-        }
-        if (searchResults.isNotEmpty()) {
-            EditorSearchOverlay(
-                results = searchResults,
-                onSelect = { open(it) },
-                onDismiss = {
-                    focusManager.clearFocus()
-                    explorer.searchQuery = ""
-                    searchResults.clear()
+    Box(
+        modifier
+            .fillMaxSize()
+            .background(cs.surfaceContainerHigh)
+            // ⌘P / Ctrl+P while focus is anywhere in the pane (the tree, the header).
+            .goToFileShortcut { runCatching { searchFocus.requestFocus() } },
+    ) {
+        FileSearch(
+            fileSystem = fileSystem,
+            view = view,
+            workdir = workdir,
+            onOpen = onGoTo,
+            focusRequester = searchFocus,
+            modifier = Modifier.fillMaxSize().testTag("editor_explorer_pane"),
+        ) {
+            FileTreeHeader(
+                view = view,
+                fileSystem = fileSystem,
+                revealActive = revealActive,
+                onRevealActiveChange = { on -> scope.launch { prefs.putFilesRevealActive(on) } },
+                // Creates at the tree's root; the tree below draws the dialog or the in-place row
+                // (it reads view.dialog / view.inlineEdit).
+                onNewEntry = if (fileSystem == null) null else { folder ->
+                    view.startAction(FileTreeDialog.NewEntry(view.rootPath, folder), inline = hardwareKeyboard)
                 },
-                modifier = Modifier.fillMaxSize(),
             )
+            HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
+            // FileTreeView tags its own list `editor_tree`; the offline hint carries the tag itself
+            // so the pane has exactly one `editor_tree` node either way.
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (fileSystem == null) {
+                    Box(Modifier.fillMaxSize().testTag("editor_tree"), contentAlignment = Alignment.Center) {
+                        Text("Host offline", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("editor_tree_offline"))
+                    }
+                } else {
+                    FileTreeWithActions(
+                        fileSystem = fileSystem,
+                        view = view,
+                        onOpenFile = openAbsolute,
+                        activePath = activePath,
+                        revealActive = revealActive,
+                        compact = !LocalPointerAvailable.current || LocalWindowWidthClass.current == WindowWidthClass.Compact,
+                        onEntryMoved = onEntryMoved,
+                    )
+                }
+            }
         }
     }
 }

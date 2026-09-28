@@ -140,6 +140,9 @@ interface TerminalSurface {
     /** The accessory-key route into this pane's pty, and the modifier state a bar renders. */
     val keys: TerminalKeySink
 
+    /** The program's newest window title (OSC 0/2), or null until it sets one. Snapshot state. */
+    val title: String? get() = null
+
     /** Draw the grid. Same contract as [TerminalViewFactory.TerminalView]. */
     @Composable
     fun Content(modifier: Modifier, active: Boolean, onExit: (() -> Unit)?)

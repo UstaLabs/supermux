@@ -261,11 +261,15 @@ compose.desktop {
                 debMaintainer = "supermux"
                 menuGroup = "Development"
                 appCategory = "Development"
+                iconFile.set(project.file("icons/supermux.png"))
                 // ⚠️ Inline chat video (Compose Media Player) links the SYSTEM GStreamer on Linux:
                 // the bundled `libNativeVideoPlayer.so` is a thin JNI shim, unlike macOS/Windows
                 // where the backend is an OS framework. On a box without
                 // `libgstreamer-1.0-0` + `gstreamer1.0-plugins-{base,good,libav}` the player fails
                 // to load and Timeline.kt falls back to the download chip — the app still starts.
+            }
+            windows {
+                iconFile.set(project.file("icons/supermux.ico"))
             }
             // macOS DMG. The app name + bundle id differ from the retired native SwiftUI client
             // (`Supermux.app` / `dev.supermux.app`) and are KEPT that way for update continuity:
@@ -275,10 +279,20 @@ compose.desktop {
                 bundleID = "dev.supermux.desktop"
                 dockName = "Supermux Desktop"
                 appCategory = "public.app-category.developer-tools"
+                iconFile.set(project.file("icons/supermux.icns"))
                 // Hardened runtime is mandatory for notarization; see the plist for why each
                 // entitlement is needed.
                 entitlementsFile.set(project.file("entitlements.mac.plist"))
                 runtimeEntitlementsFile.set(project.file("entitlements.mac.plist"))
+                // Without a usage string macOS never shows the mic prompt: TCC silently denies the app
+                // and javax.sound hands back a line of ALL-ZERO samples (not an error) — the broker
+                // then gets silence and the STT model invents a sentence from nothing.
+                infoPlist {
+                    extraKeysRawXml = """
+                        <key>NSMicrophoneUsageDescription</key>
+                        <string>Supermux uses the microphone for voice dictation.</string>
+                    """.trimIndent()
+                }
                 // Signing is OPT-IN so unsigned local/CI dry-run builds keep working untouched:
                 // pass -PsmMacSignIdentity=<identity-or-sha1> (plus -PsmMacSignKeychain=<path> when
                 // the identity lives outside the login keychain). ⚠️ Use the SHA-1 fingerprint from

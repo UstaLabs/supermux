@@ -51,6 +51,10 @@ data class TerminalTheme(
     val selectionForeground: Color? = null,
     val selectionHandle: Color = Color(0xFF3E7BD6),
     val selectionHandleSize: Dp = 12.dp,
+    /** Every find-in-scrollback match; translucent, drawn over the text. */
+    val searchMatch: Color = Color(0x55F2C94C),
+    /** The current find match, drawn over [searchMatch]'s place. */
+    val searchCurrent: Color = Color(0xAAF28C28),
     val ansi: List<Color> = DEFAULT_ANSI,
     val fontFamily: FontFamily = FontFamily.Monospace,
     val fontSize: TextUnit = 13.sp,

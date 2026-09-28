@@ -61,6 +61,12 @@ class FleetStoreRoutingTest {
             appFactory = { url, token, onConn ->
                 val key = url.removePrefix("http://")
                 val http = HttpClient(MockEngine { req ->
+                    // Every Snapshot refreshes the launcher's model catalog in the background; its
+                    // reply lands on the engine's own thread, often after a test cleared `calls`,
+                    // and would read as a stray call to the wrong host. Not routing — skip it.
+                    if (req.url.encodedPath == "/agents/models") {
+                        return@MockEngine respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    }
                     calls.getValue(key) += "${req.method.value} ${req.url.encodedPath}"
                     respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
                 })

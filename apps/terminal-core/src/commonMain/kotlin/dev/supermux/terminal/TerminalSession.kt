@@ -8,6 +8,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -272,6 +273,40 @@ class TerminalSession private constructor(
         val reply = CompletableDeferred<String>()
         send(Command.SelectedText(reply))
         return reply.await()
+    }
+
+    /**
+     * Every occurrence of [query] in the scrollback and on the screen, oldest first, at most
+     * [maxMatches] of them. Case-insensitive unless [ignoreCase] is false.
+     *
+     * Runs on the owner coroutine in slices of [SEARCH_SLICE_ROWS] rows, so a search of a full
+     * scrollback never stalls output or typing for longer than one slice; the viewport is put back
+     * after every slice and the next published frame is full. Row numbers are those of the moment
+     * each slice ran — a search racing heavy output at the scrollback limit can see rows renumbered
+     * between slices, like any other absolute row a host holds. See [searchSlice] for what a match is.
+     */
+    suspend fun search(
+        query: String,
+        ignoreCase: Boolean = true,
+        maxMatches: Int = MAX_SEARCH_MATCHES,
+    ): TerminalSearchResult {
+        if (query.isEmpty()) return TerminalSearchResult(emptyList(), truncated = false)
+        val matches = ArrayList<TerminalSearchMatch>()
+        var from = 0L
+        var heldRetries = 0
+        while (true) {
+            val reply = CompletableDeferred<TerminalSearchSlice>()
+            send(Command.Search(query, ignoreCase, from, maxMatches - matches.size, reply))
+            val slice = reply.await()
+            matches += slice.matches
+            if (matches.size >= maxMatches) return TerminalSearchResult(matches, truncated = true)
+            if (!slice.complete) {
+                // Synchronized output: the screen cannot be read until the program lets go of it.
+                if (++heldRetries > SEARCH_HELD_RETRIES) return TerminalSearchResult(matches, truncated = true)
+                delay(SEARCH_HELD_WAIT)
+            }
+            from = slice.nextRow ?: return TerminalSearchResult(matches, truncated = false)
+        }
     }
 
     /** Non-blocking: a key event. Safe to call from a UI thread. */
@@ -600,6 +635,23 @@ class TerminalSession private constructor(
                     sent.fold(command.reply::complete, command.reply::completeExceptionally)
                     sent.getOrThrow()
                 }
+                is Command.Search -> {
+                    val slice = runCatching {
+                        searchSlice(
+                            engine, command.query, command.ignoreCase, command.fromRow,
+                            SEARCH_SLICE_ROWS, command.maxMatches,
+                        )
+                    }
+                    // The walk read screens nobody published and moved the engine's viewport
+                    // under the renderer: the next frame starts over, and any frame still
+                    // waiting for its acknowledgement is superseded (the engine ignores a stale
+                    // ack; waiting for one would only delay the full frame).
+                    forceFull = true
+                    dirty = true
+                    pendingGeneration = null
+                    slice.fold(command.reply::complete, command.reply::completeExceptionally)
+                    slice.getOrThrow()
+                }
                 is Command.SelectedText -> {
                     val text = runCatching { engine.selectedText() }
                     text.fold(command.reply::complete, command.reply::completeExceptionally)
@@ -862,9 +914,26 @@ class TerminalSession private constructor(
         }
 
         class SelectedText(val reply: CompletableDeferred<String>) : Command
+
+        class Search(
+            val query: String,
+            val ignoreCase: Boolean,
+            val fromRow: Long,
+            val maxMatches: Int,
+            val reply: CompletableDeferred<TerminalSearchSlice>,
+        ) : Command
     }
 
     companion object {
+        /** Rows one search slice reads before the owner loop gets a turn. */
+        internal const val SEARCH_SLICE_ROWS = 2_000
+
+        /** The default cap on [search] matches: more than anyone steps through, few enough to draw. */
+        const val MAX_SEARCH_MATCHES = 10_000
+
+        private const val SEARCH_HELD_RETRIES = 20
+        private val SEARCH_HELD_WAIT = 50.milliseconds
+
         /** Per-event accounting overhead of a local input event against the input budget. */
         private const val EVENT_OVERHEAD_BYTES = 16
 

@@ -21,7 +21,7 @@ import dev.supermux.ui.shell.WorkspacePanesBind
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.collectActiveViewIds
-import dev.supermux.workspace.viewTitle
+import dev.supermux.ui.terminal.liveViewTitle
 
 /** Extra window caption: workspace name plus the active view on this host. */
 fun extraWindowTitle(
@@ -31,7 +31,7 @@ fun extraWindowTitle(
     sessionNames: Map<String, String> = emptyMap(),
 ): String {
     val activeId = hosted?.let { collectActiveViewIds(it).firstOrNull() }
-    val viewPart = activeId?.let { viewsById[it] }?.let { viewTitle(it, sessionNames::get) }
+    val viewPart = activeId?.let { viewsById[it] }?.let { liveViewTitle(it, sessionNames::get) }
     return if (viewPart.isNullOrBlank()) workspaceName else "$workspaceName — $viewPart"
 }
 

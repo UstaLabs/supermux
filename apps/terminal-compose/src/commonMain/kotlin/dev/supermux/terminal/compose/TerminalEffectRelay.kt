@@ -41,6 +41,14 @@ class TerminalEffectRelay {
      */
     val clipboard: StateFlow<ClipboardRequest?> get() = clipboardState
 
+    /**
+     * How many times the program rang the bell (BEL, LIVE output only). A counter rather than an
+     * event so a host can collect it as state: every change is one more ring.
+     */
+    val bells: StateFlow<Long> get() = bellState
+
+    private val bellState = MutableStateFlow(0L)
+
     /** One OSC 52 request, with the serial that makes a repeat of it a new value. */
     data class ClipboardRequest(val serial: Long, val effect: TerminalEffect.ClipboardRequest)
 
@@ -52,6 +60,7 @@ class TerminalEffectRelay {
             is TerminalEffect.Title -> titleState.value = effect.value
             is TerminalEffect.ClipboardRequest ->
                 clipboardState.value = ClipboardRequest(++clipboardSerial, effect)
+            TerminalEffect.Bell -> bellState.value = bellState.value + 1
             else -> Unit
         }
     }

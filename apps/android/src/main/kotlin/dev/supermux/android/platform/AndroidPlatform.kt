@@ -55,7 +55,10 @@ import dev.supermux.ui.terminal.SharedTerminal
 import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.flatMapConcat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -76,7 +79,7 @@ import kotlinx.coroutines.withContext
  */
 class AndroidPlatform(
     private val context: Context,
-    private val pickerHost: PickerHost<Uri>,
+    private val pickerHost: PickerHost<List<Uri>>,
     private val qrScanHost: QrScanHost,
     override val haptics: Haptics,
     private val captureHost: CaptureHost = CaptureHost(),
@@ -130,12 +133,12 @@ class AndroidPlatform(
 
     /**
      * Suspends on the activity-result launcher registered by [rememberPickerHost] and resumes with
-     * the picked URI turned into a streaming [PickedFile]. Cancel → empty list. Single-select: SAF
-     * `GetContent` and the visual-media picker both hand back one URI here (unchanged behaviour).
+     * the picked URIs turned into streaming [PickedFile]s. Cancel → empty list. Multi-select: SAF
+     * `GetMultipleContents` and the multiple visual-media picker both hand back a URI list.
      */
     override suspend fun pickFiles(kind: PickKind, requester: String): List<PickedFile> {
-        val uri = pickerHost.pick(kind, requester) ?: return emptyList()
-        return listOfNotNull(pickedFileFromUri(context, uri))
+        val uris = pickerHost.pick(kind, requester) ?: return emptyList()
+        return uris.mapNotNull { pickedFileFromUri(context, it) }
     }
 
     /**
@@ -223,13 +226,14 @@ class AndroidPlatform(
      * Only the screen that asked for the pick sees it: [requester] must match the one passed to
      * [pickFiles]. Collect it for the lifetime of the screen — a one-shot read races the delivery.
      */
+    @OptIn(ExperimentalCoroutinesApi::class)
     override fun pendingPicks(requester: String): Flow<PickedFile> = merge(
         pickerHost.unclaimed
             .filterNotNull()
             .filter { it.requester == requester }
-            .mapNotNull { stash ->
+            .flatMapConcat { stash ->
                 pickerHost.claim(stash)
-                pickedFileFromUri(context, stash.result)
+                stash.result.mapNotNull { pickedFileFromUri(context, it) }.asFlow()
             },
         // A camera capture is orphaned by exactly the same rotation, and the screen that asked for
         // it wants the photo staged the same way — so both stashes come out of one flow.
@@ -525,8 +529,8 @@ fun rememberQrScanHost(): QrScanHost {
 /** Registers the two picker launchers for the current activity and returns the host to hand to
  *  [AndroidPlatform]. Called once per entry point, from `AndroidTheme`. */
 @Composable
-fun rememberPickerHost(): PickerHost<Uri> {
-    val host = remember { PickerHost<Uri>() }
+fun rememberPickerHost(): PickerHost<List<Uri>> {
+    val host = remember { PickerHost<List<Uri>>() }
     // The in-flight marker survives activity recreation, so a result arriving for a pick started
     // before the restart is recognised, tagged and re-routed rather than dropped (rule 2).
     var savedMarker by rememberSaveable { mutableStateOf<String?>(null) }
@@ -546,12 +550,15 @@ fun rememberPickerHost(): PickerHost<Uri> {
         savedMarker = if (id == null) null
         else listOf(id.toString(), host.inFlightKind!!.name, host.inFlightRequester!!).joinToString("\u0000")
     }
-    val anyFile = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        host.deliver(uri)
+    // An empty list is a cancel — delivered as null so it never stashes an "unclaimed" nothing.
+    val anyFile = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        host.deliver(uris.ifEmpty { null })
         syncMarker()
     }
-    val visualMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        host.deliver(uri)
+    val visualMedia = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(MAX_PICKED_MEDIA),
+    ) { uris ->
+        host.deliver(uris.ifEmpty { null })
         syncMarker()
     }
     // Clear a marker the OS can no longer complete (see PickerHost.clearStuckInFlight): the
@@ -577,6 +584,9 @@ fun rememberPickerHost(): PickerHost<Uri> {
     }
     return host
 }
+
+/** Upper bound for one photo-picker selection (the system picker requires one above 1). */
+private const val MAX_PICKED_MEDIA = 20
 
 /** The [Platform] for this activity: pickers + haptics bound to the hosting view. */
 @Composable

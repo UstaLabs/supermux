@@ -7,7 +7,15 @@
 // is the same code on every target.
 package dev.supermux.ui.terminal
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -47,8 +55,24 @@ import dev.supermux.terminal.TerminalSize
 import dev.supermux.terminal.compose.LocalTerminalScroll
 import dev.supermux.terminal.compose.Terminal
 import dev.supermux.terminal.compose.TerminalAccessoryState
+import dev.supermux.terminal.compose.TerminalClipboard
 import dev.supermux.terminal.compose.TerminalTheme
+import dev.supermux.terminal.compose.LocalTerminalEffects
+import dev.supermux.terminal.compose.TerminalEffectRelay
+import dev.supermux.terminal.compose.TerminalSearchState
+import dev.supermux.terminal.compose.TerminalZoom
 import dev.supermux.terminal.compose.rememberTerminalAccessories
+import dev.supermux.terminal.compose.rememberTerminalClipboard
+import dev.supermux.terminal.compose.rememberTerminalSearchState
+import dev.supermux.ui.prefs.InMemorySettingsStore
+import dev.supermux.ui.prefs.LocalUiPrefsOrNull
+import dev.supermux.ui.prefs.UiPrefs
+import dev.supermux.ui.prefs.TERMINAL_FONT_DEFAULT
+import dev.supermux.ui.prefs.TERMINAL_FONT_MAX
+import dev.supermux.ui.prefs.TERMINAL_FONT_MIN
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.theme.LocalPanes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -95,6 +119,9 @@ private val INITIAL_SIZE = TerminalSize(columns = 80, rows = 24, cellWidthPx = 8
  * @param nowMs the monotonic clock the prediction engine's latency gate and cooldown run on.
  * @param openSession the engine seam. Real builds get the native engine; a test passes its own so
  *   the surface can be driven without one.
+ * @param clipboardOf the clipboard copy, paste and OSC 52 go through. Compose's own everywhere but
+ *   the browser, which can only read clipboard text inside the user's `paste` event (see
+ *   `TerminalClipboard.willRead`) and so passes one of its own.
  * @param predictionsOf the prediction state each surface gets. A host that wants no speculative
  *   echo at all passes one whose clock never opens the latency gate; a test passes one it holds,
  *   so it can read what the overlay would draw.
@@ -107,6 +134,7 @@ class GhosttyTerminalViewFactory(
     private val openSession: suspend (TerminalSize, (TerminalEffect) -> Unit) -> TerminalSession =
         { size, effects -> TerminalSession.open(size = size, limits = TerminalLimits(), effects = effects) },
     private val predictionsOf: @Composable () -> GhosttyPredictionState = { rememberGhosttyPredictions(nowMs) },
+    private val clipboardOf: @Composable () -> TerminalClipboard = { rememberTerminalClipboard() },
 ) : TerminalViewFactory {
 
     /** The engine ships with the app on every target; whether it LOADS is a per-mount failure. */
@@ -116,14 +144,18 @@ class GhosttyTerminalViewFactory(
     override fun rememberTerminalSurface(connect: () -> TerminalClient): TerminalSurface {
         val client = rememberLazyTerminalClient(connect)
         val accessories = rememberTerminalAccessories()
+        val search = rememberTerminalSearchState()
         // The bar's presses become KEYS, not bytes: Ghostty owns the encoding (see
         // TerminalKeySink.semantic), so an armed Ctrl is applied exactly once, by the same encoder
-        // that handles the physical keyboard and the IME.
+        // that handles the physical keyboard and the IME. Paste and Find are not keys at all: they
+        // go to the renderer's own paste path and to this pane's find.
         val keys = rememberSemanticTerminalKeySink(
             hideKeyboard = { accessories.hideKeyboard() },
+            paste = { accessories.pasteClipboard() },
+            find = { search.open() },
         ) { key, mods -> sendAccessoryKey(accessories, key, mods) }
-        return remember(client, keys, accessories) {
-            GhosttyTerminalSurface(this, client, keys, accessories)
+        return remember(client, keys, accessories, search) {
+            GhosttyTerminalSurface(this, client, keys, accessories, search)
         }
     }
 
@@ -137,6 +169,9 @@ class GhosttyTerminalViewFactory(
 
     @Composable
     internal fun predictions(): GhosttyPredictionState = predictionsOf()
+
+    @Composable
+    internal fun clipboard(): TerminalClipboard = clipboardOf()
 
     internal fun now(): Long = nowMs()
 }
@@ -186,7 +221,12 @@ private class GhosttyTerminalSurface(
     private val client: LazyTerminalClient,
     override val keys: TerminalKeySink,
     private val accessories: TerminalAccessoryState,
+    private val search: TerminalSearchState,
 ) : TerminalSurface {
+
+    /** The newest OSC 0/2 title the program set; the tab strip shows it. */
+    override var title: String? by mutableStateOf(null)
+        private set
 
     @Composable
     override fun Content(modifier: Modifier, active: Boolean, onExit: (() -> Unit)?) {
@@ -212,6 +252,9 @@ private class GhosttyTerminalSurface(
         // Everything that touches the engine goes through here, including the clears, so a
         // "forget everything" cannot overtake the keystroke it was meant to forget.
         val signals = remember { Channel<PredictionSignal>(Channel.UNLIMITED) }
+        // What the program asks of the HOST rather than of the pty — a title, the bell, an OSC 52
+        // copy. The relay records them as state; the pty-bound effects pass through untouched.
+        val relay = remember { TerminalEffectRelay() }
 
         BindArmedModifiers(keys, accessories)
 
@@ -221,12 +264,14 @@ private class GhosttyTerminalSurface(
             var opened: TerminalSession? = null
             try {
                 val session0 = factory.open(
-                    terminalEffects(
-                        predict = { signal -> signals.trySend(signal) },
-                        sendInput = { bytes -> terminal.sendInput(bytes) },
-                        sendReply = { bytes -> terminal.sendReply(bytes) },
-                        now = factory::now,
-                        caret = { opened?.viewports?.value?.cursor?.toPredictionCursor() },
+                    relay.wrap(
+                        terminalEffects(
+                            predict = { signal -> signals.trySend(signal) },
+                            sendInput = { bytes -> terminal.sendInput(bytes) },
+                            sendReply = { bytes -> terminal.sendReply(bytes) },
+                            now = factory::now,
+                            caret = { opened?.viewports?.value?.cursor?.toPredictionCursor() },
+                        ),
                     ),
                 )
                 opened = session0
@@ -346,32 +391,166 @@ private class GhosttyTerminalSurface(
         // it TWICE is not harmless belt-and-braces — a second stop() racing the first reaches a
         // socket the first one is already closing. One owner, one stop.
 
+        // FONT SIZE: one app-wide preference, stepped by Cmd/Ctrl +/−/0 and a pinch. `pending` is
+        // the step already asked for but not yet read back from the store, so two fast steps (a
+        // pinch produces them back to back) compound instead of both starting from the old size.
+        //
+        // Null until the store has answered, and the grid waits for it: measured at the default
+        // first, a pane would resize the pty twice on every mount — two SIGWINCHes, two redraws of
+        // whatever full-screen program is attached.
+        val provided = LocalUiPrefsOrNull.current
+        val prefs = provided ?: remember { UiPrefs(InMemorySettingsStore()) }
+        val loadedFontSize by remember(prefs) { prefs.terminalFontSize.map<Int, Int?> { it } }
+            .collectAsState(initial = null)
+        val storedFontSize = loadedFontSize ?: run {
+            Box(modifier.testTag(TERMINAL_GRID_TAG).background(theme.background))
+            return
+        }
+        var pendingFontSize by remember { mutableStateOf<Int?>(null) }
+        LaunchedEffect(storedFontSize) { if (pendingFontSize == storedFontSize) pendingFontSize = null }
+        val fontSize = pendingFontSize ?: storedFontSize
+        val sizedTheme = remember(theme, fontSize) { theme.copy(fontSize = fontSize.sp) }
+        val scope = rememberCoroutineScope()
+        val zoom: (TerminalZoom) -> Unit = { step ->
+            // Read at CALL time, not captured: a pinch can step twice before the next composition.
+            val current = pendingFontSize ?: loadedFontSize ?: TERMINAL_FONT_DEFAULT
+            val next = when (step) {
+                TerminalZoom.IN -> current + 1
+                TerminalZoom.OUT -> current - 1
+                TerminalZoom.RESET -> TERMINAL_FONT_DEFAULT
+            }.coerceIn(TERMINAL_FONT_MIN, TERMINAL_FONT_MAX)
+            if (next != current) {
+                pendingFontSize = next
+                scope.launch { prefs.putTerminalFontSize(next) }
+            }
+        }
+
+        val clipboard = factory.clipboard()
+        val titleSink = LocalTerminalTitleSink.current
+        var pendingLink by remember { mutableStateOf<String?>(null) }
+        val bellFlash = remember { Animatable(0f) }
+        val bells by relay.bells.collectAsState()
+        val haptics = rememberHaptics()
+        var lastBellHapticMs by remember { mutableStateOf(0L) }
+        LaunchedEffect(bells) {
+            if (bells == 0L || !active) return@LaunchedEffect
+            // A visual bell: a quick wash over the grid. Never a sound — a pane in a background
+            // tab, or a `yes $'\a'`, must not be able to make the device beep.
+            val now = factory.now()
+            if (now - lastBellHapticMs > BELL_HAPTIC_INTERVAL_MS) {
+                lastBellHapticMs = now
+                haptics.perform(HapticKind.Tick)
+            }
+            bellFlash.snapTo(BELL_FLASH_ALPHA)
+            bellFlash.animateTo(0f, tween(BELL_FLASH_MS))
+        }
+
         Box(modifier.testTag(TERMINAL_GRID_TAG)) {
             // NOT keyed on the epoch. Re-keying would rebuild the renderer on every reconnect and
             // take the keyboard with it; `requestFullFrame` above is what makes the surviving
             // viewport model safe across a new screen, which is the only part that needed it.
-            Terminal(
-                session = live,
-                modifier = Modifier.fillMaxSize(),
-                theme = theme,
-                active = active,
-                accessories = accessories,
-                onFailure = { failure = it },
-            ) {
-                val scroll = LocalTerminalScroll.current
-                GhosttyPredictionOverlay(
-                    state = predictions,
-                    theme = theme,
-                    modifier = Modifier.matchParentSize(),
-                    scrolledBack = scroll?.following == false,
-                )
-                // A failure is not an exit: the grid keeps whatever it had, and this says why it
-                // stopped moving.
-                failure?.let { TerminalFailureBanner(it, Modifier.align(Alignment.TopCenter)) }
+            CompositionLocalProvider(LocalTerminalEffects provides relay) {
+                Terminal(
+                    session = live,
+                    modifier = Modifier.fillMaxSize(),
+                    theme = sizedTheme,
+                    active = active,
+                    accessories = accessories,
+                    clipboard = clipboard,
+                    onTitle = {
+                        title = it
+                        titleSink(it)
+                    },
+                    // The link's TEXT and its URI can differ (that is what OSC 8 is), so the URI
+                    // itself is shown and confirmed before anything opens it.
+                    onLink = { pendingLink = it },
+                    // OSC 52 writes are allowed, like Ghostty's default: it is how vim, tmux and
+                    // anything over ssh copy to the clipboard of the device you are holding. READS
+                    // stay denied inside the engine — a program can put text there, never take it.
+                    onClipboard = { request ->
+                        if (request.write) scope.launch { runCatching { clipboard.write(request.text.orEmpty()) } }
+                    },
+                    onFailure = { failure = it },
+                    search = search,
+                    onZoom = zoom,
+                ) {
+                    val scroll = LocalTerminalScroll.current
+                    GhosttyPredictionOverlay(
+                        state = predictions,
+                        theme = sizedTheme,
+                        modifier = Modifier.matchParentSize(),
+                        scrolledBack = scroll?.following == false,
+                    )
+                    // A failure is not an exit: the grid keeps whatever it had, and this says why it
+                    // stopped moving.
+                    failure?.let { TerminalFailureBanner(it, Modifier.align(Alignment.TopCenter)) }
+                    if (bellFlash.value > 0f) {
+                        Box(Modifier.matchParentSize().background(sizedTheme.foreground.copy(alpha = bellFlash.value)))
+                    }
+                }
             }
+            // A SIBLING of the grid, not part of its overlay: the renderer previews every key that
+            // reaches one of its descendants, so a field inside it would type into the shell.
+            if (search.isOpen && active) {
+                TerminalSearchBar(search, Modifier.align(Alignment.TopEnd).padding(8.dp))
+            }
+        }
+        pendingLink?.let { uri ->
+            TerminalLinkDialog(
+                uri = uri,
+                onCopy = { scope.launch { runCatching { clipboard.write(uri) } } },
+                onDismiss = { pendingLink = null },
+            )
         }
     }
 }
+
+/**
+ * "Open this link?" for an OSC 8 hyperlink the user clicked. The URI is shown in full because the
+ * text on screen is whatever the program chose to print over it. Only web and mail links can be
+ * opened — a `file://` link names a file on the machine the SHELL runs on, not this device — and
+ * any link can be copied.
+ */
+@Composable
+private fun TerminalLinkDialog(uri: String, onCopy: () -> Unit, onDismiss: () -> Unit) {
+    val uriHandler = LocalUriHandler.current
+    val openable = isOpenableTerminalLink(uri)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("terminal_link_dialog"),
+        title = { Text(if (openable) "Open link?" else "Link") },
+        text = { Text(uri, fontFamily = MonoFontFamily, fontSize = 13.sp, maxLines = 6, overflow = TextOverflow.Ellipsis) },
+        confirmButton = {
+            if (openable) {
+                TextButton(
+                    onClick = {
+                        runCatching { uriHandler.openUri(uri) }
+                        onDismiss()
+                    },
+                    modifier = Modifier.testTag("terminal_link_open"),
+                ) { Text("Open") }
+            } else {
+                TextButton(onClick = { onCopy(); onDismiss() }) { Text("Copy") }
+            }
+        },
+        dismissButton = {
+            Row {
+                if (openable) TextButton(onClick = { onCopy(); onDismiss() }) { Text("Copy") }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+    )
+}
+
+/** Web and mail links open on this device; anything else (file://, ssh://, a custom scheme) is copy-only. */
+internal fun isOpenableTerminalLink(uri: String): Boolean {
+    val scheme = uri.substringBefore(':', missingDelimiterValue = "").lowercase()
+    return scheme == "http" || scheme == "https" || scheme == "mailto"
+}
+
+private const val BELL_FLASH_ALPHA = 0.14f
+private const val BELL_FLASH_MS = 220
+private const val BELL_HAPTIC_INTERVAL_MS = 1_000L
 
 /** What a mid-life engine failure looks like: a line over the grid, not a blank pane. */
 @Composable

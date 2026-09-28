@@ -93,4 +93,14 @@ class InputModeDetectorTest {
         assertTrue(isDeskUiMode(Configuration.UI_MODE_TYPE_DESK or Configuration.UI_MODE_NIGHT_NO))
         assertFalse(isDeskUiMode(Configuration.UI_MODE_TYPE_NORMAL or Configuration.UI_MODE_NIGHT_YES))
     }
+
+    @Test
+    fun aHardwareKeyboardIsAVisibleQwertyKeyboard() {
+        assertTrue(hardwareKeyboardFor(Configuration.KEYBOARD_QWERTY, Configuration.HARDKEYBOARDHIDDEN_NO))
+        // Folded away / slid shut.
+        assertFalse(hardwareKeyboardFor(Configuration.KEYBOARD_QWERTY, Configuration.HARDKEYBOARDHIDDEN_YES))
+        assertFalse(hardwareKeyboardFor(Configuration.KEYBOARD_NOKEYS, Configuration.HARDKEYBOARDHIDDEN_NO))
+        assertFalse(hardwareKeyboardFor(Configuration.KEYBOARD_12KEY, Configuration.HARDKEYBOARDHIDDEN_NO))
+        assertFalse(hardwareKeyboardFor(Configuration.KEYBOARD_UNDEFINED, Configuration.HARDKEYBOARDHIDDEN_UNDEFINED))
+    }
 }

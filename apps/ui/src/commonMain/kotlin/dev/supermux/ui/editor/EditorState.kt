@@ -1,15 +1,14 @@
 // Ported from apps/android/src/main/kotlin/dev/supermux/android/editor/EditorState.kt — keep in
 // sync until a shared UI module exists.
 //
-// This is now a thin coordinator over three collaborators, each holding one of the jobs this class
+// This is now a thin coordinator over two collaborators, each holding one of the jobs this class
 // used to do at once (behaviour unchanged; every member below still exists, delegating):
 //   - [DocumentStore] — the open documents (the [Document] text buffers) + their load/save/reload
 //     lifecycle, including the three M3-T4 networked-fsRead divergences (in-flight guard,
 //     close-during-load cancel, reveal nonce) documented in DocumentStore.kt's header.
-//   - [ExplorerState] — file-tree + search UI state.
 //   - [DiffState] — diff / inline code-review state.
-// What stays HERE is what is per-VIEW rather than per-file: the tab ORDER, the active selection and
-// the preview toggle. Documents are keyed by path in the store and exist exactly once, so a later
+// What stays HERE is what is per-VIEW rather than per-file: the tab ORDER, the active selection,
+// the preview toggle and the tree-visibility / search-query UI state. Documents are keyed by path in the store and exist exactly once, so a later
 // phase can hand a second pane its own tab list over the SAME [Document] instances rather than a
 // second copy of the file text.
 //
@@ -42,6 +41,7 @@ import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.RepoDiff
 import dev.supermux.net.RepoRefs
+import dev.supermux.ui.files.affectedOpenPaths
 import dev.supermux.net.ReviewComment
 import kotlinx.coroutines.CoroutineScope
 
@@ -49,9 +49,8 @@ class EditorState(
     fsRead: suspend (String) -> Result<String>,
     fsWrite: suspend (String, String) -> Boolean,
     scope: CoroutineScope,
-) {
+) : WatchedDocuments {
     val documents = DocumentStore(fsRead, fsWrite, scope)
-    val explorer = ExplorerState()
     val diff = DiffState()
 
     /** The tab strip: ORDER + membership for this view. Holds [Document] references owned by
@@ -99,7 +98,8 @@ class EditorState(
         get() = documents.saving
         set(value) { documents.saving = value }
 
-    /** Workdir-relative paths the broker reported changed on disk (fs_changed) → reload banner. */
+    /** Workdir-relative paths changed on disk behind an open document → reload banner (see
+     *  [DocumentStore.changedPaths]). */
     var changedPaths: Set<String>
         get() = documents.changedPaths
         set(value) { documents.changedPaths = value }
@@ -131,6 +131,28 @@ class EditorState(
         if (activeTabPath == null) loadError = null
     }
 
+    /**
+     * The Files tree renamed or deleted [oldAbs] (→ [newAbs]; null = deleted). Same rule as the
+     * workspace's `applyEntryMoved` (WorkspaceSession.kt): a CLEAN tab under the path follows the
+     * file — closed if it is gone, reopened at its new path if it moved (the reopened tab becomes
+     * active, like any open) — while a DIRTY tab keeps its old path and unsaved text and is marked
+     * stale, so the "changed on disk" banner shows and a Save (which would recreate the old path)
+     * is the user's explicit choice. Nothing is silently discarded.
+     */
+    fun applyEntryMoved(workdir: String, oldAbs: String, newAbs: String?) {
+        val moved = affectedOpenPaths(workdir, oldAbs, newAbs, tabs.map { it.path })
+        val stale = ArrayList<String>()
+        for (m in moved) {
+            if (isDirty(m.oldPath)) {
+                stale += m.oldPath
+                continue
+            }
+            closeTab(m.oldPath)
+            m.newPath?.let(::openFile)
+        }
+        if (stale.isNotEmpty()) markChanged(stale)
+    }
+
     fun selectTab(path: String) {
         activeTabPath = path
         loadError = null
@@ -144,7 +166,15 @@ class EditorState(
     }
 
     /** Record disk-change notifications (workdir-relative paths, leading slash optional). */
-    fun markChanged(paths: List<String>) = documents.markChanged(paths)
+    override fun markChanged(paths: List<String>) = documents.markChanged(paths)
+
+    /** The open files (every tab's document lives in [documents]). */
+    override val openPaths: Collection<String> get() = documents.openPaths
+
+    /** Our own saves ([saveActive] → [DocumentStore.save], which brackets the write and finishes it
+     *  in a `finally`), for the stale-banner watcher. */
+    override fun observeWrites(observer: WatchedDocuments.WriteObserver): () -> Unit =
+        documents.observeWrites(observer)
 
     fun isStale(path: String): Boolean = documents.isStale(path)
 
@@ -152,35 +182,12 @@ class EditorState(
     suspend fun reload(path: String, fsRead: suspend (String) -> Result<String>) =
         documents.reload(path, fsRead)
 
-    // ── File tree / search (delegates to [explorer]) ───────────────────────────────────────────
+    // ── Tree visibility / search (the tree's own state lives in the panel's TreeViewState) ──────
 
-    /** File tree UI state — survives panel / session switches while composed. */
-    val treeRoot get() = explorer.treeRoot
+    /** Whether the sidebar tree is shown; null until the panel seeds it from the window width. */
+    var treeVisible by mutableStateOf<Boolean?>(null)
 
-    var treeRootLoaded: Boolean
-        get() = explorer.treeRootLoaded
-        set(value) { explorer.treeRootLoaded = value }
-
-    var expandedPaths: Set<String>
-        get() = explorer.expandedPaths
-        set(value) { explorer.expandedPaths = value }
-
-    var treeLoadingPaths: Set<String>
-        get() = explorer.treeLoadingPaths
-        set(value) { explorer.treeLoadingPaths = value }
-
-    var treeVisible: Boolean?
-        get() = explorer.treeVisible
-        set(value) { explorer.treeVisible = value }
-
-    var searchQuery: String
-        get() = explorer.searchQuery
-        set(value) { explorer.searchQuery = value }
-
-    /** Per-directory tree-listing errors (path → message) surfaced as an inline row (M3-T4). */
-    var treeLoadError: Map<String, String>
-        get() = explorer.treeLoadError
-        set(value) { explorer.treeLoadError = value }
+    var searchQuery by mutableStateOf("")
 
     // ── Diff / inline code-review (delegates to [diff]) ────────────────────────────────────────
 

@@ -12,6 +12,7 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.ui.prefs.InMemorySettingsStore
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.prefs.UiPrefs
 
 /**
@@ -49,6 +50,7 @@ fun DesktopTheme(
         LocalContextMenuRepresentation provides contextMenu,
         LocalPlatform provides platform,
         LocalUiPrefs provides prefs,
+        LocalUiPrefsOrNull provides prefs,
     ) {
         SupermuxTheme(
             appearance = appearance,
