@@ -183,8 +183,11 @@ export type FsOp =
 - `rename` / `move`: `fs.promises.rename`; target exists → `EEXIST`.
 - `mkdir`: recursive. `touch`: create empty file, `EEXIST` if present.
 - `delete`: move to the OS trash (Linux: freedesktop trash in `~/.local/share/Trash` with a `.trashinfo`
-  file; macOS host: `~/.Trash`). If the path is on a different filesystem from the trash, fall back to a
-  real recursive delete. The app always confirms before calling it.
+  file; macOS host: `~/.Trash`). If the path is on a different filesystem from the trash, the op fails
+  with `EXDEV` (409) and deletes nothing; the app then asks "Delete permanently?" and, only if confirmed,
+  sends `{op:"delete", path, permanent: true}` for a real recursive delete. `/`, mount roots and the home
+  folder are never deleted (`EACCES`). The app always confirms before calling it. *(Revised 2026-09-28
+  after review: the original silent fallback to `rm -rf` was unsafe.)*
 - Each op reloads the affected parent folders through `DirCache` right away (does not wait for the
   watcher), so subscribers see the result immediately.
 
@@ -427,6 +430,6 @@ Each step is testable on a preview broker (`mux:preview-broker`) before merging.
 ## 9. Decisions on the former open questions
 
 - **View state sync:** not synced; per device, in memory (§5.1).
-- **Delete:** OS trash with confirmation; real delete only when the trash is on another filesystem (§4.3).
+- **Delete:** OS trash with confirmation; across filesystems a second, explicit "Delete permanently?" confirm (§4.3).
 - **Git status:** data in A1; badges in B2.
 - **Browsing above the workspace root:** allowed through breadcrumbs, with a chip back to the root (§5.1).
