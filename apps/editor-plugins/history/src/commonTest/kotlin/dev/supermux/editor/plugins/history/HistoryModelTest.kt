@@ -61,7 +61,20 @@ class HistoryModelTest {
     }
 
     @Test fun lazyHistoryAgreesWithTheEagerModel() {
-        assertEquals(3000, run(Random(20260928), cases = 3000, ops = 5..24, agentShare = 0.4))
+        assertEquals(null, run(Random(20260928), cases = 3000, ops = 5..24, agentShare = 0.4))
+    }
+
+    /**
+     * The ACCEPTED divergence, pinned: 40 × 400 operations, 85 % agent edits, exact comparison. Past
+     * MAX_PENDING (64) the carried mappings are composed, and the merged change is judged by the drop
+     * rule as one: here the lazy history keeps an undo the eager model (every remote change judged
+     * alone) dropped. Both documents are still consistent (the round-trip test above); this records
+     * where and how they differ, so a change to the cap or the rule shows up here.
+     */
+    @Test fun pastTheCapAMergedMappingMayKeepAStepTheEagerModelDrops() {
+        val d = run(Random(4400), cases = 40, ops = 400..400, agentShare = 0.85)
+        println("HistoryModelTest: the pinned divergence: $d")
+        assertTrue(d != null && d.startsWith("case 7: undo availability: model false, history true"), "the pinned seed now gives: $d")
     }
 
     /**
@@ -96,11 +109,13 @@ class HistoryModelTest {
                 return ChangeSpec(from, to, ins)
             }
             // Runs [first] on a copy of the state, then [second]: the document must come back.
+            // Right after an undo that happened, its redo must be there (and the other way round), and
+            // bring the document back exactly.
             fun roundTrips(first: dev.supermux.editor.core.Command, second: dev.supermux.editor.core.Command): Boolean {
                 val before = st
                 val doc = st.doc.toString()
                 if (!first.run(target)) { st = before; return true }
-                val ok = !second.run(target) || st.doc.toString() == doc
+                val ok = second.run(target) && st.doc.toString() == doc
                 st = before
                 return ok
             }
@@ -146,9 +161,11 @@ class HistoryModelTest {
         assertTrue(undos > 0)
     }
 
-    /** [cases] random runs of [ops] operations, [agentShare] of them agent edits; returns the runs done. */
-    private fun run(rnd: Random, cases: Int, ops: IntRange, agentShare: Double): Int {
-        var done = 0
+    /**
+     * [cases] random runs of [ops] operations, [agentShare] of them agent edits, compared with the
+     * eager model after every step; returns the first divergence ("case N: …"), or null. A throw fails.
+     */
+    private fun run(rnd: Random, cases: Int, ops: IntRange, agentShare: Double): String? {
         repeat(cases) { case ->
             var now = 0L
             val start = buildString { repeat(rnd.nextInt(0, 30)) { append("abcdefgh\n"[rnd.nextInt(9)]) } }
@@ -188,16 +205,15 @@ class HistoryModelTest {
                                 target.dispatch(TransactionSpec(changeSet = cs, userEvent = if (c.insert.isEmpty()) "delete.backward" else "input"))
                             }
                         }
-                        op <= 4 -> { log += "undo"; val a = model.pop(true); val b = History.undo.run(target); assertEquals(a, b, "undo availability") }
-                        else -> { log += "redo"; val a = model.pop(false); val b = History.redo.run(target); assertEquals(a, b, "redo availability") }
+                        op <= 4 -> { log += "undo"; val a = model.pop(true); val b = History.undo.run(target); if (a != b) return "case $case: undo availability: model $a, history $b after ${log.size} ops" }
+                        else -> { log += "redo"; val a = model.pop(false); val b = History.redo.run(target); if (a != b) return "case $case: redo availability: model $a, history $b after ${log.size} ops" }
                     }
                 } catch (e: Throwable) {
                     fail("case $case threw $e after ${log.takeLast(40).joinToString("; ")} on '$start'")
                 }
-                assertEquals(model.doc.toString(), st.doc.toString(), "case $case diverged after ${log.takeLast(40).joinToString("; ")} on '$start'")
+                if (model.doc.toString() != st.doc.toString()) return "case $case: document after ${log.size} ops: ${log.takeLast(10).joinToString("; ")}"
             }
-            done++
         }
-        return done
+        return null
     }
 }

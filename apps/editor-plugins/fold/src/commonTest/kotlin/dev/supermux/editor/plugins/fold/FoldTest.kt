@@ -272,6 +272,22 @@ class FoldTest {
         assertEquals(text.removeRange(f.from, f.to), v.doc)
     }
 
+    @Test fun undoRestoresAFoldALocalEditOpenedByReachingIntoIt() {
+        // A replace all lets its edit into folds (EditorAnnotations.atomicWhole): the fold opens with
+        // that same transaction, and its undo folds it again.
+        val v = view(text, 2, history())
+        Fold.foldCode.run(v)
+        val f = v.folds().single()
+        val at = text.indexOf("one")
+        v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(at, at + 3, "ONE")), userEvent = "input.replace.all",
+            annotations = listOf(dev.supermux.editor.compose.EditorAnnotations.atomicWhole.of(true))))
+        assertEquals(text.replace("one", "ONE"), v.doc)
+        assertTrue(v.folds().isEmpty(), "the fold holding the edit opened")
+        History.undo.run(v)
+        assertEquals(text, v.doc)
+        assertEquals(listOf(f), v.folds(), "undo did not fold it again")
+    }
+
     @Test fun undoAcrossAFoldIsNotPoliced() {
         // Type inside a block, fold it, undo: the undo edits hidden text; it applies, the fold stays (CM6).
         val v = view(text, text.indexOf("two") + 3, history())

@@ -143,14 +143,16 @@ object Fold {
 
     /**
      * Undo brings back a fold a deletion removed (with its text): registered in editor-core's
-     * `invertedEffectsFacet`, which the history reads. Only folds a change deleted whole; folding and
-     * unfolding themselves are not undo steps (as in CM6).
+     * `invertedEffectsFacet`, which the history reads: the folds a change deleted whole, and the
+     * folds a LOCAL edit opened by reaching into their hidden text (a replace all across a fold,
+     * which the surface lets through). Folding and unfolding themselves are not undo steps (as in CM6).
      */
     private val restoreDeleted: (dev.supermux.editor.core.Transaction) -> List<StateEffect<*>> = { tr ->
         val before = tr.startState.fieldOrNull(field)
         if (!tr.docChanged || before == null || before.isEmpty) emptyList() else {
             val changes = tr.changes.iterChanges()
-            before.filter { r -> changes.any { c -> c.toA > c.fromA && c.fromA <= r.from && c.toA >= r.to } }
+            val local = isLocal(tr)
+            before.filter { r -> changes.any { c -> (c.toA > c.fromA && c.fromA <= r.from && c.toA >= r.to) || (local && touchesInside(c.fromA, c.toA, r.from, r.to)) } }
                 .map { foldEffect.of(FoldRange(it.from, it.to)) }
         }
     }
