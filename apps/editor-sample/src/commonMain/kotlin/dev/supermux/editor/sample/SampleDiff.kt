@@ -46,6 +46,7 @@ class SampleReviewHost(initial: List<ReviewThread> = emptyList()) : DiffHost {
         threads = threads.map { t -> if (t.id == threadId) t.copy(comments = t.comments + ReviewComment("${t.id}-${t.comments.size + 1}", "user", text, "now")) else t }
         note = "replied"
         push()
+        view?.let { Review.clearReply(it, threadId) }
     }
 
     override fun onResolve(threadId: String) {

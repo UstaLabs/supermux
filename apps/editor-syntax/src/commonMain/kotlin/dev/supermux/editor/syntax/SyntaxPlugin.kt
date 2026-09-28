@@ -52,11 +52,18 @@ internal class LayerRange(val from: Int, val to: Int, val depth: Int, val langua
 /** One doc-changing transaction: [changes] turned version `version - 1` into [version]. */
 class VersionedChanges(val version: Long, val changes: ChangeSet)
 
-/** A select-parent request (CM6's `selectParentSyntax`) for the ranges [from, to]* of the state it was made in. */
-class ParentRequest(val id: Long, val ranges: IntArray)
+/**
+ * A select-parent request (CM6's `selectParentSyntax`) for the ranges [from, to]* of the state it was
+ * made in, [levels] enclosing nodes up (a second Mod-i before the first answer arrived asks for two).
+ */
+class ParentRequest(val id: Long, val ranges: IntArray, val levels: Int = 1)
 
-/** The worker's answer to request [id], computed at [version]: per range (anchor, head), or (-1, -1) where nothing encloses it. */
-class ParentAnswer(val id: Long, val version: Long, val ranges: IntArray)
+/**
+ * The worker's answer to request [id], computed at [version] for the selection [requested] (the
+ * request's [ParentRequest.ranges]): per range (anchor, head), or (-1, -1) where nothing encloses it.
+ * The host applies it only while the text AND the selection are still the ones it was asked for.
+ */
+class ParentAnswer(val id: Long, val version: Long, val ranges: IntArray, val requested: IntArray = IntArray(0))
 
 /** What the syntax worker needs from one state. Plain data: safe to hand to another thread. */
 class SyntaxSnapshot(
@@ -138,7 +145,10 @@ object Syntax {
                 SelectParentService { t ->
                     if (v.language == null || v.syntaxOff) return@SelectParentService false
                     val ranges = t.state.selection.ranges.flatMap { listOf(it.from, it.to) }.toIntArray()
-                    t.dispatch(dev.supermux.editor.core.TransactionSpec(effects = listOf(requestParent.of(ParentRequest(nextRequest(), ranges)))))
+                    // Pressed again before the answer: one more level, from the same selection.
+                    val pending = t.state.fieldOrNull(parentField)?.takeIf { it.ranges.contentEquals(ranges) }
+                    val levels = (pending?.levels ?: 0) + 1
+                    t.dispatch(dev.supermux.editor.core.TransactionSpec(effects = listOf(requestParent.of(ParentRequest(nextRequest(), ranges, levels)))))
                     true
                 }
             }
@@ -225,7 +235,7 @@ object Syntax {
     /** The worker's answer (see [ParentAnswer]); the host turns it into a selection when the text did not change since. */
     val parentAnswer: StateEffectType<ParentAnswer> = StateEffectType("syntax.parentAnswer")
 
-    /** The pending request (cleared by its answer, and by an edit: its ranges would be stale). */
+    /** The pending request (cleared by its answer, and by an edit or a selection change: its ranges would be stale). */
     internal val parentField: StateField<ParentRequest?> = StateField(
         name = "syntax.parent",
         create = { null },
@@ -235,7 +245,7 @@ object Syntax {
                 e.valueIf(requestParent)?.let { out = it }
                 e.valueIf(parentAnswer)?.let { a -> if (out?.id == a.id) out = null }
             }
-            if (tr.docChanged) out = null
+            if (tr.docChanged || (tr.selectionSet && tr.selection != tr.startState.selection)) out = null
             out
         },
     )
@@ -249,6 +259,9 @@ object Syntax {
     private val STRING_CLASSES = setOf(TokenClasses.STRING, TokenClasses.STRING_SPECIAL, TokenClasses.REGEXP, TokenClasses.ESCAPE)
 
     /** What the worker needs from a state; null when the state has no syntax extension. */
+    /** The select-parent request [state] waits for (null: none, or it was answered or went stale). */
+    fun pendingParent(state: EditorState): ParentRequest? = state.fieldOrNull(parentField)
+
     fun snapshot(state: EditorState): SyntaxSnapshot? = state.fieldOrNull(field)?.let { v ->
         SyntaxSnapshot(v.epoch, v.language, state.doc, v.version, v.viewport, v.log, v.syntaxOff, state.fieldOrNull(parentField))
     }

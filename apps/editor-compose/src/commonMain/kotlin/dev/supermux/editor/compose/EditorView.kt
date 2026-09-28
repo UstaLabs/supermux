@@ -58,7 +58,7 @@ class EditorView(initial: EditorState) : CommandTarget {
      * are dropped. Programmatic changes (a disk reload, LSP, plugins' effects) still apply, and the
      * selection still moves. Set by the surface from `Editor(readOnly = ...)`.
      */
-    var readOnly: Boolean = false
+    override var readOnly: Boolean = false
 
     /**
      * The zoomed font size in sp, or null for the theme's own ([EditorTheme.fontSizeSp]). The zoom
@@ -326,7 +326,7 @@ class EditorView(initial: EditorState) : CommandTarget {
         // write loses): a background producer must hop to the UI thread first.
         if (currentThreadKey() !== uiThread) EditorDiagnostics.reportOffThreadDispatch()
         val userEdit = isUserEdit(spec)
-        if (readOnly && userEdit && spec.userEvent !in current.facet(readOnlyAllowFacet)) return
+        if (readOnly && userEdit && !isHostEdit(spec) && spec.userEvent !in current.facet(readOnlyAllowFacet)) return
         val start = current
         var tr = start.update(spec)
         // Debug assertion: a key-bound command's edit should say what it is (history groups by it).
@@ -398,7 +398,7 @@ class EditorView(initial: EditorState) : CommandTarget {
     /**
      * Whether [spec] is LOCAL input or a command (policed by the replaced-range rules): not
      * [EditorAnnotations.remote], no userEvent of [POLICY_EXEMPT] (`undo`, `redo`, `disk`, `remote`,
-     * `agent`, `lsp` and their sub-events), and either some other userEvent or dispatched while a
+     * `agent`, `lsp`, an LSP workspace edit's `edit.workspace`, and their sub-events), and either some other userEvent or dispatched while a
      * command runs ([runningCommand]: a key binding, an input handler, a menu item, a plugin's click
      * handler), whatever its userEvent. A transaction without a userEvent from outside any command is
      * programmatic (a host's, a plugin's effect) and passes.
@@ -410,6 +410,8 @@ class EditorView(initial: EditorState) : CommandTarget {
     }
 
     private fun isRemote(spec: TransactionSpec) = spec.annotations.any { it.type === EditorAnnotations.remote && it.value == true }
+
+    private fun isHostEdit(spec: TransactionSpec) = spec.annotations.any { it.type === EditorAnnotations.hostEdit && it.value == true }
 
     /** A field edit inserting more U+FFFC than the text it replaces held (a leaked placeholder). */
     private fun insertsPlaceholder(tr: Transaction): Boolean {
@@ -604,7 +606,7 @@ class EditorView(initial: EditorState) : CommandTarget {
         val USER_EDITS = listOf("input", "delete", "paste", "undo", "redo", "drop", "edit")
 
         /** userEvents the local-input rules (replaced and atomic ranges) never police, with their sub-events. */
-        val POLICY_EXEMPT = listOf("undo", "redo", "disk", "remote", "agent", "lsp")
+        val POLICY_EXEMPT = listOf("undo", "redo", "disk", "remote", "agent", "lsp", "edit.workspace")
         var nextWidgetStateId = 1L
     }
 }

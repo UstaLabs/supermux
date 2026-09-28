@@ -216,6 +216,9 @@ fun Editor(
             if (view.surface === controller) {
                 view.surface = null
                 view.geometry = null
+                // A read-only pane that goes away must not leave its view read-only for the next
+                // one to show it (the next surface sets its own) or for whatever edits it meanwhile.
+                view.readOnly = false
                 // Nothing lays this view out any more: a host waiting for "laid out" (a reveal into a
                 // document shown again later) must wait for the NEXT surface's first frame.
                 view.publishViewport(IntRange.EMPTY)

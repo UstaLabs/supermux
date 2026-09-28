@@ -806,6 +806,12 @@ jobs:
             if ($names -notcontains $want) { throw "packaged terminal-core jar is missing $want ($($jar.FullName))" }
           }
           Write-Host "client engine + licences present in $($jar.FullName)"
+      - name: Assert the packaged editor grammars
+        # Same check as the Linux and macOS jobs: the editor-syntax jar carries the windows-x64
+        # grammar library with a digest that matches the packaged bytes, and the grammar tables.
+        working-directory: .
+        shell: bash
+        run: python scripts/check-packaged-editor-syntax.py "$(find apps/desktop/build/compose/binaries/main/app -mindepth 2 -maxdepth 2 -type d -name app | head -1)" windows-x64
 
       - name: Stage .msi + checksum
         shell: bash

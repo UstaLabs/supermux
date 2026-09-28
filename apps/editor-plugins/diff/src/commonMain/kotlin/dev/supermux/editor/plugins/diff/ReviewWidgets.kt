@@ -164,7 +164,19 @@ private fun WidgetScope.ThreadBlock(key: WidgetKey) {
             val reply = remember(key.id) { TextFieldState(Review.replyDraft(st, t.id)) }
             val target = editor
             LaunchedEffect(reply) { snapshotFlow { reply.text.toString() }.collect { Review.typedReply(target, t.id, it) } }
-            fun send() { if (Review.reply(editor, t.id, reply.text.toString())) reply.clearText() }
+            // Emptied only when the host says the reply was posted (Review.clearReply): a failed one keeps its text.
+            // `sent`: the text handed to the host, so a draft emptied by the user's own typing is never mistaken for it.
+            val stored = Review.replyDraft(st, t.id)
+            val sent = remember(key.id) { androidx.compose.runtime.mutableStateOf<String?>(null) }
+            LaunchedEffect(reply, stored) {
+                if (stored.isEmpty() && sent.value != null && reply.text.toString() == sent.value) reply.clearText()
+                if (stored.isEmpty()) sent.value = null
+            }
+            fun send() {
+                val text = reply.text.toString()
+                Review.typedReply(target, t.id, text) // the state holds it before the host can clear it
+                if (Review.reply(editor, t.id, text)) sent.value = text
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
                 ProseField(p, reply, "Reply…", ReviewTags.REPLY_FIELD, 1, Modifier.weight(1f), onSend = ::send, onEscape = { focusEditor() })
                 Button(p, "Reply", ReviewTags.REPLY, primary = true, onClick = ::send)

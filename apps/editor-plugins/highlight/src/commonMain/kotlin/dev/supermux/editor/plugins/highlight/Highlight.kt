@@ -119,13 +119,17 @@ class SyntaxHost(
 
     private val removeListener = view.addListener { tr ->
         if (started) post(tr.state)
-        for (e in tr.effects) e.valueIf(Syntax.parentAnswer)?.let { answer -> selectAnswered(answer) }
+        // Only the answer to the request the state was still waiting for: an earlier one (a second
+        // Mod-i superseded it with one more level) or a stale one (the selection moved) is dropped.
+        for (e in tr.effects) e.valueIf(Syntax.parentAnswer)?.let { answer ->
+            if (Syntax.pendingParent(tr.startState)?.id == answer.id) selectAnswered(answer)
+        }
     }
 
     /**
      * The worker's answer to a select-parent request (Mod-i, CM6's `selectParentSyntax`): the
-     * enclosing nodes, selected in ONE `select` transaction, unless the text changed since it was
-     * computed (the answer's positions would be another text's).
+     * enclosing nodes, selected in ONE `select` transaction, unless the text or the selection changed
+     * since it was asked for (the answer's positions would be another text's, or undo a newer move).
      */
     private fun selectAnswered(answer: dev.supermux.editor.syntax.ParentAnswer) {
         hop {
@@ -134,6 +138,8 @@ class SyntaxHost(
             if (Syntax.snapshot(st)?.version != answer.version) return@hop
             val old = st.selection.ranges
             if (old.size * 2 != answer.ranges.size) return@hop
+            val now = old.flatMap { listOf(it.from, it.to) }.toIntArray()
+            if (answer.requested.isNotEmpty() && !answer.requested.contentEquals(now)) return@hop
             var changed = false
             val ranges = old.mapIndexed { i, r ->
                 val a = answer.ranges[2 * i]; val h = answer.ranges[2 * i + 1]

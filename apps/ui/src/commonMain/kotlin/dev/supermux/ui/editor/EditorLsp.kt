@@ -4,6 +4,7 @@
 // session ([LspHub.attach]); it leaves when it closes (its view's plugins stop: didClose).
 package dev.supermux.ui.editor
 
+import dev.supermux.editor.compose.EditorAnnotations
 import dev.supermux.editor.core.ChangeSet
 import dev.supermux.editor.core.ChangeSpec
 import dev.supermux.editor.core.Rope
@@ -117,8 +118,10 @@ class LspHub internal constructor(private val store: DocumentStore, private val 
             val changes = lspChanges(view.state.doc, edits, encoding) ?: return false
             // A user-level edit (a rename, a code action): recorded, one undo step in that document.
             // The callback does not say which kind it was, so one name for all of them.
-            view.dispatch(TransactionSpec(changeSet = changes, userEvent = "edit.workspace"))
-            return true
+            // A host edit: applied even if the last pane to show the view left it read-only.
+            val before = view.state.doc
+            view.dispatch(TransactionSpec(changeSet = changes, userEvent = "edit.workspace", annotations = listOf(EditorAnnotations.hostEdit.of(true))))
+            return changes.isEmpty || view.state.doc !== before
         }
         if (doc != null) {
             val changes = lspChanges(Rope.of(doc.content), edits, encoding) ?: return false

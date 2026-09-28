@@ -130,4 +130,16 @@ class LspHubTest {
         assertEquals("Xbc\n", native.primary.state.doc.toString())
         assertTrue(store.isDirty("d.kt"))
     }
+
+    // Re-review: a view left read-only by its last pane still takes a workspace edit.
+    @Test fun a_workspace_edit_reaches_a_read_only_view() = runTest {
+        val store = DocumentStore({ Result.success("abc\n") }, { _, _ -> true }, backgroundScope)
+        store.native = NativeEditorEnv(backgroundScope, lspParseOnWorker = false)
+        store.open("d.kt"); runCurrent()
+        val native = store.nativeFor(store.get("d.kt")!!)!!
+        native.primary.readOnly = true
+        val hub = store.lspHub()!!
+        assertTrue(hub.applyElsewhere("/w", "file:///w/d.kt", listOf(LspTextEdit(LspRange(LspPosition(0, 0), LspPosition(0, 1)), "X")), PositionEncoding.UTF16))
+        assertEquals("Xbc\n", native.primary.state.doc.toString())
+    }
 }

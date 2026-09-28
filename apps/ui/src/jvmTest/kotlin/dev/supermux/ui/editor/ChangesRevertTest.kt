@@ -58,4 +58,50 @@ class ChangesRevertTest {
         assertTrue(applyRevert(support(null, writes), "", "b.kt", "a\nb\n", crlf = true))
         assertEquals(listOf("b.kt" to "a\r\nb\r\n"), writes)
     }
+
+    // Re-review: the tab's view was left read-only (its pane showed a markdown preview): the revert
+    // still applies (a host edit), and is not reported as applied when it was not.
+    @Test fun a_revert_reaches_a_read_only_view_as_a_host_edit() = runTest {
+        val disk = mutableMapOf("a.md" to "one\nTWO\n")
+        val store = DocumentStore({ p -> Result.success(disk.getValue(p)) }, { p, t -> disk[p] = t; true }, backgroundScope)
+        store.native = NativeEditorEnv(backgroundScope)
+        store.open("a.md"); testScheduler.runCurrent()
+        val native = store.nativeFor(store.get("a.md")!!)!!
+        native.primary.readOnly = true
+        assertTrue(applyRevert(support(store, mutableListOf()), "", "a.md", "one\ntwo\n", crlf = false, expected = "one\nTWO\n"))
+        assertEquals("one\ntwo\n", native.primary.state.doc.toString())
+        assertEquals("one\ntwo\n", disk["a.md"])
+        // Typing is still refused there.
+        native.primary.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 0, "x")), userEvent = "input.type"))
+        assertEquals("one\ntwo\n", native.primary.state.doc.toString())
+        native.dispose()
+    }
+
+    @Test fun a_revert_over_text_that_moved_on_since_the_diff_loaded_is_refused() = runTest {
+        val disk = mutableMapOf("a.kt" to "saved since\n")
+        val store = DocumentStore({ p -> Result.success(disk.getValue(p)) }, { p, t -> disk[p] = t; true }, backgroundScope)
+        store.native = NativeEditorEnv(backgroundScope)
+        store.open("a.kt"); testScheduler.runCurrent()
+        val native = store.nativeFor(store.get("a.kt")!!)!!
+        assertFalse(applyRevert(support(store, mutableListOf()), "", "a.kt", "base\n", crlf = false, expected = "old working\n"))
+        assertEquals("saved since\n", native.primary.state.doc.toString())
+        assertEquals("saved since\n", disk["a.kt"])
+        native.dispose()
+    }
+
+    @Test fun a_direct_revert_is_refused_when_the_disk_moved_on() = runTest {
+        val writes = mutableListOf<Pair<String, String>>()
+        val s = NativeDiffSupport(
+            readFile = { _, _ -> Result.success("changed\r\n") },
+            writeFile = { repo, path, text -> writes += repoPath(repo, path) to text; true },
+            sideBySide = false,
+            postComment = { null },
+            onResolve = {},
+            documents = null,
+        )
+        assertFalse(applyRevert(s, "", "b.kt", "a\n", crlf = true, expected = "old\n"))
+        assertTrue(writes.isEmpty())
+        assertTrue(applyRevert(s, "", "b.kt", "a\n", crlf = true, expected = "changed\n"))
+        assertEquals(listOf("b.kt" to "a\r\n"), writes)
+    }
 }

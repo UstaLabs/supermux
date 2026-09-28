@@ -214,6 +214,12 @@ object Review {
         target.dispatch(TransactionSpec(effects = listOf(replyDraft.of(threadId to text))))
     }
 
+    /**
+     * The host posted the reply to [threadId]: its draft goes (the field empties). A host calls it on
+     * success only, so a failed reply keeps what was typed.
+     */
+    fun clearReply(target: CommandTarget, threadId: String) = typedReply(target, threadId, "")
+
     internal fun reply(target: CommandTarget, threadId: String, text: String): Boolean {
         val body = text.trim()
         if (body.isEmpty()) return false

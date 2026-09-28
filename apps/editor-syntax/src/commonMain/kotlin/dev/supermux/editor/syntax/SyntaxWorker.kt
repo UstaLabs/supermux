@@ -281,12 +281,21 @@ class SyntaxWorker(
         val text = RopeText(s.doc)
         val out = IntArray(req.ranges.size)
         for (i in req.ranges.indices step 2) {
-            val p = step("parent") { h.parentRange(doc, req.ranges[i], req.ranges[i + 1], text) }
+            var from = req.ranges[i]
+            var to = req.ranges[i + 1]
+            var p: Pair<Int, Int>? = null
+            // [levels] nodes up; where nothing encloses the last one, the last one found stands.
+            repeat(req.levels.coerceAtLeast(1)) {
+                val up = step("parent") { h.parentRange(doc, from, to, text) } ?: return@repeat
+                p = up
+                from = up.first
+                to = up.second
+            }
             // CM6 selects node.to .. node.from (the anchor at the end).
             out[i] = p?.second ?: -1
             out[i + 1] = p?.first ?: -1
         }
-        dispatch(TransactionSpec(effects = listOf(Syntax.parentAnswer.of(ParentAnswer(req.id, s.version, out)))))
+        dispatch(TransactionSpec(effects = listOf(Syntax.parentAnswer.of(ParentAnswer(req.id, s.version, out, req.ranges)))))
     }
 
     /**

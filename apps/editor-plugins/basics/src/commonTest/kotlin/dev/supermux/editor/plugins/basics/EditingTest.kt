@@ -97,6 +97,28 @@ class EditingTest {
         assertEquals("y|", two.show())
     }
 
+    @Test fun deleteLineNeverLandsInsideASurrogatePair() {
+        val v = view("a|bc\n\uD83D\uDE00x")
+        v.run(Editing.deleteLine)
+        assertEquals("\uD83D\uDE00|x", v.show())       // column 1 = one code point, not one UTF-16 unit
+    }
+
+    @Test fun insertBlankLineOnAWhitespaceOnlyLineMovesTheCursorDown() {
+        val v = view("  |")
+        v.run(Editing.insertBlankLine)
+        assertEquals("\n  |", v.show())                  // CM6: the blanks move to the new line, the cursor with them
+    }
+
+    @Test fun editingCommandsLetTheirKeyFallThroughInAReadOnlyView() {
+        val v = view("a\nb|\nc")
+        v.readOnly = true
+        for (cmd in listOf(Editing.moveLineDown, Editing.copyLineDown, Editing.deleteLine, Editing.insertBlankLine, Editing.toggleLineComment)) {
+            assertFalse(cmd.run(v), "an editing command consumed its key in a read-only view")
+        }
+        assertEquals("a\nb|\nc", v.show())
+        assertTrue(Editing.selectLine.run(v))              // a selection command still runs
+    }
+
     @Test fun selectLineSelectsTheLineWithItsBreak() {
         val v = view("ab\nc|d\nef")
         v.run(Editing.selectLine)

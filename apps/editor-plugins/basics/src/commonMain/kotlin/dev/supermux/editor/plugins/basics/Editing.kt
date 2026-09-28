@@ -42,19 +42,19 @@ import dev.supermux.editor.core.selectParentFacet
  * the syntax worker's, so the selection may arrive a moment later).
  */
 object Editing {
-    val moveLineUp: Command = Command { t -> moveLine(t, forward = false) }
-    val moveLineDown: Command = Command { t -> moveLine(t, forward = true) }
-    val copyLineUp: Command = Command { t -> copyLine(t, forward = false) }
-    val copyLineDown: Command = Command { t -> copyLine(t, forward = true) }
-    val deleteLine: Command = Command(::deleteLines)
+    val moveLineUp: Command = editing { t -> moveLine(t, forward = false) }
+    val moveLineDown: Command = editing { t -> moveLine(t, forward = true) }
+    val copyLineUp: Command = editing { t -> copyLine(t, forward = false) }
+    val copyLineDown: Command = editing { t -> copyLine(t, forward = true) }
+    val deleteLine: Command = editing(::deleteLines)
     val selectLine: Command = Command(::selectLines)
-    val insertBlankLine: Command = Command(::blankLine)
+    val insertBlankLine: Command = editing(::blankLine)
     val cursorMatchingBracket: Command = Command(::matchingBracket)
-    val toggleLineComment: Command = Command { t -> changeLineComment(t) }
-    val toggleBlockComment: Command = Command { t -> changeBlockComment(t, t.state.selection.ranges.map { it.from to it.to }) }
+    val toggleLineComment: Command = editing { t -> changeLineComment(t) }
+    val toggleBlockComment: Command = editing { t -> changeBlockComment(t, t.state.selection.ranges.map { it.from to it.to }) }
 
     /** CM6's `toggleComment`: line comments where the language has them, else block comments around the lines. */
-    val toggleComment: Command = Command { t ->
+    val toggleComment: Command = editing { t ->
         val st = t.state
         val tokens = tokensAt(st, st.doc.lineAt(st.selection.main.from).from)
         when {
@@ -170,13 +170,15 @@ object Editing {
         })
         // Each cursor goes one line down (the goal column kept), then through the deletion: it lands on
         // the line that followed, where it was across (CM6 moves vertically, then maps).
+        // The column counts code points, so the cursor never lands inside a surrogate pair.
         val sel = EditorSelection.create(st.selection.ranges.map { r ->
             val line = doc.lineIndexAt(r.head)
-            val col = r.head - doc.lineStart(line)
+            val lineStart = doc.lineStart(line)
+            val col = codePoints(doc.slice(lineStart, r.head))
             val down = if (line + 1 < doc.lineCount) {
                 val start = doc.lineStart(line + 1)
                 val end = if (line + 2 < doc.lineCount) doc.lineStart(line + 2) - 1 else doc.length
-                minOf(start + col, end)
+                start + offsetOfCodePoint(doc.slice(start, end), col)
             } else doc.length
             SelectionRange(cs.mapPos(down, -1))
         }, st.selection.mainIndex)
@@ -196,7 +198,6 @@ object Editing {
         val st = t.state
         val doc = st.doc
         val specs = ArrayList<ChangeSpec>()
-        val starts = ArrayList<Int>()
         for (r in st.selection.ranges) {
             val line = doc.lineAt(r.from)
             val target = if (r.to <= line.to) line else doc.lineAt(r.to)
@@ -205,12 +206,13 @@ object Editing {
             // A whitespace-only line gives up its blanks (CM6: `from = line.from` when nothing but space precedes it).
             if (from > target.from && from < target.from + 100 && target.text.isBlank()) from = target.from
             specs += ChangeSpec(from, target.to, "\n" + indent)
-            starts += from
         }
         // Two cursors on one line: one blank line.
         val unique = specs.withIndex().distinctBy { it.value.from to it.value.to }
         val cs = ChangeSet.of(doc.length, unique.map { it.value })
-        val ranges = starts.map { SelectionRange(cs.mapPos(it, 1)) }
+        // The cursor at the END of the inserted "\n" + indent (mapping the replaced range's start
+        // would leave it on the old line when a whitespace-only line gave up its blanks).
+        val ranges = specs.map { sp -> SelectionRange(cs.mapPos(sp.from, -1) + sp.insert.length) }
         t.dispatch(TransactionSpec(changeSet = cs, selection = EditorSelection.create(ranges, st.selection.mainIndex), scrollIntoView = true, userEvent = "input"))
         return true
     }
@@ -368,3 +370,28 @@ object Editing {
         return true
     }
 }
+
+/** Code points in [text] (a surrogate pair counts once). */
+private fun codePoints(text: String): Int {
+    var n = 0
+    var i = 0
+    while (i < text.length) {
+        i += if (text[i].isHighSurrogate() && i + 1 < text.length && text[i + 1].isLowSurrogate()) 2 else 1
+        n++
+    }
+    return n
+}
+
+/** The UTF-16 offset of code point [index] in [text], clamped to its end. */
+private fun offsetOfCodePoint(text: String, index: Int): Int {
+    var i = 0
+    var n = 0
+    while (i < text.length && n < index) {
+        i += if (text[i].isHighSurrogate() && i + 1 < text.length && text[i + 1].isLowSurrogate()) 2 else 1
+        n++
+    }
+    return i
+}
+
+/** An editing command: false in a read-only view, so its key falls through (CM6's `state.readOnly` check). */
+private fun editing(run: (CommandTarget) -> Boolean): Command = Command { t -> !t.readOnly && run(t) }

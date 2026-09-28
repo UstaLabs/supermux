@@ -138,6 +138,7 @@ object Lint {
         val labelled = object : CommandTarget {
             override val state: EditorState get() = target.state
             override fun dispatch(spec: TransactionSpec) = target.dispatch(if (spec.userEvent == null) spec.copy(userEvent = "edit.codeAction") else spec)
+            override val readOnly: Boolean get() = target.readOnly
         }
         action.apply(labelled, d.from, d.to)
     }

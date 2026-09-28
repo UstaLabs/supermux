@@ -219,6 +219,9 @@ val stageJvmNativeResources by tasks.registering {
     val targets = jvmNativeTargets
     val outDir = layout.buildDirectory.dir("generated/jvmNativeResources")
     inputs.files(targets.map { (t, lib) -> File(root, "$t/lib/$lib") } + File(root, "manifest.json"))
+    // The release gate is an input: a cached "natives missing, staged nothing" result must not
+    // satisfy a later SUPERMUX_REQUIRE_EDITOR_SYNTAX=1 build.
+    inputs.property("requireEditorSyntax", System.getenv("SUPERMUX_REQUIRE_EDITOR_SYNTAX") == "1")
     outputs.dir(outDir)
     doLast {
         val out = outDir.get().asFile

@@ -67,9 +67,20 @@ class ReviewUiTest {
         assertTrue(!v.focused, "a tap on a thread never takes the editor's focus")
     }
 
+    /** A host whose replies succeed or fail ([posts]); a posted one is cleared through Review.clearReply. */
+    private class ReplyHost(var posts: Boolean) : DiffHost {
+        val log = mutableListOf<String>()
+        var view: EditorView? = null
+        override fun onReply(threadId: String, text: String) {
+            log += "reply $threadId $text"
+            if (posts) view?.let { Review.clearReply(it, threadId) }
+        }
+        override fun onResolve(threadId: String) { log += "resolve $threadId" }
+    }
+
     @Test fun replyAndResolveButtons() = runComposeUiTest {
-        val host = RecordingHost()
-        show(host)
+        val host = ReplyHost(posts = true)
+        host.view = show(host)
         onNodeWithTag(ReviewTags.REPLY_FIELD).performClick()
         onNodeWithTag(ReviewTags.REPLY_FIELD).performTextInput("Thanks!")
         onNodeWithTag(ReviewTags.REPLY).performClick()
@@ -78,6 +89,20 @@ class ReviewUiTest {
         waitForIdle()
         assertEquals(listOf("reply t1 Thanks!", "resolve t1"), host.log)
         assertEquals("", onNodeWithTag(ReviewTags.REPLY_FIELD).fetchSemanticsNode().config[SemanticsProperties.EditableText].text, "sent: cleared")
+    }
+
+    /** Re-review: a reply the host could not post keeps what was typed. */
+    @Test fun aFailedReplyKeepsItsText() = runComposeUiTest {
+        val host = ReplyHost(posts = false)
+        val v = show(host)
+        host.view = v
+        onNodeWithTag(ReviewTags.REPLY_FIELD).performClick()
+        onNodeWithTag(ReviewTags.REPLY_FIELD).performTextInput("Thanks!")
+        onNodeWithTag(ReviewTags.REPLY).performClick()
+        waitForIdle()
+        assertEquals(listOf("reply t1 Thanks!"), host.log)
+        assertEquals("Thanks!", onNodeWithTag(ReviewTags.REPLY_FIELD).fetchSemanticsNode().config[SemanticsProperties.EditableText].text, "failed: kept")
+        assertEquals("Thanks!", Review.replyDraft(v.state, "t1"))
     }
 
     @Test fun theComposerTakesTheFocusSendsItsDraftAndGivesTheFocusBack() = runComposeUiTest {

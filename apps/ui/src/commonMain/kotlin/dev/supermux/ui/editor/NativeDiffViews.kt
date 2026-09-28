@@ -266,6 +266,7 @@ private fun NativeFileDiffEditor(
 ) {
     val scope = rememberCoroutineScope()
     val syntax = LocalPlatform.current.editorSyntax
+    val notices = LocalPlatform.current.notices
     val fontSize = rememberEditorFontSize()
     val path = file.path
     val sideBySide = support.sideBySide
@@ -298,7 +299,11 @@ private fun NativeFileDiffEditor(
             revert = { _ ->
                 val reverted = shown.view?.state?.doc?.toString()
                 if (reverted != null) scope.launch {
-                    applyRevert(support, repo, path, reverted, working.crlf)
+                    if (!applyRevert(support, repo, path, reverted, working.crlf, expected = working.text)) {
+                        notices.show("Couldn't revert that change: ${path.substringAfterLast('/')} changed since the diff was loaded")
+                    }
+                    // Either way the views are rebuilt from disk: a refused revert must not leave the
+                    // hunk looking reverted.
                     currentReload()
                 }
             },
@@ -384,21 +389,49 @@ private fun NativeFileDiffEditor(
  * A hunk reverted in the Changes pane reaches the file: through its OPEN document when the store
  * has one (one `edit.revert` transaction in the tab's own history, then the store's save, so a later
  * Mod-S or Reload in that tab never fights it), else straight to disk with the file's line endings.
+ *
+ * [reverted] is the pane's whole snapshot, so it is applied only over the text the pane was built
+ * from ([expected], when given): an open document that moved on since (a save from its tab) refuses
+ * rather than losing those edits. False when nothing was applied — refused, or the edit was dropped.
  */
-internal suspend fun applyRevert(support: NativeDiffSupport, repo: String, path: String, reverted: String, crlf: Boolean): Boolean {
+internal suspend fun applyRevert(
+    support: NativeDiffSupport,
+    repo: String,
+    path: String,
+    reverted: String,
+    crlf: Boolean,
+    expected: String? = null,
+): Boolean {
     val store = support.documents
     val doc = store?.get(repoPath(repo, path))
     if (store != null && doc != null) {
         if (doc.isDirty) return false
         val native = store.nativeFor(doc)
         if (native != null) {
-            minimalChange(native.text(), reverted)?.let { change ->
-                native.primary.dispatch(dev.supermux.editor.core.TransactionSpec(changes = listOf(change), userEvent = Diff.REVERT_EVENT))
+            val current = native.text()
+            if (expected != null && current != expected) return false
+            minimalChange(current, reverted)?.let { change ->
+                // A host edit: the tab's view may be read-only (a covered editor), which stops typing only.
+                native.primary.dispatch(
+                    dev.supermux.editor.core.TransactionSpec(
+                        changes = listOf(change),
+                        userEvent = Diff.REVERT_EVENT,
+                        annotations = listOf(dev.supermux.editor.compose.EditorAnnotations.hostEdit.of(true)),
+                    ),
+                )
+                if (native.text() != reverted) return false
             }
-        } else doc.content = reverted
+        } else {
+            if (expected != null && doc.content != expected) return false
+            doc.content = reverted
+        }
         return store.saveNow(doc)
     }
     val write = support.writeFile ?: return false
+    if (expected != null) {
+        val onDisk = support.readFile(repo, path).getOrNull()?.let(LineEndings::load)?.text
+        if (onDisk != expected) return false
+    }
     return write(repo, path, LineEndings.save(reverted, crlf))
 }
 

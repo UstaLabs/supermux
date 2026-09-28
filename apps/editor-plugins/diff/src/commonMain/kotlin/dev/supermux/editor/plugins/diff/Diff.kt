@@ -50,7 +50,7 @@ interface DiffHost {
     /** The composer's text was submitted for [line] (the composer closes; the host posts the comment). */
     fun onCommentSubmit(line: Int, text: String) {}
 
-    /** A reply to thread [threadId]. */
+    /** A reply to thread [threadId]; once it is posted, `Review.clearReply` empties the field (kept on failure). */
     fun onReply(threadId: String, text: String) {}
 
     /** The user resolved thread [threadId] (the host marks it and pushes the threads again). */

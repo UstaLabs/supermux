@@ -183,7 +183,7 @@ targets:
           fi
           DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/editor-syntax"
           mkdir -p "$DEST"
-          rsync -a --delete "$TABLES/" "$DEST/" || echo "warning: copying the grammar tables failed"
+          rsync -a --delete "$TABLES/" "$DEST/" || { echo "warning: copying the grammar tables failed"; exit $missing_exit; }
 
   SupermuxWatch:
     type: application

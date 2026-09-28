@@ -92,6 +92,8 @@ class CommandPolicingTest {
             TransactionSpec(changes = listOf(ChangeSpec(foldTo - 1, foldTo)), userEvent = "undo"),
             TransactionSpec(changes = listOf(ChangeSpec(foldTo - 1, foldTo)), userEvent = "redo"),
             TransactionSpec(changes = listOf(ChangeSpec(foldTo - 1, foldTo)), annotations = listOf(EditorAnnotations.remote.of(true))),
+            // An LSP workspace edit (a rename) that touches a folded range must apply whole.
+            TransactionSpec(changes = listOf(ChangeSpec(foldTo - 1, foldTo)), userEvent = "edit.workspace"),
         )) {
             val f = Folds(foldFrom to foldTo)
             val v = EditorView(EditorState.create(text, EditorSelection.cursor(foldTo), f.extension))
@@ -119,6 +121,18 @@ class CommandPolicingTest {
         assertEquals("abc", view.state.doc.toString())
         view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 1, "S")), userEvent = "lsp"))
         assertEquals("Sbc", view.state.doc.toString())
+    }
+
+    @Test fun aHostEditAppliesToAReadOnlyViewAndIsRecordedAsItsUserEvent() {
+        val view = EditorView(EditorState.create("abc", EditorSelection.cursor(0)))
+        view.readOnly = true
+        var seen: String? = null
+        view.addListener { tr -> if (tr.docChanged) seen = tr.annotation(dev.supermux.editor.core.Transaction.userEvent) }
+        view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 1, "R")), userEvent = "edit.revert", annotations = listOf(EditorAnnotations.hostEdit.of(true))))
+        assertEquals("Rbc", view.state.doc.toString())
+        assertEquals("edit.revert", seen)
+        view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 1, "X")), userEvent = "edit.revert"))
+        assertEquals("Rbc", view.state.doc.toString(), "without the annotation it is the user's, and dropped")
     }
 
     @Test fun aHostListenerDispatchingDuringACommandIsNotTheCommands() {

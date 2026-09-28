@@ -93,7 +93,9 @@ class FileReviewHost(
         if (body.isEmpty()) return
         scope.launch {
             submitting = true
-            try { reply(root, body) } finally { submitting = false }
+            val ok = try { reply(root, body) } finally { submitting = false }
+            // Only a posted reply empties the field; a failed one keeps what was typed.
+            if (ok) target?.let { Review.clearReply(it, threadId) }
         }
     }
 

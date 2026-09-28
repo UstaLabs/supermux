@@ -9,6 +9,12 @@ package dev.supermux.editor.core
 interface CommandTarget {
     val state: EditorState
     fun dispatch(spec: TransactionSpec)
+
+    /**
+     * No user edits here (a read-only editor): an editing command returns false, so its key is not
+     * consumed (CM6's commands check `state.readOnly` the same way). Selection commands still run.
+     */
+    val readOnly: Boolean get() = false
 }
 
 /** An action. Returns true when it did something (so the key that triggered it is consumed). */

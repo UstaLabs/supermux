@@ -229,6 +229,14 @@ object EditorAnnotations {
      */
     val remote: dev.supermux.editor.core.AnnotationType<Boolean> = dev.supermux.editor.core.AnnotationType("remote")
 
+    /**
+     * On the HOST's own edit (a hunk revert applied to an open document, an LSP workspace edit):
+     * applied even while the view is read-only. [EditorView.readOnly] stops the user's typing, not
+     * the host — whichever pane last showed the view may have left it read-only (a covered editor).
+     * Still a user-level edit otherwise: recorded in history, policed like its userEvent.
+     */
+    val hostEdit: dev.supermux.editor.core.AnnotationType<Boolean> = dev.supermux.editor.core.AnnotationType("hostEdit")
+
     /** On the hidden field's own edits (the view checks they never insert its U+FFFC placeholder). */
     internal val fieldInput: dev.supermux.editor.core.AnnotationType<Boolean> = dev.supermux.editor.core.AnnotationType("fieldInput")
 

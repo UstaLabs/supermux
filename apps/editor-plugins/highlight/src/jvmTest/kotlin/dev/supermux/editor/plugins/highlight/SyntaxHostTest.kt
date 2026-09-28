@@ -282,6 +282,47 @@ class SyntaxHostTest {
         host.join()
     }
 
+    /** Re-review: two Mod-i before the first answer grow the selection twice, as CM6's synchronous command does. */
+    @Test fun aDoubleSelectParentBeforeTheAnswerGrowsTwice() = run { scope ->
+        val text = "fun f() {\n    val x = g(1, 2)\n}\n"
+        val one = text.indexOf("1")
+        fun mk() = EditorView(EditorState.create(text, EditorSelection.cursor(one), extensionOf(highlight("kotlin"), basics())))
+        val single = withContext(ui) { mk() }
+        val double = withContext(ui) { mk() }
+        val hosts = withContext(ui) { listOf(SyntaxHost(single, backend, scope = scope), SyntaxHost(double, backend, scope = scope)).onEach { it.start() } }
+        until("the first colours") { TokenClasses.KEYWORD in classes(single.state) && TokenClasses.KEYWORD in classes(double.state) }
+        withContext(ui) { dev.supermux.editor.plugins.basics.Editing.selectParentSyntax.run(single) }
+        until("one level") { !single.state.selection.main.empty }
+        val once = withContext(ui) { single.state.selection.main }
+        withContext(ui) { dev.supermux.editor.plugins.basics.Editing.selectParentSyntax.run(single) }
+        until("two levels, one press at a time") { single.state.selection.main.let { it.to - it.from > once.to - once.from } }
+        val twice = withContext(ui) { single.state.selection.main }
+        withContext(ui) {
+            dev.supermux.editor.plugins.basics.Editing.selectParentSyntax.run(double)
+            dev.supermux.editor.plugins.basics.Editing.selectParentSyntax.run(double)
+        }
+        until("two levels from a double press") { double.state.selection.main.let { it.from == twice.from && it.to == twice.to } }
+        withContext(ui) { hosts.forEach { it.close() } }
+        hosts.forEach { it.join() }
+    }
+
+    /** Re-review: an answer for a selection the user has since moved away from is not applied. */
+    @Test fun aSelectParentAnswerForAMovedSelectionIsDropped() = run { scope ->
+        val text = "fun f() {\n    val x = g(1, 2)\n}\n"
+        val one = text.indexOf("1")
+        val view = withContext(ui) { EditorView(EditorState.create(text, EditorSelection.cursor(one), extensionOf(highlight("kotlin"), basics()))) }
+        val host = withContext(ui) { SyntaxHost(view, backend, scope = scope).also { it.start() } }
+        until("the first colours") { TokenClasses.KEYWORD in classes(view.state) }
+        withContext(ui) {
+            dev.supermux.editor.plugins.basics.Editing.selectParentSyntax.run(view)
+            view.dispatch(dev.supermux.editor.core.TransactionSpec(selection = EditorSelection.cursor(0), userEvent = "select"))
+        }
+        kotlinx.coroutines.delay(500)
+        assertEquals(EditorSelection.cursor(0), withContext(ui) { view.state.selection })
+        withContext(ui) { host.close() }
+        host.join()
+    }
+
     /** M5 B1: Mod-/ takes the comment tokens of the language at the line: Kotlin's //, and a fenced block's own. */
     @Test fun commentTokensFollowTheLanguageAndItsInjections() = run { scope ->
         val md = "# Title\n\n```kotlin\nval x = 1\n```\n"
