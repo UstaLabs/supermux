@@ -136,10 +136,11 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
     val ranges = state.selection.ranges
     // Line decorations.
     val backgrounds = ArrayList<Pair<Color, Rect>>()
-    if (theme.lineClassBackgrounds.isNotEmpty()) {
+    run {
         for (set in state.facet(decorationsFacet)) for (r in set.between(viewStart, viewEnd)) {
             val v = r.value as? Decoration.LineStyle ?: continue
-            val color = v.classes.firstNotNullOfOrNull { theme.lineClassBackgrounds[it] } ?: continue
+            // The active line falls back to the theme's currentLine when it has no class for it.
+            val color = v.classes.firstNotNullOfOrNull { theme.lineClassBackgrounds[it] ?: if (it == EditorTheme.ACTIVE_LINE_CLASS) theme.currentLine else null } ?: continue
             val line = doc.lineIndexAt(r.from)
             if (g.folds.isHidden(line)) continue
             backgrounds += color to textRow(line)

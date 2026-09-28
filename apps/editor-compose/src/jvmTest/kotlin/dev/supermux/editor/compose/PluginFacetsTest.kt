@@ -126,4 +126,14 @@ class PluginFacetsTest {
             assertEquals(dark.background, f.controller.theme!!.background)
         }
     }
+
+    @Test fun anActiveLineIsPaintedEvenWhenTheThemeHasNoClassForIt() {
+        val active = dev.supermux.editor.core.decorationsFacet.of(dev.supermux.editor.core.RangeSet.of(listOf(
+            dev.supermux.editor.core.Ranged(0, 0, dev.supermux.editor.core.Decoration.LineStyle(setOf(EditorTheme.ACTIVE_LINE_CLASS)) as dev.supermux.editor.core.Decoration),
+        )))
+        editorTest(EditorState.create(text, extensions = active), theme = { it.copy(lineClassBackgrounds = emptyMap()) }) { f ->
+            val bg = f.controller.frame!!.lineBackgrounds
+            assertEquals(listOf(f.theme!!.currentLine), bg.map { it.first }, "no fallback to currentLine")
+        }
+    }
 }

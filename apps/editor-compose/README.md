@@ -313,8 +313,9 @@ see it; they put semantic class names on decorations:
   `TokenClasses.ALL`, all 29 coloured in `light` and `dark`) or in `classStyles` (`search-match`,
   `diff-add`, ...) style the text. A class the theme does not know draws nothing.
 - `Decoration.LineStyle(classes)`: `lineClassBackgrounds` paints the line's background. The surface
-  paints no current line of its own: basics' `active-line` (`EditorTheme.ACTIVE_LINE_CLASS`, in
-  `currentLine`) is one. `light` / `dark` also style basics' `matching-bracket`,
+  paints no current line of its own: basics' `active-line` (`EditorTheme.ACTIVE_LINE_CLASS`) is one,
+  in the theme's class for it, else `currentLine` (so a host theme without the class still shows it).
+  Chosen: no built-in active line. A host without `basics()` (or `ActiveLine.extension`) gets none. `light` / `dark` also style basics' `matching-bracket`,
   `nonmatching-bracket` and `selection-match` (`EditorTheme.pluginClasses`).
 - When several marks cover the same text, styles merge in `decorationsFacet` order (highest
   precedence first) and the later one wins per attribute. `ime-composition` is the surface's own
