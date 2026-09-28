@@ -169,3 +169,16 @@ test("unpinned folders are evicted least-recently-used; pinned ones stay", async
   expect(c.get(join(root, "b"))).toBeUndefined()
   expect(c.get(join(root, "c"))).toBeDefined()
 })
+
+test("a truncated folder is cut before lstat: only the kept entries are stat-ed, dirs (and dir links) first", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "fs-cache-huge-")))
+  for (let i = 0; i < 30; i++) writeFileSync(join(root, `f${i}`), "")
+  mkdirSync(join(root, "zdir"))
+  mkdirSync(join(root, "adir"))
+  symlinkSync(join(root, "adir"), join(root, "mlink"))
+  const c = cache({ maxEntries: 5 })
+  const snap = (await c.load(root)).snap
+  expect(snap.entries.map((e) => e.name)).toEqual(["adir", "mlink", "zdir", "f0", "f1"])
+  expect(snap.truncated).toEqual({ total: 33 })
+  expect(c.entryStatCount).toBe(5)
+})

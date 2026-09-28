@@ -64,6 +64,8 @@ export class DirCache {
   private counter = 0
   /** Number of real directory reads performed (tests). */
   readCount = 0
+  /** Number of entries lstat-ed (tests): a truncated folder lstats only the entries it keeps. */
+  entryStatCount = 0
 
   constructor(private readonly opts: DirCacheOpts) {}
 
@@ -132,11 +134,14 @@ export class DirCache {
       this.dirs.delete(real)
       throw toFsError(e)
     }
-    const all = await mapLimit(dirents, this.opts.statConcurrency ?? 32, async (d) => this.entry(real, d.name))
-    const entries = sortEntries(all.filter((e): e is FsEntry => e !== null))
     const max = this.opts.maxEntries ?? 5_000
-    const truncated = entries.length > max ? { total: entries.length } : undefined
-    const kept = truncated ? entries.slice(0, max) : entries
+    const conc = this.opts.statConcurrency ?? 32
+    // A huge folder is cut BEFORE the per-entry lstat: order the names (dirs first, from the dirent
+    // types; only symlinks need a stat to know whether they point at a folder), keep `max`, lstat those.
+    const truncated = dirents.length > max ? { total: dirents.length } : undefined
+    const names = truncated ? (await this.firstNames(real, dirents, max, conc)) : dirents.map((d) => d.name)
+    const all = await mapLimit(names, conc, async (name) => this.entry(real, name))
+    const kept = sortEntries(all.filter((e): e is FsEntry => e !== null))
     await this.opts.repo.annotate(real, kept)
     // Test-only hook, run once this read's data is fully gathered but before it is compared and
     // committed — used to hold a read open (its promise unresolved) so tests can force overlap
@@ -159,8 +164,21 @@ export class DirCache {
     return { snap, changed: true }
   }
 
+  /** The first `max` names of a folder in listing order (dirs first, then by name), without lstat-ing all. */
+  private async firstNames(dir: string, dirents: import("fs").Dirent[], max: number, conc: number): Promise<string[]> {
+    const dirish = await mapLimit(dirents, conc, async (d) => {
+      if (d.isDirectory()) return true
+      if (!d.isSymbolicLink()) return false
+      return stat(join(dir, d.name)).then((s) => s.isDirectory(), () => false)
+    })
+    const order = dirents.map((d, i) => ({ name: d.name, dir: dirish[i]! }))
+    order.sort((a, b) => (a.dir !== b.dir ? (a.dir ? -1 : 1) : collator.compare(a.name, b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)))
+    return order.slice(0, max).map((o) => o.name)
+  }
+
   private async entry(dir: string, name: string): Promise<FsEntry | null> {
     const full = join(dir, name)
+    this.entryStatCount++
     let l: import("fs").Stats
     try { l = await lstat(full) } catch { return null }
     if (l.isSymbolicLink()) {
