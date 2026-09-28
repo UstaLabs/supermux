@@ -32,6 +32,7 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import io.ktor.client.engine.mock.respond
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -177,7 +178,12 @@ class NativeEditorPaneTest {
                     EditorPanel(
                         state = EditorPanelState(sessionId = "s1", workdir = "/w"),
                         actions = EditorPanelActions(
-                            fsList = { Result.success(listOf(FsEntry(name = "a.kt", type = "file"))) },
+                            fileSystem = dev.supermux.fs.FileSystemService(
+                                dev.supermux.net.BrokerApi("http://h", "t", io.ktor.client.HttpClient(io.ktor.client.engine.mock.MockEngine { respond("{}") })),
+                                send = {},
+                                scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+                                graceMs = 0,
+                            ),
                             fsRead = { Result.success(hundredLines) },
                             fsWrite = { _, _ -> true },
                             fsSearch = { emptyList() },
