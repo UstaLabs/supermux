@@ -17,6 +17,14 @@ internal object SearchCursors {
     const val MAX_WINDOW = 2_097_152
 
     /**
+     * The window on the SLICED path (the panel's runner on a big document), and its limit: one window
+     * is one uninterruptible regex call, so it is 32K there and never grows; a match reaching that far
+     * is cut at it (`<[^>]*` over a 3 MB tag matches about 32K of it, then the rest as the next
+     * matches). Kotlin/Wasm's engine takes up to ~0.25 µs a unit for a negated class: 32K is ~8 ms.
+     */
+    const val SLICED_WINDOW = 32_768
+
+    /**
      * Text a regex sees before the position it searches from (look-behinds, `\b`, and `^` only ever
      * at a real line start) and after the last position a match may end at (look-aheads, `$`).
      */
@@ -53,6 +61,15 @@ internal object SearchCursors {
 internal object SearchStats {
     var unitsRead: Long = 0
 
+    /** The biggest single window read (one slice's work) since the last [largestWindow]. */
+    var maxWindow: Int = 0
+
+    fun largestWindow(block: () -> Unit): Int {
+        maxWindow = 0
+        block()
+        return maxWindow
+    }
+
     fun measure(block: () -> Unit): Long {
         val before = unitsRead
         block()
@@ -73,7 +90,7 @@ internal abstract class MatchScanner : Iterator<SearchMatch> {
     protected var read: Long = 0L
         private set
 
-    protected fun reading(n: Int) { read += n; SearchStats.unitsRead += n }
+    protected fun reading(n: Int) { read += n; SearchStats.unitsRead += n; if (n > SearchStats.maxWindow) SearchStats.maxWindow = n }
 
     protected fun shouldPause(): Boolean = read >= stopAt
 
@@ -174,10 +191,12 @@ internal class RegexCursor(
     private val wholeWord: Boolean,
     from: Int,
     private val to: Int,
+    private val maxWindow: Int = SearchCursors.MAX_WINDOW,
 ) : MatchScanner() {
     private var pos = from
     private val end = minOf(doc.length, to + SearchCursors.LOOKAHEAD)
-    private var size = if (multiline) SearchCursors.MULTILINE_WINDOW else SearchCursors.WINDOW
+    private val base = minOf(maxWindow, if (multiline) SearchCursors.MULTILINE_WINDOW else SearchCursors.WINDOW)
+    private var size = base
     private var ws = -1
     private var we = -1
     private var exact = false
@@ -211,6 +230,7 @@ internal class RegexCursor(
             }
             val m = try { regex.find(text, pos - ws) } catch (e: Throwable) { null } // a runaway pattern: no match
             if (m == null) {
+                size = base // a window consumed: the next is a normal one again
                 when {
                     we >= end -> return tail()
                     exact -> { pos = we + 1; ws = -1 }
@@ -224,8 +244,10 @@ internal class RegexCursor(
             val a = ws + m.range.first
             val b = ws + m.range.last + 1
             if (a > to) return tail()
-            if (b > to) { pos = SearchCursors.stepOver(doc, a); continue }
-            if (!exact && b + SearchCursors.LOOKAHEAD > we && size < SearchCursors.MAX_WINDOW) {
+            // Ends past the range: done (stepping on one position at a time would be quadratic for
+            // `[\\s\\S]*` and the like; matches are in order of their starts).
+            if (b > to) return tail()
+            if (!exact && b + SearchCursors.LOOKAHEAD > we && size < maxWindow) {
                 // It may be cut short (or a `$` / look-ahead answering at the cut): again, bigger, from it.
                 size *= 2
                 pos = a
@@ -238,6 +260,7 @@ internal class RegexCursor(
                 continue
             }
             lastA = a; lastB = b
+            if (size != base) { size = base; ws = -1 } // accepted: back to normal windows from its end
             return SearchMatch(a, b, m.groupValues)
         }
         return tail()

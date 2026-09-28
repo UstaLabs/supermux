@@ -40,6 +40,19 @@ data. `cursor(doc, from, to)` iterates the matches in order (not overlapping); `
     back, a look-ahead at most 1,024 past the range, a match is at most 2M long, and a match longer
     than the overlap that starts near a cut can be missed. `b\x0Aa` over 30,000 lines finds all 29,999;
     `^b[^\n]` on a line longer than 256K matches only at real line starts.
+  - **Window growth resets.** A window grown for one long match goes back to its normal size once
+    that match is accepted or the window is consumed. On the SLICED path (the panel's runner on a
+    big document) a window is 32K and never grows: one regex call is one uninterruptible piece of
+    work, so a match reaching that far is CUT there (`<[^>]*` over a 3 MB tag matches it in ~32K
+    pieces); synchronously (small documents, the viewport's marks) windows grow up to 2M as above.
+  - **The "any character" idioms** `[\s\S]`, `[\w\W]`, `[\d\D]` (either order) become a dot with
+    DOT_MATCHES_ALL when the pattern has no dot of its own: Kotlin/Wasm's engine runs such a class
+    under a quantifier ~100 times slower than `.*` (`[\s\S]*` over 32K held the page ~116 ms, 3 ms after).
+  - The multi-line test also counts `\H`, nested negated classes (`[x[^a]]`, `[a&&[^b]]`) and ANY
+    `\p{…}` not on a known-safe list (letter, mark, number, punctuation, symbol categories, the letter /
+    digit / case classes, a few scripts): `\p{ASCII}`, `\p{InBasicLatin}`, `\p{IsCc}`, `\p{IsCommon}`,
+    `\p{gc=Cc}`, `\p{IsAssigned}`, `\p{Print}` all search across lines (`\p{Print}` holds no line break
+    on the JVM but differs on the other engines).
   - A cursor stops at the first match that ends past its range (a viewport's marks on a 10 MB line
     read about the viewport, not the line). An invalid pattern is an error state (`valid` false,
     `error` its message): it finds nothing and nothing throws. Empty matches (`^`, `x*`) are found,
@@ -89,11 +102,16 @@ match is found, and a newer find cancels an older one; `Mod-g` / `F3` in the edi
 too while the panel is composed (`Search.requestSearch`). The count is sliced the same way ("…"
 until it is done), restarted at once when the query changes, and only after the document and the
 selection have been still for 120 ms after an edit or a caret move (a caret move on a small
-document recounts at once). Measured, a keystroke in the find field on 10 MB with no match anywhere
+document recounts at once). The user wins over a sliced find: a caret move (or any selection set
+by someone else) while it runs cancels it, and it only ever selects when the document, the query AND
+the selection are still what it started from; an edit re-runs it ONCE from the new state (a second
+edit during the re-run cancels it). Measured, a keystroke in the find field on 10 MB with no match anywhere
 (`SearchMainThreadTest`, JVM: every UI-thread task timed; `SearchMainThreadWasmTest`, headless
-Chrome: M2c's MessageChannel gap monitor): the longest UI task on the JVM 4.1–4.4 ms
-(literal, regex, multi-line regex, whole word); the longest the web page was held 8.7–10.7 ms, the
-whole find + count done in 0.23 s (literal) to 0.95 s (multi-line regex). Asserted under 16 ms on both.
+Chrome: M2c's MessageChannel gap monitor): the longest UI task on the JVM 3.1–3.5 ms
+(literal, regex, multi-line regex, whole word; 3 ms slices); the longest the web page was held
+7.2–9.3 ms, the whole find + count done in 0.31 s (literal) to 1.45 s (multi-line regex). A 3 MB tag
+(one line): `<[^>]*` 10.3 ms, `[\s\S]*` 1.3 ms, `(?s).*` 1.1 ms. Asserted under 16 ms on both
+(one run in five showed one 65 ms hold on the web, not reproduced: a garbage collection, most likely).
 ⚠️ On the web a slice must end with a REAL event-loop turn: kotlinx-coroutines' JS dispatcher runs up
 to 16 queued tasks per turn, so `yield()` alone held the page ~70 ms; `giveBackThread()` posts a
 MessageChannel message there (and is `yield()` elsewhere).

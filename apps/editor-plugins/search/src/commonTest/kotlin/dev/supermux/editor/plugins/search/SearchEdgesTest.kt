@@ -81,4 +81,46 @@ class SearchEdgesTest {
         assertEquals(0, q.matchFrom(doc, 3)!!.from, "wraps")
         assertNotNull(SearchQuery("a").matchFrom(doc, 0))
     }
+
+    @Test fun moreWaysOfMatchingALineBreakAreFoundAcrossLines() {
+        val text = "ab\n".repeat(30_000)
+        for (p in listOf("b\\Ha", "b[x[^a]]a", "b\\p{ASCII}a", "b\\p{InBasicLatin}a", "b\\p{IsCc}a", "b\\p{IsCommon}a", "b\\p{gc=Cc}a", "b\\p{IsAssigned}a", "b\\p{Print}a")) {
+            val q = SearchQuery(p, regexp = true, caseSensitive = true)
+            assertTrue(q.multiline, "$p is not seen as multi-line")
+            // \p{Print} holds no line break on the JVM but does elsewhere; an engine may not know a
+            // property at all (an error state, then nothing to count).
+            if (!q.valid || p == "b\\p{Print}a") continue
+            assertEquals(29_999, q.count(Rope.of(text), limit = 1_000_000).count, p)
+        }
+        for (p in listOf("\\p{L}+", "\\p{Lu}", "\\p{IsAlphabetic}", "\\pN", "\\p{Nd}")) assertFalse(SearchQuery(p, regexp = true).multiline, p)
+    }
+
+    @Test fun aGrownWindowShrinksBackAfterItsMatch() {
+        // A match that made the window grow is followed by normal windows (no 2 MB reads per window).
+        val text = "<" + "a".repeat(300_000) + ">" + "\nb".repeat(400_000)
+        val q = SearchQuery("<[^>]*", regexp = true)
+        val c = q.scanner(Rope.of(text))
+        assertEquals(0 to 300_001, c.next().let { it.from to it.to })
+        val window = SearchStats.largestWindow { while (c.hasNext()) c.next() }
+        assertTrue(window <= SearchCursors.MULTILINE_WINDOW + 2 * SearchCursors.PREFIX, "a window of $window units after the long match")
+        // Sliced (the panel's runner on a big document): windows never grow past 64K; the match is cut there.
+        val s = q.scanner(Rope.of(text), maxWindow = SearchCursors.SLICED_WINDOW)
+        val first = s.next()
+        assertEquals(0, first.from)
+        assertTrue(first.to - first.from <= SearchCursors.SLICED_WINDOW, "a sliced match of ${first.to - first.from}")
+    }
+
+    @Test fun anyCharacterIdiomsBecomeADotAndMeanTheSame() {
+        assertEquals("a.*b", SearchQuery.anyCharIdioms("a[\\s\\S]*b"))
+        assertEquals(null, SearchQuery.anyCharIdioms("\\[\\s\\S]"), "an escaped bracket is no class")
+        assertEquals(null, SearchQuery.anyCharIdioms("[x[\\s\\S]]"), "inside a class: left alone")
+        assertEquals(null, SearchQuery.anyCharIdioms("a.[\\s\\S]"), "the pattern's own dot keeps its meaning")
+        val q = SearchQuery("a.[\\s\\S]", regexp = true)
+        assertEquals(emptyList(), q.cursor(Rope.of("a\nb")).asSequence().toList(), "the dot does not match a line break")
+        assertEquals(listOf(0 to 3), q.cursor(Rope.of("ab\n")).asSequence().map { it.from to it.to }.toList())
+        val text = "a\nb😀c\r\nd"
+        for (p in listOf("[\\s\\S]", "[\\w\\W]", "[\\d\\D]")) {
+            assertEquals(listOf(0 to text.length), SearchQuery("$p+", regexp = true).cursor(Rope.of(text)).asSequence().map { it.from to it.to }.toList(), p)
+        }
+    }
 }

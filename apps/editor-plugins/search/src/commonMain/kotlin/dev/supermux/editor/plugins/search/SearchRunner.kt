@@ -33,7 +33,7 @@ internal expect suspend fun giveBackThread()
 internal class SearchRunner(
     private val editor: CommandTarget,
     private val scope: CoroutineScope,
-    private val sliceMs: Long = 4,
+    private val sliceMs: Long = 3,
 ) {
     /** "3 of 17", or null while the count runs on a big document. */
     var info: MatchInfo? by mutableStateOf(null)
@@ -71,6 +71,16 @@ internal class SearchRunner(
 
     private fun onTransaction(tr: Transaction) {
         for (e in tr.effects) e.valueIf(Search.requestSearch)?.let { find(it) }
+        // A sliced find still running: an edit re-runs it ONCE from the new state (its positions
+        // are stale); the user moving the caret cancels it (their move wins).
+        val running = inFlight
+        if (running != null && findJob?.isActive == true && !tr.isUserEvent("select.search")) {
+            when {
+                tr.docChanged && !running.rerun -> { val m = tr.state.selection.main; run(running.dir, m.from, m.to, rerun = true) }
+                tr.docChanged -> findJob?.cancel()
+                tr.selectionSet -> findJob?.cancel()
+            }
+        }
         val before = Search.query(tr.startState)
         val now = Search.query(tr.state)
         when {
@@ -115,8 +125,13 @@ internal class SearchRunner(
         run(dir, main.from, main.to)
     }
 
-    private fun run(dir: Int, from: Int, to: Int) {
+    /** The sliced find in flight: its direction, and whether it is already the re-run after an edit. */
+    private class InFlight(val dir: Int, val rerun: Boolean)
+    private var inFlight: InFlight? = null
+
+    private fun run(dir: Int, from: Int, to: Int, rerun: Boolean = false) {
         findJob?.cancel()
+        inFlight = null
         searching = false
         val st = editor.state
         val q = Search.query(st)
@@ -131,18 +146,22 @@ internal class SearchRunner(
             return
         }
         searching = true
+        val selection = st.selection
+        inFlight = InFlight(dir, rerun)
         val job = scope.launch {
             mark = TimeSource.Monotonic.markNow()
             val m = when (dir) {
-                0 -> q.nextImpl(doc, from, from, exclude = false) { pause() }
+                0 -> q.nextImpl(doc, from, from, exclude = false, SearchCursors.SLICED_WINDOW) { pause() }
                 1 -> q.nextMatchSliced(doc, from, to) { pause() }
                 else -> q.prevMatchSliced(doc, from, to) { pause() }
             }
-            // Only for the document and query it was asked for (a newer one cancelled it anyway).
-            if (editor.state.doc === doc && Search.query(editor.state) == q) select(m)
+            // Only for the document, query AND selection it was asked for: a caret the user moved
+            // meanwhile is never overridden (an edit re-ran it; a newer find cancelled it).
+            val now = editor.state
+            if (now.doc === doc && Search.query(now) == q && now.selection == selection) select(m)
         }
         findJob = job
-        job.invokeOnCompletion { if (findJob === job) searching = false }
+        job.invokeOnCompletion { if (findJob === job) { searching = false; inFlight = null } }
     }
 
     private fun select(m: SearchMatch?) {

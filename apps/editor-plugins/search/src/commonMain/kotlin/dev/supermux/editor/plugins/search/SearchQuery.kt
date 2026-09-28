@@ -77,12 +77,12 @@ data class SearchQuery(
     /** Every match in [from, to), in document order, not overlapping. */
     fun cursor(doc: Rope, from: Int = 0, to: Int = doc.length): Iterator<SearchMatch> = scanner(doc, from, to)
 
-    internal fun scanner(doc: Rope, from: Int = 0, to: Int = doc.length): MatchScanner {
+    internal fun scanner(doc: Rope, from: Int = 0, to: Int = doc.length, maxWindow: Int = SearchCursors.MAX_WINDOW): MatchScanner {
         val a = from.coerceIn(0, doc.length)
         val b = to.coerceIn(a, doc.length)
         return when {
             !valid -> LiteralCursor(doc, "", false, false, a, b) // an empty needle finds nothing
-            regex != null -> RegexCursor(doc, regex, { emptyLineRegex }, multiline, wholeWord, a, b)
+            regex != null -> RegexCursor(doc, regex, { emptyLineRegex }, multiline, wholeWord, a, b, maxWindow)
             else -> LiteralCursor(doc, needle, !caseSensitive, wholeWord, a, b)
         }
     }
@@ -99,11 +99,11 @@ data class SearchQuery(
 
     /** [nextMatch], giving the thread back ([pause]) every [STEP_UNITS] units read. */
     internal suspend fun nextMatchSliced(doc: Rope, curFrom: Int, curTo: Int, pause: suspend () -> Unit): SearchMatch? =
-        nextImpl(doc, curFrom, curTo, exclude = true) { pause() }
+        nextImpl(doc, curFrom, curTo, exclude = true, SearchCursors.SLICED_WINDOW) { pause() }
 
-    internal inline fun nextImpl(doc: Rope, curFrom: Int, curTo: Int, exclude: Boolean, pause: () -> Unit): SearchMatch? {
+    internal inline fun nextImpl(doc: Rope, curFrom: Int, curTo: Int, exclude: Boolean, maxWindow: Int = SearchCursors.MAX_WINDOW, pause: () -> Unit): SearchMatch? {
         if (!valid) return null
-        val c = scanner(doc, curTo, doc.length)
+        val c = scanner(doc, curTo, doc.length, maxWindow)
         while (true) {
             val m = c.step(STEP_UNITS)
             if (m === MatchScanner.PAUSED) { pause(); continue }
@@ -113,7 +113,7 @@ data class SearchQuery(
         // Wrapped: from the start up to where the first scan began (a literal a needle further, so a
         // match across that point is found; a regex's match may end at most there).
         val bound = if (regex == null) minOf(doc.length, curTo + needle.length - 1) else curTo
-        val w = scanner(doc, 0, bound)
+        val w = scanner(doc, 0, bound, maxWindow)
         while (true) {
             val m = w.step(STEP_UNITS)
             if (m === MatchScanner.PAUSED) { pause(); continue }
@@ -131,11 +131,11 @@ data class SearchQuery(
     fun prevMatch(doc: Rope, curFrom: Int, curTo: Int): SearchMatch? = prevImpl(doc, curFrom, curTo) {}
 
     internal suspend fun prevMatchSliced(doc: Rope, curFrom: Int, curTo: Int, pause: suspend () -> Unit): SearchMatch? =
-        prevImpl(doc, curFrom, curTo) { pause() }
+        prevImpl(doc, curFrom, curTo, SearchCursors.SLICED_WINDOW) { pause() }
 
-    internal inline fun prevImpl(doc: Rope, curFrom: Int, curTo: Int, pause: () -> Unit): SearchMatch? {
+    internal inline fun prevImpl(doc: Rope, curFrom: Int, curTo: Int, maxWindow: Int = SearchCursors.MAX_WINDOW, pause: () -> Unit): SearchMatch? {
         if (!valid) return null
-        return lastIn(doc, 0, curFrom, curFrom, curTo, pause) ?: lastIn(doc, minOf(curFrom, curTo), doc.length, curFrom, curTo, pause)
+        return lastIn(doc, 0, curFrom, curFrom, curTo, maxWindow, pause) ?: lastIn(doc, minOf(curFrom, curTo), doc.length, curFrom, curTo, maxWindow, pause)
     }
 
     /** Every match, or null when there are more than [limit] (CM6's `matchAll`). */
@@ -157,13 +157,13 @@ data class SearchQuery(
     internal fun info(doc: Rope, selFrom: Int, selTo: Int, limit: Int = MATCH_LIMIT): MatchInfo = infoImpl(doc, selFrom, selTo, limit) {}
 
     internal suspend fun infoSliced(doc: Rope, selFrom: Int, selTo: Int, limit: Int = MATCH_LIMIT, pause: suspend () -> Unit): MatchInfo =
-        infoImpl(doc, selFrom, selTo, limit) { pause() }
+        infoImpl(doc, selFrom, selTo, limit, SearchCursors.SLICED_WINDOW) { pause() }
 
-    internal inline fun infoImpl(doc: Rope, selFrom: Int, selTo: Int, limit: Int, pause: () -> Unit): MatchInfo {
+    internal inline fun infoImpl(doc: Rope, selFrom: Int, selTo: Int, limit: Int, maxWindow: Int = SearchCursors.MAX_WINDOW, pause: () -> Unit): MatchInfo {
         if (error != null) return MatchInfo(0, MatchCount(0, false), error)
         var n = 0
         var current = 0
-        val c = scanner(doc)
+        val c = scanner(doc, maxWindow = maxWindow)
         while (true) {
             val m = c.step(STEP_UNITS)
             if (m === MatchScanner.PAUSED) { pause(); continue }
@@ -212,7 +212,7 @@ data class SearchQuery(
     }
 
     /** The last match in [from, to) that is not [exFrom, exTo), scanning chunks backwards. */
-    internal inline fun lastIn(doc: Rope, from: Int, to: Int, exFrom: Int, exTo: Int, pause: () -> Unit): SearchMatch? {
+    internal inline fun lastIn(doc: Rope, from: Int, to: Int, exFrom: Int, exTo: Int, maxWindow: Int, pause: () -> Unit): SearchMatch? {
         if (to < from) return null
         var size = PREV_CHUNK
         var pos = to
@@ -220,7 +220,7 @@ data class SearchQuery(
             val overlap = if (regex == null) needle.length else 0
             val start = maxOf(from, pos - size - overlap)
             var last: SearchMatch? = null
-            val c = scanner(doc, start, pos)
+            val c = scanner(doc, start, pos, maxWindow)
             while (true) {
                 val m = c.step(STEP_UNITS)
                 if (m === MatchScanner.PAUSED) { pause(); continue }
@@ -248,13 +248,20 @@ data class SearchQuery(
         /** What a pattern needs from the windows: whether it can match a line break, whether it anchors to the input. */
         internal class PatternFacts(val multiline: Boolean, val inputAnchor: Boolean)
 
-        private val LINE_BREAK_PROPERTY = Regex("^(C|Cc|Z|Zl|Zp|Space|Cntrl|javaWhitespace|javaISOControl|IsWhite_?Space|IsControl|All|Any|javaSpaceChar)$", RegexOption.IGNORE_CASE)
+        /**
+         * `\p{…}` properties that never include a line break: the letter, mark, number, punctuation and
+         * symbol categories (with or without `Is`), and the letter / digit / case classes. Any other
+         * (`ASCII`, `InBasicLatin`, `IsCc`, `IsCommon`, `gc=Cc`, `IsAssigned`, `Print`, …) makes the
+         * pattern multi-line: safe, never wrong, only slower.
+         */
+        private val SAFE_PROPERTY = Regex("^(Is)?(L[ultmo]?|M[nce]?|N[dlo]?|P[cdseifo]?|S[mcko]?|Alpha|Alphabetic|Letter|Upper|Lower|Uppercase|Lowercase|Digit|Alnum|Punct|Latin|Greek|Cyrillic|Han|Arabic|Hebrew|Ideographic)$")
 
         /** A small scanner over the pattern: escapes, classes, `\Q…\E` and inline flags. */
         internal fun patternFacts(p: String): PatternFacts {
             var multiline = false
             var anchor = false
             var inClass = false
+            var depth = 0
             var i = 0
             while (i < p.length) {
                 val c = p[i]
@@ -270,24 +277,27 @@ data class SearchQuery(
                             continue
                         }
                         'A', 'z', 'Z', 'G' -> if (!inClass) anchor = true
-                        's', 'W', 'D', 'n', 'r', 'v', 'R', 'X', 'x', 'u', '0', 'c', 'P' -> multiline = true
+                        's', 'W', 'D', 'H', 'n', 'r', 'v', 'R', 'X', 'x', 'u', '0', 'c', 'P' -> multiline = true
                         'p' -> {
                             val name = if (i + 2 < p.length && p[i + 2] == '{') p.substring(i + 3, p.indexOf('}', i + 3).let { if (it < 0) p.length else it })
                             else if (i + 2 < p.length) p[i + 2].toString() else ""
-                            if (LINE_BREAK_PROPERTY.matches(name)) multiline = true
+                            // Only properties known never to hold a line break keep a pattern per line.
+                            if (!SAFE_PROPERTY.matches(name)) multiline = true
                         }
                     }
                     i += 2
                     continue
                 }
-                if (!inClass && c == '[') {
+                if (c == '[') {
+                    // Classes nest (`[x[^a]]`, `[a&&[^b]]`): any negated one can hold a line break.
+                    depth++
                     inClass = true
                     i++
                     if (i < p.length && p[i] == '^') { multiline = true; i++ }
                     if (i < p.length && p[i] == ']') i++
                     continue
                 }
-                if (inClass && c == ']') inClass = false
+                if (inClass && c == ']') { depth--; if (depth == 0) inClass = false }
                 if (!inClass && c == '(' && i + 1 < p.length && p[i + 1] == '?') {
                     // Inline flags: (?s), (?is), (?s:...), not after a '-' (turned off).
                     var j = i + 2
@@ -324,11 +334,42 @@ data class SearchQuery(
 
         private fun compile(pattern: String, caseSensitive: Boolean): Any = try {
             val options = if (caseSensitive) setOf(RegexOption.MULTILINE) else setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)
-            Regex(unicodeWordClasses(pattern), options)
+            val any = anyCharIdioms(pattern)
+            Regex(unicodeWordClasses(any ?: pattern), if (any != null) options + RegexOption.DOT_MATCHES_ALL else options)
         } catch (e: Throwable) {
             // PatternSyntaxException on the JVM, IllegalArgumentException elsewhere: an error state.
             e.message?.lineSequence()?.firstOrNull()?.takeIf { it.isNotBlank() } ?: "invalid regular expression"
         }
+
+        /**
+         * The "any character" idioms `[\s\S]`, `[\S\s]`, `[\w\W]`, `[\W\w]`, `[\d\D]`, `[\D\d]` as a
+         * dot with DOT_MATCHES_ALL, which means the same, when the pattern has no dot of its own (it
+         * would change meaning); else null (kept as written). Kotlin/Wasm's engine runs such a class,
+         * or a `(?s:.)` group, under a quantifier ~100 times slower than a plain `.*` (`[\s\S]*` over
+         * 32K held the page ~116 ms, `(?s).*` 1 ms).
+         */
+        internal fun anyCharIdioms(p: String): String? {
+            if (p.indexOf('[') < 0) return null
+            val out = StringBuilder(p.length)
+            var i = 0
+            var depth = 0
+            var found = false
+            while (i < p.length) {
+                val c = p[i]
+                if (c == '\\' && i + 1 < p.length) {
+                    if (p[i + 1] == 'Q') return null // quoted text: keep it simple
+                    out.append(c).append(p[i + 1]); i += 2; continue
+                }
+                val idiom = if (c == '[' && depth == 0) ANY_CHAR.firstOrNull { p.startsWith(it, i) } else null
+                if (idiom != null) { out.append('.'); i += idiom.length; found = true; continue }
+                if (c == '.' && depth == 0) return null // its own dot: DOT_MATCHES_ALL would change it
+                if (c == '[') depth++ else if (c == ']' && depth > 0) depth--
+                out.append(c); i++
+            }
+            return if (found) out.toString() else null
+        }
+
+        private val ANY_CHAR = listOf("[\\s\\S]", "[\\S\\s]", "[\\w\\W]", "[\\W\\w]", "[\\d\\D]", "[\\D\\d]")
 
         /**
          * `\w` and `\W` as the editor's word characters (Unicode letters, decimal digits, `_`).

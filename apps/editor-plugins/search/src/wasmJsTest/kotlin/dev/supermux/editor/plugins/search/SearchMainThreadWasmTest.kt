@@ -48,10 +48,12 @@ class SearchMainThreadWasmTest {
         while (length < 10_000_000) append(line)
     }
 
-    private suspend fun keystroke(query: SearchQuery, typed: String): Pair<Double, Double> {
+    private val tag = "<" + "a".repeat(3_000_000)
+
+    private suspend fun keystroke(query: SearchQuery, typed: String, doc: String = text): Pair<Double, Double> {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
-            val view = EditorView(EditorState.create(text, EditorSelection.cursor(text.length / 2), search()))
+            val view = EditorView(EditorState.create(doc, EditorSelection.cursor(doc.length / 2), search()))
             val runner = SearchRunner(view, scope)
             runner.attach()
             Search.openSearchPanel.run(view)
@@ -84,6 +86,19 @@ class SearchMainThreadWasmTest {
             if (held > 16.0) over += "$typed: $held ms"
         }
         println("SEARCH-MAINTHREAD wasm 10 MB keystroke: " + out.joinToString("; "))
+        assertTrue(over.isEmpty(), "held the page over 16 ms: $over")
+    }
+
+    /** Patterns whose match runs to every window's cut end (a 3 MB tag): windows never grow on the sliced path. */
+    @Test fun longMatchesNeverHoldThePageFor16ms() = runSuspendTest {
+        val over = ArrayList<String>()
+        val out = ArrayList<String>()
+        for ((q, typed) in listOf(SearchQuery("<[^>]", regexp = true) to "<[^>]*", SearchQuery("[\\s\\S]", regexp = true) to "[\\s\\S]*", SearchQuery("(?s).", regexp = true) to "(?s).*")) {
+            val (held, took) = keystroke(q, typed, tag)
+            out += "'$typed' longest held ${(held * 10).toInt() / 10.0} ms, done in ${took.toInt()} ms"
+            if (held > 16.0) over += "$typed: $held ms"
+        }
+        println("SEARCH-MAINTHREAD wasm 3 MB tag: " + out.joinToString("; "))
         assertTrue(over.isEmpty(), "held the page over 16 ms: $over")
     }
 }

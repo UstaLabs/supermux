@@ -428,7 +428,7 @@ object Search {
     private val NONE: RangeSet<Decoration> = RangeSet.empty()
 
     /** Characters searched for marks at most (a viewport on a minified file's one line can be megabytes). */
-    internal const val MAX_SCAN = 50_000
+    internal const val MAX_SCAN = 20_000
 
     internal fun marks(st: EditorState): RangeSet<Decoration> {
         val s = state(st)
