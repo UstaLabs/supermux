@@ -50,7 +50,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -60,7 +59,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -73,11 +71,9 @@ import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
-import dev.supermux.net.FsSearchResult
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.proto.ServerFrame
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
@@ -95,13 +91,17 @@ import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.files.TreeViewState
+import dev.supermux.ui.files.FileSearch
+import dev.supermux.ui.files.GoToEntry
+import dev.supermux.ui.files.goToFileShortcut
+import androidx.compose.ui.focus.FocusRequester
 import dev.supermux.ui.files.childOf
 import dev.supermux.ui.files.relativeToWorkdir
 
 // ── Explorer ──────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The file tree and the filename search, as a pane.
+ * The file tree and its "Go to file…" fuzzy search ([FileSearch]; ⌘P / Ctrl+P), as a pane.
  *
  * The tree is the live host tree ([FileTreeView]) over [fileSystem]; its paths are ABSOLUTE. What
  * leaves the pane is workdir-relative: [onOpenFile] gets a path relative to [workdir], and a file
@@ -125,39 +125,26 @@ fun ExplorerPane(
     onOutsideWorkdir: (absolutePath: String) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
-    val focusManager = LocalFocusManager.current
-    val searchResults = remember { mutableStateListOf<FsSearchResult>() }
-
-    // Same 200ms debounce as the composite panel — a keystroke must not be a broker round trip.
-    // (Task 10 replaces this with the fuzzy search.)
-    LaunchedEffect(view.query, fileSystem) {
-        delay(200)
-        val q = view.query.trim()
-        searchResults.clear()
-        if (q.isEmpty() || fileSystem == null) return@LaunchedEffect
-        val hits = fileSystem.search(workdir, q).getOrNull().orEmpty()
-        searchResults.addAll(
-            hits.mapNotNull { h ->
-                val rel = relativeToWorkdir(workdir, h.path)?.takeIf { it != "." } ?: return@mapNotNull null
-                FsSearchResult(path = rel, name = h.name, type = h.type)
-            },
-        )
-    }
-
-    fun clearSearch() {
-        focusManager.clearFocus()
-        view.query = ""
-        searchResults.clear()
-    }
-
-    fun openRelative(path: String) {
-        clearSearch()
-        onOpenFile(path)
-    }
+    val searchFocus = remember { FocusRequester() }
 
     val openAbsolute: (String) -> Unit = { abs ->
         val rel = relativeToWorkdir(workdir, abs)?.takeIf { it != "." }
-        if (rel != null) onOpenFile(rel) else onOutsideWorkdir(abs)
+        if (rel != null) {
+            view.noteOpened(rel)
+            onOpenFile(rel)
+        } else {
+            onOutsideWorkdir(abs)
+        }
+    }
+
+    val onGoTo: (GoToEntry) -> Unit = { e ->
+        if (e.isDir) {
+            // A folder hit is shown, not opened: open it in the tree and select it.
+            view.reveal(e.absolutePath)
+            view.expand(e.absolutePath)
+        } else {
+            openAbsolute(e.absolutePath)
+        }
     }
 
     val activePath = activeRelativePath?.takeIf { it.isNotEmpty() && it != "." }?.let { rel ->
@@ -170,18 +157,21 @@ fun ExplorerPane(
     // The tag goes on an INNER node, never on the caller's modifier: two testTag calls on one
     // modifier chain keep the OUTER one, so a pane that tagged `modifier` would be invisible to
     // any caller that had already tagged it.
-    Box(modifier.fillMaxSize().background(cs.surfaceContainerHigh)) {
-        Column(Modifier.fillMaxSize().testTag("editor_explorer_pane")) {
-            Row(
-                Modifier.fillMaxWidth().height(40.dp).padding(horizontal = Space.xs),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                EditorSearchField(
-                    query = view.query,
-                    onQueryChange = { view.query = it },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+    Box(
+        modifier
+            .fillMaxSize()
+            .background(cs.surfaceContainerHigh)
+            // ⌘P / Ctrl+P while focus is anywhere in the pane (the tree, the header).
+            .goToFileShortcut { runCatching { searchFocus.requestFocus() } },
+    ) {
+        FileSearch(
+            fileSystem = fileSystem,
+            view = view,
+            workdir = workdir,
+            onOpen = onGoTo,
+            focusRequester = searchFocus,
+            modifier = Modifier.fillMaxSize().testTag("editor_explorer_pane"),
+        ) {
             FileTreeHeader(
                 view = view,
                 fileSystem = fileSystem,
@@ -207,14 +197,6 @@ fun ExplorerPane(
                     )
                 }
             }
-        }
-        if (searchResults.isNotEmpty()) {
-            EditorSearchOverlay(
-                results = searchResults,
-                onSelect = { openRelative(it) },
-                onDismiss = { clearSearch() },
-                modifier = Modifier.fillMaxSize(),
-            )
         }
     }
 }

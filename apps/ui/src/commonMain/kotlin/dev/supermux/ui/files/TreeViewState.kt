@@ -21,6 +21,20 @@ class TreeViewState(rootPath: String) {
     var query by mutableStateOf("")
     val list = LazyListState()
 
+    // The last [RecentMax] files opened from this pane (workdir-relative, newest first): what the
+    // "Go to file…" list shows before anything is typed.
+    private val recentDeque = ArrayDeque<String>()
+    var recent by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    /** Record that [relativePath] was opened from this pane (moves it to the front). */
+    fun noteOpened(relativePath: String) {
+        recentDeque.remove(relativePath)
+        recentDeque.addFirst(relativePath)
+        while (recentDeque.size > RecentMax) recentDeque.removeLast()
+        recent = recentDeque.toList()
+    }
+
     fun isExpanded(path: String) = path in expanded
     fun expand(path: String) { expanded = expanded + path }
     fun toggle(path: String) {
@@ -38,6 +52,8 @@ class TreeViewState(rootPath: String) {
         selected = path
     }
 }
+
+const val RecentMax = 10
 
 /** Per-host, in-memory holder: one [TreeViewState] per Files view id. */
 class TreeViewStates {
