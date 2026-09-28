@@ -74,6 +74,21 @@ async function exists(p: string): Promise<boolean> {
 export interface OpOptions {
   trashDir?: string
   platform?: NodeJS.Platform
+  /** The user's home folder, which delete refuses (default `os.homedir()`; tests override it). */
+  homeDir?: string
+}
+
+/** `/`, a mount root (its device differs from its parent's) and the home folder are never deleted. */
+async function refuseProtected(path: string, opts: OpOptions): Promise<void> {
+  const parent = dirname(path)
+  if (parent === path) throw new FsError("EACCES", "refusing to delete the root folder")
+  const home = opts.homeDir ?? homedir()
+  const real = await realpath(path).catch(() => path)
+  const homeReal = await realpath(home).catch(() => home)
+  if (path === home || real === homeReal) throw new FsError("EACCES", `refusing to delete the home folder: ${path}`)
+  // lstat: a symlink pointing at a mount root is an ordinary entry in its parent and may go.
+  const [self, up] = await Promise.all([lstat(path), stat(parent)])
+  if (!self.isSymbolicLink() && self.dev !== up.dev) throw new FsError("EACCES", `refusing to delete a mount point: ${path}`)
 }
 
 export async function applyOp(op: FsOp, opts: OpOptions = {}): Promise<void> {
@@ -94,7 +109,10 @@ export async function applyOp(op: FsOp, opts: OpOptions = {}): Promise<void> {
       }
       case "delete":
         await lstat(op.path) // ENOENT early
-        await moveToTrash(op.path, opts)
+        await refuseProtected(op.path, opts)
+        // A real delete happens only when the caller explicitly asked for it (e.g. after EXDEV).
+        if (op.permanent === true) await rm(op.path, { recursive: true, force: false })
+        else await moveToTrash(op.path, opts)
         return
     }
   } catch (e) {
@@ -141,16 +159,15 @@ async function moveToTrash(path: string, opts: OpOptions): Promise<void> {
   try {
     await rename(path, join(filesDir, name))
   } catch (e) {
-    if ((e as { code?: string }).code === "EXDEV") {
-      // The trash is on another filesystem; the app already confirmed, so delete for real.
-      await rm(path, { recursive: true, force: true })
-      if (platform !== "darwin") await rm(infoPath, { force: true })
-      return
-    }
-    // Any other failure means the file never made it to the trash; remove the
+    // Any failure means the file never made it to the trash; remove the
     // now-untracked info record so the spec's "info first" ordering never
     // leaves a dangling .trashinfo behind.
     if (platform !== "darwin") await unlink(infoPath).catch(() => {})
+    // The trash is on another filesystem. Never fall back to a real delete here: the user was
+    // promised "moved to the trash". The app asks, then sends `permanent: true`.
+    if ((e as { code?: string }).code === "EXDEV") {
+      throw new FsError("EXDEV", "Can't move to the trash across filesystems; delete permanently instead?")
+    }
     throw e
   }
 }

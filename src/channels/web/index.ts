@@ -2661,9 +2661,11 @@ export class WebChannel implements Channel {
     // Byte-for-byte the same handlers as the /sessions/:id/fs* block above,
     // resolving the workdir from the workspace instead of the session. Spec §7.4.
     //
-    // WorkdirFs (src/core/fs/legacy.ts) enforces containment server-side: a path
-    // that escapes the root throws, and that is the security boundary. The
-    // client's own guard is redundant defense, not the real one.
+    // WorkdirFs (src/core/fs/legacy.ts) enforces containment server-side for these
+    // legacy RELATIVE routes: a path that escapes the root throws, and that is their
+    // boundary (the client's own guard is redundant defense). It is not the host's
+    // security boundary in general: /fs/* below takes any absolute path and is trusted
+    // at the device level (a paired device's token), like a terminal.
     if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
@@ -2765,7 +2767,7 @@ export class WebChannel implements Channel {
           return this.json(await this.fss.write(p, await req.text()))
         }
         if (method === "GET" && path === "/fs/search") {
-          const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "50") || 50, 1), 500)
+          const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "50") || 50, 1), 200)
           return this.json(await this.fss.search(url.searchParams.get("scope") ?? "", url.searchParams.get("q") ?? "", limit))
         }
         if (method === "POST" && path === "/fs/ops") {
@@ -2774,10 +2776,17 @@ export class WebChannel implements Channel {
           if (!body || typeof op !== "string" || typeof body.path !== "string") {
             return this.json({ error: "EINVAL", message: "op and path required" }, 400)
           }
+          // `permanent` (a real, recursive delete instead of the trash) is only valid on delete,
+          // and only as an explicit boolean: the app sends it after the user confirmed an EXDEV.
+          if (body.permanent !== undefined && (op !== "delete" || typeof body.permanent !== "boolean")) {
+            return this.json({ error: "EINVAL", message: "permanent must be a boolean and is only valid for delete" }, 400)
+          }
           if (op === "rename" || op === "move") {
             if (typeof body.to !== "string") return this.json({ error: "EINVAL", message: `${op} needs to` }, 400)
             await this.fss.op({ op, path: body.path, to: body.to })
-          } else if (op === "mkdir" || op === "touch" || op === "delete") {
+          } else if (op === "delete") {
+            await this.fss.op(body.permanent === true ? { op, path: body.path, permanent: true } : { op, path: body.path })
+          } else if (op === "mkdir" || op === "touch") {
             await this.fss.op({ op, path: body.path })
           } else {
             return this.json({ error: "EINVAL", message: `unknown op: ${op}` }, 400)

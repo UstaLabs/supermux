@@ -1,8 +1,8 @@
 import { test, expect } from "bun:test"
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, realpathSync, chmodSync } from "fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, realpathSync, chmodSync, statSync } from "fs"
 import { execSync } from "child_process"
 import { tmpdir } from "os"
-import { join } from "path"
+import { dirname, join } from "path"
 import { readText, writeText, statEntry, applyOp, MAX_READ_BYTES } from "./file-ops"
 
 const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), "fs-ops-")))
@@ -121,4 +121,50 @@ test("delete removes the .trashinfo file if the move fails for a reason other th
   } finally {
     chmodSync(roDir, 0o755)
   }
+})
+
+test("delete across filesystems throws EXDEV and deletes nothing", async () => {
+  const d = tmp()
+  let trash: string
+  try { trash = realpathSync(mkdtempSync("/dev/shm/fs-ops-trash-")) } catch { return } // no second fs here
+  if (statSync(d).dev === statSync(trash).dev) return // same filesystem: cannot provoke EXDEV
+  mkdirSync(join(d, "keep"))
+  writeFileSync(join(d, "keep", "x"), "1")
+  await expect(applyOp({ op: "delete", path: join(d, "keep") }, { trashDir: trash, platform: "linux" })).rejects.toMatchObject({
+    code: "EXDEV", message: expect.stringContaining("delete permanently"),
+  })
+  expect(readFileSync(join(d, "keep", "x"), "utf-8")).toBe("1")
+  expect(existsSync(join(trash, "info", "keep.trashinfo"))).toBe(false)
+  expect(readdirSync(join(trash, "files"))).toEqual([])
+})
+
+test("delete with permanent: true removes the entry for real, recursively, without touching the trash", async () => {
+  const d = tmp()
+  const trash = tmp()
+  mkdirSync(join(d, "gone", "deep"), { recursive: true })
+  writeFileSync(join(d, "gone", "deep", "x"), "1")
+  await applyOp({ op: "delete", path: join(d, "gone"), permanent: true }, { trashDir: trash, platform: "linux" })
+  expect(existsSync(join(d, "gone"))).toBe(false)
+  expect(readdirSync(trash)).toEqual([])
+  await expect(applyOp({ op: "delete", path: join(d, "gone"), permanent: true })).rejects.toMatchObject({ code: "ENOENT" })
+})
+
+test("delete refuses / , the home folder and a mount root with EACCES (trash and permanent)", async () => {
+  const trash = tmp()
+  const home = tmp()
+  writeFileSync(join(home, "f"), "1")
+  // `/` is refused before anything happens (never exercise `permanent` on it).
+  await expect(applyOp({ op: "delete", path: "/" }, { trashDir: trash, platform: "linux", homeDir: home })).rejects.toMatchObject({ code: "EACCES" })
+  for (const permanent of [false, true]) {
+    await expect(applyOp({ op: "delete", path: home, permanent }, { trashDir: trash, platform: "linux", homeDir: home })).rejects.toMatchObject({ code: "EACCES" })
+    expect(readFileSync(join(home, "f"), "utf-8")).toBe("1")
+  }
+  // A mount root: its device differs from its parent's. Trash mode only, so a bug can't rm anything.
+  const mount = ["/proc", "/dev", "/dev/shm", "/sys"].find((m) => { try { return statSync(m).dev !== statSync(dirname(m)).dev } catch { return false } })
+  if (mount) {
+    await expect(applyOp({ op: "delete", path: mount }, { trashDir: trash, platform: "linux", homeDir: home })).rejects.toMatchObject({
+      code: "EACCES", message: expect.stringContaining("mount point"),
+    })
+  }
+  expect(readdirSync(trash)).toEqual([])
 })

@@ -28,7 +28,9 @@ export interface SearchHit {
 
 export type FsOp =
   | { op: "rename" | "move"; path: string; to: string }
-  | { op: "mkdir" | "touch" | "delete"; path: string }
+  | { op: "mkdir" | "touch"; path: string }
+  /** Moves to the OS trash; `permanent: true` (only when explicitly asked, e.g. after EXDEV) removes it for good. */
+  | { op: "delete"; path: string; permanent?: boolean }
 
 export type FsFrame =
   | { type: "fs_dir"; path: string; version: string; entries: FsEntry[]; truncated?: { total: number } }

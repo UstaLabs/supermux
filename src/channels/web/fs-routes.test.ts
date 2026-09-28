@@ -145,6 +145,44 @@ test("/fs/ops rejects a malformed body and an unknown op with 400", async () => 
   expect((await post(JSON.stringify({ op: "rename", path: join(d, "x") }))).status).toBe(400)
 })
 
+test("/fs/ops delete: permanent:true is a real delete; permanent is boolean-only and delete-only", async () => {
+  const { base, auth } = await boot()
+  const d = tmp()
+  const post = (body: unknown) => fetch(`${base}/fs/ops`, { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify(body) })
+  writeFileSync(join(d, "x"), "1")
+  expect((await post({ op: "delete", path: join(d, "x"), permanent: "yes" })).status).toBe(400)
+  expect((await post({ op: "touch", path: join(d, "y"), permanent: true })).status).toBe(400)
+  expect(existsSync(join(d, "y"))).toBe(false)
+  expect(existsSync(join(d, "x"))).toBe(true)
+  expect((await post({ op: "delete", path: join(d, "x"), permanent: true })).status).toBe(204)
+  expect(existsSync(join(d, "x"))).toBe(false)
+})
+
+test("/fs/ops forwards permanent only when true, and a trash EXDEV answers 409 with the code", async () => {
+  const { base, auth } = await boot()
+  const seen: unknown[] = []
+  const fss = (channel as any).fss
+  fss.op = async (op: unknown) => {
+    seen.push(op)
+    const { FsError } = await import("../../core/fs/errors")
+    throw new FsError("EXDEV", "Can't move to the trash across filesystems; delete permanently instead?")
+  }
+  const post = (body: unknown) => fetch(`${base}/fs/ops`, { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify(body) })
+  const r = await post({ op: "delete", path: "/tmp/whatever" })
+  expect(r.status).toBe(409)
+  expect(await r.json()).toMatchObject({ error: "EXDEV" })
+  await post({ op: "delete", path: "/tmp/whatever", permanent: false })
+  expect(seen).toEqual([{ op: "delete", path: "/tmp/whatever" }, { op: "delete", path: "/tmp/whatever" }])
+})
+
+test("/fs/search clamps limit to the service max of 200", async () => {
+  const { base, auth } = await boot()
+  let got = -1
+  ;(channel as any).fss.search = async (_s: string, _q: string, limit: number) => { got = limit; return [] }
+  await fetch(`${base}/fs/search?scope=/tmp&q=a&limit=999`, { headers: auth })
+  expect(got).toBe(200)
+})
+
 test("reading a binary file → 415, a directory → 400, wrong method → 405", async () => {
   const { base, auth } = await boot()
   const d = tmp()
