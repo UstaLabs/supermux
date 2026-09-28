@@ -22,6 +22,7 @@ import dev.supermux.ui.prefs.UiPrefs
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import dev.supermux.state.HostStore
+import dev.supermux.state.LauncherDraft
 import dev.supermux.proto.ClientFrame
 import dev.supermux.proto.ServerFrame
 import dev.supermux.workspace.singleViewLayout
@@ -174,6 +175,10 @@ class AppShellTest {
         // The draft lives in the SHARED settings store since cluster F1 (`UiPrefs`), not in
         // `launcher-state.json` — that file is only the one-way migration source now.
         val prefs = UiPrefs(InMemorySettingsStore())
+        // Since 30aca97e the launcher has no `~` default: with nothing naming a project (no
+        // draft, no session, no catalog) send stays disabled. The stored draft is the shortest
+        // way a real launcher gets its project, so the test seeds one the same way.
+        runBlocking { prefs.putLauncherDraft(LauncherDraft(workdir = "/proj/x")) }
         setPlatformContent(uiPrefs = prefs) {
             SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
         }
@@ -207,14 +212,16 @@ class AppShellTest {
         val sent = mutableListOf<ClientFrame>()
         val app = appFor(sent, validateOk = false) // invalid workdir → createSessionWithFirstMessage returns null
         val ui = ShellUiState().apply { openLauncher() }
-        setPlatformContent {
+        val prefs = UiPrefs(InMemorySettingsStore())
+        runBlocking { prefs.putLauncherDraft(LauncherDraft(workdir = "/proj/x")) } // see above
+        setPlatformContent(uiPrefs = prefs) {
             SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
         }
         waitForIdle()
         onNodeWithTag("launcher_message").performTextInput("hello there")
         onNodeWithTag("launcher_submit").performClick()
         // Same real-dispatcher wait as above; here the observable outcome is the error row.
-        waitUntil { onAllNodesWithTag("launcher_error").fetchSemanticsNodes().isNotEmpty() }
+        waitUntil(timeoutMillis = 10_000) { onAllNodesWithTag("launcher_error").fetchSemanticsNodes().isNotEmpty() }
         waitForIdle()
 
         assertNull(ui.selectedId)
