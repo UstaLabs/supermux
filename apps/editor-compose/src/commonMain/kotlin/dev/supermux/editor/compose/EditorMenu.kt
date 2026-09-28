@@ -74,7 +74,7 @@ internal fun menuItems(view: EditorView, readOnly: Boolean, clipboardHasText: Bo
 /** Run [item] through [DefaultCommands]; Select All keeps the menu and shows the handles. */
 internal fun runMenuItem(c: EditorController, item: MenuItem) {
     val view = c.view
-    view.runningCommand { runMenuCommand(view, item) }
+    view.runningCommand { view.guarded("menu item $item", Unit) { runMenuCommand(view, item) } }
     if (item == MenuItem.SELECT_ALL) {
         c.handles = TouchHandles.SELECTION
         c.menuShown = true

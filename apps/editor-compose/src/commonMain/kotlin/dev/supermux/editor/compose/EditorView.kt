@@ -299,6 +299,20 @@ class EditorView(initial: EditorState) : CommandTarget {
         }
     }
 
+    /**
+     * Run [block] (a plugin's command, handler or click reaction) so that its exception never
+     * escapes into the UI: it is counted and logged once ([EditorDiagnostics.pluginFailures]) and
+     * [fallback] returned. Whatever it dispatched before failing stands; nothing else changes.
+     */
+    internal fun <T> guarded(what: String, fallback: T, block: () -> T): T = try {
+        block()
+    } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        EditorDiagnostics.reportPluginFailure(what, e)
+        fallback
+    }
+
     override fun dispatch(spec: TransactionSpec) {
         val userEdit = isUserEdit(spec)
         if (readOnly && userEdit) return

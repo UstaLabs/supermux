@@ -142,4 +142,16 @@ class CommandPolicingTest {
         assertEquals(before, EditorDiagnostics.unlabeledCommandEdits)
         assertEquals(("// " + text).length - 1, view.state.doc.length)
     }
+
+    @Test fun aThrowingCommandNeverEscapesAKeyAMenuOrAClick() {
+        val boom = Command { error("a plugin bug") }
+        val view = EditorView(EditorState.create(text, EditorSelection.cursor(0), keymapOf(KeyBinding("Ctrl-d", boom))))
+        val before = EditorDiagnostics.pluginFailures
+        assertTrue(runBindings(view, KeyChord("d", ctrl = true), apple = false), "the key was not consumed")
+        assertEquals(text, view.state.doc.toString())
+        assertEquals(before + 1, EditorDiagnostics.pluginFailures)
+        // The same guard for menus and click handlers.
+        assertEquals(false, view.guarded("a click handler", false) { boom.run(view) })
+        assertEquals(before + 2, EditorDiagnostics.pluginFailures)
+    }
 }

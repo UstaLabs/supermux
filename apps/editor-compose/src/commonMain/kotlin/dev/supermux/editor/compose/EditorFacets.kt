@@ -256,8 +256,9 @@ object EditorDiagnostics {
         private set
 
     /**
-     * How many times a plugin's input handler threw (a bad change plan): the keystroke was typed
-     * plainly instead. The first is logged with its exception.
+     * How many times a plugin's code threw inside the editor: an input handler (the keystroke was
+     * typed plainly instead), a key binding's or menu item's command, a gutter or widget click
+     * handler (nothing more happened). Never a crash. The first is logged with its exception.
      */
     var pluginFailures: Int = 0
         private set
