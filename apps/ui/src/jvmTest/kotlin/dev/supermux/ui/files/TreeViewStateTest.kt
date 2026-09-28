@@ -43,4 +43,16 @@ class TreeViewStateTest {
         kotlin.test.assertNull(v.selected)
         assertTrue(v.expanded.isEmpty())
     }
+
+    @Test fun retainOnlyDropsClosedViews() {
+        val h = TreeViewStates()
+        val a = h.forView("v1", workdir = "/w")
+        h.forView("v2", workdir = "/w")
+        h.retainOnly(setOf("v1"))
+        assertSame(a, h.forView("v1", workdir = "/w"))
+        val b1 = h.forView("v2", workdir = "/w")
+        b1.toggle("/w/src")
+        h.retainOnly(setOf("v1"))
+        assertTrue(h.forView("v2", workdir = "/w").expanded.isEmpty())
+    }
 }

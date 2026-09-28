@@ -102,6 +102,7 @@ fun rememberWorkspaceSession(
     val previewModes = remember(workspace.id) { mutableStateMapOf<String, Boolean>() }
     // Files-pane view state per view id — held here, beside the documents, so it outlives panes.
     val treeStates = remember(workspace.id) { TreeViewStates() }
+    LaunchedEffect(treeStates, viewsById.keys) { treeStates.retainOnly(viewsById.keys) }
     val fileOpener = WorkspaceFileOpener(
         workspaceId = workspace.id,
         treeOf = { layoutSync.tree },

@@ -50,4 +50,7 @@ class TreeViewStates {
     }
 
     fun forget(viewId: String) { byView.remove(viewId) }
+
+    /** Drop the states of views that no longer exist (a closed Files pane). */
+    fun retainOnly(viewIds: Set<String>) { byView.keys.retainAll(viewIds) }
 }
