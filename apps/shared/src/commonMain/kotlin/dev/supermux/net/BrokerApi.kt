@@ -1333,7 +1333,7 @@ class BrokerApi(
         explicitNulls = false
         coerceInputValues = true
     }
-    internal var spawnTimeoutMillis: Long = 50_000
+    internal var spawnTimeoutMillis: Long = 120_000
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
