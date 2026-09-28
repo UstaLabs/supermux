@@ -11,7 +11,12 @@ import dev.supermux.editor.core.extensionOf
 import dev.supermux.editor.plugins.basics.basics
 import dev.supermux.editor.core.TransactionSpec
 import dev.supermux.editor.sample.resources.Res
+import dev.supermux.editor.plugins.fold.FoldConfig
+import dev.supermux.editor.plugins.fold.fold
 import dev.supermux.editor.plugins.highlight.SyntaxHost
+import dev.supermux.editor.plugins.history.history
+import dev.supermux.editor.plugins.view.EditorSettings
+import dev.supermux.editor.plugins.view.viewSettings
 import dev.supermux.editor.plugins.highlight.highlight
 import dev.supermux.editor.syntax.LanguageRegistry
 import dev.supermux.editor.syntax.SyntaxBackend
@@ -110,10 +115,10 @@ fun addCursorBelow(view: dev.supermux.editor.compose.EditorView) {
 }
 
 /**
- * One open document: an [EditorView] with the plugins, and the highlight plugin's [SyntaxHost] that
- * colours it (the worker hears every transaction; the surface's viewport comes through
- * [onViewport]); the worker's results come back through [hop], which must run them on the UI
- * thread in order.
+ * One open document: an [EditorView] with every M4a plugin (highlight, basics, history, fold, view
+ * settings) and the highlight plugin's [SyntaxHost] that colours it (the worker hears every
+ * transaction; the surface's viewport comes through [onViewport]); the worker's results come back
+ * through [hop], which must run them on the UI thread in order.
  */
 class SampleSession(
     text: String,
@@ -122,9 +127,13 @@ class SampleSession(
     registry: LanguageRegistry,
     scope: CoroutineScope,
     extra: dev.supermux.editor.core.Extension = extensionOf(),
+    settings: EditorSettings = EditorSettings(lineWrap = false),
+    deleteFoldWhole: Boolean = false,
     hop: (() -> Unit) -> Unit,
 ) : AutoCloseable {
-    val view = EditorView(EditorState.create(text, extensions = extensionOf(highlight(language), basics(), extra)))
+    val view = EditorView(EditorState.create(text, extensions = extensionOf(
+        highlight(language), basics(), history(), foldSlot.of(fold(FoldConfig(deleteFoldWhole))), viewSettings(settings), extra,
+    )))
     val host = SyntaxHost(view, backend, registry, scope, hop = hop)
     val worker: SyntaxWorker get() = host.worker
 
@@ -135,7 +144,14 @@ class SampleSession(
     /** The surface's viewport, for the worker (`Editor(onViewport = …)`). */
     fun onViewport(range: IntRange) = host.onViewport(range)
 
+    /** The fold plugin's Backspace policy, switched while the document is open (its folds stay). */
+    fun setDeleteFoldWhole(on: Boolean) = view.dispatch(TransactionSpec(effects = listOf(foldSlot.reconfigure(fold(FoldConfig(on))))))
+
     override fun close() = host.close()
+
+    private companion object {
+        val foldSlot = dev.supermux.editor.core.Compartment("sample.fold")
+    }
 }
 
 /** The editor for [session], reporting its viewport to the worker and its paints to [stats]. */

@@ -52,7 +52,12 @@ import dev.supermux.editor.core.EditorSelection
 import dev.supermux.editor.core.EditorState
 import dev.supermux.editor.core.TransactionSpec
 import dev.supermux.editor.core.decorationsFacet
+import dev.supermux.editor.compose.EditorThemeMode
+import dev.supermux.editor.plugins.fold.Fold
 import dev.supermux.editor.plugins.highlight.precompileSyntax
+import dev.supermux.editor.plugins.history.History
+import dev.supermux.editor.plugins.view.EditorSettings
+import dev.supermux.editor.plugins.view.ViewSettings
 import dev.supermux.editor.syntax.LanguageRegistry
 import dev.supermux.editor.syntax.Syntax
 import dev.supermux.editor.syntax.SyntaxBackend
@@ -99,6 +104,9 @@ fun SampleApp(
     var readOnly by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
     var fontSize by remember { mutableStateOf(EditorZoom.DEFAULT) }
+    var deleteFoldWhole by remember { mutableStateOf(false) }
+    // A new document starts with the sample's settings (the view settings plugin).
+    fun settingsNow() = EditorSettings(fontSize = fontSize, lineWrap = wrap, theme = if (dark) EditorThemeMode.DARK else EditorThemeMode.LIGHT)
     var webKeyboard by remember { mutableStateOf(WebKeyboard.AUTO) }
     val inputLog = remember { InputLog() }
     DisposableEffect(Unit) {
@@ -138,12 +146,12 @@ fun SampleApp(
                 SampleFile.SIDE_BY_SIDE -> sideBySideExtension
                 else -> dev.supermux.editor.core.extensionOf()
             }
-            SampleSession(text, f.language, backend!!, registry, scope, extra) { run -> scope.launch { run() } }
+            SampleSession(text, f.language, backend!!, registry, scope, extra, settingsNow(), deleteFoldWhole) { run -> scope.launch { run() } }
         }
     }
     // The side-by-side demo's working copy (B): the same file with a few edits, linked to A.
     val sessionB = loaded?.takeIf { it.first == SampleFile.SIDE_BY_SIDE }?.let { (f, text) ->
-        remember(f, text, backend) { SampleSession(fakeWorkingCopy(text), f.language, backend!!, registry, scope, sideBySideExtension) { run -> scope.launch { run() } } }
+        remember(f, text, backend) { SampleSession(fakeWorkingCopy(text), f.language, backend!!, registry, scope, sideBySideExtension, settingsNow(), deleteFoldWhole) { run -> scope.launch { run() } } }
     }
     if (sessionB != null) DisposableEffect(sessionB) { onDispose { sessionB.close() } }
 
@@ -211,19 +219,21 @@ fun SampleApp(
             }
             for (f in SampleFile.entries) Chip(f.label, f == file, ink) { file = f }
         }
+        // A zoom (keys, pinch) is kept the way :ui will keep it: a whole px, through the host's callback.
+        val zoomReport = remember(session) { session?.let { s -> ViewSettings.fontSizeReporter(s.view) { px -> fontSize = px.toFloat() } } ?: { _: Float -> } }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
                 failure != null -> Message("could not start: $failure", ink)
                 session == null -> Message("loading…", ink)
                 sessionB != null -> SideBySidePane(session, sessionB, theme, stats, onFontSize = { fontSize = it })
-                file == SampleFile.DEMO -> SampleEditorPane(session, theme, wrap, stats, readOnly = readOnly, onFontSize = { fontSize = it }, widgets = M3cDemo.rememberWidgets(ink, chrome))
-                else -> SampleEditorPane(session, theme, wrap, stats, readOnly = readOnly, onFontSize = { fontSize = it })
+                file == SampleFile.DEMO -> SampleEditorPane(session, theme, wrap, stats, readOnly = readOnly, onFontSize = zoomReport, widgets = M3cDemo.rememberWidgets(ink, chrome))
+                else -> SampleEditorPane(session, theme, wrap, stats, readOnly = readOnly, onFontSize = zoomReport)
             }
             val status = session?.let { s ->
                 val st = s.view.state
                 val syntax = when { s.language == null -> "plain"; Syntax.isOff(st) -> "syntax off"; else -> s.language }
                 val sp = dev.supermux.editor.compose.EditorDiagnostics.smartPunctuation
-                "${st.doc.lineCount} lines · $syntax · ${stats.summary}" + (if (sp == "n/a") "" else " · smart punctuation: $sp") +
+                "${st.doc.lineCount} lines · $syntax · undo ${History.undoDepth(st)} · folds ${Fold.folded(st).size} · ${stats.summary}" + (if (sp == "n/a") "" else " · smart punctuation: $sp") +
                     (if (file == SampleFile.DEMO && demoNote.isNotEmpty()) " · $demoNote" else "") +
                     (if (benchResult.isNotEmpty()) "\n$benchResult" else "")
             } ?: ""
@@ -245,8 +255,12 @@ fun SampleApp(
         if (settings) {
             SettingsSheet(
                 chrome = chrome, ink = ink,
-                wrap = wrap, onWrap = { wrap = it },
-                dark = dark, onDark = { dark = it },
+                wrap = wrap, onWrap = { on -> wrap = on; for (s in listOfNotNull(session, sessionB)) ViewSettings.update(s.view) { it.copy(lineWrap = on) } },
+                dark = dark, onDark = { on ->
+                    dark = on
+                    for (s in listOfNotNull(session, sessionB)) ViewSettings.update(s.view) { it.copy(theme = if (on) EditorThemeMode.DARK else EditorThemeMode.LIGHT) }
+                },
+                deleteFoldWhole = deleteFoldWhole, onDeleteFoldWhole = { on -> deleteFoldWhole = on; for (s in listOfNotNull(session, sessionB)) s.setDeleteFoldWhole(on) },
                 readOnly = readOnly, onReadOnly = { readOnly = it },
                 fontSize = session?.view?.effectiveFontSize ?: fontSize,
                 onZoom = { step -> session?.view?.let { v -> if (step == 0) v.resetZoom() else v.zoomTo(v.effectiveFontSize + step) } },
@@ -269,6 +283,7 @@ private fun SettingsSheet(
     wrap: Boolean, onWrap: (Boolean) -> Unit,
     dark: Boolean, onDark: (Boolean) -> Unit,
     readOnly: Boolean, onReadOnly: (Boolean) -> Unit,
+    deleteFoldWhole: Boolean, onDeleteFoldWhole: (Boolean) -> Unit,
     fontSize: Float, onZoom: (Int) -> Unit,
     logOn: Boolean, onLog: (Boolean) -> Unit,
     webKeyboard: WebKeyboard, onWebKeyboard: (WebKeyboard) -> Unit,
@@ -291,6 +306,8 @@ private fun SettingsSheet(
             Chip(if (wrap) "wrap: on" else "wrap: off", wrap, ink) { onWrap(!wrap) }
             Chip(if (dark) "theme: dark" else "theme: light", false, ink) { onDark(!dark) }
             Chip(if (readOnly) "read-only: on" else "read-only: off", readOnly, ink) { onReadOnly(!readOnly) }
+            // The fold plugin's Backspace policy: off = unfold first (the default), on = CM6's delete whole.
+            Chip(if (deleteFoldWhole) "delete fold whole: on" else "delete fold whole: off", deleteFoldWhole, ink) { onDeleteFoldWhole(!deleteFoldWhole) }
         }
         Line {
             BasicText("font ${FrameStats.fmt(fontSize.toDouble())}", style = TextStyle(color = ink, fontSize = 12.sp))

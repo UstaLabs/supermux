@@ -68,14 +68,13 @@ import dev.supermux.editor.core.panelsFacet
 
 // ------------------------------------------------------------------ the M3c demo --
 //
-// What M4's plugins will do, faked just enough to try M3c's surface by hand: lint and diff markers
-// (a click says which line), fold arrows that really fold ({ ... } ranges, "⋯" to unfold), a review
-// thread under a line with a reply field (the 💬 marker opens and closes it), an inline type hint,
-// and a find panel.
+// What M4's later plugins will do, faked just enough to try M3c's surface by hand: lint and diff
+// markers (a click says which line), a review thread under a line with a reply field (the 💬 marker
+// opens and closes it), an inline type hint, and a find panel. Folding is the real fold plugin now
+// (M4a), as in every sample file.
 
-/** The demo's own memory: its folds (mapped through edits), its markers, the thread and the panel. */
+/** The demo's own memory: its markers, the thread and the panel. */
 private class DemoValue(
-    val folds: RangeSet<Decoration>,
     val markers: RangeSet<GutterMarker>,
     val threadAt: Int,
     val threadOpen: Boolean,
@@ -91,8 +90,6 @@ object DemoProbe {
 }
 
 object M3cDemo {
-    private val toggleFold = StateEffectType<Int>("demo.fold") // a line to fold / unfold
-    private val unfoldAt = StateEffectType<Int>("demo.unfold") // a fold's start
     private val toggleThread = StateEffectType<Unit>("demo.thread")
 
     /** The find panel: in or out of the configuration. */
@@ -112,13 +109,12 @@ object M3cDemo {
         { f ->
             extensionOf(
                 gutterMarkersFacet.compute(FacetDep.field(f)) { it.field(f).markers },
-                gutterMarkersFacet.compute(FacetDep.field(f), FacetDep.Doc) { foldMarkers(it.doc, it.field(f).folds) },
                 decorationsFacet.compute(FacetDep.field(f)) { st ->
                     val v = st.field(f)
                     val extra = ArrayList<Ranged<Decoration>>()
                     if (v.threadOpen) extra += Ranged(v.threadAt, v.threadAt, Decoration.BlockWidget(WidgetKey("thread", "t1"), estimatedHeightLines = 5f))
                     extra += Ranged(v.hintAt, v.hintAt, Decoration.InlineWidget(WidgetKey("hint", "h1"), side = 1))
-                    v.folds.update(add = extra)
+                    RangeSet.of(extra)
                 },
             )
         },
@@ -139,76 +135,31 @@ object M3cDemo {
         val text = doc.slice(0, minOf(doc.length, 20_000))
         val v = Regex("\\bval [A-Za-z_][A-Za-z0-9_]*").find(text)
         val hint = v?.range?.last?.plus(1) ?: (at(7) - 1).coerceAtLeast(0)
-        return DemoValue(RangeSet.empty(), RangeSet.of(m), at(thread), threadOpen = true, hintAt = hint)
+        return DemoValue(RangeSet.of(m), at(thread), threadOpen = true, hintAt = hint)
     }
 
     private fun update(v: DemoValue, tr: Transaction): DemoValue {
-        var folds = v.folds.map(tr.changes)
         val markers = v.markers.map(tr.changes)
         var threadAt = tr.changes.mapPos(v.threadAt, -1)
         var open = v.threadOpen
         val doc = tr.state.doc
         for (e in tr.effects) {
-            e.valueIf(toggleFold)?.let { line ->
-                val start = doc.lineStart(line)
-                val existing = folds.firstOrNull { doc.lineIndexAt(it.from) == line }
-                folds = if (existing != null) folds.update(filter = { it !== existing })
-                else foldRange(doc, line)?.let { (a, b) -> folds.update(add = listOf(Ranged(a, b, Decoration.Replace(WidgetKey("fold", "f$start"), fold = true)))) } ?: folds
-            }
-            e.valueIf(unfoldAt)?.let { at -> folds = folds.update(filter = { it.from != at }) }
             e.valueIf(toggleThread)?.let { open = !open }
         }
         if (threadAt > doc.length) threadAt = doc.length
-        return DemoValue(folds, markers, doc.lineStart(doc.lineIndexAt(threadAt)), open, tr.changes.mapPos(v.hintAt, 1))
+        return DemoValue(markers, doc.lineStart(doc.lineIndexAt(threadAt)), open, tr.changes.mapPos(v.hintAt, 1))
     }
 
-    /** A line ending in `{`: from after it to its matching `}` (which stays shown after the "⋯"). */
-    private fun foldRange(doc: Rope, line: Int): Pair<Int, Int>? {
-        val start = doc.lineStart(line)
-        val end = if (line + 1 < doc.lineCount) doc.lineStart(line + 1) - 1 else doc.length
-        if (end <= start || doc.charAt(end - 1) != '{') return null
-        var depth = 0
-        var i = end - 1
-        val limit = minOf(doc.length, end + 200_000)
-        while (i < limit) {
-            when (doc.charAt(i)) { '{' -> depth++; '}' -> { depth--; if (depth == 0) return if (doc.lineIndexAt(i) > line) end to i else null } }
-            i++
-        }
-        return null
-    }
-
-    /** A fold arrow on every line ending in `{` (in the first 3,000 lines): open, or closed when folded. */
-    private fun foldMarkers(doc: Rope, folds: RangeSet<Decoration>): RangeSet<GutterMarker> {
-        val folded = folds.mapTo(HashSet()) { doc.lineIndexAt(it.from) }
-        val out = ArrayList<Ranged<GutterMarker>>()
-        for (l in 0 until minOf(doc.lineCount, 3000)) {
-            val s = doc.lineStart(l)
-            val e = if (l + 1 < doc.lineCount) doc.lineStart(l + 1) - 1 else doc.length
-            if (e > s && doc.charAt(e - 1) == '{') {
-                val closed = l in folded
-                out += Ranged(s, s, GutterMarker("fold", if (closed) "fold-closed" else "fold-open", if (closed) "unfold" else "fold"))
-            }
-        }
-        return RangeSet.of(out)
-    }
-
-    /** The demo: its state field, and its say over gutter clicks (fold arrows, the 💬) and the "⋯". */
+    /** The demo: its state field, and its say over gutter clicks (the 💬, the lint and diff markers). */
     fun extension(onGutter: (String) -> Unit = {}): Extension = extensionOf(
         field,
         panelSlot.of(extensionOf()),
         gutterClickFacet.of(GutterClickHandler { t, column, line, marker ->
             when (column) {
-                "fold" -> { if (marker != null) t.dispatch(TransactionSpec(effects = listOf(toggleFold.of(line)))); true }
                 "comment" -> { if (marker != null) t.dispatch(TransactionSpec(effects = listOf(toggleThread.of(Unit)))); true }
+                "fold" -> false // the fold plugin's
                 else -> { onGutter("gutter click: $column, line ${line + 1}${marker?.tooltip?.let { " — $it" } ?: ""}"); true }
             }
-        }),
-        widgetClickFacet.of(WidgetClickHandler { t, key, from, _ ->
-            if (key.type == "fold") { t.dispatch(TransactionSpec(effects = listOf(unfoldAt.of(from)))); true } else false
-        }),
-        // Backspace into a fold, a search landing inside one: unfold (the editor's unfold-first default).
-        dev.supermux.editor.compose.revealFacet.of(dev.supermux.editor.compose.RevealHandler { t, from, _ ->
-            t.dispatch(TransactionSpec(effects = listOf(unfoldAt.of(from)))); true
         }),
     )
 

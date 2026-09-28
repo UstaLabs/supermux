@@ -185,7 +185,7 @@ object AtomicDelete {
     }
 }
 
-/** Annotations the surface puts on the transactions it makes, for plugins (history, M4) to read. */
+/** Annotations the surface puts on the transactions it makes, for plugins (history) to read. */
 object EditorAnnotations {
     /**
      * On a composition step (`input.ime`): the transaction just before this one was the SAME

@@ -564,7 +564,8 @@ private val KEY_NAMES: Map<Key, String> = buildMap {
  * every key is the IME's (Enter picks a candidate, Backspace edits the preedit).
  *
  * The field's own undo/redo chords are swallowed: its private history knows only the window it
- * held, and replaying it would edit the document behind the editor's back (history is M4's).
+ * held, and replaying it would edit the document behind the editor's back (undo is the history
+ * plugin's, editor-plugins/history).
  */
 internal fun handleEditorKey(view: EditorView, event: KeyEvent, composing: Boolean): Boolean {
     if (event.type != KeyEventType.KeyDown) return false

@@ -252,7 +252,7 @@ the old and new ranges are paired by position, not index, since ranges may merge
 **Scrolling or searching into a fold.** A transaction that sets the selection inside a replaced
 range and scrolls it into view (a search match, go-to-definition) asks the `revealFacet` handlers to
 show it (the fold plugin unfolds by its state effect) and keeps the selection; without a handler
-that takes it, the selection moves out to the range's edge. M4's fold plugin installs the handler;
+that takes it, the selection moves out to the range's edge. The fold plugin (editor-plugins/fold) installs the handler;
 M4's search dispatches its selection with `scrollIntoView` and needs nothing else
 (`AtomicFoldsTest.aSelectionScrolledIntoAFoldAsksToRevealIt` is the hook's test).
 
@@ -602,7 +602,7 @@ a focus that starts with a trackpad or mouse click starts no input session (IME 
 need a tap); not yet checked on the iPad with its trackpad. Backgrounding and resuming the app was
 not tested for the caret bug (only document switching). Device frame times (120 Hz iPad, typing on
 the Fold) were not measured; M3c added the in-app device bench (below). The Smart Punctuation shim depends on Compose
-internals (above): re-run `ios-sim.sh` on every Compose upgrade. Undo is M4's history plugin.
+internals (above): re-run `ios-sim.sh` on every Compose upgrade. Undo is the history plugin's (M4a).
 
 ## The device pass (M3c)
 
@@ -638,6 +638,25 @@ The same scenes on the Mac JVM (release-like, loaded 6-16, `DemoRenderTest` / `E
 M3c demo scrolls at p95 10.3-10.7 ms per frame with markers, fold arrows and the thread widget; two
 linked editors at 9.8-10.4 ms; keystroke p95 6.1-7.8 ms.
 
+## The device pass (M4a)
+
+The sample now runs every M4a plugin (highlight, basics+, history, fold, view settings) on every
+file; the M3c demo's own fold arrows are gone (the fold plugin folds there too), and the settings
+sheet has **"delete fold whole"** (the fold plugin's CM6 Backspace policy; off = unfold first). The
+status line shows the undo depth and the fold count. Builds of 2026-09-28 ~04:00, from
+`mac:~/work/native-editor-m3b`:
+
+| Device | Build | State |
+|---|---|---|
+| iPhone 15 Pro | Release (`CONFIG=Release iosApp/device.sh`) | installed; launch refused: **locked** |
+| iPad Air M2 | Release, same build | installed; launch refused: **locked** |
+| Galaxy Z Fold 7 | `assembleRelease` | installed and started behind the keyguard (**locked**) |
+| Mac desktop window, web page | from the same clone | restarted; `webInputTest` (input, two, widget) and `webColdStartTest` pass |
+
+The Mac JVM, same harness as M3c: keystroke p95 5.6 ms (10k lines, syntax on), 1 MB line 4.0 ms,
+scroll 7.0 ms, 10 MB open 32 ms, the demo 10.5 ms, two linked editors 10.3 ms: no regression from
+the plugins (a first run caught selection matches searching a whole 1 MB line: 192 ms, now bounded).
+
 ## Tests
 
 `./gradlew :editor-compose:jvmTest` (on the Mac: see `scripts/editor/mac-sync.sh`): the pure logic
@@ -657,7 +676,8 @@ iOS simulator 96 (commonTest: `Folds`, `LineMap`, `AtomicFoldsTest`, `Accessible
 
 ## Not here yet
 
-M4: the plugins that produce these decorations (fold, search, lsp, diff, history, basics+) and view
-settings. An accessory bar for soft keyboards (Tab / Shift-Tab, arrows). A gap widget draws plain
-background (a hatched diff gap is the diff plugin's registered content, if it wants one). Lines over
-10,000 units show no inline widgets or replaces.
+M4a built the first plugins on this surface (`editor-plugins/`: history, basics+, highlight, fold,
+view settings). Still to come: M4b search/replace (its panel and its matches), M4c LSP, M4d diff and
+review threads. An accessory bar for soft keyboards (Tab / Shift-Tab, arrows, undo). A gap widget
+draws plain background (a hatched diff gap is the diff plugin's registered content, if it wants
+one). Lines over 10,000 units show no inline widgets or replaces.
