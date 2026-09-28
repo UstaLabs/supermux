@@ -42,4 +42,14 @@ class FlattenTreeTest {
         val rows = flattenTree("/w", emptySet()) { DirState.Loading(prev) }
         assertEquals(listOf("x"), rows.map { it.entry.name })
     }
+
+    @Test fun failedRefreshKeepsPreviousChildrenUnderTheErrorRow() {
+        val prev = DirSnapshot(path = "/w/src", version = "v1", entries = listOf(file("a.kt")))
+        val states = mapOf(
+            "/w" to ready("/w", dir("src")),
+            "/w/src" to DirState.Failed("EACCES", "denied", prev),
+        )
+        val rows = flattenTree("/w", setOf("/w/src")) { states[it] ?: DirState.Unloaded }
+        assertEquals(listOf("src:0:ERROR", "a.kt:1:FILE"), rows.map { "${it.entry.name}:${it.depth}:${it.status}" })
+    }
 }

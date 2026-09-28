@@ -28,7 +28,11 @@ fun flattenTree(root: String, expanded: Set<String>, dirOf: (String) -> DirState
             val real = realOf(p)
             if (real != null && real in seenReals) { out += TreeRow(p, depth, e, RowStatus.LOOP); continue }
             when (st) {
-                is DirState.Failed -> out += TreeRow(p, depth, e, RowStatus.ERROR, st.message.ifBlank { st.code })
+                is DirState.Failed -> {
+                    // A failed REFRESH keeps showing what we knew, under the error row.
+                    out += TreeRow(p, depth, e, RowStatus.ERROR, st.message.ifBlank { st.code })
+                    if (st.previous != null) walk(p, depth + 1, seenReals + (real ?: p))
+                }
                 is DirState.Loading -> if (st.previous == null) out += TreeRow(p, depth, e, RowStatus.LOADING) else {
                     out += TreeRow(p, depth, e, RowStatus.OPEN); walk(p, depth + 1, seenReals + (real ?: p))
                 }

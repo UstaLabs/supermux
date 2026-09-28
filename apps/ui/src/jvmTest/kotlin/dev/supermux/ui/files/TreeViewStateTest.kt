@@ -36,4 +36,11 @@ class TreeViewStateTest {
         h.forget("v1")
         assertNotSame(b, h.forView("v1", workdir = "/other"))
     }
+
+    @Test fun revealOutsideRootDoesNothing() {
+        val v = TreeViewState("/w")
+        v.reveal("/other/A.kt")
+        kotlin.test.assertNull(v.selected)
+        assertTrue(v.expanded.isEmpty())
+    }
 }

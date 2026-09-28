@@ -32,6 +32,7 @@ class TreeViewState(rootPath: String) {
 
     /** Expand every ancestor of [path] under [rootPath] and select it. */
     fun reveal(path: String) {
+        if (!isWithin(rootPath, path)) return // nothing to show outside the tree's root
         val anc = ancestorsWithin(rootPath, path).filter { it != rootPath }
         if (anc.isNotEmpty()) expanded = expanded + anc
         selected = path
