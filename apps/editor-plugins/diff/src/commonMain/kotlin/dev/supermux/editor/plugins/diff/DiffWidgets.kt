@@ -69,9 +69,11 @@ fun InlineDiffEditor(
     label: String = "Diff",
     lineWrap: Boolean = false,
     onFontSize: (Float) -> Unit = {},
+    /** Null: read-only unless the model is [DiffConfig.editable]; true: read-only anyway (a review surface that only reverts, see `readOnlyAllowFacet`). */
+    readOnly: Boolean? = null,
 ) {
     val editable = Diff.model(view.state)?.config?.editable ?: true
-    Editor(view, modifier.diffPaging(view), theme = theme, readOnly = !editable, widgets = widgets, label = label, lineWrap = lineWrap, onFontSize = onFontSize)
+    Editor(view, modifier.diffPaging(view), theme = theme, readOnly = readOnly ?: !editable, widgets = widgets, label = label, lineWrap = lineWrap, onFontSize = onFontSize)
 }
 
 /**

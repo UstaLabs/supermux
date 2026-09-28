@@ -272,6 +272,7 @@ fun ViewHost(
                     )
                 "diff" -> DiffPaneForWorkspace(
                     actions = actions,
+                    documents = documents,
                     workspaceId = workspaceId,
                     viewId = view.id,
                     base = view.stateString("diffBase"),
@@ -665,6 +666,7 @@ private fun FilePaneForWorkspace(
         lspStatusQuery = { id, p -> actions.lspStatusQuery(id, p) },
         lspOpen = { id, serverId -> actions.lspOpen(id, serverId) },
         lspRpcOut = { id, serverId, message -> actions.lspRpcOut(id, serverId, message) },
+        lspClose = { id, serverId -> actions.lspClose(id, serverId) },
         lineWrap = lineWrap,
         fontSize = fontSize,
         onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
@@ -678,6 +680,7 @@ private fun FilePaneForWorkspace(
 @Composable
 private fun DiffPaneForWorkspace(
     actions: ShellActions,
+    documents: DocumentStore?,
     workspaceId: String,
     viewId: String,
     base: String?,
@@ -728,6 +731,7 @@ private fun DiffPaneForWorkspace(
         onReviewSubmit = { reviewSessionId?.let { actions.reviewSubmit(it) } },
         onClose = onClose,
         writeDiffFile = { repo, path, text -> actions.workspaceFsWrite(workspaceId, if (repo.isBlank()) path else "$repo/$path", text) },
+        diffDocuments = documents,
         modifier = modifier.fillMaxSize(),
     )
 }

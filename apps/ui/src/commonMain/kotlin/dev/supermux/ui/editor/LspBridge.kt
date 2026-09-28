@@ -28,6 +28,8 @@ class LspBridge(
     private val lspStatusQuery: (sessionId: String, path: String) -> Unit,
     private val lspOpen: (sessionId: String, serverId: String) -> Unit,
     private val lspRpcOut: (sessionId: String, serverId: String, message: String) -> Unit,
+    /** `lsp_close`: the broker stops the server (the native editor's clients, when their store goes). */
+    private val lspClose: (sessionId: String, serverId: String) -> Unit = { _, _ -> },
 ) {
     private fun statusKey(path: String) = "$sessionId|$path"
 
@@ -39,7 +41,10 @@ class LspBridge(
      */
     suspend fun queryStatus(path: String): ServerFrame.LspStatus {
         val key = statusKey(path)
-        val prior = lspStatus.value[key]
+        // A "stale" entry (the broker connection was replaced) is not an answer: wait for a fresh
+        // one as if nothing were cached, and never fall back to it.
+        val prior = lspStatus.value[key]?.takeIf { it.state != LSP_STATE_STALE }
+        val stalePrior = lspStatus.value[key]?.takeIf { it.state == LSP_STATE_STALE }
         lspStatusQuery(sessionId, path)
         // Wait for a status OBJECT that is not the one held when we asked (=== identity).
         // If nothing is cached yet, wait the full 9s for the first response (parity iOS).
@@ -48,7 +53,7 @@ class LspBridge(
         // the cached entry (the correct answer) instead of mislabelling it "unavailable".
         val window = if (prior == null) 9_000L else 1_500L
         val fresh = withTimeoutOrNull(window) {
-            lspStatus.first { map -> map[key]?.let { it !== prior } == true }[key]
+            lspStatus.first { map -> map[key]?.let { it !== prior && it !== stalePrior && it.state != LSP_STATE_STALE } == true }[key]
         }
         return fresh
             ?: prior
@@ -87,6 +92,9 @@ class LspBridge(
 
     /** Send an outbound JSON-RPC message from the cm6 LSP client to the broker. */
     fun rpcOut(serverId: String, message: String) = lspRpcOut(sessionId, serverId, message)
+
+    /** Stop [serverId] for this session at the broker. */
+    fun close(serverId: String) = lspClose(sessionId, serverId)
 
     /** The session this bridge serves. */
     val session: String get() = sessionId

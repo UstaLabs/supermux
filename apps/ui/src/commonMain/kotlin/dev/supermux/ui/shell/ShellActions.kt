@@ -142,6 +142,7 @@ class ShellActions(
     val lspStatusQuery: (sessionId: String, path: String) -> Unit = { _, _ -> },
     val lspOpen: (sessionId: String, serverId: String) -> Unit = { _, _ -> },
     val lspRpcOut: (sessionId: String, serverId: String, message: String) -> Unit = { _, _, _ -> },
+    val lspClose: (sessionId: String, serverId: String) -> Unit = { _, _ -> },
 
     // ── review + walkthrough ──────────────────────────────────────────────────────────────────
     val reviewComments: suspend (sessionId: String) -> List<ReviewComment> = { emptyList() },
@@ -216,6 +217,7 @@ fun rememberShellActions(
             lspStatusQuery = { id, path -> session(id)?.let { app.lspStatusQuery(it, path) } },
             lspOpen = { id, serverId -> session(id)?.let { app.lspOpen(it, serverId) } },
             lspRpcOut = { id, serverId, message -> session(id)?.let { app.lspRpcOut(it, serverId, message) } },
+            lspClose = { id, serverId -> session(id)?.let { app.lspClose(it, serverId) } },
             reviewComments = { id -> session(id)?.let { app.reviewComments(it) }.orEmpty() },
             reviewAddComment = { id, body -> session(id)?.let { app.reviewAddComment(it, body) } },
             reviewResolve = { id, commentId -> session(id)?.let { app.reviewResolve(it, commentId) } == true },
@@ -278,6 +280,7 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             lspStatusQuery = { id, path -> fleet.lspStatusQuery(id, path) },
             lspOpen = { id, serverId -> fleet.lspOpen(id, serverId) },
             lspRpcOut = { id, serverId, message -> fleet.lspRpcOut(id, serverId, message) },
+            lspClose = { id, serverId -> fleet.lspClose(id, serverId) },
             reviewComments = { id -> fleet.reviewComments(id) },
             reviewAddComment = { id, body -> fleet.reviewAddComment(id, body) },
             reviewResolve = { id, commentId -> fleet.reviewResolve(id, commentId) },

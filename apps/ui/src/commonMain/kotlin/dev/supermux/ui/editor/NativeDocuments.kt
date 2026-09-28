@@ -73,7 +73,10 @@ class NativeDocument internal constructor(
 
     val primary: EditorView = EditorView(EditorState.create(document.content, extensions = extensions(withLsp = true)))
 
-    private var savedDoc: Rope by mutableStateOf(primary.state.doc)
+    // The last LOADED or SAVED text (the document may carry edits made before the view existed).
+    private var savedDoc: Rope by mutableStateOf(
+        primary.state.doc.let { d -> if (d.length == document.savedContent.length && d.toString() == document.savedContent) d else Rope.of(document.savedContent) },
+    )
 
     // Dirty is read by every tab chip on every recomposition: remember the answer per rope, so a
     // cursor move (same rope) costs nothing and only a same-length edit compares the texts.

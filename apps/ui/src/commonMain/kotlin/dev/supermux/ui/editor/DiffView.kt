@@ -88,6 +88,7 @@ import dev.supermux.net.DiffFile
 import dev.supermux.net.RepoDiff
 import dev.supermux.net.RepoRefs
 import dev.supermux.net.ReviewComment
+import dev.supermux.net.AddCommentBody
 import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
@@ -147,10 +148,15 @@ fun DiffView(
      * and composer. Null (or [NativeEditor] off) keeps the patch rows.
      */
     readFile: (suspend (repo: String, path: String) -> Result<String>)? = null,
-    /** Writes a working copy back: offers revert (and saving an edit) in the native diff. Null: read-only. */
+    /** Writes a working copy back: offers hunk revert in the native diff. Null: no revert. */
     writeFile: (suspend (repo: String, path: String, text: String) -> Boolean)? = null,
-    /** A reply to [root]'s thread (the native diff's thread widgets have a reply field). */
-    onReply: suspend (root: ReviewComment, body: String) -> Unit = { _, _ -> },
+    /**
+     * Posts a comment or a reply and answers what the broker created (null: it failed, the
+     * composer's draft stays). The native diff uses it for both; null falls back to [onAddComment].
+     */
+    postComment: (suspend (AddCommentBody) -> ReviewComment?)? = null,
+    /** The open documents: a revert goes through the file's document when it is open (and is not offered while it is dirty). */
+    documents: DocumentStore? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -165,14 +171,23 @@ fun DiffView(
     val uiPrefs = LocalUiPrefs.current
     val treeView by uiPrefs.editorDiffTreeView.collectAsState(EDITOR_DIFF_TREE_VIEW_DEFAULT)
     val sideBySide by uiPrefs.editorDiffSideBySide.collectAsState(EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT)
+    // Kept by the pane, not the (lazy) file items: a rebuilt item finds its drafts and its scroll.
+    val nativeDrafts = remember { HashMap<String, MapReviewDrafts>() }
+    val nativeScroll = remember { HashMap<String, dev.supermux.editor.compose.EditorScrollPosition>() }
     val native = if (readFile != null && NativeEditor.enabled) {
         NativeDiffSupport(
             readFile = readFile,
             writeFile = writeFile,
             sideBySide = sideBySide,
-            onAddComment = onAddComment,
-            onReply = onReply,
+            postComment = postComment ?: { body ->
+                onAddComment(body.repo, body.path, body.anchorLine, body.anchorContext, body.diffHunkHeader.orEmpty(), body.body)
+                // The legacy callback reports nothing: count it as posted.
+                ReviewComment(id = "", repo = body.repo, path = body.path, side = body.side, anchorLine = body.anchorLine, body = body.body, status = "open")
+            },
             onResolve = onResolve,
+            documents = documents,
+            drafts = { repo, path -> nativeDrafts.getOrPut("$repo $path") { MapReviewDrafts() } },
+            scroll = nativeScroll,
         )
     } else null
     // `repo||path||newLine` of the line whose composer is open (null = none).
@@ -954,13 +969,8 @@ private fun FileSection(
                             repo = repo,
                             file = file,
                             wrap = wrap,
-                            sideBySide = native.sideBySide,
                             comments = comments,
-                            readFile = native.readFile,
-                            writeFile = native.writeFile,
-                            onAddComment = native.onAddComment,
-                            onReply = native.onReply,
-                            onResolve = native.onResolve,
+                            support = native,
                             onReload = onReload,
                             testTagIndex = testTagIndex,
                             fallback = rows,
@@ -1357,7 +1367,9 @@ internal class NativeDiffSupport(
     val readFile: suspend (repo: String, path: String) -> Result<String>,
     val writeFile: (suspend (repo: String, path: String, text: String) -> Boolean)?,
     val sideBySide: Boolean,
-    val onAddComment: suspend (repo: String, path: String, anchorLine: Int, anchorContext: String, hunkHeader: String, body: String) -> Unit,
-    val onReply: suspend (root: ReviewComment, body: String) -> Unit,
+    val postComment: suspend (AddCommentBody) -> ReviewComment?,
     val onResolve: suspend (commentId: String) -> Unit,
+    val documents: DocumentStore? = null,
+    val drafts: (repo: String, path: String) -> ReviewDrafts = { _, _ -> MapReviewDrafts() },
+    val scroll: MutableMap<String, dev.supermux.editor.compose.EditorScrollPosition> = HashMap(),
 )

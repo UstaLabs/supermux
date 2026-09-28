@@ -80,22 +80,33 @@ class BrokerLspTransport(
 
     fun close() {
         closed = true
+        reopenPending = false
         watcher?.cancel()
         opening?.cancel()
         statusFlow.value = LspConnState.DISCONNECTED
     }
 
+    /** A reopen asked for while one was in flight: it runs once that one ends (its open may predate the reason). */
+    private var reopenPending = false
+
     private fun reopen() {
-        if (closed || opening?.isActive == true) return
+        if (closed) return
+        if (opening?.isActive == true) { reopenPending = true; return }
         opening = scope.launch {
             if (statusFlow.value == LspConnState.CONNECTED) statusFlow.value = LspConnState.CONNECTING
             opens++
-            if (bridge.open(serverId)) {
-                generation.value = generation.value + 1
-                statusFlow.value = LspConnState.CONNECTED
-            } else {
-                statusFlow.value = LspConnState.DISCONNECTED
+            val ok = bridge.open(serverId)
+            if (ok) generation.value = generation.value + 1
+            if (reopenPending) {
+                // A broker reconnect (or a failed send) landed during this open's settle window: the
+                // server it confirmed may already be gone. Open again rather than report CONNECTED
+                // to a process that no longer exists.
+                reopenPending = false
+                opening = null
+                reopen()
+                return@launch
             }
+            statusFlow.value = if (ok) LspConnState.CONNECTED else LspConnState.DISCONNECTED
         }
     }
 }

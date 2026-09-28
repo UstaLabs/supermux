@@ -115,13 +115,15 @@ fun SideBySideDiff(
     baseLabel: String = "Base",
     workingLabel: String = "Working copy",
     onPaint: (() -> Unit)? = null,
+    /** Null: the working side is read-only unless [DiffConfig.editable]; true: read-only anyway. */
+    readOnly: Boolean? = null,
 ) {
     val editable = pair.model?.config?.editable ?: true
     Row(modifier) {
         Editor(pair.base, Modifier.weight(1f).fillMaxHeight(), theme = theme, readOnly = true, lineWrap = lineWrap,
             onFontSize = onFontSize, label = baseLabel, linked = pair.link, linkedSide = LinkedSide.A, widgets = widgets)
         Box(Modifier.width(1.dp).fillMaxHeight().background(theme.gutterForeground.copy(alpha = 0.5f)))
-        Editor(pair.working, Modifier.weight(1f).fillMaxHeight(), theme = theme, readOnly = !editable, lineWrap = lineWrap,
+        Editor(pair.working, Modifier.weight(1f).fillMaxHeight(), theme = theme, readOnly = readOnly ?: !editable, lineWrap = lineWrap,
             onFontSize = onFontSize, label = workingLabel, linked = pair.link, linkedSide = LinkedSide.B, widgets = widgets, onPaint = onPaint)
     }
 }

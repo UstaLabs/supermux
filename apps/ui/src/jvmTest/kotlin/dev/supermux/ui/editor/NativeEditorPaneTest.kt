@@ -193,4 +193,51 @@ class NativeEditorPaneTest {
         // Opening a file never writes the font size (only a zoom does).
         runBlocking { assertEquals(13, prefs.editorFontSize.first()) }
     }
+
+    /** Review I8: under the markdown preview the editor is read-only (a hardware keyboard edits nothing). */
+    @Test fun a_covered_editor_takes_no_edits() = runComposeUiTest {
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined)
+        val store = storeWith(scope, "a.md" to "# title")
+        val doc = store.get("a.md")!!
+        var covered by mutableStateOf(false)
+        setContent {
+            CompositionLocalProvider(LocalUiPrefs provides UiPrefs(InMemorySettingsStore())) {
+                NativeDocumentEditor(store, doc, lineWrap = true, fontSize = 13, onFontSize = {}, modifier = Modifier.fillMaxSize(), covered = covered)
+            }
+        }
+        waitForIdle()
+        covered = true
+        waitForIdle()
+        val view = doc.native!!.primary
+        view.typeText("x")
+        assertEquals("# title", view.state.doc.toString())
+        covered = false
+        waitForIdle()
+        view.typeText("x")
+        assertEquals("x# title", view.state.doc.toString())
+    }
+
+    /** Review I4: a reveal into a document shown BEFORE (its view kept a stale viewport) still lands centred. */
+    @Test fun a_reveal_into_a_document_shown_before_lands_on_its_line() = runComposeUiTest {
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined)
+        val store = storeWith(scope, "a.kt" to hundredLines, "b.kt" to "b")
+        var active by mutableStateOf("a.kt")
+        setContent {
+            CompositionLocalProvider(LocalUiPrefs provides UiPrefs(InMemorySettingsStore())) {
+                key(active) {
+                    NativeDocumentEditor(store, store.get(active)!!, lineWrap = false, fontSize = 13, onFontSize = {}, modifier = Modifier.size(400.dp, 300.dp))
+                }
+            }
+        }
+        waitForIdle()
+        active = "b.kt"; waitForIdle()
+        val a = store.get("a.kt")!!
+        a.revealLine = 80 to null
+        active = "a.kt"; waitForIdle()
+        val view = a.native!!.primary
+        assertEquals(view.state.doc.lineStart(79), view.state.selection.main.head)
+        // On screen: the top line is well above 80 and not the start of the file.
+        val top = view.state.doc.lineIndexAt(view.scrollPosition.anchor)
+        kotlin.test.assertTrue(top in 55..79, "line 80 revealed but the view shows line ${top + 1} at the top")
+    }
 }

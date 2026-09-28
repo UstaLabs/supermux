@@ -84,7 +84,34 @@ class DocumentStore(
 
     var loadingPath by mutableStateOf<String?>(null)
     var loadError by mutableStateOf<String?>(null)
-    var saving by mutableStateOf(false)
+    /** Paths whose save is in flight: one write per document at a time, other documents unaffected. */
+    private var savingPaths by mutableStateOf(setOf<String>())
+
+    /** Some document is being saved (the header spinner). Setting it false forgets every in-flight guard. */
+    var saving: Boolean
+        get() = savingPaths.isNotEmpty()
+        set(value) { if (!value) savingPaths = emptySet() }
+
+    fun isSaving(path: String): Boolean = path in savingPaths
+
+    /** Every open document's path. */
+    val paths: Set<String> get() = docs.keys.toSet()
+
+    /** Paths some pane has shown ([retainViewed]): only those can have lost their last pane. */
+    private val everViewed = mutableSetOf<String>()
+
+    /**
+     * The panes that show documents now are the ones for [viewed] (a workspace's file views): close
+     * every document whose LAST pane went (its view, syntax worker and LSP didOpen go with it). A
+     * document with unsaved edits stays open, so reopening its tab finds them; a document no pane
+     * ever showed yet (an open still resolving its view) is left alone. Returns what was closed.
+     */
+    fun retainViewed(viewed: Set<String>): List<String> {
+        everViewed += viewed
+        val gone = docs.keys.filter { it in everViewed && it !in viewed && docs[it]?.isDirty != true }
+        for (p in gone) { close(p); everViewed -= p }
+        return gone
+    }
 
     /** Workdir-relative paths the broker reported changed on disk (fs_changed) → reload banner. */
     var changedPaths by mutableStateOf(setOf<String>())
@@ -260,19 +287,38 @@ class DocumentStore(
     }
 
     fun save(doc: Document) {
-        if (saving) return
-        saving = true
-        // What is written is what is marked saved: the text NOW, not whatever the document holds
-        // when the (networked) write returns — an edit typed meanwhile stays dirty.
-        val native = doc.native
-        val rope = native?.primary?.state?.doc
-        val text = rope?.toString() ?: doc.content
-        scope.launch {
-            if (fsWrite(doc.path, LineEndings.save(text, doc.crlf))) {
+        if (doc.path in savingPaths) return
+        // Snapshot the text NOW (before the launch): an edit typed while the write is in flight stays dirty.
+        val snapshot = snapshotOf(doc)
+        savingPaths = savingPaths + doc.path
+        scope.launch { write(doc, snapshot) }
+    }
+
+    /** [save], waiting for the write: true when the file was written (false also when a save of it is already running). */
+    suspend fun saveNow(doc: Document): Boolean {
+        if (doc.path in savingPaths) return false
+        val snapshot = snapshotOf(doc)
+        savingPaths = savingPaths + doc.path
+        return write(doc, snapshot)
+    }
+
+    /** What is written is what is marked saved: the text at the moment of the save. */
+    private fun snapshotOf(doc: Document): Pair<String, dev.supermux.editor.core.Rope?> {
+        val rope = doc.native?.primary?.state?.doc
+        return (rope?.toString() ?: doc.content) to rope
+    }
+
+    private suspend fun write(doc: Document, snapshot: Pair<String, dev.supermux.editor.core.Rope?>): Boolean {
+        val (text, rope) = snapshot
+        try {
+            val ok = fsWrite(doc.path, LineEndings.save(text, doc.crlf))
+            if (ok) {
                 doc.savedContent = text
-                if (rope != null) native.markSaved(rope)
+                if (rope != null) doc.native?.markSaved(rope)
             }
-            saving = false
+            return ok
+        } finally {
+            savingPaths = savingPaths - doc.path
         }
     }
 

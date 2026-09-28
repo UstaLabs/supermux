@@ -216,6 +216,9 @@ fun Editor(
             if (view.surface === controller) {
                 view.surface = null
                 view.geometry = null
+                // Nothing lays this view out any more: a host waiting for "laid out" (a reveal into a
+                // document shown again later) must wait for the NEXT surface's first frame.
+                view.publishViewport(IntRange.EMPTY)
             }
         }
     }

@@ -208,6 +208,12 @@ object AtomicDelete {
 }
 
 /** Annotations the surface puts on the transactions it makes, for plugins (history) to read. */
+/**
+ * userEvents a READ-ONLY view still applies ([EditorView.readOnly] drops every other user edit): a
+ * review surface that may only revert a hunk (`Diff.REVERT_EVENT`) and nothing typed. Exact names.
+ */
+val readOnlyAllowFacet: dev.supermux.editor.core.Facet<String, List<String>> = dev.supermux.editor.core.Facet.list("readOnlyAllow")
+
 object EditorAnnotations {
     /**
      * On a composition step (`input.ime`): the transaction just before this one was the SAME

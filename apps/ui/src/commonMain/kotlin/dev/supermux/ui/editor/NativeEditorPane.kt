@@ -106,6 +106,11 @@ fun NativeDocumentEditor(
     /** The accessory bar under the text (null: the app's setting, Settings → Editor; on by default). */
     accessoryBar: Boolean? = null,
     readOnly: Boolean = false,
+    /**
+     * Something covers the editor (the markdown preview overlay): read-only and without the focus,
+     * so a hardware keyboard cannot edit a document nobody sees.
+     */
+    covered: Boolean = false,
     /** Code intelligence for this document: the session whose language servers serve it (null: none). */
     lsp: LspLink? = null,
     /** Where a definition or reference in ANOTHER file opens (a workdir-relative path, a 1-based line). */
@@ -139,6 +144,8 @@ fun NativeDocumentEditor(
         if (doc.revealLine == reveal) doc.revealLine = null
     }
 
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    LaunchedEffect(view, covered) { if (covered && view.focused) focusManager.clearFocus() }
     val barSetting by dev.supermux.ui.prefs.LocalUiPrefs.current.editorAccessoryBar
         .collectAsState(dev.supermux.ui.prefs.EDITOR_ACCESSORY_BAR_DEFAULT)
     val showBar = accessoryBar ?: barSetting
@@ -162,7 +169,7 @@ fun NativeDocumentEditor(
                 modifier = Modifier.matchParentSize(),
                 theme = theme,
                 lineWrap = lineWrap,
-                readOnly = readOnly,
+                readOnly = readOnly || covered,
                 onFontSize = report,
                 label = doc.path.substringAfterLast('/'),
                 widgets = widgets,
@@ -181,7 +188,7 @@ fun NativeDocumentEditor(
                 )
             }
         }
-        if (showBar) EditorAccessories(view, Modifier.fillMaxWidth(), theme = theme)
+        if (showBar && !covered) EditorAccessories(view, Modifier.fillMaxWidth(), theme = theme)
     }
 }
 

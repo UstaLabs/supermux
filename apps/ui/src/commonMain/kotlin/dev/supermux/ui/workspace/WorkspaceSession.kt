@@ -1,5 +1,6 @@
 package dev.supermux.ui.workspace
 
+import dev.supermux.proto.stateString
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateMapOf
@@ -91,6 +92,12 @@ fun rememberWorkspaceSession(
     // The native editor's views live as long as the store, not as long as a pane (M5): they go
     // with it, so every language server gets its didClose and every syntax worker is freed.
     androidx.compose.runtime.DisposableEffect(documents) { onDispose { documents.disposeNative() } }
+    // A file whose last pane closed leaves the store (unless it has unsaved edits).
+    val viewedFiles = viewsById.values
+        .filter { it.kind == "editor" && it.stateString("mode") == "file" }
+        .mapNotNull { it.stateString("path") }
+        .toSet()
+    LaunchedEffect(documents, viewedFiles) { documents.retainViewed(viewedFiles) }
 
     // Opening a file is a layout edit plus a POST that carries the id
     // we already used — see WorkspaceFileOpen.kt. Rebuilt every

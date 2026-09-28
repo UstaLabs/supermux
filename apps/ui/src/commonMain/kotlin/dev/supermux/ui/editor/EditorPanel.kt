@@ -218,6 +218,7 @@ fun EditorPanel(
             lspStatusQuery = actions.lspStatusQuery,
             lspOpen = actions.lspOpen,
             lspRpcOut = actions.lspRpcOut,
+            lspClose = actions.lspClose,
         )
     }
 
@@ -340,7 +341,8 @@ fun EditorPanel(
                 // M5: each file on the native diff plugin, read and written through the session's fs.
                 readFile = { repo, path -> actions.fsRead(repoPath(repo, path)) },
                 writeFile = { repo, path, text -> actions.fsWrite(repoPath(repo, path), text) },
-                onReply = { root, body -> actions.reviewAddComment(replyBody(root, body)); Unit },
+                postComment = actions.reviewAddComment,
+                documents = editor.documents,
             )
             return@Box
         }
@@ -529,6 +531,7 @@ fun EditorPanel(
                                             modifier = Modifier.fillMaxSize(),
                                             lsp = lspLink,
                                             onNavigate = { path, line -> revealFile(path, line) },
+                                            covered = showPreview,
                                         )
                                     }
                                 }

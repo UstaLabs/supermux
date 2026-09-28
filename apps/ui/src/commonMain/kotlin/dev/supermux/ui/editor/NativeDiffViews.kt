@@ -207,32 +207,34 @@ internal fun NativeWalkthroughRegion(
 }
 
 /**
- * One changed file of the Changes pane on the diff plugin: the working copy (read with [readFile];
- * a deleted file is empty) against its base (the patch applied in reverse), inline or
- * [sideBySide], its review threads and the `+` gutter composer (a comment carries the line's text
- * and its hunk header, as the rows' composer did). When [writeFile] is given the working copy is
- * editable: a revert writes the file at once, a typed edit is saved with Mod-S or the Save button.
- * A file that cannot be read, or whose patch does not fit it, shows [fallback] (the patch rows).
+ * One changed file of the Changes pane on the diff plugin: the working copy (read with
+ * [NativeDiffSupport.readFile]; a deleted file is empty) against its base (the patch applied in
+ * reverse), inline or side by side, its review threads and the `+` gutter composer (a comment
+ * carries the line's text and its hunk header, as the rows' composer did).
+ *
+ * READ-ONLY except for a hunk revert (review I2: the pane is a review surface; an edit typed here
+ * would live in a lazy list item that a scroll, a collapse, a side-by-side toggle or the agent's
+ * next diff refresh rebuilds from disk — editing belongs to the file's tab, where the store owns
+ * dirty / save / reload). A revert is applied to the file's OPEN document when there is one (one
+ * `edit.revert` step in its history, saved through the store: review I1), else written to disk;
+ * it is not offered while that document has unsaved edits. Drafts and the scroll position are the
+ * pane's ([NativeDiffSupport]), so a rebuild keeps them. A file that cannot be read, or whose patch
+ * does not fit it, shows [fallback] (the patch rows).
  */
 @Composable
 internal fun NativeFileDiff(
     repo: String,
     file: DiffFile,
     wrap: Boolean,
-    sideBySide: Boolean,
     comments: List<ReviewComment>,
-    readFile: suspend (repo: String, path: String) -> Result<String>,
-    writeFile: (suspend (repo: String, path: String, text: String) -> Boolean)?,
-    onAddComment: suspend (repo: String, path: String, anchorLine: Int, anchorContext: String, hunkHeader: String, body: String) -> Unit,
-    onReply: suspend (root: ReviewComment, body: String) -> Unit,
-    onResolve: suspend (commentId: String) -> Unit,
+    support: NativeDiffSupport,
     onReload: () -> Unit,
     testTagIndex: Int,
     fallback: @Composable () -> Unit,
 ) {
     val deleted = file.status == "deleted"
     val loaded by produceState<Result<LineEndings.Loaded>?>(null, repo, file.path, file.diff) {
-        value = if (deleted) Result.success(LineEndings.Loaded("", false)) else readFile(repo, file.path).map(LineEndings::load)
+        value = if (deleted) Result.success(LineEndings.Loaded("", false)) else support.readFile(repo, file.path).map(LineEndings::load)
     }
     val working = loaded?.getOrNull()
     if (loaded == null) {
@@ -245,10 +247,7 @@ internal fun NativeFileDiff(
         fallback()
         return
     }
-    NativeFileDiffEditor(
-        repo, file, patch, working, base, wrap, sideBySide, comments,
-        writeFile?.takeIf { !deleted }, onAddComment, onReply, onResolve, onReload, testTagIndex,
-    )
+    NativeFileDiffEditor(repo, file, patch, working, base, wrap, comments, support, deleted, onReload, testTagIndex)
 }
 
 @Composable
@@ -259,12 +258,9 @@ private fun NativeFileDiffEditor(
     working: LineEndings.Loaded,
     base: String,
     wrap: Boolean,
-    sideBySide: Boolean,
     comments: List<ReviewComment>,
-    writeFile: (suspend (repo: String, path: String, text: String) -> Boolean)?,
-    onAddComment: suspend (repo: String, path: String, anchorLine: Int, anchorContext: String, hunkHeader: String, body: String) -> Unit,
-    onReply: suspend (root: ReviewComment, body: String) -> Unit,
-    onResolve: suspend (commentId: String) -> Unit,
+    support: NativeDiffSupport,
+    deleted: Boolean,
     onReload: () -> Unit,
     testTagIndex: Int,
 ) {
@@ -272,15 +268,15 @@ private fun NativeFileDiffEditor(
     val syntax = LocalPlatform.current.editorSyntax
     val fontSize = rememberEditorFontSize()
     val path = file.path
-    val editable = writeFile != null
+    val sideBySide = support.sideBySide
+    val key = "$repo $path"
     val currentComments by rememberUpdatedState(comments)
-    val currentWrite by rememberUpdatedState(writeFile)
     val currentReload by rememberUpdatedState(onReload)
-    // The view shown now, for the host's callbacks (a side-by-side toggle makes new views).
+    // The file's open document (a tab), if any: a revert goes through it; not offered while it is dirty.
+    val openDoc = support.documents?.get(repoPath(repo, path))
+    val openDirty = openDoc?.isDirty == true
+    val revertable = support.writeFile != null && !deleted && !openDirty
     val shown = remember { ShownView() }
-    val saver = remember(repo, path, working) {
-        FileSaver(scope, { currentWrite }, { currentReload() }, repo, path, working.crlf)
-    }
 
     val host = remember(repo, path, working) {
         FileReviewHost(
@@ -288,50 +284,55 @@ private fun NativeFileDiffEditor(
             path = path,
             scope = scope,
             lineText = { line -> shown.view?.state?.doc?.let { d -> if (line < d.lineCount) d.line(line + 1).text else "" }.orEmpty() },
-            drafts = MapReviewDrafts(),
+            drafts = support.drafts(repo, path),
             comments = { currentComments },
             submit = { line, context, body ->
-                onAddComment(repo, path, line, context, hunkHeaderFor(patch, line), body)
+                val created = support.postComment(
+                    AddCommentBody(repo = repo, path = path, side = "RIGHT", anchorLine = line, anchorContext = context, body = body, diffHunkHeader = hunkHeaderFor(patch, line)),
+                )
                 currentReload()
-                true
+                created != null
             },
-            reply = { root, body -> onReply(root, body); currentReload(); true },
-            resolve = { id -> onResolve(id); currentReload(); true },
-            // A revert applied in the working copy: the file on disk follows at once.
-            revert = { shown.view?.let(saver::save) },
+            reply = { root, body -> val created = support.postComment(replyBody(root, body)); currentReload(); created != null },
+            resolve = { id -> support.onResolve(id); currentReload(); true },
+            revert = { _ ->
+                val reverted = shown.view?.state?.doc?.toString()
+                if (reverted != null) scope.launch {
+                    applyRevert(support, repo, path, reverted, working.crlf)
+                    currentReload()
+                }
+            },
         )
     }
+    // Only a revert may edit these views (read-only otherwise, see the KDoc).
     val common: Extension = extensionOf(
         highlight(syntax.languageFor(path)),
         viewSettings(EditorSettings(fontSize = fontSize.toFloat(), lineWrap = wrap)),
         search(),
     )
-    val views = remember(host, base, sideBySide) {
-        lateinit var w: EditorView
-        w = EditorView(
+    val views = remember(host, base, sideBySide, revertable) {
+        val w = EditorView(
             EditorState.create(
                 working.text,
                 extensions = extensionOf(
-                    Prec.highest(keymapOf(KeyBinding("Mod-s", Command { saver.save(w); true }))),
+                    dev.supermux.editor.compose.readOnlyAllowFacet.of(Diff.REVERT_EVENT),
                     common,
                     basics(),
-                    history(),
                     review(host),
-                    if (sideBySide) extensionOf() else inlineDiff(base, DiffConfig(editable = editable), host),
+                    if (sideBySide) extensionOf() else inlineDiff(base, DiffConfig(editable = revertable), host),
                 ),
             ),
         )
         val a = if (sideBySide) EditorView(EditorState.create(base, extensions = common)) else null
         host.target = w
         shown.view = w
-        saver.saved = saver.saved ?: w.state.doc
         w to a
     }
     val workingView = views.first
     val baseView = views.second
     var pair by remember(views) { mutableStateOf<DiffPair?>(null) }
     if (baseView != null) DisposableEffect(views) {
-        val p = DiffPair(baseView, workingView, DiffConfig(editable = editable), host)
+        val p = DiffPair(baseView, workingView, DiffConfig(editable = revertable), host)
         pair = p
         onDispose { p.dispose(); if (pair === p) pair = null }
     }
@@ -339,6 +340,11 @@ private fun NativeFileDiffEditor(
     LaunchedEffect(views, threads) { Review.setThreads(workingView, threads) }
     LaunchedEffect(views, wrap, fontSize) {
         for (v in listOfNotNull(workingView, baseView)) ViewSettings.update(v) { it.copy(lineWrap = wrap, fontSize = fontSize.toFloat()) }
+    }
+    // The scroll survives a rebuild (a revert's reload, a toggle, scrolling the list out and back).
+    LaunchedEffect(views) {
+        support.scroll[key]?.let(workingView::restoreScroll)
+        workingView.viewport.drop(1).collect { r -> if (!r.isEmpty()) support.scroll[key] = workingView.scrollPosition }
     }
 
     val widgets = rememberReviewWidgets()
@@ -352,61 +358,52 @@ private fun NativeFileDiffEditor(
     // hunk), bounded so a huge file never takes the whole pane.
     val rows = remember(patch) { parseDiffLines(patch).size + 1 }
     val height = (rows * (fontSize * 1.55f) + 16f).coerceIn(120f, 560f).dp
-    val doc = workingView.state.doc
-    val savedDoc = saver.saved
-    val dirty = editable && savedDoc != null && doc !== savedDoc && doc != savedDoc
 
     Column(Modifier.fillMaxWidth().testTag("diff_native_$testTagIndex")) {
-        if (dirty) {
-            Row(
-                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Unsaved changes", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                TextButton(onClick = { saver.save(workingView) }, enabled = !saver.saving, modifier = Modifier.testTag("diff_native_save_$testTagIndex")) { Text("Save") }
-            }
+        if (openDirty && support.writeFile != null && !deleted) {
+            Text(
+                "This file has unsaved changes in a tab: save them to revert hunks here.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(horizontal = 12.dp, vertical = 6.dp).testTag("diff_native_dirty_$testTagIndex"),
+            )
         }
         Box(Modifier.fillMaxWidth().height(height)) {
             val p = pair
             if (baseView != null) {
-                if (p != null) SideBySideDiff(p, Modifier.fillMaxSize(), theme = theme, widgets = widgets, lineWrap = wrap)
+                if (p != null) SideBySideDiff(p, Modifier.fillMaxSize(), theme = theme, widgets = widgets, lineWrap = wrap, readOnly = true)
             } else {
-                InlineDiffEditor(workingView, Modifier.fillMaxSize(), theme = theme, widgets = widgets, label = path.substringAfterLast('/'), lineWrap = wrap)
+                InlineDiffEditor(workingView, Modifier.fillMaxSize(), theme = theme, widgets = widgets, label = path.substringAfterLast('/'), lineWrap = wrap, readOnly = true)
             }
         }
     }
 }
 
+/**
+ * A hunk reverted in the Changes pane reaches the file: through its OPEN document when the store
+ * has one (one `edit.revert` transaction in the tab's own history, then the store's save, so a later
+ * Mod-S or Reload in that tab never fights it), else straight to disk with the file's line endings.
+ */
+internal suspend fun applyRevert(support: NativeDiffSupport, repo: String, path: String, reverted: String, crlf: Boolean): Boolean {
+    val store = support.documents
+    val doc = store?.get(repoPath(repo, path))
+    if (store != null && doc != null) {
+        if (doc.isDirty) return false
+        val native = store.nativeFor(doc)
+        if (native != null) {
+            minimalChange(native.text(), reverted)?.let { change ->
+                native.primary.dispatch(dev.supermux.editor.core.TransactionSpec(changes = listOf(change), userEvent = Diff.REVERT_EVENT))
+            }
+        } else doc.content = reverted
+        return store.saveNow(doc)
+    }
+    val write = support.writeFile ?: return false
+    return write(repo, path, LineEndings.save(reverted, crlf))
+}
+
 /** The view a Changes-pane file shows now (its host's callbacks read it). */
 private class ShownView { var view: EditorView? = null }
-
-/**
- * Writes a Changes-pane working copy back (a revert, Mod-S, Save): with the file's own line
- * endings, one write at a time; what was written counts as saved, then the diff is fetched again.
- */
-private class FileSaver(
-    private val scope: kotlinx.coroutines.CoroutineScope,
-    private val write: () -> (suspend (repo: String, path: String, text: String) -> Boolean)?,
-    private val reload: () -> Unit,
-    private val repo: String,
-    private val path: String,
-    private val crlf: Boolean,
-) {
-    var saved: Rope? by mutableStateOf(null)
-    var saving: Boolean by mutableStateOf(false)
-        private set
-
-    fun save(view: EditorView) {
-        val w = write() ?: return
-        if (saving) return
-        val rope = view.state.doc
-        saving = true
-        scope.launch {
-            val ok = try { w(repo, path, LineEndings.save(rope.toString(), crlf)) } finally { saving = false }
-            if (ok) { saved = rope; reload() }
-        }
-    }
-}
 
 /** 0-based [line] of [text] ("" past its end). */
 internal fun lineOf(text: String, line: Int): String {

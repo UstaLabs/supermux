@@ -222,4 +222,53 @@ class NativeDocumentsTest {
         s.update("a.kt", "z")
         assertTrue(s.isDirty("a.kt"))
     }
+
+    /** Review: a save in flight on one document must not drop a save of another. */
+    @Test fun saving_one_document_never_blocks_another() = runTest {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val writes = mutableListOf<String>()
+        val s = DocumentStore({ p -> Result.success("t:$p") }, { p, _ -> writes += p; if (p == "a.kt") gate.await(); true }, this)
+        s.open("a.kt"); s.open("b.kt"); testScheduler.advanceUntilIdle()
+        s.update("a.kt", "A"); s.update("b.kt", "B")
+        s.save(s.get("a.kt")!!); testScheduler.runCurrent()
+        assertTrue(s.isSaving("a.kt"))
+        s.save(s.get("b.kt")!!); testScheduler.runCurrent()
+        assertEquals(listOf("a.kt", "b.kt"), writes)
+        assertFalse(s.isDirty("b.kt"))
+        s.save(s.get("a.kt")!!); testScheduler.runCurrent()   // the same document again: one write at a time
+        assertEquals(2, writes.size)
+        gate.complete(Unit); testScheduler.advanceUntilIdle()
+        assertFalse(s.saving)
+    }
+
+    /** Review: a view made for a document that was already edited starts dirty (saved = the loaded text). */
+    @Test fun a_view_made_after_an_edit_compares_with_the_saved_text() {
+        val s = store(Disk("a.kt" to "abc"))
+        s.open("a.kt")
+        val env = s.native
+        s.native = null
+        s.update("a.kt", "abcd")                   // the plain-string path edited it first
+        s.native = env
+        val n = s.view("a.kt")
+        assertEquals("abcd", n.primary.state.doc.toString())
+        assertTrue(s.isDirty("a.kt"))
+        n.dispose()
+    }
+
+    /** Review I3: a workspace document goes when its last pane does, unless it has unsaved edits. */
+    @Test fun a_document_whose_last_pane_went_is_closed_unless_dirty() {
+        val lives = Lives()
+        val s = store(Disk("a.kt" to "a", "b.kt" to "b", "c.kt" to "c"), lives = lives)
+        for (p in listOf("a.kt", "b.kt", "c.kt")) s.open(p)
+        s.view("a.kt").start(); s.view("b.kt").start()
+        assertEquals(emptyList(), s.retainViewed(setOf("a.kt", "b.kt")))   // c.kt: never shown yet, kept
+        s.view("b.kt").primary.type(0, "!")                                 // b.kt has unsaved edits
+
+        assertEquals(listOf("a.kt"), s.retainViewed(setOf("c.kt")))
+        assertEquals(null, s.get("a.kt"))
+        assertEquals(1, lives.destroyed)                                     // its plugins stopped (didClose)
+        assertTrue(s.get("b.kt") != null)                                    // dirty: kept, edits intact
+        assertEquals(setOf("b.kt", "c.kt"), s.paths)
+        s.disposeNative()
+    }
 }

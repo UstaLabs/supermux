@@ -197,6 +197,7 @@ fun FilePane(
     lspStatusQuery: (String, String) -> Unit = { _, _ -> },
     lspOpen: (String, String) -> Unit = { _, _ -> },
     lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
+    lspClose: (String, String) -> Unit = { _, _ -> },
     lineWrap: Boolean = EDITOR_LINE_WRAP_DEFAULT,
     fontSize: Int = EDITOR_FONT_DEFAULT,
     onFontSize: (Int) -> Unit = {},
@@ -238,6 +239,7 @@ fun FilePane(
                 lspStatusQuery = lspStatusQuery,
                 lspOpen = lspOpen,
                 lspRpcOut = lspRpcOut,
+                lspClose = lspClose,
             )
         }
     }
@@ -325,6 +327,7 @@ fun FilePane(
                         modifier = Modifier.fillMaxSize(),
                         lsp = remember(bridge, workdir) { bridge?.let { b -> LspLink(b.session, workdir, b) } },
                         onNavigate = onNavigate,
+                        covered = showPreview,
                     )
                 }
                 if (showPreview) {
@@ -431,6 +434,8 @@ fun DiffPane(
     onClose: () -> Unit = {},
     /** Writes a changed file's working copy back (the native diff's revert / save); null: read-only. */
     writeDiffFile: (suspend (repo: String, path: String, text: String) -> Boolean)? = null,
+    /** The workspace's open documents: a revert of an open file goes through its tab's document. */
+    diffDocuments: DocumentStore? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -529,7 +534,8 @@ fun DiffPane(
             // M5: each file on the native diff plugin (the same reader the walkthrough uses).
             readFile = readWalkthroughFile,
             writeFile = writeDiffFile,
-            onReply = { root, body -> onReviewAddComment(replyBody(root, body)); Unit },
+            postComment = onReviewAddComment,
+            documents = diffDocuments,
         )
         }
     }

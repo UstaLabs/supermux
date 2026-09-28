@@ -275,7 +275,8 @@ The markdown preview is not part of the editor and is unchanged.
 - **Editor settings** (`EditorSettingsScreen`, `editor-config.ts`) keep their values.
 - **Per-session editor state** stays owned by session id, as it is today.
 - **Line endings:** the rope knows only `\n`. The host normalizes `\r\n` to `\n` on load and
-  remembers the file's line ending to restore it on save.
+  remembers the file's line ending to restore it on save. A file with MIXED endings is saved with its
+  majority ending on every line (M5's `LineEndings`; a lone `\r` is left as text).
 
 ## 9. Removed at cutover
 

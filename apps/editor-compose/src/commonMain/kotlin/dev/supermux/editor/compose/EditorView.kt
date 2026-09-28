@@ -42,7 +42,8 @@ class EditorView(initial: EditorState) : CommandTarget {
 
     /**
      * UTF-16 `[start, end)` of the lines the surface lays out (the visible ones plus overscan), as
-     * `start until end`; empty before the first paint. Updated at most once per frame.
+     * `start until end`; empty before the first paint and again once no surface shows the view.
+     * Updated at most once per frame.
      */
     val viewport: StateFlow<IntRange> = viewportFlow.asStateFlow()
 
@@ -325,7 +326,7 @@ class EditorView(initial: EditorState) : CommandTarget {
         // write loses): a background producer must hop to the UI thread first.
         if (currentThreadKey() !== uiThread) EditorDiagnostics.reportOffThreadDispatch()
         val userEdit = isUserEdit(spec)
-        if (readOnly && userEdit) return
+        if (readOnly && userEdit && spec.userEvent !in current.facet(readOnlyAllowFacet)) return
         val start = current
         var tr = start.update(spec)
         // Debug assertion: a key-bound command's edit should say what it is (history groups by it).

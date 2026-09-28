@@ -106,6 +106,22 @@ class BrokerLspTransportTest {
         assertEquals(listOf(0, 1, 2), generations)
     }
 
+    /** Review I5: a reconnect inside an open's 2 s settle window must not leave LSP talking to a dead server. */
+    @Test fun a_reconnect_during_an_open_in_flight_opens_again_afterwards() = runTest {
+        val b = Broker()
+        val t = BrokerLspTransport(b.bridge, "kls", backgroundScope)
+        t.start(); runCurrent(); settle()
+        assertEquals(1, t.connection.value)
+
+        b.reconnect(); runCurrent()                 // reopen #2 in flight (its lsp_ready marked the entries ready)
+        advanceTimeBy(500); runCurrent()
+        b.reconnect(); runCurrent()                 // another snapshot while #2 still settles
+        settle(); settle()
+        assertEquals(3, b.opens)                    // the second reconnect was not dropped
+        assertEquals(LspConnState.CONNECTED, t.status.value)
+        assertTrue(t.connection.value >= 3)
+    }
+
     @Test fun a_failed_send_throws_and_bumps_the_generation() = runTest {
         val b = Broker()
         val t = BrokerLspTransport(b.bridge, "kls", backgroundScope)

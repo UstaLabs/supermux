@@ -26,7 +26,7 @@ class LspLink(val sessionId: String, val workdir: String, val bridge: LspBridge)
  * another file); the pane showing the store sets it.
  */
 class LspHub internal constructor(private val store: DocumentStore, private val scope: CoroutineScope, private val parseOnWorker: Boolean = true) {
-    private class Entry(val transport: BrokerLspTransport, val client: LspClient)
+    private class Entry(val transport: BrokerLspTransport, val client: LspClient, val bridge: LspBridge)
 
     private val entries = LinkedHashMap<Pair<String, String>, Entry>()
 
@@ -70,7 +70,12 @@ class LspHub internal constructor(private val store: DocumentStore, private val 
     /** The store's owner goes: every client stops (the documents' views close their documents first). */
     fun close() {
         for (e in entries.values) {
+            // shutdown + exit while the scope still runs (UNDISPATCHED: the owner's scope is about to be
+            // cancelled; the client closes inside NonCancellable), then lsp_close so the broker stops
+            // the process even if the pipe never carried them.
+            runCatching { scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { e.client.close() } }
             e.transport.close()
+            e.bridge.close(e.transport.serverId)
         }
         entries.clear()
     }
@@ -94,7 +99,7 @@ class LspHub internal constructor(private val store: DocumentStore, private val 
             ),
         )
         transport.start()
-        return Entry(transport, client)
+        return Entry(transport, client, link.bridge)
     }
 
     /**
@@ -110,7 +115,9 @@ class LspHub internal constructor(private val store: DocumentStore, private val 
         if (native != null) {
             val view = native.primary
             val changes = lspChanges(view.state.doc, edits, encoding) ?: return false
-            view.dispatch(TransactionSpec(changeSet = changes, userEvent = "lsp"))
+            // A user-level edit (a rename, a code action): recorded, one undo step in that document.
+            // The callback does not say which kind it was, so one name for all of them.
+            view.dispatch(TransactionSpec(changeSet = changes, userEvent = "edit.workspace"))
             return true
         }
         if (doc != null) {
