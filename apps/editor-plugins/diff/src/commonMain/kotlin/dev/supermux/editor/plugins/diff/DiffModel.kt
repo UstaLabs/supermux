@@ -93,7 +93,7 @@ class DiffModel internal constructor(
             val h0 = if (start) g0 else g0 + ctx
             val h1 = if (end) g1 else g1 - ctx
             if (h1 - h0 < MIN_COLLAPSE) return
-            // What the user revealed is taken out; each piece left of at least two lines folds.
+            // What the user revealed is taken out; each piece left of at least MIN_COLLAPSE lines folds.
             var from = h0
             for (r in revealed) {
                 if (r.last < from || r.first >= h1) continue
@@ -123,7 +123,7 @@ class DiffModel internal constructor(
 
     companion object {
         /** Fewer hidden lines than this are shown instead (a "⋯ 1 unchanged line" saves nothing). */
-        const val MIN_COLLAPSE = 2
+        const val MIN_COLLAPSE = 3
 
         internal fun create(base: String, doc: Rope, config: DiffConfig, slice: Int): DiffModel {
             val baseLines = LineDiff.lines(base)
@@ -187,7 +187,7 @@ private fun DiffModel.expand(x: ExpandRun): DiffModel {
         Expand.UP -> maxOf(run.bFrom, run.bTo - step) until run.bTo
         Expand.DOWN -> run.bFrom until minOf(run.bTo, run.bFrom + step)
     }
-    // A piece left under two lines would stay open anyway: reveal it too.
+    // Pieces left under MIN_COLLAPSE lines stay open (computeCollapsed).
     val revealed = (revealed + listOf(shown)).sortedBy { it.first }
     val merged = ArrayList<IntRange>()
     for (r in revealed) {

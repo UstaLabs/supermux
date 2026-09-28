@@ -22,6 +22,8 @@ import dev.supermux.editor.core.Facet
 import dev.supermux.editor.core.FacetDep
 import dev.supermux.editor.core.GutterMarker
 import dev.supermux.editor.core.KeyBinding
+import dev.supermux.editor.core.LineMapping
+import dev.supermux.editor.core.lineMappingFacet
 import dev.supermux.editor.core.NamedCommand
 import dev.supermux.editor.core.RangeSet
 import dev.supermux.editor.core.Ranged
@@ -105,6 +107,8 @@ object Diff {
             decorationsFacet.compute(FacetDep.field(f), FacetDep.field(EditorViewport.field)) { st -> visibleDecorations(st, st.field(f), Side.B, inline) },
             decorationsFacet.compute(FacetDep.field(f)) { st -> blockDecorations(st.doc, st.field(f), Side.B, inline) },
             gutterMarkersFacet.compute(FacetDep.field(f), FacetDep.field(EditorViewport.field)) { st -> markers(st, st.field(f), Side.B, inline) },
+            // Side by side: which lines pair, for the linked views (none yet: line for line).
+            if (inline) extensionOf() else lineMappingFacet.compute(FacetDep.field(f)) { st -> st.field(f).let { m -> if (m.ready) m.lineMapping else LineMapping.IDENTITY } },
             if (host != null) diffHostFacet.of(host) else extensionOf(),
             common,
             viewPluginsFacet.of(worker),

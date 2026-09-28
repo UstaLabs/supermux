@@ -24,6 +24,13 @@ class StateEffect<T> internal constructor(val type: StateEffectType<T>, val valu
     companion object {
         /** Replace the whole configuration. */
         val reconfigure = StateEffectType<Extension>("reconfigure")
+
+        /**
+         * Add [Extension]s to the configuration (after what is there: lower precedence than an equal
+         * `Prec`), CM6's `StateEffect.appendConfig`: a plugin that sets up a view it did not create
+         * (the diff plugin's `DiffPair`). Fields already there keep their values; new ones are created.
+         */
+        val appendConfig = StateEffectType<Extension>("appendConfig")
         internal val compartmentReconfigure = StateEffectType<Pair<Compartment, Extension>>("compartment.reconfigure")
     }
 }
@@ -243,6 +250,7 @@ class EditorState private constructor(
         var reconfigured = false
         for (e in spec.effects) {
             e.valueIf(StateEffect.reconfigure)?.let { root = it; reconfigured = true }
+            e.valueIf(StateEffect.appendConfig)?.let { root = extensionOf(root, it); reconfigured = true }
             e.valueIf(StateEffect.compartmentReconfigure)?.let { (c, ext) -> compartments = compartments + (c to ext); reconfigured = true }
         }
         val newConfig = if (reconfigured) Configuration.resolve(root, compartments) else config

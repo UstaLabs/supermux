@@ -96,6 +96,16 @@ class StateTest {
         assertNull(s2.fieldOrNull(editCount))
     }
 
+    @Test fun appendConfigAddsAfterWhatIsThereAndKeepsFields() {
+        val s0 = EditorState.create("a", extensions = extensionOf(editCount, words.of("first")))
+        val s1 = s0.update(ChangeSpec(1, 1, "b")).state
+        val flag = StateField<Int>("appended", { 7 }, { v, _ -> v })
+        val s2 = s1.update(TransactionSpec(effects = listOf(StateEffect.appendConfig.of(extensionOf(flag, words.of("second")))))).state
+        assertEquals(1, s2.field(editCount), "kept")
+        assertEquals(7, s2.field(flag), "created")
+        assertEquals(listOf("first", "second"), s2.facet(words))
+    }
+
     @Test fun theSameExtensionIncludedTwiceCountsOnce() {
         val w = words.of("once")
         assertEquals(listOf("once"), EditorState.create(extensions = extensionOf(w, w)).facet(words))

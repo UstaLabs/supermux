@@ -106,7 +106,8 @@ class PluginFacetsTest {
         val diffTint = androidx.compose.ui.graphics.Color(0x3300FF00)
         val host: (EditorTheme) -> EditorTheme = { t ->
             t.copy(
-                lineClassBackgrounds = t.lineClassBackgrounds + ("diff-add" to diffTint),
+                // A class no palette defines (the palettes carry the diff plugin's own since M4d).
+                lineClassBackgrounds = t.lineClassBackgrounds + ("host-tint" to diffTint),
                 classStyles = t.classStyles + ("search-match" to androidx.compose.ui.text.SpanStyle(background = diffTint)),
             )
         }
@@ -118,7 +119,7 @@ class PluginFacetsTest {
                 val shown = f.controller.theme!!
                 val palette = if (m == EditorThemeMode.DARK) EditorTheme.dark(font) else EditorTheme.light(font)
                 assertEquals(palette.background, shown.background, "$m: not the palette")
-                assertEquals(diffTint, shown.lineClassBackgrounds["diff-add"], "$m: the host's diff-add class was dropped")
+                assertEquals(diffTint, shown.lineClassBackgrounds["host-tint"], "$m: the host's own class was dropped")
                 assertTrue(shown.classStyles.containsKey("search-match"), "$m: the host's search-match class was dropped")
                 // The palette's own classes stay the palette's (not the host palette's active line).
                 assertEquals(palette.currentLine, shown.lineClassBackgrounds[EditorTheme.ACTIVE_LINE_CLASS], "$m: active line")

@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -119,12 +120,14 @@ private fun WidgetScope.DeletedLinesBlock(key: WidgetKey) {
     val mark = theme.classStyles["diff-remove-text"] ?: SpanStyle(background = Color(0x59F85149))
     val style = TextStyle(color = theme.foreground.copy(alpha = 0.85f), fontFamily = theme.fontFamily, fontSize = theme.fontSizeSp.sp)
     val text = remember(h, shown, tab) { deletedText(m.baseLines, h, shown, tab, mark) }
+    // The editor's text starts half a cell right of the gutter (a monospace cell is ~0.6 em).
+    val pad = with(LocalDensity.current) { (theme.fontSizeSp * 0.3f).sp.toDp() }
     Column(Modifier.fillMaxWidth().background(bg).testTag("diff-deleted").semantics { contentDescription = "$count deleted ${if (count == 1) "line" else "lines"}" }) {
         // One line per row at the editor's line height, so the old lines read like the new ones.
-        for (i in 0 until shown) BasicText(text[i], Modifier.height(lineHeight).padding(start = 2.dp), style = style, softWrap = false, maxLines = 1)
+        for (i in 0 until shown) BasicText(text[i], Modifier.height(lineHeight).padding(start = pad), style = style, softWrap = false, maxLines = 1)
         if (shown < count) BasicText(
             "⋯ show ${count - shown} more deleted lines",
-            Modifier.height(lineHeight).padding(start = 2.dp).press("Show all deleted lines") { all = true },
+            Modifier.height(lineHeight).padding(start = pad).press("Show all deleted lines") { all = true },
             style = style.copy(color = accent(theme)),
         )
     }

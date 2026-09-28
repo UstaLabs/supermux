@@ -61,4 +61,23 @@ class InlineDiffUiTest {
         v.typeText("x", "input.type")
         assertEquals(working, v.state.doc.toString())
     }
+
+    @Test fun rendersForALook() {
+        val b = (1..60).joinToString("\n") { "fun f$it(x: Int) = x + $it" }
+        val w = b.split('\n').toMutableList().also {
+            it[5] = "fun f6(x: Long) = x * 6"
+            it.add(20, "// a new line"); it.add(21, "fun extra() = 0")
+            it.removeAt(40); it.removeAt(40)
+        }.joinToString("\n")
+        val view = EditorView(EditorState.create(w, extensions = inlineDiff(b, DiffConfig(context = 3))))
+        val scene = androidx.compose.ui.ImageComposeScene(900, 1100, androidx.compose.ui.unit.Density(2f)) {
+            InlineDiffEditor(view, Modifier.fillMaxSize(), theme = dev.supermux.editor.compose.EditorTheme.dark(dev.supermux.editor.compose.packagedEditorFontFamily()))
+        }
+        try {
+            repeat(3) { scene.render(it * 16_666_667L) }
+            val img = scene.render(100_000_000L)
+            val out = java.io.File("build/diff-renders").apply { mkdirs() }
+            java.io.File(out, "inline-small.png").writeBytes(img.encodeToData(org.jetbrains.skia.EncodedImageFormat.PNG)!!.bytes)
+        } finally { scene.close() }
+    }
 }
