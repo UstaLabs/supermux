@@ -81,6 +81,24 @@ class DocumentStore(
 
     fun get(path: String): Document? = docs[path]
 
+    /** Paths of the open documents (a snapshot read: a composable reading it follows opens/closes). */
+    val openPaths: Set<String> get() = docs.keys.toSet()
+
+    /** Something that must know when this store writes a file itself (the stale-banner tracker:
+     *  our own save changes the file's mtime too, and must not read as "changed on disk"). */
+    interface WriteObserver {
+        fun writeStarted(path: String)
+        fun writeFinished(path: String, ok: Boolean)
+    }
+
+    private val writeObservers = mutableListOf<WriteObserver>()
+
+    /** Register [observer]; the returned function unregisters it. */
+    fun observeWrites(observer: WriteObserver): () -> Unit {
+        writeObservers += observer
+        return { writeObservers -= observer }
+    }
+
     fun isDirty(path: String): Boolean {
         val doc = docs[path] ?: return false
         return doc.content != doc.savedContent
@@ -188,11 +206,17 @@ class DocumentStore(
     fun save(doc: Document) {
         if (saving) return
         saving = true
+        val path = doc.path
+        writeObservers.toList().forEach { it.writeStarted(path) }
         scope.launch {
-            if (fsWrite(doc.path, doc.content)) {
-                doc.savedContent = doc.content
+            var ok = false
+            try {
+                ok = fsWrite(path, doc.content)
+                if (ok) doc.savedContent = doc.content
+            } finally {
+                saving = false
+                writeObservers.toList().forEach { it.writeFinished(path, ok) }
             }
-            saving = false
         }
     }
 

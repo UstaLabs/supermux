@@ -1615,16 +1615,9 @@ private fun WorkspacePanel(
     }
     LaunchedEffect(current.id, localLayout) { ui.windows.onWorkspaceTree(current.id, localLayout) }
 
-    val lspSession = ws.let { current.primarySessionId }
-    val hasEditorView = ws.viewsById.values.any { it.kind == "editor" }
-    androidx.compose.runtime.DisposableEffect(lspSession, hasEditorView) {
-        if (lspSession != null && hasEditorView) fleet.editorOpen(lspSession)
-        onDispose { if (lspSession != null && hasEditorView) fleet.editorClose(lspSession) }
-    }
-    LaunchedEffect(ws.documents, lspSession) {
-        val sid = lspSession ?: return@LaunchedEffect
-        wsApp.fsChanges.collect { f -> if (f.session == sid) ws.documents.markChanged(f.paths) }
-    }
+    // The "changed on disk" banner of the workspace's open documents, from subscriptions to their
+    // folders on the workspace's host (no fs_changed / editor_open needed here any more).
+    dev.supermux.ui.files.FileStaleWatcher(wsApp.fileSystem, current.workdir, ws.documents)
     LaunchedEffect(ui.externalOpen, current.id, isActive) {
         if (!isActive) return@LaunchedEffect
         val req = ui.externalOpen ?: return@LaunchedEffect
