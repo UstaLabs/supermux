@@ -7,8 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.ui.res.painterResource
 import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -34,7 +33,6 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.platform.LocalDensity
@@ -541,7 +539,7 @@ fun main() {
 
         if (isTraySupported) {
             Tray(
-                icon = rememberVectorPainter(Icons.Filled.Terminal),
+                icon = painterResource("supermux-tray.png"),
                 state = trayState,
                 tooltip = "supermux",
                 onAction = {
@@ -571,6 +569,7 @@ fun main() {
             // title still paints centred over our own UI on runtimes that ignore
             // `apple.awt.windowTitleVisible`. Other platforms keep the normal caption text.
             title = if (isMacOs()) "" else "supermux",
+            icon = painterResource("supermux-icon.png"),
             state = windowState,
         ) {
             if (shuttingDown) return@Window
@@ -1788,6 +1787,7 @@ fun main() {
                             it.sessionNames,
                         )
                     } ?: "supermux",
+                    icon = painterResource("supermux-icon.png"),
                     state = extraState,
                 ) {
                     val extraModal = remember { ModalPresence() }
