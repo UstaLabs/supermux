@@ -45,3 +45,7 @@ internal actual fun platformFocusChanged(c: EditorController, focused: Boolean) 
 internal actual fun platformCodeInputFocus(owner: Any, focused: Boolean) {}
 
 internal actual fun detectTouchFirst(): Boolean = true
+
+internal actual fun webKeyboardInsetDp(): Float? = null
+
+internal actual fun currentThreadKey(): Any = Thread.currentThread()

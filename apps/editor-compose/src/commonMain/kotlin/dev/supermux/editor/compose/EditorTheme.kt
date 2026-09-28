@@ -68,19 +68,31 @@ data class EditorTheme(
     /**
      * This theme with [palette]'s colours (a light/dark switch): the palette's colours, tokens,
      * marker styles and its own classes, this theme's font, size, line height and gutter columns,
-     * and every class of this theme the palette does not define (a host's `diff-add`, `search-match`)
-     * kept as it is.
+     * and every class of this theme whose value is the host's own (not one of the built-in light /
+     * dark values: a host's `diff-add`, `search-match`) kept as it is.
      */
-    fun withPalette(palette: EditorTheme): EditorTheme = palette.copy(
-        fontFamily = fontFamily,
-        fontSizeSp = fontSizeSp,
-        lineHeightFactor = lineHeightFactor,
-        gutterColumns = gutterColumns,
-        classStyles = classStyles + palette.classStyles,
-        lineClassBackgrounds = lineClassBackgrounds + palette.lineClassBackgrounds,
-        gutterMarkers = gutterMarkers + palette.gutterMarkers,
-        squiggles = squiggles + palette.squiggles,
-    )
+    fun withPalette(palette: EditorTheme): EditorTheme {
+        // A host's OWN value for a class (its diff-add, its search-match) is kept; a value that is
+        // one of the built-in palettes' (this theme came from light or dark) follows the new palette.
+        val dark = dark(fontFamily)
+        val light = light(fontFamily)
+        fun <V> merge(host: Map<String, V>, pal: Map<String, V>, builtIn: (EditorTheme) -> Map<String, V>): Map<String, V> {
+            val d = builtIn(dark); val l = builtIn(light)
+            val out = LinkedHashMap(host)
+            for ((k, v) in pal) { val h = host[k]; if (h == null || h == d[k] || h == l[k]) out[k] = v }
+            return out
+        }
+        return palette.copy(
+            fontFamily = fontFamily,
+            fontSizeSp = fontSizeSp,
+            lineHeightFactor = lineHeightFactor,
+            gutterColumns = gutterColumns,
+            classStyles = merge(classStyles, palette.classStyles) { it.classStyles },
+            lineClassBackgrounds = merge(lineClassBackgrounds, palette.lineClassBackgrounds) { it.lineClassBackgrounds },
+            gutterMarkers = merge(gutterMarkers, palette.gutterMarkers) { it.gutterMarkers },
+            squiggles = merge(squiggles, palette.squiggles) { it.squiggles },
+        )
+    }
 
     companion object {
         /** The class the surface puts on text an IME is still composing (an underline). */

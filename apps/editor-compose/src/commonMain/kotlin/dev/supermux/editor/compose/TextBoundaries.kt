@@ -183,3 +183,11 @@ internal object TextBoundaries {
 
     private fun charCount(c: Int) = if (c >= 0x10000) 2 else 1
 }
+
+/**
+ * The editor's grapheme rules for plugins (the caret's, [TextBoundaries]): where the user-perceived
+ * character starting at [i] of [s] ends. A diff marks whole graphemes (never half an emoji).
+ */
+object Graphemes {
+    fun next(s: CharSequence, i: Int): Int = TextBoundaries.nextIn(s, i)
+}

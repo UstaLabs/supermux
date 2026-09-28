@@ -168,3 +168,10 @@ internal actual fun platformCodeInputFocus(owner: Any, focused: Boolean) {
 }
 
 internal actual fun detectTouchFirst(): Boolean = true
+
+internal actual fun webKeyboardInsetDp(): Float? = null
+
+private object MainThreadKey
+
+/** UIKit's UI thread is the main thread: any other thread gets a key of its own (never equal). */
+internal actual fun currentThreadKey(): Any = if (platform.Foundation.NSThread.isMainThread) MainThreadKey else Any()

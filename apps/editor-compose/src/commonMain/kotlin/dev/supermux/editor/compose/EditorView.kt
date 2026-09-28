@@ -46,6 +46,9 @@ class EditorView(initial: EditorState) : CommandTarget {
      */
     val viewport: StateFlow<IntRange> = viewportFlow.asStateFlow()
 
+    /** A hardware keyboard typed into this view (a letter or an arrow as a key event): no accessory bar then. */
+    internal var hardwareKeySeen: Boolean by mutableStateOf(false)
+
     /** True while the surface holds the keyboard focus (mirrors Compose focus). */
     var focused: Boolean by mutableStateOf(false)
 
@@ -313,7 +316,14 @@ class EditorView(initial: EditorState) : CommandTarget {
         fallback
     }
 
+    /** The UI thread: the one that made the view, then the one its surface composes on. */
+    internal var uiThread: Any = currentThreadKey()
+
     override fun dispatch(spec: TransactionSpec) {
+        // Debug check: the state is Compose state, written only on the UI thread. A write from another
+        // thread while a composition runs is silently lost (the composition's snapshot or the other
+        // write loses): a background producer must hop to the UI thread first.
+        if (currentThreadKey() !== uiThread) EditorDiagnostics.reportOffThreadDispatch()
         val userEdit = isUserEdit(spec)
         if (readOnly && userEdit) return
         val start = current

@@ -74,6 +74,12 @@ that decorates only what is on screen includes `EditorViewport.extension` and re
 `EditorViewport.of(state)` / `rangeOf(state)`; the surface dispatches `EditorViewport.set` with the
 laid-out range whenever it changes (after the frame, no userEvent), and only when some plugin asked.
 
+**Threads.** `EditorView.dispatch` is the UI thread's: a view's state is Compose state, and a
+write from another thread while a composition runs can be lost without a trace. A dispatch from a
+thread other than the view's (the one that composes its surface, or made it) is counted in
+`EditorDiagnostics.offThreadDispatches` and the first is logged with its stack. Background producers
+(the syntax worker, a diff job, an LSP parse) hop to the UI thread first.
+
 **Coordinates.** Offsets are UTF-16 (as everywhere in the editor). Geometry works in *content*
 coordinates (x from the text area's left edge, y from the document top); the surface adds the
 gutter and the scroll.
@@ -389,8 +395,8 @@ see it; they put semantic class names on decorations:
   `search-match` / `search-match-selected` (`EditorTheme.searchClasses`), autocomplete's
   `snippet-field` (`EditorTheme.completionClasses`), and the diff plugin's line tints `diff-add`,
   `diff-change`, `diff-remove` and character marks `diff-add-text`, `diff-remove-text`
-  (`EditorTheme.diffClasses`, M4d). A theme mode's palette carries these, so a host's own colours
-  for them are replaced by the palette's on a mode switch (a host class no palette defines is kept).
+  (`EditorTheme.diffClasses`, M4d). On a theme-mode switch (`withPalette`) a host's OWN value for any
+  class is kept; only values that are the built-in light / dark palettes' follow the new palette.
 - `EditorTheme.squiggles` (`SquiggleStyle(color, dotted)`): mark classes drawn as an underline under
   their text, per row, decided in the layout pass: the lint plugin's `lint-error` / `lint-warning` /
   `lint-info` (wavy) and `lint-hint` (dotted), in `light` and `dark` (`EditorTheme.lintSquiggles`).
@@ -633,18 +639,24 @@ hide-keyboard key. Styled like the terminal's accessory bar (40 dp keys, at leas
 dividers between groups, the terminal's hide-keyboard key of commit 8b0a6653: iOS has no back
 gesture), in the editor theme's tones. Ahmet approved it on 2026-09-28 (M4b task 3).
 - **When**: `AccessoryVisibility.AUTO` shows it only while the editor has the focus AND a soft
-  keyboard is up (an IME inset of at least `MIN_KEYBOARD`, 100 dp: an iPad's hardware-keyboard
-  shortcut strip does not count, and a hardware keyboard on Android hides the IME); a touch-first
-  browser, whose keyboard gives no inset, counts a focused editor. `ALWAYS` is the host's call.
+  keyboard is up: an IME inset of at least `MIN_KEYBOARD`, 100 dp (an iPad's hardware-keyboard
+  shortcut strip does not count; a hardware keyboard on Android hides the IME); on the web the
+  visual viewport's lost height (`visualViewport`; a touch browser without it counts a focused
+  editor); on iOS a FLOATING iPad keyboard, which reports no inset at all, counts once the editor has
+  been focused 700 ms with no inset ever seen and no hardware key typed (a letter or an arrow as a
+  key event). After its hide-keyboard key it stays hidden until the keyboard comes back (its inset
+  grows again) or a new focus. `ALWAYS` is the host's call.
 - **Commands, not key events**: Tab, ⇧Tab and the arrows run what that key is BOUND to (the state's
   keymap, then the defaults, guarded and policed like a key: a completion list's ↑/↓, a snippet's Tab
   work); Undo / Redo / Find run the named commands `history.undo`, `history.redo`, `search.open`.
   A key is dimmed (and `disabled` for a screen reader) when no plugin provides its command or
   editor-core's `commandEnabled(state, id)` says it cannot run: `commandAvailabilityFacet`
   (`CommandAvailability`), which the history plugin answers from its stacks.
-- **Never the focus**: the keys are taps (`detectTapGestures`), never `clickable` / `focusable`, so the
-  hidden field keeps the focus, the keyboard stays up and the IME keeps its session. The arrows
-  repeat while held (after 400 ms, every 50 ms). Hide keyboard asks the platform to dismiss it and
+- **Never the focus**: the keys are raw pointer gestures, never `clickable` / `focusable`, so the
+  hidden field keeps the focus, the keyboard stays up and the IME keeps its session. A key runs when
+  the finger LIFTS on it; past the touch slop the gesture is a drag of the bar and runs nothing (a
+  swipe that starts on Undo does not undo). The arrows repeat while held still (after 400 ms, every
+  50 ms; a drag cancels the repeat). Hide keyboard asks the platform to dismiss it and
   leaves the focus alone: a tap on the text brings it back.
 - Tests: `EditorAccessoriesTest` (the harness: commands run, the focus stays, a held arrow repeats,
   Undo disabled until something can be undone, a plugin's Tab wins, hide keeps the focus, AUTO shows

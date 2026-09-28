@@ -29,6 +29,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -225,5 +226,26 @@ class SyntaxHostTest {
         shown = false
         waitForIdle()
         waitUntil(timeoutMillis = 10_000) { SyntaxDebug.liveTrees() < before }
+    }
+
+    @Test fun resultsAreDispatchedOnTheUiThreadEvenFromAnUnconfinedScope() = runBlocking {
+        val uiThread = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "the-ui") }
+        val uiDispatcher = uiThread.asCoroutineDispatcher()
+        // The parent scope inherits Unconfined (ImageComposeScene's default): a resumed coroutine would
+        // run on the worker's thread. The host must still hop to the UI dispatcher.
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val threads = java.util.Collections.synchronizedSet(HashSet<String>())
+        try {
+            val view = withContext(uiDispatcher) { EditorView(EditorState.create(kotlinText, extensions = highlight("kotlin"))) }
+            withContext(uiDispatcher) { view.addListener { threads += Thread.currentThread().name.substringBefore(" @") } }
+            val offBefore = dev.supermux.editor.compose.EditorDiagnostics.offThreadDispatches
+            withContext(uiDispatcher) { SyntaxHost(view, backend, scope = scope, uiDispatcher = uiDispatcher).also { it.start() } }
+            for (i in 0 until 1000) { if (withContext(uiDispatcher) { TokenClasses.KEYWORD in classes(view.state) }) break; delay(10) }
+            assertTrue(withContext(uiDispatcher) { TokenClasses.KEYWORD in classes(view.state) }, "colours arrived")
+            assertEquals(setOf("the-ui"), threads.toSet(), "every result dispatched on the UI thread")
+            assertEquals(offBefore, dev.supermux.editor.compose.EditorDiagnostics.offThreadDispatches)
+        } finally {
+            scope.cancel(); uiThread.shutdown()
+        }
     }
 }

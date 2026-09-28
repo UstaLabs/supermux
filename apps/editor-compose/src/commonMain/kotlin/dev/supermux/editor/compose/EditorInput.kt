@@ -604,6 +604,9 @@ internal fun handleEditorKey(view: EditorView, event: KeyEvent, composing: Boole
     val log = view.onKeyPath
     if (composing) { log?.invoke(keyLabel(event.key), KeyPath.IME); return false }
     val name = keyName(event.key) ?: run { log?.invoke(keyLabel(event.key), KeyPath.FIELD); return false }
+    // A letter or an arrow as a key event is a hardware keyboard (a soft one edits the field; its
+    // Backspace or Return may come as keys on Android, so those do not count): the accessory bar's rule.
+    if (name.length == 1 || name.startsWith("Arrow")) view.hardwareKeySeen = true
     val chord = KeyChord(name, ctrl = event.isCtrlPressed, alt = event.isAltPressed, shift = event.isShiftPressed, meta = event.isMetaPressed)
     val apple = isApplePlatform
     val cp = event.utf16CodePoint

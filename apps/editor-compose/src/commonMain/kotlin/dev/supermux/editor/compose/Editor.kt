@@ -201,6 +201,7 @@ fun Editor(
         onDispose { view.focused = false }
     }
     DisposableEffect(view, controller) {
+        view.uiThread = currentThreadKey()
         view.surface = controller
         view.geometry = controller.geometry
         view.scrollState = scrollState

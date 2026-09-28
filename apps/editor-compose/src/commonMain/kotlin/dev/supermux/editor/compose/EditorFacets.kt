@@ -268,6 +268,19 @@ object EditorDiagnostics {
         if (pluginFailures == 1) println("editor-compose: a plugin's $what failed; typed plainly instead: $e")
     }
 
+    /**
+     * Debug check: how many transactions were dispatched OFF the view's UI thread (the thread that
+     * composes its surface, or made it). Such a write can be lost without a trace; the first is
+     * logged with its stack. A background producer hops to the UI thread before it dispatches.
+     */
+    var offThreadDispatches: Int = 0
+        private set
+
+    internal fun reportOffThreadDispatch() {
+        offThreadDispatches++
+        if (offThreadDispatches == 1) println("editor-compose: EditorView.dispatch was called off the UI thread (hop onto it first):\n" + Throwable().stackTraceToString().lines().take(12).joinToString("\n"))
+    }
+
     internal fun reportUnlabeledCommandEdit(changes: String) {
         unlabeledCommandEdits++
         if (unlabeledCommandEdits == 1) println("editor-compose: a key-bound command dispatched an edit without a userEvent ($changes); give it one (\"input.*\", \"delete.*\", ...)")

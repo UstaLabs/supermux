@@ -352,3 +352,12 @@ internal actual fun platformCodeInputFocus(owner: Any, focused: Boolean) {}
 internal actual fun detectTouchFirst(): Boolean = coarsePointer()
 
 private fun coarsePointer(): Boolean = js("(typeof matchMedia === 'function') && matchMedia('(pointer: coarse)').matches")
+
+internal actual fun webKeyboardInsetDp(): Float? = visualKeyboardInset().let { if (it < 0) null else it.toFloat() }
+
+private fun visualKeyboardInset(): Double = js("(window.visualViewport ? Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop) : -1)")
+
+private object PageThread
+
+/** The browser has one thread. */
+internal actual fun currentThreadKey(): Any = PageThread

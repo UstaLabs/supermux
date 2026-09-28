@@ -61,8 +61,9 @@ fun highlight(language: String?): Extension = extensionOf(
  *   [OFF_PANEL] panel ([registerWidgets] gives its content) and sets [isOff];
  * - [close] stops the worker, which frees every native handle on its own thread.
  *
- * [scope] is the UI's (its dispatcher runs [hop] by default and the viewport collection); the
- * worker runs on its own single thread inside it. Compose hosts use [rememberSyntaxHost].
+ * [scope] is the UI's; the worker runs on its own single thread inside it. The results are
+ * dispatched on the UI thread: [hop], else [uiDispatcher], else [scope]'s dispatcher (never an
+ * Unconfined one: see `uiContext`), else `Dispatchers.Main`. Compose hosts use [rememberSyntaxHost].
  */
 class SyntaxHost(
     val view: EditorView,
@@ -70,12 +71,25 @@ class SyntaxHost(
     private val registry: LanguageRegistry = LanguageRegistry.default,
     private val scope: CoroutineScope,
     limits: SyntaxLimits = SyntaxLimits(),
-    private val hop: (() -> Unit) -> Unit = { run -> scope.launch { run() } },
+    hop: ((() -> Unit) -> Unit)? = null,
+    uiDispatcher: kotlin.coroutines.CoroutineContext? = null,
 ) : AutoCloseable {
     private var closed = false
     private var started = false
 
-    val worker: SyntaxWorker = SyntaxWorker(backend, registry, scope, dispatch = { spec -> hop { if (!closed) view.dispatch(spec) } }, limits = limits)
+    /**
+     * Where the worker's results are dispatched: [uiDispatcher], else [scope]'s own dispatcher unless
+     * it is Unconfined (a coroutine resumed from the worker would then dispatch ON the worker thread,
+     * and an off-thread write to the view's Compose state can be lost), else `Dispatchers.Main`.
+     */
+    private val uiContext: kotlin.coroutines.CoroutineContext by lazy {
+        uiDispatcher ?: scope.coroutineContext[kotlin.coroutines.ContinuationInterceptor]?.takeIf { it !== kotlinx.coroutines.Dispatchers.Unconfined }
+            ?: runCatching { kotlinx.coroutines.Dispatchers.Main.also { it.isDispatchNeeded(kotlin.coroutines.EmptyCoroutineContext) } }.getOrNull()
+            ?: error("SyntaxHost: the scope's dispatcher is Unconfined and there is no Main dispatcher: pass uiDispatcher (the UI thread's)")
+    }
+    private val hop: (() -> Unit) -> Unit = hop ?: { run -> scope.launch(uiContext) { run() } }
+
+    val worker: SyntaxWorker = SyntaxWorker(backend, registry, scope, dispatch = { spec -> this.hop { if (!closed) view.dispatch(spec) } }, limits = limits)
 
     /** True once syntax is off for the shown document (snapshot state: a host's status line can show it). */
     var isOff: Boolean by mutableStateOf(false)

@@ -2,7 +2,8 @@ package dev.supermux.editor.compose
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,7 +19,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -67,16 +72,19 @@ enum class AccessoryVisibility {
  *
  * - The host places it (above the keyboard: the bottom of a column padded by the IME insets, as
  *   the sample does); [AccessoryVisibility.AUTO] shows it only while the editor has the focus AND a
- *   soft keyboard is up (its inset at least [MIN_KEYBOARD] tall, so a hardware keyboard's shortcut
- *   strip on an iPad does not count; a browser on a touch device, whose keyboard gives no inset,
- *   counts a focused editor as one with its keyboard up).
+ *   soft keyboard is up: its inset at least [MIN_KEYBOARD] tall (a hardware keyboard's shortcut
+ *   strip on an iPad does not count); on the web the visual viewport's lost height (a touch browser
+ *   without `visualViewport` counts a focused editor); on iOS a FLOATING iPad keyboard, which gives
+ *   no inset at all, counts when the editor has been focused 700 ms with no inset ever seen and no
+ *   hardware key typed. Its own hide key hides it until the keyboard comes back or a new focus.
  * - The buttons run EDITOR COMMANDS, never key events: Tab, ⇧Tab and the arrows run what that key
  *   is bound to (the state's keymap, then the defaults: a completion list's ↑/↓, a snippet's Tab
  *   work), Undo / Redo / Find the named commands `history.undo`, `history.redo`, `search.open`,
  *   disabled (dimmed, `disabled` for a screen reader) when no plugin provides them or
  *   `commandEnabled` says they cannot run (an empty undo stack).
  * - They never take the focus (taps, not `clickable` / `focusable`): the hidden field keeps it, so
- *   the soft keyboard stays up and the IME keeps its session. The arrows repeat while held.
+ *   the soft keyboard stays up and the IME keeps its session. A key runs when the finger lifts on it
+ *   (a swipe over the bar runs nothing); the arrows repeat while held still.
  * - The trailing button hides the soft keyboard, the focus kept (the terminal's, commit 8b0a6653:
  *   iOS has no back gesture): a tap on the text brings it back.
  */
@@ -87,11 +95,36 @@ fun EditorAccessories(
     theme: EditorTheme = EditorTheme.default(),
     visibility: AccessoryVisibility = AccessoryVisibility.AUTO,
 ) {
+    // Hidden by its own key: until the keyboard comes back (its inset grows again) or a new focus.
+    var hiddenByUser by remember(view) { mutableStateOf(false) }
     if (visibility == AccessoryVisibility.AUTO) {
         val density = LocalDensity.current
-        val ime = WindowInsets.ime.getBottom(density)
-        val keyboardUp = with(density) { ime.toDp() } >= MIN_KEYBOARD || (platformInputOnAnyFocus && isTouchFirstPlatform)
-        if (!view.focused || !keyboardUp) return
+        val imeDp = with(density) { WindowInsets.ime.getBottom(density).toDp() }
+        val focused = view.focused
+        // The web: the visual viewport tells a keyboard (polled while focused: it has no inset).
+        var webInset by remember(view) { mutableStateOf(webKeyboardInsetDp()) }
+        var insetSeen by remember(view) { mutableStateOf(false) }
+        var settled by remember(view) { mutableStateOf(false) }
+        LaunchedEffect(view, focused) {
+            hiddenByUser = false; insetSeen = false; settled = false
+            if (!focused) return@LaunchedEffect
+            if (webInset != null) while (true) { webInset = webKeyboardInsetDp(); delay(150) }
+            delay(FLOATING_SETTLE_MS)
+            settled = true
+        }
+        val docked = imeDp >= MIN_KEYBOARD || (webInset ?: 0f) >= MIN_KEYBOARD.value
+        if (imeDp > 0.dp) SideEffect { insetSeen = true }
+        LaunchedEffect(docked) { if (docked) hiddenByUser = false }
+        val keyboardUp = when {
+            docked -> true
+            // A touch browser without visualViewport: a focused editor has its keyboard.
+            webInset == null && platformInputOnAnyFocus && isTouchFirstPlatform -> true
+            // iOS: a FLOATING iPad keyboard gives no inset at all. Focused a moment with no inset ever
+            // seen and no hardware key typed: count it as up (the documented fallback).
+            isApplePlatform && isTouchFirstPlatform && !platformInputOnAnyFocus -> settled && !insetSeen && !view.hardwareKeySeen
+            else -> false
+        }
+        if (!focused || !keyboardUp || hiddenByUser) return
     }
     val canUndo by remember(view) { derivedStateOf { commandEnabled(view.state, UNDO) } }
     val canRedo by remember(view) { derivedStateOf { commandEnabled(view.state, REDO) } }
@@ -127,7 +160,7 @@ fun EditorAccessories(
             AccessoryKey(c, "Find", "Find", AccessoryTags.FIND, enabled = canFind) { named(FIND) }
         }
         Divider(c)
-        AccessoryKey(c, null, "Hide keyboard", AccessoryTags.HIDE_KEYBOARD) { tick(); keyboard?.hide() }
+        AccessoryKey(c, null, "Hide keyboard", AccessoryTags.HIDE_KEYBOARD) { tick(); keyboard?.hide(); hiddenByUser = true }
     }
 }
 
@@ -152,6 +185,9 @@ val MIN_KEYBOARD: Dp = 100.dp
 private const val UNDO = "history.undo"
 private const val REDO = "history.redo"
 private const val FIND = "search.open"
+
+/** How long a focused iOS editor waits for a keyboard inset before it counts a floating keyboard. */
+private const val FLOATING_SETTLE_MS = 700L
 
 /** The first repeat of a held arrow, then every [REPEAT_EVERY_MS] (a hardware key's feel). */
 private const val REPEAT_AFTER_MS = 400L
@@ -202,16 +238,27 @@ private fun AccessoryKey(c: AccessoryColors, label: String?, description: String
             .clip(RoundedCornerShape(8.dp))
             .background(c.key.copy(alpha = if (enabled) 1f else 0.45f))
             .pointerInput(repeat) {
-                detectTapGestures(onPress = {
-                    if (!on) return@detectTapGestures
-                    latest()
+                // A key runs when the finger LIFTS on it (a swipe of the bar that starts on Undo runs
+                // nothing); an arrow held still repeats. Past the touch slop it is a drag: nothing runs.
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    if (!on) return@awaitEachGesture
+                    var repeated = false
                     val held = if (repeat) scope.launch {
                         delay(REPEAT_AFTER_MS)
+                        repeated = true
                         while (true) { latest(); delay(REPEAT_EVERY_MS) }
                     } else null
-                    tryAwaitRelease()
+                    var tapped = false
+                    while (true) {
+                        val e = awaitPointerEvent()
+                        val ch = e.changes.firstOrNull { it.id == down.id } ?: break
+                        if (ch.isConsumed || (ch.position - down.position).getDistance() > viewConfiguration.touchSlop) break
+                        if (!ch.pressed) { tapped = true; ch.consume(); break }
+                    }
                     held?.cancel()
-                })
+                    if (tapped && !repeated && on) latest()
+                }
             }
             .semantics {
                 role = Role.Button

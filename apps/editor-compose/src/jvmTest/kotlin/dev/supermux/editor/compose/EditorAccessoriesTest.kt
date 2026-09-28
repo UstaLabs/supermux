@@ -18,6 +18,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.dp
 import dev.supermux.editor.core.Command
 import dev.supermux.editor.core.CommandAvailability
@@ -140,5 +141,26 @@ class EditorAccessoriesTest {
         assertTrue(v.focused)
         onNodeWithTag(AccessoryTags.BAR).assertDoesNotExist()
         onNodeWithTag(AccessoryTags.RIGHT).assertDoesNotExist()
+    }
+
+    @Test fun aSwipeThatStartsOnAKeyRunsNothing() = runComposeUiTest {
+        val runs = Runs().also { it.canUndo = true }
+        val (v, _) = show(runs)
+        v.dispatch(dev.supermux.editor.core.TransactionSpec(selection = EditorSelection.cursor(1)))
+        waitForIdle()
+        onNodeWithTag(AccessoryTags.UNDO).performTouchInput { swipe(start = center, end = androidx.compose.ui.geometry.Offset(center.x - 200f, center.y)) }
+        waitForIdle()
+        assertEquals(emptyList(), runs.log, "a swipe over Undo does not undo")
+        val head = v.head
+        onNodeWithTag(AccessoryTags.RIGHT).performTouchInput { swipe(start = center, end = androidx.compose.ui.geometry.Offset(center.x - 200f, center.y)) }
+        waitForIdle()
+        assertEquals(head, v.head, "a swipe over an arrow does not move the caret")
+        // A plain tap still runs: on the finger's lift.
+        onNodeWithTag(AccessoryTags.UNDO).performTouchInput { down(center) }
+        waitForIdle()
+        assertEquals(emptyList(), runs.log, "nothing on touch-down")
+        onNodeWithTag(AccessoryTags.UNDO).performTouchInput { up() }
+        waitForIdle()
+        assertEquals(listOf("undo"), runs.log)
     }
 }

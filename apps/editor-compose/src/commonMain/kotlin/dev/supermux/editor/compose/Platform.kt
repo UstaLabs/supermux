@@ -100,3 +100,12 @@ fun androidx.compose.ui.Modifier.codeTextInput(): androidx.compose.ui.Modifier =
 
 /** iOS: [owner] (a code field) gained or lost the focus: Smart Punctuation off while it has it. */
 internal expect fun platformCodeInputFocus(owner: Any, focused: Boolean)
+
+/**
+ * The web's soft keyboard, as the page sees it: how much of the layout viewport the visual viewport
+ * lost at the bottom (`visualViewport`), in CSS px (= dp); null off the web or without the API.
+ */
+internal expect fun webKeyboardInsetDp(): Float?
+
+/** The calling thread, as something to compare with `===` (the UI thread's check in [EditorView.dispatch]). */
+internal expect fun currentThreadKey(): Any
