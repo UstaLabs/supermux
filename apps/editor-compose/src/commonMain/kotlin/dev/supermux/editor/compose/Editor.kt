@@ -110,6 +110,8 @@ internal val LocalEditorCursorBlink = staticCompositionLocalOf { true }
  * cursors and the line-number gutter), laying out only the visible lines plus overscan.
  *
  * @param theme colours, the font and the token styles; the default follows the system dark mode.
+ * @param lightTheme / darkTheme what a state's `themeModeFacet` picks between (a host's own themes);
+ *   without them the mode swaps only the palette of [theme] (see [EditorTheme.withPalette]).
  * @param lineWrap wrap long lines at the viewport's width (no horizontal scrolling then).
  * @param showLineNumbers the gutter.
  * @param readOnly no user edits (see [EditorView.readOnly]); the selection still moves.
@@ -143,6 +145,8 @@ fun Editor(
     widgets: WidgetRegistry = remember { WidgetRegistry() },
     linked: LinkedScroll? = null,
     linkedSide: LinkedSide = LinkedSide.A,
+    lightTheme: EditorTheme? = null,
+    darkTheme: EditorTheme? = null,
 ) {
     // cacheSize = 0: the surface keeps its own bounded caches (LineLayouts).
     val measurer = rememberTextMeasurer(cacheSize = 0)
@@ -161,9 +165,11 @@ fun Editor(
     val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
     val baseTheme = when (val mode = settingMode) {
         null -> theme
-        else -> remember(theme, mode, systemDark) {
+        else -> remember(theme, mode, systemDark, lightTheme, darkTheme) {
             val dark = mode == EditorThemeMode.DARK || (mode == EditorThemeMode.SYSTEM && systemDark)
-            (if (dark) EditorTheme.dark(theme.fontFamily) else EditorTheme.light(theme.fontFamily)).copy(fontSizeSp = theme.fontSizeSp)
+            // The host's own theme for that mode, else only the palette swapped under the host's theme.
+            (if (dark) darkTheme else lightTheme)
+                ?: theme.withPalette(if (dark) EditorTheme.dark(theme.fontFamily) else EditorTheme.light(theme.fontFamily))
         }
     }
     // The zoom is the view's (snapshot state): a change recomposes this with the theme at that size.

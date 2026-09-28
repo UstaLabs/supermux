@@ -55,6 +55,8 @@ internal fun editorTest(
     toolbar: androidx.compose.ui.platform.TextToolbar? = null,
     widgets: WidgetRegistry? = null,
     showLineNumbers: Boolean = true,
+    lightTheme: EditorTheme? = null,
+    darkTheme: EditorTheme? = null,
     body: ComposeUiTest.(SurfaceFixture) -> Unit,
 ) = runComposeUiTest {
     // Measuring or scrolling inside a draw pass fails every surface test (M3c: measure before draw).
@@ -92,6 +94,8 @@ internal fun editorTest(
                     onFontSize = onFontSize,
                     widgets = widgets ?: androidx.compose.runtime.remember { WidgetRegistry() },
                     showLineNumbers = showLineNumbers,
+                    lightTheme = lightTheme,
+                    darkTheme = darkTheme,
                 )
             }
         }

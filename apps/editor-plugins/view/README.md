@@ -12,7 +12,9 @@ ViewSettings.update(view) { it.copy(lineWrap = false) }   // the settings screen
 
 - **`EditorSettings(fontSize, lineWrap, tabSize, indentUnit, showLineNumbers, theme)`**, defaults
   as today's editor: 13 px, wrap ON (`UiPrefs.EDITOR_LINE_WRAP_DEFAULT`), tab 4, four spaces, line
-  numbers, `EditorThemeMode.SYSTEM`.
+  numbers, and `theme = null`: the host's `Editor(theme)` as it is. A mode (LIGHT, DARK, SYSTEM)
+  picks the host's `Editor(lightTheme / darkTheme)`, else swaps only the palette under the host's
+  theme (its own classes, `diff-add`, `search-match`, stay).
 - **`viewSettings(settings)`** puts them in the state: `fontSizeFacet`, `lineWrappingFacet`,
   `tabSizeFacet`, `indentUnitFacet`, `lineNumbersFacet`, `themeModeFacet` (editor-compose), each in
   its own compartment. The surface reads them from the state and they OVERRIDE the `Editor(...)`

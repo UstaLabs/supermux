@@ -35,9 +35,10 @@ val fontSizeFacet: Facet<Float, Float?> = Facet.define("fontSize") { it.firstOrN
 enum class EditorThemeMode { LIGHT, DARK, SYSTEM }
 
 /**
- * The theme a host's settings chose. When set, the surface paints with [EditorTheme.light] or
- * [EditorTheme.dark] (SYSTEM: after the platform's dark mode) in the `Editor(theme = …)` theme's font
- * and size, instead of that theme itself.
+ * The theme a host's settings chose (SYSTEM: after the platform's dark mode). When set, the surface
+ * paints with `Editor(lightTheme / darkTheme)` when the host gave them, else with `Editor(theme)`'s
+ * palette swapped for [EditorTheme.light] / [EditorTheme.dark] ([EditorTheme.withPalette]: the
+ * host's own classes, fonts and gutter columns are kept). Unset: `Editor(theme)` as it is.
  */
 val themeModeFacet: Facet<EditorThemeMode, EditorThemeMode?> = Facet.define("themeMode") { it.firstOrNull() }
 

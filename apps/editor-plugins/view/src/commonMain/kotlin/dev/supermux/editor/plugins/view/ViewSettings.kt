@@ -30,7 +30,8 @@ data class EditorSettings(
     val tabSize: Int = 4,
     val indentUnit: String = "    ",
     val showLineNumbers: Boolean = true,
-    val theme: EditorThemeMode = EditorThemeMode.SYSTEM,
+    /** Null: the host's `Editor(theme)` as it is (the default); else light, dark or the system's. */
+    val theme: EditorThemeMode? = null,
 ) {
     init {
         require(tabSize in 1..16) { "tab size $tabSize" }
@@ -69,7 +70,7 @@ object ViewSettings {
         tabSize.of(tabSizeFacet.of(settings.tabSize)),
         indentUnit.of(indentUnitFacet.of(settings.indentUnit)),
         lineNumbers.of(lineNumbersFacet.of(settings.showLineNumbers)),
-        theme.of(themeModeFacet.of(settings.theme)),
+        theme.of(settings.theme?.let { themeModeFacet.of(it) } ?: extensionOf()),
         data.of(settingsFacet.of(settings)),
     )
 
@@ -82,7 +83,7 @@ object ViewSettings {
             if (old?.tabSize != settings.tabSize) add(tabSize.reconfigure(tabSizeFacet.of(settings.tabSize)))
             if (old?.indentUnit != settings.indentUnit) add(indentUnit.reconfigure(indentUnitFacet.of(settings.indentUnit)))
             if (old?.showLineNumbers != settings.showLineNumbers) add(lineNumbers.reconfigure(lineNumbersFacet.of(settings.showLineNumbers)))
-            if (old?.theme != settings.theme) add(theme.reconfigure(themeModeFacet.of(settings.theme)))
+            if (old?.theme != settings.theme) add(theme.reconfigure(settings.theme?.let { themeModeFacet.of(it) } ?: extensionOf()))
             if (old != settings) add(data.reconfigure(settingsFacet.of(settings)))
         }
     }

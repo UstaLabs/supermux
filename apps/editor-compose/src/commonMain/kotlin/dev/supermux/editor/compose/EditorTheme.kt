@@ -60,6 +60,22 @@ data class EditorTheme(
     /** The style of mark class [cls], or null when the theme does not draw it. */
     fun styleOf(cls: String): SpanStyle? = tokens[cls] ?: classStyles[cls]
 
+    /**
+     * This theme with [palette]'s colours (a light/dark switch): the palette's colours, tokens,
+     * marker styles and its own classes, this theme's font, size, line height and gutter columns,
+     * and every class of this theme the palette does not define (a host's `diff-add`, `search-match`)
+     * kept as it is.
+     */
+    fun withPalette(palette: EditorTheme): EditorTheme = palette.copy(
+        fontFamily = fontFamily,
+        fontSizeSp = fontSizeSp,
+        lineHeightFactor = lineHeightFactor,
+        gutterColumns = gutterColumns,
+        classStyles = classStyles + palette.classStyles,
+        lineClassBackgrounds = lineClassBackgrounds + palette.lineClassBackgrounds,
+        gutterMarkers = gutterMarkers + palette.gutterMarkers,
+    )
+
     companion object {
         /** The class the surface puts on text an IME is still composing (an underline). */
         const val COMPOSITION_CLASS = "ime-composition"

@@ -89,4 +89,41 @@ class PluginFacetsTest {
             assertEquals(long + "\n" + text, f.view.state.doc.toString())
         }
     }
+
+    @Test fun aThemeModeKeepsTheHostsOwnClasses() {
+        val mode = Compartment("mode")
+        val diffTint = androidx.compose.ui.graphics.Color(0x3300FF00)
+        val host: (EditorTheme) -> EditorTheme = { t ->
+            t.copy(
+                lineClassBackgrounds = t.lineClassBackgrounds + ("diff-add" to diffTint),
+                classStyles = t.classStyles + ("search-match" to androidx.compose.ui.text.SpanStyle(background = diffTint)),
+            )
+        }
+        editorTest(EditorState.create(text, extensions = mode.of(themeModeFacet.of(EditorThemeMode.DARK))), theme = host) { f ->
+            val font = f.theme!!.fontFamily
+            for (m in listOf(EditorThemeMode.DARK, EditorThemeMode.LIGHT)) {
+                f.view.dispatch(TransactionSpec(effects = listOf(mode.reconfigure(themeModeFacet.of(m)))))
+                waitForIdle()
+                val shown = f.controller.theme!!
+                val palette = if (m == EditorThemeMode.DARK) EditorTheme.dark(font) else EditorTheme.light(font)
+                assertEquals(palette.background, shown.background, "$m: not the palette")
+                assertEquals(diffTint, shown.lineClassBackgrounds["diff-add"], "$m: the host's diff-add class was dropped")
+                assertTrue(shown.classStyles.containsKey("search-match"), "$m: the host's search-match class was dropped")
+                // The palette's own classes stay the palette's (not the host palette's active line).
+                assertEquals(palette.currentLine, shown.lineClassBackgrounds[EditorTheme.ACTIVE_LINE_CLASS], "$m: active line")
+            }
+        }
+    }
+
+    @Test fun aHostsLightAndDarkThemesArePickedByTheMode() {
+        val mode = Compartment("mode")
+        val light = EditorTheme.light(androidx.compose.ui.text.font.FontFamily.Monospace).copy(background = androidx.compose.ui.graphics.Color(0xFFFFEEDD))
+        val dark = EditorTheme.dark(androidx.compose.ui.text.font.FontFamily.Monospace).copy(background = androidx.compose.ui.graphics.Color(0xFF112233))
+        editorTest(EditorState.create(text, extensions = mode.of(themeModeFacet.of(EditorThemeMode.LIGHT))), lightTheme = light, darkTheme = dark) { f ->
+            assertEquals(light.background, f.controller.theme!!.background)
+            f.view.dispatch(TransactionSpec(effects = listOf(mode.reconfigure(themeModeFacet.of(EditorThemeMode.DARK)))))
+            waitForIdle()
+            assertEquals(dark.background, f.controller.theme!!.background)
+        }
+    }
 }
