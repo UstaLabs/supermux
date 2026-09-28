@@ -123,8 +123,22 @@ jobs:
         # verification and EXECs the materialized helper. Build a tiny probe
         # binary, run it, then rm it BEFORE the checksum/upload steps so the probe
         # never ships in the release artifacts (upload grabs dist/*).
+        #
+        # build-binary.sh puts the committed placeholder zmx slots back once the
+        # broker is compiled, so the probe's own compile would embed placeholders.
+        # Stage the same bundle the broker embedded (build/zmx/out-<target>) for it.
         run: |
+          set -eu
+          zmx_out="$(ls -d build/zmx/out-*/ | head -1)"
+          slots=src/core/terminal/zmx/embedded
+          backup="$(mktemp -d)"
+          cp -a "$slots/." "$backup/"
+          cp "${zmx_out}bin/zmx" "$slots/zmx"
+          cp "${zmx_out}bin/mux-zmx-helper" "$slots/mux-zmx-helper"
+          cp "${zmx_out}manifest.json" "$slots/manifest"
+          chmod +x "$slots/zmx" "$slots/mux-zmx-helper"
           bun build --compile scripts/asset-probe.ts --outfile dist/asset-probe
+          cp -a "$backup/." "$slots/"
           ./dist/asset-probe
           rm -f dist/asset-probe
       - name: Checksum
@@ -258,7 +272,9 @@ jobs:
           print("\n".join(e.split("=", 1)[1].strip() for e in spec.split(",")))
           PY
           sdkmanager "ndk;$(python3 -c "import json,sys; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
-          for target in linux-x64 $(cat /tmp/abis.txt); do
+          # Every target verifyNativeArtifactsForHost requires of a Linux host (targetBuildHost
+          # in terminal-core/build.gradle.kts): linux-arm64 and windows-x64 cross-compile here.
+          for target in linux-x64 linux-arm64 windows-x64 $(cat /tmp/abis.txt); do
             echo "::group::native/build.sh $target"
             bash apps/terminal-core/native/build.sh "$target"
             echo "::endgroup::"
@@ -574,6 +590,17 @@ jobs:
           name: terminal-native-windows-x64
           path: apps/terminal-core/build/native/windows-x64
           if-no-files-found: error
+      # The browser engine the Windows broker's embedded web client needs, for the same
+      # reason: wasm/build.sh cannot provision Zig on a Windows host.
+      - name: Build the browser terminal engine (wasm32)
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/wasm/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terminal-wasm
+          path: apps/terminal-core/build/wasm
+          if-no-files-found: error
 
   build-desktop-windows:
     # Windows .msi installer and native host. jpackage's MSI backend needs the
@@ -599,6 +626,10 @@ jobs:
         with:
           name: terminal-native-windows-x64
           path: apps/terminal-core/build/native/windows-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: terminal-wasm
+          path: apps/terminal-core/build/wasm
       # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
       # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
       - uses: gradle/actions/setup-gradle@v4
@@ -641,6 +672,9 @@ jobs:
         # Git Bash provides sh/curl/tar; the canonical staging path compiles the
         # Windows x64 broker + sessiond and fetches the pinned frpc.exe.
         shell: bash
+        env:
+          # The wasm engine came from build-terminal-jni-windows (no Zig pin for this host).
+          SUPERMUX_TERMINAL_WASM_PREBUILT: "1"
         run: ../scripts/stage-desktop-binaries.sh windows-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Assert staged host helpers
         shell: pwsh
@@ -1012,9 +1046,16 @@ jobs:
         # The framework's release link runs inside the Gradle daemon, and apps/gradle.properties
         # caps that at 2g (sized for the dev box) — it dies with "Java heap space" here. The
         # user-home gradle.properties outranks the project's, so raise it for this runner only.
+        # 5g stopped being enough once the terminal engine and Mermaid joined the framework.
+        # The runner has 7 GB, so give ONE JVM 6g: the Kotlin compiler runs in-process
+        # instead of in its own daemon (kotlin.daemon.jvmargs=6g in the project), which
+        # would otherwise hold its heap alongside Gradle's through the link.
         run: |
           mkdir -p ~/.gradle
-          echo "org.gradle.jvmargs=-Xmx5g" >> ~/.gradle/gradle.properties
+          {
+            echo "org.gradle.jvmargs=-Xmx6g"
+            echo "kotlin.compiler.execution.strategy=in-process"
+          } >> ~/.gradle/gradle.properties
       - name: Validate compile (unsigned)
         # Dry runs and secret-less tag builds stop here: a device build with signing off
         # proves the archive compiles without needing any Apple credentials.

@@ -109,7 +109,15 @@ esac
 # The web client's terminal is the pinned libghostty-vt wasm module. :terminal-core
 # only stages what wasm/build.sh produced, and without it webpack cannot resolve
 # './supermux-terminal.wasm' — so no bundle at all. Same Zig provisioner as zmx.
-ST_ZIG_JOBS="${MUX_ZIG_JOBS:-4}" bash apps/terminal-core/wasm/build.sh
+# SUPERMUX_TERMINAL_WASM_PREBUILT=1: use the module already in build/wasm (a
+# Windows host has no pinned Zig; CI builds it on Linux and hands it over).
+# :terminal-core still verifies it against its manifest before staging it.
+if [ "${SUPERMUX_TERMINAL_WASM_PREBUILT:-}" = "1" ]; then
+  [ -f apps/terminal-core/build/wasm/manifest.json ] || { echo "build-binary.sh: SUPERMUX_TERMINAL_WASM_PREBUILT=1 but apps/terminal-core/build/wasm has no manifest.json" >&2; exit 1; }
+  echo "build-binary.sh: browser terminal engine from apps/terminal-core/build/wasm (prebuilt)"
+else
+  ST_ZIG_JOBS="${MUX_ZIG_JOBS:-4}" bash apps/terminal-core/wasm/build.sh
+fi
 ( cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain )
 
 # pty-helper: POSIX-only native-arch compile (Windows persistent terminals use sessiond).
