@@ -99,21 +99,13 @@ class FoldTest {
         assertTrue(v.folds().isEmpty())
     }
 
-    @Test fun foldAllOn10kLinesStaysUnder100ms() {
-        val block = "class C {\n    fun f() {\n        if (x) {\n            y()\n        }\n    }\n}\n"
-        val big = block.repeat(1500) // 10,500 lines
-        val v = view(big)
-        // Warm up once (JIT), then measure the best of three.
-        Fold.foldAll.run(v); Fold.unfoldAll.run(v)
-        var best = Long.MAX_VALUE
-        repeat(3) {
-            val t = TimeSource.Monotonic.markNow()
-            Fold.foldAll.run(v)
-            best = minOf(best, t.elapsedNow().inWholeMilliseconds)
-            assertEquals(1500, v.folds().size)
-            Fold.unfoldAll.run(v)
-        }
-        assertTrue(best < 100, "foldAll over 10k lines took $best ms")
+    /** Correct on every platform; the time budget is asserted on the JVM (FoldPerfTest: iOS tests are Debug builds). */
+    @Test fun foldAllOn10kLinesFoldsEveryTopLevelBlock() {
+        val v = view(FoldPerf.bigText)
+        val ms = FoldPerf.bestOf3(v)
+        println("PERF foldAll over 10,500 lines: best of 3 $ms ms")
+        Fold.foldAll.run(v)
+        assertEquals(1500, v.folds().size)
     }
 
     // ------------------------------------------------------------------ gutter and chip --
@@ -224,5 +216,23 @@ class FoldTest {
         assertEquals(1, v.folds().size)
         History.undo.run(v)
         assertEquals(text, v.doc)
+    }
+}
+
+/** foldAll over 10,500 lines (1,500 top-level classes), the best of three runs after a warm-up. */
+internal object FoldPerf {
+    val bigText: String = "class C {\n    fun f() {\n        if (x) {\n            y()\n        }\n    }\n}\n".repeat(1500)
+
+    fun bestOf3(v: EditorView): Long {
+        Fold.foldAll.run(v); Fold.unfoldAll.run(v)
+        var best = Long.MAX_VALUE
+        repeat(3) {
+            val t = TimeSource.Monotonic.markNow()
+            Fold.foldAll.run(v)
+            best = minOf(best, t.elapsedNow().inWholeMilliseconds)
+            check(Fold.folded(v.state).size == 1500)
+            Fold.unfoldAll.run(v)
+        }
+        return best
     }
 }

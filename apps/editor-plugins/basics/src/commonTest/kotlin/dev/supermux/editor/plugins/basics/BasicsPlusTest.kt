@@ -204,6 +204,22 @@ class BasicsPlusTest {
 
     // --------------------------------------------------------------------------- big files --
 
+    @Test fun aMegabyteLineOfOneWordNeverStallsSelectionMatches() {
+        // "x" a million times, the cursor in the middle, the whole line on screen: every position
+        // is a candidate, and the "word" under the cursor is enormous.
+        val text = "x".repeat(1_000_000)
+        val v = EditorView(EditorState.create(text, EditorSelection.cursor(500_000), extensionOf(basics())))
+        v.dispatch(TransactionSpec(effects = listOf(EditorViewport.set.of(0 until text.length))))
+        val t0 = TimeSource.Monotonic.markNow()
+        repeat(20) { v.typeText("x") }
+        val ms = t0.elapsedNow().inWholeMilliseconds
+        assertTrue(ms < 400, "20 keystrokes on a 1 MB one-word line took $ms ms")
+        // A selection there is bounded too.
+        val t1 = TimeSource.Monotonic.markNow()
+        v.dispatch(TransactionSpec(selection = EditorSelection.single(10, 60), userEvent = "select"))
+        assertTrue(t1.elapsedNow().inWholeMilliseconds < 100)
+    }
+
     @Test fun aLargeFileNeverStalls() {
         val text = "fun f(x: Int) { return (x + 1) * [2, 3].size }\n".repeat(40_000) // ~1.9 MB
         val t0 = TimeSource.Monotonic.markNow()

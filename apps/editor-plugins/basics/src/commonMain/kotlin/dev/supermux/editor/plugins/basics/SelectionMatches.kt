@@ -29,8 +29,9 @@ val selectionMatchesConfig: Facet<SelectionMatchesConfig, SelectionMatchesConfig
  * at least [SelectionMatchesConfig.minSelectionLength] characters that is not all whitespace (and at
  * most 200), every other occurrence of its text gets a [CLASS] mark; with one empty cursor inside a
  * word, the word's other WHOLE-WORD occurrences do. Only in the viewport (editor-compose's
- * [EditorViewport]; before the first paint, 100 lines around the cursor), so a big file costs what
- * the screen shows. More than [SelectionMatchesConfig.maxMatches] matches mark nothing.
+ * [EditorViewport]; before the first paint, 100 lines around the cursor), at most 20,000 characters
+ * around the cursor, so a big file (or a megabyte line) costs what the screen shows. More than
+ * [SelectionMatchesConfig.maxMatches] matches mark nothing; a "word" over 100 characters is none.
  */
 object SelectionMatches {
     const val CLASS = "selection-match"
@@ -67,8 +68,13 @@ object SelectionMatches {
             wholeWord = false
         }
         val range = EditorViewport.rangeOf(st)
-        val from = maxOf(0, range.first)
-        val to = minOf(doc.length, range.last + 1)
+        var from = maxOf(0, range.first)
+        var to = minOf(doc.length, range.last + 1)
+        // A viewport can be one huge line (a minified file): search a window around the cursor only.
+        if (to - from > MAX_SCAN) {
+            from = (main.head - MAX_SCAN / 2).coerceIn(from, to)
+            to = minOf(to, from + MAX_SCAN)
+        }
         if (to - from < query.length) return NONE
         val text = doc.slice(from, to)
         val out = ArrayList<Ranged<Decoration>>()
@@ -87,6 +93,12 @@ object SelectionMatches {
         return RangeSet.of(out)
     }
 
+    /** Characters searched at most (a viewport on a minified file's one line can be megabytes). */
+    private const val MAX_SCAN = 20_000
+
+    /** A "word" longer than this is not one (a line of one repeated letter, a base64 blob). */
+    private const val MAX_WORD = 100
+
     /** The word (letters, digits, `_`) around [pos], touching it on either side, or null. */
     private fun wordAt(st: EditorState, pos: Int): Pair<Int, Int>? {
         val doc = st.doc
@@ -95,8 +107,8 @@ object SelectionMatches {
         val lineEnd = if (line + 1 < doc.lineCount) doc.lineStart(line + 1) - 1 else doc.length
         var a = pos
         var b = pos
-        while (a > lineStart && pos - a < 200 && isWordChar(doc.charAt(a - 1))) a--
-        while (b < lineEnd && b - pos < 200 && isWordChar(doc.charAt(b))) b++
-        return if (b > a) a to b else null
+        while (a > lineStart && pos - a <= MAX_WORD && isWordChar(doc.charAt(a - 1))) a--
+        while (b < lineEnd && b - pos <= MAX_WORD && isWordChar(doc.charAt(b))) b++
+        return if (b > a && b - a <= MAX_WORD) a to b else null
     }
 }
