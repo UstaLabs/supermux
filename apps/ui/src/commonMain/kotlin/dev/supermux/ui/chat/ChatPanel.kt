@@ -52,6 +52,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -292,6 +293,16 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
  * flicker or lose scroll position: tool rows key off callId (falling back to kind:seq:ts), message
  * rows off the entry id. Identical on both hosts before the merge.
  */
+internal fun uniqueTimelineKeys(items: List<TimelineItem>): List<String> {
+    val seen = HashMap<String, Int>()
+    return items.map { item ->
+        val base = timelineItemKey(item)
+        val n = seen.getOrElse(base) { 0 }
+        seen[base] = n + 1
+        if (n == 0) base else "$base#$n"
+    }
+}
+
 private fun timelineItemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Msg -> "m:${item.entry.id}"
     is TimelineItem.Tool -> "t:${item.event.callId ?: "${item.event.kind}:${item.event.seq}:${item.event.ts}"}"
@@ -428,6 +439,9 @@ fun ChatPanel(
     val timelineItems = remember(messages, activity, hideTools, subagents) {
         mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents)
     }
+    // LazyColumn throws (and freezes the whole Compose UI) on a duplicate key, so make every key
+    // unique even if two items ever resolve to the same id: later duplicates get a #n suffix.
+    val timelineKeys = remember(timelineItems) { uniqueTimelineKeys(timelineItems) }
 
     // The live agent state is carried by the header status line when there IS a header, and by the
     // transcript's own rows when there is not (Android's phone/tablet chat, which owns its header).
@@ -737,7 +751,7 @@ fun ChatPanel(
                 contentPadding = PaddingValues(top = Space.md, bottom = bottomPad),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
-                items(timelineItems, key = { timelineItemKey(it) }) { item ->
+                itemsIndexed(timelineItems, key = { i, _ -> timelineKeys[i] }) { _, item ->
                     TimelineItemRow(
                         item = item,
                         loadBytes = { id -> actions.loadBytes(id) },

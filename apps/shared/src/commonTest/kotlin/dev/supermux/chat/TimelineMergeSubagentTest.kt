@@ -112,4 +112,18 @@ class TimelineMergeSubagentTest {
         assertEquals("2026-09-28T10:00:05.000Z", epochMillisToIso(1_790_589_605_000L))
         assertEquals("2000-02-29T23:59:59.999Z", epochMillisToIso(951_868_799_999L))
     }
+
+    @Test fun aSecondToolRowForTheSameCallIsFoldedAway() {
+        // The broker's "auto-approved: …" row reuses the call's id; two Tool items with one callId
+        // collided as LazyColumn keys and froze the web client.
+        val activity = listOf(
+            tool("2026-09-28T19:26:56.559Z", "call-6", tool = "Use_tool"),
+            ActivityEvent(ts = "2026-09-28T19:26:56.562Z", kind = "tool", tool = "other", title = "auto-approved: other", phase = "completed", callId = "call-6"),
+            ActivityEvent(ts = "2026-09-28T19:26:56.612Z", kind = "tool_result", title = "error", phase = "completed", callId = "call-6"),
+        )
+        val tools = mergeTimeline(emptyList(), activity).filterIsInstance<TimelineItem.Tool>()
+        assertEquals(1, tools.size)
+        assertEquals("Use_tool", tools.single().event.tool)
+        assertEquals(ToolStatus.ERROR, tools.single().status)
+    }
 }

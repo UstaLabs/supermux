@@ -108,7 +108,12 @@ fun mergeTimeline(
     val spawnRows = HashMap<String, ActivityEvent>()
     val items = ArrayList<TimelineItem>(messages.size + activity.size)
     messages.forEach { items.add(TimelineItem.Msg(it)) }
+    // One row per tool call: a second `tool` event for a callId we already have (e.g. the
+    // broker's "auto-approved: …" row when the permission policy answers) is folded away — two
+    // rows with the same callId would also collide as LazyColumn keys and crash the chat.
+    val seenToolCalls = HashSet<String>()
     for (e in activity) {
+        if (e.kind == "tool" && e.callId != null && !seenToolCalls.add(e.callId)) continue
         val child = e.subagentId
         if (child != null) {
             childRows.getOrPut(child) { ArrayList() }.add(e)
