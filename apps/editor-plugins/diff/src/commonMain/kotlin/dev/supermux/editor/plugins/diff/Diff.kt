@@ -56,6 +56,13 @@ interface DiffHost {
     /** The user resolved thread [threadId] (the host marks it and pushes the threads again). */
     fun onResolve(threadId: String) {}
 
+    /**
+     * The user opened the composer on [line] (a gutter tap, the comment command; today's
+     * `onDiffLineClick`). A host that kept a draft for that line hands it back with
+     * `Review.setComposer(ReviewComposer(line, draft))` (taken while the new composer is still empty).
+     */
+    fun onComposerOpen(line: Int) {}
+
     /** The composer's draft for [line] changed (the host keeps it, to restore it with a `ReviewComposer`). */
     fun onComposerDraft(line: Int, text: String) {}
 

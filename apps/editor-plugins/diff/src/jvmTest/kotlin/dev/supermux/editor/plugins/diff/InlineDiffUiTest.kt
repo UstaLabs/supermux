@@ -69,8 +69,13 @@ class InlineDiffUiTest {
             it.add(20, "// a new line"); it.add(21, "fun extra() = 0")
             it.removeAt(40); it.removeAt(40)
         }.joinToString("\n")
-        val view = EditorView(EditorState.create(w, extensions = inlineDiff(b, DiffConfig(context = 3))))
-        val scene = androidx.compose.ui.ImageComposeScene(900, 1100, androidx.compose.ui.unit.Density(2f)) {
+        val view = EditorView(EditorState.create(w, extensions = dev.supermux.editor.core.extensionOf(inlineDiff(b, DiffConfig(context = 3)), review())))
+        Review.setThreads(view, listOf(
+            ReviewThread("t1", 5, comments = listOf(ReviewComment("c1", "user", "Why Long here?", "10:02"), ReviewComment("c2", "agent", "The sum overflows Int for big inputs.", "10:03"))),
+            ReviewThread("t2", 21, resolved = true, comments = listOf(ReviewComment("c3", "user", "ok"))),
+        ))
+        Review.setComposer(view, ReviewComposer(22, "Maybe name it"))
+        val scene = androidx.compose.ui.ImageComposeScene(900, 1500, androidx.compose.ui.unit.Density(2f)) {
             InlineDiffEditor(view, Modifier.fillMaxSize(), theme = dev.supermux.editor.compose.EditorTheme.dark(dev.supermux.editor.compose.packagedEditorFontFamily()))
         }
         try {

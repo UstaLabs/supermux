@@ -49,9 +49,9 @@ fun Diff.registerWidgets(registry: WidgetRegistry) {
     registry.register(DELETED) { key -> DeletedLinesBlock(key) }
 }
 
-/** A registry with the diff's widgets. */
+/** A registry with the diff's widgets and the review threads' ([Review.registerWidgets]). */
 @Composable
-fun rememberDiffWidgets(): WidgetRegistry = remember { WidgetRegistry().also { Diff.registerWidgets(it) } }
+fun rememberDiffWidgets(): WidgetRegistry = remember { WidgetRegistry().also { Diff.registerWidgets(it); Review.registerWidgets(it) } }
 
 /**
  * The inline diff in an `Editor`: read-only unless the model's [DiffConfig.editable], with the
