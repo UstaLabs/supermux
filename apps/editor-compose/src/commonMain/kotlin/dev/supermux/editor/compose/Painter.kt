@@ -322,6 +322,21 @@ private fun DrawScope.drawMarker(m: DrawnMarker, style: GutterMarkerStyle) {
             }
             drawPath(p, style.color)
         }
+        GutterMarkerShape.REVERT -> {
+            // A hook: a half-circle open to the left, its arrowhead at the upper end pointing back.
+            val s = unit * 0.26f
+            val stroke = maxOf(1.5f, 1.6f * density)
+            drawArc(style.color, startAngle = -90f, sweepAngle = 180f, useCenter = false,
+                topLeft = Offset(c.x - s, c.y - s), size = Size(2 * s, 2 * s),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke))
+            val head = Path().apply {
+                moveTo(c.x - s * 0.9f, c.y - s)
+                lineTo(c.x + s * 0.05f, c.y - s * 1.55f)
+                lineTo(c.x + s * 0.05f, c.y - s * 0.45f)
+                close()
+            }
+            drawPath(head, style.color)
+        }
     }
 }
 

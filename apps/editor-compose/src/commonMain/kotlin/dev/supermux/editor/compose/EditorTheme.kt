@@ -120,8 +120,20 @@ data class EditorTheme(
             "lint-hint" to SquiggleStyle(hint, dotted = true),
         )
 
-        /** The M4 plugins' columns: diff bars, lint dots, comment bubbles, fold arrows. */
-        val DEFAULT_GUTTER_COLUMNS: Map<String, Dp> = mapOf("diff" to 6.dp, "lint" to 12.dp, "comment" to 16.dp, "fold" to 14.dp)
+        /**
+         * The diff plugin's classes: line backgrounds `diff-add` (an inserted line), `diff-change` (a
+         * line of a replaced run in the working copy), `diff-remove` (a base line that is gone or
+         * replaced), and the stronger mark backgrounds for the characters that changed inside them,
+         * `diff-add-text` and `diff-remove-text`.
+         */
+        fun diffClasses(add: Color, change: Color, remove: Color, addText: Color, removeText: Color): Pair<Map<String, Color>, Map<String, SpanStyle>> =
+            mapOf("diff-add" to add, "diff-change" to change, "diff-remove" to remove) to mapOf(
+                "diff-add-text" to SpanStyle(background = addText),
+                "diff-remove-text" to SpanStyle(background = removeText),
+            )
+
+        /** The M4 plugins' columns: diff bars, lint dots, comment bubbles, fold arrows, the diff's revert arrows. */
+        val DEFAULT_GUTTER_COLUMNS: Map<String, Dp> = mapOf("diff" to 6.dp, "lint" to 12.dp, "comment" to 16.dp, "fold" to 14.dp, "revert" to 16.dp)
 
         /** Marker kinds drawn by [dark] and [light], with the diff, lint and comment accents given. */
         fun markerStyles(add: Color, remove: Color, change: Color, error: Color, warning: Color, comment: Color, fold: Color): Map<String, GutterMarkerStyle> = mapOf(
@@ -134,14 +146,17 @@ data class EditorTheme(
             "comment" to GutterMarkerStyle(comment, GutterMarkerShape.BUBBLE),
             "fold-open" to GutterMarkerStyle(fold, GutterMarkerShape.OPEN),
             "fold-closed" to GutterMarkerStyle(fold, GutterMarkerShape.CLOSED),
+            "diff-revert" to GutterMarkerStyle(fold, GutterMarkerShape.REVERT),
         )
 
         /** Tuned to supermux's dark palette: its near-black code tone, the teal accent, One Dark tokens. */
         fun dark(font: FontFamily): EditorTheme = pluginClasses(
             currentLine = Color(0xFF151713), bracket = Color(0x47BAD0F8), nonmatching = Color(0xFFE06C75), selectionMatch = Color(0x33AAFE66),
-        ).let { (lines, marks) -> EditorTheme(
-            lineClassBackgrounds = lines,
-            classStyles = marks + searchClasses(match = Color(0x4DE5C07B), selected = Color(0x99D19A66)) + completionClasses(Color(0x334BBAA7)),
+        ).let { (lines, marks) -> diffClasses(
+            add = Color(0x2E3FB950), change = Color(0x26D29922), remove = Color(0x2EF85149), addText = Color(0x593FB950), removeText = Color(0x59F85149),
+        ).let { (diffLines, diffMarks) -> EditorTheme(
+            lineClassBackgrounds = lines + diffLines,
+            classStyles = marks + diffMarks + searchClasses(match = Color(0x4DE5C07B), selected = Color(0x99D19A66)) + completionClasses(Color(0x334BBAA7)),
             background = Color(0xFF0A0B09),
             foreground = Color(0xFFD8DED3),
             selection = Color(0x664BBAA7),
@@ -163,14 +178,16 @@ data class EditorTheme(
             ),
             squiggles = lintSquiggles(error = Color(0xFFE06C75), warning = Color(0xFFE5C07B), info = Color(0xFF61AFEF), hint = Color(0xFF8A9084)),
             fontFamily = font,
-        ) }
+        ) } }
 
         /** Tuned to supermux's light palette: its paper code tone, the deep teal accent, One Light tokens. */
         fun light(font: FontFamily): EditorTheme = pluginClasses(
             currentLine = Color(0xFFF0F1EB), bracket = Color(0x52328C82), nonmatching = Color(0xFFBB5555), selectionMatch = Color(0x5599FF77),
-        ).let { (lines, marks) -> EditorTheme(
-            lineClassBackgrounds = lines,
-            classStyles = marks + searchClasses(match = Color(0x66FFD54A), selected = Color(0x99FF9F1C)) + completionClasses(Color(0x26007368)),
+        ).let { (lines, marks) -> diffClasses(
+            add = Color(0x2E2E9A3E), change = Color(0x2EC99A06), remove = Color(0x26D13438), addText = Color(0x592E9A3E), removeText = Color(0x4DD13438),
+        ).let { (diffLines, diffMarks) -> EditorTheme(
+            lineClassBackgrounds = lines + diffLines,
+            classStyles = marks + diffMarks + searchClasses(match = Color(0x66FFD54A), selected = Color(0x99FF9F1C)) + completionClasses(Color(0x26007368)),
             background = Color(0xFFFEFEFB),
             foreground = Color(0xFF1F221C),
             selection = Color(0x4D007368),
@@ -192,7 +209,7 @@ data class EditorTheme(
             ),
             squiggles = lintSquiggles(error = Color(0xFFD13438), warning = Color(0xFFB88600), info = Color(0xFF2F6FD6), hint = Color(0xFF6E7268)),
             fontFamily = font,
-        ) }
+        ) } }
 
         /** [dark] or [light] after the system setting, with the packaged face. */
         @Composable
@@ -260,4 +277,6 @@ enum class GutterMarkerShape {
     OPEN,
     /** A rightward arrow (a folded region). */
     CLOSED,
+    /** A curved arrow back (the diff plugin's revert-hunk action). */
+    REVERT,
 }
