@@ -103,8 +103,20 @@ fun NativeDocumentEditor(
     modifier: Modifier = Modifier,
     accessoryBar: Boolean = true,
     readOnly: Boolean = false,
+    /** Code intelligence for this document: the session whose language servers serve it (null: none). */
+    lsp: LspLink? = null,
+    /** Where a definition or reference in ANOTHER file opens (a workdir-relative path, a 1-based line). */
+    onNavigate: ((path: String, line: Int) -> Unit)? = null,
 ) {
     val native = remember(documents, doc) { documents.nativeFor(doc) } ?: return
+    val hub = remember(documents) { documents.lspHub() }
+    if (hub != null && onNavigate != null) androidx.compose.runtime.SideEffect { hub.onNavigate = onNavigate }
+    // The document joins its server's client (one per session and server, the store's) and stays
+    // in it after this pane goes: its view outlives the pane, so no didClose on a tab switch.
+    LaunchedEffect(native, hub, lsp?.sessionId, lsp?.workdir) {
+        if (hub == null) return@LaunchedEffect
+        if (lsp == null) native.detachLsp() else hub.attach(native, lsp)
+    }
     val view = remember(native) { native.acquire() }
     // Started from an effect, never mid-composition (a dispatch made while composing can be lost).
     DisposableEffect(native, view) {

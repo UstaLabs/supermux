@@ -267,6 +267,7 @@ fun ViewHost(
                         // intelligence — say so rather than looking broken.
                         lspSessionId = primarySessionId,
                         engineFactory = editorEngineFactory,
+                        onNavigate = { p, line -> onOpenFile(p, line, null) },
                         modifier = modifier.testTag("editor-$workdir"),
                     )
                 "diff" -> DiffPaneForWorkspace(
@@ -638,6 +639,7 @@ private fun FilePaneForWorkspace(
     documents: DocumentStore,
     lspSessionId: String?,
     engineFactory: EditorEngineFactory?,
+    onNavigate: (path: String, line: Int) -> Unit,
     modifier: Modifier,
 ) {
     // Resolve the id against the LIVE session list: a workspace whose primary session has been
@@ -668,6 +670,7 @@ private fun FilePaneForWorkspace(
         fontSize = fontSize,
         onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
         engineFactory = engineFactory,
+        onNavigate = onNavigate,
         modifier = modifier.fillMaxSize(),
     )
 }

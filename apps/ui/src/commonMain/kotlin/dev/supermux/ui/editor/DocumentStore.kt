@@ -140,7 +140,22 @@ class DocumentStore(
     /** The owner goes: every native view stops (didClose, syntax workers freed); the texts stay. */
     fun disposeNative() {
         for (d in docs.values) d.dropNative()
+        hub?.close()
+        hub = null
     }
+
+    private var hub: LspHub? = null
+
+    /** The LSP clients of this store's native views (made on first use), or null without a [native] environment. */
+    fun lspHub(): LspHub? {
+        hub?.let { return it }
+        val env = native ?: return null
+        return LspHub(this, env.scope, env.lspParseOnWorker).also { hub = it }
+    }
+
+    /** The store's own reader and writer (an LSP edit to a file nobody has open). */
+    internal suspend fun readFile(path: String): Result<String> = fsRead(path)
+    internal suspend fun writeFile(path: String, text: String): Boolean = fsWrite(path, text)
 
     fun open(path: String) {
         docs[path]?.let {

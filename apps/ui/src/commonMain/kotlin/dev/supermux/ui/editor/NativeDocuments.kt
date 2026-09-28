@@ -51,6 +51,8 @@ class NativeEditorEnv(
     val syntax: EditorSyntax = EditorSyntax.None,
     settings: EditorSettings = EditorSettings(),
     val extraExtensions: (Document) -> Extension = { extensionOf() },
+    /** LSP messages parsed on a worker thread (false: on [scope], for tests on a virtual clock). */
+    val lspParseOnWorker: Boolean = true,
 ) {
     var settings: EditorSettings = settings
         internal set
@@ -96,6 +98,26 @@ class NativeDocument internal constructor(
      */
     var lspWidgets: ((dev.supermux.editor.compose.WidgetRegistry) -> Unit)? by mutableStateOf(null)
         internal set
+
+    /** The (session, server) whose LSP client serves this document now, or null ([LspHub.attach]). */
+    var lspKey: Pair<String, String>? by mutableStateOf(null)
+        private set
+
+    /** The LSP client's plugin goes into the primary view (its lsp compartment), its widgets into the panes. */
+    internal fun attachLsp(key: Pair<String, String>, plugin: Extension, widgets: (dev.supermux.editor.compose.WidgetRegistry) -> Unit) {
+        if (disposed) return
+        lspKey = key
+        lspWidgets = widgets
+        primary.dispatch(TransactionSpec(effects = listOf(lspSlot.reconfigure(plugin))))
+    }
+
+    /** Leave the client (another session serves the pane now): the plugin goes, which sends didClose. */
+    internal fun detachLsp() {
+        if (lspKey == null) return
+        lspKey = null
+        lspWidgets = null
+        if (!disposed) primary.dispatch(TransactionSpec(effects = listOf(lspSlot.reconfigure(extensionOf()))))
+    }
 
     /** True once [dispose]d (the document closed). */
     var disposed: Boolean = false

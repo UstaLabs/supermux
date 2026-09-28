@@ -210,6 +210,8 @@ fun FilePane(
     previewMode: Boolean = false,
     /** Where a file link inside the preview lands. */
     onOpenFile: (FilePathRef) -> Unit = {},
+    /** Where an LSP definition or reference in another file opens (workdir-relative path, 1-based line). */
+    onNavigate: (path: String, line: Int) -> Unit = { _, _ -> },
 ) {
     val cs = MaterialTheme.colorScheme
     val c = LocalPanes.current
@@ -322,6 +324,8 @@ fun FilePane(
                         fontSize = fontSize,
                         onFontSize = onFontSize,
                         modifier = Modifier.fillMaxSize(),
+                        lsp = remember(bridge, workdir) { bridge?.let { b -> LspLink(b.session, workdir, b) } },
+                        onNavigate = onNavigate,
                     )
                 }
                 if (showPreview) {

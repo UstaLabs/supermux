@@ -221,6 +221,9 @@ fun EditorPanel(
         )
     }
 
+    // The native editor's code intelligence: this session's language servers, over the same bridge.
+    val lspLink = remember(bridge, workdir) { LspLink(sessionId, workdir, bridge) }
+
     // The engine itself is owned by the shared [EditorSurface]; the panel reaches the live one
     // through these seams (scroll reads for a tab switch, the LSP push channel, its ready gate).
     val reader = remember { EditorScrollReader() }
@@ -520,6 +523,8 @@ fun EditorPanel(
                                             fontSize = fontSize,
                                             onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
                                             modifier = Modifier.fillMaxSize(),
+                                            lsp = lspLink,
+                                            onNavigate = { path, line -> revealFile(path, line) },
                                         )
                                     }
                                 }

@@ -39,6 +39,13 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             finishJobs = frame.sessions
                 .mapNotNull { s -> s.finish_job?.let { s.id to it } }
                 .toMap(),
+            // A snapshot is a NEW broker connection: the broker disposed the old connection's
+            // language servers with it (src/core/lsp/bridge.ts, one LspConnection per socket), so
+            // every server this client had open is gone. Say so, and an editor's LSP client opens
+            // its server again (the native editor's BrokerLspTransport).
+            lspStatus = if (state.lspStatus.isEmpty()) state.lspStatus else state.lspStatus.mapValues { (_, st) ->
+                if (st.serverId != null && st.state == "ready") st.copy(state = LSP_STATE_STALE) else st
+            },
         )
     }
     is ServerFrame.ProjectsChanged -> state.copy(
@@ -251,3 +258,6 @@ private fun markLspState(
         },
     )
 }
+
+/** A language server entry whose broker connection was replaced (see the snapshot case). */
+const val LSP_STATE_STALE = "stale"
