@@ -59,13 +59,21 @@ internal fun locations(e: JsonElement?): List<LspLocation> {
     }
 }
 
-/** A workspace edit: per document, its edits (`changes`, or `documentChanges` text edits). */
-internal fun workspaceEdit(e: JsonElement?): Map<String, List<LspTextEdit>> {
-    val out = LinkedHashMap<String, MutableList<LspTextEdit>>()
-    e["changes"].obj?.forEach { (uri, edits) -> out.getOrPut(uri) { ArrayList() } += edits.arr.orEmpty().mapNotNull(::textEdit) }
+/** One document's edits in a workspace edit, and the document version they were computed on (null: not said). */
+data class VersionedEdits(val version: Int?, val edits: List<LspTextEdit>)
+
+/** A workspace edit: per document, its edits (`changes`, or `documentChanges` text edits with their version). */
+internal fun workspaceEdit(e: JsonElement?): Map<String, VersionedEdits> {
+    val out = LinkedHashMap<String, VersionedEdits>()
+    e["changes"].obj?.forEach { (uri, edits) ->
+        val prev = out[uri]
+        out[uri] = VersionedEdits(prev?.version, prev?.edits.orEmpty() + edits.arr.orEmpty().mapNotNull(::textEdit))
+    }
     e["documentChanges"].arr?.forEach { dc ->
         val uri = dc["textDocument"]["uri"].str ?: return@forEach
-        out.getOrPut(uri) { ArrayList() } += dc["edits"].arr.orEmpty().mapNotNull(::textEdit)
+        val v = dc["textDocument"]["version"].int
+        val prev = out[uri]
+        out[uri] = VersionedEdits(prev?.version ?: v, prev?.edits.orEmpty() + dc["edits"].arr.orEmpty().mapNotNull(::textEdit))
     }
     return out
 }

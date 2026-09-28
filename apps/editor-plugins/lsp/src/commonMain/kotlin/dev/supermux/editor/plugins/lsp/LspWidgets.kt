@@ -48,6 +48,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -70,9 +71,11 @@ import dev.supermux.editor.compose.isTouchFirstPlatform
 /** Test tags of the LSP tooltips and panels. */
 object LspTags {
     const val HOVER = "lsp-hover"
+    const val HOVER_CLOSE = "lsp-hover-close"
     const val SIGNATURE = "lsp-signature"
     const val REFERENCES = "lsp-references"
     const val RENAME_FIELD = "lsp-rename-field"
+    const val RENAME_NOTE = "lsp-rename-note"
     fun reference(i: Int) = "lsp-reference-$i"
 }
 
@@ -103,12 +106,21 @@ private fun Box(scope: WidgetScope, tag: String, content: @Composable () -> Unit
 private fun HoverContent(scope: WidgetScope, client: LspClient, id: String) {
     val text = client.hoverTexts[id] ?: return
     val theme = scope.theme
+    val style = TextStyle(color = theme.foreground, fontFamily = theme.fontFamily, fontSize = (theme.fontSizeSp - 0.5f).sp)
     Box(scope, LspTags.HOVER) {
-        BasicText(
-            text,
-            Modifier.verticalScroll(rememberScrollState()),
-            style = TextStyle(color = theme.foreground, fontFamily = theme.fontFamily, fontSize = (theme.fontSizeSp - 0.5f).sp),
-        )
+        Row(verticalAlignment = Alignment.Top) {
+            BasicText(
+                text,
+                Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
+                    .semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite },
+                style = style,
+            )
+            // A close affordance: touch has no pointer that leaves (a tap elsewhere closes it too).
+            androidx.compose.foundation.layout.Box(
+                Modifier.size(if (isTouchFirstPlatform) 40.dp else 20.dp).press("Close") { Hover.closeHover.run(scope.editor) }.testTag(LspTags.HOVER_CLOSE),
+                contentAlignment = Alignment.Center,
+            ) { BasicText("×", style = style.copy(color = theme.gutterForeground)) }
+        }
     }
 }
 
@@ -192,14 +204,15 @@ private fun RenamePanel(scope: WidgetScope, client: LspClient) {
         runCatching { focus.requestFocus() }
     }
     fun submit() {
-        val d = client.documents.values.firstOrNull { it.target === editor } ?: return
-        LspPlugin.submitRename(client, d.uri, editor, field.text.toString())
-        scope.focusEditor()
+        LspPlugin.submitRename(client, editor, field.text.toString())
     }
+    // The prompt goes (renamed, cancelled): the focus goes back to the editor.
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { scope.focusEditor() } }
     fun cancel() { LspPlugin.closeRename.run(editor); scope.focusEditor() }
     val style = TextStyle(color = theme.foreground, fontFamily = theme.fontFamily, fontSize = theme.fontSizeSp.sp)
     val target = if (isTouchFirstPlatform) 44.dp else 28.dp
-    Row(Modifier.fillMaxWidth().background(theme.gutterBackground).padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxWidth().background(theme.gutterBackground)) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         BasicText("New name", style = style.copy(color = theme.gutterForeground))
         Spacer(Modifier.width(8.dp))
         BasicTextField(
@@ -219,5 +232,12 @@ private fun RenamePanel(scope: WidgetScope, client: LspClient) {
         Spacer(Modifier.width(8.dp))
         androidx.compose.foundation.layout.Box(Modifier.heightIn(min = target).clip(RoundedCornerShape(6.dp)).background(theme.selection).press("Rename") { submit() }.padding(horizontal = 10.dp), contentAlignment = Alignment.Center) { BasicText("Rename", style = style) }
         androidx.compose.foundation.layout.Box(Modifier.size(target).press("Cancel rename") { cancel() }, contentAlignment = Alignment.Center) { BasicText("×", style = style) }
+    }
+    val note = p.error ?: if (p.pending) "Renaming…" else null
+    if (note != null) BasicText(
+        note,
+        Modifier.padding(start = 8.dp, bottom = 4.dp).testTag(LspTags.RENAME_NOTE).semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite },
+        style = style.copy(color = if (p.error != null) Color(0xFFE06C75) else theme.gutterForeground, fontSize = (theme.fontSizeSp - 1).sp),
+    )
     }
 }

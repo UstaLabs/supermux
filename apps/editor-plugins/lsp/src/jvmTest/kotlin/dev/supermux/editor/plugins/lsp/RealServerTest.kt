@@ -47,12 +47,12 @@ class RealServerTest {
         Assume.assumeTrue("no clangd on this machine", bin != null)
         val dir = kotlin.io.path.createTempDirectory("lsp-real").toFile().canonicalFile
         val file = File(dir, "main.c").also { it.writeText(source) }
-        val uri = file.toURI().toString().replace("file:/", "file:///").replace("file:////", "file:///")
+        val uri = file.toPath().toUri().toString()
         val ui = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         runBlocking(ui) {
             val scope = CoroutineScope(coroutineContext + SupervisorJob())
             val transport = ProcessLspTransport(listOf(bin!!, "--log=error"), dir, scope)
-            val client = LspClient(transport, scope, LspClientConfig(rootUri = dir.toURI().toString(), requestTimeoutMs = 20_000))
+            val client = LspClient(transport, scope, LspClientConfig(rootUri = dir.toPath().toUri().toString(), requestTimeoutMs = 20_000))
             val view = EditorView(EditorState.create(source, EditorSelection.cursor(0), extensionOf(autocompletion(AutocompleteConfig(interactionDelay = 0)), lint(), client.plugin(uri, "c"))))
             view.startPlugins(scope)
             suspend fun until(what: String, ms: Long = 30_000, p: () -> Boolean) = withTimeout(ms) { while (!p()) delay(50) }.also { println("REAL-LSP clangd: $what") }
@@ -67,11 +67,11 @@ class RealServerTest {
             until("the error went after the fix") { Lint.diagnostics(view.state).none { it.severity == Severity.ERROR } }
             // Hover on add's use.
             val use = view.state.doc.toString().indexOf("add(1")
-            val h = client.documents[uri]!!.hover(view.state, use + 1)
+            val h = client.workspace.viewFor(view)!!.hover(view.state, use + 1)
             assertTrue(h != null && client.hoverTexts[h.key.id].orEmpty().contains("add"), "hover: ${h?.let { client.hoverTexts[it.key.id] }}")
             // Definition: F12 on the use goes to line 2's add.
             view.dispatch(TransactionSpec(selection = EditorSelection.cursor(use + 1)))
-            assertTrue(client.documents[uri]!!.definition())
+            assertTrue(client.workspace.viewFor(view)!!.definition())
             until("definition") { view.state.doc.lineIndexAt(view.state.selection.main.head) == 1 }
             // Completion of "pri" inside main: printf.
             val ret = view.state.doc.toString().indexOf("  return")

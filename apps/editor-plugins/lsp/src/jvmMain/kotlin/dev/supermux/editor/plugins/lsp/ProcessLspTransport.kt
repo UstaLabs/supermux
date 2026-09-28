@@ -22,17 +22,23 @@ class ProcessLspTransport(command: List<String>, workDir: File? = null, scope: C
     private val process: Process = ProcessBuilder(command).apply { if (workDir != null) directory(workDir) }.redirectError(ProcessBuilder.Redirect.DISCARD).start()
     private val input = BufferedInputStream(process.inputStream)
     private val output: OutputStream = process.outputStream
-    private val messages = Channel<String>(Channel.UNLIMITED)
+    // Bounded: a server flooding faster than the UI handles messages waits on its pipe (backpressure).
+    private val messages = Channel<String>(QUEUE)
     private val statusFlow = MutableStateFlow(LspConnState.CONNECTED)
 
     override val incoming: Flow<String> = messages.receiveAsFlow()
     override val status: StateFlow<LspConnState> = statusFlow
+    override val connection: StateFlow<Int> = MutableStateFlow(1)
 
     init {
         scope.launch(Dispatchers.IO) {
             try {
                 while (true) messages.send(readMessage() ?: break)
-            } catch (_: Exception) {
+            } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // A malformed frame, a huge one, a closed pipe, an OOM: the connection is over.
+                System.err.println("editor-plugins/lsp: the language server's output failed: $e")
             } finally {
                 statusFlow.value = LspConnState.DISCONNECTED
             }
@@ -48,6 +54,7 @@ class ProcessLspTransport(command: List<String>, workDir: File? = null, scope: C
             if (i > 0 && line.substring(0, i).trim().equals("Content-Length", ignoreCase = true)) length = line.substring(i + 1).trim().toInt()
         }
         if (length < 0) return null
+        require(length <= MAX_FRAME) { "a $length-byte message (the limit is $MAX_FRAME)" }
         val buf = ByteArray(length)
         var n = 0
         while (n < length) { val r = input.read(buf, n, length - n); if (r < 0) return null; n += r }
@@ -60,6 +67,7 @@ class ProcessLspTransport(command: List<String>, workDir: File? = null, scope: C
             val c = input.read()
             if (c < 0) return null
             if (c == '\n'.code) return sb.toString().trimEnd('\r')
+            require(sb.length < 8192) { "a header line over 8 KB" }
             sb.append(c.toChar())
         }
     }
@@ -84,6 +92,10 @@ class ProcessLspTransport(command: List<String>, workDir: File? = null, scope: C
     val alive: Boolean get() = process.isAlive
 
     companion object {
+        /** The largest message accepted (64 MB): a bigger `Content-Length` ends the connection. */
+        const val MAX_FRAME = 64 * 1024 * 1024
+        const val QUEUE = 1024
+
         /** The first of [names] found on the PATH (and a few usual places), or null. */
         fun find(vararg names: String): String? {
             val dirs = (System.getenv("PATH").orEmpty().split(File.pathSeparator) + listOf("/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", System.getProperty("user.home") + "/.cargo/bin", System.getProperty("user.home") + "/.mux/lsp/bin"))

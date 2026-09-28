@@ -162,7 +162,7 @@ class LspClientTest {
 
     @Test fun aDiagnosticsNotificationForAnOlderVersionIsIgnored() = runTest {
         val s = setup()
-        val d = s.client.documents[uri]!!
+        val d = s.client.workspace.document(uri)!!
         val old = d.version
         s.view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 0, "x")), userEvent = "input.type"))
         settle()
@@ -223,7 +223,7 @@ class LspClientTest {
 
     @Test fun hoverShowsTheServersMarkdownAsTextAndAStaleOneIsDropped() = runTest {
         val s = setup()
-        val d = s.client.documents[uri]!!
+        val d = s.client.workspace.viewFor(s.view)!!
         val h = d.hover(s.view.state, at("add", 1) + 1)
         assertNotNull(h)
         assertEquals(at("add", 1), h.from)
@@ -269,7 +269,6 @@ class LspClientTest {
     @Test fun anotherDocumentsDefinitionGoesToTheHost() = runTest {
         var navigated: String? = null
         val s = setup(cursor = at("add", 1) + 1, config = LspClientConfig(onNavigate = { u, _ -> navigated = u }, parseOnWorker = false))
-        s.client.documents[uri]!!.let { }
         // The fake answers in the same document; a Location elsewhere is the host's: exercised through goToReference.
         s.view.dispatch(TransactionSpec(effects = listOf(LspPlugin.setReferences.of(listOf(Reference(LspLocation("file:///other.toy", LspRange(LspPosition(0, 0), LspPosition(0, 1))), null, null, 0, ""))))))
         LspPlugin.goToReference(s.client, s.view, 0)
@@ -293,7 +292,7 @@ class LspClientTest {
         val s = setup(cursor = at("total") + 2)
         assertTrue(key(s.view, "F2"))
         assertEquals("total", LspPlugin.state(s.view.state).rename?.word)
-        LspPlugin.submitRename(s.client, uri, s.view, "sum")
+        LspPlugin.submitRename(s.client, s.view, "sum")
         settle()
         assertTrue(s.view.text.contains("val sum = add(1, 2)"))
         assertEquals("edit.rename", s.events.last())
@@ -338,7 +337,7 @@ class LspClientTest {
         server.silent += "textDocument/definition"
         val messages = ArrayList<String>()
         val s = setup(server = server, cursor = at("add", 1) + 1, config = LspClientConfig(requestTimeoutMs = 500, onMessage = { _, m -> messages += m }, parseOnWorker = false))
-        assertNull(s.client.documents[uri]!!.hover(s.view.state, at("add", 1)))
+        assertNull(s.client.workspace.viewFor(s.view)!!.hover(s.view.state, at("add", 1)))
         assertTrue(key(s.view, "F12"))
         settle(2_000)
         assertEquals(at("add", 1) + 1, s.view.state.selection.main.head, "nothing moved")

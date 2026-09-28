@@ -28,8 +28,11 @@ import dev.supermux.editor.plugins.autocomplete.CompletionSource
 import dev.supermux.editor.plugins.autocomplete.completionSourcesFacet
 import dev.supermux.editor.plugins.autocomplete.completionTriggersFacet
 
-/** The rename prompt: the word it renames ([from], [to]) and the focus requests the panel follows. */
-data class RenamePrompt(val word: String, val from: Int, val to: Int, val focus: Int)
+/**
+ * The rename prompt: the word it renames ([from], [to]), the focus requests the panel follows, a
+ * rename in flight ([pending]) and why the last one did not apply ([error]).
+ */
+data class RenamePrompt(val word: String, val from: Int, val to: Int, val focus: Int, val pending: Boolean = false, val error: String? = null)
 
 /**
  * The LSP plugin's per-view state: what the server can do ([features], for the completion triggers),
@@ -97,27 +100,32 @@ object LspPlugin {
 
     fun state(st: EditorState): LspViewState = st.fieldOrNull(field) ?: LspViewState()
 
-    private fun doc(client: LspClient, uri: String): LspDocument? = client.documents[uri]
+    /** The LSP view of the editor a command runs in (never another view of the same URI). */
+    private fun view(client: LspClient, t: CommandTarget): LspView? = client.workspace.viewFor(t)
 
-    fun jumpToDefinition(client: LspClient, uri: String) = Command { doc(client, uri)?.definition() == true }
-    fun findReferences(client: LspClient, uri: String) = Command { doc(client, uri)?.references() == true }
-    fun formatDocument(client: LspClient, uri: String) = Command { doc(client, uri)?.format() == true }
+    fun jumpToDefinition(client: LspClient) = Command { t -> view(client, t)?.definition() == true }
+    fun findReferences(client: LspClient) = Command { t -> view(client, t)?.references() == true }
+    fun formatDocument(client: LspClient) = Command { t -> view(client, t)?.format() == true }
 
     /** CM6's `renameSymbol`: the prompt with the word at the cursor (F2). False without a word or rename support. */
-    fun renameSymbol(client: LspClient, uri: String) = Command { t ->
-        val d = doc(client, uri) ?: return@Command false
+    fun renameSymbol(client: LspClient) = Command { t ->
+        val d = view(client, t) ?: return@Command false
         val w = d.renameWord() ?: return@Command false
         val cur = state(t.state).rename
         t.dispatch(TransactionSpec(effects = listOf(setRename.of(RenamePrompt(t.state.sliceDoc(w.first, w.last + 1), w.first, w.last + 1, (cur?.focus ?: 0) + 1)))))
         true
     }
 
-    /** Rename the prompt's word to [newName] (the prompt's Enter) and close the prompt. */
-    fun submitRename(client: LspClient, uri: String, t: CommandTarget, newName: String) {
+    /**
+     * Rename the prompt's word to [newName] (the prompt's Enter). The prompt stays, `pending`, until
+     * the rename applied (then it closes) or did not (then it shows why: "Rename out of date — try again").
+     */
+    fun submitRename(client: LspClient, t: CommandTarget, newName: String) {
         val p = state(t.state).rename ?: return
-        t.dispatch(TransactionSpec(effects = listOf(setRename.of(null))))
-        if (newName.isBlank() || newName == p.word) return
-        doc(client, uri)?.rename(newName, p.from)
+        if (newName.isBlank() || newName == p.word) { t.dispatch(TransactionSpec(effects = listOf(setRename.of(null)))); return }
+        val v = view(client, t) ?: return
+        t.dispatch(TransactionSpec(effects = listOf(setRename.of(p.copy(pending = true, error = null)))))
+        v.rename(newName, p.from)
     }
 
     val closeRename: Command = Command { t ->
@@ -165,12 +173,12 @@ object LspPlugin {
     }
 
     internal fun extension(client: LspClient, uri: String, languageId: String): Extension {
-        val runner = ViewPlugin { host -> LspDocument(client, host, uri, languageId) }
-        val source = CompletionSource { ctx -> doc(client, uri)?.complete(ctx) }
-        val def = jumpToDefinition(client, uri)
-        val refs = findReferences(client, uri)
-        val rename = renameSymbol(client, uri)
-        val format = formatDocument(client, uri)
+        val runner = ViewPlugin { host -> LspView(client, host, uri, languageId) }
+        val source = CompletionSource { ctx -> client.workspace.viewFor(ctx.state)?.complete(ctx) }
+        val def = jumpToDefinition(client)
+        val refs = findReferences(client)
+        val rename = renameSymbol(client)
+        val format = formatDocument(client)
         return extensionOf(
             field,
             viewPluginsFacet.of(runner),
@@ -179,7 +187,7 @@ object LspPlugin {
                 val f = state(st).features
                 if (!f.completion) emptySet() else f.completionTriggers.ifEmpty { client.config.fallbackTriggers }
             },
-            hoverTooltip(HOVER_ID) { st, pos, _ -> doc(client, uri)?.hover(st, pos) },
+            hoverTooltip(HOVER_ID) { st, pos, _ -> client.workspace.viewFor(st)?.hover(st, pos) },
             tooltipsFacet.compute(FacetDep.field(field)) { st ->
                 state(st).signature?.let { Tooltip(it.pos.coerceIn(0, st.doc.length), WidgetKey(SIGNATURE_TOOLTIP, "sig"), above = true) }
             },

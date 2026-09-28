@@ -15,13 +15,21 @@ enum class LspConnState { CONNECTING, CONNECTED, DISCONNECTED }
  * - The desktop has [ProcessLspTransport] (jvm): a language server process over stdio.
  * - Tests and the sample use `FakeLspServer` (`:editor-plugins:lsp-fake`), in-process.
  *
- * [status] going to [LspConnState.CONNECTED] (again, after a drop) makes the client initialize
- * and re-open its documents; [LspConnState.DISCONNECTED] fails every pending request.
+ * A new [connection] generation while [status] is [LspConnState.CONNECTED] makes the client
+ * initialize and re-open its documents; [LspConnState.DISCONNECTED] fails every pending request.
  */
 interface LspTransport {
     suspend fun send(message: String)
     val incoming: Flow<String>
     val status: StateFlow<LspConnState>
+
+    /**
+     * The connection's generation: bumped by every new connection (a reconnect). The client starts
+     * over (initialize, didOpen) for every new generation it sees while [status] is CONNECTED, so a
+     * drop and a reconnect inside one tick, which a StateFlow of [status] alone conflates away, is
+     * never missed. A transport that never reconnects keeps one generation.
+     */
+    val connection: StateFlow<Int>
 }
 
 /** A request that failed: a server error ([code], JSON-RPC's), a timeout, or a dropped connection. */

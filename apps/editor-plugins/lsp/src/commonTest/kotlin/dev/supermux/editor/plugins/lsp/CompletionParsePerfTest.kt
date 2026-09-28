@@ -44,7 +44,7 @@ class CompletionParsePerfTest {
         val view = EditorView(EditorState.create("some", EditorSelection.cursor(4), extensionOf(autocompletion(), lint(), client.plugin("file:///p.toy", "toy"))))
         view.startPlugins(backgroundScope)
         advanceTimeBy(1_000); runCurrent()
-        val doc = client.documents["file:///p.toy"]!!
+        val doc = client.workspace.viewFor(view)!!
         val text = response(5000)
         val ctx = CompletionContext(view.state, 4, explicit = true)
         var bestParse = Long.MAX_VALUE; var bestMap = Long.MAX_VALUE

@@ -8,8 +8,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
@@ -82,20 +80,18 @@ class LspClient(
     var serverName: String? = null
         private set
 
-    private val sendLock = Mutex()
-    private val ordered = object : LspTransport by transport {
-        override suspend fun send(message: String) = sendLock.withLock { transport.send(message) }
-    }
-
     /** Where incoming JSON is parsed and completion lists mapped. */
     internal val parseContext: kotlin.coroutines.CoroutineContext =
         if (config.parseOnWorker) lspParseDispatcher else kotlin.coroutines.EmptyCoroutineContext
 
-    internal val rpc = JsonRpc(ordered, scope, { config.requestTimeoutMs }, parseContext, ::notification, ::serverRequest)
-    internal val documents = LinkedHashMap<String, LspDocument>()
+    internal val rpc = JsonRpc(transport, scope, { config.requestTimeoutMs }, parseContext, ::notification, ::serverRequest, onSendFailure = { e -> report(1, "The connection to the language server failed: ${e.message ?: e}"); connectionFailed() })
+
+    /** The documents this client has open, one per URI, shared by every view showing it. */
+    val workspace: LspWorkspace = LspWorkspace(this)
     private var watcher: Job? = null
     private var initJob: Job? = null
     private var closed = false
+    private var generation = -1
 
     /** Hover texts by tooltip id (what `tooltip:lsp-hover` shows), the most recent few. */
     internal val hoverTexts = LinkedHashMap<String, String>()
@@ -114,9 +110,15 @@ class LspClient(
     private fun start() {
         rpc.start()
         watcher = scope.launch {
-            transport.status.collect { s ->
+            // A new generation (a reconnect, even one inside a tick) starts over; a drop stops.
+            kotlinx.coroutines.flow.combine(transport.status, transport.connection) { s, g -> s to g }.collect { (s, g) ->
                 when (s) {
-                    LspConnState.CONNECTED -> if (stateFlow.value == LspClientState.DISCONNECTED) initJob = launch { initialize() }
+                    LspConnState.CONNECTED -> if (g != generation || stateFlow.value == LspClientState.DISCONNECTED) {
+                        if (generation >= 0 && g != generation) disconnected()
+                        generation = g
+                        rpc.reset()
+                        initJob = launch { initialize() }
+                    }
                     LspConnState.DISCONNECTED -> disconnected()
                     LspConnState.CONNECTING -> Unit
                 }
@@ -129,7 +131,13 @@ class LspClient(
         if (stateFlow.value == LspClientState.DISCONNECTED) return
         stateFlow.value = LspClientState.DISCONNECTED
         rpc.failAll("the connection dropped")
-        for (d in documents.values) d.connectionLost()
+        for (d in workspace.docs.values) d.connectionLost()
+    }
+
+    /** A send failed: this connection is unusable until the transport's next generation. */
+    private fun connectionFailed() {
+        disconnected()
+        stateFlow.value = LspClientState.FAILED
     }
 
     private suspend fun initialize() {
@@ -156,75 +164,85 @@ class LspClient(
         serverName = result["serverInfo"]["name"].str
         rpc.notify("initialized", buildJsonObject {})
         stateFlow.value = LspClientState.READY
-        for (d in documents.values.toList()) d.open()
+        for (d in workspace.docs.values.toList()) d.open()
     }
 
     /**
      * The editor extension for the document [uri] (CM6's `client.plugin(uri, languageId)`): sync,
      * diagnostics, completion, hover, signature help and the commands and keys. [languageId] is the
      * LSP language id (the host maps its syntax registry's language to it: `kotlin`, `typescript`,
-     * …). The editor needs `autocompletion()` and `lint()` too (installed once, by the host), and the
+     * …). Several views may show the same [uri]: they share ONE server document ([workspace]). The
+     * editor needs `autocompletion()` and `lint()` too (installed once, by the host), and the
      * widgets: [registerWidgets].
      */
     fun plugin(uri: String, languageId: String): Extension = LspPlugin.extension(this, uri, languageId)
 
-    internal fun attach(d: LspDocument) { documents[d.uri] = d }
-    internal fun detach(d: LspDocument) { if (documents[d.uri] === d) documents.remove(d.uri) }
-
     /** The document for [uri] as a server wrote it (percent-encoding, a `file:` drive letter's case may differ). */
-    internal fun document(uri: String?): LspDocument? {
-        if (uri == null) return null
-        documents[uri]?.let { return it }
-        val k = normalizeUri(uri)
-        return documents.values.firstOrNull { normalizeUri(it.uri) == k }
-    }
+    internal fun document(uri: String?): LspDocument? = workspace.document(uri)
 
     internal val ready: Boolean get() = stateFlow.value == LspClientState.READY
 
-    internal fun launch(block: suspend CoroutineScope.() -> Unit): Job = scope.launch(block = block)
-
-    /** Start [block] now, in call order: its first send queues behind the ones before it (didOpen, didClose). */
-    internal fun launchOrdered(block: suspend () -> Unit): Job = scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { block() }
+    /** Launch [block] on the client's scope; anything it throws (but a cancellation) is reported, never escapes. */
+    internal fun launch(what: String = "an LSP task", block: suspend CoroutineScope.() -> Unit): Job = scope.launch {
+        try { block() } catch (e: kotlin.coroutines.cancellation.CancellationException) { throw e } catch (e: Throwable) { report(1, "$what failed: ${e.message ?: e}") }
+    }
 
     internal fun report(type: Int, message: String) {
         config.onMessage?.invoke(type, message) ?: println("editor-plugins/lsp: $message")
     }
 
-    /** Ask the server; null when it is not ready, the request failed, or the server said nothing. */
+    /** Ask the server; null when it is not ready, the request failed, or the server said nothing. Never throws but a cancellation. */
     internal suspend fun request(method: String, params: JsonElement?, quiet: Boolean = true): JsonElement? {
         if (!ready) return null
         return try {
             rpc.request(method, params)
         } catch (e: kotlin.coroutines.cancellation.CancellationException) {
             throw e
-        } catch (e: LspException) {
-            if (!quiet && e.code != LspException.REQUEST_CANCELLED && e.code != LspException.CONTENT_MODIFIED) report(1, "$method failed: ${e.message}")
+        } catch (e: Throwable) {
+            val code = (e as? LspException)?.code
+            if (!quiet && code != LspException.REQUEST_CANCELLED && code != LspException.CONTENT_MODIFIED) report(1, "$method failed: ${e.message}")
             null
         }
     }
 
-    internal suspend fun notify(method: String, params: JsonElement?) {
+    /** Queue a notification, in order (never suspends; nothing when not ready). */
+    internal fun notify(method: String, params: JsonElement?) {
         if (!ready) return
-        try { rpc.notify(method, params) } catch (e: kotlin.coroutines.cancellation.CancellationException) { throw e } catch (e: Throwable) { report(1, "$method failed: $e") }
+        rpc.notify(method, params)
     }
 
     private fun notification(method: String, params: JsonElement?) {
         when (method) {
             "textDocument/publishDiagnostics" -> document(params["uri"].str)?.diagnostics(params)
-            "window/showMessage", "window/logMessage" -> if (method == "window/showMessage") report(params["type"].int ?: 4, params["message"].str.orEmpty())
+            "window/showMessage" -> report(params["type"].int ?: 4, params["message"].str.orEmpty())
             else -> Unit
         }
     }
 
+    /**
+     * A workspace edit ([edits] per URI, each at the version it names, else the text the server has
+     * now): a document this client has open applies it through its views (mapped from that version to
+     * now); any other goes to [LspClientConfig.onWorkspaceEdit]. True only when EVERY edit was applied.
+     */
+    internal fun applyWorkspaceEdit(edits: Map<String, VersionedEdits>, userEvent: String?, fallbackVersion: (LspDocument) -> Int = { it.version }, via: dev.supermux.editor.core.CommandTarget? = null): Boolean {
+        var applied = true
+        for ((uri, ve) in edits) {
+            val d = document(uri)
+            val ok = if (d != null) {
+                d.applyEdits(ve.edits, ve.version ?: fallbackVersion(d), userEvent, via = via?.let { d.viewFor(it.state) }) == ApplyResult.APPLIED
+            } else {
+                val cb = config.onWorkspaceEdit
+                if (cb == null) { report(1, "An edit to $uri, which is not open, was not applied (no onWorkspaceEdit)"); false } else cb(uri, ve.edits)
+            }
+            applied = applied && ok
+        }
+        return applied
+    }
+
     private suspend fun serverRequest(method: String, params: JsonElement?): JsonElement? = when (method) {
         "workspace/applyEdit" -> {
-            val edits = workspaceEdit(params["edit"])
-            var applied = true
-            for ((uri, list) in edits) {
-                val d = document(uri)
-                applied = applied && (if (d != null) d.applyServerEdits(list, userEvent = "lsp") else config.onWorkspaceEdit?.invoke(uri, list) == true)
-            }
-            buildJsonObject { put("applied", applied) }
+            val applied = applyWorkspaceEdit(workspaceEdit(params["edit"]), userEvent = "lsp")
+            buildJsonObject { put("applied", applied); if (!applied) put("failureReason", "some edits were out of date or for documents that are not open") }
         }
         "workspace/configuration" -> JsonArray(params["items"].arr.orEmpty().map { JsonNull })
         "client/registerCapability", "client/unregisterCapability", "window/workDoneProgress/create" -> JsonNull
@@ -237,10 +255,11 @@ class LspClient(
         if (closed) return
         closed = true
         withContext(NonCancellable) {
-            for (d in documents.values.toList()) d.close()
+            for (d in workspace.docs.values.toList()) d.close()
             if (ready) {
                 withTimeoutOrNull(2_000) { runCatching { rpc.request("shutdown", null) } }
-                runCatching { rpc.notify("exit", null) }
+                rpc.notify("exit", null)
+                rpc.drain(1_000)
             }
             watcher?.cancel()
             rpc.stop()

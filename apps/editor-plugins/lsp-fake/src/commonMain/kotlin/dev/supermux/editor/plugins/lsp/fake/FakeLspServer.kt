@@ -52,7 +52,13 @@ class FakeLspServer(
     val syncKind: Int = 2,
     val marker: String = "TODO",
     var extraCompletions: Int = 0,
+    /** Code actions come without their edit, resolved by `codeAction/resolve` against the text THEN. */
+    val resolveCodeActions: Boolean = false,
 ) {
+    /** Each request method's last params, and the document text the server had when it arrived. */
+    val lastParams = HashMap<String, JsonElement>()
+    val textAtRequest = HashMap<String, String>()
+
     private val out = Channel<String>(Channel.UNLIMITED)
     private val statusFlow = MutableStateFlow(LspConnState.CONNECTED)
     private var enc = "utf-16"
@@ -72,42 +78,93 @@ class FakeLspServer(
     /** What the client initialized with (its `capabilities`). */
     var clientCapabilities: JsonElement? = null; private set
 
+    private val connectionFlow = MutableStateFlow(1)
+
+    /** Test hook: every `send` takes this long (a slow pipe: the client must never reorder around it). */
+    var sendDelayMs: Long = 0
+
+    /** Test hook: the next this-many sends throw (a broken pipe), after [failAfterSends] good ones. */
+    var failSends: Int = 0
+    var failAfterSends: Int = 0
+    private var sends = 0
+
+    /** Every message the client sent, in the order the transport accepted them (method or "response"). */
+    val wire = ArrayList<String>()
+
     val transport: LspTransport = object : LspTransport {
         override suspend fun send(message: String) {
+            if (sendDelayMs > 0) delay(sendDelayMs)
+            sends++
+            if (failSends > 0 && sends > failAfterSends) { failSends--; throw IllegalStateException("the fake pipe broke") }
             if (statusFlow.value != LspConnState.CONNECTED) return
             val msg = Json.parseToJsonElement(message).jsonObject
+            wire += (msg["method"] as? JsonPrimitive)?.contentOrNull ?: "response"
             scope.launch { handle(msg) }
         }
         override val incoming: Flow<String> = out.receiveAsFlow()
         override val status: StateFlow<LspConnState> = statusFlow
+        override val connection: StateFlow<Int> = connectionFlow
     }
 
     /** The connection drops: the server forgets its documents (a restarted server). */
     fun disconnect() {
         statusFlow.value = LspConnState.DISCONNECTED
-        documents.clear(); versions.clear(); initialized = false
+        forget()
     }
 
-    fun reconnect() { statusFlow.value = LspConnState.CONNECTED }
+    fun reconnect() {
+        connectionFlow.value++
+        statusFlow.value = LspConnState.CONNECTED
+    }
+
+    /** A drop and a reconnect inside one tick: a StateFlow of the status alone never shows it. */
+    fun blip() {
+        statusFlow.value = LspConnState.DISCONNECTED
+        forget()
+        connectionFlow.value++
+        statusFlow.value = LspConnState.CONNECTED
+    }
+
+    private fun forget() { documents.clear(); versions.clear(); initialized = false }
 
     private fun send(o: JsonElement) { if (statusFlow.value == LspConnState.CONNECTED) out.trySend(o.toString()) }
 
     private var nextServerId = 1000
 
-    /** Push a `workspace/applyEdit` to the client: [edits] as (range as 4 numbers, text). */
-    fun pushEdit(uri: String, edits: List<Pair<IntArray, String>>) {
+    /** The client's answers to [pushEdit], by request id. */
+    val applyResults = LinkedHashMap<Int, JsonElement>()
+
+    /**
+     * Push a `workspace/applyEdit` to the client: [edits] as (range as 4 numbers, text); with a
+     * [version], as `documentChanges` for that version of the document. Returns the request id
+     * ([applyResults] gets the client's answer).
+     */
+    fun pushEdit(uri: String, edits: List<Pair<IntArray, String>>, version: Int? = null): Int {
+        val id = nextServerId++
         send(buildJsonObject {
-            put("jsonrpc", "2.0"); put("id", nextServerId++); put("method", "workspace/applyEdit")
+            put("jsonrpc", "2.0"); put("id", id); put("method", "workspace/applyEdit")
             put("params", buildJsonObject {
-                put("edit", buildJsonObject { put("changes", buildJsonObject { put(uri, JsonArray(edits.map { (r, t) -> edit(r[0], r[1], r[2], r[3], t) })) }) })
+                put("edit", buildJsonObject {
+                    val list = JsonArray(edits.map { (r, t) -> edit(r[0], r[1], r[2], r[3], t) })
+                    if (version == null) put("changes", buildJsonObject { put(uri, list) })
+                    else put("documentChanges", buildJsonArray { add(buildJsonObject { put("textDocument", buildJsonObject { put("uri", uri); put("version", version) }); put("edits", list) }) })
+                })
             })
         })
+        return id
     }
+
+    /** What rename answers for another document too (a URI and its edits), as the fake cannot see it. */
+    val extraRenameEdits = LinkedHashMap<String, List<Pair<IntArray, String>>>()
 
     private suspend fun handle(msg: JsonObject) {
         val method = msg["method"]?.let { (it as? JsonPrimitive)?.contentOrNull }
         val id = msg["id"]
-        if (method == null) return // a response to our applyEdit
+        if (method == null) {
+            // A response to our applyEdit.
+            (id as? JsonPrimitive)?.intOrNull?.let { applyResults[it] = msg["result"] ?: msg["error"] ?: JsonNull }
+            return
+        }
         log += method
         val params = msg["params"]
         if (id == null) { notification(method, params); return }
@@ -272,7 +329,7 @@ class FakeLspServer(
                     put("referencesProvider", true)
                     put("renameProvider", true)
                     put("documentFormattingProvider", true)
-                    put("codeActionProvider", true)
+                    if (resolveCodeActions) put("codeActionProvider", buildJsonObject { put("resolveProvider", true) }) else put("codeActionProvider", true)
                 })
             }
         }
@@ -287,8 +344,20 @@ class FakeLspServer(
                 put("documentation", buildJsonObject { put("kind", "markdown"); put("value", if (d != null) "**$label**: a `${d.kind}` declared on line ${lineOf(text, d.nameAt) + 1}" else "`$label`") })
             }
         }
+        if (method == "codeAction/resolve") {
+            val data = p!!["data"]!!.jsonObject
+            val u = data.s("uri")
+            val t = documents[u] ?: return p
+            val r = occurrences(t, marker).firstOrNull() ?: return p
+            return buildJsonObject {
+                for ((k, v) in p) put(k, v)
+                put("edit", buildJsonObject { put("changes", buildJsonObject { put(u, buildJsonArray { add(buildJsonObject { put("range", range(t, r.first, r.last + 1)); put("newText", "DONE") }) }) }) })
+            }
+        }
         val uri = p?.get("textDocument")?.jsonObject?.s("uri") ?: return JsonNull
         val text = documents[uri] ?: return JsonNull
+        lastParams[method] = p
+        textAtRequest[method] = text
         val at = p["position"]?.let { offset(text, it) } ?: 0
         return when (method) {
             "textDocument/completion" -> completion(text, at)
@@ -317,7 +386,12 @@ class FakeLspServer(
                 val w = wordAt(text, at) ?: return JsonNull
                 val name = text.substring(w.first, w.last + 1)
                 val newName = p.s("newName")
-                buildJsonObject { put("changes", buildJsonObject { put(uri, JsonArray(occurrences(text, name).map { r -> buildJsonObject { put("range", range(text, r.first, r.last + 1)); put("newText", newName) } })) }) }
+                buildJsonObject { put("changes", buildJsonObject {
+                    put(uri, JsonArray(occurrences(text, name).map { r -> buildJsonObject { put("range", range(text, r.first, r.last + 1)); put("newText", newName) } }))
+                    // Other open documents: every occurrence there too (the toy language has one namespace).
+                    for ((u, t) in documents) if (u != uri) put(u, JsonArray(occurrences(t, name).map { r -> buildJsonObject { put("range", range(t, r.first, r.last + 1)); put("newText", newName) } }))
+                    for ((u, es) in extraRenameEdits) put(u, JsonArray(es.map { (r, t) -> edit(r[0], r[1], r[2], r[3], t) }))
+                }) }
             }
             "textDocument/formatting" -> {
                 val edits = ArrayList<JsonElement>()
@@ -336,7 +410,8 @@ class FakeLspServer(
                 JsonArray(diags.filter { (it.jsonObject["code"] as? JsonPrimitive)?.contentOrNull == "todo" }.map { d ->
                     buildJsonObject {
                         put("title", "Replace $marker with DONE"); put("kind", "quickfix")
-                        put("edit", buildJsonObject { put("changes", buildJsonObject { put(uri, buildJsonArray { add(buildJsonObject { put("range", d.jsonObject["range"]!!); put("newText", "DONE") }) }) }) })
+                        if (resolveCodeActions) put("data", buildJsonObject { put("uri", uri) })
+                        else put("edit", buildJsonObject { put("changes", buildJsonObject { put(uri, buildJsonArray { add(buildJsonObject { put("range", d.jsonObject["range"]!!); put("newText", "DONE") }) }) }) })
                     }
                 })
             }

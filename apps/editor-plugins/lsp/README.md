@@ -17,7 +17,10 @@ Editor(view, widgets = registry)
 ## The transport (the M5 seam)
 
 ```kotlin
-interface LspTransport { suspend fun send(message: String); val incoming: Flow<String>; val status: StateFlow<LspConnState> }
+interface LspTransport {
+    suspend fun send(message: String); val incoming: Flow<String>
+    val status: StateFlow<LspConnState>; val connection: StateFlow<Int>  // a generation per (re)connection
+}
 ```
 One JSON-RPC message per string, no `Content-Length` framing (the broker's `lsp` channel frames on
 the server side, `src/core/lsp/framing.ts`). **M5** adapts `:ui`'s `LspBridge` to it: `send` =
@@ -25,7 +28,29 @@ the server side, `src/core/lsp/framing.ts`). **M5** adapts `:ui`'s `LspBridge` t
 `lspStatus` / `open` (`ready` → CONNECTED, `error` / `exited` → DISCONNECTED). Also here:
 `ProcessLspTransport` (jvm, the desktop): a server process over stdio with the framing; and
 `:editor-plugins:lsp-fake`'s `FakeLspServer`, an in-process toy-language server (tests, the sample;
-never a production host).
+never a production host) whose transport can take its time (`sendDelayMs`), break (`failSends`) and
+drop and reconnect inside one tick (`blip()`): the review's bugs only show with those.
+
+## The workspace: one server document per URI
+
+`client.workspace` (`LspWorkspace`, CM6's `Workspace`) holds ONE `LspDocument` per URI, shared by
+every view showing it: each view's plugin (`client.plugin(uri, languageId)`) attaches to it; the first
+attach sends `didOpen`, the last detach `didClose`. Every view of a document shows the same text: an
+edit in one is applied to the others at once (a `remote` transaction, so each history undoes only its
+own view's edits) and sent to the server once. Commands, completion, hover and signature help run for
+the view they were asked in (its cursor, its lists); diagnostics reach every view. A workspace edit
+(rename, a code action, the server's `applyEdit`) is applied to EVERY document open in this client
+through its own views, each at the version it names, mapped to now; only documents that are not open
+go to `onWorkspaceEdit`, and with no callback that is a loud failure (`applied: false`, `onMessage`).
+`openDocuments`, `viewCount(uri)`, `version(uri)`, `serverText(uri)` read it. This is M5's shape: one
+client per session and server, every open file and every view of it in its workspace.
+
+**M5 lifetime.** A view's plugins stop when the view does (`startPlugins`' stop, the Editor leaving
+the composition): that detaches it, and the last detach closes the document. So the host keeps a
+tab's view alive across tab switches (the view, not the Editor composable, is the tab's; it calls
+`view.startPlugins(hostScope)` itself for views it keeps), so switching tabs never sends
+`didClose` / `didOpen` again. A `setState` (another document in the same view) detaches the old URI
+and attaches the new one.
 
 ## Lifecycle and sync
 
@@ -37,7 +62,11 @@ never a production host).
 - **didChange**: the edits since the last sync compose into ONE change set, sent 50 ms after the last
   edit (`syncDelayMs`) and always right before a request; incremental ranges back to front, each in
   the synced text (CM6's `contentChangesFor`); full text to a server that asks for full sync; none to
-  kind 0. Every send goes through one lock, so didOpen / didChange / requests leave in order.
+  kind 0. **Order**: every outgoing message goes into ONE queue synchronously, in call order (sync is
+  synchronous; a request queues its message before it first suspends and builds its params in the
+  same step), and one sender drains it: the server always has the text a request's position is in,
+  however slow the pipe (tested with a 100 ms send), and a cancelled caller never takes a queued
+  `didChange` with it.
 - **Versions**: the last 32 synced texts and the edits between them are kept, so a response computed
   on an older version is read in THAT text and mapped to the current document (definition,
   references, rename, code actions); a hover or signature help for a text that changed meanwhile is
@@ -45,31 +74,38 @@ never a production host).
   user edited inside a range it changes (CM6).
 - **didClose** when the view's plugin goes (a document switch, the editor disposed); `close()` sends
   `shutdown` + `exit`.
-- **A dropped transport** (DISCONNECTED) fails every pending request; back to CONNECTED, the client
-  initializes again and re-opens its documents with their text as it is then.
-- **Errors**: a server error, a timeout (`requestTimeoutMs`, 15 s) or a dropped connection never
-  throws out of a feature; a user-asked one (definition, references, rename, format) is reported
+- **A dropped transport** (DISCONNECTED) fails every pending request; a new connection (a new
+  `LspTransport.connection` generation while CONNECTED, even a drop and reconnect inside one tick that a
+  StateFlow of the status alone would hide) makes the client initialize again and re-open its
+  documents with their text as it is then. A send that throws fails the connection (`FAILED`, pending
+  requests fail) until the next generation.
+- **Errors**: a server error, a timeout (`requestTimeoutMs`, 15 s), a failed send or a dropped
+  connection never throws out of a request (every other exception becomes `LspException(DISCONNECTED)`)
+  nor out of a feature (every launched command, code action and signature request is guarded); a user-asked one (definition, references, rename, format) is reported
   through `onMessage`. `RequestCancelled` / `ContentModified` are silent.
 - **Threading**: everything runs on the client's scope (the UI thread). Incoming messages are parsed
   on a worker (`Dispatchers.Default`) on the JVM, Android and iOS; in the **browser**, a message over
   128 KB is parsed by `SlicedJson` (iterative, gives the thread back through a real macrotask every
-  ~4 ms of work) and a completion list is mapped in slices of 1,000 items.
+  ~4 ms of work; strict RFC 8259: malformed input is refused, as kotlinx's parser does) and a
+  completion list is mapped in slices of 1,000 items.
+- `ProcessLspTransport` caps a message at 64 MB and a header line at 8 KB, bounds its queue (1,024
+  messages: a flooding server waits on its pipe) and ends the connection on any read failure.
 
 ## Features
 
 | LSP | here | userEvent |
 |---|---|---|
 | `publishDiagnostics` | `Lint.setDiagnostics` (severity, `source code`, the range mapped) | |
-| `codeAction` | each diagnostic's actions (the 30 nearest the cursor, asked after each publish; resolved with `codeAction/resolve` when needed; a Command runs `workspace/executeCommand`) | `edit.codeAction` |
+| `codeAction` | each diagnostic's actions (the 30 nearest the cursor, asked after each publish, attached BY THE DIAGNOSTIC'S ID; resolved with `codeAction/resolve` when needed, after a sync, and applied at THAT version; a Command runs `workspace/executeCommand`) | `edit.codeAction` |
 | `completion` (+ `completionItem/resolve`) | a completion source: `textEdit` / `insertText` / snippets (`Snippet.fromLsp`) / `additionalTextEdits`; `filterText` is matched, `label` shown; the documentation shown when selected; `isIncomplete` asks again per keystroke, else CM6's `prefixRegexp` `validFor`; cancelled by typing (`$/cancelRequest`) | `input.complete` |
 | trigger characters | the server's `completionProvider.triggerCharacters`, else today's list `. : " ' \` < / @ #` | |
 | `hover` | `hoverTooltip("lsp")`: the markdown as text (`LspMarkdown.toPlainText`, or the host's `markdown`) in `tooltip:lsp-hover` | |
 | `signatureHelp` | `tooltip:lsp-signature` ABOVE the caret, on the server's trigger characters (and retrigger ones while shown), again 250 ms after a cursor move while shown (CM6), the active parameter bold; `Mod-Shift-Space`, `Mod-Shift-ArrowUp/Down`, `Escape` | |
 | `definition` | `F12`: this document: the cursor moves there (scrolled into view: a fold opens); another: `onNavigate(uri, range)` | `select.definition` |
 | `references` | `Shift-F12`: the `lsp-references` panel (line, text); a tap or click goes there (another document: `onNavigate`); `Escape` or × closes it | `select.reference` |
-| `rename` | `F2`: the `lsp-rename` prompt ("New name", the word selected), Enter renames; this document's edits as ONE transaction, another's to `onWorkspaceEdit` | `edit.rename` |
-| `formatting` | `Shift-Alt-f` (CM6's `formatKeymap`), tab size and spaces from `indentUnitFacet` | `edit.format` |
-| `workspace/applyEdit` (server-initiated) | applied, answered `applied` | `lsp` (not recorded, not policed) |
+| `rename` | `F2`: the `lsp-rename` prompt ("New name", the word selected), Enter renames, ALL OR NOTHING: an occurrence edited while the server worked (or a version gone) applies nothing and the prompt says "Rename out of date — try again"; other open documents through their own views, the rest to `onWorkspaceEdit` | `edit.rename` |
+| `formatting` | `Shift-Alt-f` (CM6's `formatKeymap`): `tabSize` from `tabSizeFacet`, `insertSpaces` from `indentUnitFacet`; all or nothing | `edit.format` |
+| `workspace/applyEdit` (server-initiated) | each document's edits at the `documentChanges` version they name (else the text the server has), mapped to now; answered `applied: true` only when EVERY edit applied (a version no longer kept, an edit the user changed since, a document that is not open and no host callback: `false`) | `lsp` (not recorded, not policed) |
 | `workspace/configuration`, `client/registerCapability`, `window/workDoneProgress/create` | answered (nulls) | |
 | `window/showMessage` | `onMessage(type, message)` | |
 
