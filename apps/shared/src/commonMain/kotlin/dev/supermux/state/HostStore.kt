@@ -4,7 +4,7 @@
 // BrokerApi (HTTP) and reduces inbound ServerFrames into StateFlows the Compose UI observes.
 // The Milestone-1 surface is ported here — sessions / messages / activity / agentState / bgTasks /
 // commands + the send/viewing/control paths — plus the M3 editor filesystem surface (fsList/fsRead/
-// fsWrite/fsSearch, editorOpen/editorClose, and the fs_changed → [fsChanges] fold) and the M4b finish
+// fsWrite/fsSearch) and the M4b finish
 // surface (the finish_job + session_git reducer branches + finish/finishReadiness/verifySuggest/
 // verifySave/clearFinishJob). Still-out-of-scope frames (LSP, displays) and features (uploads beyond
 // Send args, dictation, models/reasoning, drafts, push, notifications) are deliberately no-op'd so the
@@ -278,25 +278,11 @@ class HostStore(
     private val _ackedFinish = MutableStateFlow<Map<String, Double>>(emptyMap())
     val ackedFinish: StateFlow<Map<String, Double>> = _ackedFinish
 
-    // ── Editor file-watch (M3) ─────────────────────────────────────────────────────
-    // The reducer folds inbound fs_changed frames into this app-wide SharedFlow (mirrors Android's
-    // AppViewModel.fsChanges). Each EditorPanel collects it and calls its EditorState.markChanged
-    // FILTERED to its own session — the stale-on-disk banner is dead without this stream. A replay
-    // of 0 (transient signal, not state) + a 64-deep buffer with DROP_OLDEST: the default overflow
-    // policy (SUSPEND) makes tryEmit fail on a full buffer, dropping the NEWEST pulse — exactly the
-    // one the banner needs. DROP_OLDEST keeps the freshest change flowing instead (trivially better
-    // than Android's default-policy flow — backport candidate).
-    private val _fsChanges = MutableSharedFlow<ServerFrame.FsChanged>(
-        extraBufferCapacity = 64,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
-    val fsChanges: SharedFlow<ServerFrame.FsChanged> = _fsChanges.asSharedFlow()
-
     // ── Notifications (M5-3) ────────────────────────────────────────────────────────
     // Raw agent-reply pulses (direction="outbound", op="reply" MessageAppend entries only),
     // folded by [reduce] and consumed by AppShell's NotificationController — see
-    // NotifyDecision.kt for the PURE viewed/muted decision this flow feeds. Same replay-0 +
-    // bounded-buffer shape as [fsChanges]: DROP_OLDEST keeps the freshest reply flowing rather
+    // NotifyDecision.kt for the PURE viewed/muted decision this flow feeds. A replay-0 +
+    // bounded buffer with DROP_OLDEST (transient signal, not state): DROP_OLDEST keeps the freshest reply flowing rather
     // than suspending the reducer on a full buffer — a burst of replies while the collector is
     // briefly busy shouldn't block message delivery, and NotificationDedup coalesces the burst
     // into one toast regardless.
@@ -454,7 +440,9 @@ class HostStore(
             is ServerFrame.AgentState -> {
                 _pendingSend.update { it - frame.session }
             }
-            is ServerFrame.FsChanged -> _fsChanges.tryEmit(frame)
+            // Legacy per-session watcher pulse from an older broker. The "changed on disk" banner
+            // now comes from fs_sub folder subscriptions (FileSystemService), so it is ignored.
+            is ServerFrame.FsChanged -> Unit
             is ServerFrame.WalkthroughUpdated -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.ReviewCommentFrame -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
@@ -1145,8 +1133,7 @@ class HostStore(
         runApi("stopDisplay") { api.stopDisplay(id) }
     }
 
-    // ── Editor filesystem + lifecycle (M3; mirrors AppViewModel.fsList/fsRead/fsWrite/fsSearch
-    //    + editorOpen/editorClose) ─────────────────────────────────────────────────────
+    // ── Editor filesystem (M3; mirrors AppViewModel.fsList/fsRead/fsWrite/fsSearch) ────────────────────────────────────────────────────────────────
     // The EditorPanel binds these to path-only lambdas capturing the session, exactly as Android's
     // ChatScreen binds the AppViewModel wrappers. All broker calls run through [runApi] EXCEPT
     // [fsRead] (see its note — it must preserve the FsException message for the editor's error UI).
@@ -1242,16 +1229,6 @@ class HostStore(
      *  fire it outside an explicit user "Submit review" click (see DiffView's submit bar). */
     suspend fun reviewSubmit(session: SessionInfo): ReviewSubmitResult? =
         runApi("reviewSubmit") { api.reviewSubmit(session.id) }
-
-    /** Start the broker fs-watcher for this session (so fs_changed fires → the stale banner works).
-     *  Sent on EditorPanel mount; the [editorClose] counterpart stops it on dispose. */
-    fun editorOpen(session: SessionInfo) {
-        stateScope.launch { runApi("editorOpen") { sendFrame(ClientFrame.EditorOpen(session.id)) } }
-    }
-
-    fun editorClose(session: SessionInfo) {
-        stateScope.launch { runApi("editorClose") { sendFrame(ClientFrame.EditorClose(session.id)) } }
-    }
 
     // ── LSP control-plane senders (M4g-3; mirrors AppViewModel.lspStatusQuery/lspOpen/lspRpcOut/
     //    lspClose:832-843) ───────────────────────────────────────────────────────────────────────

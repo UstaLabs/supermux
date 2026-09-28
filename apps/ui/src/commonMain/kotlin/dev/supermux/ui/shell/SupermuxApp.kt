@@ -1614,7 +1614,7 @@ private fun WorkspacePanel(
     LaunchedEffect(current.id, localLayout) { ui.windows.onWorkspaceTree(current.id, localLayout) }
 
     // The "changed on disk" banner of the workspace's open documents, from subscriptions to their
-    // folders on the workspace's host (no fs_changed / editor_open needed here any more).
+    // folders on the workspace's host.
     dev.supermux.ui.files.FileStaleWatcher(wsApp.fileSystem, current.workdir, ws.documents)
     val notices = LocalPlatform.current.notices
     LaunchedEffect(ui.externalOpen, current.id, isActive) {

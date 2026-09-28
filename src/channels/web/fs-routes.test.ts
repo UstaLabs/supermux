@@ -238,23 +238,20 @@ test("closing the socket releases its folder subscriptions", async () => {
   expect(held()).toBe(0)
 })
 
-test("a second editor_open on one socket releases the first watcher callback", async () => {
-  const live = new Set<unknown>()
-  const fsWatcher = {
-    subscribe: (_s: string, _w: string, cb: unknown) => { live.add(cb) },
-    unsubscribe: (_s: string, cb: unknown) => { live.delete(cb) },
-  } as any
+test("editor_open / editor_close from an older app are ignored: no error, no fs_changed", async () => {
   const wd = tmp()
-  const { base, token } = await boot({ fsWatcher, getSessionWorkdir: (s) => (s === "a" || s === "b" ? wd : undefined) })
+  const { base, token } = await boot({ getSessionWorkdir: (s) => (s === "a" ? wd : undefined) })
   const ws = new WebSocket(base.replace("http", "ws") + "/ws", { headers: { Authorization: `Bearer ${token}` } } as any)
+  const types: string[] = []
+  ws.onmessage = (e) => { types.push(JSON.parse(String(e.data)).type) }
   await new Promise((r) => (ws.onopen = r))
   ws.send(JSON.stringify({ type: "editor_open", session: "a" }))
-  ws.send(JSON.stringify({ type: "editor_open", session: "b" }))
-  await until(() => false, 200)
-  expect(live.size).toBe(1)
+  writeFileSync(join(wd, "x.txt"), "changed")
+  ws.send(JSON.stringify({ type: "editor_close", session: "a" }))
+  await until(() => false, 300)
+  expect(types).not.toContain("error")
+  expect(types).not.toContain("fs_changed")
   ws.close()
-  await until(() => live.size === 0, 2_000)
-  expect(live.size).toBe(0)
 })
 
 test("a cookie-authenticated /ws from a foreign origin is refused; own host and bearer are fine", async () => {

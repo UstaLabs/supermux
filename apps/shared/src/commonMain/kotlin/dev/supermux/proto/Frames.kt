@@ -473,6 +473,9 @@ sealed interface ServerFrame {
         val resolved: Boolean = false,
     ) : ServerFrame
 
+    /** Legacy: the per-session recursive watcher's pulse, removed from the broker. Kept decodable
+     *  because an older broker still sends it; the app ignores it (the stale banner comes from
+     *  [FsDir] folder subscriptions now). */
     @Serializable @SerialName("fs_changed")
     data class FsChanged(
         val session: String,
@@ -623,12 +626,6 @@ sealed interface ClientFrame {
         @EncodeDefault(EncodeDefault.Mode.ALWAYS) val op: String = "reply",
         val args: SendArgs,
     ) : ClientFrame
-
-    @Serializable @SerialName("editor_open")
-    data class EditorOpen(val session: String) : ClientFrame
-
-    @Serializable @SerialName("editor_close")
-    data class EditorClose(val session: String) : ClientFrame
 
     @Serializable @SerialName("fs_sub")
     data class FsSub(val path: String, val since: String? = null) : ClientFrame

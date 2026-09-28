@@ -289,7 +289,6 @@ class FleetStore(
     val pendingSend: StateFlow<Set<String>> =
         eachHost { it.pendingSend }.map { parts -> parts.flatten().toSet() }
             .stateIn(fleetScope, SharingStarted.Eagerly, emptySet())
-    val fsChanges: Flow<ServerFrame.FsChanged> = mergedEvents { it.fsChanges }
     val lspRpc: Flow<ServerFrame.LspRpcIn> = mergedEvents { it.lspRpc }
 
     private val _sessions = MutableStateFlow<List<SessionInfo>>(emptyList())
@@ -1252,8 +1251,6 @@ class FleetStore(
         reasoningLevel: String? = null,
     ): String? = appFor(source.id)?.continueConversation(source, message, agent, model, reasoningLevel)
 
-    fun editorOpen(sessionId: String) { withSessionSync(sessionId) { app, s -> app.editorOpen(s) } }
-    fun editorClose(sessionId: String) { withSessionSync(sessionId) { app, s -> app.editorClose(s) } }
     fun lspStatusQuery(sessionId: String, path: String) {
         withSessionSync(sessionId) { app, s -> app.lspStatusQuery(s, path) }
     }

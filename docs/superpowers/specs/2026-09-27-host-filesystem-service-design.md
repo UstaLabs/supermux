@@ -74,9 +74,8 @@ New directory `src/core/fs/`. Each file has one job:
 | `file-system-service.ts` | `FileSystemService`: the facade that wires the above and emits frames. |
 
 `src/core/editor/fs-service.ts` keeps only `getDiff` and what `/fs/diff` needs; `listDir`, `readFile`,
-`writeFile`, `searchFiles` and `gitIgnoredRelPaths` move out. `src/core/editor/fs-watcher.ts` is deleted
-in B2, when the editor's stale banner moves to folder subscriptions. Until then it stays, with its
-callback leak fixed in A2 (a socket's previous `editor_open` watch is released before a new one is added).
+`writeFile`, `searchFiles` and `gitIgnoredRelPaths` move out. `src/core/editor/fs-watcher.ts` was deleted
+in B2, when the editor's stale banner moved to folder subscriptions (see §4.3).
 
 **Rule for every file in `src/core/fs/`:** no `*Sync` fs calls and no `execSync`. Git runs through
 `Bun.spawn` with a 5 s timeout and output read to completion; a timeout kills the process and is treated
@@ -197,9 +196,13 @@ export type FsOp =
   (a path escaping the workdir is rejected), join the relative path and call `FileSystemService`.
   Listing responses map `FsEntry` back to today's shape (`modified` as ISO string, `type` symlinks reported
   as their target type).
-- `fs_changed` keeps coming from the existing `FsWatcher` (driven by `editor_open`/`editor_close`) until B2
-  moves the stale banner to folder subscriptions; then `FsWatcher`, `fs_changed` and the watch handling in
-  `editor_open`/`editor_close` are removed.
+- `fs_changed` is REMOVED (B2, done): `FsWatcher`, the `fs_changed` frame and the watch handling in
+  `editor_open`/`editor_close` are gone from the broker, which now accepts and ignores those two frames
+  (older apps still send them). The app ignores an `fs_changed` from an older broker; the frame stays
+  decodable (`ServerFrame.FsChanged`) but nothing consumes it. Every "changed on disk" banner — the
+  workspace shell's `DocumentStore` and the session-scoped `EditorPanel`'s `EditorState` (Android's
+  session-only chat) — comes from `FileStaleWatcher` over folder subscriptions (both implement
+  `WatchedDocuments`).
 
 ### 4.4 Protocol
 
@@ -352,7 +355,7 @@ class TreeViewState(rootPath: String) {
 
 | Consumer | Change |
 |---|---|
-| Editor "changed on disk" banner | subscribes to the open file's parent folder and compares the entry's `mtime`/`size` with the loaded copy; `editor_open`/`editor_close` stop driving watches |
+| Editor "changed on disk" banner | subscribes to the open file's parent folder and compares the entry's `mtime`/`size` with the loaded copy (`FileStaleWatcher` + `FileChangeTracker`, over any `WatchedDocuments`: the workspace `DocumentStore` and the session editor's `EditorState`); `fs_changed` is removed and the broker ignores `editor_open`/`editor_close` |
 | New-project path picker | browses with `list()`/`stat()` |
 | Tapping a file path in chat | `stat()` first; missing file → a toast instead of an empty editor |
 

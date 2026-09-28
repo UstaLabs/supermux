@@ -16,7 +16,6 @@ import { WorkdirFs } from "../../core/fs/legacy"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
-import { FsWatcher } from "../../core/editor/fs-watcher"
 import { LspConnection } from "../../core/lsp/bridge"
 import { encodeTouch, encodeKey, encodeText, TouchAction } from "../../core/display/scrcpy/control"
 import { redactAppConfig } from "../../core/settings/app-config"
@@ -338,8 +337,6 @@ export interface WebChannelOpts {
    * workspace-scoped diff route as on the session-scoped one.
    */
   getWorkspaceDiffBase?: (id: string) => { baseCommits: Record<string, string>; createdAt?: string } | undefined
-  /** Workspace id a session belongs to (for fs_changed). */
-  getSessionWorkspaceId?: (sessionId: string) => string | undefined
   transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
   /**
    * Server-side TTS (codex). Returns either a soft platform error, or an async
@@ -380,7 +377,6 @@ export interface WebChannelOpts {
   listProxies?: () => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean; url: string }[]
   updateProxy?: (domain: string, isPublic: boolean) => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }
   terminalManager?: import("../../core/terminal/manager").TerminalManager
-  fsWatcher?: FsWatcher
   getSessionWorkdir?: (name: string) => string | undefined
   /** Resolve a claude session's tmux "session:window" target (for kind=agent
    * terminals). Returns undefined for non-claude/unknown sessions. When this opt
@@ -466,7 +462,6 @@ export class WebChannel implements Channel {
   private inboundHandlers: Array<(m: InboundMessage) => void> = []
   private wsConnections = new Set<{ ws: import("bun").ServerWebSocket<WSData>; deviceName: string }>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
-  private readonly fsWatcher?: FsWatcher
   /** The host's single file-system service (spec 2026-09-27). */
   readonly fss: FileSystemService<import("bun").ServerWebSocket<WSData>>
   private readonly clientLogRing: StoredClientLogEntry[] = []
@@ -487,7 +482,6 @@ export class WebChannel implements Channel {
     this.claimStore = opts.claimStore
     this.mintDeviceToken = opts.mintDeviceToken
     this.getRelayUrl = opts.getRelayUrl
-    this.fsWatcher = opts.fsWatcher
     this.fss = new FileSystemService<import("bun").ServerWebSocket<WSData>>({
       emit: (ws, frame) => { try { ws.send(JSON.stringify(frame)) } catch {} },
     })
@@ -930,9 +924,6 @@ export class WebChannel implements Channel {
 
   private onWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
     this.fss.dropSocket(ws)
-    if (this.fsWatcher && (ws.data as any)?._editorCb) {
-      this.fsWatcher.unsubscribe((ws.data as any)._editorSession, (ws.data as any)._editorCb)
-    }
     ;((ws.data as any)?._lsp as LspConnection | undefined)?.dispose()
     for (const c of this.wsConnections) {
       if (c.ws === ws) { this.wsConnections.delete(c); break }
@@ -1463,40 +1454,10 @@ export class WebChannel implements Channel {
       this.fss.unsubscribe(ws, frame.path)
       return
     }
-    if (frame.type === "editor_open" && frame.session) {
-      if (this.fsWatcher && this.opts.getSessionWorkdir) {
-        const fsWorkdir = this.opts.getSessionWorkdir(frame.session)
-        if (fsWorkdir) {
-          const workspaceIdForWatch = this.opts.getSessionWorkspaceId?.(frame.session)
-          const cb = (paths: string[]) => {
-            try {
-              ws.send(JSON.stringify({
-                type: "fs_changed",
-                session: frame.session,
-                workspace: workspaceIdForWatch,
-                paths,
-              }))
-            } catch {}
-          }
-          // A second editor_open on this socket replaces the first: release the old
-          // watcher callback, or it stays subscribed until the socket closes.
-          const prevCb = (ws.data as any)._editorCb
-          if (prevCb) this.fsWatcher.unsubscribe((ws.data as any)._editorSession, prevCb)
-          ;(ws.data as any)._editorCb = cb
-          ;(ws.data as any)._editorSession = frame.session
-          this.fsWatcher.subscribe(frame.session, fsWorkdir, cb)
-        }
-      }
-      return
-    }
-    if (frame.type === "editor_close" && frame.session) {
-      if (this.fsWatcher && (ws.data as any)?._editorCb) {
-        this.fsWatcher.unsubscribe(frame.session, (ws.data as any)._editorCb)
-        ;(ws.data as any)._editorCb = null
-        ;(ws.data as any)._editorSession = null
-      }
-      return
-    }
+    // Older apps still send these on editor mount/unmount. They used to start a per-session
+    // recursive watcher that answered with fs_changed; the "changed on disk" banner now comes from
+    // fs_sub folder subscriptions, so they are accepted and ignored (not "unknown frame type").
+    if (frame.type === "editor_open" || frame.type === "editor_close") return
     if (typeof frame.type === "string" && frame.type.startsWith("lsp_")) {
       this.lspFor(ws).handle(frame)
       return
