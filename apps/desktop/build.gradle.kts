@@ -338,11 +338,15 @@ compose.desktop {
                 debMaintainer = "supermux"
                 menuGroup = "Development"
                 appCategory = "Development"
+                iconFile.set(project.file("icons/supermux.png"))
                 // ⚠️ Inline chat video (Compose Media Player) links the SYSTEM GStreamer on Linux:
                 // the bundled `libNativeVideoPlayer.so` is a thin JNI shim, unlike macOS/Windows
                 // where the backend is an OS framework. On a box without
                 // `libgstreamer-1.0-0` + `gstreamer1.0-plugins-{base,good,libav}` the player fails
                 // to load and Timeline.kt falls back to the download chip — the app still starts.
+            }
+            windows {
+                iconFile.set(project.file("icons/supermux.ico"))
             }
             // macOS DMG. The app name + bundle id differ from the retired native SwiftUI client
             // (`Supermux.app` / `dev.supermux.app`) and are KEPT that way for update continuity:
@@ -352,6 +356,7 @@ compose.desktop {
                 bundleID = "dev.supermux.desktop"
                 dockName = "Supermux Desktop"
                 appCategory = "public.app-category.developer-tools"
+                iconFile.set(project.file("icons/supermux.icns"))
                 // Hardened runtime is mandatory for notarization; see the plist for why each
                 // entitlement is needed (JIT, and library validation for the downloaded CEF).
                 entitlementsFile.set(project.file("entitlements.mac.plist"))
