@@ -9,6 +9,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.fs.FileSystemService
+import dev.supermux.net.BrokerApi
 import dev.supermux.net.FsEntry
 import dev.supermux.proto.ServerFrame
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
@@ -20,6 +22,11 @@ import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,11 +42,17 @@ class EditorPanelTest {
 
     private val backs = mutableListOf<Boolean>()
 
+    private val fs = FileSystemService(
+        BrokerApi("http://h", "t", HttpClient(MockEngine { respond("{}") })),
+        send = {},
+        scope = CoroutineScope(Dispatchers.Unconfined),
+        graceMs = 0,
+    )
+
     private fun host(
         widthClass: WindowWidthClass,
         fsChanges: MutableSharedFlow<ServerFrame.FsChanged> = MutableSharedFlow(),
         pendingOpen: PendingEditorOpen? = null,
-        files: List<FsEntry> = listOf(FsEntry(name = "a.kt", type = "file")),
         read: (String) -> Result<String> = { Result.success("hello") },
     ): @Composable () -> Unit = {
         CompositionLocalProvider(
@@ -55,7 +68,7 @@ class EditorPanelTest {
                         fsChanges = fsChanges,
                     ),
                     actions = EditorPanelActions(
-                        fsList = { Result.success(files) },
+                        fileSystem = fs,
                         fsRead = { read(it) },
                         fsWrite = { _, _ -> true },
                         fsSearch = { emptyList() },
@@ -100,6 +113,18 @@ class EditorPanelTest {
         onNodeWithTag("editor_tree_pane").assertIsDisplayed()
         onNodeWithTag("editor_tree_drawer").assertDoesNotExist()
         assertEquals(false, backs.last(), "a side pane never consumes back")
+    }
+
+    @Test
+    fun clicking_a_file_in_the_tree_opens_it_by_its_workdir_relative_path() = runComposeUiTest {
+        setContent(host(WindowWidthClass.Expanded))
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsDir(path = "/w", version = "1", entries = listOf(FsEntry(name = "a.kt", type = "file"))))
+        waitForIdle()
+
+        onNodeWithTag("tree_row:a.kt").performClick()
+        waitForIdle()
+        onNodeWithTag("editor_tab_a.kt").assertIsDisplayed()
     }
 
     @Test

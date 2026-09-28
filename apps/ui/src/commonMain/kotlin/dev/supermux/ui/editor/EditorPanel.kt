@@ -69,7 +69,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
-import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.ReviewComment
@@ -77,10 +76,17 @@ import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.proto.ServerFrame
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.MarkdownBody
+import dev.supermux.fs.FileSystemService
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.editor.engine.EditorScrollReader
 import dev.supermux.ui.editor.engine.captureOutgoingScroll
+import dev.supermux.ui.files.FileTreeView
+import dev.supermux.ui.files.TreeViewState
+import dev.supermux.ui.files.childOf
+import dev.supermux.ui.files.relativeToWorkdir
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalPanes
@@ -117,7 +123,8 @@ data class EditorPanelState(
  * nothing in the panel may key on them.
  */
 data class EditorPanelActions(
-    val fsList: suspend (String) -> Result<List<FsEntry>>,
+    /** The session host's file-system service the sidebar tree lists through; null → "Host offline". */
+    val fileSystem: FileSystemService?,
     val fsRead: suspend (String) -> Result<String>,
     val fsWrite: suspend (String, String) -> Boolean,
     val fsSearch: suspend (String) -> List<FsSearchResult>,
@@ -178,6 +185,10 @@ fun EditorPanel(
     }
     val treeVisible = editor.treeVisible ?: expanded
     val searchResults = remember { mutableStateListOf<FsSearchResult>() }
+    // The sidebar tree's view state. This legacy panel has no view ids, so it lives for the
+    // session + workdir (a workdir change starts a fresh tree rooted at the new checkout).
+    val treeView = remember(sessionId, workdir) { TreeViewState(workdir) }
+    val notices = LocalPlatform.current.notices
 
     LaunchedEffect(editor.searchQuery) {
         delay(200)
@@ -442,11 +453,13 @@ fun EditorPanel(
                                 .background(cs.surfaceContainerHigh)
                                 .testTag("editor_tree_pane"),
                         ) {
-                            FileTree(
-                                fsList = actions.fsList,
-                                explorer = editor.explorer,
+                            EditorTreeSidebar(
+                                fileSystem = actions.fileSystem,
+                                view = treeView,
                                 workdir = workdir,
+                                activeRelativePath = editor.activeTabPath,
                                 onOpenFile = { revealFile(it) },
+                                onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
                             )
                         }
                         Box(
@@ -632,11 +645,13 @@ fun EditorPanel(
                                 .background(cs.surfaceContainerHigh)
                                 .testTag("editor_tree_drawer"),
                         ) {
-                            FileTree(
-                                fsList = actions.fsList,
-                                explorer = editor.explorer,
+                            EditorTreeSidebar(
+                                fileSystem = actions.fileSystem,
+                                view = treeView,
                                 workdir = workdir,
+                                activeRelativePath = editor.activeTabPath,
                                 onOpenFile = { revealFile(it) },
+                                onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
                             )
                         }
                     }
@@ -659,4 +674,40 @@ fun EditorPanel(
             )
         }
     }
+}
+
+/**
+ * The panel's file tree: the shared [FileTreeView] over the session host's [FileSystemService].
+ * Paths in the tree are ABSOLUTE; [onOpenFile] gets them workdir-relative (what [EditorState]
+ * speaks), and anything outside the workdir goes to [onOutsideWorkdir] instead of opening.
+ */
+@Composable
+private fun EditorTreeSidebar(
+    fileSystem: FileSystemService?,
+    view: TreeViewState,
+    workdir: String,
+    activeRelativePath: String?,
+    onOpenFile: (relativePath: String) -> Unit,
+    onOutsideWorkdir: (absolutePath: String) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    if (fileSystem == null) {
+        Box(Modifier.fillMaxSize().testTag("editor_tree"), contentAlignment = Alignment.Center) {
+            Text("Host offline", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("editor_tree_offline"))
+        }
+        return
+    }
+    val activePath = activeRelativePath?.takeIf { it.isNotEmpty() && it != "." }?.let { rel ->
+        rel.split('/').filter { it.isNotEmpty() }.fold(workdir) { acc, seg -> childOf(acc, seg) }
+    }
+    FileTreeView(
+        fileSystem = fileSystem,
+        view = view,
+        onOpenFile = { abs ->
+            val rel = relativeToWorkdir(workdir, abs)?.takeIf { it != "." }
+            if (rel != null) onOpenFile(rel) else onOutsideWorkdir(abs)
+        },
+        activePath = activePath,
+        compact = !LocalPointerAvailable.current || LocalWindowWidthClass.current == WindowWidthClass.Compact,
+    )
 }

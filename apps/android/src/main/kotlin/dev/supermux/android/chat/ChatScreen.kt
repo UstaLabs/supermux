@@ -179,7 +179,8 @@ fun ChatScreen(
     loadDraft: suspend (String) -> String = { "" },
     saveDraft: (String, String) -> Unit = { _, _ -> },
     loadBytes: suspend (String) -> ByteArray? = { null },
-    fsList: suspend (String) -> Result<List<dev.supermux.net.FsEntry>> = { Result.success(emptyList()) },
+    /** The session host's file-system service (the editor sidebar's tree). */
+    fileSystem: dev.supermux.fs.FileSystemService? = null,
     fsRead: suspend (String) -> Result<String> = { Result.success("") },
     fsWrite: suspend (String, String) -> Boolean = { _, _ -> false },
     fsSearch: suspend (String) -> List<dev.supermux.net.FsSearchResult> = { emptyList() },
@@ -695,7 +696,7 @@ fun ChatScreen(
                         lspRpc = lspRpc,
                     ),
                     actions = EditorPanelActions(
-                        fsList = fsList,
+                        fileSystem = fileSystem,
                         fsRead = fsRead,
                         fsWrite = fsWrite,
                         fsSearch = fsSearch,

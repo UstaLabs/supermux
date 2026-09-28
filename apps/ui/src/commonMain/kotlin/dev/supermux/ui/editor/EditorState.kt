@@ -1,15 +1,14 @@
 // Ported from apps/android/src/main/kotlin/dev/supermux/android/editor/EditorState.kt — keep in
 // sync until a shared UI module exists.
 //
-// This is now a thin coordinator over three collaborators, each holding one of the jobs this class
+// This is now a thin coordinator over two collaborators, each holding one of the jobs this class
 // used to do at once (behaviour unchanged; every member below still exists, delegating):
 //   - [DocumentStore] — the open documents (the [Document] text buffers) + their load/save/reload
 //     lifecycle, including the three M3-T4 networked-fsRead divergences (in-flight guard,
 //     close-during-load cancel, reveal nonce) documented in DocumentStore.kt's header.
-//   - [ExplorerState] — file-tree + search UI state.
 //   - [DiffState] — diff / inline code-review state.
-// What stays HERE is what is per-VIEW rather than per-file: the tab ORDER, the active selection and
-// the preview toggle. Documents are keyed by path in the store and exist exactly once, so a later
+// What stays HERE is what is per-VIEW rather than per-file: the tab ORDER, the active selection,
+// the preview toggle and the tree-visibility / search-query UI state. Documents are keyed by path in the store and exist exactly once, so a later
 // phase can hand a second pane its own tab list over the SAME [Document] instances rather than a
 // second copy of the file text.
 //
@@ -51,7 +50,6 @@ class EditorState(
     scope: CoroutineScope,
 ) {
     val documents = DocumentStore(fsRead, fsWrite, scope)
-    val explorer = ExplorerState()
     val diff = DiffState()
 
     /** The tab strip: ORDER + membership for this view. Holds [Document] references owned by
@@ -152,35 +150,12 @@ class EditorState(
     suspend fun reload(path: String, fsRead: suspend (String) -> Result<String>) =
         documents.reload(path, fsRead)
 
-    // ── File tree / search (delegates to [explorer]) ───────────────────────────────────────────
+    // ── Tree visibility / search (the tree's own state lives in the panel's TreeViewState) ──────
 
-    /** File tree UI state — survives panel / session switches while composed. */
-    val treeRoot get() = explorer.treeRoot
+    /** Whether the sidebar tree is shown; null until the panel seeds it from the window width. */
+    var treeVisible by mutableStateOf<Boolean?>(null)
 
-    var treeRootLoaded: Boolean
-        get() = explorer.treeRootLoaded
-        set(value) { explorer.treeRootLoaded = value }
-
-    var expandedPaths: Set<String>
-        get() = explorer.expandedPaths
-        set(value) { explorer.expandedPaths = value }
-
-    var treeLoadingPaths: Set<String>
-        get() = explorer.treeLoadingPaths
-        set(value) { explorer.treeLoadingPaths = value }
-
-    var treeVisible: Boolean?
-        get() = explorer.treeVisible
-        set(value) { explorer.treeVisible = value }
-
-    var searchQuery: String
-        get() = explorer.searchQuery
-        set(value) { explorer.searchQuery = value }
-
-    /** Per-directory tree-listing errors (path → message) surfaced as an inline row (M3-T4). */
-    var treeLoadError: Map<String, String>
-        get() = explorer.treeLoadError
-        set(value) { explorer.treeLoadError = value }
+    var searchQuery by mutableStateOf("")
 
     // ── Diff / inline code-review (delegates to [diff]) ────────────────────────────────────────
 

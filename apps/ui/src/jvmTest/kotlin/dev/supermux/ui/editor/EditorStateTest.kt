@@ -340,15 +340,10 @@ class EditorStateTest {
         assertEquals(10 to 12, tab.revealLine)
     }
 
-    // ── tree / search UI state defaults — ADDED (search-query state + tree state, per plan Task 3;
-    //    sortedForTree ordering itself is covered separately in FileTreeTest.kt). ─────────────────
+    // ── tree-visibility / search UI state defaults ─────────────────────────────────────────────
 
     @Test fun tree_and_search_ui_state_defaults() {
         val s = state()
-        assertTrue(s.treeRoot.isEmpty())
-        assertFalse(s.treeRootLoaded)
-        assertTrue(s.expandedPaths.isEmpty())
-        assertTrue(s.treeLoadingPaths.isEmpty())
         assertNull(s.treeVisible)
         assertTrue(s.changedPaths.isEmpty())
         assertEquals("", s.searchQuery)
