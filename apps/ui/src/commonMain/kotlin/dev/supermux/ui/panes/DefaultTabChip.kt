@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -78,6 +79,10 @@ fun DefaultTabChip(
             fontFamily = labelFont,
             fontSize = if (touch) 13.sp else 11.sp,
             fontWeight = if (state.selected) FontWeight.Medium else FontWeight.Normal,
+            // A terminal's title is whatever its program says, often a whole path.
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 220.dp),
         )
         Box(
             Modifier

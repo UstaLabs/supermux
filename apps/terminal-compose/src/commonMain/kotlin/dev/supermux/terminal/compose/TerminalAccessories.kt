@@ -123,11 +123,21 @@ class TerminalAccessoryState {
         sink?.hideKeyboard()
     }
 
+    /**
+     * Paste whatever the platform clipboard holds — an accessory bar's Paste button. The terminal
+     * reads the clipboard (this is a user action, so it may), pastes through the engine and, when
+     * the engine refuses text that could run commands, asks the user instead of dropping it.
+     */
+    fun pasteClipboard() {
+        sink?.pasteFromClipboard()
+    }
+
     /** What [Terminal] installs while it is composed; see the class documentation. */
     internal interface Sink {
         fun key(key: TerminalKey)
         fun paste(text: String, allowUnsafe: Boolean, onResult: (Boolean) -> Unit)
         fun hideKeyboard()
+        fun pasteFromClipboard()
     }
 
     internal fun bind(sink: Sink) {

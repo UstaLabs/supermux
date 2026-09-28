@@ -8,6 +8,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEvent
@@ -87,6 +89,35 @@ internal class TerminalInputController(
     var clipboard: TerminalClipboard? = null
 
     /**
+     * A shortcut the surface does not perform itself (find, zoom): true when the host took it. A
+     * chord nobody takes reaches the program like any other key.
+     */
+    var onShortcut: (TerminalShortcut) -> Boolean = { false }
+
+    /** The surface's own copy/paste menu, while it is showing. */
+    var menu: TerminalMenuRequest? by mutableStateOf(null)
+        private set
+
+    /**
+     * Clipboard text the engine refused to paste unasked — it could run commands — waiting for the
+     * user to confirm it. See [TerminalPasteConfirmation].
+     */
+    var pendingPaste: String? by mutableStateOf(null)
+        private set
+
+    /** How far apart two clicks may be and still count as a double click; set from the platform. */
+    private var doubleClickMillis: Long = 300L
+
+    /** The last mouse click, for double and triple clicks. */
+    private var lastClick: ClickRecord? = null
+
+    /** The two-finger gesture in progress, if any. */
+    private var pinch: PinchTracker? = null
+
+    /** Font zoom steps a pinch asks for; null = pinching does nothing. */
+    var onZoom: ((TerminalZoom) -> Unit)? = null
+
+    /**
      * True while this surface holds focus.
      *
      * Snapshot state, not a plain field: the semantics node OBSERVES it, and a screen reader that
@@ -111,8 +142,77 @@ internal class TerminalInputController(
 
     // ----------------------------------------------------------------- keyboard ----
 
-    fun onKeyEvent(event: androidx.compose.ui.input.key.KeyEvent): Boolean =
-        enabled && router.handle(event)
+    private val shortcuts = TerminalShortcutGate()
+
+    fun onKeyEvent(event: androidx.compose.ui.input.key.KeyEvent): Boolean {
+        if (!enabled) return false
+        // The repeat and the release of a key that was performed as a shortcut: the program never
+        // saw it go down, so it must not see it come up either.
+        if (shortcuts.swallows(event)) return true
+        val shortcut = shortcuts.shortcutOf(event, selection.hasSelection)
+        if (shortcut != null && perform(shortcut, event)) {
+            shortcuts.take(event)
+            return true
+        }
+        dismissMenu()
+        return router.handle(event)
+    }
+
+    /** Run [shortcut]; false when nobody could (nothing to copy, the host has no find). */
+    private fun perform(shortcut: TerminalShortcut, event: androidx.compose.ui.input.key.KeyEvent?): Boolean {
+        dismissMenu()
+        return when (shortcut) {
+            TerminalShortcut.COPY -> {
+                // Plain Ctrl+C with a selection copies AND drops it, so the next Ctrl+C interrupts.
+                val plainCtrlC = event != null && event.isCtrlPressed && !event.isShiftPressed
+                copySelection(thenClear = plainCtrlC)
+            }
+            TerminalShortcut.PASTE -> pasteClipboard()
+            TerminalShortcut.SELECT_ALL -> {
+                selection.selectAll()
+                true
+            }
+            else -> onShortcut(shortcut)
+        }
+    }
+
+    /** A menu item was chosen. */
+    fun onMenuAction(action: TerminalMenuAction) {
+        dismissMenu()
+        when (action) {
+            TerminalMenuAction.COPY -> copySelection()
+            TerminalMenuAction.PASTE -> pasteClipboard()
+            TerminalMenuAction.SELECT_ALL -> {
+                selection.selectAll()
+                // On a phone the bubble comes straight back, now offering Copy.
+                lastMenu?.takeIf { it.touch }?.let { menu = it }
+            }
+            TerminalMenuAction.FIND -> onShortcut(TerminalShortcut.FIND)
+        }
+    }
+
+    private var lastMenu: TerminalMenuRequest? = null
+
+    fun showMenu(anchor: Offset, touch: Boolean, belowY: Float = anchor.y) {
+        val request = TerminalMenuRequest(anchor, touch, belowY)
+        lastMenu = request
+        menu = request
+    }
+
+    fun dismissMenu() {
+        menu = null
+    }
+
+    /** The user confirmed a paste the engine refused as unsafe. */
+    fun confirmPaste() {
+        val text = pendingPaste ?: return
+        pendingPaste = null
+        paste(text, allowUnsafe = true) {}
+    }
+
+    fun cancelPaste() {
+        pendingPaste = null
+    }
 
     fun onFocusChanged(focused: Boolean) {
         this.focused = focused
@@ -121,7 +221,9 @@ internal class TerminalInputController(
         // and a key held while focus moved will never produce its key-up here.
         accessories.clear()
         router.reset()
+        shortcuts.reset()
         selection.finish()
+        if (!focused) dismissMenu()
         // A composition that was live is NOT ended here: this relies on the platform IME finalizing
         // or cancelling it on blur, which is what every one of them does (Android ends the batch
         // edit and finishes composing, AWT/UIKit/the browser commit or abandon the preedit), and
@@ -188,10 +290,13 @@ internal class TerminalInputController(
     // ----------------------------------------------------------------- clipboard ----
 
     /** Copy the selection through the ENGINE's `selectedText()`; false when there is nothing to copy. */
-    fun copySelection(): Boolean {
+    fun copySelection(thenClear: Boolean = false): Boolean {
         val target = clipboard ?: return false
         if (!selection.hasSelection) return false
-        selection.copy(target)
+        dismissMenu()
+        // Cleared only once the engine has handed the text over: a clear sent now would reach the
+        // engine BEFORE the copy's read and copy nothing.
+        selection.copy(target) { if (thenClear) selection.clear() }
         return true
     }
 
@@ -204,9 +309,13 @@ internal class TerminalInputController(
      */
     fun pasteClipboard(): Boolean {
         val source = clipboard ?: return false
+        dismissMenu()
+        source.willRead()
         scope.launch {
             val text = runCatching { source.read() }.getOrNull() ?: return@launch
-            if (text.isNotEmpty()) paste(text, allowUnsafe = false) {}
+            if (text.isEmpty()) return@launch
+            // Refused = the text could run commands. Ask, rather than drop it without a word.
+            paste(text, allowUnsafe = false) { sent -> if (!sent && enabled) pendingPaste = text }
         }
         return true
     }
@@ -227,6 +336,10 @@ internal class TerminalInputController(
      */
     override fun hideKeyboard() {
         keyboard?.hide()
+    }
+
+    override fun pasteFromClipboard() {
+        if (enabled) pasteClipboard()
     }
 
     override fun paste(text: String, allowUnsafe: Boolean, onResult: (Boolean) -> Unit) {
@@ -256,6 +369,7 @@ internal class TerminalInputController(
      */
     private fun afterLocalInput() {
         accessories.clear()
+        dismissMenu()
         selection.clear()
         if (!scroll.following) scroll.followBottom()
     }
@@ -274,6 +388,7 @@ internal class TerminalInputController(
     suspend fun handlePointer(pointerScope: PointerInputScope) = with(pointerScope) {
         val longPressTimeout = viewConfiguration.longPressTimeoutMillis
         val slop = viewConfiguration.touchSlop
+        doubleClickMillis = viewConfiguration.doubleTapTimeoutMillis
         awaitPointerEventScope {
             while (true) {
                 val waiting = press?.takeIf { !it.longPressFired }
@@ -289,6 +404,7 @@ internal class TerminalInputController(
                         ?: run { fireLongPress(waiting); continue }
                 }
                 if (!enabled) continue
+                if (onPinch(event)) continue
                 when (event.type) {
                     PointerEventType.Scroll -> onScroll(event)
                     PointerEventType.Press -> onPress(event)
@@ -396,6 +512,21 @@ internal class TerminalInputController(
         // A finger (or a cursor) landing on a touch handle takes THAT handle, whatever the modes
         // say: the handles are this surface's own chrome and a program never sees them.
         val handle = handleUnder(change.position)?.takeIf { selection.beginHandle(it) }
+        dismissMenu()
+        // A secondary click the program did not ask for opens the surface's menu. It keeps the
+        // selection it was made over — right-click, Copy is the whole point.
+        if (device == PointerDevice.MOUSE && button == MouseButton.RIGHT && route != PointerRoute.REMOTE_MOUSE) {
+            press = null
+            requestFocus()
+            showMenu(change.position, touch = false)
+            change.consume()
+            return
+        }
+        val clicks = if (device == PointerDevice.MOUSE && route == PointerRoute.LOCAL_SELECTION && handle == null) {
+            countClick(cell, change.uptimeMillis)
+        } else {
+            1
+        }
         press = PressTracker(
             pointerId = change.id.value,
             downPosition = change.position,
@@ -407,6 +538,7 @@ internal class TerminalInputController(
             modifiers = modifiers,
             route = if (handle != null) PointerRoute.LOCAL_SELECTION else route,
             handle = handle,
+            clicks = clicks,
         )
         // Touching a terminal is how a user says "type here"; the host never has to ask for focus.
         // A finger says it louder: it also wants the soft keyboard back, whether or not the field
@@ -425,9 +557,33 @@ internal class TerminalInputController(
         // how a touch user SCROLLS, and stealing it for a selection is the single most infuriating
         // thing a mobile terminal can do; touch selection starts from a long press instead.
         if (route == PointerRoute.LOCAL_SELECTION && device == PointerDevice.MOUSE) {
-            selection.begin(cell)
+            when (clicks) {
+                2 -> selection.selectWord(cell)
+                3 -> selection.selectLine(cell)
+                else -> selection.begin(cell)
+            }
             change.consume()
         }
+    }
+
+    /**
+     * 1, 2 or 3 for a single, double or triple click on (about) the same cell; a fourth click
+     * starts over. Adjacent cells count — a hand does not hold a mouse perfectly still.
+     */
+    private fun countClick(cell: TerminalCellPosition, uptimeMillis: Long): Int {
+        val last = lastClick
+        val count = if (
+            last != null &&
+            uptimeMillis - last.uptimeMillis <= doubleClickMillis &&
+            last.cell.row == cell.row &&
+            kotlin.math.abs(last.cell.column - cell.column) <= 1
+        ) {
+            last.count % 3 + 1
+        } else {
+            1
+        }
+        lastClick = ClickRecord(cell, uptimeMillis, count)
+        return count
     }
 
     /** The selection handle under [position], or null. */
@@ -485,6 +641,8 @@ internal class TerminalInputController(
         val cell = cellOf(change.position) ?: return
         val modifiers = modifiersOf(event)
         val device = deviceOf(change)
+        // A finger whose press was taken away (the rest of a pinch) has nothing left to release.
+        if (tracker == null && device == PointerDevice.TOUCH) return
         // Same rule as a drag: the release belongs to whoever the press did.
         val route = if (tracker?.route == PointerRoute.REMOTE_MOUSE) {
             PointerRoute.REMOTE_MOUSE
@@ -498,6 +656,31 @@ internal class TerminalInputController(
         }
         val wasDragging = selection.dragging
         selection.finish()
+        // A finger that just made or adjusted a selection — a long press, a handle drag — gets the
+        // Copy / Paste bubble, the way every phone's text selection does. A long press on nothing
+        // still gets it: that is how a touch user pastes.
+        if (tracker != null && device == PointerDevice.TOUCH && (tracker.longPressClaimed || tracker.handle != null)) {
+            val frame = model.frame
+            val handles = frame?.let { selectionHandles(it, metrics, scroll.paintOffset(it)) }.orEmpty()
+            if (handles.isEmpty()) {
+                showMenu(tracker.downPosition, touch = true)
+            } else {
+                val left = handles.minOf { it.position.x }
+                val right = handles.maxOf { it.position.x }
+                showMenu(
+                    anchor = Offset((left + right) / 2f, handles.minOf { it.position.y } - metrics.height),
+                    touch = true,
+                    belowY = handles.maxOf { it.position.y } + handleRadiusPx * 2f,
+                )
+            }
+            if (wasDragging) change.consume()
+            return
+        }
+        // The second and third click of a multi-click made the selection; they are not links.
+        if (tracker != null && tracker.clicks > 1) {
+            change.consume()
+            return
+        }
         // A plain click that never moved, on a cell the frame says carries an OSC 8 hyperlink.
         if (tracker != null && !tracker.moved && !tracker.longPressClaimed && tracker.cell == cell) {
             // A click drops the selection it did not extend — the standard way to dismiss one — and
@@ -517,11 +700,58 @@ internal class TerminalInputController(
         val local =
             TerminalInputPolicy.route(modes(), PointerIntent.LONG_PRESS, tracker.device, tracker.modifiers) !=
                 PointerRoute.REMOTE_MOUSE
-        tracker.longPressClaimed = local
+        // A finger that already moved is scrolling, not pressing: its release is no click either
+        // way, and claiming it would pop the copy bubble at the end of an ordinary scroll.
+        tracker.longPressClaimed = local && !tracker.moved
         if (!local || tracker.moved || tracker.handle != null) return
         // A word, not a cell: it gives the user two handles far enough apart to pull.
         tracker.route = PointerRoute.LOCAL_SELECTION
         selection.selectWord(tracker.cell)
+    }
+
+    /**
+     * Two fingers: a pinch, which zooms the font one step each time the spread grows or shrinks by
+     * [PINCH_STEP] — not continuously, because every step is a new cell size, a new grid and a
+     * resize of the pty. Returns true while it owns the event, which it consumes so the history does
+     * not scroll under the pinch and no single-finger gesture sees it.
+     */
+    private fun onPinch(event: PointerEvent): Boolean {
+        val zoom = onZoom
+        val fingers = event.changes.filter { it.pressed && it.type == PointerType.Touch }
+        if (fingers.size < 2 || zoom == null) {
+            val was = pinch != null
+            pinch = null
+            // The fingers lifting after a pinch are not a tap, a long press or a scroll either.
+            if (was) event.changes.forEach { it.consume() }
+            return was
+        }
+        val spread = (fingers[0].position - fingers[1].position).getDistance()
+        val tracker = pinch
+        if (tracker == null) {
+            pinch = PinchTracker(spread)
+            // The first finger's press is not going to be a tap or a long press any more — and if
+            // the program was handed it, the program gets its release now rather than never.
+            press?.takeIf { it.route == PointerRoute.REMOTE_MOUSE }?.let {
+                send(it.cell, it.button, MouseAction.RELEASE, it.modifiers)
+            }
+            press = null
+            selection.finish()
+            dismissMenu()
+        } else if (tracker.baseline > 0f) {
+            val ratio = spread / tracker.baseline
+            when {
+                ratio >= PINCH_STEP -> {
+                    zoom(TerminalZoom.IN)
+                    tracker.baseline = spread
+                }
+                ratio <= 1f / PINCH_STEP -> {
+                    zoom(TerminalZoom.OUT)
+                    tracker.baseline = spread
+                }
+            }
+        }
+        event.changes.forEach { it.consume() }
+        return true
     }
 
     private fun linkAt(cell: TerminalCellPosition): String? =
@@ -552,9 +782,18 @@ internal class TerminalInputController(
         var longPressFired: Boolean = false,
         var longPressClaimed: Boolean = false,
         var lastRemoteCell: TerminalCellPosition? = null,
+        /** 2 or 3 when this press is the second or third of a multi-click. */
+        val clicks: Int = 1,
     )
 
+    private class ClickRecord(val cell: TerminalCellPosition, val uptimeMillis: Long, val count: Int)
+
+    private class PinchTracker(var baseline: Float)
+
     private companion object {
+        /** How much a pinch has to spread (or close) for one font step. */
+        const val PINCH_STEP = 1.18f
+
         /** What the policy sees before the first frame: a plain shell, nothing negotiated. */
         val NO_MODES = TerminalModes(
             alternateScreen = false, mouseTracking = false, bracketedPaste = false, alternateScroll = false,

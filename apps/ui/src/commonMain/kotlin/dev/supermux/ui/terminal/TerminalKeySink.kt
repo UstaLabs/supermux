@@ -64,6 +64,10 @@ class TerminalKeySink(
     // fake) have never needed it, and hiding the IME is not something that belongs in `semantic`
     // — it is not a keystroke the emulator encodes, and it must never touch the armed modifiers.
     private val onHideKeyboard: () -> Unit = {},
+    // The bar's Paste and Find buttons. Null = the host has neither, and the bar hides the button:
+    // a raw byte sink cannot paste through an engine it does not have.
+    private val onPaste: (() -> Unit)? = null,
+    private val onFind: (() -> Unit)? = null,
     private val send: (ByteArray) -> Unit,
 ) {
     var ctrl: TerminalModState by mutableStateOf(TerminalModState.OFF)
@@ -163,6 +167,26 @@ class TerminalKeySink(
      * which is what a semantic sink's [onHideKeyboard] ultimately reaches.
      */
     fun hideKeyboard() = onHideKeyboard()
+
+    /** True when [paste] does something; the bar shows its Paste button only then. */
+    val canPaste: Boolean get() = onPaste != null
+
+    /** True when [find] does something; the bar shows its Find button only then. */
+    val canFind: Boolean get() = onFind != null
+
+    /**
+     * Paste the clipboard into the pty — the bar's Paste button. Not a keystroke: it goes through
+     * the renderer's paste path (bracketed paste, the "this may run commands" confirmation) and
+     * leaves the armed modifiers alone.
+     */
+    fun paste() {
+        onPaste?.invoke()
+    }
+
+    /** Open find-in-scrollback — the bar's Find button. */
+    fun find() {
+        onFind?.invoke()
+    }
 }
 
 /**
@@ -201,15 +225,24 @@ fun rememberTerminalKeySink(send: (ByteArray) -> Unit): TerminalKeySink {
 @Composable
 fun rememberSemanticTerminalKeySink(
     hideKeyboard: () -> Unit = {},
+    paste: (() -> Unit)? = null,
+    find: (() -> Unit)? = null,
     press: (TerminalKey, Mods) -> Unit,
 ): TerminalKeySink {
     val current by rememberUpdatedState(press)
     val currentHideKeyboard by rememberUpdatedState(hideKeyboard)
+    val currentPaste by rememberUpdatedState(paste)
+    val currentFind by rememberUpdatedState(find)
+    // Whether the buttons exist is fixed for the sink's life; what they do follows the latest lambda.
+    val hasPaste = paste != null
+    val hasFind = find != null
     return remember {
         TerminalKeySink(
             send = { },
             semantic = { key, mods -> current(key, mods) },
             onHideKeyboard = { currentHideKeyboard() },
+            onPaste = if (hasPaste) ({ currentPaste?.invoke() }) else null,
+            onFind = if (hasFind) ({ currentFind?.invoke() }) else null,
         )
     }
 }

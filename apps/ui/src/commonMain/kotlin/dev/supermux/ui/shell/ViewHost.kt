@@ -15,6 +15,9 @@
 package dev.supermux.ui.shell
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.runtime.CompositionLocalProvider
+import dev.supermux.ui.terminal.LocalTerminalTitleSink
+import dev.supermux.ui.terminal.TerminalTitles
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -242,10 +245,16 @@ fun ViewHost(
                 else AgentTerminalForSession(actions, sessionId, terminalId, modifier)
             } else {
                 key(workspaceId, terminalId) {
-                    workspaceTerminalContent(
-                        { actions.connectWorkspaceTerminal(workspaceId, terminalId).orFail(workspaceId) },
-                        modifier.fillMaxSize().testTag("terminal-$workspaceId-$terminalId"),
-                    )
+                    // The program's title goes to this view's TAB, which the pane strip draws.
+                    val viewId = view.id
+                    CompositionLocalProvider(
+                        LocalTerminalTitleSink provides { title -> TerminalTitles.set(viewId, title) },
+                    ) {
+                        workspaceTerminalContent(
+                            { actions.connectWorkspaceTerminal(workspaceId, terminalId).orFail(workspaceId) },
+                            modifier.fillMaxSize().testTag("terminal-$workspaceId-$terminalId"),
+                        )
+                    }
                 }
             }
         }

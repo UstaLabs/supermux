@@ -12,6 +12,7 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.prefs.InMemorySettingsStore
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.prefs.UiPrefs
 
 /**
@@ -56,6 +57,7 @@ fun HostTheme(
         // with a Bluetooth keyboard is still a thumb device. See ui/adaptive/InputMode.kt.
         LocalPointerAvailable provides pointerAvailable,
         LocalUiPrefs provides prefs,
+        LocalUiPrefsOrNull provides prefs,
     ) {
         SupermuxTheme(appearance = appearance, textScale = textScale, content = content)
     }

@@ -104,6 +104,40 @@ internal class TerminalSelectionController(
     }
 
     /**
+     * Select the whole ROW under [cell] — a triple click.
+     *
+     * A row, not a logical line: frames carry no soft-wrap marker, so a wrapped line is selected one
+     * screen row at a time. The copy still comes out right for what IS selected, because the engine
+     * assembles the text.
+     */
+    fun selectLine(cell: TerminalCellPosition) {
+        val frame = model.frame ?: return
+        val row = frame.viewportTop + cell.row
+        anchor = TerminalPoint(row, 0)
+        dragging = false
+        draggingHandle = null
+        send(TerminalPoint(row, 0), TerminalPoint(row, frame.size.columns - 1))
+    }
+
+    /** Select everything the terminal holds: every history row and the whole screen. */
+    fun selectAll() {
+        val frame = model.frame ?: return
+        val last = frame.historyRows + frame.size.rows - 1
+        anchor = TerminalPoint(0, 0)
+        dragging = false
+        draggingHandle = null
+        send(TerminalPoint(0, 0), TerminalPoint(last, frame.size.columns - 1))
+    }
+
+    /** Select [first]..[last] on absolute [row] — a search match the user wants to copy. */
+    fun selectSpan(row: Long, first: Int, last: Int) {
+        anchor = TerminalPoint(row, first)
+        dragging = false
+        draggingHandle = null
+        send(TerminalPoint(row, first), TerminalPoint(row, last))
+    }
+
+    /**
      * Start dragging one [handle] of the existing selection; the OTHER end becomes the anchor.
      *
      * Returns false when there is no selection to take a handle from.

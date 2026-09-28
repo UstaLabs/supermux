@@ -14,6 +14,7 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.ui.prefs.InMemorySettingsStore
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.editor.LocalHeavyweightShield
 import dev.supermux.ui.widgets.LocalModalHost
@@ -61,6 +62,7 @@ fun DesktopTheme(
         LocalModalHost provides ModalPresenceHost,
         LocalHeavyweightShield provides HeavyweightShieldHost,
         LocalUiPrefs provides prefs,
+        LocalUiPrefsOrNull provides prefs,
     ) {
         SupermuxTheme(
             appearance = appearance,
