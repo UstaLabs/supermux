@@ -26,6 +26,8 @@ import dev.supermux.ui.widgets.DropdownMenu
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import dev.supermux.net.FsEntry
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -125,8 +127,15 @@ private const val TypeAheadMs = 700L
  * value lets an unchanged row skip when a folder elsewhere updates.
  */
 @Immutable
-private data class TreeLine(val row: TreeRow, val isError: Boolean) {
-    val key: String get() = if (isError) "${row.path}#error" else row.path
+private data class TreeLine(val row: TreeRow, val isError: Boolean, val create: InlineEdit.Create? = null) {
+    /** A real folder/file row — not an error line, not a new entry's temporary row. */
+    val isRow: Boolean get() = !isError && create == null
+    val key: String get() = when {
+        // NUL can't occur in a path, so no real row can ever collide with the temporary one.
+        create != null -> "${create.parent}/\u0000new"
+        isError -> "${row.path}#error"
+        else -> row.path
+    }
 }
 
 /**
@@ -177,6 +186,13 @@ fun FileTreeView(
      * and calls `dismiss` after picking one. Null → no menu.
      */
     rowMenu: (@Composable ColumnScope.(row: TreeRow, dismiss: () -> Unit) -> Unit)? = null,
+    /**
+     * The in-place name field for [TreeViewState.inlineEdit] (see InlineEdit.kt): drawn in place of
+     * the renamed row's name, or in a temporary row among the new entry's siblings. `finish` ends
+     * the edit (clears it) and, when asked, gives the tree its keyboard focus back. Null → an
+     * [TreeViewState.inlineEdit] is ignored.
+     */
+    inlineField: (@Composable (edit: InlineEdit, modifier: Modifier, finish: (refocusTree: Boolean) -> Unit) -> Unit)? = null,
 ) {
     // ── subscriptions (owned here, never by rows) ────────────────────────────────────────────
     val wanted by remember(view) {
@@ -219,10 +235,21 @@ fun FileTreeView(
         derivedStateOf {
             val rows = flattenTree(view.rootPath, view.expanded) { states[it] ?: DirState.Unloaded }
             val out = ArrayList<TreeLine>(rows.size + 4)
-            for (r in rows) {
+            // A new entry's temporary row goes among its folder's children (flattenTree stays pure).
+            val create = view.inlineEdit as? InlineEdit.Create
+            val slot = create?.let { inlineCreateSlot(rows, view.rootPath, it) }
+            fun addCreate() {
+                val c = create ?: return
+                val at = slot ?: return
+                val entry = FsEntry(name = "", type = if (c.folder) "dir" else "file")
+                out += TreeLine(TreeRow(c.parent, at.depth, entry, if (c.folder) RowStatus.CLOSED else RowStatus.FILE), isError = false, create = c)
+            }
+            for ((i, r) in rows.withIndex()) {
+                if (slot?.index == i) addCreate()
                 out += TreeLine(r, isError = false)
                 if (r.status == RowStatus.ERROR) out += TreeLine(r, isError = true)
             }
+            if (slot?.index == rows.size) addCreate()
             out
         }
     }
@@ -244,7 +271,7 @@ fun FileTreeView(
     LaunchedEffect(activePath, revealActive, view) {
         val target = activePath ?: return@LaunchedEffect
         if (!revealActive || !isWithin(view.rootPath, target)) return@LaunchedEffect
-        val index = snapshotFlow { lines.indexOfFirst { !it.isError && it.row.path == target } }.first { it >= 0 }
+        val index = snapshotFlow { lines.indexOfFirst { it.isRow && it.row.path == target } }.first { it >= 0 }
         // The list must have LAID OUT the new rows first, or the scroll clamps to the old count.
         snapshotFlow { view.list.layoutInfo.totalItemsCount > index }.first { it }
         val visible = view.list.layoutInfo.visibleItemsInfo
@@ -282,12 +309,14 @@ fun FileTreeView(
     val rename by rememberUpdatedState(onRename)
     val delete by rememberUpdatedState(onDelete)
     val typeAhead = remember { TypeAhead() }
+    // The in-place name field has focus: its keys are its own (the list sees them first, in preview).
+    var inlineFocused by remember(view) { mutableStateOf(false) }
     val onKey: (KeyEvent) -> Boolean = { e ->
-        val key = if (e.type == KeyEventType.KeyDown) treeKeyOf(e, typeAhead) else null
+        val key = if (e.type == KeyEventType.KeyDown && !(inlineFocused && view.inlineEdit != null)) treeKeyOf(e, typeAhead) else null
         if (key == null) {
             false
         } else {
-            val rows = lines.filter { !it.isError }.map { it.row }
+            val rows = lines.filter { it.isRow }.map { it.row }
             val result = treeKeyAction(key, rows, view.selected, view.expanded)
             fun rowOf(path: String) = rows.first { it.path == path }
             when (result) {
@@ -295,7 +324,7 @@ fun FileTreeView(
                 TreeKeyResult.Stay -> true
                 is TreeKeyResult.Select -> {
                     view.selected = result.path
-                    scope.launch { scrollIntoView(view.list, lines.indexOfFirst { !it.isError && it.row.path == result.path }) }
+                    scope.launch { scrollIntoView(view.list, lines.indexOfFirst { it.isRow && it.row.path == result.path }) }
                     true
                 }
                 is TreeKeyResult.Expand -> { view.expand(result.path); true }
@@ -341,10 +370,43 @@ fun FileTreeView(
     LaunchedEffect(menuPath, view) {
         if (menuPath == null) return@LaunchedEffect
         snapshotFlow {
-            val index = lines.indexOfFirst { !it.isError && it.row.path == menuPath }
+            val index = lines.indexOfFirst { it.isRow && it.row.path == menuPath }
             index >= 0 && view.list.layoutInfo.visibleItemsInfo.any { it.index == index }
         }.first { onScreen -> !onScreen }
         if (menuOpen?.first == menuPath) menuOpen = null
+    }
+
+    // ── in-place edit ────────────────────────────────────────────────────────────────────────
+    val inlineSlot by rememberUpdatedState(inlineField)
+    val finishFor: (InlineEdit) -> (Boolean) -> Unit = remember(view) {
+        { edit ->
+            { refocus ->
+                if (view.inlineEdit == edit) view.inlineEdit = null
+                inlineFocused = false
+                if (refocus) takeFocus()
+            }
+        }
+    }
+    val trackFocus = remember(view) { Modifier.onFocusChanged { inlineFocused = it.hasFocus } }
+    // Show the edited row (or the new entry's row) once it exists.
+    val editing = view.inlineEdit
+    LaunchedEffect(editing, view) {
+        val edit = editing ?: return@LaunchedEffect
+        val index = snapshotFlow {
+            lines.indexOfFirst { l ->
+                when (edit) {
+                    is InlineEdit.Create -> l.create == edit
+                    is InlineEdit.Rename -> l.isRow && l.row.path == edit.path
+                }
+            }
+        }.first { it >= 0 }
+        snapshotFlow { view.list.layoutInfo.totalItemsCount > index }.first { it }
+        scrollIntoView(view.list, index)
+    }
+    // Moving the tree's root drops an edit it may no longer show.
+    LaunchedEffect(view) {
+        var first = true
+        snapshotFlow { view.rootPath }.collect { if (!first) view.inlineEdit = null; first = false }
     }
 
     Box(modifier.fillMaxSize()) {
@@ -364,9 +426,23 @@ fun FileTreeView(
         ) {
             items(lines, key = { it.key }, contentType = { if (it.isError) 1 else 0 }) { line ->
                 val row = line.row
-                if (line.isError) {
+                val create = line.create
+                if (create != null) {
+                    val slot = inlineSlot
+                    TreeNewEntryLine(row.depth, create.folder, compact) { m ->
+                        slot?.invoke(create, m.then(trackFocus), finishFor(create))
+                    }
+                } else if (line.isError) {
                     TreeErrorLine(row.depth, row.error.orEmpty())
                 } else {
+                    val edit = view.inlineEdit
+                    val slot = inlineSlot
+                    val nameField: (@Composable (Modifier) -> Unit)? =
+                        if (slot != null && edit is InlineEdit.Rename && edit.path == row.path) {
+                            { m -> slot(edit, m.then(trackFocus), finishFor(edit)) }
+                        } else {
+                            null
+                        }
                     TreeRowLine(
                         line = line,
                         selected = view.selected == row.path,
@@ -379,6 +455,7 @@ fun FileTreeView(
                         menuAt = menuOpen?.takeIf { it.first == row.path }?.second,
                         onMenuDismiss = dismissMenu,
                         menuContent = menuContent,
+                        nameField = nameField,
                     )
                 }
             }
@@ -506,6 +583,8 @@ private fun TreeRowLine(
     menuAt: DpOffset? = null,
     onMenuDismiss: () -> Unit = {},
     menuContent: @Composable ColumnScope.(TreeRow) -> Unit = {},
+    /** Non-null while this row is being renamed in place: drawn instead of the name. */
+    nameField: (@Composable (Modifier) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val row = line.row
@@ -551,12 +630,19 @@ private fun TreeRowLine(
                     },
                 )
                 .then(if (selected) Modifier.background(cs.secondaryContainer) else Modifier)
-                .combinedClickable(
-                    role = Role.Button,
-                    onClickLabel = clickLabel,
-                    onLongClickLabel = onLongClick?.let { "More actions" },
-                    onClick = { onClick(row) },
-                    onLongClick = onLongClick?.let { { it(row) } },
+                .then(
+                    // While renamed in place, clicks belong to the name field, not the row.
+                    if (nameField != null) {
+                        Modifier
+                    } else {
+                        Modifier.combinedClickable(
+                            role = Role.Button,
+                            onClickLabel = clickLabel,
+                            onLongClickLabel = onLongClick?.let { "More actions" },
+                            onClick = { onClick(row) },
+                            onLongClick = onLongClick?.let { { it(row) } },
+                        )
+                    },
                 )
                 .semantics { if (isDir) stateDescription = if (expanded) "Expanded" else "Collapsed" }
                 .pointerHoverIcon(PointerIcon.Hand)
@@ -597,16 +683,20 @@ private fun TreeRowLine(
             } else {
                 FileBadgeBox(fileBadge(entry.name, isDir = false), alpha)
             }
-            Text(
-                entry.name,
-                color = cs.onSurface.copy(alpha = alpha),
-                fontFamily = MonoFontFamily,
-                fontSize = 13.sp,
-                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).padding(vertical = 3.dp),
-            )
+            if (nameField != null) {
+                nameField(Modifier.weight(1f).padding(vertical = 1.dp))
+            } else {
+                Text(
+                    entry.name,
+                    color = cs.onSurface.copy(alpha = alpha),
+                    fontFamily = MonoFontFamily,
+                    fontSize = 13.sp,
+                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(vertical = 3.dp),
+                )
+            }
             if (row.status == RowStatus.LOOP) {
                 Text(
                     "↻",
@@ -630,6 +720,34 @@ private fun TreeRowLine(
                 DropdownMenu(expanded = true, onDismissRequest = onMenuDismiss) { menuContent(row) }
             }
         }
+    }
+}
+
+/**
+ * A new entry's temporary row: the same indent, chevron slot and icon as a real row at [depth],
+ * with the name [field] where the name would be.
+ */
+@Composable
+private fun TreeNewEntryLine(depth: Int, folder: Boolean, compact: Boolean, field: @Composable (Modifier) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val guide = cs.outlineVariant.copy(alpha = 0.6f)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .testTag("tree_new_entry")
+            .drawBehind { drawIndentGuides(depth, guide) }
+            .heightIn(min = if (compact) RowMinTouch else RowMinDense)
+            .padding(start = IndentStep * depth, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(RowGap),
+    ) {
+        Spacer(Modifier.width(IndentBase + ChevronSize))
+        if (folder) {
+            Icon(Icons.Filled.Folder, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        } else {
+            FileBadgeBox(fileBadge("", isDir = false), 1f)
+        }
+        field(Modifier.weight(1f).padding(vertical = 1.dp))
     }
 }
 

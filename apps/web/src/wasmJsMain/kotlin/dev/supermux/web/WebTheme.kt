@@ -45,6 +45,9 @@ fun WebTheme(
         uiPrefs = uiPrefs,
         inputMode = if (pointer) InputMode.Pointer else InputMode.Touch,
         pointerAvailable = pointer,
+        // A browser can't see a keyboard; a fine pointer (a desktop browser) is the proxy, so a
+        // phone PWA keeps the Files tree's dialogs.
+        hardwareKeyboard = pointer,
         widthClass = rememberWindowWidthClass(),
     ) {
         // The browser has no Toast either, so `Platform.notices` surfaces as the same Compose

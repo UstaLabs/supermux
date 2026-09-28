@@ -28,6 +28,7 @@ import dev.supermux.net.BrokerApi
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsException
 import dev.supermux.proto.ServerFrame
+import dev.supermux.ui.adaptive.LocalHardwareKeyboard
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.InMemorySettingsStore
@@ -99,10 +100,13 @@ class FileTreeMenuValidationTest {
 
 @OptIn(ExperimentalTestApi::class)
 class FileTreeMenuTest {
+    // The DIALOG path: a touch-only device (no hardware keyboard). The in-place path is
+    // FileTreeInlineEditTest.
     private fun host(content: @Composable () -> Unit): @Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
             LocalPlatform provides FakePlatform(),
+            LocalHardwareKeyboard provides false,
         ) {
             SupermuxTheme(appearance = AppearanceMode.DARK) { content() }
         }

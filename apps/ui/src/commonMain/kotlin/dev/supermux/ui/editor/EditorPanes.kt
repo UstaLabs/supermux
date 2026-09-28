@@ -86,6 +86,7 @@ import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.editor.engine.EditorScrollReader
 import dev.supermux.fs.FileSystemService
 import dev.supermux.ui.files.FileTreeDialog
+import dev.supermux.ui.adaptive.LocalHardwareKeyboard
 import dev.supermux.ui.files.FileTreeHeader
 import dev.supermux.ui.files.FileTreeWithActions
 import dev.supermux.ui.adaptive.LocalPointerAvailable
@@ -158,6 +159,7 @@ fun ExplorerPane(
     }
     val prefs = LocalUiPrefs.current
     val scope = rememberCoroutineScope()
+    val hardwareKeyboard = LocalHardwareKeyboard.current
     val revealActive by prefs.filesRevealActive.collectAsState(FILES_REVEAL_ACTIVE_DEFAULT)
 
     // The tag goes on an INNER node, never on the caller's modifier: two testTag calls on one
@@ -183,9 +185,10 @@ fun ExplorerPane(
                 fileSystem = fileSystem,
                 revealActive = revealActive,
                 onRevealActiveChange = { on -> scope.launch { prefs.putFilesRevealActive(on) } },
-                // Creates at the tree's root; the tree below draws the dialog (it reads view.dialog).
+                // Creates at the tree's root; the tree below draws the dialog or the in-place row
+                // (it reads view.dialog / view.inlineEdit).
                 onNewEntry = if (fileSystem == null) null else { folder ->
-                    view.dialog = FileTreeDialog.NewEntry(view.rootPath, folder)
+                    view.startAction(FileTreeDialog.NewEntry(view.rootPath, folder), inline = hardwareKeyboard)
                 },
             )
             HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)

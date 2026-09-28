@@ -107,3 +107,21 @@ fun rememberInputMode(): InputMode {
  */
 @Composable
 fun rememberPointerAvailable(): Boolean = rememberPointerProbe()
+
+/**
+ * Pure decision behind Android's `LocalHardwareKeyboard`: a desktop-class keyboard
+ * (`KEYBOARD_QWERTY`) that is attached and not hidden (`hardKeyboardHidden == NO` — a keyboard
+ * folded behind a tablet, or a slide-out closed, reports YES). A 12-key dialpad doesn't count.
+ */
+fun hardwareKeyboardFor(keyboard: Int, hardKeyboardHidden: Int): Boolean =
+    keyboard == Configuration.KEYBOARD_QWERTY && hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+
+/**
+ * Android's `LocalHardwareKeyboard` value, re-evaluated on every configuration change (attaching
+ * or detaching a keyboard emits one, with `keyboard|keyboardHidden` in the config-change mask).
+ */
+@Composable
+fun rememberHardwareKeyboard(): Boolean {
+    val configuration = LocalConfiguration.current
+    return remember(configuration) { hardwareKeyboardFor(configuration.keyboard, configuration.hardKeyboardHidden) }
+}

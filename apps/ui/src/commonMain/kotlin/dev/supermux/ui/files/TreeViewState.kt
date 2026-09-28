@@ -24,7 +24,39 @@ class TreeViewState(rootPath: String) {
      * than inside the tree so the pane header's ⋮ menu can open New file… / New folder… too.
      */
     var dialog by mutableStateOf<FileTreeDialog?>(null)
+    /**
+     * The in-place New file / New folder / Rename field this pane has open, or null — the
+     * hardware-keyboard counterpart of [dialog] (see [startAction]).
+     */
+    var inlineEdit by mutableStateOf<InlineEdit?>(null)
     val list = LazyListState()
+
+    /**
+     * Open [action]: in place when [inline] (a hardware keyboard is available — see
+     * `LocalHardwareKeyboard`) and it is a New entry or Rename, as its dialog otherwise. Delete
+     * always confirms in a dialog. A new entry's folder (and the folders above it) are expanded
+     * first so its temporary row has somewhere to go.
+     */
+    fun startAction(action: FileTreeDialog, inline: Boolean) {
+        when {
+            inline && action is FileTreeDialog.NewEntry -> {
+                dialog = null
+                val parent = action.parent
+                if (parent != rootPath && isWithin(rootPath, parent)) {
+                    expanded = expanded + ancestorsWithin(rootPath, parent).filter { it != rootPath } + parent
+                }
+                inlineEdit = InlineEdit.Create(parent, action.folder)
+            }
+            inline && action is FileTreeDialog.Rename -> {
+                dialog = null
+                inlineEdit = InlineEdit.Rename(action.path)
+            }
+            else -> {
+                inlineEdit = null
+                dialog = action
+            }
+        }
+    }
 
     // The last [RecentMax] files opened from this pane (workdir-relative, newest first): what the
     // "Go to file…" list shows before anything is typed.

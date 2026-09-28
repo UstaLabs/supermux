@@ -81,7 +81,7 @@ fun FileTreeHeader(
     onRevealActiveChange: ((Boolean) -> Unit)? = null,
     /**
      * "New file…" / "New folder…" in the pane menu, creating at the tree's root ([view] rootPath).
-     * The caller opens the dialog (ExplorerPane sets [TreeViewState.dialog]). Null → not offered.
+     * The caller opens it (ExplorerPane calls [TreeViewState.startAction]: in place or a dialog). Null → not offered.
      */
     onNewEntry: ((folder: Boolean) -> Unit)? = null,
 ) {

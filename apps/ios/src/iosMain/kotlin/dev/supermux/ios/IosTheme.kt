@@ -72,6 +72,9 @@ fun IosTheme(
         uiPrefs = uiPrefs,
         inputMode = inputMode,
         pointerAvailable = pointerAvailable,
+        // No in-place tree editing on iOS: the keyboard probe is unreliable (see above — every
+        // simulator reports the Mac's keyboard), so the Files tree keeps its dialogs.
+        hardwareKeyboard = false,
         widthClass = rememberWindowWidthClass(),
     ) {
         NoticeOverlay(platform.notices, content)
