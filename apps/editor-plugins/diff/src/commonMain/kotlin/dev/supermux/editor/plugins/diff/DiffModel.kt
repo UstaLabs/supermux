@@ -100,16 +100,17 @@ class DiffModel internal constructor(
     internal val spliced: Boolean = false,
 ) {
     /** The folded runs with no review lines to keep open (see [collapsedFor]). */
-    val collapsed: List<CollapsedRun> get() = collapsedFor(emptyList())
+    val collapsed: List<CollapsedRun> get() = collapsedFor(Pins())
 
-    private var lastPinned: List<Int>? = null
+    private var lastPinned: Pins? = null
     private var lastRuns: List<CollapsedRun> = emptyList()
 
     /**
-     * The folded runs, in order, given the review's [pinned] lines (a thread's, the composer's: kept
-     * open ± context when [DiffConfig.unfoldComments], else counted in [CollapsedRun.comments]).
+     * The folded runs, in order, given the review's [pinned] lines: a thread's is kept open ± context
+     * when [DiffConfig.unfoldComments] (never in a [DiffConfig.range] step: counted in
+     * [CollapsedRun.comments] instead); the open composer's always is, in a step too.
      */
-    fun collapsedFor(pinned: List<Int>): List<CollapsedRun> {
+    internal fun collapsedFor(pinned: Pins): List<CollapsedRun> {
         if (lastPinned == pinned) return lastRuns
         val r = computeCollapsed(pinned)
         lastPinned = pinned; lastRuns = r
@@ -128,17 +129,19 @@ class DiffModel internal constructor(
         baseLines: List<String> = this.baseLines,
     ) = DiffModel(base, baseLines, hunks, ready, pending, revealed, slice, config, lineCount, spliced)
 
-    private fun computeCollapsed(pinned: List<Int>): List<CollapsedRun> {
+    private fun computeCollapsed(pinned: Pins): List<CollapsedRun> {
         if (!config.collapseUnchanged || !ready) return emptyList()
         val ctx = config.context
         val range = config.range
         val out = ArrayList<CollapsedRun>()
-        val sortedPins = pinned.sorted()
+        val sortedPins = pinned.threads.sorted()
         fun count(f: Int, t: Int) = sortedPins.count { it in f until t }
         fun changes(f: Int, t: Int) = hunks.any { it.bFrom < t && maxOf(it.bTo, it.bFrom + 1) > f }
         // What stays open inside a gap: what the user revealed, and (unless a step) the review's lines ± context.
         val open = ArrayList<IntRange>(revealed)
         if (range == null && config.unfoldComments) for (p in sortedPins) open += maxOf(0, p - ctx)..(p + ctx)
+        // The composer (someone is writing there) never folds, in a walkthrough step too.
+        for (p in pinned.composer) open += maxOf(0, p - ctx)..(p + ctx)
         open.sortBy { it.first }
         fun gap(g0: Int, g1: Int, a0: Int, keepStart: Boolean, keepEnd: Boolean) {
             val h0 = if (!keepStart) g0 else g0 + ctx
@@ -172,7 +175,7 @@ class DiffModel internal constructor(
     }
 
     /** The collapsed run [id] names (a widget's), or null. */
-    internal fun collapsedRun(id: String, pinned: List<Int>): CollapsedRun? = collapsedFor(pinned).firstOrNull { it.id == id }
+    internal fun collapsedRun(id: String, pinned: Pins): CollapsedRun? = collapsedFor(pinned).firstOrNull { it.id == id }
 
     /** The hunk whose markers sit on B's [line] (its first line; a deletion's line below it, or the last line). */
     fun hunkAtLine(line: Int): DiffHunk? = hunks.firstOrNull { anchorLine(it) == line }
@@ -206,7 +209,10 @@ internal class Computed(val doc: Rope, val slice: Int, val result: DiffResult, v
 internal class SetBase(val base: String, val config: DiffConfig? = null)
 
 /** Expand the run [bFrom, bTo) as the widget saw it (with the review's [pinned] lines then). */
-internal class ExpandRun(val bFrom: Int, val bTo: Int, val dir: Expand, val pinned: List<Int> = emptyList())
+internal class ExpandRun(val bFrom: Int, val bTo: Int, val dir: Expand, val pinned: Pins = Pins())
+
+/** The review's lines the diff keeps open: the threads', and the open composer's. */
+internal data class Pins(val threads: List<Int> = emptyList(), val composer: List<Int> = emptyList())
 
 internal object DiffEffects {
     val setBase = StateEffectType<SetBase>("diff.setBase")

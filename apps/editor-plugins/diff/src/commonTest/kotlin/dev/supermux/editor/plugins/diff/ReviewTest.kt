@@ -82,7 +82,8 @@ class ReviewTest {
         Review.typed(v, "hello")
         assertEquals(ReviewComposer(20, "hello"), Review.composer(v.state))
         // The host hears the draft when the widget reports it (debounced there), not per keystroke.
-        Review.reportDraft(v, "hello")
+        Review.flushDraft(v)
+        Review.flushDraft(v) // heard once
         // An edit above moves the open composer with its line.
         v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 0, "new\n"))))
         assertTrue(Review.submit(v, "  hello  "))
@@ -158,5 +159,43 @@ class ReviewTest {
         assertFalse(v.gutter(Review.COLUMN, 3))
         assertNull(Review.composer(v.state))
         assertTrue(v.state.facet(gutterMarkersFacet).flatMap { it.toList() }.none { it.value.kind == "comment-add" })
+    }
+
+    // ------------------------------------------------------------------ the re-review: no lost typing --
+
+    @Test fun pagingFlushesThePendingDraftFirst() {
+        val log = ArrayList<String>()
+        val host = object : DiffHost {
+            override fun onComposerDraft(line: Int, text: String) { log += "draft $line $text" }
+            override fun onDiffPage(direction: DiffPage) { log += "page $direction" }
+        }
+        val v = view(host)
+        Review.openComposer(v, 20)
+        Review.typed(v, "half a senten") // inside the debounce: the host has not heard it
+        assertTrue(Diff.pageNext.run(v))
+        assertEquals(listOf("draft 20 half a senten", "page NEXT"), log)
+    }
+
+    @Test fun anotherComposerFlushesTheOpenOnesDraftFirst() {
+        val host = RecordingHost()
+        val v = view(host)
+        Review.openComposer(v, 20)
+        Review.typed(v, "first")
+        Review.openComposer(v, 30)
+        Review.typed(v, "second")
+        Review.setComposer(v, ReviewComposer(40, "kept for 40"))
+        assertEquals(listOf("open 20", "draft 20 first", "open 30", "draft 30 second"), host.log)
+        assertEquals(ReviewComposer(40, "kept for 40"), Review.composer(v.state))
+        Review.flushDraft(v)
+        assertEquals(4, host.log.size, "the host's own draft is not sent back to it")
+    }
+
+    @Test fun aComposerLineStaysOpenInAStepAndIsNotCountedAsAThread() {
+        val v = view(diff = DiffConfig(range = 60..62, context = 3))
+        Review.setThreads(v, listOf(t1.copy(line = 80)))
+        Review.setComposer(v, ReviewComposer(90, "a draft", focus = false))
+        val runs = Diff.collapsed(v.state)
+        assertTrue(runs.none { 90 in it.bFrom until it.bTo }, "the composer's line is shown: $runs")
+        assertEquals(1, runs.sumOf { it.comments }, "only the thread is counted")
     }
 }

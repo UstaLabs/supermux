@@ -145,11 +145,11 @@ object Diff {
     fun collapsed(state: EditorState): List<CollapsedRun> = sideModel(state)?.collapsedFor(pinnedOf(state)).orEmpty()
 
     /** Working-copy lines the review keeps open (threads, the composer): the review plugin provides them. */
-    internal val pinnedLinesFacet: Facet<List<Int>, List<Int>> = Facet.define("diff.pinned") { it.flatten() }
+    internal val pinnedLinesFacet: Facet<Pins, Pins> = Facet.define("diff.pinned") { l -> Pins(l.flatMap { it.threads }, l.flatMap { it.composer }) }
 
     /** The pinned lines of this side's view (B: the review's; A: the ones its pair pushed). */
-    internal fun pinnedOf(state: EditorState): List<Int> =
-        if (model(state) != null) state.facet(pinnedLinesFacet) else state.fieldOrNull(baseField)?.pinned.orEmpty()
+    internal fun pinnedOf(state: EditorState): Pins =
+        if (model(state) != null) state.facet(pinnedLinesFacet) else state.fieldOrNull(baseField)?.pinned ?: Pins()
 
     // ---------------------------------------------------------------- effects --
 
@@ -243,6 +243,8 @@ object Diff {
 
     internal fun page(t: CommandTarget, dir: DiffPage): Boolean {
         val host = t.state.facet(diffHostFacet) ?: return false
+        // The composer's last typing (still in its debounce) reaches the host before the step goes.
+        Review.flushDraft(t)
         host.onDiffPage(dir)
         return true
     }
@@ -269,7 +271,7 @@ object Diff {
     internal val sideFacet: Facet<Side, Side> = Facet.first("diff.side", Side.B)
 
     /** What the pair pushes to A after every B transaction: B's model and the review's lines. */
-    internal class Pushed(val model: DiffModel, val pinned: List<Int>)
+    internal class Pushed(val model: DiffModel, val pinned: Pins)
 
     /** A's copy of the working side's model (the pair pushes it). */
     internal val baseField: StateField<Pushed?> = StateField(
@@ -377,7 +379,7 @@ object Diff {
     }
 
     /** The folded unchanged runs (whole document: they change its height) and, inline, the deleted lines' widgets. */
-    internal fun blockDecorations(doc: Rope, m: DiffModel, side: Side, inline: Boolean, pinned: List<Int>): RangeSet<Decoration> {
+    internal fun blockDecorations(doc: Rope, m: DiffModel, side: Side, inline: Boolean, pinned: Pins): RangeSet<Decoration> {
         if (!m.ready) return RangeSet.empty()
         val out = ArrayList<Ranged<Decoration>>()
         for (r in m.collapsedFor(pinned)) {

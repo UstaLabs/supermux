@@ -248,4 +248,16 @@ class SyntaxHostTest {
             scope.cancel(); uiThread.shutdown()
         }
     }
+
+    @Test fun withNoUiDispatcherTheHostFailsWhenCreatedNotOnTheWorker() {
+        val unconfined = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val e = kotlin.runCatching { resolveUiDispatcher(null, unconfined, main = { null }) }.exceptionOrNull()
+            assertTrue(e is IllegalStateException && "uiDispatcher" in e.message.orEmpty(), "$e")
+            // A real dispatcher in the scope, or an explicit one, is taken; Unconfined never is.
+            val serial = Dispatchers.Default.limitedParallelism(1)
+            assertTrue(resolveUiDispatcher(null, CoroutineScope(serial), main = { null }) === serial)
+            assertTrue(resolveUiDispatcher(serial, unconfined, main = { null }) === serial)
+        } finally { unconfined.cancel() }
+    }
 }

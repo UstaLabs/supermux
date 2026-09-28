@@ -63,7 +63,14 @@ object Review {
     class Anchored internal constructor(val thread: ReviewThread, internal val pos: Int, internal val hostLine: Int)
 
     /** The open composer: its line's start [pos], its [draft] as last typed, and [gen] (a new composer, a new widget). */
-    class Composer internal constructor(internal val pos: Int, val draft: String, internal val gen: Int, internal val focus: Boolean = true)
+    class Composer internal constructor(
+        internal val pos: Int,
+        val draft: String,
+        internal val gen: Int,
+        internal val focus: Boolean = true,
+        /** The draft the host last heard (from it, or from [DiffHost.onComposerDraft]). */
+        internal val reported: String = draft,
+    )
 
     /** The review's state: the threads, the composer, the resolved threads the user expanded (per view). */
     class State internal constructor(val threads: List<Anchored>, val composer: Composer?, val expanded: Set<String>, internal val config: ReviewConfig)
@@ -73,6 +80,7 @@ object Review {
     internal val open = StateEffectType<Int>("review.open")
     internal val close = StateEffectType<Unit>("review.close")
     internal val draft = StateEffectType<String>("review.draft")
+    internal val reported = StateEffectType<String>("review.reported")
     internal val toggle = StateEffectType<String>("review.toggle")
     private var gens = 0
 
@@ -86,7 +94,7 @@ object Review {
             gutterMarkersFacet.compute(FacetDep.field(f)) { st -> st.field(f)?.let { markers(st, it) } ?: RangeSet.empty() },
             // The diff keeps these lines open (a thread or the composer never hides in a folded run).
             Diff.pinnedLinesFacet.compute(FacetDep.field(f)) { st ->
-                st.field(f)?.let { r -> r.threads.map { st.doc.lineIndexAt(it.pos) } + listOfNotNull(r.composer?.let { st.doc.lineIndexAt(it.pos) }) }.orEmpty()
+                st.field(f)?.let { r -> Pins(r.threads.map { st.doc.lineIndexAt(it.pos) }, listOfNotNull(r.composer?.let { st.doc.lineIndexAt(it.pos) })) } ?: Pins()
             },
             gutterClickFacet.of(GutterClickHandler { t, column, line, _ ->
                 if (column != COLUMN) return@GutterClickHandler false
@@ -123,8 +131,12 @@ object Review {
      * what the user is typing (its draft is taken only while the open one is still empty); on another
      * line it opens there with its draft.
      */
-    fun setComposer(target: CommandTarget, composer: ReviewComposer?) =
+    fun setComposer(target: CommandTarget, composer: ReviewComposer?) {
+        // Replaced by one on another line: the old one's last typing reaches the host first.
+        val open = state(target.state)?.composer
+        if (open != null && composer != null && target.state.doc.lineIndexAt(open.pos) != composer.line) flushDraft(target)
         target.dispatch(TransactionSpec(effects = listOf(setComposer.of(composer))))
+    }
 
     /** Open the composer on [line] (a gutter tap, [comment]); the host hears [DiffHost.onComposerOpen]. */
     fun openComposer(target: CommandTarget, line: Int): Boolean {
@@ -133,6 +145,8 @@ object Review {
         val doc = target.state.doc
         val l = line.coerceIn(0, doc.lineCount - 1)
         if (st.composer != null && doc.lineIndexAt(st.composer.pos) == l) return true
+        // Another line: what was typed in the open composer reaches the host before it is replaced.
+        flushDraft(target)
         // The line after the composer scrolled into view: the composer (between) is on screen too.
         val after = if (l + 1 < doc.lineCount) doc.lineStart(l + 1) else doc.length
         target.dispatch(TransactionSpec(effects = listOf(open.of(l), EditorEffects.scrollTo.of(after))))
@@ -145,20 +159,28 @@ object Review {
 
     // ---------------------------------------------------------------- what the widgets do --
 
-    /** The composer's text changed: kept in the state at once (the host hears it debounced: [reportDraft]). */
+    /** The composer's text changed: kept in the state at once (the host hears it debounced: [flushDraft]). */
     internal fun typed(target: CommandTarget, text: String) {
         val c = state(target.state)?.composer ?: return
         if (c.draft == text) return
         target.dispatch(TransactionSpec(effects = listOf(draft.of(text))))
     }
 
-    /** Tell the host the composer's draft [text] (the widget calls it ~300 ms after the typing stops, and before a close or submit). */
-    internal fun reportDraft(target: CommandTarget, text: String) {
+    /**
+     * Tell the host the open composer's draft if it has not heard it yet: the widget calls this
+     * ~300 ms after the typing stops and when it is disposed; paging ([Diff.page]), opening another
+     * composer, a close and a submit call it first. What the host heard is kept in the state, so a
+     * recreated widget never swallows (or repeats) it.
+     */
+    fun flushDraft(target: CommandTarget) {
         val c = state(target.state)?.composer ?: return
-        target.state.facet(diffHostFacet)?.onComposerDraft(target.state.doc.lineIndexAt(c.pos), text)
+        if (c.draft == c.reported) return
+        target.dispatch(TransactionSpec(effects = listOf(reported.of(c.draft))))
+        target.state.facet(diffHostFacet)?.onComposerDraft(target.state.doc.lineIndexAt(c.pos), c.draft)
     }
 
     internal fun submit(target: CommandTarget, text: String): Boolean {
+        flushDraft(target)
         val c = state(target.state)?.composer ?: return false
         val body = text.trim()
         if (body.isEmpty()) return false
@@ -170,6 +192,7 @@ object Review {
 
     internal fun cancel(target: CommandTarget) {
         if (state(target.state)?.composer == null) return
+        flushDraft(target)
         target.dispatch(TransactionSpec(effects = listOf(close.of(Unit))))
         target.state.facet(diffHostFacet)?.onComposerClosed()
     }
@@ -203,7 +226,7 @@ object Review {
             // line above), snapped back to a line start.
             fun map(pos: Int) = doc.lineStart(doc.lineIndexAt(tr.changes.mapPos(pos, 1).coerceIn(0, doc.length)))
             threads = threads.map { a -> Anchored(a.thread, map(a.pos), a.hostLine) }
-            composer = composer?.let { Composer(map(it.pos), it.draft, it.gen, it.focus) }
+            composer = composer?.let { Composer(map(it.pos), it.draft, it.gen, it.focus, it.reported) }
         }
         for (e in tr.effects) {
             e.valueIf(setThreads)?.let { list ->
@@ -217,15 +240,16 @@ object Review {
             e.valueIf(setComposer)?.let { c ->
                 composer = when {
                     composer != null && doc.lineIndexAt(composer!!.pos) == c.line ->
-                        if (composer!!.draft.isEmpty() && c.draft.isNotEmpty()) Composer(composer!!.pos, c.draft, ++gens, composer!!.focus || c.focus) else composer
+                        if (composer!!.draft.isEmpty() && c.draft.isNotEmpty()) Composer(composer!!.pos, c.draft, ++gens, composer!!.focus || c.focus, c.draft) else composer
                     else -> Composer(lineStartAt(doc, c.line), c.draft, ++gens, c.focus)
                 }
             }
             // (valueIf is null for a null value too: the host closing the composer.)
             if (e.isOf(setComposer) && e.value == null) composer = null
             e.valueIf(open)?.let { l -> composer = Composer(lineStartAt(doc, l), "", ++gens) }
+            e.valueIf(reported)?.let { d -> composer = composer?.let { Composer(it.pos, it.draft, it.gen, it.focus, d) } }
             if (e.isOf(close)) composer = null
-            e.valueIf(draft)?.let { d -> composer = composer?.let { Composer(it.pos, d, it.gen, it.focus) } }
+            e.valueIf(draft)?.let { d -> composer = composer?.let { Composer(it.pos, d, it.gen, it.focus, it.reported) } }
             e.valueIf(toggle)?.let { id -> expanded = if (id in expanded) expanded - id else expanded + id }
         }
         return if (threads === this.threads && composer === this.composer && expanded === this.expanded) this else State(threads, composer, expanded, config)

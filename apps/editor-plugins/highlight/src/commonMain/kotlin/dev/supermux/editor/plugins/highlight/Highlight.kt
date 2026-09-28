@@ -49,6 +49,20 @@ fun highlight(language: String?): Extension = extensionOf(
 )
 
 /**
+ * Where a [SyntaxHost] dispatches: [explicit], else [scope]'s dispatcher unless Unconfined (or
+ * missing), else [main] (`Dispatchers.Main` when the platform has one); none: an
+ * [IllegalStateException] right away.
+ */
+internal fun resolveUiDispatcher(
+    explicit: kotlin.coroutines.CoroutineContext?,
+    scope: CoroutineScope,
+    main: () -> kotlin.coroutines.CoroutineContext? = { runCatching { kotlinx.coroutines.Dispatchers.Main.also { it.isDispatchNeeded(kotlin.coroutines.EmptyCoroutineContext) } }.getOrNull() },
+): kotlin.coroutines.CoroutineContext =
+    explicit ?: scope.coroutineContext[kotlin.coroutines.ContinuationInterceptor]?.takeIf { it !== kotlinx.coroutines.Dispatchers.Unconfined }
+        ?: main()
+        ?: throw IllegalStateException("SyntaxHost: the scope's dispatcher is Unconfined (or none) and there is no Main dispatcher: pass uiDispatcher (the UI thread's) or a hop")
+
+/**
  * Owns the [SyntaxWorker] of ONE [EditorView] (spec §5, the host's side of the syntax layer):
  *
  * - posts every transaction's state to the worker (a view listener), and a replaced state too
@@ -63,7 +77,14 @@ fun highlight(language: String?): Extension = extensionOf(
  *
  * [scope] is the UI's; the worker runs on its own single thread inside it. The results are
  * dispatched on the UI thread: [hop], else [uiDispatcher], else [scope]'s dispatcher (never an
- * Unconfined one: see `uiContext`), else `Dispatchers.Main`. Compose hosts use [rememberSyntaxHost].
+ * Unconfined one), else `Dispatchers.Main`; with none of them the constructor throws. Compose hosts
+ * use [rememberSyntaxHost].
+ *
+ * ⚠️ **Headless scenes.** `ImageComposeScene` (and any composition without a UI dispatcher) runs its
+ * `rememberCoroutineScope()` on Unconfined, and a JVM test may have no `Dispatchers.Main`, or a Swing
+ * one that is NOT the thread rendering the scene. Give such a scene its own queued UI dispatcher
+ * (`ImageComposeScene(coroutineContext = queue)`, drained between frames) or pass [uiDispatcher] /
+ * [hop] explicitly.
  */
 class SyntaxHost(
     val view: EditorView,
@@ -82,12 +103,13 @@ class SyntaxHost(
      * it is Unconfined (a coroutine resumed from the worker would then dispatch ON the worker thread,
      * and an off-thread write to the view's Compose state can be lost), else `Dispatchers.Main`.
      */
-    private val uiContext: kotlin.coroutines.CoroutineContext by lazy {
-        uiDispatcher ?: scope.coroutineContext[kotlin.coroutines.ContinuationInterceptor]?.takeIf { it !== kotlinx.coroutines.Dispatchers.Unconfined }
-            ?: runCatching { kotlinx.coroutines.Dispatchers.Main.also { it.isDispatchNeeded(kotlin.coroutines.EmptyCoroutineContext) } }.getOrNull()
-            ?: error("SyntaxHost: the scope's dispatcher is Unconfined and there is no Main dispatcher: pass uiDispatcher (the UI thread's)")
+    private val hop: (() -> Unit) -> Unit = hop ?: run {
+        // Resolved HERE, in the constructor: a host with no UI dispatcher fails when it creates the
+        // SyntaxHost (on its own thread, with a clear message), never later on the worker's thread.
+        val ui = resolveUiDispatcher(uiDispatcher, scope)
+        val hopper: (() -> Unit) -> Unit = { run -> scope.launch(ui) { run() } }
+        hopper
     }
-    private val hop: (() -> Unit) -> Unit = hop ?: { run -> scope.launch(uiContext) { run() } }
 
     val worker: SyntaxWorker = SyntaxWorker(backend, registry, scope, dispatch = { spec -> this.hop { if (!closed) view.dispatch(spec) } }, limits = limits)
 

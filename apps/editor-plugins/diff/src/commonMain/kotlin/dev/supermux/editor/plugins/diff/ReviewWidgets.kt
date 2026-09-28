@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
@@ -188,14 +189,15 @@ private fun WidgetScope.ComposerBlock(key: WidgetKey) {
         withFrameNanos {}
         runCatching { focus.requestFocus() }
     }
-    // The draft is the state's at once; the host hears it debounced (300 ms), and before a close or submit.
-    val reported = remember(key.id) { arrayOf(c.draft) }
-    fun flush() { val t = text.text.toString(); if (t != reported[0]) { reported[0] = t; Review.reportDraft(editor, t) } }
+    // The draft is the state's at once; the host hears it debounced (300 ms), when this widget goes
+    // (scrolled far away, the editor disposed), and before a page, a close or a submit.
     LaunchedEffect(text) {
-        snapshotFlow { text.text.toString() }.collectLatest { Review.typed(editor, it); delay(DRAFT_DEBOUNCE_MS); flush() }
+        snapshotFlow { text.text.toString() }.collectLatest { Review.typed(editor, it); delay(DRAFT_DEBOUNCE_MS); Review.flushDraft(editor) }
     }
-    fun submit() { flush(); if (Review.submit(editor, text.text.toString())) focusEditor() }
-    fun cancel() { flush(); Review.cancel(editor); focusEditor() }
+    val target = editor
+    DisposableEffect(key.id) { onDispose { Review.flushDraft(target) } }
+    fun submit() { if (Review.submit(editor, text.text.toString())) focusEditor() }
+    fun cancel() { Review.cancel(editor); focusEditor() }
     Card(p, "review-composer-card") {
         ProseField(p, text, "Leave a comment…", ReviewTags.COMPOSER_FIELD, 3, Modifier.fillMaxWidth().heightIn(min = 48.dp), onSend = ::submit, onEscape = ::cancel, fieldModifier = Modifier.focusRequester(focus))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {

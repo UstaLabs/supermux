@@ -22,6 +22,8 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import dev.supermux.editor.compose.EditorView
 import dev.supermux.editor.compose.isApplePlatform
 import dev.supermux.editor.core.EditorState
@@ -184,5 +186,34 @@ class ReviewUiTest {
         onNodeWithTag("host").performMouseInput { scroll(10f) }
         waitForIdle()
         assertEquals(2, pages.size)
+    }
+
+    @Test fun aDisposedComposerFlushesItsDraftAndARecreatedOneStillReports() = runComposeUiTest {
+        val host = RecordingHost()
+        val view = EditorView(EditorState.create(working, extensions = extensionOf(inlineDiff(base, DiffConfig(collapseUnchanged = false)), review(host))))
+        var shown by androidx.compose.runtime.mutableStateOf(true)
+        setContent { Box(Modifier.size(800.dp, 900.dp)) { if (shown) InlineDiffEditor(view, Modifier.fillMaxSize()) } }
+        waitForIdle()
+        Review.openComposer(view, 10)
+        waitForIdle()
+        mainClock.autoAdvance = false
+        onNodeWithTag(ReviewTags.COMPOSER_FIELD).performTextInput("abc")
+        mainClock.advanceTimeBy(50)
+        // The editor goes (another pane) inside the debounce: the typing is not lost.
+        shown = false
+        mainClock.advanceTimeBy(50)
+        assertEquals(listOf("open 10", "draft 10 abc"), host.log)
+        // Back: the recreated widget starts from the state's draft, and new typing is still reported.
+        shown = true
+        mainClock.advanceTimeBy(50)
+        mainClock.autoAdvance = true
+        waitForIdle()
+        assertEquals("abc", onNodeWithTag(ReviewTags.COMPOSER_FIELD).fetchSemanticsNode().config[SemanticsProperties.EditableText].text)
+        onNodeWithTag(ReviewTags.COMPOSER_FIELD).performTextInput("d")
+        waitForIdle()
+        mainClock.advanceTimeBy(DRAFT_DEBOUNCE_MS + 100)
+        waitForIdle()
+        assertEquals("abcd", Review.composer(view.state)?.draft)
+        assertEquals(listOf("open 10", "draft 10 abc", "draft 10 abcd"), host.log)
     }
 }
