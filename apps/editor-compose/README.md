@@ -747,6 +747,24 @@ The Mac JVM, same harness as M3c: keystroke p95 5.6 ms (10k lines, syntax on), 1
 scroll 7.0 ms, 10 MB open 32 ms, the demo 10.5 ms, two linked editors 10.3 ms: no regression from
 the plugins (a first run caught selection matches searching a whole 1 MB line: 192 ms, now bounded).
 
+## The device pass (M4c)
+
+The sample adds **"LSP demo (fake server)"** (the in-process toy language server of
+`:editor-plugins:lsp-fake`) and connects **HostStore.kt** to it too; on the desktop, **"real LSP:
+clangd"** runs Xcode's clangd over stdio (listed only where clangd exists). While an LSP file is open
+the toolbar has chips for phones (no F-keys): complete, hover, signature, next problem, problems,
+definition, references, rename, format; the status line shows the client's state, its message counts
+and the number of problems. Builds of 2026-09-28 ~09:00 from `mac:~/work/native-editor-m3b`:
+
+| Device | Build | State |
+|---|---|---|
+| iPhone 15 Pro | Release (`EDITOR_ROOT=…/native-editor-m3b/apps CONFIG=Release iosApp/device.sh`) | installed; launch refused: **locked** |
+| iPad Air M2 | Release, same build (`SKIP_BUILD=1`) | installed and **launched** |
+| Galaxy Z Fold 7 | `assembleRelease` | installed, started behind the keyguard (**locked**) |
+| Mac desktop window, web page | from the same clone | restarted; `webInputTest` and `webColdStartTest` (median hold 177 ms, ceiling 300) pass |
+
+⚠️ `iosApp/device.sh` builds `~/work/native-editor/apps` unless `EDITOR_ROOT` says otherwise.
+
 ## Tests
 
 `./gradlew :editor-compose:jvmTest` (on the Mac: see `scripts/editor/mac-sync.sh`): the pure logic
@@ -767,7 +785,8 @@ iOS simulator 96 (commonTest: `Folds`, `LineMap`, `AtomicFoldsTest`, `Accessible
 ## Not here yet
 
 M4a built the first plugins on this surface (`editor-plugins/`: history, basics+, highlight, fold,
-view settings). Still to come: M4b search/replace (its panel and its matches), M4c LSP, M4d diff and
-review threads. An accessory bar for soft keyboards (Tab / Shift-Tab, arrows, undo). A gap widget
+view settings), M4b search/replace, M4c the tooltip layer, view plugins, autocompletion, lint and the
+LSP client. Still to come: M4d diff and review threads, M5's host adapter from `LspBridge` to
+`LspTransport` and cross-file navigation. An accessory bar for soft keyboards (Tab / Shift-Tab, arrows, undo). A gap widget
 draws plain background (a hatched diff gap is the diff plugin's registered content, if it wants
 one). Lines over 10,000 units show no inline widgets or replaces.

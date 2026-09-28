@@ -219,8 +219,20 @@ class FakeLspServer(
         Decl(m.groupValues[1], m.groupValues[2], m.groups[2]!!.range.first, m.groups[4]?.value?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() })
     }.toList()
 
-    private fun occurrences(text: String, name: String): List<IntRange> =
-        Regex("(?<![\\p{L}\\p{N}_])" + Regex.escape(name) + "(?![\\p{L}\\p{N}_])").findAll(text).map { it.range }.toList()
+    /**
+     * Whole-word occurrences of [name], scanned by hand: a look-behind regex is quadratic in
+     * Kotlin/Wasm's engine (a 100 KB file hung the browser page).
+     */
+    private fun occurrences(text: String, name: String): List<IntRange> {
+        val out = ArrayList<IntRange>()
+        var i = text.indexOf(name)
+        while (i >= 0) {
+            val end = i + name.length
+            if ((i == 0 || !isIdent(text[i - 1])) && (end == text.length || !isIdent(text[end]))) out += i until end
+            i = text.indexOf(name, i + 1)
+        }
+        return out
+    }
 
     private fun lineOf(text: String, at: Int) = text.substring(0, at).count { it == '\n' }
 

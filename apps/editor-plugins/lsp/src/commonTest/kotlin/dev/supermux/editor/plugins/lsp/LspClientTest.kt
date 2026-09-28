@@ -366,6 +366,17 @@ class LspClientTest {
         assertEquals(s.view.text, s.server.documents[uri], "and synced after")
     }
 
+    @Test fun aHundredKilobyteDocumentOpensAndGetsItsDiagnosticsFast() = runTest {
+        val big = (0 until 3000).joinToString("\n") { i -> if (i % 500 == 0) "// TODO item $i" else "val v$i = add($i, ${i + 1}) // some plain text" } + "\n"
+        val t0 = kotlin.time.TimeSource.Monotonic.markNow()
+        val s = setup(doc = big)
+        val ms = t0.elapsedNow().inWholeMilliseconds
+        println("LSP-BIG-DOC ${big.length / 1024} KB: open + diagnostics ${ms} ms")
+        assertEquals(6, Lint.diagnostics(s.view.state).size)
+        assertEquals(big, s.server.documents[uri])
+        assertTrue(ms < 5_000, "a 100 KB document took $ms ms")
+    }
+
     @Test fun closingSendsDidCloseShutdownAndExit() = runTest {
         val s = setup()
         s.client.close()

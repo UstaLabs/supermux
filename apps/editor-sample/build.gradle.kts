@@ -55,6 +55,11 @@ kotlin {
             implementation(project(":editor-plugins:fold"))
             implementation(project(":editor-plugins:view"))
             implementation(project(":editor-plugins:search"))
+            implementation(project(":editor-plugins:autocomplete"))
+            implementation(project(":editor-plugins:lint"))
+            implementation(project(":editor-plugins:lsp"))
+            // The sample's documents talk to the in-process toy language server (M4c; M5's host uses the broker).
+            implementation(project(":editor-plugins:lsp-fake"))
             implementation(compose.runtime)
             implementation(compose.foundation)
             implementation(compose.ui)

@@ -10,3 +10,7 @@ actual fun insideKeyEvent(): Boolean = js("window.__inKey === true")
 actual fun lastInputKind(): String = js("String(window.__keyKind || '')")
 
 actual val platformFloatingCursorDrag: ((dx: Double, dy: Double) -> Boolean)? = null
+
+actual val platformRealLspName: String? = null
+
+actual fun platformRealLsp(scope: kotlinx.coroutines.CoroutineScope, file: String, text: String): Triple<dev.supermux.editor.plugins.lsp.LspTransport, String, () -> Unit>? = null

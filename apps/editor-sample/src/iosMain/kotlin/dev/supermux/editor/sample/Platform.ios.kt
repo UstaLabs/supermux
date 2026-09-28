@@ -12,3 +12,7 @@ actual fun insideKeyEvent(): Boolean = false
 actual fun lastInputKind(): String = ""
 
 actual val platformFloatingCursorDrag: ((dx: Double, dy: Double) -> Boolean)? = { dx, dy -> dev.supermux.editor.compose.debugDriveFloatingCursor(dx, dy) }
+
+actual val platformRealLspName: String? = null
+
+actual fun platformRealLsp(scope: kotlinx.coroutines.CoroutineScope, file: String, text: String): Triple<dev.supermux.editor.plugins.lsp.LspTransport, String, () -> Unit>? = null

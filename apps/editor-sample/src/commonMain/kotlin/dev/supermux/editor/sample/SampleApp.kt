@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -139,16 +140,30 @@ fun SampleApp(
     }
     // What the M3c demo's gutter clicks said (shown in the status line).
     var demoNote by remember { mutableStateOf("") }
+    // M4c: the LSP demo and the Kotlin file talk to the in-process fake server; the desktop's
+    // "real LSP" file to clangd over stdio (when the Mac has it).
+    val lsp = loaded?.let { (f, text) ->
+        remember(f, text, backend) {
+            when (f) {
+                SampleFile.LSP_DEMO -> SampleLsp.fake(scope, "file:///sample/demo.toy")
+                SampleFile.KOTLIN -> SampleLsp.fake(scope, "file:///sample/HostStore.kt")
+                SampleFile.REAL_LSP -> SampleLsp.real(scope, "main.c", text, "c")
+                else -> null
+            }
+        }
+    }
+    if (lsp != null) DisposableEffect(lsp) { onDispose { lsp.close(scope) } }
     val session = loaded?.let { (f, text) ->
         remember(f, text, backend) {
             val extra = when (f) {
                 SampleFile.DEMO -> M3cDemo.extension { demoNote = it }
                 SampleFile.SIDE_BY_SIDE -> sideBySideExtension
-                else -> dev.supermux.editor.core.extensionOf()
+                else -> lsp?.extension ?: dev.supermux.editor.core.extensionOf()
             }
             SampleSession(text, f.language, backend!!, registry, scope, extra, settingsNow(), deleteFoldWhole) { run -> scope.launch { run() } }
         }
     }
+    val lspWidgets = remember(lsp) { lsp?.let { l -> dev.supermux.editor.compose.WidgetRegistry().also { l.registerWidgets(it) } } }
     // The side-by-side demo's working copy (B): the same file with a few edits, linked to A.
     val sessionB = loaded?.takeIf { it.first == SampleFile.SIDE_BY_SIDE }?.let { (f, text) ->
         remember(f, text, backend) { SampleSession(fakeWorkingCopy(text), f.language, backend!!, registry, scope, sideBySideExtension, settingsNow(), deleteFoldWhole) { run -> scope.launch { run() } } }
@@ -229,7 +244,8 @@ fun SampleApp(
                 val shown = M3cDemo.panelShown(session.view.state)
                 Chip(if (shown) "demo panel: on" else "demo panel: off", shown, ink) { M3cDemo.setPanel(session.view, !shown) }
             }
-            for (f in SampleFile.entries) Chip(f.label, f == file, ink) { file = f }
+            if (lsp != null && session != null) LspChips(session.view, lsp, ink)
+            for (f in SampleFile.entries) if (f != SampleFile.REAL_LSP || platformRealLspName != null) Chip(f.label, f == file, ink) { file = f }
         }
         // A zoom (keys, pinch) is kept the way :ui will keep it: a whole px, through the host's callback.
         val zoomReport = remember(session) { session?.let { s -> ViewSettings.fontSizeReporter(s.view) { px -> fontSize = px.toFloat() } } ?: { _: Float -> } }
@@ -239,7 +255,7 @@ fun SampleApp(
                 session == null -> Message("loading…", ink)
                 sessionB != null -> SideBySidePane(session, sessionB, theme, stats, onFontSize = { fontSize = it })
                 file == SampleFile.DEMO -> SampleEditorPane(session, theme, wrap, stats, readOnly = readOnly, onFontSize = zoomReport, widgets = M3cDemo.rememberWidgets(ink, chrome))
-                else -> SampleEditorPane(session, theme, wrap, stats, readOnly = readOnly, onFontSize = zoomReport)
+                else -> SampleEditorPane(session, theme, wrap, stats, readOnly = readOnly, onFontSize = zoomReport, widgets = lspWidgets)
             }
             val status = session?.let { s ->
                 val st = s.view.state
@@ -247,6 +263,7 @@ fun SampleApp(
                 val sp = dev.supermux.editor.compose.EditorDiagnostics.smartPunctuation
                 "${st.doc.lineCount} lines · $syntax · undo ${History.undoDepth(st)} · folds ${Fold.folded(st).size} · ${stats.summary}" + (if (sp == "n/a") "" else " · smart punctuation: $sp") +
                     (if (file == SampleFile.DEMO && demoNote.isNotEmpty()) " · $demoNote" else "") +
+                    (lsp?.let { l -> " · lsp ${l.client.state.collectAsStateValue().name.lowercase()} ${l.client.serverName ?: ""} ↑${l.client.messagesSent} ↓${l.client.messagesReceived} · problems ${dev.supermux.editor.plugins.lint.Lint.diagnostics(st).size}" + (if (l.lastMessage.isNotEmpty()) " · ${l.lastMessage.take(60)}" else "") } ?: "") +
                     (if (benchResult.isNotEmpty()) "\n$benchResult" else "")
             } ?: ""
             BasicText(
@@ -287,6 +304,32 @@ fun SampleApp(
         }
     }
 }
+
+/**
+ * The LSP features as chips, for phones (no F-keys there): the plugins' own commands, as the keys
+ * run them. Hover is a command here (touch has no hover).
+ */
+@Composable
+private fun LspChips(view: dev.supermux.editor.compose.EditorView, lsp: SampleLsp, ink: Color) {
+    fun named(id: String) = view.state.facet(dev.supermux.editor.core.commandsFacet).firstOrNull { it.id == id }?.command
+    Chip("complete", false, ink) { dev.supermux.editor.plugins.autocomplete.Autocomplete.startCompletion.run(view) }
+    Chip("hover", false, ink) { dev.supermux.editor.compose.Hover.showHover.run(view) }
+    Chip("signature", false, ink) { named("lsp.signature")?.run(view) }
+    Chip("next problem", false, ink) { dev.supermux.editor.plugins.lint.Lint.nextDiagnostic.run(view) }
+    Chip("problems", dev.supermux.editor.plugins.lint.Lint.state(view.state).panelOpen, ink) {
+        if (dev.supermux.editor.plugins.lint.Lint.state(view.state).panelOpen) dev.supermux.editor.plugins.lint.Lint.closeLintPanel.run(view)
+        else dev.supermux.editor.plugins.lint.Lint.openLintPanel.run(view)
+    }
+    Chip("definition", false, ink) { named("lsp.definition")?.run(view) }
+    Chip("references", false, ink) { named("lsp.references")?.run(view) }
+    Chip("rename", false, ink) { named("lsp.rename")?.run(view) }
+    Chip("format", false, ink) { named("lsp.format")?.run(view) }
+    if (lsp.client.state.value == dev.supermux.editor.plugins.lsp.LspClientState.DISCONNECTED) BasicText("lsp: connecting…", style = TextStyle(color = ink, fontSize = 12.sp))
+}
+
+/** A StateFlow's value, observed (the status line recomposes when it changes). */
+@Composable
+private fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsStateValue(): T = collectAsState().value
 
 /** The settings sheet: the editor's options and the device pass's debug tools. */
 @Composable

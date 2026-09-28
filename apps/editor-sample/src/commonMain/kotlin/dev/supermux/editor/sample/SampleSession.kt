@@ -34,6 +34,8 @@ enum class SampleFile(val label: String, val language: String?) {
     KOTLIN_10K("10k lines of Kotlin", "kotlin"),
     MARKDOWN("the editor spec (Markdown)", "markdown"),
     TURKISH("Türkçe + emoji", null),
+    LSP_DEMO("LSP demo (fake server)", "kotlin"),
+    REAL_LSP("real LSP: clangd (desktop)", "c"),
     TEN_MB("10 MB of Kotlin", "kotlin"),
 }
 
@@ -75,6 +77,8 @@ object SampleFiles {
         SampleFile.MARKDOWN -> markdown
         SampleFile.TURKISH -> TURKISH_TEXT
         SampleFile.TEN_MB -> tenMb(kotlin)
+        SampleFile.LSP_DEMO -> LSP_DEMO_TEXT
+        SampleFile.REAL_LSP -> REAL_LSP_TEXT
     }
 
     /**
