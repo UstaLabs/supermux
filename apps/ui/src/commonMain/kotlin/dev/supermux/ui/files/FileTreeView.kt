@@ -11,6 +11,22 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.utf16CodePoint
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
@@ -79,6 +95,8 @@ import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.rememberHaptics
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlin.time.TimeSource
 
 private val IndentStep: Dp = 14.dp
 private val IndentBase: Dp = 8.dp
@@ -88,6 +106,8 @@ private val RowMinDense: Dp = 24.dp
 private val RowMinTouch: Dp = 44.dp
 private val ChevronSize: Dp = 14.dp
 private val RowGap: Dp = 6.dp
+/** Type-ahead: keys typed within this window extend the prefix; a longer pause starts over. */
+private const val TypeAheadMs = 700L
 
 /**
  * One line of the lazy list: a folder/file row, or the error message under a failed folder.
@@ -138,6 +158,10 @@ fun FileTreeView(
     onRowContextMenu: ((TreeRow) -> Unit)? = null,
     /** Phone / touch layout: rows are at least [RowMinTouch] tall (thumb targets). */
     compact: Boolean = false,
+    /** F2 on the selected row. Null → the key is not handled. */
+    onRename: ((TreeRow) -> Unit)? = null,
+    /** Delete on the selected row. Null → the key is not handled. */
+    onDelete: ((TreeRow) -> Unit)? = null,
 ) {
     // ── subscriptions (owned here, never by rows) ────────────────────────────────────────────
     val wanted by remember(view) {
@@ -216,9 +240,12 @@ fun FileTreeView(
     val haptics = rememberHaptics()
     val openFile by rememberUpdatedState(onOpenFile)
     val contextMenu by rememberUpdatedState(onRowContextMenu)
-    val onClick: (TreeRow) -> Unit = remember(view, subs, haptics) {
+    // The list keeps keyboard focus after a click, so ↑/↓ work right after picking a row. Revealing
+    // the active file never requests it — the editor keeps focus while the tree follows along.
+    val focus = remember { FocusRequester() }
+    fun takeFocus() { runCatching { focus.requestFocus() } }
+    val activate: (TreeRow) -> Unit = remember(view, subs) {
         { row ->
-            haptics.perform(HapticKind.Tick)
             view.selected = row.path
             when (row.status) {
                 RowStatus.FILE -> openFile(row.path)
@@ -227,9 +254,42 @@ fun FileTreeView(
             }
         }
     }
+    val onClick: (TreeRow) -> Unit = remember(activate, haptics) {
+        { row -> haptics.perform(HapticKind.Tick); takeFocus(); activate(row) }
+    }
     // The chevron always toggles — the only way to fold a failed folder, whose row click retries.
     val onToggle: (TreeRow) -> Unit = remember(view, haptics) {
-        { row -> haptics.perform(HapticKind.Tick); view.toggle(row.path) }
+        { row -> haptics.perform(HapticKind.Tick); takeFocus(); view.toggle(row.path) }
+    }
+
+    // ── keyboard ─────────────────────────────────────────────────────────────────────────────
+    val scope = rememberCoroutineScope()
+    val rename by rememberUpdatedState(onRename)
+    val delete by rememberUpdatedState(onDelete)
+    val typeAhead = remember { TypeAhead() }
+    val onKey: (KeyEvent) -> Boolean = { e ->
+        val key = if (e.type == KeyEventType.KeyDown) treeKeyOf(e, typeAhead) else null
+        if (key == null) {
+            false
+        } else {
+            val rows = lines.filter { !it.isError }.map { it.row }
+            val result = treeKeyAction(key, rows, view.selected, view.expanded)
+            fun rowOf(path: String) = rows.first { it.path == path }
+            when (result) {
+                TreeKeyResult.Unhandled -> false
+                TreeKeyResult.Stay -> true
+                is TreeKeyResult.Select -> {
+                    view.selected = result.path
+                    scope.launch { scrollIntoView(view.list, lines.indexOfFirst { !it.isError && it.row.path == result.path }) }
+                    true
+                }
+                is TreeKeyResult.Expand -> { view.expand(result.path); true }
+                is TreeKeyResult.Collapse -> { view.toggle(result.path); true }
+                is TreeKeyResult.Activate -> { activate(rowOf(result.path)); true }
+                is TreeKeyResult.Rename -> rename?.let { it(rowOf(result.path)); true } ?: false
+                is TreeKeyResult.Delete -> delete?.let { it(rowOf(result.path)); true } ?: false
+            }
+        }
     }
     val onLongClick: (TreeRow) -> Unit = remember { { row -> contextMenu?.invoke(row) } }
     val hasMenu = onRowContextMenu != null
@@ -239,7 +299,16 @@ fun FileTreeView(
         rootRefreshFailed?.let { failed ->
             TreeErrorStrip(failed.message.ifBlank { failed.code }, compact, onRetry = { subs.retry(view.rootPath) })
         }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("editor_tree"), state = view.list) {
+        LazyColumn(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .testTag("editor_tree")
+                .onPreviewKeyEvent(onKey)
+                .focusRequester(focus)
+                .focusable(),
+            state = view.list,
+        ) {
             items(lines, key = { it.key }, contentType = { if (it.isError) 1 else 0 }) { line ->
                 val row = line.row
                 if (line.isError) {
@@ -262,6 +331,54 @@ fun FileTreeView(
             // Read only here: a root refresh with rows on screen must not recompose the pane.
             TreePlaceholder(states[view.rootPath] ?: DirState.Unloaded, onRetry = { subs.retry(view.rootPath) })
         }
+    }
+}
+
+/** The type-ahead prefix: characters typed within [TypeAheadMs] of each other. */
+private class TypeAhead {
+    private var prefix = ""
+    private var last: TimeSource.Monotonic.ValueTimeMark? = null
+
+    fun type(c: Char): String {
+        val now = TimeSource.Monotonic.markNow()
+        val prev = last
+        prefix = if (prev != null && (now - prev).inWholeMilliseconds <= TypeAheadMs) prefix + c else c.toString()
+        last = now
+        return prefix
+    }
+}
+
+/** The [TreeKey] for a key-down event, or null when the tree doesn't use it. */
+private fun treeKeyOf(e: KeyEvent, typeAhead: TypeAhead): TreeKey? {
+    if (e.isCtrlPressed || e.isMetaPressed || e.isAltPressed) return null
+    return when (e.key) {
+        Key.DirectionUp -> TreeKey.Up
+        Key.DirectionDown -> TreeKey.Down
+        Key.DirectionLeft -> TreeKey.Left
+        Key.DirectionRight -> TreeKey.Right
+        Key.Enter, Key.NumPadEnter -> TreeKey.Enter
+        Key.MoveHome -> TreeKey.Home
+        Key.MoveEnd -> TreeKey.End
+        Key.F2 -> TreeKey.Rename
+        Key.Delete -> TreeKey.Delete
+        else -> {
+            val cp = e.utf16CodePoint
+            val c = if (cp in 0x21..0xFFFF) cp.toChar() else return null // no space, no controls
+            if (c.isLetterOrDigit() || c in "._-") TreeKey.Type(typeAhead.type(c)) else null
+        }
+    }
+}
+
+/** Scroll the least amount that shows line [index] whole. */
+private suspend fun scrollIntoView(list: LazyListState, index: Int) {
+    if (index < 0) return
+    val info = list.layoutInfo
+    val item = info.visibleItemsInfo.firstOrNull { it.index == index }
+    when {
+        item == null -> list.scrollToItem(index)
+        item.offset < info.viewportStartOffset -> list.scrollBy((item.offset - info.viewportStartOffset).toFloat())
+        item.offset + item.size > info.viewportEndOffset ->
+            list.scrollBy((item.offset + item.size - info.viewportEndOffset).toFloat())
     }
 }
 

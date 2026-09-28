@@ -13,6 +13,11 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.fs.FileSystemService
 import dev.supermux.net.BrokerApi
@@ -185,6 +190,66 @@ class FileTreeViewTest {
         assertTrue(ClientFrame.FsSub("/w/src") !in sentCopy(sent))
         assertEquals(emptySet(), view.expanded)
         assertEquals(null, view.selected)
+    }
+
+    @Test fun keyboardNavigatesAfterAClick() = runComposeUiTest {
+        val fs = service(mutableListOf())
+        val view = TreeViewState("/w")
+        val opened = mutableListOf<String>()
+        val renamed = mutableListOf<String>()
+        val deleted = mutableListOf<String>()
+        setContent(
+            host {
+                FileTreeView(
+                    fs, view,
+                    onOpenFile = { opened += it },
+                    onRename = { renamed += it.path },
+                    onDelete = { deleted += it.path },
+                )
+            },
+        )
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsDir(path = "/w", version = "1", entries = listOf(FsEntry(name = "src", type = "dir"), FsEntry(name = "a.kt", type = "file"), FsEntry(name = "b.kt", type = "file"))))
+        waitForIdle()
+        onNodeWithTag("tree_row:a.kt").performClick()
+        waitForIdle()
+        onNodeWithTag("editor_tree").assertIsFocused()
+        val tree = onNodeWithTag("editor_tree")
+        tree.performKeyInput { pressKey(Key.DirectionDown) }
+        waitForIdle()
+        assertEquals("/w/b.kt", view.selected)
+        tree.performKeyInput { pressKey(Key.MoveHome) }
+        waitForIdle()
+        assertEquals("/w/src", view.selected)
+        // → expands, ← collapses.
+        tree.performKeyInput { pressKey(Key.DirectionRight) }
+        waitForIdle()
+        assertTrue("/w/src" in view.expanded)
+        tree.performKeyInput { pressKey(Key.DirectionLeft) }
+        waitForIdle()
+        assertTrue("/w/src" !in view.expanded)
+        // Type-ahead, then Enter opens; F2 / Delete go to their callbacks.
+        tree.performKeyInput { pressKey(Key.B) }
+        waitForIdle()
+        assertEquals("/w/b.kt", view.selected)
+        tree.performKeyInput { pressKey(Key.Enter) }
+        waitForIdle()
+        assertEquals(listOf("/w/a.kt", "/w/b.kt"), opened)
+        tree.performKeyInput { pressKey(Key.F2) }
+        tree.performKeyInput { pressKey(Key.Delete) }
+        waitForIdle()
+        assertEquals(listOf("/w/b.kt"), renamed)
+        assertEquals(listOf("/w/b.kt"), deleted)
+    }
+
+    @Test fun revealingTheActiveFileDoesNotTakeFocus() = runComposeUiTest {
+        val fs = service(mutableListOf())
+        val view = TreeViewState("/w")
+        setContent(host { FileTreeView(fs, view, onOpenFile = {}, activePath = "/w/a.kt") })
+        fs.onFrame(ServerFrame.FsDir(path = "/w", version = "1", entries = listOf(FsEntry(name = "a.kt", type = "file"))))
+        waitForIdle()
+        assertEquals("/w/a.kt", view.selected)
+        onNodeWithTag("editor_tree").assertIsNotFocused()
     }
 
     @Test fun theChevronCollapsesAFailedFolderWhileTheRowRetries() = runComposeUiTest {
