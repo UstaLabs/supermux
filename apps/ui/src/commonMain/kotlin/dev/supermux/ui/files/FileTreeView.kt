@@ -9,7 +9,13 @@ package dev.supermux.ui.files
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,6 +60,11 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -73,6 +84,10 @@ private val IndentStep: Dp = 14.dp
 private val IndentBase: Dp = 8.dp
 private const val SpinnerDelayMs = 150L
 private const val IgnoredAlpha = 0.45f
+private val RowMinDense: Dp = 24.dp
+private val RowMinTouch: Dp = 44.dp
+private val ChevronSize: Dp = 14.dp
+private val RowGap: Dp = 6.dp
 
 /**
  * One line of the lazy list: a folder/file row, or the error message under a failed folder.
@@ -121,12 +136,21 @@ fun FileTreeView(
     activePath: String? = null,
     revealActive: Boolean = true,
     onRowContextMenu: ((TreeRow) -> Unit)? = null,
+    /** Phone / touch layout: rows are at least [RowMinTouch] tall (thumb targets). */
+    compact: Boolean = false,
 ) {
     // ── subscriptions (owned here, never by rows) ────────────────────────────────────────────
     val wanted by remember(view) {
         derivedStateOf {
             val root = view.rootPath
-            buildSet { add(root); view.expanded.filterTo(this) { isWithin(root, it) } }
+            val expanded = view.expanded
+            // Only folders actually on screen: every ancestor between the root and it is open too.
+            buildSet {
+                add(root)
+                expanded.filterTo(this) { p ->
+                    isWithin(root, p) && ancestorsWithin(root, p).all { it == root || it in expanded }
+                }
+            }
         }
     }
     val subs = remember(fileSystem) { TreeSubscriptions(fileSystem) }
@@ -138,12 +162,13 @@ fun FileTreeView(
 
     // Mirror each subscribed folder's StateFlow into one snapshot map the row derivation reads.
     val states: SnapshotStateMap<String, DirState> = remember(fileSystem) { mutableStateMapOf() }
+    val currentView by rememberUpdatedState(view)
     for (path in wanted) {
         key(fileSystem, path) {
             LaunchedEffect(fileSystem, path) {
                 fileSystem.dir(path).collect { st ->
                     states[path] = st
-                    if (st == DirState.Gone && path != view.rootPath) view.prune(path)
+                    if (st == DirState.Gone && path != currentView.rootPath) currentView.prune(path)
                 }
             }
         }
@@ -161,6 +186,13 @@ fun FileTreeView(
             }
             out
         }
+    }
+
+    // Read by the pane itself, so a folder update that keeps the tree non-empty (or the root
+    // healthy) doesn't recompose it — only the lazy list reads [lines].
+    val isEmpty by remember(view, states) { derivedStateOf { lines.isEmpty() } }
+    val rootRefreshFailed by remember(view, states) {
+        derivedStateOf { (states[view.rootPath] as? DirState.Failed)?.takeIf { it.previous != null } }
     }
 
     // ── reveal the active file ────────────────────────────────────────────────────────────────
@@ -191,15 +223,23 @@ fun FileTreeView(
             when (row.status) {
                 RowStatus.FILE -> openFile(row.path)
                 RowStatus.ERROR -> subs.retry(row.path) // stays expanded; the service re-sends fs_sub
-                else -> view.toggle(row.path)
+                else -> view.toggle(row.path) // LOOP rows are expanded, so this collapses them
             }
         }
+    }
+    // The chevron always toggles — the only way to fold a failed folder, whose row click retries.
+    val onToggle: (TreeRow) -> Unit = remember(view, haptics) {
+        { row -> haptics.perform(HapticKind.Tick); view.toggle(row.path) }
     }
     val onLongClick: (TreeRow) -> Unit = remember { { row -> contextMenu?.invoke(row) } }
     val hasMenu = onRowContextMenu != null
 
     Box(modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize().testTag("editor_tree"), state = view.list) {
+        Column(Modifier.fillMaxSize()) {
+        rootRefreshFailed?.let { failed ->
+            TreeErrorStrip(failed.message.ifBlank { failed.code }, compact, onRetry = { subs.retry(view.rootPath) })
+        }
+        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("editor_tree"), state = view.list) {
             items(lines, key = { it.key }, contentType = { if (it.isError) 1 else 0 }) { line ->
                 val row = line.row
                 if (line.isError) {
@@ -209,13 +249,16 @@ fun FileTreeView(
                         line = line,
                         selected = view.selected == row.path,
                         active = activePath == row.path,
+                        compact = compact,
                         onClick = onClick,
+                        onToggle = onToggle,
                         onLongClick = if (hasMenu) onLongClick else null,
                     )
                 }
             }
         }
-        if (lines.isEmpty()) {
+        }
+        if (isEmpty) {
             // Read only here: a root refresh with rows on screen must not recompose the pane.
             TreePlaceholder(states[view.rootPath] ?: DirState.Unloaded, onRetry = { subs.retry(view.rootPath) })
         }
@@ -244,6 +287,32 @@ private fun TreePlaceholder(root: DirState, onRetry: () -> Unit) {
     }
 }
 
+/** One line above the list: the root's refresh failed but its previous rows are still shown. */
+@Composable
+private fun TreeErrorStrip(message: String, compact: Boolean, onRetry: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .testTag("editor_tree_error")
+            .background(cs.errorContainer)
+            .heightIn(min = if (compact) RowMinTouch else RowMinDense)
+            .padding(start = IndentBase, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            message,
+            color = cs.onErrorContainer,
+            fontFamily = MonoFontFamily,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onRetry, modifier = Modifier.testTag("editor_tree_retry")) { Text("Retry", fontSize = 12.sp) }
+    }
+}
+
 /**
  * One row. [line] compares by value and the click lambdas are remembered by the caller, so on a
  * new snapshot only rows whose values (or selected/active flags) changed recompose.
@@ -254,37 +323,69 @@ private fun TreeRowLine(
     line: TreeLine,
     selected: Boolean,
     active: Boolean,
+    compact: Boolean,
     onClick: (TreeRow) -> Unit,
+    onToggle: (TreeRow) -> Unit,
     onLongClick: ((TreeRow) -> Unit)?,
 ) {
     val cs = MaterialTheme.colorScheme
     val row = line.row
     val entry = row.entry
     val isDir = row.status != RowStatus.FILE
+    val expanded = row.status != RowStatus.FILE && row.status != RowStatus.CLOSED
     val alpha = if (entry.ignored) IgnoredAlpha else 1f
     val guide = cs.outlineVariant.copy(alpha = 0.6f)
     val depth = row.depth
+    val clickLabel = when (row.status) {
+        RowStatus.FILE -> "Open"
+        RowStatus.ERROR -> "Retry"
+        RowStatus.CLOSED -> "Expand"
+        else -> "Collapse"
+    }
     Row(
         Modifier
             .fillMaxWidth()
             .testTag("tree_row:${entry.name}")
             .then(if (selected) Modifier.background(cs.secondaryContainer) else Modifier)
             .combinedClickable(
+                role = Role.Button,
+                onClickLabel = clickLabel,
+                onLongClickLabel = onLongClick?.let { "More actions" },
                 onClick = { onClick(row) },
                 onLongClick = onLongClick?.let { { it(row) } },
             )
+            .semantics { if (isDir) stateDescription = if (expanded) "Expanded" else "Collapsed" }
             .pointerHoverIcon(PointerIcon.Hand)
             .drawBehind { drawIndentGuides(depth, guide) }
-            .padding(start = IndentStep * depth + IndentBase, end = 8.dp, top = 3.dp, bottom = 3.dp),
+            .heightIn(min = if (compact) RowMinTouch else RowMinDense)
+            .height(IntrinsicSize.Min)
+            .padding(start = IndentStep * depth, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(RowGap),
     ) {
-        Box(Modifier.size(14.dp), contentAlignment = Alignment.Center) {
+        // The chevron's hit area spans the leading inset and the full row height, so it's more than
+        // a 14dp speck; the icon itself stays where the indent guides expect it.
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .width(IndentBase + ChevronSize)
+                .then(
+                    if (isDir) {
+                        Modifier
+                            .testTag("tree_chevron:${entry.name}")
+                            .clickable(role = Role.Button, onClickLabel = if (expanded) "Collapse" else "Expand") { onToggle(row) }
+                    } else {
+                        Modifier
+                    },
+                )
+                .padding(start = IndentBase),
+            contentAlignment = Alignment.CenterStart,
+        ) {
             if (isDir) FolderChevron(line, alpha)
         }
         if (isDir) {
             Icon(
-                if (row.status == RowStatus.OPEN) Icons.Filled.FolderOpen else Icons.Filled.Folder,
+                if (expanded) Icons.Filled.FolderOpen else Icons.Filled.Folder,
                 contentDescription = null,
                 tint = cs.onSurfaceVariant.copy(alpha = alpha),
                 modifier = Modifier.size(16.dp),
@@ -300,20 +401,51 @@ private fun TreeRowLine(
             fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).padding(vertical = 3.dp),
         )
-        val git = entry.git
-        if (git != null) {
+        if (row.status == RowStatus.LOOP) {
             Text(
-                git,
-                color = gitColor(git).copy(alpha = alpha),
-                fontFamily = MonoFontFamily,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
+                "↻",
+                color = cs.onSurfaceVariant.copy(alpha = alpha),
+                fontSize = 12.sp,
                 maxLines = 1,
+                modifier = Modifier.clearAndSetSemantics { contentDescription = "Symlink loop" },
             )
         }
+        val git = entry.git
+        if (git != null) GitMark(git, alpha)
     }
+}
+
+/** The git status letter (or, for "changes inside" a folder, a dot) with a spoken description. */
+@Composable
+private fun GitMark(letter: String, alpha: Float) {
+    val color = gitColor(letter).copy(alpha = alpha)
+    val spoken = Modifier.clearAndSetSemantics { contentDescription = gitDescription(letter) }
+    if (letter == "*") {
+        Box(spoken.size(6.dp).background(color, CircleShape))
+    } else {
+        Text(
+            letter,
+            color = color,
+            fontFamily = MonoFontFamily,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            modifier = spoken,
+        )
+    }
+}
+
+private fun gitDescription(letter: String): String = when (letter) {
+    "M" -> "Modified"
+    "A" -> "Added"
+    "D" -> "Deleted"
+    "R" -> "Renamed"
+    "?" -> "Untracked"
+    "U" -> "Conflict"
+    "*" -> "Changes inside"
+    else -> "Git: $letter"
 }
 
 /** Chevron, or — for a folder still loading — a small spinner, but only after [SpinnerDelayMs]. */
@@ -337,7 +469,7 @@ private fun FolderChevron(line: TreeLine, alpha: Float) {
             },
             contentDescription = null,
             tint = cs.onSurfaceVariant.copy(alpha = alpha),
-            modifier = Modifier.size(14.dp),
+            modifier = Modifier.size(ChevronSize),
         )
     }
 }
@@ -375,8 +507,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawIndentGuides(de
 private fun gitColor(letter: String): Color {
     val cs = MaterialTheme.colorScheme
     return when (letter) {
-        "M" -> Color(0xFFE2A03F)
-        "A", "?" -> Color(0xFF4EAA25)
+        "M", "*" -> Color(0xFFE2A03F)
+        "A", "R", "?" -> Color(0xFF4EAA25)
         "D" -> cs.error
         "U" -> Color(0xFFCE422B)
         else -> cs.onSurfaceVariant

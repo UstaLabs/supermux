@@ -12,6 +12,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,7 +60,8 @@ fun fileBadge(name: String, isDir: Boolean): FileBadge {
 @Composable
 internal fun FileBadgeBox(badge: FileBadge, alpha: Float, modifier: Modifier = Modifier) {
     Box(
-        modifier.size(16.dp).background(badge.color.copy(alpha = badge.color.alpha * alpha), RoundedCornerShape(3.dp)),
+        // Decorative: the row already speaks the file name.
+        modifier.clearAndSetSemantics {}.size(16.dp).background(badge.color.copy(alpha = badge.color.alpha * alpha), RoundedCornerShape(3.dp)),
         contentAlignment = Alignment.Center,
     ) {
         Text(

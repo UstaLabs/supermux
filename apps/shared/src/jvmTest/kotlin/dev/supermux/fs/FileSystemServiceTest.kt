@@ -187,4 +187,23 @@ class FileSystemServiceTest {
         fs.refresh("/p"); runCurrent()
         assertEquals(emptyList<ClientFrame>(), sent)
     }
+
+    @Test fun resubscribeAfterAnErrorShowsLoadingWithTheCachedRows() = runTest(StandardTestDispatcher()) {
+        val (fs, sent) = service()
+        val a = fs.subscribe("/p"); runCurrent()
+        fs.onFrame(dir("/p", "b:1", "x"))
+        fs.onFrame(ServerFrame.FsErr("/p", "EIO", "boom"))
+        assertIs<DirState.Failed>(fs.dir("/p").value)
+        sent.clear()
+        val b = fs.subscribe("/p"); runCurrent() // a retry: the broker dropped the sub after the error
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsSub("/p", since = "b:1")), sent)
+        val loading = assertIs<DirState.Loading>(fs.dir("/p").value)
+        assertEquals(listOf("x"), loading.previous?.entries?.map { it.name })
+        // With nothing cached, a retry still moves off Failed.
+        fs.subscribe("/q"); runCurrent()
+        fs.onFrame(ServerFrame.FsErr("/q", "EACCES", "denied"))
+        fs.subscribe("/q"); runCurrent()
+        assertEquals(DirState.Loading(null), fs.dir("/q").value)
+        a.close(); b.close()
+    }
 }

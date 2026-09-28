@@ -3,7 +3,13 @@ package dev.supermux.ui.files
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -157,6 +163,56 @@ class FileTreeViewTest {
         fs.onFrame(ServerFrame.FsDir(path = "/w/src/deep", version = "1", entries = listOf(FsEntry(name = "x.kt", type = "file"))))
         waitForIdle()
         onNodeWithTag("tree_row:x.kt").assertIsDisplayed()
+    }
+
+    @Test fun theChevronCollapsesAFailedFolderWhileTheRowRetries() = runComposeUiTest {
+        val sent = mutableListOf<ClientFrame>()
+        val fs = service(sent)
+        val view = TreeViewState("/w").apply { expand("/w/locked") }
+        setContent(host { FileTreeView(fs, view, onOpenFile = {}) })
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsDir(path = "/w", version = "1", entries = listOf(FsEntry(name = "locked", type = "dir"))))
+        fs.onFrame(ServerFrame.FsErr(path = "/w/locked", code = "EACCES", message = "permission denied"))
+        waitForIdle()
+        onNodeWithTag("tree_row:locked").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
+        onNodeWithTag("tree_chevron:locked", useUnmergedTree = true).performClick()
+        waitForIdle()
+        assertTrue("/w/locked" !in view.expanded)
+        onNodeWithText("permission denied").assertDoesNotExist()
+        onNodeWithTag("tree_row:locked").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+    }
+
+    @Test fun aFailedRootRefreshShowsAStripAboveTheKnownRows() = runComposeUiTest {
+        val sent = mutableListOf<ClientFrame>()
+        val fs = service(sent)
+        val view = TreeViewState("/w")
+        setContent(host { FileTreeView(fs, view, onOpenFile = {}) })
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsDir(path = "/w", version = "1", entries = listOf(FsEntry(name = "a.kt", type = "file"))))
+        fs.onFrame(ServerFrame.FsErr(path = "/w", code = "EIO", message = "read failed"))
+        waitForIdle()
+        onNodeWithTag("editor_tree_error").assertIsDisplayed()
+        onNodeWithText("read failed").assertIsDisplayed()
+        onNodeWithTag("tree_row:a.kt").assertIsDisplayed()
+        val before = sentCopy(sent).count { it is ClientFrame.FsSub && it.path == "/w" }
+        onNodeWithTag("editor_tree_retry").performClick()
+        waitForIdle()
+        assertEquals(before + 1, sentCopy(sent).count { it is ClientFrame.FsSub && it.path == "/w" })
+        onNodeWithTag("editor_tree_error").assertDoesNotExist() // the retry is Loading(previous) now
+        onNodeWithTag("tree_row:a.kt").assertIsDisplayed()
+    }
+
+    @Test fun compactRowsAreThumbSized() = runComposeUiTest {
+        val fs = service(mutableListOf())
+        val view = TreeViewState("/w")
+        setContent(host { FileTreeView(fs, view, onOpenFile = {}, compact = true) })
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsDir(path = "/w", version = "1", entries = listOf(FsEntry(name = "src", type = "dir"), FsEntry(name = "a.kt", type = "file", git = "M"))))
+        waitForIdle()
+        onNodeWithTag("tree_row:a.kt").assertHeightIsAtLeast(44.dp)
+        onNodeWithTag("tree_row:src").assertHeightIsAtLeast(44.dp)
+        onNodeWithTag("tree_row:a.kt").assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, androidx.compose.ui.semantics.Role.Button))
+        onNodeWithContentDescription("Modified").assertExists()
     }
 
     @Test fun badges() {

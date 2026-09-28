@@ -80,7 +80,8 @@ class FileSystemService(
             if (s.subscribed) return@synchronized
             s.subscribed = true
             val cached = s.state.value.snapshotOrPrevious
-            if (cached == null) s.state.value = DirState.Loading(null)
+            // A retry after an error leaves Failed at once, so the view shows progress, not the old error.
+            if (cached == null || s.state.value is DirState.Failed) s.state.value = DirState.Loading(cached)
             outbox.trySend(ClientFrame.FsSub(path, since = cached?.version))
         }
         var closed = false
