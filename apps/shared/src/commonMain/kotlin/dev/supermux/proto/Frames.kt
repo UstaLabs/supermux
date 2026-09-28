@@ -485,6 +485,8 @@ sealed interface ServerFrame {
     @Serializable @SerialName("fs_dir")
     data class FsDir(
         val path: String,
+        /** realpath of [path] (the broker's sharing key); null from an older broker. */
+        val real: String? = null,
         val version: String,
         val entries: List<dev.supermux.net.FsEntry> = emptyList(),
         val unchanged: Boolean = false,

@@ -12,7 +12,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,18 +39,41 @@ val DirState.snapshotOrPrevious: DirSnapshot?
 
 fun interface DirSubscription { fun close() }
 
+/**
+ * An absolute path in the broker's normalised form (its fs_dir / fs_gone / fs_err echo this):
+ * `//` collapsed, `.` dropped, `..` resolved (never above "/"), no trailing slash except "/".
+ * A relative path is returned with the same clean-up but no leading slash.
+ */
+fun normalizeFsPath(path: String): String {
+    val abs = path.startsWith("/")
+    val out = ArrayList<String>()
+    for (part in path.split('/')) {
+        when (part) {
+            "", "." -> {}
+            ".." -> if (out.isNotEmpty() && out.last() != "..") out.removeAt(out.size - 1) else if (!abs) out += part
+            else -> out += part
+        }
+    }
+    val joined = out.joinToString("/")
+    return if (abs) "/$joined" else joined.ifEmpty { "." }
+}
+
 class FileSystemService(
     private val api: BrokerApi,
     private val send: suspend (ClientFrame) -> Unit,
     private val scope: CoroutineScope,
     private val graceMs: Long = 10_000,
     private val maxCached: Int = 1_000,
+    private val goneRetryBaseMs: Long = 2_000,
+    private val goneRetryAttempts: Int = 4,
 ) {
     private class Slot(val state: MutableStateFlow<DirState>) {
         var refs = 0
         var subscribed = false      // an fs_sub is live on the broker
         var grace: Job? = null
         var used = 0L
+        var goneRetry: Job? = null  // a pending re-subscribe of a Gone folder
+        var goneAttempts = 0
     }
 
     private val lock = SynchronizedObject()
@@ -63,16 +88,30 @@ class FileSystemService(
     private val outbox = Channel<ClientFrame>(Channel.UNLIMITED)
 
     init {
-        scope.launch { for (frame in outbox) send(frame) }
+        scope.launch {
+            // One failed send (the socket closed mid-send) must not end the loop: every later
+            // fs_sub/fs_unsub would be dropped silently. Only this scope's own cancellation stops it.
+            for (frame in outbox) {
+                try {
+                    send(frame)
+                } catch (c: CancellationException) {
+                    currentCoroutineContext().ensureActive()
+                    println("[FileSystemService] send ${frame::class.simpleName} cancelled: ${c.message}")
+                } catch (e: Throwable) {
+                    println("[FileSystemService] send ${frame::class.simpleName} failed: $e")
+                }
+            }
+        }
     }
 
     val cachedCount: Int get() = synchronized(lock) { slots.size }
 
     private fun slot(path: String): Slot = slots.getOrPut(path) { Slot(MutableStateFlow(DirState.Unloaded)) }.also { it.used = ++tick }
 
-    fun dir(path: String): StateFlow<DirState> = synchronized(lock) { slot(path).state.asStateFlow() }
+    fun dir(path: String): StateFlow<DirState> = synchronized(lock) { slot(normalizeFsPath(path)).state.asStateFlow() }
 
-    fun subscribe(path: String): DirSubscription {
+    fun subscribe(rawPath: String): DirSubscription {
+        val path = normalizeFsPath(rawPath)
         synchronized(lock) {
             val s = slot(path)
             s.refs++
@@ -81,7 +120,10 @@ class FileSystemService(
             s.subscribed = true
             val cached = s.state.value.snapshotOrPrevious
             // A retry after an error leaves Failed at once, so the view shows progress, not the old error.
-            if (cached == null || s.state.value is DirState.Failed) s.state.value = DirState.Loading(cached)
+            // A Gone folder stays Gone until it answers (see [scheduleGoneRetryLocked]).
+            if (s.state.value != DirState.Gone && (cached == null || s.state.value is DirState.Failed)) {
+                s.state.value = DirState.Loading(cached)
+            }
             outbox.trySend(ClientFrame.FsSub(path, since = cached?.version))
         }
         var closed = false
@@ -93,10 +135,15 @@ class FileSystemService(
     }
 
     /** Re-send `fs_sub` WITHOUT `since` for a currently-subscribed path (a hard refresh); no-op otherwise. */
-    fun refresh(path: String) {
+    fun refresh(rawPath: String) {
+        val path = normalizeFsPath(rawPath)
         synchronized(lock) {
             val s = slots[path] ?: return@synchronized
             if (s.refs <= 0) return@synchronized
+            // The broker holds this sub once it answers, whatever state we were in (Failed/Gone
+            // cleared `subscribed`); marking it now lets the last release send the fs_unsub.
+            s.subscribed = true
+            if (s.state.value != DirState.Gone) s.state.value = DirState.Loading(s.state.value.snapshotOrPrevious)
             outbox.trySend(ClientFrame.FsSub(path))
         }
     }
@@ -105,6 +152,7 @@ class FileSystemService(
         synchronized(lock) {
             val s = slots[path] ?: return@synchronized
             s.refs--
+            if (s.refs <= 0) { s.goneRetry?.cancel(); s.goneRetry = null }
             if (s.refs > 0 || !s.subscribed) return@synchronized
             s.grace = scope.launch {
                 delay(graceMs)
@@ -122,7 +170,12 @@ class FileSystemService(
         synchronized(lock) {
             when (frame) {
                 is ServerFrame.FsDir -> {
-                    val s = slots[frame.path] ?: return
+                    val s = slots[normalizeFsPath(frame.path)] ?: return
+                    // A reply means the broker holds a sub for us, even if a stale fs_err for an
+                    // older sub cleared the flag in between; without this, the last release would
+                    // skip the fs_unsub and leak it on the broker.
+                    if (s.refs > 0) s.subscribed = true
+                    s.goneRetry?.cancel(); s.goneRetry = null; s.goneAttempts = 0
                     if (frame.unchanged) {
                         val prev = s.state.value.snapshotOrPrevious ?: return
                         s.state.value = DirState.Ready(prev)
@@ -131,18 +184,32 @@ class FileSystemService(
                     val cur = (s.state.value as? DirState.Ready)?.snap
                     if (cur != null && cur.version == frame.version) return
                     s.state.value = DirState.Ready(
-                        DirSnapshot(path = frame.path, version = frame.version, entries = frame.entries, truncated = frame.truncated),
+                        DirSnapshot(
+                            path = frame.path,
+                            real = frame.real ?: frame.path,
+                            version = frame.version,
+                            entries = frame.entries,
+                            truncated = frame.truncated,
+                        ),
                     )
                 }
                 is ServerFrame.FsGone -> {
-                    val s = slots[frame.path] ?: return
+                    val path = normalizeFsPath(frame.path)
+                    val s = slots[path] ?: return
                     s.subscribed = false
                     s.state.value = DirState.Gone
+                    s.goneAttempts = 0
+                    scheduleGoneRetryLocked(path, s)
                 }
                 is ServerFrame.FsErr -> {
-                    val s = slots[frame.path] ?: return
+                    val path = normalizeFsPath(frame.path)
+                    val s = slots[path] ?: return
                     s.subscribed = false
-                    s.state.value = DirState.Failed(frame.code, frame.message, s.state.value.snapshotOrPrevious)
+                    if (s.state.value == DirState.Gone && (frame.code == "ENOENT" || frame.code == "ENOTDIR")) {
+                        scheduleGoneRetryLocked(path, s) // still not back: stay Gone, try again later
+                    } else {
+                        s.state.value = DirState.Failed(frame.code, frame.message, s.state.value.snapshotOrPrevious)
+                    }
                 }
                 else -> {}
             }
@@ -169,6 +236,29 @@ class FileSystemService(
         }
     }
 
+    /**
+     * A folder that vanished often comes straight back (git checkout, `rm -rf build && mkdir build`):
+     * while someone still holds it, re-subscribe after [goneRetryBaseMs], doubling each time, up to
+     * [goneRetryAttempts] tries. A tree prunes its gone subfolders (releasing them), so this only
+     * keeps roots and stale-watcher folders alive.
+     */
+    private fun scheduleGoneRetryLocked(path: String, s: Slot) {
+        s.goneRetry?.cancel(); s.goneRetry = null
+        if (s.refs <= 0 || s.goneAttempts >= goneRetryAttempts) return
+        val wait = goneRetryBaseMs shl s.goneAttempts
+        s.goneAttempts++
+        s.goneRetry = scope.launch {
+            delay(wait)
+            synchronized(lock) {
+                if (s.goneRetry?.let { it === coroutineContext[Job] } != true) return@synchronized
+                s.goneRetry = null
+                if (s.refs <= 0 || s.subscribed || s.state.value != DirState.Gone) return@synchronized
+                s.subscribed = true
+                outbox.trySend(ClientFrame.FsSub(path))
+            }
+        }
+    }
+
     private fun evictLocked() {
         if (slots.size <= maxCached) return
         val victims = slots.entries
@@ -183,9 +273,9 @@ class FileSystemService(
     private suspend fun <T> call(block: suspend () -> T): Result<T> =
         try { Result.success(block()) } catch (c: CancellationException) { throw c } catch (e: Throwable) { Result.failure(e) }
 
-    suspend fun list(path: String): Result<DirSnapshot> = call { api.hostFsList(path) }.onSuccess { snap ->
+    suspend fun list(rawPath: String): Result<DirSnapshot> = call { api.hostFsList(rawPath) }.onSuccess { snap ->
         synchronized(lock) {
-            val s = slot(path)
+            val s = slot(normalizeFsPath(rawPath))
             if (s.state.value !is DirState.Ready || (s.state.value as DirState.Ready).snap.version != snap.version) {
                 s.state.value = DirState.Ready(snap)
             }

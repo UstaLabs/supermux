@@ -84,4 +84,9 @@ class ContractTest {
         val un = json.encodeToString(ClientFrame.serializer(), ClientFrame.FsUnsub("/a"))
         kotlin.test.assertEquals("""{"type":"fs_unsub","path":"/a"}""", un)
     }
+
+    @Test fun fs_dir_carries_real() {
+        val f = json.decodeFromString<ServerFrame>(load("fs_dir")) as ServerFrame.FsDir
+        kotlin.test.assertEquals("/home/u/p/src", f.real)
+    }
 }

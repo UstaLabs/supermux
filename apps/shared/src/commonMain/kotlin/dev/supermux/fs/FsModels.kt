@@ -40,6 +40,9 @@ data class SearchHit(
 @Serializable
 data class FsWriteResult(val size: Long, val mtime: Long)
 
-/** POST /fs/ops body. `to` only for rename/move. */
+/**
+ * POST /fs/ops body. `to` only for rename/move. `permanent` only for delete: skip the trash (the
+ * broker refuses a trash move across filesystems with 409 EXDEV; the UI then asks for this).
+ */
 @Serializable
-data class FsOpRequest(val op: String, val path: String, val to: String? = null)
+data class FsOpRequest(val op: String, val path: String, val to: String? = null, val permanent: Boolean? = null)

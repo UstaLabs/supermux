@@ -215,4 +215,150 @@ class FileSystemServiceTest {
         assertEquals(404, (listed.exceptionOrNull() as dev.supermux.net.FsException).status)
         assertTrue(fs.search("/w", "q").isFailure)
     }
+
+    // ── final-review fixes ───────────────────────────────────────────────────────────────────
+
+    @Test fun oneFailedSendDoesNotKillTheOutbox() = runTest(StandardTestDispatcher()) {
+        val sent = mutableListOf<ClientFrame>()
+        var failNext = true
+        val http = HttpClient(MockEngine { respond("{}") })
+        val fs = FileSystemService(
+            BrokerApi("http://h", "t", http),
+            send = { frame ->
+                if (failNext) { failNext = false; throw IllegalStateException("socket closed mid-send") }
+                sent += frame
+            },
+            scope = backgroundScope,
+        )
+        fs.subscribe("/a"); runCurrent() // this send throws
+        fs.subscribe("/b"); runCurrent()
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsSub("/b")), sent)
+    }
+
+    @Test fun aCancellationFromOneSendIsNotFatalWhileTheScopeLives() = runTest(StandardTestDispatcher()) {
+        val sent = mutableListOf<ClientFrame>()
+        var failNext = true
+        val http = HttpClient(MockEngine { respond("{}") })
+        val fs = FileSystemService(
+            BrokerApi("http://h", "t", http),
+            send = { frame ->
+                if (failNext) { failNext = false; throw kotlinx.coroutines.CancellationException("ws closed") }
+                sent += frame
+            },
+            scope = backgroundScope,
+        )
+        fs.subscribe("/a"); runCurrent()
+        fs.subscribe("/b"); runCurrent()
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsSub("/b")), sent)
+    }
+
+    @Test fun aStaleFsErrDoesNotLeakTheNewerSubscription() = runTest(StandardTestDispatcher()) {
+        val (fs, sent) = service()
+        val s = fs.subscribe("/p"); runCurrent()
+        fs.onFrame(ServerFrame.FsErr("/p", "EIO", "boom")) // subscribed=false; the view offers a refresh
+        fs.refresh("/p"); runCurrent()                         // a newer fs_sub the broker will hold
+        assertIs<DirState.Loading>(fs.dir("/p").value)
+        fs.onFrame(ServerFrame.FsErr("/p", "EIO", "late"))    // an older sub's error arrives late
+        fs.onFrame(dir("/p", "b:2", "x"))                      // then the newer sub's reply
+        assertIs<DirState.Ready>(fs.dir("/p").value)
+        sent.clear()
+        s.close(); advanceTimeBy(10_001); runCurrent()
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsUnsub("/p")), sent) // released on the broker
+    }
+
+    @Test fun refreshOnAFailedFolderMarksItSubscribedAndLoading() = runTest(StandardTestDispatcher()) {
+        val (fs, sent) = service()
+        val s = fs.subscribe("/p"); runCurrent()
+        fs.onFrame(dir("/p", "b:1", "x"))
+        fs.onFrame(ServerFrame.FsErr("/p", "EIO", "boom"))
+        fs.refresh("/p"); runCurrent()
+        val loading = assertIs<DirState.Loading>(fs.dir("/p").value)
+        assertEquals(listOf("x"), loading.previous?.entries?.map { it.name })
+        sent.clear()
+        s.close(); advanceTimeBy(10_001); runCurrent()
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsUnsub("/p")), sent)
+    }
+
+    @Test fun pathsAreNormalisedSoBrokerEchoesMatch() = runTest(StandardTestDispatcher()) {
+        val (fs, sent) = service()
+        val s = fs.subscribe("/a//b/./c/../d/"); runCurrent()
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsSub("/a/b/d")), sent)
+        fs.onFrame(dir("/a/b/d", "b:1", "x"))
+        assertIs<DirState.Ready>(fs.dir("/a/b/d/").value)
+        assertIs<DirState.Ready>(fs.dir("/a/b/d").value)
+        sent.clear()
+        fs.refresh("/a/b/d/."); runCurrent()
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsSub("/a/b/d")), sent)
+        s.close()
+        assertEquals("/", normalizeFsPath("/"))
+        assertEquals("/", normalizeFsPath("/.."))
+        assertEquals("/", normalizeFsPath("//"))
+        assertEquals("/x", normalizeFsPath("/x/"))
+    }
+
+    @Test fun aGoneFolderIsRetriedWithBackoffAndComesBack() = runTest(StandardTestDispatcher()) {
+        val (fs, sent) = service()
+        val s = fs.subscribe("/p"); runCurrent()
+        fs.onFrame(dir("/p", "b:1", "x"))
+        fs.onFrame(ServerFrame.FsGone("/p"))
+        sent.clear()
+        advanceTimeBy(1_999); runCurrent()
+        assertEquals(emptyList<ClientFrame>(), sent)
+        advanceTimeBy(2); runCurrent()
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsSub("/p")), sent)
+        assertEquals(DirState.Gone, fs.dir("/p").value) // still gone while the retry is in flight
+        fs.onFrame(ServerFrame.FsErr("/p", "ENOENT", "no such folder")) // not back yet
+        assertEquals(DirState.Gone, fs.dir("/p").value)
+        advanceTimeBy(4_001); runCurrent()                                 // backoff doubled
+        assertEquals(2, sent.size)
+        fs.onFrame(dir("/p", "b:9", "y"))                                  // recreated
+        assertIs<DirState.Ready>(fs.dir("/p").value)
+        sent.clear()
+        s.close(); advanceTimeBy(10_001); runCurrent()
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsUnsub("/p")), sent)
+    }
+
+    @Test fun goneRetriesStopWhenReleasedOrExhausted() = runTest(StandardTestDispatcher()) {
+        val (fs, sent) = service()
+        val a = fs.subscribe("/a"); val b = fs.subscribe("/b"); runCurrent()
+        fs.onFrame(ServerFrame.FsGone("/a")); fs.onFrame(ServerFrame.FsGone("/b"))
+        a.close() // a tree prunes its gone subfolder: no retry for it
+        sent.clear()
+        repeat(10) {
+            advanceTimeBy(60_000); runCurrent()
+            (sent.lastOrNull() as? ClientFrame.FsSub)?.let { f -> if (fs.dir(f.path).value == DirState.Gone) fs.onFrame(ServerFrame.FsErr(f.path, "ENOENT", "")) }
+        }
+        assertTrue(sent.all { it == ClientFrame.FsSub("/b") })
+        assertTrue(sent.size in 2..5, "a few retries, then stop: ${sent.size}")
+        assertEquals(DirState.Gone, fs.dir("/b").value)
+        b.close()
+    }
+
+    @Test fun theSnapshotKeepsTheRealPathFromFsDir() = runTest(StandardTestDispatcher()) {
+        val (fs, _) = service()
+        fs.subscribe("/link"); runCurrent()
+        fs.onFrame(ServerFrame.FsDir(path = "/link", real = "/target", version = "b:1"))
+        assertEquals("/target", assertIs<DirState.Ready>(fs.dir("/link").value).snap.real)
+        fs.subscribe("/plain"); runCurrent()
+        fs.onFrame(ServerFrame.FsDir(path = "/plain", version = "b:1"))
+        assertEquals("/plain", assertIs<DirState.Ready>(fs.dir("/plain").value).snap.real)
+    }
+
+    @Test fun aPermanentDeleteSendsPermanentTrueAndExdevIsAFailure() = runTest {
+        val bodies = mutableListOf<String>()
+        val http = HttpClient(MockEngine { req ->
+            val b = (req.body as io.ktor.http.content.TextContent).text
+            bodies += b
+            if ("permanent" in b) respond("", HttpStatusCode.NoContent)
+            else respond("""{"error":"EXDEV","message":"Can't move to the trash across filesystems; delete permanently instead?"}""", HttpStatusCode.Conflict)
+        })
+        val fs = FileSystemService(BrokerApi("http://h", "t", http), send = {}, scope = backgroundScope)
+        val trashed = fs.op(FsOpRequest(op = "delete", path = "/mnt/x"))
+        val err = trashed.exceptionOrNull() as dev.supermux.net.FsException
+        assertEquals(409, err.status)
+        assertTrue("EXDEV" in err.message.orEmpty())
+        assertTrue(fs.op(FsOpRequest(op = "delete", path = "/mnt/x", permanent = true)).isSuccess)
+        assertEquals("""{"op":"delete","path":"/mnt/x"}""", bodies[0])
+        assertEquals("""{"op":"delete","path":"/mnt/x","permanent":true}""", bodies[1])
+    }
 }
