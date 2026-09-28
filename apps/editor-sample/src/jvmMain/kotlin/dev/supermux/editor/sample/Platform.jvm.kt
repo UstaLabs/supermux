@@ -20,5 +20,5 @@ actual fun platformRealLsp(scope: kotlinx.coroutines.CoroutineScope, file: Strin
     val dir = kotlin.io.path.createTempDirectory("editor-sample-lsp").toFile().canonicalFile
     val f = java.io.File(dir, file).also { it.writeText(text) }
     val transport = dev.supermux.editor.plugins.lsp.ProcessLspTransport(listOf(bin, "--log=error"), dir, scope)
-    return Triple(transport, "file://" + f.absolutePath, { transport.close(); dir.deleteRecursively() })
+    return Triple(transport, f.toPath().toUri().toString(), { transport.close(); dir.deleteRecursively() })
 }
