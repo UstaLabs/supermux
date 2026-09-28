@@ -11,6 +11,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -97,6 +98,75 @@ class FileSystemServiceTest {
         assertIs<DirState.Ready>(fs.dir("/keep").value)
         assertEquals(DirState.Unloaded, fs.dir("/x").value)
         keep.close()
+    }
+
+    // ── decision-order frame delivery (grace-driven unsub racing a re-subscribe) ────────────────
+
+    @Test fun graceExpiryThenImmediateResubscribe_endsWithFsSubNeverUnsubLast() = runTest(StandardTestDispatcher()) {
+        val (fs, sent) = service()
+        val s = fs.subscribe("/p"); runCurrent()
+        fs.onFrame(dir("/p", "b:1"))
+        s.close()
+        advanceTimeBy(10_001); runCurrent() // grace fires: FsUnsub decided (refs still 0 at this instant)
+        val again = fs.subscribe("/p") // decided in the very next step, before the unsub's send could reorder
+        runCurrent()
+        again.close()
+        assertEquals(ClientFrame.FsSub("/p", since = "b:1"), sent.last())
+    }
+
+    @Test fun resubscribeBeforeGraceFires_cancelsGraceSoNoUnsubIsEverSent() = runTest(StandardTestDispatcher()) {
+        val (fs, sent) = service()
+        val s = fs.subscribe("/p"); runCurrent()
+        fs.onFrame(dir("/p", "b:1"))
+        s.close()
+        advanceTimeBy(5_000) // grace pending, not yet due
+        val again = fs.subscribe("/p"); runCurrent() // cancels the grace job before it decides anything
+        advanceTimeBy(20_000); runCurrent() // grace would have fired by now if not cancelled
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsSub("/p")), sent)
+        again.close()
+    }
+
+    @Test fun slowUnsubSendDoesNotLetALaterFsSubOvertakeIt() = runTest(StandardTestDispatcher()) {
+        // A `send` that suspends for FsUnsub but not FsSub simulates a broker call that reorders
+        // on the wire if frames are launched independently. With a single serial consumer draining
+        // frames in decision order, the recorded order must still match decision order.
+        val sent = mutableListOf<ClientFrame>()
+        val http = HttpClient(MockEngine { respond("{}") })
+        val fs = FileSystemService(
+            BrokerApi("http://h", "t", http),
+            send = { frame ->
+                if (frame is ClientFrame.FsUnsub) delay(5_000)
+                sent += frame
+            },
+            scope = backgroundScope,
+            graceMs = 1_000,
+        )
+        val s = fs.subscribe("/p"); runCurrent()
+        fs.onFrame(dir("/p", "b:1"))
+        s.close()
+        advanceTimeBy(1_001); runCurrent() // grace fires: FsUnsub decided; its send is now delaying
+        fs.subscribe("/p") // decided right after, while the unsub's slow send is still in flight
+        advanceTimeBy(6_000); runCurrent()
+        assertEquals(
+            listOf<ClientFrame>(ClientFrame.FsSub("/p"), ClientFrame.FsUnsub("/p"), ClientFrame.FsSub("/p", since = "b:1")),
+            sent,
+        )
+    }
+
+    // ── reconnect ────────────────────────────────────────────────────────────────────────────
+
+    @Test fun reconnectCancelsGraceAndClearsSubscribedForRefsZeroSlots() = runTest(StandardTestDispatcher()) {
+        val (fs, sent) = service()
+        val s = fs.subscribe("/p"); runCurrent()
+        fs.onFrame(dir("/p", "b:1"))
+        s.close() // refs == 0, subscribed == true, grace pending
+        sent.clear()
+        fs.onReconnect(); runCurrent()
+        assertEquals(emptyList<ClientFrame>(), sent) // broker never knew this slot post-reconnect: nothing to resend
+        // a new subscriber arriving during the (now-cancelled) grace window must get a fresh fs_sub,
+        // not silently ride along on a subscription the broker no longer has.
+        fs.subscribe("/p"); runCurrent()
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsSub("/p", since = "b:1")), sent)
     }
 
     @Test fun refreshResendsFsSubWithoutSinceOnlyWhileSubscribed() = runTest(StandardTestDispatcher()) {

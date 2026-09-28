@@ -11,6 +11,7 @@ import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,6 +55,17 @@ class FileSystemService(
     private val slots = LinkedHashMap<String, Slot>()
     private var tick = 0L
 
+    // Outbound frames are decided under `lock` but must reach the broker in that same decision
+    // order. A grace-driven FsUnsub and a concurrent re-subscribe's FsSub each run in their own
+    // suspend call, so launching a send per-frame can reorder them on the wire. Instead every
+    // decision site `trySend`s (non-suspending) into this unlimited channel from inside the same
+    // synchronized block, and a single long-lived consumer drains it strictly in order.
+    private val outbox = Channel<ClientFrame>(Channel.UNLIMITED)
+
+    init {
+        scope.launch { for (frame in outbox) send(frame) }
+    }
+
     val cachedCount: Int get() = synchronized(lock) { slots.size }
 
     private fun slot(path: String): Slot = slots.getOrPut(path) { Slot(MutableStateFlow(DirState.Unloaded)) }.also { it.used = ++tick }
@@ -61,17 +73,16 @@ class FileSystemService(
     fun dir(path: String): StateFlow<DirState> = synchronized(lock) { slot(path).state.asStateFlow() }
 
     fun subscribe(path: String): DirSubscription {
-        val frame: ClientFrame? = synchronized(lock) {
+        synchronized(lock) {
             val s = slot(path)
             s.refs++
             s.grace?.cancel(); s.grace = null
-            if (s.subscribed) return@synchronized null
+            if (s.subscribed) return@synchronized
             s.subscribed = true
             val cached = s.state.value.snapshotOrPrevious
             if (cached == null) s.state.value = DirState.Loading(null)
-            ClientFrame.FsSub(path, since = cached?.version)
+            outbox.trySend(ClientFrame.FsSub(path, since = cached?.version))
         }
-        if (frame != null) scope.launch { send(frame) }
         var closed = false
         return DirSubscription {
             if (closed) return@DirSubscription
@@ -82,25 +93,25 @@ class FileSystemService(
 
     /** Re-send `fs_sub` WITHOUT `since` for a currently-subscribed path (a hard refresh); no-op otherwise. */
     fun refresh(path: String) {
-        val frame: ClientFrame? = synchronized(lock) {
-            val s = slots[path] ?: return@synchronized null
-            if (s.refs <= 0) return@synchronized null
-            ClientFrame.FsSub(path)
+        synchronized(lock) {
+            val s = slots[path] ?: return@synchronized
+            if (s.refs <= 0) return@synchronized
+            outbox.trySend(ClientFrame.FsSub(path))
         }
-        if (frame != null) scope.launch { send(frame) }
     }
 
     private fun release(path: String) {
         synchronized(lock) {
-            val s = slots[path] ?: return
+            val s = slots[path] ?: return@synchronized
             s.refs--
-            if (s.refs > 0 || !s.subscribed) return
+            if (s.refs > 0 || !s.subscribed) return@synchronized
             s.grace = scope.launch {
                 delay(graceMs)
-                val unsub = synchronized(lock) {
-                    if (s.refs > 0 || !s.subscribed) false else { s.subscribed = false; s.grace = null; evictLocked(); true }
+                synchronized(lock) {
+                    if (s.refs > 0 || !s.subscribed) return@synchronized
+                    s.subscribed = false; s.grace = null; evictLocked()
+                    outbox.trySend(ClientFrame.FsUnsub(path))
                 }
-                if (unsub) send(ClientFrame.FsUnsub(path))
             }
         }
     }
@@ -137,15 +148,24 @@ class FileSystemService(
         }
     }
 
-    /** The socket (re)connected: re-assert every live subscription, like `viewing` frames. */
+    /**
+     * The socket (re)connected: re-assert every live subscription, like `viewing` frames. A slot
+     * with `refs == 0` that is still `subscribed` is mid-grace; the broker has forgotten it across
+     * the reconnect, so we cancel the grace job and mark it unsubscribed locally (no frame to
+     * send — there's nothing to unsubscribe from) rather than leaving it falsely "subscribed".
+     */
     fun onReconnect() {
-        val frames = synchronized(lock) {
-            slots.filter { (_, s) -> s.refs > 0 }.map { (path, s) ->
-                s.subscribed = true
-                ClientFrame.FsSub(path, since = s.state.value.snapshotOrPrevious?.version)
+        synchronized(lock) {
+            for ((path, s) in slots) {
+                if (s.refs > 0) {
+                    s.subscribed = true
+                    outbox.trySend(ClientFrame.FsSub(path, since = s.state.value.snapshotOrPrevious?.version))
+                } else if (s.subscribed) {
+                    s.grace?.cancel(); s.grace = null
+                    s.subscribed = false
+                }
             }
         }
-        if (frames.isNotEmpty()) scope.launch { frames.forEach { send(it) } }
     }
 
     private fun evictLocked() {
