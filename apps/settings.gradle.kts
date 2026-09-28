@@ -60,3 +60,5 @@ include(":editor-plugins:history")
 include(":editor-plugins:highlight")
 include(":editor-plugins:fold")
 include(":editor-plugins:view")
+// The native editor's M4b plugin: search & replace (engine + panel).
+include(":editor-plugins:search")
