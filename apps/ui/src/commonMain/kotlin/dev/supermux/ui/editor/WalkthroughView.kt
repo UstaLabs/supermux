@@ -287,6 +287,21 @@ private fun StepSlide(
         when {
             loadError != null -> Text(loadError ?: "Could not load file", color = cs.error)
             content == null -> Text("Loading code…", color = cs.onSurfaceVariant)
+            NativeEditor.enabled -> {
+                // M5: the step's code on the diff plugin (threads, composer and paging inside).
+                Box(Modifier.fillMaxWidth().weight(1f).heightIn(min = 240.dp)) {
+                    NativeWalkthroughRegion(
+                        state = state,
+                        step = step,
+                        path = path,
+                        text = content.orEmpty(),
+                        patch = walkthroughDiffFile(repos, step)?.diff,
+                        onAddComment = onAddComment,
+                        onResolve = onResolve,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
             else -> {
                 val text = content.orEmpty()
                 val start = step.rangeStart ?: step.anchorLine ?: 1

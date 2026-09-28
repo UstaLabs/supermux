@@ -45,7 +45,11 @@ class WalkthroughViewTest {
         )
     }
 
-    private fun host(state: WalkthroughState): @Composable () -> Unit = {
+    private fun host(
+        state: WalkthroughState,
+        repos: List<dev.supermux.net.RepoDiff> = emptyList(),
+        read: (String, String) -> Result<String> = { _, _ -> Result.success("") },
+    ): @Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
             LocalPlatform provides FakePlatform(editorEngine = FakeEditorEngineFactory()),
@@ -53,8 +57,8 @@ class WalkthroughViewTest {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 WalkthroughView(
                     state = state,
-                    repos = emptyList(),
-                    readFile = { _, _ -> Result.success("") },
+                    repos = repos,
+                    readFile = { repo, path -> read(repo, path) },
                     onAddComment = { null },
                     onResolve = { false },
                     onOpenFile = { _, _, _ -> },
@@ -105,5 +109,24 @@ class WalkthroughViewTest {
         waitForIdle()
         assertEquals(1, state.stepIndex)
         onNodeWithText("Walkthrough steps").assertDoesNotExist()
+    }
+
+    /** M5: a step with code is the diff plugin's slice of the file, with the session's threads in it. */
+    @Test
+    fun a_code_step_shows_the_file_on_the_diff_plugin() = runComposeUiTest {
+        val state = WalkthroughState("s1").apply {
+            applyWalkthrough(
+                Walkthrough(
+                    id = "w1", sessionId = "s1", title = "Tour", revision = 1,
+                    steps = listOf(WalkthroughStep(id = "a", ord = 0, title = "The change", bodyMd = "Look", repo = "", path = "f.kt", rangeStart = 2, rangeEnd = 2)),
+                ),
+            )
+            seedComments(listOf(dev.supermux.net.ReviewComment(id = "t1", repo = "", path = "f.kt", side = "RIGHT", anchorLine = 2, body = "Why this name?", author = "user", status = "open")))
+        }
+        val repos = listOf(dev.supermux.net.RepoDiff(repo = "", files = listOf(dev.supermux.net.DiffFile(path = "f.kt", status = "modified", diff = "@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n"))))
+        setContent(host(state, repos = repos, read = { _, _ -> Result.success("a\nB\nc\n") }))
+        waitForIdle()
+        onNodeWithTag("walkthrough_native_region").assertExists()
+        onNodeWithText("Why this name?").assertExists()
     }
 }

@@ -52,6 +52,12 @@ const val SIDEBAR_WIDTH_DEFAULT = 320f
 /** Desktop Changes pane starts as a nested folder tree. */
 const val EDITOR_DIFF_TREE_VIEW_DEFAULT = true
 
+/** The Changes pane's per-file diff starts inline (decided 2026-09-28; side by side is a toggle). */
+const val EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT = false
+
+/** The native editor's accessory bar is on (decided 2026-09-28); it only shows with a soft keyboard. */
+const val EDITOR_ACCESSORY_BAR_DEFAULT = true
+
 /**
  * Typed accessors over the persisted UI preferences. One `Flow` read + one `suspend put` per
  * value; the reads carry the same defaults the two apps used before the move, so nothing changes
@@ -85,6 +91,20 @@ class UiPrefs(private val settings: SettingsStore) {
 
     suspend fun putEditorDiffTreeView(value: Boolean) =
         settings.putString(SettingsKeys.EDITOR_DIFF_TREE_VIEW, value.toString())
+
+    /** Changes pane: each file's diff side by side (true) or inline (false, the default). */
+    val editorDiffSideBySide: Flow<Boolean> =
+        settings.string(SettingsKeys.EDITOR_DIFF_SIDE_BY_SIDE).map { it?.toBooleanStrictOrNull() ?: EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT }
+
+    suspend fun putEditorDiffSideBySide(value: Boolean) =
+        settings.putString(SettingsKeys.EDITOR_DIFF_SIDE_BY_SIDE, value.toString())
+
+    /** The native editor's key row above a soft keyboard (Tab, arrows, undo, find). On by default. */
+    val editorAccessoryBar: Flow<Boolean> =
+        settings.string(SettingsKeys.EDITOR_ACCESSORY_BAR).map { it?.toBooleanStrictOrNull() ?: EDITOR_ACCESSORY_BAR_DEFAULT }
+
+    suspend fun putEditorAccessoryBar(value: Boolean) =
+        settings.putString(SettingsKeys.EDITOR_ACCESSORY_BAR, value.toString())
 
     /** Chat transcript density (web `cmux:chat-detail` parity). Unknown/absent → MEDIUM. */
     val chatDetailLevel: Flow<ChatDetailLevel> =

@@ -337,6 +337,10 @@ fun EditorPanel(
                 onReload = { scope.launch { editor.reloadDiff(actions.fsDiff) } },
                 onClose = { editor.showDiff = false },
                 modifier = Modifier.fillMaxSize(),
+                // M5: each file on the native diff plugin, read and written through the session's fs.
+                readFile = { repo, path -> actions.fsRead(repoPath(repo, path)) },
+                writeFile = { repo, path, text -> actions.fsWrite(repoPath(repo, path), text) },
+                onReply = { root, body -> actions.reviewAddComment(replyBody(root, body)); Unit },
             )
             return@Box
         }

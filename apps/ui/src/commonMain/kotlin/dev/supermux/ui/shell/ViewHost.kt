@@ -728,6 +728,7 @@ private fun DiffPaneForWorkspace(
         onWalkthroughClosed = onWalkthroughClosed,
         onReviewSubmit = { reviewSessionId?.let { actions.reviewSubmit(it) } },
         onClose = onClose,
+        writeDiffFile = { repo, path, text -> actions.workspaceFsWrite(workspaceId, if (repo.isBlank()) path else "$repo/$path", text) },
         modifier = modifier.fillMaxSize(),
     )
 }

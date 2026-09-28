@@ -430,6 +430,8 @@ fun DiffPane(
     onWalkthroughClosed: () -> Unit = {},
     onReviewSubmit: suspend () -> ReviewSubmitResult? = { null },
     onClose: () -> Unit = {},
+    /** Writes a changed file's working copy back (the native diff's revert / save); null: read-only. */
+    writeDiffFile: (suspend (repo: String, path: String, text: String) -> Boolean)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -525,6 +527,10 @@ fun DiffPane(
             // The pane's close IS the tab's close — there is no "back to the editor" here.
             onClose = onClose,
             modifier = Modifier.weight(1f),
+            // M5: each file on the native diff plugin (the same reader the walkthrough uses).
+            readFile = readWalkthroughFile,
+            writeFile = writeDiffFile,
+            onReply = { root, body -> onReviewAddComment(replyBody(root, body)); Unit },
         )
         }
     }
