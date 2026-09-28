@@ -228,12 +228,35 @@ fun Editor(
     }
     val reportViewport by rememberUpdatedState(onViewport)
     LaunchedEffect(view) {
-        view.viewport.collect {
-            if (it.isEmpty()) return@collect
-            // Plugins that asked for the viewport as state (EditorViewport) get it, once per change.
-            val known = EditorViewport.of(view.state)
-            if (known != null && known != it) view.dispatch(TransactionSpec(effects = listOf(EditorViewport.set.of(it))))
-            reportViewport(it)
+        // Plugins that asked for the viewport as state (EditorViewport, viewportEffectsFacet) get it
+        // in ONE transaction, only when the laid-out lines leave the window they were given.
+        var window: IntRange? = null
+        fun follow(laid: IntRange) {
+            if (laid.isEmpty()) return
+            val st = view.state
+            val providers = st.facet(viewportEffectsFacet)
+            val field = EditorViewport.of(st)
+            if (field == null && providers.isEmpty()) return
+            val known = if (field != null) field.takeIf { !it.isEmpty() } else window
+            if (known != null && laid.first >= known.first && laid.last <= known.last) return
+            val w = EditorViewport.around(st.doc, laid)
+            window = w
+            val effects = buildList {
+                if (field != null) add(EditorViewport.set.of(w))
+                for (p in providers) addAll(p(laid))
+            }
+            if (effects.isNotEmpty()) view.dispatch(TransactionSpec(effects = effects))
+        }
+        // Another state in this view (a document switch): its plugins start without a viewport.
+        val removeReplace = view.addReplaceListener { window = null; follow(view.viewport.value) }
+        try {
+            view.viewport.collect {
+                if (it.isEmpty()) return@collect
+                follow(it)
+                reportViewport(it)
+            }
+        } finally {
+            removeReplace()
         }
     }
 

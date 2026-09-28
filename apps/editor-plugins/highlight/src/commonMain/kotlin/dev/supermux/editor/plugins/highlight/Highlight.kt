@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.editor.compose.EditorView
 import dev.supermux.editor.compose.WidgetRegistry
+import dev.supermux.editor.compose.viewportEffectsFacet
 import dev.supermux.editor.core.Compartment
 import dev.supermux.editor.core.EditorState
 import dev.supermux.editor.core.Extension
@@ -40,7 +41,12 @@ import kotlinx.coroutines.launch
  * `Syntax.extension` (the spans field, mapped through every edit, and the language hooks) plus the
  * slot the "syntax off" panel appears in. Data only: the worker lives in a [SyntaxHost].
  */
-fun highlight(language: String?): Extension = extensionOf(Syntax.extension(language), SyntaxHost.offPanel.of(extensionOf()))
+fun highlight(language: String?): Extension = extensionOf(
+    Syntax.extension(language),
+    SyntaxHost.offPanel.of(extensionOf()),
+    // The worker's viewport rides on the surface's one viewport transaction (no second dispatch).
+    viewportEffectsFacet.of { laid -> listOf(Syntax.setViewport.of(laid)) },
+)
 
 /**
  * Owns the [SyntaxWorker] of ONE [EditorView] (spec §5, the host's side of the syntax layer):
@@ -48,7 +54,7 @@ fun highlight(language: String?): Extension = extensionOf(Syntax.extension(langu
  * - posts every transaction's state to the worker (a view listener), and a replaced state too
  *   (`setState`: another file in the same view, which the worker takes as a new document);
  * - hops the worker's results onto the UI thread ([hop], in order), dropping them once closed;
- * - feeds `Syntax.setViewport` from `view.viewport`, the surface's laid-out range;
+ * - the worker's viewport comes with the surface's one viewport transaction ([highlight]);
  * - [precompile]s the language's queries before the first parse (the web's cold start: a query
  *   compile is one uninterruptible call there);
  * - when syntax turns off for the document (too big, a line too long, a parse too slow), shows the
@@ -82,15 +88,15 @@ class SyntaxHost(
     val language: String? get() = Syntax.snapshot(view.state)?.language
 
     /**
-     * Start: the worker parses the current state and follows the view from now on. [followViewport]:
-     * also collect `view.viewport` in [scope] (it must be the UI's then); a host that already hears
-     * the surface's `Editor(onViewport = …)` calls [onViewport] itself instead.
+     * Start: the worker parses the current state and follows the view from now on. The viewport
+     * reaches the worker through the surface's own viewport transaction ([highlight] contributes
+     * `Syntax.setViewport` to it), so the host runs no collector of its own and nothing outlives
+     * [close].
      */
-    fun start(followViewport: Boolean = true) {
+    fun start() {
         if (started || closed) return
         started = true
         post(view.state)
-        if (followViewport) scope.launch { view.viewport.collect { if (!it.isEmpty()) onViewport(it) } }
     }
 
     /** Compile the shown language's queries (and those it always injects), each after [yieldBetween]. */
@@ -99,7 +105,10 @@ class SyntaxHost(
         precompileSyntax(backend, registry, lang, onCompile, yieldBetween)
     }
 
-    /** The surface's viewport, for the worker: dispatched as `Syntax.setViewport` when it changed. */
+    /**
+     * For a host WITHOUT the Compose surface (which does this itself): the viewport, dispatched as
+     * `Syntax.setViewport` when it changed.
+     */
     fun onViewport(range: IntRange) {
         if (closed) return
         if (Syntax.snapshot(view.state)?.viewport == range) return

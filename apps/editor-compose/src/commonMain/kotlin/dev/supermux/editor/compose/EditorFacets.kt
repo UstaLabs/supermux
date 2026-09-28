@@ -43,12 +43,22 @@ enum class EditorThemeMode { LIGHT, DARK, SYSTEM }
 val themeModeFacet: Facet<EditorThemeMode, EditorThemeMode?> = Facet.define("themeMode") { it.firstOrNull() }
 
 /**
+ * A plugin's effects for the surface's viewport transaction (the syntax plugin's `setViewport`):
+ * given the UTF-16 range the surface lays out, the effects to dispatch. They go out TOGETHER with
+ * [EditorViewport.set], in one transaction, only when the laid-out lines leave the current window.
+ */
+val viewportEffectsFacet: Facet<(IntRange) -> List<dev.supermux.editor.core.StateEffect<*>>, List<(IntRange) -> List<dev.supermux.editor.core.StateEffect<*>>>> = Facet.list("viewportEffects")
+
+/**
  * The surface's viewport as STATE, for plugins that decorate only what is on screen (selection
  * matches, fold arrows): CM6's `view.visibleRanges`. A plugin includes [extension]; the surface then
- * dispatches [set] with the UTF-16 range of the lines it lays out (the visible ones plus overscan)
- * whenever it changes, at most once per frame, after the frame (no userEvent: history ignores it).
- * Between two updates the range is mapped through edits. Empty until the first paint: a plugin
- * then falls back to a window around the selection.
+ * dispatches [set] with a WINDOW: the lines it lays out plus as many again above and below (about a
+ * screen of margin each side), so an ordinary scroll finds its decorations already there (no frame
+ * of lag); only when the laid-out lines leave the window does it dispatch a new one, after the frame,
+ * in ONE transaction with every [viewportEffectsFacet] effect (no userEvent: history ignores it). A
+ * fling past a whole screen in one frame shows the new lines' decorations a frame late. Between two
+ * updates the range is mapped through edits. Empty until the first paint: a plugin then falls back
+ * to a window around the selection.
  */
 object EditorViewport {
     val set: dev.supermux.editor.core.StateEffectType<IntRange> = dev.supermux.editor.core.StateEffectType("editor.viewport")
@@ -70,6 +80,17 @@ object EditorViewport {
 
     /** What a plugin includes (a field; several plugins including it share one). */
     val extension: dev.supermux.editor.core.Extension get() = EditorViewport.field
+
+    /** The window for [laid] (the laid-out range): as many lines again above and below it. */
+    internal fun around(doc: dev.supermux.editor.core.Rope, laid: IntRange): IntRange {
+        val l1 = doc.lineIndexAt(minOf(laid.first, doc.length))
+        val l2 = doc.lineIndexAt(minOf(maxOf(laid.first, laid.last), doc.length))
+        val n = l2 - l1 + 1
+        val a = doc.lineStart(maxOf(0, l1 - n))
+        val last = minOf(doc.lineCount - 1, l2 + n)
+        val b = if (last + 1 < doc.lineCount) doc.lineStart(last + 1) - 1 else doc.length
+        return a until b
+    }
 
     /** The viewport in [state], or null when no plugin asked for it. Empty before the first paint. */
     fun of(state: dev.supermux.editor.core.EditorState): IntRange? = state.fieldOrNull(field)

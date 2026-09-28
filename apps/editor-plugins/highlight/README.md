@@ -22,8 +22,11 @@ Editor(view, widgets = registry)
     worker takes a new syntax field instance (its epoch) as a new document and starts over;
   - the worker's results hop onto the UI thread in order (`hop`, by default a launch in the UI
     `scope`) and are dropped once the host is closed;
-  - `start()` feeds `Syntax.setViewport` from `view.viewport` (the surface's laid-out lines), or a
-    host calls `onViewport` itself from `Editor(onViewport = …)` (`start(followViewport = false)`);
+  - the worker's viewport rides on the surface's ONE viewport transaction: `highlight()`
+    contributes `Syntax.setViewport` through editor-compose's `viewportEffectsFacet`, dispatched only
+    when the laid-out lines leave the window the plugins were given; the host runs no collector,
+    so nothing outlives `close()` (a closed host leaves no coroutine and lets its view be collected,
+    tested with a weak reference). `onViewport` remains for a host without the Compose surface;
   - `precompile()` compiles the language's queries first (and those its documents always inject:
     Markdown's inline grammar), one task each: on the web a query compile is one uninterruptible
     call (M3a's cold start);

@@ -91,6 +91,24 @@ class SyntaxHostTest {
         delay(200)
     }
 
+    /** Made in its own frame, so nothing on the test's stack keeps the view. */
+    private suspend fun openAndClose(scope: CoroutineScope): java.lang.ref.WeakReference<EditorView> {
+        val view = withContext(ui) { EditorView(EditorState.create(kotlinText, extensions = highlight("kotlin"))) }
+        val host = withContext(ui) { SyntaxHost(view, backend, scope = scope).also { it.start() } }
+        until("colours") { TokenClasses.KEYWORD in classes(view.state) }
+        withContext(ui) { host.close() }
+        host.join()
+        return java.lang.ref.WeakReference(view)
+    }
+
+    @Test fun aClosedHostLeavesNoCoroutineAndLetsTheViewGo() = run { scope ->
+        val ref = openAndClose(scope)
+        delay(50)
+        assertTrue(scope.coroutineContext[kotlinx.coroutines.Job]!!.children.none { it.isActive }, "a coroutine of the host is still running")
+        repeat(50) { if (ref.get() != null) { System.gc(); delay(20) } }
+        assertEquals(null, ref.get(), "the closed host keeps its view alive")
+    }
+
     @Test fun aDocumentSwitchResetsTheWorker() = run { scope ->
         val view = withContext(ui) { EditorView(EditorState.create(kotlinText, extensions = highlight("kotlin"))) }
         val host = withContext(ui) { SyntaxHost(view, backend, scope = scope).also { it.start() } }

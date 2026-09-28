@@ -117,7 +117,7 @@ fun addCursorBelow(view: dev.supermux.editor.compose.EditorView) {
 /**
  * One open document: an [EditorView] with every M4a plugin (highlight, basics, history, fold, view
  * settings) and the highlight plugin's [SyntaxHost] that colours it (the worker hears every
- * transaction; the surface's viewport comes through [onViewport]); the worker's results come back
+ * transaction; the viewport comes with the surface's own viewport transaction); the worker's results come back
  * through [hop], which must run them on the UI thread in order.
  */
 class SampleSession(
@@ -138,10 +138,10 @@ class SampleSession(
     val worker: SyntaxWorker get() = host.worker
 
     init {
-        host.start(followViewport = false)
+        host.start()
     }
 
-    /** The surface's viewport, for the worker (`Editor(onViewport = …)`). */
+    /** The surface's viewport, for the worker, in a host without the surface's viewport transaction (tests). */
     fun onViewport(range: IntRange) = host.onViewport(range)
 
     /** The fold plugin's Backspace policy, switched while the document is open (its folds stay). */
@@ -172,7 +172,6 @@ fun SampleEditorPane(
         theme = theme,
         lineWrap = lineWrap,
         readOnly = readOnly,
-        onViewport = session::onViewport,
         onPaint = stats?.let { s -> { s.drawEnd() } },
         onFontSize = onFontSize,
         label = "Sample editor",

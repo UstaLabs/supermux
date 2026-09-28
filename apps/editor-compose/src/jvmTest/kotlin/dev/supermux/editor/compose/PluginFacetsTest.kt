@@ -13,20 +13,31 @@ import kotlin.test.assertTrue
 class PluginFacetsTest {
     private val text = (0 until 500).joinToString("\n") { "line $it" }
 
-    @Test fun theViewportReachesTheStateOfAPluginThatAsksForIt() {
-        editorTest(EditorState.create(text, extensions = EditorViewport.extension)) { f ->
+    @Test fun theViewportReachesTheStateWithAScreenOfMarginInOneTransaction() {
+        val seen = ArrayList<IntRange>()
+        val probe = viewportEffectsFacet.of { laid -> seen += laid; emptyList() }
+        editorTest(EditorState.create(text, extensions = dev.supermux.editor.core.extensionOf(EditorViewport.extension, probe))) { f ->
             waitForIdle()
-            val shown = EditorViewport.of(f.view.state)!!
-            assertTrue(!shown.isEmpty(), "no viewport in the state after the first paint")
-            assertEquals(f.view.viewport.value, shown)
-            assertEquals(0, shown.first)
-            f.controller.scroll.scrollBy(0f, 2000f)
+            val window = EditorViewport.of(f.view.state)!!
+            val laid = f.view.viewport.value
+            assertTrue(window.first <= laid.first && window.last >= laid.last, "the window $window does not hold the laid-out $laid")
+            assertTrue(window.last > laid.last, "no margin below the screen")
+            assertEquals(laid, seen.last(), "the plugins' viewport effects did not get the laid-out range")
+            // A small scroll stays inside the window: no transaction at all.
+            var n = 0
+            val remove = f.view.addListener { n++ }
+            f.controller.scroll.scrollBy(0f, 3 * f.controller.geometry.layouts.lineHeightPx)
             waitForIdle()
-            val scrolled = EditorViewport.of(f.view.state)!!
-            assertTrue(scrolled.first > 0, "the viewport in the state did not follow the scroll: $scrolled")
-            assertEquals(f.view.viewport.value, scrolled)
+            assertEquals(0, n, "a scroll within the window made a transaction")
+            // A long one moves it, in ONE transaction carrying every plugin's effects.
+            f.controller.scroll.scrollBy(0f, 4000f)
+            waitForIdle()
+            assertEquals(1, n)
+            remove()
+            val moved = EditorViewport.of(f.view.state)!!
+            assertTrue(moved.first > 0 && moved.first <= f.view.viewport.value.first, "the window did not follow: $moved")
         }
-        // Without the field, no transaction is made for it.
+        // Without the field or any viewport effect, no transaction is made for it.
         editorTest(EditorState.create(text)) { f ->
             var n = 0
             f.view.addListener { n++ }
