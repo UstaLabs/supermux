@@ -8,6 +8,7 @@ import dev.supermux.net.FsEntry
 import dev.supermux.proto.ClientFrame
 import dev.supermux.proto.ServerFrame
 import dev.supermux.ui.editor.DocumentStore
+import dev.supermux.ui.editor.EditorState
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -102,5 +103,38 @@ class FileStaleWatcherTest {
         fs.onFrame(dir("/w/build", "2", "a.kt" to 5))  // mkdir build && regenerate
         waitForIdle()
         assertTrue(docs.isStale("build/a.kt"))
+    }
+
+    // The session-scoped editor (Android's session-only chat) keeps its files in an EditorState,
+    // not a workspace DocumentStore; the same watcher feeds its banner.
+    @Test fun theSessionEditorsOwnSaveIsQuietAndAnOutsideChangeIsReported() = runComposeUiTest {
+        val sent = mutableListOf<ClientFrame>()
+        val fs = service(sent)
+        val write = CompletableDeferred<Boolean>()
+        val editor = EditorState({ Result.success("x") }, { _, _ -> write.await() }, CoroutineScope(Dispatchers.Unconfined))
+        setContent { FileStaleWatcher(fs, "/w", editor) }
+        editor.openFile("src/a.kt")
+        editor.openFile("src/b.kt")
+        waitForIdle()
+        assertTrue(ClientFrame.FsSub("/w/src") in sentCopy(sent))
+        fs.onFrame(dir("/w/src", "1", "a.kt" to 1, "b.kt" to 1))
+        waitForIdle()
+        editor.selectTab("src/a.kt")
+        editor.updateContent("src/a.kt", "edited")
+        editor.saveActive()
+        fs.onFrame(dir("/w/src", "2", "a.kt" to 2, "b.kt" to 1))
+        waitForIdle()
+        write.complete(true)
+        waitForIdle()
+        assertFalse(editor.isStale("src/a.kt"))
+        // Someone else touches b.kt.
+        fs.onFrame(dir("/w/src", "3", "a.kt" to 2, "b.kt" to 9))
+        waitForIdle()
+        assertTrue(editor.isStale("src/b.kt"))
+        assertFalse(editor.isStale("src/a.kt"))
+        editor.closeTab("src/a.kt")
+        editor.closeTab("src/b.kt")
+        waitForIdle()
+        assertTrue(ClientFrame.FsUnsub("/w/src") in sentCopy(sent))
     }
 }

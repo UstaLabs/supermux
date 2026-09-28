@@ -50,7 +50,7 @@ class DocumentStore(
     private val fsRead: suspend (String) -> Result<String>,
     private val fsWrite: suspend (String, String) -> Boolean,
     private val scope: CoroutineScope,
-) {
+) : WatchedDocuments {
     /** Open documents by path. A snapshot map so a composable reading [get]/[isDirty] is
      *  invalidated when a document appears or is closed, exactly as the old `tabs` list was. */
     private val docs = mutableStateMapOf<String, Document>()
@@ -60,8 +60,7 @@ class DocumentStore(
     var saving by mutableStateOf(false)
 
     /** Workdir-relative paths changed on disk behind an open document → reload banner. Fed by
-     *  [dev.supermux.ui.files.FileStaleWatcher]'s folder subscriptions (and, in the session-scoped
-     *  editor, by fs_changed pulses). */
+     *  [dev.supermux.ui.files.FileStaleWatcher]'s folder subscriptions. */
     var changedPaths by mutableStateOf(setOf<String>())
 
     /** Paths whose in-flight load was cancelled by [close] — the load result is dropped, never
@@ -84,19 +83,11 @@ class DocumentStore(
     fun get(path: String): Document? = docs[path]
 
     /** Paths of the open documents (a snapshot read: a composable reading it follows opens/closes). */
-    val openPaths: Set<String> get() = docs.keys.toSet()
+    override val openPaths: Set<String> get() = docs.keys.toSet()
 
-    /** Something that must know when this store writes a file itself (the stale-banner tracker:
-     *  our own save changes the file's mtime too, and must not read as "changed on disk"). */
-    interface WriteObserver {
-        fun writeStarted(path: String)
-        fun writeFinished(path: String, ok: Boolean)
-    }
+    private val writeObservers = mutableListOf<WatchedDocuments.WriteObserver>()
 
-    private val writeObservers = mutableListOf<WriteObserver>()
-
-    /** Register [observer]; the returned function unregisters it. */
-    fun observeWrites(observer: WriteObserver): () -> Unit {
+    override fun observeWrites(observer: WatchedDocuments.WriteObserver): () -> Unit {
         writeObservers += observer
         return { writeObservers -= observer }
     }
@@ -225,7 +216,7 @@ class DocumentStore(
     // ── Live file-watch reload (ports EditorState.swift:79-84, 130-144) ─────────
 
     /** Record disk-change notifications (workdir-relative paths, leading slash optional). */
-    fun markChanged(paths: List<String>) {
+    override fun markChanged(paths: List<String>) {
         changedPaths = changedPaths + paths.map(::normPath)
     }
 

@@ -49,7 +49,7 @@ class EditorState(
     fsRead: suspend (String) -> Result<String>,
     fsWrite: suspend (String, String) -> Boolean,
     scope: CoroutineScope,
-) {
+) : WatchedDocuments {
     val documents = DocumentStore(fsRead, fsWrite, scope)
     val diff = DiffState()
 
@@ -166,7 +166,15 @@ class EditorState(
     }
 
     /** Record disk-change notifications (workdir-relative paths, leading slash optional). */
-    fun markChanged(paths: List<String>) = documents.markChanged(paths)
+    override fun markChanged(paths: List<String>) = documents.markChanged(paths)
+
+    /** The open files (every tab's document lives in [documents]). */
+    override val openPaths: Collection<String> get() = documents.openPaths
+
+    /** Our own saves ([saveActive] → [DocumentStore.save], which brackets the write and finishes it
+     *  in a `finally`), for the stale-banner watcher. */
+    override fun observeWrites(observer: WatchedDocuments.WriteObserver): () -> Unit =
+        documents.observeWrites(observer)
 
     fun isStale(path: String): Boolean = documents.isStale(path)
 

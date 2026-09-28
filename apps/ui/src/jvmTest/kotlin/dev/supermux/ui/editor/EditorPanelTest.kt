@@ -27,7 +27,6 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -51,7 +50,6 @@ class EditorPanelTest {
 
     private fun host(
         widthClass: WindowWidthClass,
-        fsChanges: MutableSharedFlow<ServerFrame.FsChanged> = MutableSharedFlow(),
         pendingOpen: PendingEditorOpen? = null,
         read: (String) -> Result<String> = { Result.success("hello") },
     ): @Composable () -> Unit = {
@@ -65,7 +63,6 @@ class EditorPanelTest {
                     state = EditorPanelState(
                         sessionId = "s1",
                         workdir = "/w",
-                        fsChanges = fsChanges,
                     ),
                     actions = EditorPanelActions(
                         fileSystem = fs,
@@ -136,30 +133,31 @@ class EditorPanelTest {
         onNodeWithTag("editor_tab_a.kt").assertIsDisplayed()
     }
 
+    private fun snap(version: String, vararg files: Pair<String, Long>) =
+        ServerFrame.FsDir(path = "/w", version = version, entries = files.map { (n, m) -> FsEntry(name = n, type = "file", mtime = m, size = 1) })
+
     @Test
-    fun an_fs_change_on_the_open_file_raises_the_stale_banner() = runComposeUiTest {
-        val changes = MutableSharedFlow<ServerFrame.FsChanged>(extraBufferCapacity = 4)
-        setContent(
-            host(WindowWidthClass.Expanded, fsChanges = changes, pendingOpen = PendingEditorOpen("a.kt", null, null)),
-        )
+    fun an_outside_change_to_the_open_file_raises_the_stale_banner() = runComposeUiTest {
+        setContent(host(WindowWidthClass.Expanded, pendingOpen = PendingEditorOpen("a.kt", null, null)))
+        waitForIdle()
+        fs.onFrame(snap("1", "a.kt" to 1, "b.kt" to 1))
         waitForIdle()
         onNodeWithTag("editor_stale_banner").assertDoesNotExist()
 
-        assertTrue(changes.tryEmit(ServerFrame.FsChanged(session = "s1", paths = listOf("a.kt"))))
+        fs.onFrame(snap("2", "a.kt" to 2, "b.kt" to 1))
         waitForIdle()
 
         onNodeWithTag("editor_stale_banner").assertIsDisplayed()
     }
 
     @Test
-    fun an_fs_change_for_another_session_is_ignored() = runComposeUiTest {
-        val changes = MutableSharedFlow<ServerFrame.FsChanged>(extraBufferCapacity = 4)
-        setContent(
-            host(WindowWidthClass.Expanded, fsChanges = changes, pendingOpen = PendingEditorOpen("a.kt", null, null)),
-        )
+    fun a_change_to_a_file_that_is_not_open_is_ignored() = runComposeUiTest {
+        setContent(host(WindowWidthClass.Expanded, pendingOpen = PendingEditorOpen("a.kt", null, null)))
+        waitForIdle()
+        fs.onFrame(snap("1", "a.kt" to 1, "b.kt" to 1))
         waitForIdle()
 
-        assertTrue(changes.tryEmit(ServerFrame.FsChanged(session = "other", paths = listOf("a.kt"))))
+        fs.onFrame(snap("2", "a.kt" to 1, "b.kt" to 7))
         waitForIdle()
 
         onNodeWithTag("editor_stale_banner").assertDoesNotExist()

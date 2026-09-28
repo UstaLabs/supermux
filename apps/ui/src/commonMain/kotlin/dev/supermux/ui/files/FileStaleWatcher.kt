@@ -10,16 +10,17 @@ import androidx.compose.runtime.rememberUpdatedState
 import dev.supermux.fs.DirSnapshot
 import dev.supermux.fs.DirState
 import dev.supermux.fs.FileSystemService
-import dev.supermux.ui.editor.DocumentStore
+import dev.supermux.ui.editor.WatchedDocuments
 
 /**
- * Feeds [documents]' "changed on disk" banner from folder subscriptions: one subscription per
+ * Feeds [documents]' "changed on disk" banner (the workspace's DocumentStore, or the session-scoped
+ * editor's EditorState) from folder subscriptions: one subscription per
  * distinct parent folder of an open document (shared by every document in it, released when the
  * last one there closes), compared by a [FileChangeTracker]. Our own saves are bracketed through
- * [DocumentStore.observeWrites] so they never raise the banner. Draws nothing.
+ * [WatchedDocuments.observeWrites] so they never raise the banner. Draws nothing.
  */
 @Composable
-fun FileStaleWatcher(fileSystem: FileSystemService?, workdir: String, documents: DocumentStore) {
+fun FileStaleWatcher(fileSystem: FileSystemService?, workdir: String, documents: WatchedDocuments) {
     if (fileSystem == null) return
     val tracker = remember(fileSystem, workdir, documents) { FileChangeTracker() }
     // abs → the workdir-relative path the document store knows it by.
@@ -32,7 +33,7 @@ fun FileStaleWatcher(fileSystem: FileSystemService?, workdir: String, documents:
         relByAbs.keys.forEach(tracker::track)
     }
     DisposableEffect(tracker) {
-        val stop = documents.observeWrites(object : DocumentStore.WriteObserver {
+        val stop = documents.observeWrites(object : WatchedDocuments.WriteObserver {
             override fun writeStarted(path: String) = tracker.beginWrite(absoluteInWorkdir(workdir, path))
             override fun writeFinished(path: String, ok: Boolean) = tracker.endWrite(absoluteInWorkdir(workdir, path))
         })

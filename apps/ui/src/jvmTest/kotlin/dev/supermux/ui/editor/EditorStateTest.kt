@@ -745,4 +745,69 @@ class EditorStateTest {
 
         assertEquals("commit:abc1234", seenBase) // reloadDiff re-uses the selected base, not the default
     }
+
+    // ── WatchedDocuments: what the stale-banner watcher needs from the session editor ─────────
+
+    private class RecordingObserver : WatchedDocuments.WriteObserver {
+        val events = mutableListOf<String>()
+        override fun writeStarted(path: String) { events += "start:$path" }
+        override fun writeFinished(path: String, ok: Boolean) { events += "finish:$path:$ok" }
+    }
+
+    @Test fun open_paths_follow_the_open_tabs() {
+        val s: WatchedDocuments = state().also {
+            it.openFile("a.txt")
+            it.openFile("src/b.kt")
+            it.closeTab("a.txt")
+        }
+        assertEquals(setOf("src/b.kt"), s.openPaths.toSet())
+    }
+
+    @Test fun a_save_brackets_the_write_for_observers() {
+        val gate = CompletableDeferred<Unit>()
+        val s2 = EditorState(
+            fsRead = { Result.success("x") },
+            fsWrite = { _, _ -> gate.await(); true },
+            scope = TestScope(UnconfinedTestDispatcher()),
+        )
+        val obs = RecordingObserver()
+        val stop = s2.observeWrites(obs)
+        s2.openFile("a.txt")
+        s2.updateContent("a.txt", "edited")
+        s2.saveActive()
+        assertEquals(listOf("start:a.txt"), obs.events) // still in flight
+        gate.complete(Unit)
+        assertEquals(listOf("start:a.txt", "finish:a.txt:true"), obs.events)
+        stop()
+        s2.updateContent("a.txt", "again")
+        s2.saveActive()
+        assertEquals(2, obs.events.size) // unregistered
+        assertFalse(s2.saving)
+    }
+
+    @Test fun a_failed_save_still_finishes_the_write() {
+        val s = state(writeSucceeds = false)
+        val obs = RecordingObserver()
+        s.observeWrites(obs)
+        s.openFile("a.txt")
+        s.updateContent("a.txt", "edited")
+        s.saveActive()
+        assertEquals(listOf("start:a.txt", "finish:a.txt:false"), obs.events)
+    }
+
+    @Test fun a_throwing_save_still_finishes_the_write() {
+        val s = EditorState(
+            fsRead = { Result.success("x") },
+            fsWrite = { _, _ -> throw RuntimeException("network") },
+            scope = CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined + kotlinx.coroutines.CoroutineExceptionHandler { _, _ -> }),
+        )
+        val obs = RecordingObserver()
+        s.observeWrites(obs)
+        s.openFile("a.txt")
+        s.updateContent("a.txt", "edited")
+        s.saveActive()
+        assertEquals(listOf("start:a.txt", "finish:a.txt:false"), obs.events)
+        assertFalse(s.saving)
+        assertTrue(s.isDirty("a.txt"))
+    }
 }

@@ -190,15 +190,11 @@ fun ChatScreen(
     reviewAddComment: suspend (dev.supermux.net.AddCommentBody) -> dev.supermux.net.ReviewComment? = { null },
     reviewResolve: suspend (String) -> Boolean = { false },
     reviewSubmit: suspend () -> dev.supermux.net.ReviewSubmitResult? = { null },
-    // Editor LSP + live file-watch — app-wide flows + session-bound senders.
-    fsChanges: kotlinx.coroutines.flow.Flow<dev.supermux.proto.ServerFrame.FsChanged> =
-        kotlinx.coroutines.flow.MutableSharedFlow(),
+    // Editor LSP — app-wide flows + session-bound senders.
     lspStatus: kotlinx.coroutines.flow.StateFlow<Map<String, dev.supermux.proto.ServerFrame.LspStatus>> =
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap()),
     lspRpc: kotlinx.coroutines.flow.Flow<dev.supermux.proto.ServerFrame.LspRpcIn> =
         kotlinx.coroutines.flow.MutableSharedFlow(),
-    editorOpen: (String) -> Unit = {},
-    editorClose: (String) -> Unit = {},
     lspStatusQuery: (String, String) -> Unit = { _, _ -> },
     lspOpen: (String, String) -> Unit = { _, _ -> },
     lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
@@ -699,7 +695,6 @@ fun ChatScreen(
                     state = EditorPanelState(
                         sessionId = session.id,
                         workdir = session.workdir,
-                        fsChanges = fsChanges,
                         lspStatus = lspStatus,
                         lspRpc = lspRpc,
                     ),
@@ -713,8 +708,6 @@ fun ChatScreen(
                         reviewAddComment = reviewAddComment,
                         reviewResolve = reviewResolve,
                         reviewSubmit = reviewSubmit,
-                        editorOpen = editorOpen,
-                        editorClose = editorClose,
                         lspStatusQuery = lspStatusQuery,
                         lspOpen = lspOpen,
                         lspRpcOut = lspRpcOut,
