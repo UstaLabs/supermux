@@ -63,7 +63,7 @@ import dev.supermux.ui.editor.DiffPane
 import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerPane
-import dev.supermux.ui.editor.ExplorerState
+import dev.supermux.ui.files.TreeViewStates
 import dev.supermux.ui.editor.FilePane
 import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.platform.LocalPlatform
@@ -137,6 +137,14 @@ fun ViewHost(
      * unsaved text on both sides and a drag between groups cannot lose an edit.
      */
     documents: DocumentStore? = null,
+    /**
+     * The WORKSPACE's Files-pane view states, one per view id. Held by the workspace (next to
+     * [documents]) so a Files pane's open folders survive a drag/split/re-tab. Null → a holder
+     * scoped to this host (correct, just forgetful across remounts).
+     */
+    treeStates: TreeViewStates? = null,
+    /** Workdir-relative path of the workspace's active `file` view — the Files tree highlights it. */
+    activeFilePath: String? = null,
     /**
      * "Open this workdir-relative path" — from the explorer, from a search result, from a file
      * path tapped in a chat transcript. The workspace decides which group it lands in.
@@ -284,7 +292,10 @@ fun ViewHost(
                 else -> ExplorerPaneForWorkspace(
                     actions = actions,
                     workspaceId = workspaceId,
+                    viewId = view.id,
                     workdir = workdir,
+                    treeStates = treeStates ?: remember(workspaceId) { TreeViewStates() },
+                    activeRelativePath = activeFilePath,
                     onOpenFile = { p -> onOpenFile(p, null, null) },
                     modifier = modifier.testTag("editor-$workdir"),
                 )
@@ -598,24 +609,29 @@ private fun rememberWorkspaceDocuments(actions: ShellActions, workspaceId: Strin
     }
 }
 
-/** Explorer adapter — the file tree + filename search over `/workspaces/:id/fs*`. */
+/** Explorer adapter — the live host tree ([FileSystemService]) + filename search. */
 @Composable
 private fun ExplorerPaneForWorkspace(
     actions: ShellActions,
     workspaceId: String,
+    viewId: String,
     workdir: String,
+    treeStates: TreeViewStates,
+    activeRelativePath: String?,
     onOpenFile: (String) -> Unit,
     modifier: Modifier,
 ) {
-    // Per-explorer-pane state: two explorer panes may be expanded to different depths, which is
-    // fine — the tree is a view of the disk, not of anything the workspace owns.
-    val explorer = remember(workspaceId) { ExplorerState() }
+    // Per-VIEW state held outside the pane (the holder outlives it): two explorer panes may sit at
+    // different roots/depths, and a drag or split must not reset either.
+    val view = remember(treeStates, viewId, workdir) { treeStates.forView(viewId, workdir) }
+    val notices = LocalPlatform.current.notices
     ExplorerPane(
-        fsList = { p -> actions.workspaceFsListResult(workspaceId, p) },
-        explorer = explorer,
+        fileSystem = actions.fileSystemFor(workspaceId),
+        view = view,
         workdir = workdir,
         onOpenFile = onOpenFile,
-        fsSearch = { q -> actions.workspaceFsSearch(workspaceId, q) },
+        activeRelativePath = activeRelativePath,
+        onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
         modifier = modifier.fillMaxSize(),
     )
 }

@@ -72,7 +72,6 @@ import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
-import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.ReviewComment
@@ -87,49 +86,77 @@ import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.editor.engine.EditorScrollReader
+import dev.supermux.fs.FileSystemService
+import dev.supermux.ui.files.FileTreeHeader
+import dev.supermux.ui.files.FileTreeView
+import dev.supermux.ui.files.TreeViewState
+import dev.supermux.ui.files.childOf
+import dev.supermux.ui.files.relativeToWorkdir
 
 // ── Explorer ──────────────────────────────────────────────────────────────────────────────────
 
 /**
  * The file tree and the filename search, as a pane.
  *
- * This is [EditorPanel]'s 192dp sidebar plus its search field, with the sidebar's fixed width
- * removed: a pane is sized by the splitter around it, which is the point of the change — the tree
- * is a real split, not a strip nailed to the side of the editor.
+ * The tree is the live host tree ([FileTreeView]) over [fileSystem]; its paths are ABSOLUTE. What
+ * leaves the pane is workdir-relative: [onOpenFile] gets a path relative to [workdir], and a file
+ * outside the workdir (reachable by browsing up via the breadcrumbs) goes to [onOutsideWorkdir]
+ * instead — the document/editor code cannot open it yet.
+ *
+ * [view] is held by the caller (per view id, outliving the pane), so a drag/split/re-tab keeps the
+ * open folders, selection and scroll.
  *
  * [onOpenFile] is a REQUEST, not an action: the pane does not know where the file will land. The
  * workspace decides that (see WorkspaceFileOpen.kt) and owns the document.
  */
 @Composable
 fun ExplorerPane(
-    fsList: suspend (String) -> Result<List<FsEntry>>,
-    explorer: ExplorerState,
+    fileSystem: FileSystemService?,
+    view: TreeViewState,
     workdir: String,
-    onOpenFile: (String) -> Unit,
+    onOpenFile: (relativePath: String) -> Unit,
     modifier: Modifier = Modifier,
-    fsSearch: suspend (String) -> List<FsSearchResult> = { emptyList() },
+    activeRelativePath: String? = null,
+    onOutsideWorkdir: (absolutePath: String) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val focusManager = LocalFocusManager.current
     val searchResults = remember { mutableStateListOf<FsSearchResult>() }
 
     // Same 200ms debounce as the composite panel — a keystroke must not be a broker round trip.
-    LaunchedEffect(explorer.searchQuery) {
+    // (Task 10 replaces this with the fuzzy search.)
+    LaunchedEffect(view.query, fileSystem) {
         delay(200)
-        val q = explorer.searchQuery.trim()
-        if (q.isEmpty()) {
-            searchResults.clear()
-            return@LaunchedEffect
-        }
+        val q = view.query.trim()
         searchResults.clear()
-        searchResults.addAll(fsSearch(q))
+        if (q.isEmpty() || fileSystem == null) return@LaunchedEffect
+        val hits = fileSystem.search(workdir, q).getOrNull().orEmpty()
+        searchResults.addAll(
+            hits.mapNotNull { h ->
+                val rel = relativeToWorkdir(workdir, h.path)?.takeIf { it != "." } ?: return@mapNotNull null
+                FsSearchResult(path = rel, name = h.name, type = h.type)
+            },
+        )
     }
 
-    fun open(path: String) {
+    fun clearSearch() {
         focusManager.clearFocus()
-        explorer.searchQuery = ""
+        view.query = ""
         searchResults.clear()
+    }
+
+    fun openRelative(path: String) {
+        clearSearch()
         onOpenFile(path)
+    }
+
+    val openAbsolute: (String) -> Unit = { abs ->
+        val rel = relativeToWorkdir(workdir, abs)?.takeIf { it != "." }
+        if (rel != null) onOpenFile(rel) else onOutsideWorkdir(abs)
+    }
+
+    val activePath = activeRelativePath?.takeIf { it.isNotEmpty() && it != "." }?.let { rel ->
+        rel.split('/').filter { it.isNotEmpty() }.fold(workdir) { acc, seg -> childOf(acc, seg) }
     }
 
     // The tag goes on an INNER node, never on the caller's modifier: two testTag calls on one
@@ -142,25 +169,35 @@ fun ExplorerPane(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 EditorSearchField(
-                    query = explorer.searchQuery,
-                    onQueryChange = { explorer.searchQuery = it },
+                    query = view.query,
+                    onQueryChange = { view.query = it },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+            FileTreeHeader(view = view, fileSystem = fileSystem)
             HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
-            Box(Modifier.weight(1f).fillMaxWidth().testTag("editor_tree")) {
-                FileTree(fsList = fsList, explorer = explorer, workdir = workdir, onOpenFile = { open(it) })
+            // FileTreeView tags its own list `editor_tree`; the offline hint carries the tag itself
+            // so the pane has exactly one `editor_tree` node either way.
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (fileSystem == null) {
+                    Box(Modifier.fillMaxSize().testTag("editor_tree"), contentAlignment = Alignment.Center) {
+                        Text("Host offline", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("editor_tree_offline"))
+                    }
+                } else {
+                    FileTreeView(
+                        fileSystem = fileSystem,
+                        view = view,
+                        onOpenFile = openAbsolute,
+                        activePath = activePath,
+                    )
+                }
             }
         }
         if (searchResults.isNotEmpty()) {
             EditorSearchOverlay(
                 results = searchResults,
-                onSelect = { open(it) },
-                onDismiss = {
-                    focusManager.clearFocus()
-                    explorer.searchQuery = ""
-                    searchResults.clear()
-                },
+                onSelect = { openRelative(it) },
+                onDismiss = { clearSearch() },
                 modifier = Modifier.fillMaxSize(),
             )
         }

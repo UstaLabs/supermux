@@ -1,5 +1,6 @@
 package dev.supermux.ui.workspace
 
+import dev.supermux.ui.files.TreeViewStates
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateMapOf
@@ -29,6 +30,8 @@ class WorkspaceSession(
     val fileOpener: WorkspaceFileOpener,
     /** Fresh client-minted view ids (cluster G8: the phone/tablet add-view paths need one too). */
     val newId: () -> String = { "" },
+    /** Per-view Files-tree state (open folders, root, selection, scroll), outliving the panes. */
+    val treeStates: TreeViewStates = TreeViewStates(),
 )
 
 /**
@@ -97,6 +100,8 @@ fun rememberWorkspaceSession(
     // FilePane, driven by a button in that pane's action row; the row is
     // gone and the tab owns the toggle, so the state lives out here.
     val previewModes = remember(workspace.id) { mutableStateMapOf<String, Boolean>() }
+    // Files-pane view state per view id — held here, beside the documents, so it outlives panes.
+    val treeStates = remember(workspace.id) { TreeViewStates() }
     val fileOpener = WorkspaceFileOpener(
         workspaceId = workspace.id,
         treeOf = { layoutSync.tree },
@@ -124,5 +129,6 @@ fun rememberWorkspaceSession(
         viewsById = viewsById,
         fileOpener = fileOpener,
         newId = newId,
+        treeStates = treeStates,
     )
 }

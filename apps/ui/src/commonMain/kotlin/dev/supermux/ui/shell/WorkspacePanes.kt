@@ -90,6 +90,7 @@ import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.NewViewPlacement
+import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.setActiveViewInGroup
@@ -632,6 +633,14 @@ private fun WorkspacePaneContent(
                 chatActions = { s -> rememberChatActions(viewApp, s) },
                 drafts = drafts,
                 documents = documents,
+                treeStates = ws.treeStates,
+                // The first group (in layout order) whose active tab is a document — cheap, and
+                // good enough until Task 7 tracks the focused group.
+                activeFilePath = if (v.kind == "editor") {
+                    collectActiveViewIds(layoutSync.tree).firstNotNullOfOrNull { id ->
+                        viewsById[id]?.takeIf { it.kind == "editor" && it.stateString("mode") == "file" }?.stateString("path")
+                    }
+                } else null,
                 onOpenFile = { p, line, endLine ->
                     fileOpener.open(
                         p, line, endLine,
