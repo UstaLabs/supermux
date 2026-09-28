@@ -10,6 +10,7 @@ import androidx.core.view.WindowCompat
 import dev.supermux.android.platform.rememberAndroidPlatform
 import dev.supermux.android.platform.rememberInputMode
 import dev.supermux.android.platform.rememberPointerAvailable
+import dev.supermux.android.platform.rememberHardwareKeyboard
 import dev.supermux.ui.adaptive.rememberWindowWidthClass
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.prefs.UiPrefs
@@ -60,6 +61,7 @@ fun AndroidTheme(
         uiPrefs = uiPrefs,
         inputMode = rememberInputMode(),
         pointerAvailable = rememberPointerAvailable(),
+        hardwareKeyboard = rememberHardwareKeyboard(),
         // `containerSize` is 0 during the very first composition, and the shared helper maps 0 →
         // Expanded — right for desktop, wrong for a phone. `screenWidthDp` covers that one frame.
         // NOT the other way round: `screenWidthDp` excludes the system bars before API 35, so the

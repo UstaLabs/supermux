@@ -127,7 +127,6 @@ import { TerminalManager } from "./core/terminal/manager"
 import { DisplayManager } from "./core/display/manager"
 import { LinuxXvfbProvider } from "./core/display/providers/linux-xvfb"
 import { MacosScreenProvider } from "./core/display/providers/macos-screen"
-import { FsWatcher } from "./core/editor/fs-watcher"
 import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
 import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
@@ -676,7 +675,7 @@ const channels: Record<string, Channel> = {
 // thin aliases below keep existing call sites unchanged while the handlers
 // migrate into the component stage by stage.
 // Collaborators enter as narrow ports, once, here. Everything declared later in
-// this file (terminalManager, displayManager, fsWatcher, commandRegistry, the
+// this file (terminalManager, displayManager, commandRegistry, the
 // socket server, …) is deref'd lazily inside a closure — and webChannel/agentRpc
 // are `let`-assigned much later, so their thunks must never capture the value.
 const sessionManager = new SessionManager(registry, {
@@ -700,7 +699,6 @@ const sessionManager = new SessionManager(registry, {
   },
   cleanup: {
     terminals: { killAllForSession: (name) => terminalManager.killAllForSession(name) },
-    fsWatcher: { killSession: (name) => fsWatcher.killSession(name) },
     stopClaudeTailer,
     releaseDraftAttachments: (payload) => releaseDraftAttachmentRefs(payload),
 
@@ -1283,7 +1281,6 @@ const wsDto = (id: string) => {
   const w = registry.workspaces.getById(id)
   return w ? toWsDto(w) : undefined
 }
-const fsWatcher = new FsWatcher()
 
 function spawnLoginProc(kind: string) {
   // Per-kind command lines live in each agents/<kind>/auth.ts; this stays a
@@ -2059,13 +2056,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         createdAt: oldest?.created_at ?? ws.created_at,
       }
     },
-    // sessions.workspace_id lives on disk; SessionRecord does not expose it.
-    getSessionWorkspaceId: (id) => {
-      const row = db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(id) as
-        | { workspace_id: string | null }
-        | null
-      return row?.workspace_id ?? undefined
-    },
     proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
     proxyMainHost: MUX_WEB_PUBLIC_URL ? new URL(MUX_WEB_PUBLIC_URL).host : undefined,
     proxyLookup: (domain: string) => {
@@ -2118,7 +2108,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     listDisplays: () => displayManager.list(),
     startDisplay: (args) => displayManager.start({ sessionDisplayName: args.sessionName, provider: args.provider as any, device: args.device, width: args.width, height: args.height }),
     stopDisplay: (id) => displayManager.stop(id),
-    fsWatcher,
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
     getSessionTmuxTarget: async (id) => {
       const s = registry.get(id)

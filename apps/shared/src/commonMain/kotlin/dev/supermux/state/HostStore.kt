@@ -4,7 +4,7 @@
 // BrokerApi (HTTP) and reduces inbound ServerFrames into StateFlows the Compose UI observes.
 // The Milestone-1 surface is ported here — sessions / messages / activity / agentState / bgTasks /
 // commands + the send/viewing/control paths — plus the M3 editor filesystem surface (fsList/fsRead/
-// fsWrite/fsSearch, editorOpen/editorClose, and the fs_changed → [fsChanges] fold) and the M4b finish
+// fsWrite/fsSearch) and the M4b finish
 // surface (the finish_job + session_git reducer branches + finish/finishReadiness/verifySuggest/
 // verifySave/clearFinishJob). Still-out-of-scope frames (LSP, displays) and features (uploads beyond
 // Send args, dictation, models/reasoning, drafts, push, notifications) are deliberately no-op'd so the
@@ -35,7 +35,6 @@ import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.FsDiffResult
-import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.GitOpResult
@@ -208,6 +207,9 @@ class HostStore(
     private val apiWorktreeDelete by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpWorktreeDelete.value) }
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
 
+    /** The host's file-system service (spec 2026-09-27): shared folder listings for every pane. */
+    val fileSystem = dev.supermux.fs.FileSystemService(api, send = { sendFrame(it) }, scope = stateScope)
+
     // ── Viewing presence (mirrors iOS BrokerSession / web useViewing) ──────────────
     /** Session ids of chats currently on screen (one per visible group), or empty. */
     private var viewingSessionIds: List<String> = emptyList()
@@ -276,25 +278,11 @@ class HostStore(
     private val _ackedFinish = MutableStateFlow<Map<String, Double>>(emptyMap())
     val ackedFinish: StateFlow<Map<String, Double>> = _ackedFinish
 
-    // ── Editor file-watch (M3) ─────────────────────────────────────────────────────
-    // The reducer folds inbound fs_changed frames into this app-wide SharedFlow (mirrors Android's
-    // AppViewModel.fsChanges). Each EditorPanel collects it and calls its EditorState.markChanged
-    // FILTERED to its own session — the stale-on-disk banner is dead without this stream. A replay
-    // of 0 (transient signal, not state) + a 64-deep buffer with DROP_OLDEST: the default overflow
-    // policy (SUSPEND) makes tryEmit fail on a full buffer, dropping the NEWEST pulse — exactly the
-    // one the banner needs. DROP_OLDEST keeps the freshest change flowing instead (trivially better
-    // than Android's default-policy flow — backport candidate).
-    private val _fsChanges = MutableSharedFlow<ServerFrame.FsChanged>(
-        extraBufferCapacity = 64,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
-    val fsChanges: SharedFlow<ServerFrame.FsChanged> = _fsChanges.asSharedFlow()
-
     // ── Notifications (M5-3) ────────────────────────────────────────────────────────
     // Raw agent-reply pulses (direction="outbound", op="reply" MessageAppend entries only),
     // folded by [reduce] and consumed by AppShell's NotificationController — see
-    // NotifyDecision.kt for the PURE viewed/muted decision this flow feeds. Same replay-0 +
-    // bounded-buffer shape as [fsChanges]: DROP_OLDEST keeps the freshest reply flowing rather
+    // NotifyDecision.kt for the PURE viewed/muted decision this flow feeds. A replay-0 +
+    // bounded buffer with DROP_OLDEST (transient signal, not state): DROP_OLDEST keeps the freshest reply flowing rather
     // than suspending the reducer on a full buffer — a burst of replies while the collector is
     // briefly busy shouldn't block message delivery, and NotificationDedup coalesces the burst
     // into one toast regardless.
@@ -436,7 +424,9 @@ class HostStore(
                 sendViewingIfChanged()
                 refreshAgentModels()
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
+                fileSystem.onReconnect()
             }
+            is ServerFrame.FsDir, is ServerFrame.FsGone, is ServerFrame.FsErr -> fileSystem.onFrame(frame)
             ServerFrame.AgentModelsChanged -> refreshAgentModels()
             is ServerFrame.SessionRemoved -> {
                 walkthroughs.remove(frame.id)
@@ -450,7 +440,9 @@ class HostStore(
             is ServerFrame.AgentState -> {
                 _pendingSend.update { it - frame.session }
             }
-            is ServerFrame.FsChanged -> _fsChanges.tryEmit(frame)
+            // Legacy per-session watcher pulse from an older broker. The "changed on disk" banner
+            // now comes from fs_sub folder subscriptions (FileSystemService), so it is ignored.
+            is ServerFrame.FsChanged -> Unit
             is ServerFrame.WalkthroughUpdated -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.ReviewCommentFrame -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
@@ -1145,50 +1137,10 @@ class HostStore(
         runApi("stopDisplay") { api.stopDisplay(id) }
     }
 
-    // ── Editor filesystem + lifecycle (M3; mirrors AppViewModel.fsList/fsRead/fsWrite/fsSearch
-    //    + editorOpen/editorClose) ─────────────────────────────────────────────────────
+    // ── Editor filesystem (M3; mirrors AppViewModel.fsList/fsRead/fsWrite/fsSearch) ────────────────────────────────────────────────────────────────
     // The EditorPanel binds these to path-only lambdas capturing the session, exactly as Android's
     // ChatScreen binds the AppViewModel wrappers. All broker calls run through [runApi] EXCEPT
     // [fsRead] (see its note — it must preserve the FsException message for the editor's error UI).
-
-    /** GET /sessions/<id>/fs → directory listing (workdir-relative). Empty on any failure — use
-     *  [fsListResult] where a failed listing must be TOLD APART from an empty directory. */
-    suspend fun fsList(session: SessionInfo, path: String): List<FsEntry> =
-        fsListResult(session, path).getOrElse { emptyList() }
-
-    /**
-     * GET /sessions/<id>/fs as a Result — same shape and rationale as [fsRead]: NOT run through
-     * [runApi], because the failure message has to reach the file tree's error row (a swallowed
-     * failure renders as an empty directory, which is what made that row unreachable until cluster
-     * C1). runApi's cancellation discipline is preserved inline.
-     */
-    suspend fun fsListResult(session: SessionInfo, path: String): Result<List<FsEntry>> =
-        try {
-            Result.success(api.fsList(session.id, path))
-        } catch (c: CancellationException) {
-            currentCoroutineContext().ensureActive() // real cancel → propagate
-            Result.failure(c)
-        } catch (e: Throwable) {
-            println("[HostStore] fsList failed: $e") // runApi's log, kept now that runApi is bypassed
-            Result.failure(e)
-        }
-
-    /** GET /workspaces/<id>/fs → directory listing (workspace workdir). Empty on any failure — use
-     *  [workspaceFsListResult] where a failed listing must be told apart from an empty directory. */
-    suspend fun workspaceFsList(workspaceId: String, path: String): List<FsEntry> =
-        workspaceFsListResult(workspaceId, path).getOrElse { emptyList() }
-
-    /** GET /workspaces/<id>/fs as a Result — the workspace twin of [fsListResult]. */
-    suspend fun workspaceFsListResult(workspaceId: String, path: String): Result<List<FsEntry>> =
-        try {
-            Result.success(api.workspaceFsList(workspaceId, path))
-        } catch (c: CancellationException) {
-            currentCoroutineContext().ensureActive()
-            Result.failure(c)
-        } catch (e: Throwable) {
-            println("[HostStore] workspaceFsList failed: $e")
-            Result.failure(e)
-        }
 
     /**
      * GET /workspaces/<id>/fs/read → file text. Same Result shape as [fsRead] (preserves
@@ -1207,10 +1159,6 @@ class HostStore(
     /** PUT /workspaces/<id>/fs/write → true on success. */
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
         runApi("workspaceFsWrite") { api.workspaceFsWrite(workspaceId, path, content) } ?: false
-
-    /** GET /workspaces/<id>/fs/search → filename matches. Empty on any failure. */
-    suspend fun workspaceFsSearch(workspaceId: String, q: String): List<FsSearchResult> =
-        runApi("workspaceFsSearch") { api.workspaceFsSearch(workspaceId, q) } ?: emptyList()
 
     /** GET /workspaces/<id>/fs/diff. Null on any failure. */
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =
@@ -1285,16 +1233,6 @@ class HostStore(
      *  fire it outside an explicit user "Submit review" click (see DiffView's submit bar). */
     suspend fun reviewSubmit(session: SessionInfo): ReviewSubmitResult? =
         runApi("reviewSubmit") { api.reviewSubmit(session.id) }
-
-    /** Start the broker fs-watcher for this session (so fs_changed fires → the stale banner works).
-     *  Sent on EditorPanel mount; the [editorClose] counterpart stops it on dispose. */
-    fun editorOpen(session: SessionInfo) {
-        stateScope.launch { runApi("editorOpen") { sendFrame(ClientFrame.EditorOpen(session.id)) } }
-    }
-
-    fun editorClose(session: SessionInfo) {
-        stateScope.launch { runApi("editorClose") { sendFrame(ClientFrame.EditorClose(session.id)) } }
-    }
 
     // ── LSP control-plane senders (M4g-3; mirrors AppViewModel.lspStatusQuery/lspOpen/lspRpcOut/
     //    lspClose:832-843) ───────────────────────────────────────────────────────────────────────

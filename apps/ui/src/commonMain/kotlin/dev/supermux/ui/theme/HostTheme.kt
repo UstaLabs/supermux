@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalHardwareKeyboard
 import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
@@ -44,6 +45,7 @@ fun HostTheme(
     uiPrefs: UiPrefs? = null,
     inputMode: InputMode = InputMode.Pointer,
     pointerAvailable: Boolean = true,
+    hardwareKeyboard: Boolean = true,
     widthClass: WindowWidthClass = WindowWidthClass.Expanded,
     content: @Composable () -> Unit,
 ) {
@@ -56,6 +58,8 @@ fun HostTheme(
         // Hit-target sizing asks for a real mouse/touchpad, never the keyboard — a phone or tablet
         // with a Bluetooth keyboard is still a thumb device. See ui/adaptive/InputMode.kt.
         LocalPointerAvailable provides pointerAvailable,
+        // Editing affordances (the Files tree's in-place rename) ask for real keys. See InputMode.kt.
+        LocalHardwareKeyboard provides hardwareKeyboard,
         LocalUiPrefs provides prefs,
         LocalUiPrefsOrNull provides prefs,
     ) {

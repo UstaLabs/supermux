@@ -22,9 +22,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FsDiffResult
-import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
-import dev.supermux.net.FsSearchResult
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningResponse
@@ -125,16 +123,16 @@ class ShellActions(
         { _, _ -> null },
 
     // ── workspace file system (`/workspaces/:id/fs*`) ──────────────────────────────────────────
-    val workspaceFsListResult: suspend (workspaceId: String, path: String) -> Result<List<FsEntry>> =
-        { _, _ -> Result.success(emptyList()) },
     val workspaceFsRead: suspend (workspaceId: String, path: String) -> Result<String> =
         { _, _ -> Result.failure(IllegalStateException("No host connected")) },
     val workspaceFsWrite: suspend (workspaceId: String, path: String, content: String) -> Boolean =
         { _, _, _ -> false },
-    val workspaceFsSearch: suspend (workspaceId: String, query: String) -> List<FsSearchResult> =
-        { _, _ -> emptyList() },
     val workspaceFsDiff: suspend (workspaceId: String, base: String?) -> FsDiffResult? = { _, _ -> null },
     val workspaceFsRefs: suspend (workspaceId: String) -> FsRefsResult? = { null },
+    /** The host file-system service owning [workspaceId]'s host (spec 2026-09-27), or null offline. */
+    val fileSystemFor: (workspaceId: String) -> dev.supermux.fs.FileSystemService? = { null },
+    /** The host file-system service owning [sessionId]'s host (Android's session-scoped editor). */
+    val sessionFileSystem: (sessionId: String) -> dev.supermux.fs.FileSystemService? = { null },
 
     // ── LSP (still session-keyed in this phase) ────────────────────────────────────────────────
     val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = MutableStateFlow(emptyMap()),
@@ -205,12 +203,12 @@ fun rememberShellActions(
             connectAgentTerminal = { app.connectAgentTerminal(it) },
             connectTerminal = { id, terminalId -> app.connectTerminal(id, terminalId) },
             connectWorkspaceTerminal = { wsId, terminalId -> app.connectWorkspaceTerminal(wsId, terminalId) },
-            workspaceFsListResult = { wsId, path -> app.workspaceFsListResult(wsId, path) },
             workspaceFsRead = { wsId, path -> app.workspaceFsRead(wsId, path) },
             workspaceFsWrite = { wsId, path, content -> app.workspaceFsWrite(wsId, path, content) },
-            workspaceFsSearch = { wsId, q -> app.workspaceFsSearch(wsId, q) },
             workspaceFsDiff = { wsId, base -> app.workspaceFsDiff(wsId, base) },
             workspaceFsRefs = { wsId -> app.workspaceFsRefs(wsId) },
+            fileSystemFor = { app.fileSystem },
+            sessionFileSystem = { app.fileSystem },
             lspStatus = app.lspStatus,
             lspRpc = app.lspRpc,
             lspStatusQuery = { id, path -> session(id)?.let { app.lspStatusQuery(it, path) } },
@@ -267,12 +265,12 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             connectAgentTerminal = { fleet.connectAgentTerminal(it) },
             connectTerminal = { id, terminalId -> fleet.connectTerminal(id, terminalId) },
             connectWorkspaceTerminal = { wsId, terminalId -> fleet.connectWorkspaceTerminal(wsId, terminalId) },
-            workspaceFsListResult = { wsId, path -> fleet.workspaceFsListResult(wsId, path) },
             workspaceFsRead = { wsId, path -> fleet.workspaceFsRead(wsId, path) },
             workspaceFsWrite = { wsId, path, content -> fleet.workspaceFsWrite(wsId, path, content) },
-            workspaceFsSearch = { wsId, q -> fleet.workspaceFsSearch(wsId, q) },
             workspaceFsDiff = { wsId, base -> fleet.workspaceFsDiff(wsId, base) },
             workspaceFsRefs = { wsId -> fleet.workspaceFsRefs(wsId) },
+            fileSystemFor = { wsId -> fleet.appForWorkspace(wsId)?.fileSystem },
+            sessionFileSystem = { sid -> fleet.appFor(sid)?.fileSystem },
             lspStatus = fleet.lspStatus,
             lspRpc = fleet.lspRpc,
             lspStatusQuery = { id, path -> fleet.lspStatusQuery(id, path) },

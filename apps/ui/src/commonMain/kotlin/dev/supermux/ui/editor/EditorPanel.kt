@@ -6,7 +6,7 @@
 // panel rather than in a group's strip, and diff is a MODE that swaps the whole panel.
 //
 // Ported from `apps/android/.../editor/EditorScreen.kt` (cluster C4). Android's behaviour is kept
-// verbatim — the fs-watch lifecycle, the `onConsumesBackChange` contract, the haptics, the reveal
+// verbatim — the `onConsumesBackChange` contract, the haptics, the reveal
 // on a chat-initiated open — with three substitutions that make it multiplatform: drawable ids
 // become Material icons, `androidx.activity.compose.BackHandler` becomes Compose Multiplatform's
 // own (inert where the platform has no back gesture), and the markdown preview renders through the
@@ -69,7 +69,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
-import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.ReviewComment
@@ -77,10 +76,18 @@ import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.proto.ServerFrame
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.MarkdownBody
+import dev.supermux.fs.FileSystemService
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.editor.engine.EditorScrollReader
 import dev.supermux.ui.editor.engine.captureOutgoingScroll
+import dev.supermux.ui.files.FileStaleWatcher
+import dev.supermux.ui.files.FileTreeWithActions
+import dev.supermux.ui.files.TreeViewState
+import dev.supermux.ui.files.childOf
+import dev.supermux.ui.files.relativeToWorkdir
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalPanes
@@ -99,13 +106,11 @@ data class PendingEditorOpen(val path: String, val line: Int?, val endLine: Int?
 
 /**
  * WHAT the panel is looking at: the session it belongs to, that session's workdir, and the
- * app-wide broker flows it filters by session (fs-watch pulses and the LSP channels).
+ * app-wide broker flows it filters by session (the LSP channels).
  */
 data class EditorPanelState(
     val sessionId: String,
     val workdir: String,
-    /** Live file-watch pulses (all sessions); the panel keeps only its own. */
-    val fsChanges: Flow<ServerFrame.FsChanged> = MutableSharedFlow(),
     val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = MutableStateFlow(emptyMap()),
     val lspRpc: Flow<ServerFrame.LspRpcIn> = MutableSharedFlow(),
 )
@@ -117,7 +122,9 @@ data class EditorPanelState(
  * nothing in the panel may key on them.
  */
 data class EditorPanelActions(
-    val fsList: suspend (String) -> Result<List<FsEntry>>,
+    /** The session host's file-system service: the sidebar tree lists through it and the "changed
+     *  on disk" banner watches the open files' folders through it; null → "Host offline". */
+    val fileSystem: FileSystemService?,
     val fsRead: suspend (String) -> Result<String>,
     val fsWrite: suspend (String, String) -> Boolean,
     val fsSearch: suspend (String) -> List<FsSearchResult>,
@@ -127,10 +134,6 @@ data class EditorPanelActions(
     val reviewAddComment: suspend (AddCommentBody) -> ReviewComment? = { null },
     val reviewResolve: suspend (String) -> Boolean = { false },
     val reviewSubmit: suspend () -> ReviewSubmitResult? = { null },
-    /** Start / stop the broker's fs-watcher for this session. Without them fs_changed never
-     *  fires and the stale banner is dead. */
-    val editorOpen: (String) -> Unit = {},
-    val editorClose: (String) -> Unit = {},
     val lspStatusQuery: (String, String) -> Unit = { _, _ -> },
     val lspOpen: (String, String) -> Unit = { _, _ -> },
     val lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
@@ -178,6 +181,10 @@ fun EditorPanel(
     }
     val treeVisible = editor.treeVisible ?: expanded
     val searchResults = remember { mutableStateListOf<FsSearchResult>() }
+    // The sidebar tree's view state. This legacy panel has no view ids, so it lives for the
+    // session + workdir (a workdir change starts a fresh tree rooted at the new checkout).
+    val treeView = remember(sessionId, workdir) { TreeViewState(workdir) }
+    val notices = LocalPlatform.current.notices
 
     LaunchedEffect(editor.searchQuery) {
         delay(200)
@@ -226,17 +233,9 @@ fun EditorPanel(
     val showPreviewToggle = activeIsMarkdown && !editor.showDiff
     val showPreview = editor.previewMode && activeIsMarkdown && !editor.showDiff
 
-    // Editor lifecycle: tell the broker to start/stop the fs-watcher for this session.
-    // This is ALSO what makes fs_changed fire — the stale banner is dead without it.
-    DisposableEffect(sessionId) {
-        actions.editorOpen(sessionId)
-        onDispose { actions.editorClose(sessionId) }
-    }
-
-    // Live file-watch: fold fs_changed pulses for this session into the stale set.
-    LaunchedEffect(sessionId, state.fsChanges) {
-        state.fsChanges.collect { f -> if (f.session == sessionId) editor.markChanged(f.paths) }
-    }
+    // "Changed on disk" banner: subscribe to the open files' folders on the session's host (the
+    // same watcher the workspace shell uses; our own saves are bracketed so they never raise it).
+    if (workdir.isNotEmpty()) FileStaleWatcher(actions.fileSystem, workdir, editor)
 
     // (Re)wire code intelligence whenever the active file (or diff/preview mode) changes.
     // LaunchedEffect cancellation tears down the prior client on a fast tab switch, and the
@@ -442,11 +441,14 @@ fun EditorPanel(
                                 .background(cs.surfaceContainerHigh)
                                 .testTag("editor_tree_pane"),
                         ) {
-                            FileTree(
-                                fsList = actions.fsList,
-                                explorer = editor.explorer,
+                            EditorTreeSidebar(
+                                fileSystem = actions.fileSystem,
+                                view = treeView,
                                 workdir = workdir,
+                                activeRelativePath = editor.activeTabPath,
                                 onOpenFile = { revealFile(it) },
+                                onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
+                                onEntryMoved = { old, new -> editor.applyEntryMoved(workdir, old, new) },
                             )
                         }
                         Box(
@@ -632,11 +634,14 @@ fun EditorPanel(
                                 .background(cs.surfaceContainerHigh)
                                 .testTag("editor_tree_drawer"),
                         ) {
-                            FileTree(
-                                fsList = actions.fsList,
-                                explorer = editor.explorer,
+                            EditorTreeSidebar(
+                                fileSystem = actions.fileSystem,
+                                view = treeView,
                                 workdir = workdir,
+                                activeRelativePath = editor.activeTabPath,
                                 onOpenFile = { revealFile(it) },
+                                onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
+                                onEntryMoved = { old, new -> editor.applyEntryMoved(workdir, old, new) },
                             )
                         }
                     }
@@ -659,4 +664,43 @@ fun EditorPanel(
             )
         }
     }
+}
+
+/**
+ * The panel's file tree: the shared [FileTreeView] over the session host's [FileSystemService].
+ * Paths in the tree are ABSOLUTE; [onOpenFile] gets them workdir-relative (what [EditorState]
+ * speaks), and anything outside the workdir goes to [onOutsideWorkdir] instead of opening.
+ */
+@Composable
+private fun EditorTreeSidebar(
+    fileSystem: FileSystemService?,
+    view: TreeViewState,
+    workdir: String,
+    activeRelativePath: String?,
+    onOpenFile: (relativePath: String) -> Unit,
+    onOutsideWorkdir: (absolutePath: String) -> Unit,
+    /** A rename/delete succeeded in the tree — see [EditorState.applyEntryMoved]. */
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    if (fileSystem == null) {
+        Box(Modifier.fillMaxSize().testTag("editor_tree"), contentAlignment = Alignment.Center) {
+            Text("Host offline", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("editor_tree_offline"))
+        }
+        return
+    }
+    val activePath = activeRelativePath?.takeIf { it.isNotEmpty() && it != "." }?.let { rel ->
+        rel.split('/').filter { it.isNotEmpty() }.fold(workdir) { acc, seg -> childOf(acc, seg) }
+    }
+    FileTreeWithActions(
+        fileSystem = fileSystem,
+        view = view,
+        onOpenFile = { abs ->
+            val rel = relativeToWorkdir(workdir, abs)?.takeIf { it != "." }
+            if (rel != null) onOpenFile(rel) else onOutsideWorkdir(abs)
+        },
+        activePath = activePath,
+        compact = !LocalPointerAvailable.current || LocalWindowWidthClass.current == WindowWidthClass.Compact,
+        onEntryMoved = onEntryMoved,
+    )
 }

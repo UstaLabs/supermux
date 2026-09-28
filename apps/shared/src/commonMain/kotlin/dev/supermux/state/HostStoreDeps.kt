@@ -37,6 +37,8 @@ object SettingsKeys {
     const val TERMINAL_FONT_SIZE = "terminal:fontSize"
     /** "true"/"false" — desktop Changes pane: nested tree (true) vs flat list. Default true. */
     const val EDITOR_DIFF_TREE_VIEW = "editor:diffTreeView"
+    /** "true"/"false" — the Files tree follows (reveals) the active editor file. Default true. */
+    const val FILES_REVEAL_ACTIVE = "files:revealActive"
     /** `ChatDetailLevel.wire` ("low"/"medium"/"high"). Default "medium". */
     const val CHAT_DETAIL_LEVEL = "chatDetail:level"
 

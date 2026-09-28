@@ -1251,7 +1251,6 @@ private fun ShellHome(
                     compact = compact,
                     wsApp = wsApp,
                     appFor = { id -> appFor(id) ?: wsApp },
-                    fleet = fleet,
                     ui = ui,
                     drafts = drafts,
                     overlayScope = overlayScope,
@@ -1548,7 +1547,6 @@ private fun WorkspacePanel(
     compact: Boolean,
     wsApp: HostStore,
     appFor: (String) -> HostStore,
-    fleet: FleetStore,
     ui: ShellUiState,
     drafts: androidx.compose.runtime.snapshots.SnapshotStateMap<String, String>,
     overlayScope: kotlinx.coroutines.CoroutineScope,
@@ -1615,22 +1613,19 @@ private fun WorkspacePanel(
     }
     LaunchedEffect(current.id, localLayout) { ui.windows.onWorkspaceTree(current.id, localLayout) }
 
-    val lspSession = ws.let { current.primarySessionId }
-    val hasEditorView = ws.viewsById.values.any { it.kind == "editor" }
-    androidx.compose.runtime.DisposableEffect(lspSession, hasEditorView) {
-        if (lspSession != null && hasEditorView) fleet.editorOpen(lspSession)
-        onDispose { if (lspSession != null && hasEditorView) fleet.editorClose(lspSession) }
-    }
-    LaunchedEffect(ws.documents, lspSession) {
-        val sid = lspSession ?: return@LaunchedEffect
-        wsApp.fsChanges.collect { f -> if (f.session == sid) ws.documents.markChanged(f.paths) }
-    }
+    // The "changed on disk" banner of the workspace's open documents, from subscriptions to their
+    // folders on the workspace's host.
+    dev.supermux.ui.files.FileStaleWatcher(wsApp.fileSystem, current.workdir, ws.documents)
+    val notices = LocalPlatform.current.notices
     LaunchedEffect(ui.externalOpen, current.id, isActive) {
         if (!isActive) return@LaunchedEffect
         val req = ui.externalOpen ?: return@LaunchedEffect
         val rel = workspaceOpenPath(req.second, current.workdir)
+        // Cleared only AFTER the host check: clearing it restarts (cancels) this effect.
         if (rel == null) {
             println("[SupermuxApp] externalOpen: '${req.second.path}' is outside '${current.workdir}' — dropped")
+        } else if (dev.supermux.ui.files.tappedFileMissing(wsApp.fileSystem, dev.supermux.ui.files.absoluteInWorkdir(current.workdir, rel))) {
+            notices.show(dev.supermux.ui.files.fileNotFoundNotice(req.second.path))
         } else {
             ws.fileOpener.open(rel, req.second.line, req.second.endLine, sourceViewId = null)
         }

@@ -26,7 +26,6 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
     backend: { runtimeTargetIdOf: async () => null, kill: async () => {} },
     cleanup: {
       terminals: { killAllForSession: async () => {} },
-      fsWatcher: { killSession: () => {} },
       stopClaudeTailer: () => {},
       releaseDraftAttachments: () => {},
       syncGitStatus: () => {},

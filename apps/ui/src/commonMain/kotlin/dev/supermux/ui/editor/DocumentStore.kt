@@ -50,7 +50,7 @@ class DocumentStore(
     private val fsRead: suspend (String) -> Result<String>,
     private val fsWrite: suspend (String, String) -> Boolean,
     private val scope: CoroutineScope,
-) {
+) : WatchedDocuments {
     /** Open documents by path. A snapshot map so a composable reading [get]/[isDirty] is
      *  invalidated when a document appears or is closed, exactly as the old `tabs` list was. */
     private val docs = mutableStateMapOf<String, Document>()
@@ -59,7 +59,8 @@ class DocumentStore(
     var loadError by mutableStateOf<String?>(null)
     var saving by mutableStateOf(false)
 
-    /** Workdir-relative paths the broker reported changed on disk (fs_changed) → reload banner. */
+    /** Workdir-relative paths changed on disk behind an open document → reload banner. Fed by
+     *  [dev.supermux.ui.files.FileStaleWatcher]'s folder subscriptions. */
     var changedPaths by mutableStateOf(setOf<String>())
 
     /** Paths whose in-flight load was cancelled by [close] — the load result is dropped, never
@@ -80,6 +81,16 @@ class DocumentStore(
     var onOpened: (doc: Document, current: Boolean) -> Unit = { _, _ -> }
 
     fun get(path: String): Document? = docs[path]
+
+    /** Paths of the open documents (a snapshot read: a composable reading it follows opens/closes). */
+    override val openPaths: Set<String> get() = docs.keys.toSet()
+
+    private val writeObservers = mutableListOf<WatchedDocuments.WriteObserver>()
+
+    override fun observeWrites(observer: WatchedDocuments.WriteObserver): () -> Unit {
+        writeObservers += observer
+        return { writeObservers -= observer }
+    }
 
     fun isDirty(path: String): Boolean {
         val doc = docs[path] ?: return false
@@ -188,18 +199,24 @@ class DocumentStore(
     fun save(doc: Document) {
         if (saving) return
         saving = true
+        val path = doc.path
+        writeObservers.toList().forEach { it.writeStarted(path) }
         scope.launch {
-            if (fsWrite(doc.path, doc.content)) {
-                doc.savedContent = doc.content
+            var ok = false
+            try {
+                ok = fsWrite(path, doc.content)
+                if (ok) doc.savedContent = doc.content
+            } finally {
+                saving = false
+                writeObservers.toList().forEach { it.writeFinished(path, ok) }
             }
-            saving = false
         }
     }
 
     // ── Live file-watch reload (ports EditorState.swift:79-84, 130-144) ─────────
 
     /** Record disk-change notifications (workdir-relative paths, leading slash optional). */
-    fun markChanged(paths: List<String>) {
+    override fun markChanged(paths: List<String>) {
         changedPaths = changedPaths + paths.map(::normPath)
     }
 

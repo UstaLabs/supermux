@@ -105,7 +105,7 @@ fun SessionChatFallback(
             loadDraft = { vm.fleet.loadDraft(it) },
             saveDraft = { id, t -> vm.fleet.saveDraft(id, t) },
             loadBytes = { vm.fleet.fileBytes(it) },
-            fsList = { vm.fleet.fsListResult(session.id, it) },
+            fileSystem = vm.fleet.appFor(session.id)?.fileSystem,
             fsRead = { vm.fleet.fsRead(session.id, it) },
             fsWrite = { p, ct -> vm.fleet.fsWrite(session.id, p, ct) },
             fsSearch = { vm.fleet.fsSearch(session.id, it) },
@@ -115,12 +115,10 @@ fun SessionChatFallback(
             reviewAddComment = { body -> vm.fleet.reviewAddComment(session.id, body) },
             reviewResolve = { commentId -> vm.fleet.reviewResolve(session.id, commentId) },
             reviewSubmit = { vm.fleet.reviewSubmit(session.id) },
-            // Editor LSP + live file-watch — app-wide flows + session-bound senders.
-            fsChanges = vm.fleet.fsChanges,
+            // Editor LSP — app-wide flows + session-bound senders. (The editor's "changed on disk"
+            // banner watches folders through `fileSystem` above.)
             lspStatus = vm.fleet.lspStatus,
             lspRpc = vm.fleet.lspRpc,
-            editorOpen = { vm.fleet.editorOpen(it) },
-            editorClose = { vm.fleet.editorClose(it) },
             lspStatusQuery = { s, p -> vm.fleet.lspStatusQuery(s, p) },
             lspOpen = { s, sid -> vm.fleet.lspOpen(s, sid) },
             lspRpcOut = { s, sid, m -> vm.fleet.lspRpcOut(s, sid, m) },
