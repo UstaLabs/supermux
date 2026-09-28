@@ -128,3 +128,20 @@ test("a watch that errored is dead", async () => {
   expect(w.isDead("/e")).toBe(true)
   w.closeAll()
 })
+
+test("poll intervals and debounce timers are unref'd (they never keep the process alive)", async () => {
+  const d = tmp()
+  const poller = new DirWatchers(() => {}, { pollMs: 1_000, watchFn: () => { throw new Error("no watches") } })
+  poller.watch(d)
+  expect(((poller as any).slots.get(d).poll as { hasRef(): boolean }).hasRef()).toBe(false)
+  poller.closeAll()
+  let listener: ((event: string, filename?: string | null) => void) | undefined
+  const w = new DirWatchers(() => {}, {
+    debounceMs: 1_000,
+    watchFn: (_dir, l) => { listener = l; return Object.assign(new (require("events").EventEmitter)(), { close() {} }) as any },
+  })
+  w.watch(d)
+  listener!("change", "x")
+  expect(((w as any).slots.get(d).timer as { hasRef(): boolean }).hasRef()).toBe(false)
+  w.closeAll()
+})

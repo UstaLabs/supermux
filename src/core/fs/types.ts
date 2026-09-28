@@ -32,8 +32,13 @@ export type FsOp =
   /** Moves to the OS trash; `permanent: true` (only when explicitly asked, e.g. after EXDEV) removes it for good. */
   | { op: "delete"; path: string; permanent?: boolean }
 
+/**
+ * Broker → app frames. `path` is always the NORMALISED absolute path of the subscription (no `.`/`..`,
+ * no trailing slash): clients should subscribe with normalised paths so they can key frames by the path
+ * they sent. `real` (full fs_dir only) is the resolved real path, for the app's symlink-loop guard.
+ */
 export type FsFrame =
-  | { type: "fs_dir"; path: string; version: string; entries: FsEntry[]; truncated?: { total: number } }
+  | { type: "fs_dir"; path: string; real: string; version: string; entries: FsEntry[]; truncated?: { total: number } }
   | { type: "fs_dir"; path: string; version: string; unchanged: true }
   | { type: "fs_gone"; path: string }
   | { type: "fs_err"; path: string; code: string; message: string }

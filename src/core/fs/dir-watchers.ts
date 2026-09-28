@@ -22,6 +22,9 @@ interface Slot {
   dead?: boolean
 }
 
+/** Watch timers must never keep the process alive on their own. */
+const unref = (t: unknown) => (t as { unref?: () => void }).unref?.()
+
 const defaultWatch = (dir: string, listener: WatchListener) =>
   fsWatch(dir, { persistent: false }, (event, filename) => listener(event, filename == null ? filename : String(filename)))
 
@@ -61,6 +64,7 @@ export class DirWatchers {
     } catch {
       this.opts.onFallback?.(dir)
       slot.poll = setInterval(() => this.flush(dir), this.pollMs)
+      unref(slot.poll)
     }
   }
 
@@ -108,5 +112,6 @@ export class DirWatchers {
       slot.firstAt = undefined
       if (this.slots.get(dir) === slot) this.flush(dir)
     }, wait)
+    unref(slot.timer)
   }
 }

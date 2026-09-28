@@ -40,7 +40,7 @@ const toSnapshot = (path: string, c: CachedDir): DirSnapshot => ({
 })
 
 const dirFrame = (path: string, c: CachedDir): FsFrame => ({
-  type: "fs_dir", path, version: c.version, entries: c.entries, ...(c.truncated ? { truncated: c.truncated } : {}),
+  type: "fs_dir", path, real: c.real, version: c.version, entries: c.entries, ...(c.truncated ? { truncated: c.truncated } : {}),
 })
 
 const isUnder = (root: string, p: string) => p === root || p.startsWith(root.endsWith(sep) ? root : root + sep)
@@ -172,7 +172,11 @@ export class FileSystemService<S = unknown> {
 
   // ── subscriptions ─────────────────────────────────────────────────────────
 
-  /** Hold `path` for `sock` and send its snapshot (or `unchanged` when `since` is current). */
+  /**
+   * Hold `path` for `sock` and send its snapshot (or `unchanged` when `since` is current).
+   * Every frame about it (fs_dir / fs_gone / fs_err) carries the NORMALISED absolute path (`/a/./b/` →
+   * `/a/b`), so clients should subscribe with normalised paths to key frames by what they sent.
+   */
   async subscribe(sock: S, path: string, since?: string): Promise<void> {
     let p = path
     const tok = this.beginSubscribe(sock)
@@ -181,7 +185,7 @@ export class FileSystemService<S = unknown> {
       const real = await realKey(p)
       if (tok.dropped) return // the socket closed meanwhile: holding anything now would leak it forever
       if (this.subs.add(sock, p, real) === "limit") {
-        this.safeEmit(sock, { type: "fs_err", path, code: "TOO_MANY_SUBS", message: "too many folder subscriptions on this connection" })
+        this.safeEmit(sock, { type: "fs_err", path: p, code: "TOO_MANY_SUBS", message: "too many folder subscriptions on this connection" })
         return
       }
       const c = await this.cache.getOrLoad(real)
@@ -192,7 +196,8 @@ export class FileSystemService<S = unknown> {
     } catch (e) {
       const err = toFsError(e)
       if (this.subs.realOf(sock, p) !== undefined) this.subs.remove(sock, p)
-      if (!tok.dropped) this.safeEmit(sock, { type: "fs_err", path, code: err.code, message: err.message })
+      // `p` is the normalised path, or the raw one when it could not be normalised (EINVAL).
+      if (!tok.dropped) this.safeEmit(sock, { type: "fs_err", path: p, code: err.code, message: err.message })
     } finally {
       this.endSubscribe(sock, tok)
     }
