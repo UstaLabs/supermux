@@ -77,18 +77,38 @@ object History {
 
     private val fromHistory = AnnotationType<FromHistory>("history.from")
 
-    /** One step. [changes] null: only selections (a branch's first entry, before any edit). */
+    /**
+     * One step. [changes] null: only selections (a branch's first entry, before any edit).
+     *
+     * Mapping over changes that are not ours is LAZY (CM6's scheme): only a branch's top event is
+     * mapped; [mapped] carries what the events below it still need, and they are mapped when they
+     * become the top. The remembered selections are mapped lazily too ([selMapping]).
+     */
     internal class HistEvent(
         /** Applies to the document after the step and undoes it. */
         val changes: ChangeSet?,
         /** In the document the undo produces. */
         val effects: List<StateEffect<*>>,
+        /** The mapping the events below this one still need (from the document before this step). */
+        val mapped: ChangeSet?,
         /** Where the selection was before the step (in the document the undo produces). */
         val startSelection: EditorSelection?,
-        /** The selections moved through after it, oldest first (in the document after it). */
-        val selectionsAfter: List<EditorSelection>,
+        private val rawSelections: List<EditorSelection>,
+        /** Still to apply to [rawSelections]. */
+        private val selMapping: ChangeSet? = null,
     ) {
-        fun withSelectionsAfter(s: List<EditorSelection>) = HistEvent(changes, effects, startSelection, s)
+        /** The selections moved through after it, oldest first (in the document after it). */
+        val selectionsAfter: List<EditorSelection> by lazy { if (selMapping == null) rawSelections else rawSelections.map { it.map(selMapping) } }
+        val selectionCount: Int get() = rawSelections.size
+
+        fun withSelectionsAfter(s: List<EditorSelection>) = HistEvent(changes, effects, mapped, startSelection, s)
+
+        /** Mapped: new changes, effects, carried mapping and start selection; the selections lazily through [m]. */
+        fun remapped(changes: ChangeSet, effects: List<StateEffect<*>>, mapped: ChangeSet, start: EditorSelection?, m: ChangeSet) =
+            HistEvent(changes, effects, mapped, start, rawSelections, selMapping?.compose(m) ?: m)
+
+        /** The same, its selections still to be mapped through [m] too. */
+        fun selectionsMappedBy(m: ChangeSet) = HistEvent(changes, effects, mapped, startSelection, rawSelections, selMapping?.compose(m) ?: m)
     }
 
     internal class HistoryState(
@@ -96,6 +116,8 @@ object History {
         val undone: List<HistEvent>,
         val prevTime: Long = 0,
         val prevUserEvent: String? = null,
+        /** When the top step's group started (the IME join cap). */
+        val groupStart: Long = 0,
     )
 
     internal val field: StateField<HistoryState> = StateField("history", { HistoryState(emptyList(), emptyList()) }, ::update)
@@ -154,11 +176,13 @@ object History {
             return true
         }
         val changes = event.changes ?: return false
+        // The events below get what this one carried for them (CM6's lazy mapping).
+        val rest = branch.dropLast(1).let { r -> event.mapped?.let { addMapping(r, it) } ?: r }
         t.dispatch(TransactionSpec(
             changeSet = changes,
             selection = event.startSelection,
             effects = event.effects,
-            annotations = listOf(fromHistory.of(FromHistory(side, branch.dropLast(1), selection))),
+            annotations = listOf(fromHistory.of(FromHistory(side, rest, selection))),
             userEvent = if (side == Side.DONE) "undo" else "redo",
             scrollIntoView = true,
         ))
@@ -182,7 +206,7 @@ object History {
             return if (from.side == Side.DONE) HistoryState(from.rest, other) else HistoryState(other, from.rest)
         }
         if (!recorded(tr)) {
-            return if (tr.docChanged) HistoryState(mapBranch(h.done, tr.changes), mapBranch(h.undone, tr.changes), h.prevTime, h.prevUserEvent) else h
+            return if (tr.docChanged) HistoryState(addMapping(h.done, tr.changes), addMapping(h.undone, tr.changes), h.prevTime, h.prevUserEvent, h.groupStart) else h
         }
         val event = eventOf(tr, null)
         val userEvent = tr.annotation(Transaction.userEvent)
@@ -194,7 +218,7 @@ object History {
             if (last.isNotEmpty() && time - h.prevTime < cfg.newGroupDelay && userEvent != null && userEvent == h.prevUserEvent &&
                 (userEvent == "select" || userEvent.startsWith("select.")) && sameShape(last.last(), tr.startState.selection)
             ) return h
-            return HistoryState(addSelection(h.done, tr.startState.selection), h.undone, time, userEvent)
+            return HistoryState(addSelection(h.done, tr.startState.selection), h.undone, time, userEvent, h.groupStart)
         }
         return h
     }
@@ -215,7 +239,7 @@ object History {
             if (r.isNotEmpty()) effects = effects + r
         }
         if (effects.isEmpty() && !tr.docChanged) return null
-        return HistEvent(tr.changes.invert(tr.startState.doc), effects, selection ?: tr.startState.selection, emptyList())
+        return HistEvent(tr.changes.invert(tr.startState.doc), effects, null, selection ?: tr.startState.selection, emptyList())
     }
 
     private fun addChanges(h: HistoryState, event: HistEvent, time: Long, userEvent: String?, cfg: HistoryConfig, tr: Transaction): HistoryState {
@@ -223,17 +247,18 @@ object History {
         val lastChanges = last?.changes
         val changes = event.changes!!
         val join = lastChanges != null && !lastChanges.isEmpty && !changes.isEmpty && isAdjacent(lastChanges, changes) && (
-            // An IME composition is one step, however slow.
+            // An IME composition is one step past the typing delay, up to IME_GROUP_MS and a newline.
             tr.annotation(EditorAnnotations.imeJoinPrevious) == true ||
-                (userEvent.isIme() && h.prevUserEvent.isIme()) ||
+                (userEvent.isIme() && h.prevUserEvent.isIme() && time - h.groupStart < IME_GROUP_MS && !startsLine(tr)) ||
                 // Typing and deleting in one burst, the previous step being typing or deleting too.
-                (joinable(userEvent) && joinable(h.prevUserEvent) && last.selectionsAfter.isEmpty() &&
+                (joinable(userEvent) && joinable(h.prevUserEvent) && last.selectionCount == 0 &&
                     time - h.prevTime < cfg.newGroupDelay && !startsLine(tr))
             )
         val done = if (join) {
             val merged = HistEvent(
                 changes.compose(lastChanges!!),
                 event.effects.mapNotNull { it.map(lastChanges) } + last.effects,
+                last.mapped,
                 last.startSelection,
                 emptyList(),
             )
@@ -241,7 +266,7 @@ object History {
         } else {
             push(h.done, event, cfg.depth)
         }
-        return HistoryState(done, emptyList(), time, userEvent)
+        return HistoryState(done, emptyList(), time, userEvent, if (join) h.groupStart else time)
     }
 
     private fun String?.isIme() = this != null && (this == "input.ime" || startsWith("input.ime."))
@@ -275,7 +300,7 @@ object History {
     }
 
     private fun addSelection(branch: List<HistEvent>, selection: EditorSelection): List<HistEvent> {
-        val last = branch.lastOrNull() ?: return listOf(HistEvent(null, emptyList(), null, listOf(selection)))
+        val last = branch.lastOrNull() ?: return listOf(HistEvent(null, emptyList(), null, null, listOf(selection)))
         val sels = last.selectionsAfter.takeLast(MAX_SELECTIONS - 1)
         if (sels.isNotEmpty() && sels.last() == selection) return branch
         return branch.dropLast(1) + last.withSelectionsAfter(sels + selection)
@@ -283,29 +308,48 @@ object History {
 
     private const val MAX_SELECTIONS = 200
 
+    /** An IME composition joins one step for at most this long (then, or at a newline, a new step). */
+    private const val IME_GROUP_MS = 2_000L
+
     /**
-     * Every event of [branch] moved through [mapping] (a change that is not ours, made to the current
-     * document), newest first: each event's own changes turn the mapping into the one for the
-     * document before it (`mapping.map(changes, before = true)`). An event with nothing left is dropped.
+     * [branch] after [mapping] (a change that is not ours, made to the current document), CM6's
+     * addMappingToBranch: only the TOP event is mapped (its changes, effects and start selection;
+     * its remembered selections lazily); what the events below it need is carried in its `mapped`.
+     * A top event with nothing left (its text deleted, or everything it would restore lying inside
+     * text the change deleted: [inDeletedText]) is dropped and the next one mapped instead.
      */
-    private fun mapBranch(branch: List<HistEvent>, mapping: ChangeSet): List<HistEvent> {
-        if (branch.isEmpty()) return branch
+    private fun addMapping(branch: List<HistEvent>, mapping: ChangeSet): List<HistEvent> {
         var m = mapping
-        val out = ArrayList<HistEvent>(branch.size)
-        for (e in branch.asReversed()) {
-            val sels = e.selectionsAfter.map { it.map(m) }
-            val changes = e.changes
-            if (changes == null) { out += HistEvent(null, emptyList(), null, sels); continue }
+        var length = branch.size
+        while (length > 0) {
+            val e = branch[length - 1]
+            val changes = e.changes ?: return branch.subList(0, length - 1) + e.selectionsMappedBy(m)
             val mapped = changes.map(m)
             val before = m.map(changes, before = true)
+            val full = e.mapped?.compose(before) ?: before
             val effects = e.effects.mapNotNull { it.map(before) }
-            val start = e.startSelection?.map(before)
-            m = before
-            if (mapped.isEmpty && effects.isEmpty()) continue
-            out += HistEvent(mapped, effects, start, sels)
+            val dropped = (mapped.isEmpty && effects.isEmpty()) || (effects.isEmpty() && inDeletedText(changes, m))
+            if (!dropped) {
+                return branch.subList(0, length - 1) + e.remapped(mapped, effects, full, e.startSelection?.map(before), m)
+            }
+            m = full
+            length--
         }
-        out.reverse()
-        return out
+        return emptyList()
+    }
+
+    /**
+     * Does every change of [event] (an undo step, in [remote]'s input document) lie inside text
+     * [remote] deleted or rewrote? Then undoing it would put text back into the middle of someone
+     * else's output (an agent's rewrite of the region): the step is dropped instead.
+     */
+    private fun inDeletedText(event: ChangeSet, remote: ChangeSet): Boolean {
+        val deleted = remote.iterChanges().filter { it.toA > it.fromA }
+        if (deleted.isEmpty()) return false
+        val own = event.iterChanges()
+        return own.isNotEmpty() && own.all { c ->
+            deleted.any { d -> if (c.fromA == c.toA) d.fromA < c.fromA && c.fromA < d.toA else d.fromA <= c.fromA && c.toA <= d.toA }
+        }
     }
 }
 

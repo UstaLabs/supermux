@@ -216,6 +216,13 @@ reloads, remote edits and programmatic transactions (no userEvent, from outside 
 call, a plugin's effect) pass through unchanged, as in CM6. The caret clamp below applies to every
 transaction.
 
+**The `lsp` userEvent contract.** `lsp` and `lsp.*` mean SERVER-INITIATED edits only (a workspace
+edit the language server pushes, `workspace/applyEdit`): history does not record them (never undone
+locally; undo steps are mapped through them) and the surface does not police them. Edits the USER
+triggers through LSP carry recorded, policed userEvents: `input.complete` (a completion accepted),
+`edit.rename`, `edit.codeAction`, `edit.format`. Each is an undo step of its own (never joined with
+typing) and meets the atomic-range rules like any local edit. M4c follows this.
+
 **Replaced ranges and deletion: one unit, on every input path.** The rule is in `EditorView.dispatch`,
 so the hidden field, `typeText`, paste, key commands and the web's fast key path all meet it. It is
 per change, so per cursor: with several cursors, the others edit as usual and only the one at the

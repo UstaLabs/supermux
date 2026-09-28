@@ -40,8 +40,13 @@ class Annotation<T> internal constructor(val type: AnnotationType<T>, val value:
  * What a caller asks for. [changes] (or a prebuilt [changeSet], never both) are in the coordinates
  * of the CURRENT document; [selection], when given, is in the coordinates of the NEW one.
  *
- * [userEvent] names where the change came from, dot-separated from general to specific:
- * `input`, `input.ime`, `paste`, `undo`, `redo`, `disk`, `lsp`, `command`, and later `agent`.
+ * [userEvent] names where the change came from, dot-separated from general to specific. Local
+ * (recorded by history, policed by the surface): `input`, `input.type`, `input.ime`, `input.indent`,
+ * `input.complete` (a completion accepted), `paste`, `input.drop`, `delete.backward` / `.forward` /
+ * `.cut` / `.dedent`, `edit.rename`, `edit.codeAction`, `edit.format` (user-triggered LSP actions),
+ * `select*`. Exempt (not recorded, not policed): `undo`, `redo` (history's own), `disk` (a reload),
+ * `remote` (a collaborator), `agent`, and `lsp` / `lsp.*`, which is SERVER-INITIATED only (a
+ * workspace edit the server pushes); a user's LSP action is never `lsp`.
  */
 data class TransactionSpec(
     val changes: List<ChangeSpec> = emptyList(),

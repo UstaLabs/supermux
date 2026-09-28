@@ -81,17 +81,36 @@ class HistoryTest {
         assertEquals("abcdef", h.doc)
     }
 
-    @Test fun anImeCompositionIsOneStepHoweverSlow() {
+    private fun ime(h: H, at: Long, from: Int, to: Int, text: String, join: Boolean = false) {
+        h.at(at).view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(from, to, text)), selection = EditorSelection.cursor(from + text.length),
+            userEvent = if (at == 0L && !join) "input" else "input.ime", annotations = if (join) listOf(EditorAnnotations.imeJoinPrevious.of(true)) else emptyList()))
+    }
+
+    @Test fun anImeCompositionIsOneStepEvenPastTheTypingDelay() {
         val h = H("", 0)
         // The composition's first character arrives as plain input, the next steps as input.ime
-        // (the second one saying it joins the previous), seconds apart.
-        h.at(0).view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 0, "k")), selection = EditorSelection.cursor(1), userEvent = "input"))
-        h.at(2000).view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 1, "か")), selection = EditorSelection.cursor(1), userEvent = "input.ime",
-            annotations = listOf(EditorAnnotations.imeJoinPrevious.of(true))))
-        h.at(5000).view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 1, "漢")), selection = EditorSelection.cursor(1), userEvent = "input.ime"))
+        // (the second one saying it joins the previous), more than the 500 ms typing delay apart.
+        ime(h, 0, 0, 0, "k")
+        ime(h, 800, 0, 1, "か", join = true)
+        ime(h, 1600, 0, 1, "漢")
         assertEquals("漢", h.doc)
         h.undo()
         assertEquals("", h.doc)
+    }
+
+    @Test fun anImeGroupBreaksAfterTwoSecondsOrANewline() {
+        val h = H("", 0)
+        ime(h, 0, 0, 0, "k")
+        ime(h, 800, 0, 1, "か", join = true)
+        ime(h, 2500, 1, 1, "な") // 2.5 s after the group started: a new step
+        assertEquals("かな", h.doc)
+        h.undo(); assertEquals("か", h.doc)
+        h.undo(); assertEquals("", h.doc)
+        val n = H("", 0)
+        ime(n, 0, 0, 0, "a")
+        ime(n, 100, 0, 1, "ab", join = true)
+        ime(n, 200, 2, 2, "\n") // a newline composed: a new step
+        n.undo(); assertEquals("ab", n.doc)
     }
 
     @Test fun pasteIsItsOwnStep() {
@@ -139,6 +158,39 @@ class HistoryTest {
         assertFalse(h.undo(), "a remote change was undone")
         h.redo()
         assertEquals("QD0RR1234ab56789", h.doc)
+    }
+
+    @Test fun anUndoInsideTextAnAgentRewroteIsDropped() {
+        // The user deleted "34"; then an agent rewrote the whole region around it. Undo must not put
+        // "34" back into the middle of the agent's output.
+        val h = H("0123456789", 5)
+        h.at(0); DefaultCommands.deleteBackward.run(h.view); DefaultCommands.deleteBackward.run(h.view)
+        assertEquals("01256789", h.doc)
+        h.view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(1, 6, "AGENT")), userEvent = "agent"))
+        assertEquals("0AGENT89", h.doc)
+        assertFalse(h.undo(), "undo resurrected text into the agent's rewrite")
+        assertEquals("0AGENT89", h.doc)
+        // An edit outside the rewritten text still undoes.
+        val k = H("0123456789", 9)
+        k.at(0).type("x")
+        k.view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(1, 4, "AGENT")), userEvent = "agent"))
+        assertTrue(k.undo())
+        assertEquals("0AGENT456789", k.doc)
+    }
+
+    @Test fun userTriggeredLspActionsAreUndoableAndServerEditsAreNot() {
+        // The contract: `lsp` / `lsp.*` is server-initiated (not recorded, not policed); a completion
+        // accepted, a rename, a code action, a format are the user's (recorded, undoable).
+        for (event in listOf("input.complete", "edit.rename", "edit.codeAction", "edit.format")) {
+            val h = H("val x = 1", 9)
+            h.view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(4, 5, "renamed")), userEvent = event))
+            assertTrue(h.undo(), "$event is not undoable")
+            assertEquals("val x = 1", h.doc)
+        }
+        val s = H("val x = 1", 9)
+        s.view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(4, 5, "pushed")), userEvent = "lsp"))
+        s.view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 0, "// ")), userEvent = "lsp.workspaceEdit"))
+        assertFalse(s.undo(), "a server-initiated lsp edit was undone")
     }
 
     @Test fun aRemoteEditThatDeletesTheLocalEditLeavesNothingToUndo() {

@@ -32,9 +32,10 @@ The commands are also `NamedCommand`s in `commandsFacet` (`history.undo`, ...). 
   `input.type*`, `input.ime*`, `delete.backward*` or `delete.forward*` joins the previous step when
   that one was typing or deleting too, came within `newGroupDelay` (500 ms), touches it, and no
   cursor move happened in between.
-- **An IME composition is one step, however slow**: a step carrying
+- **An IME composition is one step, past the typing delay**: a step carrying
   `EditorAnnotations.imeJoinPrevious` (the composition's second step; its first character went out
-  as plain `input`) always joins, and so does every `input.ime` step after another `input.ime` step.
+  as plain `input`) always joins, and so does every `input.ime` step after another `input.ime` step,
+  until the group is 2 s old or a newline is composed (then a new step).
 - **A newline starts a step** (Enter, a soft Return); the line typed after it joins it (CM6's Enter
   is a non-joinable `input`, and typing after it joins).
 - **Paste, drop and every other command are steps of their own** on both sides: nothing joins a
@@ -43,6 +44,13 @@ The commands are also `NamedCommand`s in `commandsFacet` (`history.undo`, ...). 
 - A selection-only transaction is not a step. It is remembered for `undoSelection` (a run of moves
   with the same `select*` userEvent within the delay counts once, CM6's rule), and it ends a typing
   burst.
+
+**The `lsp` userEvent contract.** `lsp` and `lsp.*` mean SERVER-INITIATED edits only (a workspace
+edit the language server pushes, `workspace/applyEdit`): history does not record them (never undone
+locally; undo steps are mapped through them) and the surface does not police them. Edits the USER
+triggers through LSP carry recorded, policed userEvents: `input.complete` (a completion accepted),
+`edit.rename`, `edit.codeAction`, `edit.format`. Each is an undo step of its own (never joined with
+typing) and meets the atomic-range rules like any local edit. M4c follows this.
 
 ## Changes that are not ours
 
@@ -53,7 +61,15 @@ never undoes them**. Every event of both branches is **mapped** through such a c
 convergence law as its property test): the newest event maps over the change as it is, and each
 older one over the change as seen before the newer ones (`mapping.map(event, before = true)`). So an
 undo after a remote insert before the local edit undoes the local edit where it now is, and puts the
-caret back where it was, mapped. An event whose text the remote change deleted entirely is dropped.
+caret back where it was, mapped. An event whose text the remote change deleted entirely is dropped,
+and so is one whose every change lies INSIDE text the remote change deleted or rewrote (the user
+deleted a word, then an agent rewrote the paragraph around it): undoing it would put the word back
+into the middle of the agent's output.
+
+Mapping is LAZY, CM6's scheme: only the top event of each branch is mapped, its `mapped` carries
+what the events below need, and they are mapped when they become the top; remembered selections
+are mapped only when read. An agent streaming edits costs about 0.006 ms per transaction with 100
+steps and 200 remembered selections (`HistoryPerfTest`, budget 0.1 ms).
 
 ## Soft keyboards
 
@@ -77,8 +93,9 @@ undo that restores a fold's text is never refused. With the fold plugin's `delet
 - Nothing joins a paste (CM6 lets typing right after a paste join it).
 - Remote / disk / agent / LSP changes are never undone locally (CM6 records every change unless
   `addToHistory` is false; today's CM6 editor even records a reload from disk as an undoable edit).
-- Events are mapped eagerly over a remote change (CM6 maps lazily, the top event only); the result is
-  the same, the cost bounded by the depth.
+- A step lying inside text a remote change deleted or rewrote is dropped (CM6 keeps it and would
+  re-insert its text).
+- An IME group is capped at 2 s and a newline (CM6 joins every `input.type.compose` step).
 
 Tests: `./gradlew :editor-plugins:history:jvmTest` (commonTest: grouping, IME, paste, remote mapping,
 multi-cursor, redo, depth, selection undo, keys, folds; jvmTest: typing through a composed Editor's
