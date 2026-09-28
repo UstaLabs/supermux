@@ -2559,15 +2559,8 @@ class BrokerApi(
     }
 
     /** GET /fs/stat?path=<abs> → metadata for one entry. Throws FsException on non-2xx (404 = no such entry). */
-    suspend fun hostFsStat(path: String): dev.supermux.fs.FsStat {
-        val resp = http.get("$httpBase/fs/stat?path=${urlEncode(path)}") {
-            authHeader()
-        }
-        if (!resp.status.isSuccess()) {
-            throw FsException(resp.status.value, resp.bodyAsText())
-        }
-        return json.decodeFromString(resp.bodyAsText())
-    }
+    suspend fun hostFsStat(path: String): dev.supermux.fs.FsStat =
+        hostFsGet("$httpBase/fs/stat?path=${urlEncode(path)}")
 
     /** GET /fs/read?path=<abs> → file text. Throws FsException on non-2xx (413 too large / 415 binary / 404 / 403). */
     suspend fun hostFsRead(path: String): String {

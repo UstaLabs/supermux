@@ -59,7 +59,9 @@ class DocumentStore(
     var loadError by mutableStateOf<String?>(null)
     var saving by mutableStateOf(false)
 
-    /** Workdir-relative paths the broker reported changed on disk (fs_changed) → reload banner. */
+    /** Workdir-relative paths changed on disk behind an open document → reload banner. Fed by
+     *  [dev.supermux.ui.files.FileStaleWatcher]'s folder subscriptions (and, in the session-scoped
+     *  editor, by fs_changed pulses). */
     var changedPaths by mutableStateOf(setOf<String>())
 
     /** Paths whose in-flight load was cancelled by [close] — the load result is dropped, never

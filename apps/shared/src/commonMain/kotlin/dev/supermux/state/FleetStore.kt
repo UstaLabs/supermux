@@ -44,7 +44,6 @@ import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.FsDiffResult
-import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.GitOpResult
@@ -1216,11 +1215,6 @@ class FleetStore(
         (sessionId?.let(::appFor) ?: activeApp())?.transcribeDraft(sessionId, draft)?.text
 
     // Session-scoped filesystem / editor / review (id → SessionInfo on the owning host) ------
-    suspend fun fsList(sessionId: String, path: String): List<FsEntry> =
-        withSession(sessionId) { app, s -> app.fsList(s, path) }.orEmpty()
-    suspend fun fsListResult(sessionId: String, path: String): Result<List<FsEntry>> =
-        withSession(sessionId) { app, s -> app.fsListResult(s, path) }
-            ?: Result.failure(IllegalStateException("host offline"))
     suspend fun fsRead(sessionId: String, path: String): Result<String> =
         withSession(sessionId) { app, s -> app.fsRead(s, path) } ?: Result.failure(IllegalStateException("host offline"))
     suspend fun fsWrite(sessionId: String, path: String, content: String): Boolean =
@@ -1321,18 +1315,11 @@ class FleetStore(
     }
     suspend fun listWorkspaceTerminals(workspaceId: String): List<TerminalSummary> =
         appForWorkspace(workspaceId)?.listWorkspaceTerminals(workspaceId).orEmpty()
-    suspend fun workspaceFsList(workspaceId: String, path: String): List<FsEntry> =
-        appForWorkspace(workspaceId)?.workspaceFsList(workspaceId, path).orEmpty()
-    suspend fun workspaceFsListResult(workspaceId: String, path: String): Result<List<FsEntry>> =
-        appForWorkspace(workspaceId)?.workspaceFsListResult(workspaceId, path)
-            ?: Result.failure(IllegalStateException("host offline"))
     suspend fun workspaceFsRead(workspaceId: String, path: String): Result<String> =
         appForWorkspace(workspaceId)?.workspaceFsRead(workspaceId, path)
             ?: Result.failure(IllegalStateException("host offline"))
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
         appForWorkspace(workspaceId)?.workspaceFsWrite(workspaceId, path, content) == true
-    suspend fun workspaceFsSearch(workspaceId: String, q: String): List<FsSearchResult> =
-        appForWorkspace(workspaceId)?.workspaceFsSearch(workspaceId, q).orEmpty()
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =
         appForWorkspace(workspaceId)?.workspaceFsDiff(workspaceId, base)
     suspend fun workspaceFsRefs(workspaceId: String): FsRefsResult? =

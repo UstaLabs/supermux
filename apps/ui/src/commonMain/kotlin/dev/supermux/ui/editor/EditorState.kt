@@ -98,7 +98,8 @@ class EditorState(
         get() = documents.saving
         set(value) { documents.saving = value }
 
-    /** Workdir-relative paths the broker reported changed on disk (fs_changed) → reload banner. */
+    /** Workdir-relative paths changed on disk behind an open document → reload banner (see
+     *  [DocumentStore.changedPaths]). */
     var changedPaths: Set<String>
         get() = documents.changedPaths
         set(value) { documents.changedPaths = value }

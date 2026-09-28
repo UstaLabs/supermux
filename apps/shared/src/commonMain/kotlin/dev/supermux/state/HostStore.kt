@@ -35,7 +35,6 @@ import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.FsDiffResult
-import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.GitOpResult
@@ -1152,45 +1151,6 @@ class HostStore(
     // ChatScreen binds the AppViewModel wrappers. All broker calls run through [runApi] EXCEPT
     // [fsRead] (see its note — it must preserve the FsException message for the editor's error UI).
 
-    /** GET /sessions/<id>/fs → directory listing (workdir-relative). Empty on any failure — use
-     *  [fsListResult] where a failed listing must be TOLD APART from an empty directory. */
-    suspend fun fsList(session: SessionInfo, path: String): List<FsEntry> =
-        fsListResult(session, path).getOrElse { emptyList() }
-
-    /**
-     * GET /sessions/<id>/fs as a Result — same shape and rationale as [fsRead]: NOT run through
-     * [runApi], because the failure message has to reach the file tree's error row (a swallowed
-     * failure renders as an empty directory, which is what made that row unreachable until cluster
-     * C1). runApi's cancellation discipline is preserved inline.
-     */
-    suspend fun fsListResult(session: SessionInfo, path: String): Result<List<FsEntry>> =
-        try {
-            Result.success(api.fsList(session.id, path))
-        } catch (c: CancellationException) {
-            currentCoroutineContext().ensureActive() // real cancel → propagate
-            Result.failure(c)
-        } catch (e: Throwable) {
-            println("[HostStore] fsList failed: $e") // runApi's log, kept now that runApi is bypassed
-            Result.failure(e)
-        }
-
-    /** GET /workspaces/<id>/fs → directory listing (workspace workdir). Empty on any failure — use
-     *  [workspaceFsListResult] where a failed listing must be told apart from an empty directory. */
-    suspend fun workspaceFsList(workspaceId: String, path: String): List<FsEntry> =
-        workspaceFsListResult(workspaceId, path).getOrElse { emptyList() }
-
-    /** GET /workspaces/<id>/fs as a Result — the workspace twin of [fsListResult]. */
-    suspend fun workspaceFsListResult(workspaceId: String, path: String): Result<List<FsEntry>> =
-        try {
-            Result.success(api.workspaceFsList(workspaceId, path))
-        } catch (c: CancellationException) {
-            currentCoroutineContext().ensureActive()
-            Result.failure(c)
-        } catch (e: Throwable) {
-            println("[HostStore] workspaceFsList failed: $e")
-            Result.failure(e)
-        }
-
     /**
      * GET /workspaces/<id>/fs/read → file text. Same Result shape as [fsRead] (preserves
      * FsException messages for the editor load-error UI).
@@ -1208,10 +1168,6 @@ class HostStore(
     /** PUT /workspaces/<id>/fs/write → true on success. */
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
         runApi("workspaceFsWrite") { api.workspaceFsWrite(workspaceId, path, content) } ?: false
-
-    /** GET /workspaces/<id>/fs/search → filename matches. Empty on any failure. */
-    suspend fun workspaceFsSearch(workspaceId: String, q: String): List<FsSearchResult> =
-        runApi("workspaceFsSearch") { api.workspaceFsSearch(workspaceId, q) } ?: emptyList()
 
     /** GET /workspaces/<id>/fs/diff. Null on any failure. */
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =
