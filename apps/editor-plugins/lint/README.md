@@ -17,7 +17,10 @@ view.dispatch(Lint.setDiagnostics(view.state, listOf(Diagnostic(10, 13, Severity
   replacement until the linter answers again). `Lint.diagnostics(state)` (document order),
   `Lint.at(state, from, to)` (worst first).
 - **Marks**: `lint-error`, `lint-warning`, `lint-info`, `lint-hint` on the range (a zero-length one on
-  the character after it). editor-compose draws them as squiggles: `EditorTheme.squiggles`
+  the character after it); where diagnostics overlap each piece of text gets ONE mark, the worst
+  severity's (an error's squiggle is never under a warning's). Marks and gutter markers are built when
+  diagnostics are set and MAPPED through edits after: 10,000 diagnostics cost a keystroke under 2 ms
+  (`LintPerfTest`). `Diagnostic.id`: the source's identity (the LSP client attaches code actions by it). editor-compose draws them as squiggles: `EditorTheme.squiggles`
   (`SquiggleStyle(color, dotted)`, `EditorTheme.lintSquiggles(...)`; wavy, hints dotted), per row of
   the text, in the layout pass's frame.
 - **Gutter**: the `lint` column, one marker per line with its worst severity (`lint-error`,
@@ -35,6 +38,8 @@ view.dispatch(Lint.setDiagnostics(view.state, listOf(Diagnostic(10, 13, Severity
 - **Panel** (`panel:lint`, at the bottom): "Problems (N)", one row per diagnostic (severity,
   `line:column`, message, source). Opening it gives it the focus; `ArrowUp` / `ArrowDown` move, `Enter`
   or a tap goes to the diagnostic and gives the focus back to the editor, `Escape` or × closes it.
+  The rows are a keyed LazyColumn (only the visible ones are composed). The tooltip has a × and its
+  messages are a polite live region.
   Rows are 44 dp on touch.
 
 **Deliberate differences from CM6**: no lint sources run by the plugin itself (`linter(source)`,

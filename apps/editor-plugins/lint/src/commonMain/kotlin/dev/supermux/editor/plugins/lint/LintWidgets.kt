@@ -42,6 +42,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
@@ -61,6 +62,7 @@ import dev.supermux.editor.core.TransactionSpec
 object LintTags {
     const val TOOLTIP = "lint-tooltip"
     const val PANEL = "lint-panel"
+    const val CLOSE = "lint-tooltip-close"
     fun row(i: Int) = "lint-row-$i"
     fun action(name: String) = "lint-action-$name"
 }
@@ -93,13 +95,20 @@ private fun LintTooltip(scope: WidgetScope) {
         Modifier.widthIn(max = 460.dp).shadow(6.dp, shape).clip(shape).background(theme.background)
             .border(1.dp, theme.gutterForeground.copy(alpha = 0.35f), shape).padding(8.dp).testTag(LintTags.TOOLTIP),
     ) {
+        Row(Modifier.fillMaxWidth()) {
+            Spacer(Modifier.weight(1f))
+            Box(
+                Modifier.size(if (isTouchFirstPlatform) 36.dp else 18.dp).press("Close") { editor.dispatch(TransactionSpec(effects = listOf(Hover.set.of(Lint.HOVER_ID to null)))) }.testTag(LintTags.CLOSE),
+                contentAlignment = Alignment.Center,
+            ) { BasicText("×", style = style.copy(color = theme.gutterForeground)) }
+        }
         ds.forEachIndexed { i, d ->
             if (i > 0) Spacer(Modifier.size(6.dp))
             Row(verticalAlignment = Alignment.Top) {
                 Box(Modifier.padding(top = 4.dp).size(8.dp).clip(CircleShape).background(severityColor(theme, d.severity)))
                 Spacer(Modifier.width(6.dp))
                 Column {
-                    BasicText(d.message, style = style)
+                    BasicText(d.message, style = style, modifier = Modifier.semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite })
                     d.source?.let { BasicText(it, style = style.copy(color = theme.gutterForeground, fontSize = (theme.fontSizeSp - 1.5f).sp)) }
                     if (d.actions.isNotEmpty()) Row(Modifier.padding(top = 4.dp)) {
                         d.actions.forEach { a ->
@@ -167,7 +176,7 @@ private fun LintPanel(scope: WidgetScope) {
             Box(Modifier.size(row).press("Close diagnostics") { Lint.closeLintPanel.run(editor); scope.focusEditor() }, contentAlignment = Alignment.Center) { BasicText("×", style = style) }
         }
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = row * 7), state = list) {
-            itemsIndexed(ds) { i, d ->
+            itemsIndexed(ds, key = { i, d -> d.id ?: "${d.from}:${d.to}:$i" }) { i, d ->
                 val line = editor.state.doc.lineAt(d.from.coerceIn(0, editor.state.doc.length))
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = row)

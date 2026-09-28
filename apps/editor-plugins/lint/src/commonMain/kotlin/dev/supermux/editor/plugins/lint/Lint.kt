@@ -49,15 +49,27 @@ data class Diagnostic(
     val message: String,
     val source: String? = null,
     val actions: List<DiagnosticAction> = emptyList(),
+    /** The source's identity for it (an LSP client attaches code actions by it, never by position or order). */
+    val id: String? = null,
 )
 
 /** The plugin's state: the diagnostics (a [RangeSet], mapped through edits), the panel, its selection. */
-data class LintState(
+class LintState(
     internal val set: RangeSet<Diagnostic> = RangeSet.empty(),
     val panelOpen: Boolean = false,
     val panelFocus: Int = 0,
     val selected: Int = -1,
+    /** The marks and gutter markers, built when the diagnostics are set and MAPPED through edits after (never rebuilt per keystroke). */
+    internal val marks: RangeSet<Decoration> = RangeSet.empty(),
+    internal val markers: RangeSet<GutterMarker> = RangeSet.empty(),
 ) {
+    // Identity equality (not data): comparing 10k diagnostics per keystroke to learn "changed" costs
+    // more than recomputing what reads them.
+    internal fun copy(
+        set: RangeSet<Diagnostic> = this.set, panelOpen: Boolean = this.panelOpen, panelFocus: Int = this.panelFocus,
+        selected: Int = this.selected, marks: RangeSet<Decoration> = this.marks, markers: RangeSet<GutterMarker> = this.markers,
+    ) = LintState(set, panelOpen, panelFocus, selected, marks, markers)
+
     /** Every diagnostic, in document order (by start, then end), with its current range. */
     val diagnostics: List<Diagnostic> get() = set.map { it.value.copy(from = it.from, to = it.to) }
 }
@@ -91,14 +103,15 @@ object Lint {
         "lint",
         { LintState() },
         { v, tr ->
-            var s = if (tr.docChanged) v.copy(set = v.set.map(tr.changes)) else v
+            var s = if (tr.docChanged) v.copy(set = v.set.map(tr.changes), marks = v.marks.map(tr.changes), markers = v.markers.map(tr.changes)) else v
             for (e in tr.effects) {
                 e.valueIf(setDiagnosticsEffect)?.let { list ->
                     val len = tr.state.doc.length
-                    s = s.copy(set = RangeSet.of(list.map { d ->
+                    val set = RangeSet.of(list.map { d ->
                         val a = d.from.coerceIn(0, len); val b = d.to.coerceIn(a, len)
                         Ranged(a, b, d)
-                    }), selected = -1)
+                    })
+                    s = s.copy(set = set, selected = -1, marks = buildMarks(set, len), markers = buildMarkers(set, tr.state.doc))
                 }
                 e.valueIf(togglePanel)?.let { open -> s = s.copy(panelOpen = open, panelFocus = if (open) s.panelFocus + 1 else s.panelFocus) }
                 e.valueIf(selectInPanel)?.let { s = s.copy(selected = it) }
@@ -186,24 +199,50 @@ object Lint {
         NamedCommand("lint.panel", "Show diagnostics", openLintPanel),
     )
 
-    internal fun decorations(st: EditorState): RangeSet<Decoration> {
-        val s = state(st)
-        if (s.set.isEmpty) return RangeSet.empty()
-        val len = st.doc.length
-        return RangeSet.of(s.set.map { r ->
-            // A point diagnostic marks the character after it (before it at the end), so it shows.
+    internal fun decorations(st: EditorState): RangeSet<Decoration> = state(st).marks
+
+    internal fun markers(st: EditorState): RangeSet<GutterMarker> = state(st).markers
+
+    /**
+     * The squiggle marks: where diagnostics overlap, each piece of text gets ONE mark, its worst
+     * severity's (an error's squiggle is never drawn under a warning's). A zero-length diagnostic
+     * marks the character after it (before it at the end).
+     */
+    internal fun buildMarks(set: RangeSet<Diagnostic>, len: Int): RangeSet<Decoration> {
+        if (set.isEmpty) return RangeSet.empty()
+        class Span(val from: Int, val to: Int, val sev: Severity)
+        val spans = set.map { r ->
             var a = r.from; var b = r.to
             if (a == b) { if (b < len) b++ else if (a > 0) a-- }
-            Ranged(a, b, Decoration.Mark(setOf(r.value.severity.cls)) as Decoration)
-        }.filter { it.from < it.to })
+            Span(a, b, r.value.severity)
+        }.filter { it.from < it.to }
+        // A sweep over the boundaries: the worst severity covering each piece.
+        val points = spans.flatMap { listOf(it.from, it.to) }.distinct().sorted()
+        val byStart = spans.sortedBy { it.from }
+        val active = ArrayList<Span>()
+        var k = 0
+        val out = ArrayList<Ranged<Decoration>>()
+        var last: Ranged<Decoration>? = null
+        for (i in 0 until points.size - 1) {
+            val a = points[i]; val b = points[i + 1]
+            while (k < byStart.size && byStart[k].from <= a) active += byStart[k++]
+            active.removeAll { it.to <= a }
+            val worst = active.maxOfOrNull { it.sev } ?: continue
+            val cls = worst.cls
+            val l = last
+            if (l != null && l.to == a && (l.value as Decoration.Mark).classes.first() == cls) {
+                last = Ranged(l.from, b, l.value); out[out.size - 1] = last
+            } else {
+                last = Ranged(a, b, Decoration.Mark(setOf(cls)) as Decoration); out += last
+            }
+        }
+        return RangeSet.of(out)
     }
 
-    internal fun markers(st: EditorState): RangeSet<GutterMarker> {
-        val s = state(st)
-        if (s.set.isEmpty) return RangeSet.empty()
-        val doc = st.doc
+    internal fun buildMarkers(set: RangeSet<Diagnostic>, doc: dev.supermux.editor.core.Rope): RangeSet<GutterMarker> {
+        if (set.isEmpty) return RangeSet.empty()
         val byLine = LinkedHashMap<Int, MutableList<Diagnostic>>()
-        for (r in s.set) byLine.getOrPut(doc.lineIndexAt(r.from)) { ArrayList() } += r.value
+        for (r in set) byLine.getOrPut(doc.lineIndexAt(r.from)) { ArrayList() } += r.value
         return RangeSet.of(byLine.map { (line, ds) ->
             val worst = ds.maxOf { it.severity }
             val kind = when (worst) { Severity.ERROR -> "lint-error"; Severity.WARNING -> "lint-warning"; else -> "lint-info" }
@@ -228,8 +267,8 @@ object Lint {
  */
 fun lint(): Extension = extensionOf(
     Lint.field,
-    decorationsFacet.compute(FacetDep.field(Lint.field), FacetDep.Doc) { Lint.decorations(it) },
-    gutterMarkersFacet.compute(FacetDep.field(Lint.field), FacetDep.Doc) { Lint.markers(it) },
+    decorationsFacet.compute(FacetDep.field(Lint.field)) { Lint.decorations(it) },
+    gutterMarkersFacet.compute(FacetDep.field(Lint.field)) { Lint.markers(it) },
     panelsFacet.compute(FacetDep.field(Lint.field)) { st -> if (Lint.state(st).panelOpen) Panel(Lint.PANEL, top = false) else null },
     hoverTooltip(Lint.HOVER_ID, hideOnChange = true) { st, pos, side -> Lint.hover(st, pos, side) },
     gutterClickFacet.of(GutterClickHandler { t, column, line, _ ->

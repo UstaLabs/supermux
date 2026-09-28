@@ -72,6 +72,17 @@ class LintTest {
         assertEquals(listOf("e", "w"), Lint.at(v.state, 0, at("\n")).map { it.message })
     }
 
+    @Test fun overlappingDiagnosticsDrawTheWorstSeverityOnTop() {
+        val v = view()
+        v.set(Diagnostic(0, 10, Severity.WARNING, "w"), Diagnostic(4, 6, Severity.ERROR, "e"), Diagnostic(8, 12, Severity.HINT, "h"))
+        val marks = v.state.facet(decorationsFacet).flatMap { set -> set.map { Triple(it.from, it.to, (it.value as Decoration.Mark).classes.single()) } }
+        assertEquals(listOf(Triple(0, 4, "lint-warning"), Triple(4, 6, "lint-error"), Triple(6, 10, "lint-warning"), Triple(10, 12, "lint-hint")), marks)
+        // Mapped through an edit, not rebuilt.
+        v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 0, "xx")), userEvent = "input"))
+        val moved = v.state.facet(decorationsFacet).flatMap { set -> set.map { it.from to it.to } }
+        assertEquals(listOf(2 to 6, 6 to 8, 8 to 12, 12 to 14), moved)
+    }
+
     @Test fun f8AndShiftF8WalkTheDiagnosticsWrappingAndShowTheTooltip() {
         val v = view()
         v.set(diag("bar"), diag("qux"), diag("two", Severity.WARNING))
