@@ -529,7 +529,10 @@ jobs:
           done
 
       - name: Build .deb
-        run: ./gradlew :desktop:packageDeb --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
+        # createDistributable too: packageDeb builds its jpackage image in a temp dir, so
+        # without it binaries/main/app (read by the assertion below) never exists. Same
+        # pair the Windows lane runs.
+        run: ./gradlew :desktop:createDistributable :desktop:packageDeb --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
       - name: Assert the packaged client engine
         # The library has to be INSIDE the artifact a user installs, not merely on the build
         # machine. Read it back out of the jar in the jpackage image.
@@ -855,12 +858,28 @@ jobs:
         run: |
           # Raw codesign against a non-default keychain needs the SHA-1, not the label.
           IDENTITY=$(security find-identity -v -p codesigning "$MACOS_COMPOSE_KEYCHAIN" | awk -v label="$DEVELOPER_ID_APPLICATION" 'index($0, label) { print $2; exit }')
-          for helper in supermux-broker frpc tmux; do
+          res=apps/desktop/resources/macos-arm64
+          for helper in supermux-broker frpc tmux zmx mux-zmx-helper; do
             codesign --force --options runtime --timestamp \
               --keychain "$MACOS_COMPOSE_KEYCHAIN" \
-              --sign "$IDENTITY" "apps/desktop/resources/macos-arm64/$helper"
-            codesign --verify --strict --verbose=2 "apps/desktop/resources/macos-arm64/$helper"
+              --sign "$IDENTITY" "$res/$helper"
+            codesign --verify --strict --verbose=2 "$res/$helper"
           done
+          # Signing rewrites zmx and mux-zmx-helper, and the broker refuses both unless their
+          # sha256 matches zmx-manifest.json (src/core/terminal/zmx/helper.ts). Re-stamp the
+          # two digests to the signed bytes; everything else in the manifest (zmx commit,
+          # patch hash, helper ABI, target) still describes these same builds.
+          python3 - "$res" <<'PY'
+          import hashlib, json, os, sys
+          res = sys.argv[1]
+          path = os.path.join(res, "zmx-manifest.json")
+          m = json.load(open(path))
+          digest = lambda name: hashlib.sha256(open(os.path.join(res, name), "rb").read()).hexdigest()
+          m["zmx"]["sha256"] = digest("zmx")
+          m["helper"]["sha256"] = digest("mux-zmx-helper")
+          json.dump(m, open(path, "w"), indent=2)
+          print(f"zmx-manifest.json re-stamped: zmx {m['zmx']['sha256'][:12]}, helper {m['helper']['sha256'][:12]}")
+          PY
       - name: Build signed Compose DMG
         if: steps.signing.outputs.have == '1'
         run: >
