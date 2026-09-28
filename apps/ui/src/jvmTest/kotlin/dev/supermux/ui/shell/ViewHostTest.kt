@@ -507,21 +507,26 @@ class ViewHostTest {
         assertEquals(ChatHeaderMode.PANEL, seen.first())
     }
 
+    /**
+     * One chat header at every width and input (f776cf36): the panel's own header is the default
+     * on a touch tablet and a phone too — BAR and NONE remain shapes a host must ASK for. The
+     * header sheds its least important parts as it narrows instead of changing shape.
+     */
     @Test
-    fun aTouchTabletDefaultsToTheBarAndAPhoneToNone() {
+    fun aTouchTabletAndAPhoneBothDefaultToThePanelHeader() {
         runComposeUiTest {
             val seen = mutableListOf<ChatHeaderMode>()
             setPlatformContent(platform(), pointer = false, widthClass = WindowWidthClass.Expanded) {
                 seen.add(defaultChatHeaderMode())
             }
-            assertEquals(ChatHeaderMode.BAR, seen.first())
+            assertEquals(ChatHeaderMode.PANEL, seen.first())
         }
         runComposeUiTest {
             val seen = mutableListOf<ChatHeaderMode>()
             setPlatformContent(platform(), pointer = false, widthClass = WindowWidthClass.Compact) {
                 seen.add(defaultChatHeaderMode())
             }
-            assertEquals(ChatHeaderMode.NONE, seen.first())
+            assertEquals(ChatHeaderMode.PANEL, seen.first())
         }
     }
 
