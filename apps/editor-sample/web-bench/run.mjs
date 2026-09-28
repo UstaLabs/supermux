@@ -224,6 +224,24 @@ try {
         await page.send('Input.insertText', { text: '日本' });
       }, '日本');
       if (failed || flag('--trace')) console.log('TRACE (key ArrowUp before it, then the composition):\n  ' + (await page.value('window.__trace.join("\\n  ")')));
+      // A long task between the composition's steps (a busy page) must not let the held caret move
+      // through before Compose caught up: the hold counts frames, not milliseconds.
+      const busy = (ms) => page.value(`(() => { const t0 = performance.now(); while (performance.now() - t0 < ${ms}) {} return true; })()`);
+      for (let i = 0; i < 3; i++) await key('ArrowLeft', 'ArrowLeft', 37);
+      // The long task runs right after the browser's selectionchange (a one-shot listener behind the
+      // editor's): the held caret must still wait for Compose's frame.
+      const busyAfterSelectionChange = (ms) => page.value(`(() => { const f = () => { const t0 = performance.now(); while (performance.now() - t0 < ${ms}) {} }; document.addEventListener('selectionchange', f, { once: true, capture: true }); return true; })()`);
+      await insertedAtCaret('IME text lands at the caret with long tasks in between', async () => {
+        await busyAfterSelectionChange(200);
+        await page.send('Input.imeSetComposition', { text: 'か', selectionStart: 1, selectionEnd: 1 });
+        await sleep(100);
+        await busyAfterSelectionChange(200);
+        await page.send('Input.imeSetComposition', { text: 'かな', selectionStart: 2, selectionEnd: 2 });
+        await sleep(100);
+        await busyAfterSelectionChange(200);
+        await page.send('Input.insertText', { text: '仮名' });
+        await busy(250);
+      }, '仮名');
       await page.value('window.__trace = null');
       await key('Home', 'Home', 36);
       await insertedAtCaret('a paste event pastes at the caret', () => page.value(`(() => { const dt = new DataTransfer(); dt.setData('text/plain', 'PASTED'); const roots = [document]; for (let i = 0; i < roots.length; i++) for (const el of roots[i].querySelectorAll('*')) if (el.shadowRoot) roots.push(el.shadowRoot);

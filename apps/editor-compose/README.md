@@ -107,7 +107,10 @@ character may overhang). A keystroke on a 1 MB line takes ~6 ms to its frame.
 
 **Keep the cursor visible.** A transaction with `scrollIntoView` (every default command, every
 typed character) scrolls the least needed to show the main cursor with a margin of a line
-(four cells horizontally, without wrapping). Page moves scroll a page as well.
+(four cells horizontally, without wrapping). Page moves scroll a page as well. A transaction with
+`EditorEffects.scrollTo.of(pos)` (a position in its new document) scrolls THAT position into view
+instead (CM6's `EditorView.scrollIntoView(pos)`): the search plugin's `Mod-d` shows the range it
+added beside the main one.
 
 ## Gutter markers
 
@@ -435,9 +438,10 @@ the DOM selection before anything else and never resyncs for `insertReplacementT
 autocorrect's own replacement). Composition stays Compose's. After an IME edit the browser moves
 the TEXTAREA's caret before Compose has processed the edit, and Compose would apply that caret
 over the old text: a `selectionchange` is therefore HELD while the TEXTAREA's value is ahead of the
-field Compose reported, but only until the editor has caught up or for 100 ms at most; then the
-TEXTAREA's caret is read again and handed to Compose once (a caret the user moved meanwhile is
-never lost). A composition whose `compositionend` never came (the focus moved mid-composition)
+field Compose reported, but only until the editor has caught up or for 6 animation FRAMES at most
+(frames, not milliseconds: Compose catches up at its next frame, so a long task in between, which
+delays that frame, never lets a stale caret through); then the TEXTAREA's caret is read again and
+handed to Compose once (a caret the user moved meanwhile is never lost), trusted for two frames. A composition whose `compositionend` never came (the focus moved mid-composition)
 ends with the TEXTAREA's blur, so caret moves are never ignored for good (`webInputTest` covers
 both).
 All of this state is **per editor** (`newWebInputState()`, kept in `EditorController.platformInput`):

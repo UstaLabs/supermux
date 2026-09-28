@@ -353,7 +353,9 @@ class EditorView(initial: EditorState) : CommandTarget {
             commandDepth = depth
             keyDepth = keys
         }
-        if (tr.scrollIntoView) surface?.scrollIntoView()
+        val target = tr.effects.lastOrNull { it.isOf(EditorEffects.scrollTo) }?.valueIf(EditorEffects.scrollTo)
+        if (target != null) surface?.scrollIntoView(target.coerceIn(0, tr.state.doc.length))
+        else if (tr.scrollIntoView) surface?.scrollIntoView()
         if (reveal != null && !revealRange(reveal.from, reveal.to)) {
             // Nobody showed it after all: out to its edge.
             val f = replaced(current)
@@ -577,8 +579,8 @@ internal interface EditorSurfaceHooks {
     /** The state was replaced wholesale. */
     fun onStateReplaced()
 
-    /** Scroll the least needed to show the main cursor with a margin. */
-    fun scrollIntoView()
+    /** Scroll the least needed to show the main cursor (or [pos]) with a margin. */
+    fun scrollIntoView(pos: Int? = null)
 
     /** Scroll by [dy] pixels (page moves scroll a page as well as moving the cursor). */
     fun scrollBy(dy: Float)

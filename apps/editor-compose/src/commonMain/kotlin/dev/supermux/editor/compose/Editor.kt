@@ -1297,9 +1297,9 @@ internal class EditorController(
     }
 
     /** The least scrolling that shows the main cursor with a margin (a line, four cells). */
-    override fun scrollIntoView() {
+    override fun scrollIntoView(pos: Int?) {
         if (viewportSize.height <= 0f) return
-        val r = geometry.rectFor(view.state.selection.main.head)
+        val r = geometry.rectFor(pos ?: view.state.selection.main.head)
         val lh = layouts.lineHeightPx
         val my = minOf(lh, viewportSize.height / 4)
         var y = scroll.y

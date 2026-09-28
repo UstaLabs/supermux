@@ -289,3 +289,13 @@ internal class FocusOwner<T : Any> {
         return owner != null
     }
 }
+
+/** Effects the surface acts on. */
+object EditorEffects {
+    /**
+     * Scroll this document position into view (CM6's `EditorView.scrollIntoView(pos)`), instead of
+     * the main cursor: a range added beside the main one (`Mod-d`) is shown. The position is in the
+     * transaction's NEW document (like its selection).
+     */
+    val scrollTo: dev.supermux.editor.core.StateEffectType<Int> = dev.supermux.editor.core.StateEffectType("editor.scrollTo") { p, c -> c.mapPos(p, 1) }
+}

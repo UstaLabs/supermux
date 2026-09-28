@@ -187,40 +187,41 @@ private fun installListeners(st: JsAny, onKey: (JsAny) -> Int, onCopy: (Boolean)
       // TEXTAREA's value is ahead of the field Compose reported, the caret move is stale: Compose
       // never sees it, applies the edit at its own caret, and the caret is synced from that.
       // Held only until the editor has caught up (the TEXTAREA's value is the field's text again) or
-      // for HOLD_MS at most: then the TEXTAREA's caret, read again, is handed to Compose ONCE (a
-      // synthetic selectionchange), so a caret the user moved meanwhile is never lost for good.
+      // for HOLD_FRAMES animation frames at most: then the TEXTAREA's caret, read again, is handed to
+      // Compose ONCE (a synthetic selectionchange), so a caret the user moved meanwhile is never lost
+      // for good. Counted in FRAMES, not milliseconds: Compose catches up at its next frame, so a long
+      // task in between (which delays that frame) never lets a stale caret through.
       const selChange = () => {
         const ta = st.ta;
         if (!ta || !ta.isConnected || ta.__editorState !== st || st.deepActive() !== ta) return false;
         return ta.value !== fieldText();
       };
-      const HOLD_MS = 100;
-      let heldSince = 0, releasing = false, timer = 0;
+      const HOLD_FRAMES = 6;
+      let held = false, frames = 0, releasing = false;
       const release = () => {
-        if (!heldSince) return;
-        heldSince = 0;
-        if (timer) { clearTimeout(timer); timer = 0; }
+        if (!held) return;
+        held = false;
         const ta = st.ta;
         if (!ta || !ta.isConnected || ta.__editorState !== st) return;
-        // Still ahead (the time limit): the editor must follow this one caret report anyway.
-        if (ta.value !== fieldText()) st.trustCaret = true;
+        // Still ahead (the frame limit): the editor must follow this one caret report anyway, and
+        // only this one: the trust ends two frames on (Compose applies it at its next frame).
+        if (ta.value !== fieldText()) {
+          st.trustCaret = true;
+          requestAnimationFrame(() => requestAnimationFrame(() => { st.trustCaret = false; }));
+        }
         releasing = true;
         try { document.dispatchEvent(new Event('selectionchange')); } finally { releasing = false; }
       };
       const watch = () => {
-        if (!heldSince) return;
-        if (!selChange() || performance.now() - heldSince >= HOLD_MS) release();
+        if (!held) return;
+        frames++;
+        if (!selChange() || frames >= HOLD_FRAMES) release();
         else requestAnimationFrame(watch);
       };
       const onSelChange = (e) => {
         if (releasing) return;
-        if (!selChange()) { heldSince = 0; if (timer) { clearTimeout(timer); timer = 0; } return; }
-        if (!heldSince) {
-          heldSince = performance.now();
-          requestAnimationFrame(watch);
-          // rAF can be throttled (a background tab): the time limit holds anyway.
-          timer = setTimeout(() => { timer = 0; release(); }, HOLD_MS);
-        } else if (performance.now() - heldSince >= HOLD_MS) { release(); return; }
+        if (!selChange()) { held = false; return; }
+        if (!held) { held = true; frames = 0; requestAnimationFrame(watch); }
         e.stopImmediatePropagation();
       };
       window.addEventListener('selectionchange', onSelChange, true);
@@ -238,7 +239,7 @@ private fun installListeners(st: JsAny, onKey: (JsAny) -> Int, onCopy: (Boolean)
       window.addEventListener('copy', onCopyEvent, true);
       window.addEventListener('cut', onCutEvent, true);
       window.addEventListener('paste', paste, true);
-      return { key, pointer, onCopyEvent, onCutEvent, paste, cstart, cend, beforeInput, refocus, onSelChange, blur, stop: () => { heldSince = 0; if (timer) clearTimeout(timer); } };
+      return { key, pointer, onCopyEvent, onCutEvent, paste, cstart, cend, beforeInput, refocus, onSelChange, blur, stop: () => { held = false; } };
     })()"""
 )
 
