@@ -117,10 +117,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app
-        # The native editor's grammar tables (editor-syntax/tables/*.sesz, 5.1 MB): OFF until an
-        # app module links :editor-syntax. M3 sets this to YES in the same change that adds
-        # `api(project(":editor-syntax"))` to :ios (see apps/editor-syntax/native/README.md).
-        SUPERMUX_EDITOR_SYNTAX_TABLES: "NO"
+        # The native editor's grammar tables (editor-syntax/tables/*.sesz, 5.1 MB). ON since M5:
+        # :ui links :editor-syntax (api), so SupermuxKit carries the grammars' code and the app
+        # bundle must carry their tables (see apps/editor-syntax/native/README.md).
+        SUPERMUX_EDITOR_SYNTAX_TABLES: "YES"
         # APNs (aps-environment) + shared Keychain access group so the NSE can read
         # the same push keypair this app generates.
         CODE_SIGN_ENTITLEMENTS: Supermux/Supermux.entitlements
@@ -172,8 +172,8 @@ targets:
         script: |
           # The native editor's code-only grammars keep their parse tables as data
           # (editor-syntax/tables/<lang>.sesz), read from the main bundle (SyntaxResources.ios.kt);
-          # a static framework carries no resources. Gated by SUPERMUX_EDITOR_SYNTAX_TABLES (NO
-          # until M3 links :editor-syntax), and it never fails the app build: stale or missing
+          # a static framework carries no resources. Gated by SUPERMUX_EDITOR_SYNTAX_TABLES (YES
+          # since M5 linked :editor-syntax through :ui), and it never fails the app build: stale or missing
           # natives only print a warning (the editor then shows those languages as plain text).
           if [ "${SUPERMUX_EDITOR_SYNTAX_TABLES:-NO}" != "YES" ]; then
             echo "editor-syntax tables: skipped (SUPERMUX_EDITOR_SYNTAX_TABLES != YES)"

@@ -23,6 +23,10 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # A release web client MUST carry the native editor's syntax module and grammar tables
+  # (:web:stageForBroker fails without them). Dev and CI lanes without the Mac-built natives stage
+  # a placeholder instead and the editors open files as plain text (apps/web/build.gradle.kts).
+  SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
 
 jobs:
   classify:
@@ -70,9 +74,16 @@ jobs:
           - runner: macos-14
             os: darwin
             arch: arm64
+    needs: editor-syntax-natives
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
+      # where :editor-syntax's staging tasks look for them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
       - uses: oven-sh/setup-bun@v2
       # build-binary.sh stages the web client with Gradle (`:web:stageForBroker`
       # compiles the Kotlin/Wasm Compose app) and hard-fails without a JDK on
@@ -296,6 +307,59 @@ jobs:
           ./gradlew -p terminal-core/consumer-smoke wasmJsBrowserTest --console=plain
           ./gradlew -p terminal-compose/consumer-smoke jvmTest --console=plain
 
+  editor-syntax-natives:
+    # The native editor's grammars (apps/editor-syntax, M5): ONE Mac build of every target, handed
+    # to every job that packages an app. editor-syntax/native/build.sh is Mac-only by design (the
+    # README's pipeline: Xcode clang for the ASan/UBSan differential tests of every grammar, the
+    # Apple and Android targets, zig cross builds for Linux, Windows and wasm32), so the honest
+    # arrangement is the same as the Windows terminal engine's: build where the toolchain is
+    # pinned, pass the artifact on. The artifact holds build/natives (every library + manifest.json)
+    # and build/gen/<lang>/<lang>.sesz (the code-only grammars' tables, which :editor-syntax:stageTables
+    # checks against that manifest).
+    #
+    # The Linux and Windows libraries are cross-compiled here and LOAD-TESTED on their own OS by
+    # build-desktop-linux / build-desktop-windows (:editor-syntax:jvmResourceLoadTest).
+    runs-on: macos-26
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: apps/editor-syntax
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Install the pinned zig and NDK
+        run: |
+          zv="$(python3 -c "import json;print(json.load(open('native/upstream.lock.json'))['zig']['version'])")"
+          brew install zig || true
+          [ "$(zig version)" = "$zv" ] || { echo "::error::editor-syntax needs zig $zv (native/upstream.lock.json), brew has $(zig version)"; exit 1; }
+          sdkmanager "ndk;26.1.10909125"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+      - name: Cache the grammar sources and generated tables
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/editor-syntax/build/src
+            apps/editor-syntax/build/gen
+          key: editor-syntax-${{ hashFiles('apps/editor-syntax/native/*.lock.json', 'apps/editor-syntax/tools/**', 'apps/editor-syntax/native/src/**') }}
+      - name: Fetch, generate and build every target
+        run: |
+          bash native/fetch.sh
+          bash native/build.sh all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: |
+            apps/editor-syntax/build/natives
+            apps/editor-syntax/build/gen/*/*.sesz
+          if-no-files-found: error
+
   build-android:
     # Signed release APK for the native Android app (apps/android). Runs on tag
     # pushes AND workflow_dispatch dry runs (builds + uploads the artifact,
@@ -311,6 +375,7 @@ jobs:
     #     increasing; floor keeps CI above any historical local default, currently 32)
     # Those values are written to dist/android-client.env and consumed by
     # publish-website so versions.json matches the APK that was actually built.
+    needs: editor-syntax-natives
     runs-on: ubuntu-latest
     env:
       # Keep above any versionCode ever shipped from apps/android/build.gradle.kts
@@ -321,6 +386,12 @@ jobs:
         working-directory: apps
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
+      # where :editor-syntax's staging tasks look for them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -442,12 +513,19 @@ jobs:
     # other build-* jobs. The app carries its OWN packageVersion (independent of the v*
     # tag), so the asset name is stable: supermux-linux.deb. Unsigned; the pinned JBR/JCEF
     # runtime is bundled so the CodeMirror editor works offline on first launch.
+    needs: editor-syntax-natives
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
+      # where :editor-syntax's staging tasks look for them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -455,6 +533,9 @@ jobs:
       # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
       # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
       - uses: gradle/actions/setup-gradle@v4
+      - name: Load-test the editor's Linux x64 grammar library (cross-built on the Mac)
+        working-directory: apps
+        run: ./gradlew :editor-syntax:jvmResourceLoadTest --console=plain --no-daemon
       - uses: oven-sh/setup-bun@v2 # broker compile (scripts/build-binary.sh) during staging
       - name: Resolve version
         id: ver
@@ -578,12 +659,18 @@ jobs:
     # Unsigned v1 (SmartScreen "unknown publisher" warning accepted). Stable asset name:
     # supermux-windows.msi.
     runs-on: windows-latest
-    needs: build-terminal-jni-windows
+    needs: [build-terminal-jni-windows, editor-syntax-natives]
     defaults:
       run:
         working-directory: apps
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
+      # where :editor-syntax's staging tasks look for them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -598,6 +685,10 @@ jobs:
       # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
       # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
       - uses: gradle/actions/setup-gradle@v4
+      - name: Load-test the editor's Windows x64 grammar library (cross-built on the Mac)
+        working-directory: apps
+        shell: pwsh
+        run: ./gradlew.bat :editor-syntax:jvmResourceLoadTest --console=plain --no-daemon
       - uses: oven-sh/setup-bun@v2
         with:
           # Bun's ConPTY/EOF behavior is a native-Windows release gate.
@@ -703,6 +794,7 @@ jobs:
     # Supermux.app and are kept stable so installed clients keep finding their updates.
     # Tag builds require Developer ID + notary credentials; dry runs without secrets upload an
     # explicitly unsigned DMG.
+    needs: editor-syntax-natives
     runs-on: macos-26
     env:
       DEVELOPER_ID_APPLICATION: "Developer ID Application: AHMET HUSEYIN DOK (57L7J9XA89)"
@@ -716,6 +808,12 @@ jobs:
         working-directory: apps
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
+      # where :editor-syntax's staging tasks look for them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -931,6 +1029,7 @@ jobs:
     # derived from GITHUB_RUN_NUMBER plus TESTFLIGHT_BUILD_OFFSET. The offset guarantees the
     # first CI upload lands above the highest build uploaded from the old headless-Mac flow —
     # raise it if App Store Connect rejects a build as "already used / not higher".
+    needs: editor-syntax-natives
     runs-on: macos-26
     outputs:
       upload: ${{ steps.signing.outputs.upload }}
@@ -954,6 +1053,12 @@ jobs:
       ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
+      # where :editor-syntax's staging tasks look for them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

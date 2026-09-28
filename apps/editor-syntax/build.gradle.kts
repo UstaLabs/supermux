@@ -256,6 +256,9 @@ abstract class StageAndroidJniLibs : DefaultTask() {
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
     @get:Internal abstract val verifier: Property<(File, String, String) -> Pair<File, String>?>
 
+    /** False only under `-Peditor.allowMissingAndroidNative=true`. See [stage]. */
+    @get:Input abstract val required: Property<Boolean>
+
     @TaskAction fun stage() {
         val out = outputDir.get().asFile
         out.deleteRecursively()
@@ -266,9 +269,18 @@ abstract class StageAndroidJniLibs : DefaultTask() {
             if (found == null) { missing += target; continue }
             found.first.copyTo(File(out, "$abi/libsupermux_syntax_jni.so"), overwrite = true)
         }
-        if (missing.isNotEmpty()) {
-            logger.warn("editor-syntax: no Android JNI library for ${missing.joinToString()} (build with native/build.sh <target>)")
-        }
+        if (missing.isEmpty()) return
+        // FAIL, not warn (M5, terminal-core's rule): AGP merges an empty jniLibs directory without a
+        // word, so an APK built now would install and run with every file as plain text on those
+        // ABIs, and a warning in a long Gradle log is not a signal.
+        val message =
+            "editor-syntax: no Android JNI library for ${missing.joinToString()}.\n" +
+                "  An APK packaged now would claim these ABIs and have no syntax highlighting in them.\n" +
+                "  Build them:  ${missing.joinToString("\n               ") { "bash apps/editor-syntax/native/build.sh $it" }}\n" +
+                "  Or, to deliberately produce an APK with plain-text editors on those ABIs, pass\n" +
+                "  -Peditor.allowMissingAndroidNative=true."
+        if (required.get()) throw GradleException(message)
+        logger.warn("$message\n  (allowed by -Peditor.allowMissingAndroidNative)")
     }
 }
 
@@ -280,6 +292,7 @@ val stageAndroidJniLibs by tasks.registering(StageAndroidJniLibs::class) {
     nativeInputs.from(File(nativeBuildDir, "manifest.json"))
     outputDir.set(layout.buildDirectory.dir("generated/jniLibs"))
     verifier.set { root, target, lib -> verifiedNativeLib(root, target, lib) }
+    required.set(providers.gradleProperty("editor.allowMissingAndroidNative").orNull?.toBoolean() != true)
 }
 // ---------------------------------------------------------------- tables resources ----------
 

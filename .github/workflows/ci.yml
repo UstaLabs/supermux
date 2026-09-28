@@ -550,7 +550,9 @@ jobs:
 
       - name: Build debug APK
         working-directory: apps
-        run: ./gradlew :android:assembleDebug --build-cache --console=plain
+        # The native editor's grammar libraries are built on the Mac only (release.yml's
+        # editor-syntax-natives job); this lane's APK deliberately opens files as plain text.
+        run: ./gradlew :android:assembleDebug --build-cache --console=plain -Peditor.allowMissingAndroidNative=true
 
       - name: Run the journey on an emulator
         uses: reactivecircus/android-emulator-runner@v2

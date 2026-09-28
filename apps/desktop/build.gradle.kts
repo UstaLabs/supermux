@@ -400,6 +400,14 @@ compose.desktop {
  * value moves to the real, shipped bytes. On Linux and Windows nothing re-signs, the staged digests
  * already describe the shipped bytes, and this is a no-op.
  */
+/**
+ * The resource roots whose `<target>/native.properties` pin a packaged JNI library by digest:
+ * terminal-core's engine and (M5) editor-syntax's grammars. Both loaders check the sha256 before
+ * `System.load`, so both must be rewritten after macOS re-signs the dylibs, or the packaged app
+ * refuses its own libraries (the terminal cannot open; the editor falls back to plain text).
+ */
+val PACKAGED_NATIVE_ROOTS = listOf("dev/supermux/terminal/native/", "dev/supermux/editor/syntax/natives/")
+
 fun rewritePackagedNativeDigests(appDir: File): List<File> {
     if (!appDir.isDirectory) return emptyList()
     val changed = mutableListOf<File>()
@@ -407,7 +415,7 @@ fun rewritePackagedNativeDigests(appDir: File): List<File> {
         val updates = linkedMapOf<String, ByteArray>()
         ZipFile(jar).use { zip ->
             val propsEntries = Collections.list(zip.entries())
-                .filter { it.name.startsWith("dev/supermux/terminal/native/") && it.name.endsWith("/native.properties") }
+                .filter { e -> PACKAGED_NATIVE_ROOTS.any { e.name.startsWith(it) } && e.name.endsWith("/native.properties") }
             for (props in propsEntries) {
                 val text = zip.getInputStream(props).use { it.readBytes() }.toString(Charsets.UTF_8)
                 val fields = text.lineSequence()
@@ -419,7 +427,7 @@ fun rewritePackagedNativeDigests(appDir: File): List<File> {
                 val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
                 if (fields["sha256"] == sha && fields["size"] == bytes.size.toString()) continue
                 logger.lifecycle(
-                    "terminal-core: ${jar.name}!${props.name} records ${fields["sha256"]}/${fields["size"]} " +
+                    "native digests: ${jar.name}!${props.name} records ${fields["sha256"]}/${fields["size"]} " +
                         "but the packaged library is $sha/${bytes.size} (re-signed during packaging) — rewriting it",
                 )
                 updates[props.name] = text.lineSequence().map {
