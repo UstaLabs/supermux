@@ -25,6 +25,24 @@
 #   • cursor-agent: installed via https://cursor.com/install
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── 0a. Browser terminal engine build stage ──────────────────────────────────
+# The web client's terminal IS supermux-terminal.wasm (pinned libghostty-vt +
+# the st_* wrapper, built by Zig). `:terminal-core` only stages a module that
+# wasm/build.sh produced; without one, webpack fails to resolve
+# './supermux-terminal.wasm' and the web bundle does not build at all.
+# The module is architecture-independent, so it is built once, natively.
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS termwasmbuild
+# python3-cryptography: the Zig installer verifies the tarball's minisign
+# signature and fails closed without it (same as the zmxbuild stage below).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git python3 python3-cryptography xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY apps/terminal-core/native ./apps/terminal-core/native
+COPY apps/terminal-core/wasm ./apps/terminal-core/wasm
+RUN ST_ZIG_JOBS=4 bash apps/terminal-core/wasm/build.sh
+
 # ── 0. Web client build stage ─────────────────────────────────────────────────
 # `:web:stageForBroker` compiles the Kotlin/Wasm Compose app and writes the
 # content-hashed bundle + PWA shell into src/channels/web/static. It needs a
@@ -49,6 +67,9 @@ COPY apps ./apps
 # unless its output dir's sibling `static-serve.ts` exists, so that the task can
 # never scribble a bundle into some unrelated directory. Copy that one file.
 COPY src/channels/web/static-serve.ts ./src/channels/web/static-serve.ts
+# The browser terminal engine from stage 0a, where :terminal-core looks for it
+# (build/wasm is excluded from the context by .dockerignore).
+COPY --from=termwasmbuild /src/apps/terminal-core/build/wasm ./apps/terminal-core/build/wasm
 RUN cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain
 
 # ── 0b. Workspace-terminal backend build stage ───────────────────────────────

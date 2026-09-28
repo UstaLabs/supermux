@@ -233,6 +233,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - uses: oven-sh/setup-bun@v2
       - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
       - name: Install Android SDK packages
         run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
       - name: Cache the zig toolchain and the terminal native tree
@@ -970,6 +974,20 @@ jobs:
       - name: Generate Xcode project
         working-directory: apps/iosApp
         run: xcodegen generate
+      # The terminal engine: :terminal-core's iosArm64 cinterop links the static
+      # libsupermux_terminal.a, which only native/build.sh (on a Mac) produces.
+      - name: Cache the zig toolchain and the terminal native tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: ios-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: ios-native-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build the client terminal engine (ios-arm64)
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/native/build.sh ios-arm64
       - name: Check App Store signing credentials
         id: signing
         run: |

@@ -106,6 +106,10 @@ case "$java_major" in
   ''|*[!0-9]*) echo "build-binary.sh: could not parse 'java -version' output; needs a JDK 17+ for :web:stageForBroker" >&2; exit 1 ;;
 esac
 [ "$java_major" -ge 17 ] || { echo "build-binary.sh: java $java_major is too old; :web:stageForBroker needs a JDK 17+" >&2; exit 1; }
+# The web client's terminal is the pinned libghostty-vt wasm module. :terminal-core
+# only stages what wasm/build.sh produced, and without it webpack cannot resolve
+# './supermux-terminal.wasm' — so no bundle at all. Same Zig provisioner as zmx.
+ST_ZIG_JOBS="${MUX_ZIG_JOBS:-4}" bash apps/terminal-core/wasm/build.sh
 ( cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain )
 
 # pty-helper: POSIX-only native-arch compile (Windows persistent terminals use sessiond).

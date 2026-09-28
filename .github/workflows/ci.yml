@@ -256,6 +256,10 @@ jobs:
       # themselves — these two modules depend on nothing in the bun workspace.
       - uses: oven-sh/setup-bun@v2
       - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
       - name: Install Android SDK packages
         run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
       - name: Cache the zig toolchain and the terminal native tree
@@ -364,6 +368,20 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
+      # The web client's terminal is supermux-terminal.wasm; without it the webpack
+      # build cannot resolve './supermux-terminal.wasm' and no bundle is produced.
+      - name: Cache the zig toolchain and the terminal wasm tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-wasm-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-wasm-${{ runner.os }}-
+      - name: Build the browser terminal engine
+        run: bash apps/terminal-core/wasm/build.sh
+        env:
+          ST_ZIG_JOBS: "4"
       - name: Ensure a Playwright browser is available
         run: command -v google-chrome >/dev/null 2>&1 || bunx playwright install --with-deps chromium
       - name: Core browser journey
@@ -610,6 +628,20 @@ jobs:
       - name: Generate Xcode project
         working-directory: apps/iosApp
         run: xcodegen generate
+      # The terminal engine: :terminal-core's iosSimulatorArm64 cinterop links the
+      # static libsupermux_terminal.a, which only native/build.sh (on a Mac) produces.
+      - name: Cache the zig toolchain and the terminal native tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: ios-sim-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: ios-sim-native-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build the client terminal engine (ios-simulator-arm64)
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/native/build.sh ios-simulator-arm64
 
       # The Supermux scheme's test action runs SupermuxTests. Signing is off: a
       # simulator build needs no identity, and requiring one would make this lane
