@@ -42,7 +42,9 @@ agent or LSP edit never cancels a pending ask, a paste / undo / redo does.
 CM6's `FuzzyMatcher`, rule for rule (the penalties: case folded -200, not the whole label -100, by
 word starts -100, not at the start -700, a gap -1100, minus the label's length; one typed character
 matches only at the label's start; two must be adjacent, by word starts or a substring). Sorted by
-score + `boost`, then `sortText` (else the label) — by UTF-16 order, where CM6 uses `localeCompare`;
+score + `boost`, then `sortText` (else the label) by `Autocomplete.localeCompare`, CM6's
+`localeCompare` without a locale (punctuation, digits, letters; case-insensitive, then lower case
+first; it does not ignore accents at the first level nor compare numbers by value);
 an option equal to the one before it (label, detail, type, apply, boost) is dropped (CM6). The
 matched characters are bold in the list. **Performance** (`CompletionPerfTest`, JVM, Mac): 5,000
 options, a 12-character identifier typed one key at a time: the worst keystroke 0.7 ms (best of 11
@@ -75,6 +77,13 @@ finger (a drag there is the list's, never the editor's).
 
 ## Snippets
 
+`Snippet.fromLsp` also takes choices (`${1|a,b|}`: the first option) and variables (`$TM_FILENAME`,
+`${NAME:default}`: `variables[NAME]`, else the default, else empty) and keeps `#{` literal. A field
+ends the snippet when a deletion crosses one of its ends (CM6's `TrackDel`) or deletes its whole text.
+An option's own edits (`additionalTextEdits`) are mapped through the edits made since the source
+answered, dropped when those touched them or they fall outside the text, and overlapping ones keep
+the first; a tap's accept never throws into the UI.
+
 `Snippet.parse(template)`: CM6's syntax (`${}` / `${name}` a field, `${1}` / `${1:name}` numbered,
 the same number twice one field, `${0}` the last stop, `\{` `\}` literal braces); `Snippet.fromLsp`
 converts LSP's (`$1`, `${1:foo}`, `$0`, `\$`). Newlines indent like the snippet's line plus one indent
@@ -85,7 +94,11 @@ marked `snippet-field` (`EditorTheme.completionClasses`).
 
 ## Deliberate differences from CM6
 
-- `Tab` accepts (configurable); sorting ties by UTF-16 order, not `localeCompare`.
+- `Tab` accepts (configurable); ties sort by a locale-free approximation of `localeCompare`.
+- The fuzzy matcher keeps CM6's sticky `byWord` buffer (a later label's gap penalty depends on the
+  earlier ones'), tested against CM6's own scores (`cm6OrderingFixtures`, run under node).
+- The documentation pane goes below the list on an editor under 560 dp (a phone); the selected option
+  is announced (label, detail, type) by a polite live region.
 - No sections, no `commitCharacters`, no `closeOnBlur` (the list stays while a widget or panel has
   the focus), no `maxRenderedOptions` (the list is lazy: only its visible rows are composed).
 - The list's icons are letters coloured with the theme's token styles (the web has no emoji font).

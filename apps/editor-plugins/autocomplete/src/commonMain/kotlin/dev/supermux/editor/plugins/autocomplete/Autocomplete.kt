@@ -71,6 +71,11 @@ class ActiveResult internal constructor(
     val end: Int,
     val explicit: Boolean,
     val stale: Boolean = false,
+    /**
+     * The edits since the document the source answered for: its options' own edits
+     * ([CompletionApply.WithEdits]) are in THAT document and are mapped through these at accept.
+     */
+    val changes: ChangeSet? = null,
 )
 
 /** One shown option: its [completion], [score], the [matched] ranges of its label (`from, to` pairs), and the [result] it came from. */
@@ -218,7 +223,7 @@ object Autocomplete {
             if (head < from || head > end || st.doc.lineIndexAt(from) != st.doc.lineIndexAt(head)) return@mapNotNull null
             val typed = st.doc.slice(from, minOf(end, st.doc.length))
             val valid = r.result.validFor?.matches(typed) == true
-            ActiveResult(r.source, r.result, from, end, r.explicit, stale = r.stale || !valid)
+            ActiveResult(r.source, r.result, from, end, r.explicit, stale = r.stale || !valid, changes = r.changes?.compose(tr.changes))
         }
     }
 
@@ -246,7 +251,7 @@ object Autocomplete {
         }
         options.sortWith { x, y ->
             if (x.score != y.score) y.score.compareTo(x.score)
-            else (x.completion.sortText ?: x.completion.label).compareTo(y.completion.sortText ?: y.completion.label)
+            else localeCompare(x.completion.sortText ?: x.completion.label, y.completion.sortText ?: y.completion.label)
         }
         val out = ArrayList<Option>(options.size)
         var prev: Completion? = null
@@ -257,6 +262,36 @@ object Autocomplete {
             prev = c
         }
         return out
+    }
+
+    /**
+     * CM6 breaks ties with JavaScript's `localeCompare` (ICU's root collation). This follows its main
+     * rules without a locale: punctuation and symbols, then digits, then letters; letters compared
+     * without case (`a` < `B` < `c`), a tie then lower case first (`a` < `A`), then code units.
+     * Unlike ICU it does not ignore accents at the first level (`é` sorts after `z`) nor compare
+     * numbers by value.
+     */
+    fun localeCompare(a: String, b: String): Int {
+        fun group(c: Char) = when { c.isLetter() -> 3; c.isDigit() -> 2; else -> 1 }
+        val n = minOf(a.length, b.length)
+        for (i in 0 until n) {
+            val x = a[i]; val y = b[i]
+            val gx = group(x); val gy = group(y)
+            if (gx != gy) return gx.compareTo(gy)
+            val lx = x.lowercaseChar(); val ly = y.lowercaseChar()
+            if (lx != ly) return lx.compareTo(ly)
+        }
+        if (a.length != b.length) return a.length.compareTo(b.length)
+        for (i in 0 until n) {
+            val x = a[i]; val y = b[i]
+            if (x != y) {
+                // Same letter, other case: lower case first.
+                if (x.isLowerCase() && y.isUpperCase()) return -1
+                if (x.isUpperCase() && y.isLowerCase()) return 1
+                return x.compareTo(y)
+            }
+        }
+        return 0
     }
 
     // ---------------------------------------------------------------------- commands --
@@ -311,6 +346,21 @@ object Autocomplete {
 
     private const val PAGE = 8
 
+    /**
+     * An option's own edits (an import), written for the document its source answered for, in the
+     * current one: mapped through [changes]; one whose text was edited since, or that falls outside
+     * the document, is dropped.
+     */
+    internal fun mapExtraEdits(edits: List<ChangeSpec>, changes: ChangeSet?, docLength: Int): List<ChangeSpec> = edits.mapNotNull { e ->
+        if (changes == null) return@mapNotNull e.takeIf { it.to <= docLength }
+        if (e.to > changes.lengthBefore) return@mapNotNull null
+        val touched = changes.iterChanges().any { c -> c.fromA < e.to && c.toA > e.from || (c.fromA == c.toA && c.fromA > e.from && c.fromA < e.to) }
+        if (touched) return@mapNotNull null
+        val a = changes.mapPos(e.from, 1)
+        val b = maxOf(a, changes.mapPos(e.to, -1))
+        ChangeSpec(a, b, e.insert).takeIf { it.to <= docLength }
+    }
+
     private fun applyOption(t: CommandTarget, o: Option) {
         val c = o.completion
         val from = o.result.from
@@ -318,10 +368,13 @@ object Autocomplete {
         when (val a = c.apply) {
             is CompletionApply.Custom -> a.apply(t, c, from, to)
             is CompletionApply.Template -> t.dispatch(snippetSpec(t.state, a.snippet, from, to, emptyList()))
-            is CompletionApply.WithEdits -> t.dispatch(
-                if (a.snippet) snippetSpec(t.state, Snippet.fromLsp(a.text), from, to, a.edits)
-                else insertCompletionText(t.state, a.text, from, to, a.edits),
-            )
+            is CompletionApply.WithEdits -> {
+                val extra = mapExtraEdits(a.edits, o.result.changes, t.state.doc.length)
+                t.dispatch(
+                    if (a.snippet) snippetSpec(t.state, Snippet.fromLsp(a.text), from, to, extra)
+                    else insertCompletionText(t.state, a.text, from, to, extra),
+                )
+            }
             is CompletionApply.Text -> t.dispatch(insertCompletionText(t.state, a.text, from, to))
             null -> t.dispatch(insertCompletionText(t.state, c.label, from, to))
         }
@@ -349,7 +402,7 @@ object Autocomplete {
             specs += ChangeSpec(a, b, text)
             ends += b
         }
-        val kept = extra.filter { e -> specs.none { s -> e.from < s.to && e.to > s.from || e.from == s.from && e.to == s.to } }
+        val kept = extra.filter { e -> e.to <= st.doc.length && specs.none { s -> e.from < s.to && e.to > s.from || e.from == s.from && e.to == s.to } }
         val changes = ChangeSet.of(st.doc.length, merge(specs + kept))
         val ranges = sel.ranges.mapIndexed { i, r ->
             val end = ends[i]
@@ -380,8 +433,9 @@ object Autocomplete {
         val main = st.selection.main
         val to = if (to0 == main.from) main.to else to0
         val (text, ranges) = snippet.instantiate(st, from)
-        val kept = extra.filter { e -> !(e.from < to && e.to > from) && !(e.from == from && e.to == to) }
-        val changes = ChangeSet.of(st.doc.length, listOf(ChangeSpec(from, to, text)) + kept)
+        val kept = extra.filter { e -> !(e.from < to && e.to > from) && !(e.from == from && e.to == to) && e.to <= st.doc.length }
+        // Extra edits that overlap each other (a server's mistake): the first wins, the rest go.
+        val changes = ChangeSet.of(st.doc.length, merge(listOf(ChangeSpec(from, to, text)) + kept))
         val delta = changes.mapPos(from, -1) - from
         val mapped = ranges.map { FieldRange(it.field, it.from + delta, it.to + delta) }
         val first = mapped.filter { it.field == 0 }
@@ -519,7 +573,7 @@ internal class CompletionRunner(private val host: ViewPluginHost) : ViewPluginIn
             val results = answers.mapNotNull { (src, r) ->
                 val from = changes.mapPos(r.from.coerceIn(0, changes.lengthBefore), -1)
                 val end = changes.mapPos((r.to ?: pos).coerceIn(0, changes.lengthBefore), 1)
-                if (head < from || head > end) null else ActiveResult(src, r, from, end, explicit)
+                if (head < from || head > end) null else ActiveResult(src, r, from, end, explicit, changes = changes)
             }
             if (results.isEmpty() && Autocomplete.state(st).results.isEmpty()) return@launch
             host.target.dispatch(TransactionSpec(effects = listOf(Autocomplete.setResults.of(results))))

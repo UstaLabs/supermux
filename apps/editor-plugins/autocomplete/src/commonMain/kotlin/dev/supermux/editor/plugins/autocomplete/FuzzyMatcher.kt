@@ -18,6 +18,13 @@ class FuzzyMatcher(val pattern: String) {
     private val precise: IntArray
     private val byWord: IntArray
 
+    /**
+     * CM6 keeps its `byWord` buffer across `match` calls and tests `byWord.length` (the most by-word
+     * positions ANY earlier call on this matcher recorded): once a label has had a by-word match, a
+     * later label's non-adjacent word start marks it not word-adjacent. Kept here, the same way.
+     */
+    private var byWordSeen = 0
+
     init {
         val cs = ArrayList<Int>()
         val fs = ArrayList<Int>()
@@ -77,7 +84,6 @@ class FuzzyMatcher(val pattern: String) {
         var adjacentEnd = -1
         val hasLower = word.any { it in 'a'..'z' }
         var wordAdjacent = true
-        var byWordStarted = false
         run {
             var i = 0
             val e = minOf(word.length, 200)
@@ -100,8 +106,8 @@ class FuzzyMatcher(val pattern: String) {
                 if (i == 0 || type == UPPER && hasLower || prevType == NON_WORD && type != NON_WORD) {
                     if (chars[byWordTo] == next || (folded[byWordTo] == next && run { byWordFolded = true; true })) {
                         byWord[byWordTo++] = i
-                        byWordStarted = true
-                    } else if (byWordStarted) {
+                        if (byWordTo > byWordSeen) byWordSeen = byWordTo
+                    } else if (byWordSeen > 0) {
                         wordAdjacent = false
                     }
                 }

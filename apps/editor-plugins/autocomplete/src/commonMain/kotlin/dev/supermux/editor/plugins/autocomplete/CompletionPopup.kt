@@ -32,6 +32,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
@@ -53,6 +54,7 @@ import dev.supermux.editor.compose.isTouchFirstPlatform
 object CompletionTags {
     const val LIST = "completion-list"
     const val INFO = "completion-info"
+    const val ANNOUNCE = "completion-announce"
     fun option(i: Int) = "completion-option-$i"
 }
 
@@ -107,7 +109,16 @@ private fun CompletionPopup(scope: WidgetScope) {
     val label = TextStyle(color = theme.foreground, fontFamily = theme.fontFamily, fontSize = theme.fontSizeSp.sp)
     val dim = theme.gutterForeground
     val info = s.selectedOption?.completion?.let { c -> c.info ?: s.info?.takeIf { it.first == c }?.second }
-    Row(verticalAlignment = Alignment.Top) {
+    // Beside the list when there is room, below it on a narrow editor (a phone).
+    androidx.compose.foundation.layout.BoxWithConstraints {
+    val below = maxWidth < 560.dp
+    val sel = s.selectedOption?.completion
+    // A screen reader hears the selected option (label, detail, type) as the selection moves.
+    Box(Modifier.size(1.dp).semantics {
+        liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite
+        contentDescription = listOfNotNull(sel?.let { it.displayLabel ?: it.label }, sel?.detail, sel?.type).joinToString(", ")
+    }.testTag(CompletionTags.ANNOUNCE))
+    SideOrBelow(below) {
         Box(
             Modifier.widthIn(min = 180.dp, max = 440.dp).heightIn(max = rowHeight * 9)
                 .shadow(6.dp, shape).clip(shape).background(theme.background).border(1.dp, dim.copy(alpha = 0.35f), shape),
@@ -118,12 +129,12 @@ private fun CompletionPopup(scope: WidgetScope) {
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = rowHeight)
                             .background(if (selected) theme.selection else Color.Transparent)
-                            .pointerInput(i) { detectTapGestures { Autocomplete.accept(editor, i) } }
+                            .pointerInput(i) { detectTapGestures { acceptGuarded(editor, i) } }
                             .semantics {
                                 role = Role.Button
                                 this.selected = selected
                                 contentDescription = o.completion.displayLabel ?: o.completion.label
-                                onClick { Autocomplete.accept(editor, i) }
+                                onClick { acceptGuarded(editor, i) }
                             }
                             .testTag(CompletionTags.option(i))
                             .padding(horizontal = 6.dp),
@@ -146,7 +157,7 @@ private fun CompletionPopup(scope: WidgetScope) {
         if (!info.isNullOrBlank()) {
             Spacer(Modifier.size(4.dp))
             Column(
-                Modifier.widthIn(max = 360.dp).heightIn(max = rowHeight * 9)
+                Modifier.widthIn(max = if (below) 440.dp else 360.dp).heightIn(max = rowHeight * (if (below) 4 else 9))
                     .shadow(6.dp, shape).clip(shape).background(theme.background).border(1.dp, dim.copy(alpha = 0.35f), shape)
                     .padding(8.dp).testTag(CompletionTags.INFO),
             ) {
@@ -154,6 +165,12 @@ private fun CompletionPopup(scope: WidgetScope) {
             }
         }
     }
+    }
+}
+
+@Composable
+private fun SideOrBelow(below: Boolean, content: @Composable () -> Unit) {
+    if (below) Column { content() } else Row(verticalAlignment = Alignment.Top) { content() }
 }
 
 /** The label with its matched characters bold (CM6's `cm-completionMatchedText`). */
@@ -170,4 +187,15 @@ private fun highlighted(o: Option, theme: EditorTheme): AnnotatedString {
             i += 2
         }
     }
+}
+
+/** A tap's accept: a source's bad option (an edit out of range) never escapes into the UI. */
+private fun acceptGuarded(editor: dev.supermux.editor.core.CommandTarget, i: Int): Boolean = try {
+    Autocomplete.accept(editor, i)
+} catch (e: kotlin.coroutines.cancellation.CancellationException) {
+    throw e
+} catch (e: Throwable) {
+    println("editor-plugins/autocomplete: accepting a completion failed: $e")
+    editor.dispatch(dev.supermux.editor.core.TransactionSpec(effects = listOf(Autocomplete.close.of(Unit))))
+    false
 }

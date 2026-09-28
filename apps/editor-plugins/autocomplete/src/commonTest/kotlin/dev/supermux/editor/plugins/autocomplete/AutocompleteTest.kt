@@ -268,6 +268,82 @@ class AutocompleteTest {
         assertEquals(1, resolved)
     }
 
+    @Test fun overlappingExtraEditsNeverThrowTheFirstWins() = runTest {
+        val src = CompletionSource { c ->
+            CompletionResult(c.wordStart(), listOf(
+                Completion("List", apply = CompletionApply.WithEdits("List", listOf(ChangeSpec(0, 0, "import A\n"), ChangeSpec(0, 3, "x"), ChangeSpec(1, 2, "y")))),
+                Completion("Loop", apply = CompletionApply.WithEdits("for (\${1:i}) {}", listOf(ChangeSpec(0, 3, "a"), ChangeSpec(2, 5, "b")), snippet = true)),
+            ))
+        }
+        val v = view("val Li", EditorSelection.cursor(6), src)
+        started(v)
+        Autocomplete.startCompletion.run(v); settle()
+        assertTrue(Autocomplete.accept(v, Autocomplete.state(v.state).options.indexOfFirst { it.completion.label == "List" }))
+        assertEquals("import A\nx List", v.text, "overlapping extras: the first of each overlap applied, no exception")
+        v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, v.state.doc.length, "val Lo")), selection = EditorSelection.cursor(6)))
+        Autocomplete.startCompletion.run(v); settle()
+        assertTrue(Autocomplete.accept(v, Autocomplete.state(v.state).options.indexOfFirst { it.completion.label == "Loop" }), "a snippet's overlapping extras too")
+    }
+
+    @Test fun anExtraEditIsMappedThroughLaterEditsAndDroppedWhenItFallsOut() = runTest {
+        // The source answers for "ab x"; its extra edit appends at the END of THAT text.
+        val src = CompletionSource { c ->
+            val end = c.state.doc.length
+            CompletionResult(c.wordStart(), listOf(Completion("xyz", apply = CompletionApply.WithEdits("xyz", listOf(ChangeSpec(end, end, " // imported"))))), validFor = Regex("\\w*"))
+        }
+        val v = view("ab x", EditorSelection.cursor(4), src)
+        started(v)
+        Autocomplete.startCompletion.run(v); settle()
+        // A Backspace before the tap: the document is one shorter than the source's.
+        v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(3, 4)), selection = EditorSelection.cursor(3), userEvent = "delete.backward"))
+        v.typeText("x")
+        settle()
+        assertTrue(Autocomplete.accept(v, 0), "no exception: the extra edit was mapped")
+        assertEquals("ab xyz // imported", v.text)
+    }
+
+    @Test fun cm6OrderingFixtures() {
+        // Ties: localeCompare-like (case-insensitive, then lower first; punctuation, digits, letters).
+        val labels = listOf("b", "A", "a", "B", "_x", "1a", "Ab", "ab")
+        assertEquals(listOf("_x", "1a", "a", "A", "ab", "Ab", "b", "B"), labels.sortedWith { x, y -> Autocomplete.localeCompare(x, y) })
+        // CM6's scores for the same pattern over labels in order (its matcher's buffers are sticky).
+        // Fixtures from CM6 itself (its FuzzyMatcher run under node, one matcher per pattern as CM6 does).
+        val m = FuzzyMatcher("gt")
+        assertEquals(listOf(-307, null, -108, -703), listOf("getText", "gutter", "get_type", "xgt").map { m.match(it)?.score })
+        val m2 = FuzzyMatcher("gt")
+        assertEquals(listOf(-703, -307, null, -108), listOf("xgt", "getText", "gutter", "get_type").map { m2.match(it)?.score })
+        val m3 = FuzzyMatcher("gtt")
+        assertEquals(
+            listOf(-1307 to listOf(0, 1, 2, 4), -1306 to listOf(0, 1, 2, 4), -1308 to listOf(0, 1, 2, 3, 4, 5), -1305 to listOf(0, 1, 2, 3, 4, 5), -105 to listOf(0, 1, 2, 3, 4, 5)),
+            listOf("getText", "gutter", "get_type", "gxtxt", "g_t_t").map { w -> m3.match(w)!!.let { it.score to it.ranges.toList() } },
+        )
+    }
+
+    @Test fun snippetChoicesVariablesAndALiteralHashBrace() {
+        val st = EditorState.create("")
+        val (a, ra) = Snippet.fromLsp("\${1|one,two|} \$TM_FILENAME \${TM_LINE_NUMBER:7} #{x}", mapOf("TM_FILENAME" to "main.kt")).instantiate(st, 0)
+        assertEquals("one main.kt 7 #{x}", a)
+        assertEquals(listOf(FieldRange(0, 0, 3)), ra.filter { it.field == 0 })
+        assertEquals(1, ra.size, "#{x} is text, not a field")
+        val (b, _) = Snippet.fromLsp("\${1|a\\,b,c|}\$UNKNOWN!").instantiate(st, 0)
+        assertEquals("a,b!", b, "an escaped comma in a choice; an unknown variable is empty")
+    }
+
+    @Test fun deletingAcrossAFieldEndsTheSnippet() = runTest {
+        val src = CompletionSource { c -> CompletionResult(c.wordStart(), listOf(Completion("f", apply = CompletionApply.Template(Snippet.parse("f(\${a}, \${b})"))))) }
+        val v = view("", EditorSelection.cursor(0), src)
+        started(v)
+        v.typeText("f"); settle()
+        key(v, "Enter")
+        assertNotNull(Snippets.active(v.state))
+        // Typing over the selected field keeps it.
+        v.typeText("x")
+        assertNotNull(Snippets.active(v.state))
+        // A deletion across the field's start (the "(" and the field) ends it: CM6's TrackDel.
+        v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(1, 3)), selection = EditorSelection.cursor(1), userEvent = "delete.backward"))
+        assertNull(Snippets.active(v.state))
+    }
+
     @Test fun theFuzzyMatcherFollowsCm6() {
         fun score(p: String, w: String) = FuzzyMatcher(p).match(w)?.score
         assertEquals(0, score("print", "print"))

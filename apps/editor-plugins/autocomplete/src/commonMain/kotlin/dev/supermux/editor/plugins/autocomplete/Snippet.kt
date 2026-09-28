@@ -6,8 +6,17 @@ import dev.supermux.editor.core.EditorState
 
 /** One tab stop's range in the document: [field] is its order (0 first; `$0` is the last). */
 data class FieldRange(val field: Int, val from: Int, val to: Int) {
-    /** Through [changes]; null when its text went (CM6 drops the snippet then). */
+    /**
+     * Through [changes]; null when its text went, and the snippet with it: CM6's `TrackDel` (a
+     * deletion across either end), and a deletion of the field's whole text (a Backspace over it;
+     * typing over the selected field replaces it and keeps the field).
+     */
     fun map(changes: ChangeSet): FieldRange? {
+        for (c in changes.iterChanges()) {
+            if (c.toA <= c.fromA) continue
+            if (c.fromA < from && c.toA > from || c.fromA < to && c.toA > to) return null
+            if (from < to && c.inserted.isEmpty() && c.fromA <= from && c.toA >= to) return null
+        }
         val a = changes.mapPos(from, -1)
         val b = changes.mapPos(to, 1)
         return if (b < a) null else FieldRange(field, a, b)
@@ -51,10 +60,49 @@ class Snippet private constructor(val lines: List<String>, private val positions
 
     companion object {
         private val FIELD = Regex("""[#$]\{(?:(\d+)(?::([^{}]*))?|((?:\\[{}]|[^{}])*))\}""")
-        private val LSP = Regex("""\\([$}\\])|\$(\d+)""")
+        private val LSP = Regex(
+            """\\([$}\\])""" +                                        // 1: an escaped $ } \
+                """|\$(\d+)""" +                                         // 2: $1
+                """|\$\{(\d+)\|((?:[^|\\]|\\.)*)\|\}""" +                    // 3, 4: ${1|a,b|}
+                """|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::((?:[^}\\]|\\.)*))?\}""" + // 5, 6: ${TM_FILENAME:default}
+                """|\$([A-Za-z_][A-Za-z0-9_]*)""" +                       // 7: $TM_FILENAME
+                """|(#\{)""",                                              // 8: a literal #{
+        )
 
-        /** CM6's `lspToSnippet`: `$1` becomes `${1}`, the backslash before `$`, `}` and `\` goes. */
-        fun fromLsp(text: String): Snippet = parse(LSP.replace(text) { m -> m.groupValues[1].ifEmpty { "\${" + m.groupValues[2] + "}" } })
+        /**
+         * An LSP snippet (CM6's `lspToSnippet`, and more of the LSP grammar): `$1` is `${1}`; a
+         * choice `${1|a,b|}` is its first option as the field's text; a variable (`$TM_FILENAME`,
+         * `${TM_SELECTED_TEXT:default}`) is its value in [variables], else its default, else empty;
+         * `\$`, `\}`, `\\` are literal; `#{` is literal text (only CM6's own templates use it as a field).
+         */
+        fun fromLsp(text: String, variables: Map<String, String> = emptyMap()): Snippet = parse(LSP.replace(text) { m ->
+            val g = m.groupValues
+            when {
+                g[1].isNotEmpty() -> g[1]
+                g[2].isNotEmpty() -> "\${" + g[2] + "}"
+                g[3].isNotEmpty() -> "\${" + g[3] + ":" + firstChoice(g[4]).replace("{", "\\{").replace("}", "\\}") + "}"
+                g[5].isNotEmpty() -> braced(variables[g[5]] ?: unescape(g[6]))
+                g[7].isNotEmpty() -> braced(variables[g[7]].orEmpty())
+                else -> "#\\{"
+            }
+        })
+
+        private fun firstChoice(options: String): String {
+            val sb = StringBuilder()
+            var i = 0
+            while (i < options.length) {
+                val c = options[i]
+                if (c == '\\' && i + 1 < options.length) { sb.append(options[i + 1]); i += 2; continue }
+                if (c == ',') break
+                sb.append(c); i++
+            }
+            return sb.toString()
+        }
+
+        private fun unescape(s: String): String = s.replace(Regex("""\\(.)"""), "$1")
+
+        /** Text that must stay literal in a CM6 template: its braces escaped. */
+        private fun braced(s: String): String = s.replace("{", "\\{").replace("}", "\\}")
 
         fun parse(template: String): Snippet {
             class F(val seq: Long?, val name: String)
