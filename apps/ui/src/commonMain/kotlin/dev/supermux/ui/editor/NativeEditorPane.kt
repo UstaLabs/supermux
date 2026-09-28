@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -101,7 +102,8 @@ fun NativeDocumentEditor(
     fontSize: Int,
     onFontSize: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    accessoryBar: Boolean = true,
+    /** The accessory bar under the text (null: the app's setting, Settings → Editor; on by default). */
+    accessoryBar: Boolean? = null,
     readOnly: Boolean = false,
     /** Code intelligence for this document: the session whose language servers serve it (null: none). */
     lsp: LspLink? = null,
@@ -136,6 +138,9 @@ fun NativeDocumentEditor(
         if (doc.revealLine == reveal) doc.revealLine = null
     }
 
+    val barSetting by dev.supermux.ui.prefs.LocalUiPrefs.current.editorAccessoryBar
+        .collectAsState(dev.supermux.ui.prefs.EDITOR_ACCESSORY_BAR_DEFAULT)
+    val showBar = accessoryBar ?: barSetting
     val theme = rememberAppEditorTheme()
     val widgets = rememberDocumentWidgets()
     val lspWidgets = native.lspWidgets
@@ -175,7 +180,7 @@ fun NativeDocumentEditor(
                 )
             }
         }
-        if (accessoryBar) EditorAccessories(view, Modifier.fillMaxWidth(), theme = theme)
+        if (showBar) EditorAccessories(view, Modifier.fillMaxWidth(), theme = theme)
     }
 }
 

@@ -58,8 +58,10 @@ class NativeEditorPaneTest {
         val doc = store.get("a.kt")!!
         doc.revealLine = 60 to null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                NativeDocumentEditor(store, doc, lineWrap = false, fontSize = 13, onFontSize = {}, modifier = Modifier.size(400.dp, 300.dp))
+            CompositionLocalProvider(LocalUiPrefs provides UiPrefs(InMemorySettingsStore())) {
+                SupermuxTheme(appearance = AppearanceMode.DARK) {
+                    NativeDocumentEditor(store, doc, lineWrap = false, fontSize = 13, onFontSize = {}, modifier = Modifier.size(400.dp, 300.dp))
+                }
             }
         }
         waitForIdle()
@@ -84,8 +86,10 @@ class NativeEditorPaneTest {
         val store = storeWith(scope, "a.kt" to "aaa", "b.kt" to "bbb", extra = { viewPluginsFacet.of(lives) })
         var active by mutableStateOf("a.kt")
         setContent {
-            key(active) {
-                NativeDocumentEditor(store, store.get(active)!!, lineWrap = true, fontSize = 13, onFontSize = {}, modifier = Modifier.fillMaxSize())
+            CompositionLocalProvider(LocalUiPrefs provides UiPrefs(InMemorySettingsStore())) {
+                key(active) {
+                    NativeDocumentEditor(store, store.get(active)!!, lineWrap = true, fontSize = 13, onFontSize = {}, modifier = Modifier.fillMaxSize())
+                }
             }
         }
         waitForIdle()
@@ -111,8 +115,10 @@ class NativeEditorPaneTest {
         val persisted = mutableListOf<Int>()
         mainClock.autoAdvance = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                NativeDocumentEditor(store, doc, lineWrap = true, fontSize = 13, onFontSize = { persisted += it }, modifier = Modifier.fillMaxSize())
+            CompositionLocalProvider(LocalUiPrefs provides UiPrefs(InMemorySettingsStore())) {
+                SupermuxTheme(appearance = AppearanceMode.DARK) {
+                    NativeDocumentEditor(store, doc, lineWrap = true, fontSize = 13, onFontSize = { persisted += it }, modifier = Modifier.fillMaxSize())
+                }
             }
         }
         mainClock.advanceTimeBy(100)
@@ -130,7 +136,11 @@ class NativeEditorPaneTest {
         val doc = store.get("a.kt")!!
         var wrap by mutableStateOf(true)
         var font by mutableStateOf(13)
-        setContent { NativeDocumentEditor(store, doc, lineWrap = wrap, fontSize = font, onFontSize = {}, modifier = Modifier.fillMaxSize()) }
+        setContent {
+            CompositionLocalProvider(LocalUiPrefs provides UiPrefs(InMemorySettingsStore())) {
+                NativeDocumentEditor(store, doc, lineWrap = wrap, fontSize = font, onFontSize = {}, modifier = Modifier.fillMaxSize())
+            }
+        }
         waitForIdle()
         wrap = false; font = 18
         waitForIdle()
