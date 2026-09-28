@@ -50,7 +50,7 @@ class EditorView(initial: EditorState) : CommandTarget {
     var focused: Boolean by mutableStateOf(false)
 
     /**
-     * No user edits: typing, deleting and pasting (`input*`, `delete*`, `paste*`, `undo`, `redo`)
+     * No user edits: typing, deleting and pasting (`input*`, `delete*`, `paste*`, the user's `edit.*`, `undo`, `redo`)
      * are dropped. Programmatic changes (a disk reload, LSP, plugins' effects) still apply, and the
      * selection still moves. Set by the surface from `Editor(readOnly = ...)`.
      */
@@ -327,7 +327,18 @@ class EditorView(initial: EditorState) : CommandTarget {
         }
         current = tr.state
         surface?.onTransaction(tr)
-        for (l in listeners) l(tr)
+        // Listeners are the host's and other plugins' reactions, not the running command: whatever
+        // they dispatch synchronously is judged on its own (a programmatic edit stays programmatic).
+        val depth = commandDepth
+        val keys = keyDepth
+        commandDepth = 0
+        keyDepth = 0
+        try {
+            for (l in listeners) l(tr)
+        } finally {
+            commandDepth = depth
+            keyDepth = keys
+        }
         if (tr.scrollIntoView) surface?.scrollIntoView()
         if (reveal != null && !revealRange(reveal.from, reveal.to)) {
             // Nobody showed it after all: out to its edge.
@@ -536,7 +547,7 @@ class EditorView(initial: EditorState) : CommandTarget {
     }
 
     private companion object {
-        val USER_EDITS = listOf("input", "delete", "paste", "undo", "redo", "drop")
+        val USER_EDITS = listOf("input", "delete", "paste", "undo", "redo", "drop", "edit")
 
         /** userEvents the local-input rules (replaced and atomic ranges) never police, with their sub-events. */
         val POLICY_EXEMPT = listOf("undo", "redo", "disk", "remote", "agent", "lsp")

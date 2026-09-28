@@ -210,7 +210,10 @@ without `EditorAnnotations.remote` (for M4/M5's collaborators and agents, whatev
 binding, an input handler, a selection-menu item, a plugin's gutter or widget click handler) **is local
 input whatever its userEvent, or with none**: a plugin command that forgets its userEvent still cannot
 take a piece of a fold. Only the exempt userEvents above and `EditorAnnotations.remote` pass there.
-A key-bound command's edit without a userEvent is a plugin bug: it is counted in
+The scope is the command's OWN dispatches: a view listener (a host, another plugin) that reacts
+synchronously with an edit of its own is judged on that edit alone. **A click handler (gutter,
+widget) must label its edits** with a userEvent: unlabeled, they are still policed as local input,
+and a history cannot tell what they were. A key-bound command's edit without a userEvent is a plugin bug: it is counted in
 `EditorDiagnostics.unlabeledCommandEdits` and logged once (the debug assertion). Undo, redo,
 reloads, remote edits and programmatic transactions (no userEvent, from outside any command: a host's
 call, a plugin's effect) pass through unchanged, as in CM6. The caret clamp below applies to every

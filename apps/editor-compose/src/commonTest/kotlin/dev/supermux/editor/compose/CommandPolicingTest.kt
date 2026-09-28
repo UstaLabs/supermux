@@ -111,4 +111,35 @@ class CommandPolicingTest {
         assertEquals("abcdefx", view.state.doc.toString(), "the typed text was lost")
         assertEquals(before + 1, EditorDiagnostics.pluginFailures)
     }
+
+    @Test fun readOnlyDropsTheUsersLspActionsButNotTheServers() {
+        val view = EditorView(EditorState.create("abc", EditorSelection.cursor(0)))
+        view.readOnly = true
+        for (e in listOf("edit.rename", "edit.format", "input.complete")) view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 1, "X")), userEvent = e))
+        assertEquals("abc", view.state.doc.toString())
+        view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 1, "S")), userEvent = "lsp"))
+        assertEquals("Sbc", view.state.doc.toString())
+    }
+
+    @Test fun aHostListenerDispatchingDuringACommandIsNotTheCommands() {
+        // The command's own edit is policed; a host listener that reacts to it synchronously with a
+        // programmatic edit is the host's (not policed, not an unlabeled command edit).
+        val folds = Folds(foldFrom to foldTo)
+        val labeled = Command { t -> t.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 0, "// ")), userEvent = "input")); true }
+        val view = EditorView(EditorState.create(text, EditorSelection.cursor(0), extensionOf(folds.extension, keymapOf(KeyBinding("Ctrl-d", labeled)))))
+        var reacted = false
+        view.addListener { tr ->
+            if (!reacted && tr.docChanged) {
+                reacted = true
+                val at = tr.state.doc.toString().indexOf("}\nend")
+                view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(at - 1, at))))
+            }
+        }
+        val before = EditorDiagnostics.unlabeledCommandEdits
+        runBindings(view, KeyChord("d", ctrl = true), apple = false)
+        assertTrue(reacted)
+        assertEquals(0, folds.reveals, "the host's programmatic edit was policed as the command's")
+        assertEquals(before, EditorDiagnostics.unlabeledCommandEdits)
+        assertEquals(("// " + text).length - 1, view.state.doc.length)
+    }
 }
