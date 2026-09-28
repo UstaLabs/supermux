@@ -270,9 +270,18 @@ M4's search dispatches its selection with `scrollIntoView` and needs nothing els
 
 `Panel(id, top)` in editor-core's `panelsFacet`: strips above or below the editor, outside the
 scrolling area, their content the registry's `panel:<id>` type, in precedence order. They take their
-own height; the viewport is what is left. Their input and focus are their own (M4's search field);
-Escape inside a panel gives the focus back to the editor. The surface is always one `Column`, so a
+own height; the viewport is what is left. A plugin shows one from its own state with a computed
+input that may be null (`panelsFacet.compute(FacetDep.field(f)) { if (open) Panel(…) else null }`,
+CM6's `showPanel.from`); a compartment works too. Their input and focus are their own (the search
+field); an Escape the panel's content did not take gives the focus back to the editor (the content
+sees keys first: the search panel closes itself on Escape). The surface is always one `Column`, so a
 panel coming or going never rebuilds it (its focus and state stay).
+
+For a panel's own fields: `keyChordOf(keyEvent)` names a Compose key event as editor-core's
+`KeyChord`, so a panel matches its keys the way key bindings do (`binding.chord(isApplePlatform)`);
+`Modifier.codeTextInput()` turns iOS Smart Punctuation off while that field has the focus (the
+editor's own switch and owner rule; a search string is code), every other field of the app keeping
+the user's setting.
 
 ## Linked views (side-by-side diff)
 
@@ -316,7 +325,8 @@ see it; they put semantic class names on decorations:
   paints no current line of its own: basics' `active-line` (`EditorTheme.ACTIVE_LINE_CLASS`) is one,
   in the theme's class for it, else `currentLine` (so a host theme without the class still shows it).
   Chosen: no built-in active line. A host without `basics()` (or `ActiveLine.extension`) gets none. `light` / `dark` also style basics' `matching-bracket`,
-  `nonmatching-bracket` and `selection-match` (`EditorTheme.pluginClasses`).
+  `nonmatching-bracket` and `selection-match` (`EditorTheme.pluginClasses`), and the search plugin's
+  `search-match` / `search-match-selected` (`EditorTheme.searchClasses`).
 - When several marks cover the same text, styles merge in `decorationsFacet` order (highest
   precedence first) and the later one wins per attribute. `ime-composition` is the surface's own
   class (an underline).

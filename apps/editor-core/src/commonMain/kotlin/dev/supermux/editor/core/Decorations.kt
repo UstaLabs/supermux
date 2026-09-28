@@ -141,8 +141,13 @@ val gutterMarkersFacet: Facet<RangeSet<GutterMarker>, List<RangeSet<GutterMarker
  */
 data class Panel(val id: String, val top: Boolean)
 
-/** Every plugin's panels, in precedence order (top ones top to bottom, then the bottom ones). */
-val panelsFacet: Facet<Panel, List<Panel>> = Facet.list("panels")
+/**
+ * Every plugin's panels, in precedence order (top ones top to bottom, then the bottom ones). An
+ * input may be null, no panel: a plugin shows one from its own state with
+ * `panelsFacet.compute(FacetDep.field(f)) { st -> if (open) Panel(...) else null }` (CM6's
+ * `showPanel.from(field, v => v.panel)`), no compartment needed.
+ */
+val panelsFacet: Facet<Panel?, List<Panel>> = Facet.define("panels") { it.filterNotNull() }
 
 /**
  * Ranges that user edits treat as one unit (CM6's atomicRanges): an edit that reaches INTO one

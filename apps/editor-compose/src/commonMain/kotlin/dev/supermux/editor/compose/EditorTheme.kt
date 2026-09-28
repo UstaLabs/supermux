@@ -94,6 +94,15 @@ data class EditorTheme(
                 "selection-match" to SpanStyle(background = selectionMatch),
             )
 
+        /**
+         * The search plugin's marks: `search-match` on every match on screen, `search-match-selected`
+         * (with `search-match`, later so it wins) on the current one.
+         */
+        fun searchClasses(match: Color, selected: Color): Map<String, SpanStyle> = mapOf(
+            "search-match" to SpanStyle(background = match),
+            "search-match-selected" to SpanStyle(background = selected),
+        )
+
         /** The M4 plugins' columns: diff bars, lint dots, comment bubbles, fold arrows. */
         val DEFAULT_GUTTER_COLUMNS: Map<String, Dp> = mapOf("diff" to 6.dp, "lint" to 12.dp, "comment" to 16.dp, "fold" to 14.dp)
 
@@ -114,7 +123,7 @@ data class EditorTheme(
             currentLine = Color(0xFF151713), bracket = Color(0x47BAD0F8), nonmatching = Color(0xFFE06C75), selectionMatch = Color(0x33AAFE66),
         ).let { (lines, marks) -> EditorTheme(
             lineClassBackgrounds = lines,
-            classStyles = marks,
+            classStyles = marks + searchClasses(match = Color(0x4DE5C07B), selected = Color(0x99D19A66)),
             background = Color(0xFF0A0B09),
             foreground = Color(0xFFD8DED3),
             selection = Color(0x664BBAA7),
@@ -142,7 +151,7 @@ data class EditorTheme(
             currentLine = Color(0xFFF0F1EB), bracket = Color(0x52328C82), nonmatching = Color(0xFFBB5555), selectionMatch = Color(0x5599FF77),
         ).let { (lines, marks) -> EditorTheme(
             lineClassBackgrounds = lines,
-            classStyles = marks,
+            classStyles = marks + searchClasses(match = Color(0x66FFD54A), selected = Color(0x99FF9F1C)),
             background = Color(0xFFFEFEFB),
             foreground = Color(0xFF1F221C),
             selection = Color(0x4D007368),

@@ -32,7 +32,7 @@ internal object SmartPunctuation {
     private val patched: Boolean by lazy { dev.supermux.editor.compose.uikit.editor_patch_smart_punctuation() != 0 }
     private var warned = false
     private var verifiedThisFocus = false
-    private val owner = FocusOwner<EditorController>()
+    private val owner = FocusOwner<Any>()
 
     fun disable() { patched }
 
@@ -41,7 +41,7 @@ internal object SmartPunctuation {
      * with two editors (a side-by-side diff), the old one's blur arriving after the new one's focus
      * never turns Smart Punctuation back on under the new one.
      */
-    fun focusChanged(c: EditorController, focused: Boolean) {
+    fun focusChanged(c: Any, focused: Boolean) {
         disable()
         val on = owner.changed(c, focused)
         dev.supermux.editor.compose.uikit.editor_set_smart_punctuation_off(if (on) 1 else 0)
@@ -162,3 +162,7 @@ private fun onFloatingCursor(phase: Int, x: Double, y: Double): Int = if (Floati
  */
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 fun debugDriveFloatingCursor(dx: Double, dy: Double): Boolean = dev.supermux.editor.compose.uikit.editor_drive_floating_cursor(dx, dy) == 1
+
+internal actual fun platformCodeInputFocus(owner: Any, focused: Boolean) {
+    SmartPunctuation.focusChanged(owner, focused)
+}

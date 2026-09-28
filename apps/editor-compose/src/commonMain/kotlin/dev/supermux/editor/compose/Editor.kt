@@ -21,6 +21,7 @@ import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
@@ -406,14 +407,15 @@ fun Editor(
 
 /**
  * A panel strip: the registry's `panel:<id>` content, full width, its own height. Its input and
- * focus are its own (the search field); Escape inside it gives the focus back to the editor.
+ * focus are its own (the search field); an Escape the content did not take gives the focus back to
+ * the editor (the content sees it first: the search panel closes itself on Escape).
  */
 @Composable
 private fun androidx.compose.foundation.layout.ColumnScope.EditorPanel(c: EditorController, panel: dev.supermux.editor.core.Panel, widgets: WidgetRegistry) {
     val key = dev.supermux.editor.core.WidgetKey("panel:" + panel.id, panel.id)
     val content = widgets.content(key.type) ?: return
     Box(
-        Modifier.fillMaxWidth().onPreviewKeyEvent { e ->
+        Modifier.fillMaxWidth().onKeyEvent { e ->
             if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && e.key == androidx.compose.ui.input.key.Key.Escape) { c.requestFocus(); true } else false
         },
     ) { c.widgetScope.content(key) }

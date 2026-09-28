@@ -13,6 +13,10 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.withKeyDown
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.unit.dp
 import dev.supermux.editor.core.Compartment
 import dev.supermux.editor.core.EditorState
@@ -65,6 +69,34 @@ class PanelsTest {
             onNodeWithTag("search").performKeyInput { pressKey(Key.Escape) }
             waitForIdle()
             assertTrue(f.view.focused, "Escape did not give the focus back to the editor")
+        }
+    }
+
+    @Test fun aPanelsContentSeesEscapeFirst() {
+        var escapes = 0
+        val chords = ArrayList<dev.supermux.editor.core.KeyChord>()
+        val reg = WidgetRegistry().apply {
+            register("panel:own") {
+                BasicTextField(
+                    rememberTextFieldState(),
+                    Modifier.fillMaxWidth().height(40.dp).testTag("own").onPreviewKeyEvent { e ->
+                        if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown) keyChordOf(e)?.let { chords += it }
+                        if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && e.key == Key.Escape) { escapes++; true } else false
+                    },
+                )
+            }
+        }
+        editorTest(EditorState.create(text, extensions = panelsFacet.of(Panel("own", top = true))), widgets = reg) { f ->
+            onNodeWithTag("own").performClick()
+            waitForIdle()
+            onNodeWithTag("own").performKeyInput { withKeyDown(Key.ShiftLeft) { withKeyDown(Key.MetaLeft) { pressKey(Key.G) } } }
+            onNodeWithTag("own").performKeyInput { pressKey(Key.Escape) }
+            waitForIdle()
+            assertEquals(1, escapes, "the panel's content did not see its Escape")
+            // keyChordOf names what the content saw, the way editor-core's key bindings do.
+            assertTrue(dev.supermux.editor.core.KeyChord("g", shift = true, meta = true) in chords, chords.toString())
+            assertEquals(dev.supermux.editor.core.KeyChord("Escape"), chords.last())
+            assertTrue(!f.view.focused, "the surface took an Escape the panel's content handled")
         }
     }
 

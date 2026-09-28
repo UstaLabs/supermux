@@ -546,6 +546,15 @@ internal class FieldSync(
 /** The key name editor-core's [KeyChord] uses for a Compose [Key], or null for keys it has none for. */
 internal fun keyName(key: Key): String? = KEY_NAMES[key]
 
+/**
+ * The editor-core [KeyChord] of a Compose key event (its key and modifiers), or null for a key the
+ * editor has no name for (a modifier alone). For a plugin's own UI outside the surface (the search
+ * panel's field) that matches key bindings itself: `binding.chord(isApplePlatform) == keyChordOf(e)`.
+ */
+fun keyChordOf(event: KeyEvent): KeyChord? = keyName(event.key)?.let { name ->
+    KeyChord(name, ctrl = event.isCtrlPressed, alt = event.isAltPressed, shift = event.isShiftPressed, meta = event.isMetaPressed)
+}
+
 private val KEY_NAMES: Map<Key, String> = buildMap {
     put(Key.DirectionLeft, "ArrowLeft"); put(Key.DirectionRight, "ArrowRight")
     put(Key.DirectionUp, "ArrowUp"); put(Key.DirectionDown, "ArrowDown")

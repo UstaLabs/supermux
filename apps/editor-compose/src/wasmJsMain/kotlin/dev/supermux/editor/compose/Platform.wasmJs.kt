@@ -345,3 +345,5 @@ private fun bindSoon(st: JsAny, text: String, start: Int, end: Int) {
     // The field as it is now; a write in between (typing) replaces it before the resyncs run.
     js("{ st.field = { text: text, start: start, end: end }; requestAnimationFrame(() => { st.resync(); requestAnimationFrame(() => st.resync()); }); }")
 }
+
+internal actual fun platformCodeInputFocus(owner: Any, focused: Boolean) {}

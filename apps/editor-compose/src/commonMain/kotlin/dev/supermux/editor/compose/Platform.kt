@@ -1,5 +1,8 @@
 package dev.supermux.editor.compose
 
+import androidx.compose.ui.composed
+import androidx.compose.ui.focus.onFocusChanged
+
 /**
  * True on macOS, iOS and iPadOS (and a browser running on one): `Mod` is Cmd there, and the
  * default keymap follows the platform's conventions (Alt-Arrow moves by word, Cmd-Arrow to the
@@ -73,3 +76,18 @@ internal expect fun platformAfterKeyboardShown()
  * it; iOS turns the Smart Punctuation traits off only while an editor's field is the one in focus).
  */
 internal expect fun platformFocusChanged(c: EditorController, focused: Boolean)
+
+/**
+ * For a plugin's own text field that holds CODE (the search panel's fields): on iOS, Smart
+ * Punctuation is off while it has the focus, the same switch (and owner rule) as the editor's hidden
+ * field, so a typed `"` stays U+0022; every other text field of the app keeps the user's setting.
+ * Elsewhere it changes nothing. (Autocorrect is the field's own: `KeyboardOptions(autoCorrectEnabled = false)`.)
+ */
+fun androidx.compose.ui.Modifier.codeTextInput(): androidx.compose.ui.Modifier = composed {
+    val owner = androidx.compose.runtime.remember { Any() }
+    androidx.compose.runtime.DisposableEffect(owner) { onDispose { platformCodeInputFocus(owner, false) } }
+    onFocusChanged { platformCodeInputFocus(owner, it.hasFocus) }
+}
+
+/** iOS: [owner] (a code field) gained or lost the focus: Smart Punctuation off while it has it. */
+internal expect fun platformCodeInputFocus(owner: Any, focused: Boolean)

@@ -31,6 +31,7 @@ kotlin {
         commonMain.dependencies {
             api(project(":editor-core"))
             implementation(project(":editor-compose"))
+            implementation(libs.coroutines.core)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
