@@ -22,9 +22,12 @@ export interface LiteStatusInput {
   base_commit?: string | null   // HEAD SHA at worktree creation (from session base_commits); for `touched`
 }
 
+// GIT_OPTIONAL_LOCKS=0: `git status` otherwise takes .git/index.lock to refresh the index. The
+// broker watches that dir to trigger this very recompute, so each run re-triggered itself —
+// a permanent ~1/s git loop per repo-backed session (git's documented fix for background status).
 async function runGit(cwd: string, args: string[], timeout = 30_000): Promise<{ ok: boolean; out: string }> {
   try {
-    const { stdout } = await pexec("git", args, { cwd, encoding: "utf-8", timeout, maxBuffer: 16 * 1024 * 1024 })
+    const { stdout } = await pexec("git", args, { cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, encoding: "utf-8", timeout, maxBuffer: 16 * 1024 * 1024 })
     return { ok: true, out: stdout.trim() }
   } catch (e: any) {
     return { ok: false, out: String(e?.stdout ?? "").trim() }
