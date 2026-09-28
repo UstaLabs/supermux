@@ -30,6 +30,8 @@ data class HostState(
     val agentState: Map<String, AgentStatus> = emptyMap(),
     val agentErrors: Map<String, ServerFrame.AgentError> = emptyMap(),
     val bgTasks: Map<String, List<ServerFrame.BgTask>> = emptyMap(),
+    /** Session id → its subagents, ordered by [dev.supermux.proto.Subagent.startedAt]. */
+    val subagents: Map<String, List<dev.supermux.proto.Subagent>> = emptyMap(),
     val commands: Map<String, List<SlashCommand>> = emptyMap(),
     val commandsResolved: Map<String, Boolean> = emptyMap(),
     val lastRead: Map<String, String> = emptyMap(),

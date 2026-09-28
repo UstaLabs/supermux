@@ -1,6 +1,7 @@
 import type { EventEmitter } from "events"
 import type { AgentKind as SharedAgentKind } from "../../shared/agents"
 import type { ActivityEvent } from "./claude/activity-event"
+import type { NormalizedBody } from "../../../packages/supermux-core/src/events/normalized.js"
 
 export { AgentKind } from "../../shared/agents"
 
@@ -36,6 +37,15 @@ export type ActivityCardsEvent = { kind: "activity"; events: ActivityEvent[] }
 
 export type BrokerRequestOption = { id: string; label: string; kind?: string }
 
+/** Which subagent is asking (absent for the parent's own requests). */
+export type RequestSubagent = {
+  subagentId?: string
+  /** subagent_type / nickname, when the agent reported one. */
+  subagentName?: string
+  /** Short human label ("Inspect work dir"), when known. */
+  subagentDescription?: string
+}
+
 export type BrokerRequest = {
   requestId: string
   kind: "permission" | "question"
@@ -44,7 +54,7 @@ export type BrokerRequest = {
   options: BrokerRequestOption[]
   allowFreeText: boolean
   blocking: boolean
-}
+} & RequestSubagent
 
 export type RequestOpenEvent = {
   kind: "request-open"
@@ -55,7 +65,7 @@ export type RequestOpenEvent = {
   options: BrokerRequestOption[]
   allowFreeText: boolean
   blocking: boolean
-}
+} & RequestSubagent
 
 export type RequestClosedEvent = {
   kind: "request-closed"
@@ -70,6 +80,22 @@ export type RequestAnswerInput =
   | { answers: Record<string, string | string[]> }
   | { decline: true }
 
+/** A normalized subagent lifecycle body (started/progress/terminal/resumed), envelope stripped. */
+export type SubagentEvent = { kind: "subagent"; body: Extract<NormalizedBody, { kind: "subagent" }> }
+
+/** A subagent's own tool call started: the one-line activity to show when the agent sends none. */
+export type SubagentActivityEvent = { kind: "subagent-activity"; subagentId: string; activity: string }
+
+/** Background shell / workflow / monitor tasks (Claude background Bash, …). */
+export type TaskEvent = {
+  kind: "task"
+  taskId: string
+  taskKind: Extract<NormalizedBody, { kind: "task" }>["taskKind"]
+  phase: Extract<NormalizedBody, { kind: "task" }>["phase"]
+  label?: string
+  parentCallId?: string
+}
+
 export type AgentEvent =
   | AssistantMessageEvent
   | ToolCallEvent
@@ -79,6 +105,9 @@ export type AgentEvent =
   | ActivityCardsEvent
   | RequestOpenEvent
   | RequestClosedEvent
+  | SubagentEvent
+  | SubagentActivityEvent
+  | TaskEvent
 
 export type InboundMeta = {
   chat_id?: string
@@ -107,4 +136,12 @@ export interface AgentAdapter extends EventEmitter {
   interrupt(): Promise<void>
   respondRequest?(requestId: string, answer: RequestAnswerInput): Promise<void>
   openRequests?(): BrokerRequest[]
+  /**
+   * Send the user's text to one subagent. `direct`: delivered to the child now. `relay`: queued
+   * as a parent turn asking the parent model to forward it. Throws `unsupported_operation` when
+   * the runtime cannot reach subagents.
+   */
+  messageSubagent?(subagentId: string, text: string): Promise<{ via: "direct" | "relay" }>
+  /** Stop one subagent without interrupting the parent's turn. */
+  stopSubagent?(subagentId: string): Promise<void>
 }

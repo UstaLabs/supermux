@@ -1,4 +1,4 @@
-import type { AgentEvent, BrokerRequest, ToolCallEvent } from "../types"
+import type { AgentEvent, BrokerRequest, RequestSubagent, ToolCallEvent } from "../types"
 import type { EventEnvelope, NormalizedBody } from "../../../../packages/supermux-core/src/events/normalized.js"
 import { answerLabel, mapPermissionRequest, mapUserQuestion } from "./request-map"
 import {
@@ -50,6 +50,8 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
   // and by the time it resolves the library has already dropped the request. Keep the mapped
   // requests here, from open to resolve, so `request-closed` can state what was chosen.
   const openRequests = new Map<string, BrokerRequest>()
+  // What each subagent is called, so a request it raises can say who is asking.
+  const subagentLabels = new Map<string, { name?: string; description?: string }>()
   let pendingAssistant = ""
   let lastAssistant = ""
 
@@ -63,6 +65,37 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
     opts.emit({ kind: "assistant-message", text: trimmed })
   }
 
+  function requestSubagent(subagentId: string | undefined): RequestSubagent {
+    if (!subagentId) return {}
+    const label = subagentLabels.get(subagentId)
+    return {
+      subagentId,
+      ...(label?.name ? { subagentName: label.name } : {}),
+      ...(label?.description ? { subagentDescription: label.description } : {}),
+    }
+  }
+
+  /** Fill in the asking subagent's name/description on a request mapped elsewhere (snapshot list). */
+  function decorateRequest(request: BrokerRequest): BrokerRequest {
+    return request.subagentId ? { ...request, ...requestSubagent(request.subagentId) } : request
+  }
+
+  function emitRequest(mapped: BrokerRequest, subagentId: string | undefined): void {
+    const request = { ...mapped, ...requestSubagent(subagentId) }
+    openRequests.set(request.requestId, request)
+    opts.emit({
+      kind: "request-open",
+      requestId: request.requestId,
+      requestKind: request.kind,
+      title: request.title,
+      body: request.body,
+      options: request.options,
+      allowFreeText: request.allowFreeText,
+      blocking: request.blocking,
+      ...requestSubagent(subagentId),
+    })
+  }
+
   function handle(event: CoreNormalizedEvent): void {
     const kind = event.kind
     const replay = event.replay === true
@@ -72,6 +105,33 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
       return
     }
     if (replay) return
+
+    if (kind === "subagent") {
+      const label = subagentLabels.get(event.subagentId) ?? {}
+      if (event.name) label.name = event.name
+      if (event.description) label.description = event.description
+      subagentLabels.set(event.subagentId, label)
+      const { sessionId: _s, agent: _a, seq: _q, ts: _t, turnId: _tu, replay: _r, origin: _o, native: _n, ...body } = event
+      opts.emit({ kind: "subagent", body })
+      return
+    }
+    if (kind === "task") {
+      opts.emit({
+        kind: "task",
+        taskId: event.taskId,
+        taskKind: event.taskKind,
+        phase: event.phase,
+        ...(event.label ? { label: event.label } : {}),
+        ...(event.parentCallId ? { parentCallId: event.parentCallId } : {}),
+      })
+      return
+    }
+    // A subagent's own output is the subagent's business: its text is never the parent's reply,
+    // its tool calls never the parent's "current tool", its errors never fail the parent's turn.
+    // Its requests still need the user, so they go through below, labelled.
+    const child = event.subagentId
+    if (child && kind !== "permission-request" && kind !== "user-question" && kind !== "request-resolved"
+      && kind !== "permission-auto" && kind !== "usage") return
 
     if (kind === "assistant-delta") {
       pendingAssistant += event.text
@@ -116,38 +176,17 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
           title: `auto-approved: ${tool}`,
           phase: "completed",
           callId: event.toolCall.callId,
+          ...(child ? { subagentId: child } : {}),
         }],
       })
       return
     }
     if (kind === "permission-request") {
-      const mapped = mapPermissionRequest(event)
-      openRequests.set(mapped.requestId, mapped)
-      opts.emit({
-        kind: "request-open",
-        requestId: mapped.requestId,
-        requestKind: mapped.kind,
-        title: mapped.title,
-        body: mapped.body,
-        options: mapped.options,
-        allowFreeText: mapped.allowFreeText,
-        blocking: mapped.blocking,
-      })
+      emitRequest(mapPermissionRequest(event), child)
       return
     }
     if (kind === "user-question") {
-      const mapped = mapUserQuestion(event)
-      openRequests.set(mapped.requestId, mapped)
-      opts.emit({
-        kind: "request-open",
-        requestId: mapped.requestId,
-        requestKind: mapped.kind,
-        title: mapped.title,
-        body: mapped.body,
-        options: mapped.options,
-        allowFreeText: mapped.allowFreeText,
-        blocking: mapped.blocking,
-      })
+      emitRequest(mapUserQuestion(event), child)
       return
     }
     if (kind === "request-resolved") {
@@ -171,5 +210,5 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
     if (pendingAssistant) emitAssistant(pendingAssistant)
   }
 
-  return { handle, flush }
+  return { handle, flush, decorateRequest }
 }

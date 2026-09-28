@@ -285,6 +285,7 @@ private fun timelineItemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Msg -> "m:${item.entry.id}"
     is TimelineItem.Tool -> "t:${item.event.callId ?: "${item.event.kind}:${item.event.seq}:${item.event.ts}"}"
     is TimelineItem.Activity -> "a:${item.event.kind}:${item.event.seq}:${item.event.ts}"
+    is TimelineItem.SubagentCard -> "s:${item.subagent.id}"
 }
 
 /**

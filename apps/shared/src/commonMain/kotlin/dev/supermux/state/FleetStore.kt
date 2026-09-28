@@ -281,6 +281,7 @@ class FleetStore(
     val activity: StateFlow<Map<String, List<ActivityEvent>>> = mergedMap { it.activity }
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> = mergedMap { it.agentErrors }
     val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> = mergedMap { it.bgTasks }
+    val subagents: StateFlow<Map<String, List<dev.supermux.proto.Subagent>>> = mergedMap { it.subagents }
     val commands: StateFlow<Map<String, List<SlashCommand>>> = mergedMap { it.commands }
     val commandsResolved: StateFlow<Map<String, Boolean>> = mergedMap { it.commandsResolved }
     val finishJobs: StateFlow<Map<String, FinishJobDto>> = mergedMap { it.finishJobs }
@@ -1189,6 +1190,11 @@ class FleetStore(
     fun respondRequest(sessionId: String, requestId: String, answer: kotlinx.serialization.json.JsonObject) {
         appFor(sessionId)?.respondRequest(sessionId, requestId, answer)
     }
+    /** Routed to the session's owning host; `ok=false` (no error) when no host owns it. */
+    suspend fun messageSubagent(sessionId: String, subagentId: String, text: String): dev.supermux.net.SubagentActionResult =
+        appFor(sessionId)?.messageSubagent(sessionId, subagentId, text) ?: dev.supermux.net.SubagentActionResult(ok = false)
+    suspend fun stopSubagent(sessionId: String, subagentId: String): dev.supermux.net.SubagentActionResult =
+        appFor(sessionId)?.stopSubagent(sessionId, subagentId) ?: dev.supermux.net.SubagentActionResult(ok = false)
 
     /** Resume from archive on the owning host, then re-pull that host's archived list so the row
      *  leaves the Archived screen (the resume produces no session_removed frame).

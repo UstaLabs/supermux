@@ -20,5 +20,22 @@
         "status": "running"
       }
     ]
+  },
+  "subagents": {
+    "editor": [
+      {
+        "id": "t1",
+        "status": "running",
+        "activity": "Running ls -la",
+        "stats": {
+          "toolCalls": 2
+        },
+        "messaging": "direct",
+        "parentCallId": "exec-ba7689ac",
+        "model": "gpt-5.6-luna",
+        "startedAt": 1717200000000,
+        "lastActivityAt": 1717200003000
+      }
+    ]
   }
 }

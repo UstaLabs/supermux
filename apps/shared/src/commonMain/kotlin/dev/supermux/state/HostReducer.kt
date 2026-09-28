@@ -36,6 +36,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             activity = frame.activity + keptExtras(state.activity, frame),
             completeExtras = frame.partialExtras?.let { frame.logs.keys - it.toSet() } ?: frame.logs.keys,
             bgTasks = frame.bgTasks,
+            subagents = frame.subagents.mapValues { (_, list) -> list.sortedBy { it.startedAt } },
             agentState = frame.agentState,
             commands = frame.commands + keptExtras(state.commands, frame),
             commandsResolved = frame.commandsResolved + keptExtras(state.commandsResolved, frame),
@@ -84,6 +85,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         // session (a dead badge on a live agent) until the agent next changed state.
         val hadAgent = state.agentState.containsKey(frame.id) || state.agentErrors.containsKey(frame.id)
         if (state.sessions.none { it.id == frame.id } && !state.bgTasks.containsKey(frame.id) && !hadAgent &&
+            !state.subagents.containsKey(frame.id) &&
             frame.id !in state.completeLogs && frame.id !in state.completeExtras
         ) {
             state
@@ -91,6 +93,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             state.copy(
                 sessions = state.sessions.filterNot { s -> s.id == frame.id },
                 bgTasks = state.bgTasks - frame.id,
+                subagents = state.subagents - frame.id,
                 agentState = state.agentState - frame.id,
                 agentErrors = state.agentErrors - frame.id,
                 requests = state.requests - frame.id,
@@ -240,6 +243,13 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
     }
     is ServerFrame.Error -> state.copy(lastError = frame.reason.ifBlank { null })
     is ServerFrame.BgTasks -> state.copy(bgTasks = state.bgTasks + (frame.session to frame.tasks))
+    is ServerFrame.SubagentUpdate -> {
+        val prev = state.subagents[frame.session] ?: emptyList()
+        val next = (prev.filterNot { it.id == frame.subagent.id } + frame.subagent).sortedBy { it.startedAt }
+        state.copy(subagents = state.subagents + (frame.session to next))
+    }
+    is ServerFrame.SubagentsCleared ->
+        if (frame.session !in state.subagents) state else state.copy(subagents = state.subagents - frame.session)
     is ServerFrame.AgentState -> {
         val nextErrors = if (frame.state != "dead") state.agentErrors - frame.session else state.agentErrors
         state.copy(

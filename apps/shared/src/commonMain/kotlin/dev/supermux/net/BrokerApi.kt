@@ -324,6 +324,21 @@ data class ProjectLocationBody(val path: String)
 @Serializable
 data class MoveProjectLocationBody(val projectId: String)
 
+@Serializable
+data class SubagentMessageBody(val text: String)
+
+/**
+ * Answer of POST /sessions/<id>/subagents/<subagentId>/{message,stop}. [via] is `direct` (the
+ * child got it now) or `relay` (a parent turn forwards it) on a sent message. A refusal
+ * (409 unsupported / 400 / 404) comes back as `ok=false` with the broker's [error].
+ */
+@Serializable
+data class SubagentActionResult(
+    val ok: Boolean = false,
+    val via: String? = null,
+    val error: String? = null,
+)
+
 /** The 409 body of POST /project-catalog/:id/locations. */
 @Serializable
 private data class ProjectLocationConflictBody(val error: String? = null, val projectId: String? = null)
@@ -2163,6 +2178,29 @@ class BrokerApi(
         http.post("$httpBase/sessions/$id/interrupt") {
             authHeader()
         }
+    }
+
+    /** POST /sessions/<id>/subagents/<subagentId>/message {text}. */
+    suspend fun messageSubagent(id: String, subagentId: String, text: String): SubagentActionResult =
+        subagentAction(http.post("$httpBase/sessions/${urlEncode(id)}/subagents/${urlEncode(subagentId)}/message") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(SubagentMessageBody(text)))
+        })
+
+    /** POST /sessions/<id>/subagents/<subagentId>/stop. */
+    suspend fun stopSubagent(id: String, subagentId: String): SubagentActionResult =
+        subagentAction(http.post("$httpBase/sessions/${urlEncode(id)}/subagents/${urlEncode(subagentId)}/stop") {
+            authHeader()
+        })
+
+    /** A 4xx with the broker's `{ok:false,error}` is an answer, not a failure: say why. */
+    private suspend fun subagentAction(resp: HttpResponse): SubagentActionResult {
+        if (resp.status.value in 400..499) {
+            val refused = runCatching { json.decodeFromString<SubagentActionResult>(resp.bodyAsText()) }.getOrNull()
+            if (refused != null) return refused.copy(ok = false)
+        }
+        return decode(resp)
     }
 
     /** GET /sessions/<id>/git/status */

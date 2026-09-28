@@ -244,6 +244,9 @@ class HostStore(
         _state.map { it.agentErrors }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> =
         _state.map { it.bgTasks }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    /** Session id → subagents (running + recent finished), ordered by start. */
+    val subagents: StateFlow<Map<String, List<dev.supermux.proto.Subagent>>> =
+        _state.map { it.subagents }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
     val pendingSend: StateFlow<Set<String>> = _pendingSend
     val commands: StateFlow<Map<String, List<SlashCommand>>> =
@@ -2056,6 +2059,20 @@ class HostStore(
             }
         }
     }
+
+    /**
+     * Send [text] to one subagent. The broker answers `via` direct|relay, or `ok=false` with its
+     * reason (e.g. a Codex v2 child that refuses input); a transport failure is `ok=false` with
+     * no error. The transcript line ("↪ to …") arrives as a normal `message_append`.
+     */
+    suspend fun messageSubagent(sessionId: String, subagentId: String, text: String): dev.supermux.net.SubagentActionResult =
+        runApi("messageSubagent") { api.messageSubagent(sessionId, subagentId, text) }
+            ?: dev.supermux.net.SubagentActionResult(ok = false)
+
+    /** Stop one subagent without interrupting the parent's turn. Same result contract. */
+    suspend fun stopSubagent(sessionId: String, subagentId: String): dev.supermux.net.SubagentActionResult =
+        runApi("stopSubagent") { api.stopSubagent(sessionId, subagentId) }
+            ?: dev.supermux.net.SubagentActionResult(ok = false)
 
     /** Patch one session row in place (optimistic pill updates). No-op for an unknown id. */
     private fun patchSession(id: String, f: (SessionInfo) -> SessionInfo) {

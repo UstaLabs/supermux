@@ -32,6 +32,7 @@ export function mapPermissionRequest(body: Extract<NormalizedBody, { kind: "perm
     options: body.options.map((o) => ({ id: o.id, label: o.label, kind: o.kind })),
     allowFreeText: false,
     blocking: true,
+    ...(body.subagentId ? { subagentId: body.subagentId } : {}),
   }
 }
 
@@ -46,6 +47,7 @@ export function mapUserQuestion(body: Extract<NormalizedBody, { kind: "user-ques
     options: (first?.options ?? []).map((o) => ({ id: o.id, label: o.label })),
     allowFreeText: body.questions.some((q) => q.allowFreeText),
     blocking: body.blocking,
+    ...(body.subagentId ? { subagentId: body.subagentId } : {}),
   }
 }
 

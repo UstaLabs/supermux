@@ -398,6 +398,13 @@ export function createNormalizedActivity(opts: { workdir?: string }) {
   }
 
   function handle(event: NormalizedEvent, now: number): ActivityEvent[] {
+    const rows = rowsFor(event, now)
+    const subagentId = event.event?.subagentId
+    if (!subagentId || !rows.length) return rows
+    return rows.map((row) => ({ ...row, subagentId }))
+  }
+
+  function rowsFor(event: NormalizedEvent, now: number): ActivityEvent[] {
     const body = event.event
     if (!body) return []
     if (body.kind === "command-output") {

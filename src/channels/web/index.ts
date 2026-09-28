@@ -239,6 +239,11 @@ export interface WebChannelOpts {
   getSessionLog: (name: string, limit?: number) => unknown[]
   getSessionActivity?: (name: string) => unknown[]
   getSessionBgTasks?: (name: string) => unknown[]
+  /** Latest view of each subagent of a session (snapshot `subagents`; live `subagent_update`). */
+  getSessionSubagents?: (id: string) => unknown[]
+  /** POST /sessions/:id/subagents/:subagentId/message and …/stop. */
+  messageSubagent?: (sessionId: string, subagentId: string, text: string) => Promise<{ ok: true; via?: "direct" | "relay" } | { ok: false; status: number; error: string }>
+  stopSubagent?: (sessionId: string, subagentId: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
   setMute: (name: string, muted: boolean) => void
   onSendFromWeb: (msg: InboundMessage) => void
   fileStore?: import("../../core/files/store").FileStore
@@ -1280,6 +1285,7 @@ export class WebChannel implements Channel {
       const logs: Record<string, unknown[]> = {}
       const activity: Record<string, unknown[]> = {}
       const bgTasks: Record<string, unknown[]> = {}
+      const subagents: Record<string, unknown[]> = {}
       const agentState: Record<string, unknown> = {}
       const commands: Record<string, unknown[]> = {}
       const commandsResolved: Record<string, boolean> = {}
@@ -1305,6 +1311,8 @@ export class WebChannel implements Channel {
           logs[sessionKey] = this.opts.getSessionLog(sessionKey)
         }
         bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
+        // Small and needed by the session list (running badges), so never trimmed.
+        subagents[sessionKey] = this.opts.getSessionSubagents?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
         if (trimExtras && !fullLogs.has(sessionKey)) {
           partialExtras.push(sessionKey)
@@ -1335,7 +1343,7 @@ export class WebChannel implements Channel {
         requests[sessionKey] = this.opts.getSessionRequests?.(sessionKey) ?? []
       }
       const permissionModes = permissionCatalog()
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, subagents, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
       return
     }
     if (frame.type === "ping") {
@@ -2770,6 +2778,24 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       this.opts.markRead?.(id)   // advances last_read_at + broadcasts session_read (main.ts:1121)
       return this.json({ ok: true })
+    }
+    {
+      const sub = method === "POST" ? path.match(/^\/sessions\/([^/]+)\/subagents\/([^/]+)\/(message|stop)$/) : null
+      if (sub) {
+        const id = decodeURIComponent(sub[1]!)
+        const subagentId = decodeURIComponent(sub[2]!)
+        if (sub[3] === "message") {
+          if (!this.opts.messageSubagent) return this.json({ error: "not configured" }, 503)
+          const body = await req.json().catch(() => ({})) as Record<string, unknown>
+          const text = typeof body.text === "string" ? body.text.trim() : ""
+          if (!text) return this.json({ error: "text required" }, 400)
+          const result = await this.opts.messageSubagent(id, subagentId, text)
+          return result.ok ? this.json(result) : this.json({ ok: false, error: result.error }, result.status)
+        }
+        if (!this.opts.stopSubagent) return this.json({ error: "not configured" }, 503)
+        const result = await this.opts.stopSubagent(id, subagentId)
+        return result.ok ? this.json(result) : this.json({ ok: false, error: result.error }, result.status)
+      }
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/interrupt$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)

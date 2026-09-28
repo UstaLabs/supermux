@@ -245,7 +245,34 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   openRequests(): BrokerRequest[] {
     const session = this.session
     if (!session) return []
-    return session.requests.list().map(mapPendingRequest)
+    return session.requests.list().map((pending) => this.bridge.decorateRequest(mapPendingRequest(pending)))
+  }
+
+  /**
+   * Send the user's text to one subagent. Direct runtimes (Codex, Grok, OpenCode) deliver it to
+   * the child now; relay runtimes (Claude, Cursor) queue a parent turn that forwards it, whose
+   * completion is tracked like any other send. Throws the library's `unsupported_operation`.
+   */
+  async messageSubagent(subagentId: string, text: string): Promise<{ via: "direct" | "relay" }> {
+    const session = this.requireSession()
+    const epoch = this.inputEpoch
+    if (this.continueAfterConfirmedInterrupt) {
+      session.pending.continue()
+      this.continueAfterConfirmedInterrupt = false
+    }
+    const result = await session.messageSubagent(subagentId, [{ type: "text", text }], { whenBusy: "queue" })
+    if (result.via === "relay") {
+      void result.receipt.completed
+        .then((completion) => {
+          if (!this.stopped && epoch === this.inputEpoch) this.handleCompletion(completion)
+        })
+        .catch(() => {})
+    }
+    return { via: result.via }
+  }
+
+  async stopSubagent(subagentId: string): Promise<void> {
+    await this.requireSession().stopSubagent(subagentId)
   }
 
   async respondRequest(requestId: string, answer: RequestAnswerInput): Promise<void> {
@@ -658,6 +685,12 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       const env = event.event
       const cards = this.activity.handle({ ...env, event: env }, Date.now())
       if (cards.length) this.emit("activity", { kind: "activity", events: cards })
+      if (env.subagentId && env.kind === "tool-call" && env.phase === "started" && env.replay !== true) {
+        // The subagent's own "what it is doing now", for agents that report no progress line.
+        const card = cards.find((c) => c.kind === "tool")
+        const activity = card?.description || card?.title || env.title || env.tool
+        if (activity) this.emit("subagent-activity", { kind: "subagent-activity", subagentId: env.subagentId, activity })
+      }
       return
     }
     if (event.type === "session.failed") {

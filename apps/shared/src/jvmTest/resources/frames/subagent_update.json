@@ -1,0 +1,23 @@
+{
+  "type": "subagent_update",
+  "session": "550e8400-e29b-41d4-a716-446655440000",
+  "subagent": {
+    "id": "af3c70a348a6a6b7a",
+    "name": "general-purpose",
+    "description": "Inspect work dir",
+    "prompt": "List the files in the current directory with the Bash tool (ls -R), then Read the file sub/secret.txt, then reply with a one-line summary including the secret word.",
+    "background": false,
+    "status": "completed",
+    "activity": "Reading sub/secret.txt",
+    "stats": { "toolCalls": 2, "tokens": 14549, "durationMs": 13713 },
+    "result": "The directory contains config.ini, notes.txt, and sub/secret.txt, which reveals the secret word is PELICAN.",
+    "resultClipped": true,
+    "model": "claude-haiku-4-5-20251001",
+    "messaging": "relay",
+    "parentCallId": "toolu_01FY1DZSocZ1MNN2Rp2jmdfj",
+    "nativeId": "af3c70a348a6a6b7a",
+    "startedAt": 1790589601000,
+    "endedAt": 1790589614713,
+    "lastActivityAt": 1790589614713
+  }
+}

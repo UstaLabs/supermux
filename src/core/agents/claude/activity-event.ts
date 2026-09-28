@@ -23,4 +23,9 @@ export interface ActivityEvent {
   callId?: string    // tool_use id (and matching tool_result tool_use_id) for pairing
   /** Structured payload for High-detail terminal / diff rendering. */
   body?: ActivityToolBody
+  /**
+   * Set on every row a SUBAGENT produced (its tool calls, results, reasoning), so clients nest
+   * it under that subagent instead of the parent's timeline. Parent rows never carry it.
+   */
+  subagentId?: string
 }

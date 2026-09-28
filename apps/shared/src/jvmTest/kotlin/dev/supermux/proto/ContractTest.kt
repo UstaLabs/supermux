@@ -23,6 +23,8 @@ class ContractTest {
             "walkthrough_updated", "review_comment",
             "request_open", "request_closed", "error",
             "worktree_sizes", "worktrees_removed", "agent_models_changed",
+            "subagent_update", "subagents_cleared", "activity_append_subagent",
+            "request_open_subagent", "message_append_subagent",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -49,6 +51,8 @@ class ContractTest {
                 is ServerFrame.SessionRead -> {}
                 is ServerFrame.ActivityAppend -> {}
                 is ServerFrame.BgTasks -> {}
+                is ServerFrame.SubagentUpdate -> assertEquals("toolu_01FY1DZSocZ1MNN2Rp2jmdfj", frame.subagent.parentCallId)
+                is ServerFrame.SubagentsCleared -> {}
                 is ServerFrame.CommandsChanged -> {}
                 is ServerFrame.FsChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
@@ -77,6 +81,21 @@ class ContractTest {
                 is ServerFrame.WorktreesRemoved -> {}
             }
         }
+    }
+
+    @Test fun subagent_fields_survive_the_wire() {
+        val row = json.decodeFromString<ServerFrame>(load("activity_append_subagent")) as ServerFrame.ActivityAppend
+        assertEquals("af3c70a348a6a6b7a", row.event.subagentId)
+        val ask = json.decodeFromString<ServerFrame>(load("request_open_subagent")) as ServerFrame.RequestOpen
+        assertEquals("a2b3c4", ask.request.subagentId)
+        assertEquals("Write the report", ask.request.subagentDescription)
+        val line = json.decodeFromString<ServerFrame>(load("message_append_subagent")) as ServerFrame.MessageAppend
+        assertEquals("af3c70a348a6a6b7a", line.entry.subagent_id)
+        val snap = json.decodeFromString<ServerFrame>(load("snapshot")) as ServerFrame.Snapshot
+        assertEquals("t1", snap.subagents["editor"]!!.single().id)
+        val update = json.decodeFromString<ServerFrame>(load("subagent_update")) as ServerFrame.SubagentUpdate
+        assertEquals(2, update.subagent.stats.toolCalls)
+        assertEquals("completed", update.subagent.status)
     }
 
     @Test fun client_prompt_frames_round_trip() {

@@ -115,7 +115,7 @@ import { homedir, hostname } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
-import type { AgentAdapter } from "./core/agents/types"
+import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, TaskEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
@@ -132,7 +132,8 @@ import { FsWatcher } from "./core/editor/fs-watcher"
 import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
 import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
-import { BackgroundTaskStore } from "./core/session-manager/background-task-store"
+import { BackgroundTaskStore, type BgTaskKind } from "./core/session-manager/background-task-store"
+import { SubagentStore } from "./core/session-manager/subagent-store"
 
 import { normalizeToolName } from "./core/agents/tool-normalize"
 import { gcOrphanAgentHomes, reclaimCursorHomes } from "./core/agents/shared-runtime"
@@ -441,6 +442,11 @@ messageLog.on("append", (sessionId: string, entry: any) => {
 const activityStore = new ActivityStore()
 const agentStateStore = new AgentStateStore()
 const bgTaskStore = new BackgroundTaskStore()
+const subagentStore = new SubagentStore()
+/** "Waiting · N background": open background tasks plus background subagents still running. */
+function bgOpenCount(sessionId: string): number {
+  return bgTaskStore.openCount(sessionId) + subagentStore.backgroundRunning(sessionId)
+}
 
 function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } | null {
   try {
@@ -481,6 +487,7 @@ function ensureClaudeTailer(_sessionUuid: string, _name: string, _workdir: strin
 function stopClaudeTailer(sessionUuid: string): void {
   activityStore.clear(sessionUuid)
   bgTaskStore.clear(sessionUuid)
+  subagentStore.clear(sessionUuid)
 }
 
 const modelCache = new ModelCache()
@@ -659,7 +666,7 @@ const sessionManager = new SessionManager(registry, {
     // UserPromptSubmit hook is dropped (fire-and-forget curl) and the turn emits
     // no other state change. Mutates nothing — it just re-emits the same frame
     // the change-listener would send (keeps delivery a pure reflector).
-    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgTaskStore.openCount(id))),
+    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgOpenCount(id))),
     onTarget: (id, chat_id) => replyTargets.note(id, chat_id),
   },
   backend: {
@@ -681,7 +688,8 @@ const sessionManager = new SessionManager(registry, {
     stop: (id) => displayManager.stop(id),
   },
   agentState: agentStateStore,
-  bgTasks: bgTaskStore,
+  // Archiving clears both: an archived session can neither be "waiting" nor own live subagents.
+  bgTasks: { clear: (id: string) => { bgTaskStore.clear(id); subagentStore.clear(id) } },
   commands: {
     remove: (name) => commandRegistry.remove(name),
     refresh: (name) => commandRegistry.refresh(name),
@@ -1053,6 +1061,79 @@ function finishReadinessById(sessionId: string): FinishReadiness | { error: stri
   return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction, prRequiresGreen: cfg.prRequiresGreen })
 }
 
+const TASK_KIND: Record<TaskEvent["taskKind"], BgTaskKind> = {
+  shell: "shell", workflow: "workflow", agent: "agent", subagent: "agent", collab: "agent", monitor: "task",
+}
+
+/** Core `task` bodies (Claude background Bash, workflows, monitors) feed the bg-task chips. */
+function applyTaskEvent(sessionId: string, ev: TaskEvent): void {
+  const ts = Date.now()
+  if (ev.phase === "started") {
+    bgTaskStore.upsertOpen(sessionId, { id: ev.taskId, kind: TASK_KIND[ev.taskKind] ?? "task", label: ev.label || ev.taskId, ts, ...(ev.parentCallId ? { callId: ev.parentCallId } : {}) })
+  } else if (ev.phase === "completed" || ev.phase === "failed" || ev.phase === "interrupted") {
+    bgTaskStore.close(sessionId, {
+      id: ev.taskId,
+      status: ev.phase === "completed" ? "completed" : "failed",
+      ts,
+      ...(ev.phase === "interrupted" ? { summary: "interrupted" } : {}),
+      ...(ev.parentCallId ? { callId: ev.parentCallId } : {}),
+    })
+  }
+  // "interacted" / "wake" move nothing the chips show.
+}
+
+type SubagentActionResult = { ok: true; via?: "direct" | "relay" } | { ok: false; status: number; error: string }
+
+function subagentActionError(err: unknown): SubagentActionResult {
+  const code = typeof err === "object" && err !== null && "code" in err ? String((err as { code: unknown }).code) : ""
+  const message = err instanceof Error ? err.message : String(err)
+  if (code === "unsupported_operation") return { ok: false, status: 409, error: message }
+  if (code === "invalid_input") return { ok: false, status: 400, error: message }
+  return { ok: false, status: 500, error: message }
+}
+
+/**
+ * POST /sessions/:id/subagents/:subagentId/message. The transcript gets ONE compact line in
+ * the user's own words — "↪ to <subagent>: <text>" — tagged with `subagent_id`; the relay
+ * boilerplate a Claude/Cursor parent receives is never logged.
+ */
+async function messageSubagent(id: string, subagentId: string, text: string): Promise<SubagentActionResult> {
+  const s = registry.get(id)
+  if (!s) return { ok: false, status: 404, error: "session not found" }
+  const adapter = sessionManager.adapterFor(s.id)
+  if (!adapter?.messageSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot message subagents` }
+  const known = subagentStore.find(s.id, subagentId)
+  if (known?.messaging === "none") return { ok: false, status: 409, error: "this subagent does not accept messages" }
+  let via: "direct" | "relay"
+  try {
+    ;({ via } = await adapter.messageSubagent(subagentId, text))
+  } catch (err) {
+    return subagentActionError(err)
+  }
+  const label = known?.description || known?.name || subagentId.slice(0, 8)
+  const messageId = `msg-${Date.now()}`
+  try {
+    messageLog.append(s.id, {
+      id: `in:web:${messageId}`, ts: new Date().toISOString(), direction: "inbound", channel: "web", chat_id: "web",
+      message_id: messageId, text: `↪ to ${label}: ${text}`, subagent_id: subagentId,
+    })
+  } catch (err: any) { log.error("subagent_message_append_failed", { session: s.name, err: err?.message ?? String(err) }) }
+  return { ok: true, via }
+}
+
+async function stopSubagent(id: string, subagentId: string): Promise<SubagentActionResult> {
+  const s = registry.get(id)
+  if (!s) return { ok: false, status: 404, error: "session not found" }
+  const adapter = sessionManager.adapterFor(s.id)
+  if (!adapter?.stopSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot stop subagents` }
+  try {
+    await adapter.stopSubagent(subagentId)
+    return { ok: true }
+  } catch (err) {
+    return subagentActionError(err)
+  }
+}
+
 // Wire a codex/cursor adapter's structured events into the agent-agnostic
 // activity timeline + live status. (Claude uses its own transcript/hook path.)
 function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
@@ -1088,6 +1169,13 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       for (const a of ev?.events ?? []) activityStore.append(sessionId, a)
     } catch (err) { log.warn("adapter_activity_append_failed", { err: String(err) }) }
   })
+  adapter.on("subagent", (ev: SubagentEvent) => {
+    try { subagentStore.applyBody(sessionId, ev.body) } catch (err) { log.warn("adapter_subagent_failed", { err: String(err) }) }
+  })
+  adapter.on("subagent-activity", (ev: SubagentActivityEvent) => {
+    try { subagentStore.applyChildActivity(sessionId, ev.subagentId, ev.activity) } catch (err) { log.warn("adapter_subagent_activity_failed", { err: String(err) }) }
+  })
+  adapter.on("task", (ev: TaskEvent) => applyTaskEvent(sessionId, ev))
   adapter.on("turn-start", () => agentStateStore.applyEvent(sessionId, "turn-start"))
   adapter.on("turn-complete", () => {
     agentStateStore.applyEvent(sessionId, "Stop")
@@ -1100,7 +1188,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   // The agent pushed a fresh command/skill list (grok: ACP
   // available_commands_update) — recompute this session's slash commands. The
   // provider reads the adapter's cached list via resolveSession.
-  adapter.on("request-open", (ev: { requestId: string; requestKind: "permission" | "question"; title: string; body: string; options: { id: string; label: string; kind?: string }[]; allowFreeText: boolean; blocking: boolean }) => {
+  adapter.on("request-open", (ev: RequestOpenEvent) => {
     const request = {
       requestId: ev.requestId,
       kind: ev.requestKind,
@@ -1109,6 +1197,9 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       options: ev.options,
       allowFreeText: ev.allowFreeText,
       blocking: ev.blocking,
+      ...(ev.subagentId ? { subagentId: ev.subagentId } : {}),
+      ...(ev.subagentName ? { subagentName: ev.subagentName } : {}),
+      ...(ev.subagentDescription ? { subagentDescription: ev.subagentDescription } : {}),
     }
     webChannel?.broadcastToAll({ type: "request_open", session: sessionId, request })
     const session = registry.get(sessionId)
@@ -1116,7 +1207,8 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     const addressed = parseAddress(destination)
     if (addressed?.channel === "telegram" && telegram) {
       const labels = ev.options.map((o) => o.label)
-      const text = `${session?.name ?? sessionId}: ${ev.title}\n${ev.body}`
+      const asker = ev.subagentId ? ` (subagent ${ev.subagentDescription ?? ev.subagentName ?? ev.subagentId})` : ""
+      const text = `${session?.name ?? sessionId}${asker}: ${ev.title}\n${ev.body}`
       void telegram.send({
         op: "reply",
         chat_id: addressed.chatId,
@@ -1548,15 +1640,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionAgentState: (id) => {
       const s = registry.get(id)
       const st = s ? agentStateStore.get(s.id) : { phase: "idle" as const, since: 0 }
-      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st, bgTaskStore.openCount(s?.id ?? id))
+      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st, bgOpenCount(s?.id ?? id))
       return payload
     },
     getSessionBgTasks: (id) => {
-      // Core-derived background tasks are not yet exposed on the adapter.
-      // Send an empty list (tmux transcript detector retired).
-      void id
-      return []
+      const s = registry.get(id)
+      return s ? bgTaskStore.get(s.id) : []
     },
+    getSessionSubagents: (id) => {
+      const s = registry.get(id)
+      return s ? subagentStore.get(s.id) : []
+    },
+    messageSubagent: (id, subagentId, text) => messageSubagent(id, subagentId, text),
+    stopSubagent: (id, subagentId) => stopSubagent(id, subagentId),
     getSessionCommands: (id) => {
       const s = registry.get(id)
       return s ? commandRegistry.get(s.name) : []
@@ -2478,6 +2574,7 @@ const server = await startSocketServer({
       if (coreAlive) return
       agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
       bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
+      subagentStore.abandonRunning(session_id)  // nor finish its subagents
     }
   },
   // Safety net: a queued inbound that can't reach a live channel shim within the
@@ -2997,10 +3094,21 @@ activityStore.on("append", (sessionId: string, event) => {
 bgTaskStore.on("change", (sessionId: string) => {
   webChannel?.broadcastToAll({ type: "bg_tasks", session: sessionId, tasks: bgTaskStore.get(sessionId) })
   // waiting/bgOpen live on agent_state — re-derive whenever tasks move.
-  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgTaskStore.openCount(sessionId)))
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
+})
+subagentStore.on("change", (sessionId: string, subagent: { background?: boolean }) => {
+  webChannel?.broadcastToAll({ type: "subagent_update", session: sessionId, subagent })
+  // A background subagent starting or finishing moves the "waiting · N background" count.
+  if (subagent.background === true) {
+    webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
+  }
+})
+subagentStore.on("clear", (sessionId: string) => {
+  webChannel?.broadcastToAll({ type: "subagents_cleared", session: sessionId })
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
 })
 agentStateStore.on("change", (sessionId: string, state) => {
-  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state, bgTaskStore.openCount(sessionId)))
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state, bgOpenCount(sessionId)))
   // Deferred model/effort applies drain on the idle transition (the queue and
   // the rollback-on-failure live in the SessionManager). Fire and forget.
   void sessionManager.drainPendingReapply(sessionId, state.phase)

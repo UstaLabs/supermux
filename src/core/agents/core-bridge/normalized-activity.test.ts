@@ -371,3 +371,22 @@ test("parity: real cursor-turn.ndjson tool cards", () => {
   expect(cards.some((c) => c.kind === "tool")).toBe(true)
   expect(cards.some((c) => c.kind === "tool_result")).toBe(true)
 })
+
+test("child rows carry subagentId; parent rows do not", () => {
+  const act = createNormalizedActivity({ workdir: WD })
+  const child = act.handle(envelope("claude", { kind: "tool-call", callId: "c1", tool: "Bash", phase: "started", input: { command: "ls -R" }, subagentId: "a1" }, 1, {}), NOW)
+  const childDone = act.handle(envelope("claude", { kind: "tool-call", callId: "c1", tool: "Bash", phase: "completed", output: "x", subagentId: "a1" }, 2, {}), NOW)
+  const reasoning = act.handle(envelope("claude", { kind: "reasoning", reasoningId: "r", text: "hm", redacted: false, subagentId: "a1" }, 3, {}), NOW)
+  const parent = act.handle(envelope("claude", { kind: "tool-call", callId: "p1", tool: "Agent", phase: "started", input: { description: "d" } }, 4, {}), NOW)
+  expect(child.map((c) => c.subagentId)).toEqual(["a1"])
+  expect(child[0]!.callId).toBe("c1")
+  expect(childDone.map((c) => c.subagentId)).toEqual(["a1"])
+  expect(reasoning.map((c) => c.subagentId)).toEqual(["a1"])
+  expect(parent).toHaveLength(1)
+  expect("subagentId" in parent[0]!).toBe(false)
+})
+
+test("subagent lifecycle bodies produce no activity rows", () => {
+  const act = createNormalizedActivity({ workdir: WD })
+  expect(act.handle(envelope("claude", { kind: "subagent", subagentId: "a1", phase: "started" }, 1, {}), NOW)).toEqual([])
+})

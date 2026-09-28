@@ -761,6 +761,11 @@ fun TimelineItemRow(
                 ActivityKindCard(item.event)
             }
         }
+        // Until the subagent card lands (S3), a subagent shows as its spawning tool row; its own
+        // rows stay out of the parent's stream.
+        is TimelineItem.SubagentCard -> item.spawn?.let {
+            TimelineItemRow(it, loadBytes, onOpenFile, highDetail, onOpenWalkthrough)
+        }
     }
 }
 

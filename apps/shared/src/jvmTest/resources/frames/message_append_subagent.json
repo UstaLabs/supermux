@@ -1,0 +1,14 @@
+{
+  "type": "message_append",
+  "session": "550e8400-e29b-41d4-a716-446655440000",
+  "entry": {
+    "id": "in:web:msg-1790589620000",
+    "ts": "2026-09-28T10:00:20.000Z",
+    "direction": "inbound",
+    "channel": "web",
+    "chat_id": "web",
+    "message_id": "msg-1790589620000",
+    "text": "↪ to Inspect work dir: Now also read notes.txt",
+    "subagent_id": "af3c70a348a6a6b7a"
+  }
+}
