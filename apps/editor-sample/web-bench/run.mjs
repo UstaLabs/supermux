@@ -235,6 +235,38 @@ try {
       const mod = process.platform === 'darwin' ? 4 : 2;
       await insertedAtCaret('Mod-V pastes the clipboard', () => key('v', 'KeyV', 86, mod, ['paste']), 'CLIP');
       if (!wrote) console.log('  (clipboard write was refused: the Mod-V check depends on it)');
+      // A caret move while the TEXTAREA's value is AHEAD of the editor (an edit Compose has not
+      // processed yet) is held back, but only until the editor caught up or ~100 ms: then it is
+      // applied once. Here the value never catches up (a character only the DOM has), so only the
+      // time limit can let the user's caret through.
+      const findTa = `const roots = [document]; for (let i = 0; i < roots.length; i++) for (const el of roots[i].querySelectorAll('*')) if (el.shadowRoot) roots.push(el.shadowRoot);
+        let t = null; for (const r of roots) t = t || r.querySelector('textarea'); const proto = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');`;
+      const caretMovedTo = async (name, prepare, cleanup) => {
+        const [, h0] = await sel();
+        const moved = JSON.parse(await page.value(`(() => { ${findTa} ${prepare}
+          const c = t.selectionStart; const k = Math.max(0, c - 3); window.__keep = { value: t.value, k };
+          proto.set.call(t, t.value + 'Z'); t.setSelectionRange(k, k); return JSON.stringify({ c, k }); })()`));
+        await sleep(400);
+        const [, h1] = await sel();
+        await page.value(`(() => { ${findTa} proto.set.call(t, window.__keep.value); t.setSelectionRange(window.__keep.k, window.__keep.k); ${cleanup} return true; })()`);
+        await sleep(200);
+        const expected = h0 - (moved.c - moved.k);
+        check(name, h1 === expected, `editor caret ${h0} -> ${h1}, expected ${expected} (textarea ${moved.c} -> ${moved.k})`);
+      };
+      await caretMovedTo('a caret moved while the TEXTAREA is ahead is applied within ~100 ms', '', '');
+      // A compositionend that never came (the focus left mid-composition) must not leave caret
+      // moves ignored: the blur ends the editor's "composing".
+      await page.value(`(() => { ${findTa} t.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, composed: true, data: '' })); t.blur(); return true; })()`);
+      await sleep(200);
+      for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await page.send('Input.dispatchMouseEvent', { type, x: 300, y: 160, button: 'left', clickCount: 1 });
+      await sleep(500);
+      {
+        const [, h0] = await sel();
+        const moved = JSON.parse(await page.value(`(() => { ${findTa} const c = t.selectionStart; const k = Math.max(0, c - 2); t.setSelectionRange(k, k); return JSON.stringify({ c, k }); })()`));
+        await sleep(300);
+        const [, h1] = await sel();
+        check('after a composition that never ended and a blur, caret moves are followed again', h1 === h0 - (moved.c - moved.k), `editor caret ${h0} -> ${h1} (textarea ${moved.c} -> ${moved.k})`);
+      }
       await page.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 300, y: 200 }] });
       await sleep(50);
       await page.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });

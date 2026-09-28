@@ -75,7 +75,18 @@ what the events below need, and they are mapped when they become the top; rememb
 are mapped only when read. The carried mappings are a SEQUENCE, applied one after another and each
 judged by the drop rule as when it arrived (composing them first changed how insertion ties at one
 position resolve, and two adjacent remote deletions composed into one wide "rewrite"); past 64
-pending mappings they are composed (bounded memory; ties may then resolve differently). A
+pending mappings they are composed (bounded memory; ties may then resolve differently).
+**How a capped, merged mapping is judged:** the composed change counts as ONE remote change (remote
+if any of its parts was), and the drop rule looks at ITS deletions: two adjacent deletions merge
+into one wide deletion (which can now cover a step "well inside" it, a drop the parts one by one
+would not have made), and a deletion followed by an insertion at the same place is one rewrite. So
+past the cap a step can be dropped (or kept) where mapping change by change would have kept (or
+dropped) it; it never throws and an undo always applies to the current document. That only
+happens under a step nobody undid through 64 or more foreign transactions (an agent streaming).
+`HistoryModelTest.aLongAgentHeavyRunPastTheMappingCapNeverBreaks` runs 40 × 400 operations, 85 %
+agent edits: no exception, every undo/redo round-trips, and it prints how many runs diverged from
+the eager model (0 of 40 on its seed; an exact comparison on another seed did diverge, once, on
+whether an undo was still available). A
 randomized test (`HistoryModelTest`, 3,000 cases: local typing, deletions, undo and redo interleaved
 with agent inserts, deletions and rewrites) checks the lazy history against an eager model after
 every step: same document, nothing thrown. An agent streaming edits costs about 0.006 ms per transaction with 100

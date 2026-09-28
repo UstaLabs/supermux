@@ -53,9 +53,13 @@ internal actual fun installFastTyping(view: EditorView, controller: EditorContro
     }
 }
 
-/** This editor's TEXTAREA is composing, or holds text other than [text] (the field has not caught up). */
+/**
+ * This editor's TEXTAREA is composing, or holds text other than [text] (the field has not caught
+ * up). Except right after a held caret move was released on its time limit (`st.trustCaret`): that
+ * one caret report is the user's and is followed once.
+ */
 private fun domAhead(st: JsAny, text: String): Boolean = js(
-    "(() => { const t = st.ta; if (!t || !t.isConnected || t.__editorState !== st) return false; return st.composing || t.value !== text; })()"
+    "(() => { const t = st.ta; if (!t || !t.isConnected || t.__editorState !== st) return false; if (st.trustCaret) { st.trustCaret = false; return false; } return st.composing || t.value !== text; })()"
 )
 
 /** The key-down is aimed at Compose's own text input: the TEXTAREA in the canvas's shadow root. */
@@ -81,7 +85,7 @@ private fun maxTouchPoints(): Int = js("(navigator.maxTouchPoints || 0)")
 private fun newWebInputState(): JsAny = js(
     """(() => {
       const proto = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
-      const st = { ta: null, field: null, composing: false, label: '', lastPointer: '' };
+      const st = { ta: null, field: null, composing: false, trustCaret: false, label: '', lastPointer: '' };
       st.deepActive = () => {
         let a = document.activeElement;
         while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
@@ -92,7 +96,7 @@ private fun newWebInputState(): JsAny = js(
         const a = st.deepActive();
         if (a && a.tagName === 'TEXTAREA') {
           const root = a.getRootNode();
-          if (root && root.querySelector && root.querySelector('canvas')) st.ta = a;
+          if (root && root.querySelector && root.querySelector('canvas')) { if (st.ta !== a) st.composing = false; st.ta = a; }
         }
         const ta = st.ta && st.ta.isConnected ? st.ta : null;
         if (!ta) return null;
@@ -182,14 +186,49 @@ private fun installListeners(st: JsAny, onKey: (JsAny) -> Int, onCopy: (Boolean)
       // "IME composition lands at the caret", about 1 run in 30, a real IME the same). While the
       // TEXTAREA's value is ahead of the field Compose reported, the caret move is stale: Compose
       // never sees it, applies the edit at its own caret, and the caret is synced from that.
+      // Held only until the editor has caught up (the TEXTAREA's value is the field's text again) or
+      // for HOLD_MS at most: then the TEXTAREA's caret, read again, is handed to Compose ONCE (a
+      // synthetic selectionchange), so a caret the user moved meanwhile is never lost for good.
       const selChange = () => {
         const ta = st.ta;
         if (!ta || !ta.isConnected || ta.__editorState !== st || st.deepActive() !== ta) return false;
         return ta.value !== fieldText();
       };
-      const onSelChange = (e) => { if (selChange()) e.stopImmediatePropagation(); };
+      const HOLD_MS = 100;
+      let heldSince = 0, releasing = false, timer = 0;
+      const release = () => {
+        if (!heldSince) return;
+        heldSince = 0;
+        if (timer) { clearTimeout(timer); timer = 0; }
+        const ta = st.ta;
+        if (!ta || !ta.isConnected || ta.__editorState !== st) return;
+        // Still ahead (the time limit): the editor must follow this one caret report anyway.
+        if (ta.value !== fieldText()) st.trustCaret = true;
+        releasing = true;
+        try { document.dispatchEvent(new Event('selectionchange')); } finally { releasing = false; }
+      };
+      const watch = () => {
+        if (!heldSince) return;
+        if (!selChange() || performance.now() - heldSince >= HOLD_MS) release();
+        else requestAnimationFrame(watch);
+      };
+      const onSelChange = (e) => {
+        if (releasing) return;
+        if (!selChange()) { heldSince = 0; if (timer) { clearTimeout(timer); timer = 0; } return; }
+        if (!heldSince) {
+          heldSince = performance.now();
+          requestAnimationFrame(watch);
+          // rAF can be throttled (a background tab): the time limit holds anyway.
+          timer = setTimeout(() => { timer = 0; release(); }, HOLD_MS);
+        } else if (performance.now() - heldSince >= HOLD_MS) { release(); return; }
+        e.stopImmediatePropagation();
+      };
       window.addEventListener('selectionchange', onSelChange, true);
       const cend = (e) => { if (st.isMine(e)) st.composing = false; };
+      // A compositionend that never came (the focus moved mid-composition) must not leave the
+      // editor "composing", which ignores the field's caret moves: a blur of its TEXTAREA ends it.
+      const blur = (e) => { if (st.isMine(e)) st.composing = false; };
+      window.addEventListener('focusout', blur, true);
       window.addEventListener('compositionstart', cstart, true);
       window.addEventListener('compositionend', cend, true);
       window.addEventListener('beforeinput', beforeInput, true);
@@ -199,7 +238,7 @@ private fun installListeners(st: JsAny, onKey: (JsAny) -> Int, onCopy: (Boolean)
       window.addEventListener('copy', onCopyEvent, true);
       window.addEventListener('cut', onCutEvent, true);
       window.addEventListener('paste', paste, true);
-      return { key, pointer, onCopyEvent, onCutEvent, paste, cstart, cend, beforeInput, refocus, onSelChange };
+      return { key, pointer, onCopyEvent, onCutEvent, paste, cstart, cend, beforeInput, refocus, onSelChange, blur, stop: () => { heldSince = 0; if (timer) clearTimeout(timer); } };
     })()"""
 )
 
@@ -210,7 +249,7 @@ private fun removeListeners(h: JsAny) {
          window.removeEventListener('paste', h.paste, true);
          window.removeEventListener('compositionstart', h.cstart, true); window.removeEventListener('compositionend', h.cend, true);
          window.removeEventListener('beforeinput', h.beforeInput, true); window.removeEventListener('pointerup', h.refocus, true);
-         window.removeEventListener('selectionchange', h.onSelChange, true); }"""
+         window.removeEventListener('selectionchange', h.onSelChange, true); window.removeEventListener('focusout', h.blur, true); h.stop(); }"""
     )
 }
 

@@ -422,7 +422,14 @@ the TEXTAREA gets the focus back after a mouse press (the press focuses the canv
 editor's selection back (Compose sets the selection only when its numbers changed, while setting
 `value` moves the DOM caret to the end, so IME text landed at the window's end). `beforeinput` reads
 the DOM selection before anything else and never resyncs for `insertReplacementText` (the
-autocorrect's own replacement). Composition stays Compose's.
+autocorrect's own replacement). Composition stays Compose's. After an IME edit the browser moves
+the TEXTAREA's caret before Compose has processed the edit, and Compose would apply that caret
+over the old text: a `selectionchange` is therefore HELD while the TEXTAREA's value is ahead of the
+field Compose reported, but only until the editor has caught up or for 100 ms at most; then the
+TEXTAREA's caret is read again and handed to Compose once (a caret the user moved meanwhile is
+never lost). A composition whose `compositionend` never came (the focus moved mid-composition)
+ends with the TEXTAREA's blur, so caret moves are never ignored for good (`webInputTest` covers
+both).
 All of this state is **per editor** (`newWebInputState()`, kept in `EditorController.platformInput`):
 each editor binds to the TEXTAREA of its own input session when it takes the focus, and every
 listener (input, copy/cut/paste, the refocus, which runs only for presses on the canvas) acts only on
