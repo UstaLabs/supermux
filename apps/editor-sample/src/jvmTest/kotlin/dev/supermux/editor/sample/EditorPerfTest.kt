@@ -163,13 +163,13 @@ class EditorPerfTest {
 
     @Test fun aKeystrokeInTheMiddleOfTenThousandLinesPaintsWithin16ms() {
         val (key, settle) = typeThroughTheField(SampleFiles.tenK(kotlin), "kotlin", 5000, 8, "10k lines, syntax on")
-        assertTrue(key <= 16.0, "keystroke -> frame p95 $key ms > 16 ms")
-        assertTrue(settle <= 16.0, "syntax settle frame p95 $settle ms > 16 ms")
+        assertBudget(key, 16.0, "keystroke -> frame p95")
+        assertBudget(settle, 16.0, "syntax settle frame p95")
     }
 
     @Test fun aKeystrokeOnAOneMegabyteLinePaintsWithin16ms() {
         val (key, _) = typeThroughTheField("x".repeat(1_000_000), "kotlin", 0, 500_000, "a 1 MB single line")
-        assertTrue(key <= 16.0, "keystroke -> frame p95 $key ms > 16 ms on a 1 MB line")
+        assertBudget(key, 16.0, "keystroke -> frame p95 on a 1 MB line")
     }
 
     @Test fun continuousScrollingThroughTenThousandLinesKeepsFramesWithin16ms() {
@@ -195,7 +195,7 @@ class EditorPerfTest {
         }
         val best = runs.min()
         println("PERF scroll frame p95, best of 3: ${fmt(best)} ms (runs ${runs.map(::fmt)})")
-        assertTrue(best <= 16.0, "scroll frame p95 $best ms > 16 ms")
+        assertBudget(best, 16.0, "scroll frame p95")
     }
 
     @Test fun aTenMegabyteFileOpensWithinASecond() {
@@ -215,6 +215,6 @@ class EditorPerfTest {
         }
         val best = runs.min()
         println("PERF 10 MB open, best of 3: ${fmt(best)} ms")
-        assertTrue(best < 1000.0, "10 MB open took $best ms")
+        assertBudget(best, 1000.0, "10 MB open")
     }
 }

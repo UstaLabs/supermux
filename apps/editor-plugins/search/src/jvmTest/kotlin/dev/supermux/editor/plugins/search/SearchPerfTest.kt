@@ -34,9 +34,9 @@ class SearchPerfTest {
         val exact = wraps(SearchQuery("NEEDLE", caseSensitive = true))
         val word = wraps(SearchQuery("needle", wholeWord = true))
         println("SEARCH-PERF 10 MB literal wrap: ignore case ${"%.1f".format(ignoreCase)} ms, match case ${"%.1f".format(exact)} ms, whole word ${"%.1f".format(word)} ms")
-        assertTrue(ignoreCase < 50, "ignore case: $ignoreCase ms")
-        assertTrue(exact < 50, "match case: $exact ms")
-        assertTrue(word < 50, "whole word: $word ms")
+        assertBudget(ignoreCase.toDouble(), 50.0, "ignore case")
+        assertBudget(exact.toDouble(), 50.0, "match case")
+        assertBudget(word.toDouble(), 50.0, "whole word")
     }
 
     @Test fun regexNextMatchWrapsTenMegabytes() {
@@ -44,8 +44,8 @@ class SearchPerfTest {
         val regex = wraps(SearchQuery("NEED+LE", regexp = true))
         val multi = wraps(SearchQuery("NEED+LE\\s", regexp = true))
         println("SEARCH-PERF 10 MB regex wrap: per line ${"%.1f".format(regex)} ms, multi-line ${"%.1f".format(multi)} ms")
-        assertTrue(regex < 250, "regex: $regex ms")
-        assertTrue(multi < 250, "multi-line regex: $multi ms")
+        assertBudget(regex.toDouble(), 250.0, "regex")
+        assertBudget(multi.toDouble(), 250.0, "multi-line regex")
     }
 
     @Test fun countingTenMegabytesStopsAtTheCap() {
@@ -54,7 +54,7 @@ class SearchPerfTest {
         val ms = best { SearchQuery("val").count(doc) }
         val none = best { SearchQuery("absent").count(doc) }
         println("SEARCH-PERF 10 MB count: capped ${"%.1f".format(ms)} ms, no match ${"%.1f".format(none)} ms")
-        assertTrue(none < 50, "a full count: $none ms")
+        assertBudget(none.toDouble(), 50.0, "a full count")
     }
 
     @Test fun marksOnATenMegabyteLineCostWhatTheViewportShows() {
@@ -74,7 +74,7 @@ class SearchPerfTest {
             val ms = best { Search.marks(st) }
             assertTrue(Search.marks(st).size > 0, "marks for $q")
             out += "${q.search} ${"%.2f".format(ms)} ms"
-            assertTrue(ms < 2.0, "${q.search}: $ms ms")
+            assertBudget(ms.toDouble(), 2.0, "${q.search}")
         }
         println("SEARCH-PERF marks on a 10 MB line: " + out.joinToString(", "))
     }

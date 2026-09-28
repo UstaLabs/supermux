@@ -56,11 +56,13 @@ import dev.supermux.editor.core.decorationsFacet
 import dev.supermux.editor.compose.EditorThemeMode
 import dev.supermux.editor.plugins.diff.Diff
 import dev.supermux.editor.plugins.diff.DiffConfig
+import dev.supermux.editor.plugins.diff.DiffPage
 import dev.supermux.editor.plugins.diff.DiffPair
 import dev.supermux.editor.plugins.diff.Review
 import dev.supermux.editor.plugins.diff.ReviewComposer
 import dev.supermux.editor.plugins.diff.SideBySideDiff
 import dev.supermux.editor.plugins.diff.inlineDiff
+import dev.supermux.editor.plugins.diff.diffPaging
 import dev.supermux.editor.plugins.diff.rememberDiffWidgets
 import dev.supermux.editor.plugins.diff.review
 import dev.supermux.editor.plugins.fold.Fold
@@ -172,26 +174,33 @@ fun SampleApp(
                 SampleFile.DEMO -> M3cDemo.extension { demoNote = it }
                 // The walkthrough: the working copy against the file, one column, read-only, today's 20 lines of context.
                 SampleFile.WALKTHROUGH -> dev.supermux.editor.core.extensionOf(
-                    inlineDiff(text, DiffConfig(editable = false, context = 20)),
+                    inlineDiff(text, walkthroughConfig(0)),
                     review(reviewHost),
                 )
                 else -> lsp?.extension ?: dev.supermux.editor.core.extensionOf()
             }
             val shown = if (f == SampleFile.WALKTHROUGH) fakeWorkingCopy(text) else text
-            SampleSession(shown, f.language, backend!!, registry, scope, extra, settingsNow(), deleteFoldWhole, withHistory = f != SampleFile.SIDE_BY_SIDE) { run -> scope.launch { run() } }
+            SampleSession(shown, f.language, backend!!, registry, scope, extra, settingsNow(), deleteFoldWhole, withHistory = f != SampleFile.SIDE_BY_SIDE)
         }
     }
     // The host's data goes in AFTER the composition (a dispatch from inside remember{} races the
     // syntax worker's dispatches, and the composition's write loses).
     if (session != null && loaded?.first == SampleFile.WALKTHROUGH) LaunchedEffect(session) {
         reviewHost!!.view = session.view
+        // Paging (the chips, a sideways trackpad swipe): the other step, its range, a new slice.
+        var step = 0
+        val text = loaded!!.second
+        reviewHost.onPage = { dir ->
+            step = (step + if (dir == DiffPage.NEXT) 1 else -1).mod(SampleReviewHost.DEMO_STEPS.size)
+            Diff.load(session.view, text, fakeWorkingCopy(text), walkthroughConfig(step))
+        }
         // The composer a walkthrough step opens with (the host's kept draft; it does not take the focus).
-        Review.setComposer(session.view, ReviewComposer(40, "A draft the host kept for this line", focus = false))
+        Review.setComposer(session.view, ReviewComposer(98, "A draft the host kept for this line", focus = false))
     }
     val lspWidgets = remember(lsp) { lsp?.let { l -> dev.supermux.editor.compose.WidgetRegistry().also { l.registerWidgets(it) } } }
     // The side-by-side demo's working copy (B): the same file with a few edits, the diff plugin's pair with A.
     val sessionB = loaded?.takeIf { it.first == SampleFile.SIDE_BY_SIDE }?.let { (f, text) ->
-        remember(f, text, backend) { SampleSession(fakeWorkingCopy(text), f.language, backend!!, registry, scope, review(reviewHost), settingsNow(), deleteFoldWhole) { run -> scope.launch { run() } } }
+        remember(f, text, backend) { SampleSession(fakeWorkingCopy(text), f.language, backend!!, registry, scope, review(reviewHost), settingsNow(), deleteFoldWhole) }
     }
     if (sessionB != null) DisposableEffect(sessionB) { onDispose { sessionB.close() } }
     // The pair sets both views up by dispatching: after the composition, like the host's data.
@@ -291,7 +300,7 @@ fun SampleApp(
                 session == null -> Message("loading…", ink)
                 sessionB != null -> pair?.let { p -> SideBySideDiff(p, Modifier.fillMaxSize(), theme = theme, widgets = rememberSearchWidgets(rememberDiffWidgets()), lineWrap = wrap,
                     onFontSize = { fontSize = it }, onPaint = { stats.drawEnd() }) } ?: Message("loading…", ink)
-                file == SampleFile.WALKTHROUGH -> SampleEditorPane(session, theme, wrap, stats, readOnly = true, onFontSize = zoomReport, widgets = rememberDiffWidgets())
+                file == SampleFile.WALKTHROUGH -> SampleEditorPane(session, theme, wrap, stats, modifier = Modifier.fillMaxSize().diffPaging(session.view), readOnly = true, onFontSize = zoomReport, widgets = rememberDiffWidgets())
                 file == SampleFile.DEMO -> SampleEditorPane(session, theme, wrap, stats, readOnly = readOnly, onFontSize = zoomReport, widgets = M3cDemo.rememberWidgets(ink, chrome))
                 else -> SampleEditorPane(session, theme, wrap, stats, readOnly = readOnly, onFontSize = zoomReport, widgets = lspWidgets)
             }
@@ -349,12 +358,16 @@ fun SampleApp(
     }
 }
 
+/** The walkthrough demo's step [i]: read-only, today's 20 lines of context around the step's lines. */
+private fun walkthroughConfig(i: Int) = DiffConfig(editable = false, context = 20, range = SampleReviewHost.DEMO_STEPS[i])
+
 /** The diff's commands as chips, for phones (no F7 there): the plugin's own commands, as the keys run them. */
 @Composable
 private fun DiffChips(view: dev.supermux.editor.compose.EditorView, editable: Boolean, ink: Color) {
     Chip("prev change", false, ink) { Diff.prevHunk.run(view) }
     Chip("next change", false, ink) { Diff.nextHunk.run(view) }
     if (editable) Chip("revert change", false, ink) { Diff.revertHunk.run(view) }
+    else { Chip("prev step", false, ink) { Diff.pagePrevious.run(view) }; Chip("next step", false, ink) { Diff.pageNext.run(view) } }
     Chip("comment", false, ink) { Review.comment.run(view) }
 }
 

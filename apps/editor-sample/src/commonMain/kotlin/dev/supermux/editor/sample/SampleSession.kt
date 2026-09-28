@@ -139,7 +139,8 @@ class SampleSession(
     deleteFoldWhole: Boolean = false,
     /** False for a diff's read-only base (DiffPair: the base keeps no undo stack). */
     withHistory: Boolean = true,
-    hop: (() -> Unit) -> Unit,
+    /** Where the worker's results run: null = SyntaxHost's own rule (the scope's UI dispatcher). */
+    hop: ((() -> Unit) -> Unit)? = null,
 ) : AutoCloseable {
     val view = EditorView(EditorState.create(text, extensions = extensionOf(
         highlight(language), basics(), if (withHistory) history() else extensionOf(), foldSlot.of(fold(FoldConfig(deleteFoldWhole))), viewSettings(settings), search(), extra,

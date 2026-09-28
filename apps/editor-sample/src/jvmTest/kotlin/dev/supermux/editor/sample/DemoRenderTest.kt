@@ -69,7 +69,7 @@ class DemoRenderTest {
         }
         val p95 = times.drop(10).sorted().let { it[it.size * 95 / 100] }
         println("PERF demo scroll (markers, fold arrows, a thread widget): frame p95 ${"%.2f".format(p95)} ms over ${times.size} frames")
-        assertTrue(p95 <= 16.0, "demo scroll frame p95 $p95 ms")
+        assertBudget(p95, 16.0, "demo scroll frame p95")
     }
 
     @Test fun theSideBySideDemoRendersAndScrollsWithinBudget() {
@@ -91,7 +91,7 @@ class DemoRenderTest {
         }
         val p95 = times.drop(10).sorted().let { it[it.size * 95 / 100] }
         println("PERF side-by-side scroll (the diff plugin's DiffPair: two linked editors, tints, folded runs, a thread): frame p95 ${"%.2f".format(p95)} ms over ${times.size} frames")
-        assertTrue(p95 <= 16.0, "side-by-side scroll frame p95 $p95 ms")
+        assertBudget(p95, 16.0, "side-by-side scroll frame p95")
     }
 
     /** The sample's side-by-side pane: the diff plugin's pair of A and B, with a review thread on B. */

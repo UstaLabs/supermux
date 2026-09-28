@@ -7,6 +7,7 @@ import dev.supermux.editor.compose.EditorView
 import dev.supermux.editor.plugins.diff.Diff
 import dev.supermux.editor.plugins.diff.DiffHost
 import dev.supermux.editor.plugins.diff.DiffHunk
+import dev.supermux.editor.plugins.diff.DiffPage
 import dev.supermux.editor.plugins.diff.Review
 import dev.supermux.editor.plugins.diff.ReviewComment
 import dev.supermux.editor.plugins.diff.ReviewComposer
@@ -65,7 +66,15 @@ class SampleReviewHost(initial: List<ReviewThread> = emptyList()) : DiffHost {
 
     override fun onRevert(hunk: DiffHunk) { note = "reverted the change at line ${hunk.bFrom + 1}" }
 
+    /** The walkthrough's step paging (the sample's two demo steps; M5's host pages its real ones). */
+    var onPage: (DiffPage) -> Unit = {}
+
+    override fun onDiffPage(direction: DiffPage) { note = "page ${direction.name.lowercase()}"; onPage(direction) }
+
     companion object {
+        /** The walkthrough's two steps (0-based working-copy lines): the inserted run, the changed run. */
+        val DEMO_STEPS: List<IntRange> = listOf(96..98, 148..151)
+
         /** The walkthrough's two threads, on the demo's inserted and changed runs (fakeWorkingCopy). */
         fun demoThreads(): List<ReviewThread> = listOf(
             ReviewThread("w1", 96, comments = listOf(
