@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { execFileSync } from "child_process"
-import { fuzzyMatch, SearchIndexes } from "./search-index"
+import { fuzzyMatch, rankPaths, SearchIndexes } from "./search-index"
 import { RepoInfoCache } from "./repo-info"
 
 test("fuzzyMatch prefers the file name, consecutive runs and word starts", () => {
@@ -130,4 +130,42 @@ test("evicting an idle scope also forgets its invalidation epoch", async () => {
   now += 11 * 60_000
   await idx.query(b, "x", 10)
   expect((idx as unknown as { epoch: Map<string, number> }).epoch.has(a)).toBe(false)
+})
+
+/** The previous implementation: score everything, sort all hits, slice. */
+function rankAllThenSort(scope: string, rels: Array<{ rel: string; dir: boolean }>, q: string, limit: number) {
+  const offset = scope.length + 1
+  const scored = []
+  for (const { rel, dir } of rels) {
+    const m = fuzzyMatch(q, rel)
+    if (!m) continue
+    scored.push({ path: `${scope}/${rel}`, name: rel.slice(rel.lastIndexOf("/") + 1), type: dir ? "dir" : "file", score: m.score, hits: m.hits.map((i) => i + offset) })
+  }
+  scored.sort((x, y) => y.score - x.score || x.path.length - y.path.length || (x.path < y.path ? -1 : 1))
+  return scored.slice(0, Math.max(1, Math.min(limit, 200)))
+}
+
+test("rankPaths keeps a bounded top-K that equals the old score-all-then-sort result", async () => {
+  const rels = [
+    "src/FileTree.kt", "src/tree/Tree.kt", "src/tree/TreeNode.kt", "docs/tree.md", "src", "src/tree",
+    "app/src/main/FileTreeView.kt", "ft.txt", "a/b/c/f/t.kt", "src/tree/ftree.kt", "src/tree/FTree.kt",
+  ].map((rel) => ({ rel, dir: !rel.includes(".") }))
+  for (const q of ["ft", "tree", "src", "t"]) {
+    for (const limit of [1, 3, 50]) {
+      expect(await rankPaths("/r", rels, q, limit)).toEqual(rankAllThenSort("/r", rels, q, limit) as any)
+    }
+  }
+})
+
+test("a 200k-path query yields to the event loop while it scores, and caps limit at 200", async () => {
+  const rels = Array.from({ length: 200_000 }, (_, i) => ({ rel: `pkg${i % 97}/module${i}/File${i}.kt`, dir: false }))
+  let fired = false
+  let resolved = false
+  const timer = setTimeout(() => { fired = true; expect(resolved).toBe(false) }, 0)
+  const hits = await rankPaths("/big", rels, "file", 500)
+  resolved = true
+  clearTimeout(timer)
+  expect(fired).toBe(true)
+  expect(hits.length).toBe(200)
+  for (let i = 1; i < hits.length; i++) expect(hits[i - 1]!.score).toBeGreaterThanOrEqual(hits[i]!.score)
 })

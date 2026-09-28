@@ -60,6 +60,49 @@ export function fuzzyMatch(q: string, s: string): { score: number; hits: number[
   return best
 }
 
+/** Paths scored between two yields to the event loop: a 200k-path scope never blocks the broker. */
+const YIELD_EVERY = 5_000
+export const MAX_SEARCH_LIMIT = 200
+
+interface Ranked { rel: string; dir: boolean; score: number; hits: number[] }
+
+/** Better first: higher score, then shorter path, then lexical (paths share the scope prefix, so rel decides). */
+const better = (x: Ranked, y: Ranked) => y.score - x.score || x.rel.length - y.rel.length || (x.rel < y.rel ? -1 : x.rel > y.rel ? 1 : 0)
+
+/**
+ * Top `limit` fuzzy matches of `q` among `rels` under `scope`. Scores in chunks, yielding to the event loop
+ * every few thousand paths, and keeps only a bounded sorted top-K instead of collecting and sorting every hit.
+ */
+export async function rankPaths(scope: string, rels: ReadonlyArray<{ rel: string; dir: boolean }>, q: string, limit: number): Promise<SearchHit[]> {
+  if (!q || !q.trim()) return []
+  const k = Math.max(1, Math.min(limit, MAX_SEARCH_LIMIT))
+  const top: Ranked[] = [] // sorted, best first, length <= k
+  for (let i = 0; i < rels.length; i++) {
+    if (i > 0 && i % YIELD_EVERY === 0) await new Promise<void>((r) => setImmediate(r))
+    const { rel, dir } = rels[i]!
+    const m = fuzzyMatch(q, rel)
+    if (!m) continue
+    const cand: Ranked = { rel, dir, score: m.score, hits: m.hits }
+    if (top.length === k && better(cand, top[k - 1]!) >= 0) continue
+    let lo = 0, hi = top.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (better(top[mid]!, cand) <= 0) lo = mid + 1
+      else hi = mid
+    }
+    top.splice(lo, 0, cand)
+    if (top.length > k) top.pop()
+  }
+  const offset = scope === "/" ? 1 : scope.length + 1
+  return top.map(({ rel, dir, score, hits }) => ({
+    path: scope === "/" ? `/${rel}` : `${scope}/${rel}`,
+    name: rel.slice(rel.lastIndexOf("/") + 1),
+    type: dir ? "dir" : "file",
+    score,
+    hits: hits.map((i) => i + offset),
+  }))
+}
+
 interface Built { scope: string; rels: Array<{ rel: string; dir: boolean }>; builtAt: number; lastUsed: number }
 
 async function walk(scope: string): Promise<Array<{ rel: string; dir: boolean }>> {
@@ -153,21 +196,7 @@ export class SearchIndexes {
   async query(scope: string, q: string, limit: number): Promise<SearchHit[]> {
     if (!q || !q.trim()) return []
     const b = await this.get(scope)
-    const offset = scope === "/" ? 1 : scope.length + 1
-    const scored: SearchHit[] = []
-    for (const { rel, dir } of b.rels) {
-      const m = fuzzyMatch(q, rel)
-      if (!m) continue
-      scored.push({
-        path: scope === "/" ? `/${rel}` : `${scope}/${rel}`,
-        name: rel.slice(rel.lastIndexOf("/") + 1),
-        type: dir ? "dir" : "file",
-        score: m.score,
-        hits: m.hits.map((i) => i + offset),
-      })
-    }
-    scored.sort((x, y) => y.score - x.score || x.path.length - y.path.length || (x.path < y.path ? -1 : 1))
-    return scored.slice(0, Math.max(1, Math.min(limit, 200)))
+    return rankPaths(scope, b.rels, q, limit)
   }
 
   /** Drop a scope's index (tests, or after a burst of changes). */
