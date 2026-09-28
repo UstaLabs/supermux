@@ -90,6 +90,13 @@ class NativeDocument internal constructor(
             return dirty
         }
 
+    /**
+     * Registers the LSP client's widgets (hover, signature, rename, references) in a pane's
+     * registry, once a client serves this document (M5 A4); null before.
+     */
+    var lspWidgets: ((dev.supermux.editor.compose.WidgetRegistry) -> Unit)? by mutableStateOf(null)
+        internal set
+
     /** True once [dispose]d (the document closed). */
     var disposed: Boolean = false
         private set
@@ -116,15 +123,15 @@ class NativeDocument internal constructor(
      */
     fun acquire(): EditorView {
         check(!disposed) { "${document.path}: the document was closed" }
-        start()
         if (!primaryBorrowed) {
             primaryBorrowed = true
             return primary
         }
+        // A mirror's plugins run while its pane's Editor shows it (the Editor starts them); only the
+        // primary's must outlive the pane ([start]).
         val view = EditorView(EditorState.create(primary.state.doc.toString(), extensions = extensions(withLsp = false)))
-        lateinit var m: Mirror
         val remove = view.addListener { tr -> if (tr.docChanged) mirror(view, tr) }
-        m = Mirror(view, remove, view.startPlugins(env.scope), null)
+        val m = Mirror(view, remove, null, null)
         mirrors += m
         withBackend { b -> if (m in mirrors && m.syntax == null) m.syntax = syntaxHost(view, b) }
         return view

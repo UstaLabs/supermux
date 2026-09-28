@@ -1428,14 +1428,15 @@ internal class EditorController(
         composition = null
     }
 
-    /** The least scrolling that shows the main cursor with a margin (a line, four cells). */
-    override fun scrollIntoView(pos: Int?) {
+    /** The least scrolling that shows the main cursor with a margin (a line, four cells); [center]: its line in the middle. */
+    override fun scrollIntoView(pos: Int?, center: Boolean) {
         if (viewportSize.height <= 0f) return
         val r = geometry.rectFor(pos ?: view.state.selection.main.head)
         val lh = layouts.lineHeightPx
         val my = minOf(lh, viewportSize.height / 4)
         var y = scroll.y
-        if (r.top - my < y) y = r.top - my
+        if (center) y = ((r.top + r.bottom) / 2 - viewportSize.height / 2).coerceAtLeast(0f)
+        else if (r.top - my < y) y = r.top - my
         else if (r.bottom + my > y + viewportSize.height) y = r.bottom + my - viewportSize.height
         var x = scroll.x
         if (!lineWrap) {

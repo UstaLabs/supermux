@@ -221,6 +221,9 @@ fun FilePane(
     // path still issue ONE fsRead.
     LaunchedEffect(path) { documents.open(path) }
     val doc = documents.get(path)
+    // The owner (the workspace) gives its store native views on ITS scope; a store nobody equipped
+    // gets them on this pane's (they then live as long as the pane).
+    val nativeEditor = rememberNativeDocuments(documents)
 
     val reader = remember { EditorScrollReader() }
     val lspHandle = remember(lspSessionId) { EditorLspHandle() }
@@ -308,7 +311,32 @@ fun FilePane(
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (showPreview) {
+            if (nativeEditor) {
+                // The native editor stays composed under the preview: an OVERLAY now (no heavyweight
+                // child to paint over it), so the view, its LSP and its scroll survive a toggle.
+                if (doc != null) {
+                    NativeDocumentEditor(
+                        documents = documents,
+                        doc = doc,
+                        lineWrap = lineWrap,
+                        fontSize = fontSize,
+                        onFontSize = onFontSize,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                if (showPreview) {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .background(Color(c.code))
+                            .verticalScroll(rememberScrollState())
+                            .padding(Space.lg)
+                            .testTag("editor_preview"),
+                    ) {
+                        MarkdownBody(doc?.content ?: "", linkify = true, onOpenFile = onOpenFile)
+                    }
+                }
+            } else if (showPreview) {
                 Column(
                     Modifier
                         .fillMaxSize()

@@ -311,4 +311,11 @@ object EditorEffects {
      * transaction's NEW document (like its selection).
      */
     val scrollTo: dev.supermux.editor.core.StateEffectType<Int> = dev.supermux.editor.core.StateEffectType("editor.scrollTo") { p, c -> c.mapPos(p, 1) }
+
+    /**
+     * Like [scrollTo], but the position's line lands in the MIDDLE of the viewport (CM6's
+     * `scrollIntoView(pos, {y: "center"})`): a host revealing a line it was asked to show (a path
+     * tapped in chat, a search result) centres it, as today's `cmRevealLine` does.
+     */
+    val scrollToCenter: dev.supermux.editor.core.StateEffectType<Int> = dev.supermux.editor.core.StateEffectType("editor.scrollToCenter") { p, c -> c.mapPos(p, 1) }
 }

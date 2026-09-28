@@ -106,6 +106,18 @@ class WebPlatform(
     override val windows: WindowHostController? = null
     // The committed cm6 bundle in a same-origin iframe, driven by desktop's bridge protocol.
     override val editorEngine: EditorEngineFactory = WebEditorEngineFactory()
+
+    /**
+     * The native editor's syntax module (M5): fetched the first time an editor opens a file (never
+     * with the shell), and the code-only grammars' tables from the digest-named directory
+     * `:web:stageForBroker` publishes them under. A staged placeholder module fails to compile and
+     * the editors show plain text.
+     */
+    override val editorSyntax: dev.supermux.ui.editor.EditorSyntax = webEditorSyntax
+}
+
+private val webEditorSyntax = dev.supermux.ui.editor.EditorSyntax {
+    dev.supermux.editor.syntax.WasmBackend.load(tablesUrl = dev.supermux.web.editor.SYNTAX_TABLES_DIR)
 }
 
 @Suppress("UNUSED_PARAMETER")

@@ -589,13 +589,16 @@ private fun AgentTerminalForSession(
 @Composable
 private fun rememberWorkspaceDocuments(actions: ShellActions, workspaceId: String): DocumentStore {
     val scope = rememberCoroutineScope()
-    return remember(workspaceId, actions) {
+    val store = remember(workspaceId, actions) {
         DocumentStore(
             fsRead = { p -> actions.workspaceFsRead(workspaceId, p) },
             fsWrite = { p, content -> actions.workspaceFsWrite(workspaceId, p, content) },
             scope = scope,
         )
     }
+    dev.supermux.ui.editor.rememberNativeDocuments(store, scope)
+    androidx.compose.runtime.DisposableEffect(store) { onDispose { store.disposeNative() } }
+    return store
 }
 
 /** Explorer adapter — the file tree + filename search over `/workspaces/:id/fs*`. */

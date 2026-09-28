@@ -154,6 +154,13 @@ interface Platform {
      * its native fallback.
      */
     val editorEngine: EditorEngineFactory
+
+    /**
+     * The native editor's syntax backend (M5; replaces [editorEngine] at cutover): the native
+     * binding by default, loaded on first use. The browser overrides it with the wasm module and
+     * the hashed tables directory. A platform without the library gets plain-text editors.
+     */
+    val editorSyntax: dev.supermux.ui.editor.EditorSyntax get() = dev.supermux.ui.editor.DefaultEditorSyntax
 }
 
 /** Default [Platform.pickFiles] requester for screens that only ever have one picker in play. */

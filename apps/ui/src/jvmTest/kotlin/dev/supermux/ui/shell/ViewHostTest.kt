@@ -41,6 +41,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import androidx.compose.ui.test.assertCountEquals
 import kotlin.test.assertNull
 
 private fun view(kind: String, state: Map<String, String>) = ViewDto(
@@ -168,18 +170,22 @@ class ViewHostTest {
     @Test
     fun modeFileDrawsOneDocumentFromTheStore() = runComposeUiTest {
         val app = fakeApp()
+        val documents0 = store("fun main() {}")
         setPlatformContent(platform()) {
             host(
                 app,
                 view("editor", mapOf("mode" to "file", "path" to "src/Main.kt")),
                 workdir = "/some/dir",
-                documents = store("fun main() {}"),
+                documents = documents0,
             )
         }
         onNodeWithTag("editor_file_pane").assertIsDisplayed()
         // No tree and no tab row of its own — the group's strip is the tab row now.
         onNodeWithTag("editor_tree").assertDoesNotExist()
-        onNodeWithTag("editor_native_input").assertTextEquals("fun main() {}")
+        // The native editor draws the store's document: its view holds the file's text (M5).
+        onNodeWithTag("editor_native").assertIsDisplayed()
+        waitForIdle()
+        assertEquals("fun main() {}", documents0?.get("src/Main.kt")?.native?.primary?.state?.doc?.toString())
     }
 
     @Test
@@ -249,12 +255,23 @@ class ViewHostTest {
             }
         }
         waitForIdle()
-        // ONE document exists for the path, and both panes hold a reference to it — an edit made
-        // through either pane's sink is the same edit.
+        // ONE document exists for the path, and both panes show it: the first borrows its view, the
+        // second a mirror of it (M5), so an edit made through either is the same edit.
+        val native = assertNotNull(documents.get("a.kt")?.native)
+        assertEquals(2, native.views.size)
+        onAllNodesWithTag("editor_native").assertCountEquals(2)
         documents.update("a.kt", "edited in one pane")
         waitForIdle()
-        onAllNodesWithTag("editor_native_input")[0].assertTextEquals("edited in one pane")
-        onAllNodesWithTag("editor_native_input")[1].assertTextEquals("edited in one pane")
+        for (v in native.views) assertEquals("edited in one pane", v.state.doc.toString())
+        // An edit in the second pane's view reaches the document too.
+        native.views[1].dispatch(
+            dev.supermux.editor.core.TransactionSpec(
+                changes = listOf(dev.supermux.editor.core.ChangeSpec(0, 0, ">")),
+                userEvent = "input.type",
+            ),
+        )
+        waitForIdle()
+        assertEquals(">edited in one pane", documents.get("a.kt")?.content)
     }
 
     // ── Tab titles ──────────────────────────────────────────────────────────────────────────

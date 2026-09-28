@@ -364,8 +364,10 @@ class EditorView(initial: EditorState) : CommandTarget {
             commandDepth = depth
             keyDepth = keys
         }
+        val center = tr.effects.lastOrNull { it.isOf(EditorEffects.scrollToCenter) }?.valueIf(EditorEffects.scrollToCenter)
         val target = tr.effects.lastOrNull { it.isOf(EditorEffects.scrollTo) }?.valueIf(EditorEffects.scrollTo)
-        if (target != null) surface?.scrollIntoView(target.coerceIn(0, tr.state.doc.length))
+        if (center != null) surface?.scrollIntoView(center.coerceIn(0, tr.state.doc.length), center = true)
+        else if (target != null) surface?.scrollIntoView(target.coerceIn(0, tr.state.doc.length))
         else if (tr.scrollIntoView) surface?.scrollIntoView()
         if (reveal != null && !revealRange(reveal.from, reveal.to)) {
             // Nobody showed it after all: out to its edge.
@@ -614,8 +616,8 @@ internal interface EditorSurfaceHooks {
     /** The state was replaced wholesale. */
     fun onStateReplaced()
 
-    /** Scroll the least needed to show the main cursor (or [pos]) with a margin. */
-    fun scrollIntoView(pos: Int? = null)
+    /** Scroll the least needed to show the main cursor (or [pos]) with a margin; [center]: put its line in the middle. */
+    fun scrollIntoView(pos: Int? = null, center: Boolean = false)
 
     /** Scroll by [dy] pixels (page moves scroll a page as well as moving the cursor). */
     fun scrollBy(dy: Float)

@@ -172,6 +172,10 @@ fun EditorPanel(
     // edit on each pulse. fsRead/fsWrite only ever call vm.<fs>(session.id, …) and session.id
     // is invariant for a given sessionId, so capturing the first instances stays correct.
     val editor = remember(sessionId) { EditorState(actions.fsRead, actions.fsWrite, scope) }
+    // The native editor (M5): one view per open document, living as long as this session's
+    // state, not as long as the active tab's surface.
+    val nativeEditor = rememberNativeDocuments(editor.documents, scope)
+    DisposableEffect(editor) { onDispose { editor.documents.disposeNative() } }
 
     if (editor.treeVisible == null) {
         SideEffect { editor.treeVisible = expanded }
@@ -203,6 +207,7 @@ fun EditorPanel(
     // Live changes (Settings → Editor, or a pinch) still flow through; the seed above only fixes
     // the FIRST composition.
     val fontSize by prefs.editorFontSize.collectAsState(initialFontSize)
+    val liveLineWrap by prefs.editorLineWrap.collectAsState(lineWrap)
 
     // LSP bridge — orchestrates the cm6 LSPClient over the Phase-2 flows, filtered by session.
     val bridge = remember(sessionId, state.lspStatus, state.lspRpc) {
@@ -504,7 +509,21 @@ fun EditorPanel(
                         }
 
                         Box(Modifier.weight(1f).fillMaxWidth()) {
-                            EditorSurface(
+                            if (nativeEditor) {
+                                if (activeTab != null) {
+                                    // key: a tab switch is another document, another borrowed view.
+                                    androidx.compose.runtime.key(activeTab.path) {
+                                        NativeDocumentEditor(
+                                            documents = editor.documents,
+                                            doc = activeTab,
+                                            lineWrap = liveLineWrap,
+                                            fontSize = fontSize,
+                                            onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    }
+                                }
+                            } else EditorSurface(
                                 content = activeTab?.content ?: "",
                                 filename = activeTab?.path ?: "",
                                 lineWrap = lineWrap,
