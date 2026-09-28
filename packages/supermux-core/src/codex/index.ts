@@ -4,6 +4,7 @@ import { appliedFor, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse, ToolKind } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 import { createCodexNormalizer } from './normalize.js'
+import { CoreError, UnsupportedOperation } from '../errors.js'
 
 export type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type CodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -20,6 +21,8 @@ const MAX_SETUP_NOTICES = 256
 const MAX_EARLY_NOTICES = 256
 const MAX_LIVE_TURNS = 256
 const MAX_TOMBSTONES = 256
+const MAX_CHILDREN = 256
+const MAX_FOREIGN_BUFFER = 256
 const permissionOptions = [
   { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' as const },
   { optionId: 'reject_once', name: 'Reject once', kind: 'reject_once' as const },
@@ -147,6 +150,15 @@ export function codex(options: CodexOptions): AgentDriver {
     const tombstones = new Map<string, true>()
     let generation = 0
     const pendingSetup: { method?: string; params?: any }[] = []
+    // Subagent (collab) child threads share this connection; their frames carry the child
+    // threadId. Known children are forwarded (never as the parent's turn lifecycle); frames of
+    // not-yet-known threads wait briefly because a child can speak before spawnAgent completes.
+    const children = new Set<string>()
+    const childTurns = new Map<string, string>()
+    /** Children this process has not loaded (learned from thread/read): resume before a turn. */
+    const unloadedChildren = new Set<string>()
+    const foreign: any[] = []
+    const normalizer = createCodexNormalizer()
     const failure = deferred<never>()
     let livePermissions: Extract<PermissionsSpec, { kind: 'codex' }> = initialPermissions
     let overrides = sessionOverrides(context.configuration)
@@ -377,7 +389,7 @@ export function codex(options: CodexOptions): AgentDriver {
         return undefined
       }
     }
-    async function askHost(params: any, signal: AbortSignal, method?: string) {
+    async function askHost(params: any, signal: AbortSignal, method?: string, subagentId?: string) {
       const mcpApproval = method ? isMcpToolApproval(method, params) : false
       const mcp = mcpApproval ? elicitationTool(params) : undefined
       const toolCallId = typeof params?.approvalId === 'string' && params.approvalId
@@ -402,6 +414,7 @@ export function codex(options: CodexOptions): AgentDriver {
             coreSessionId: context.sessionId,
             toolCall: { toolCallId, title, kind: (mcp ? 'other' : typeof params?.command === 'string' ? 'execute' : 'edit') as ToolKind, rawInput: mcp ? { server: mcp.server, tool: mcp.tool, arguments: params?._meta?.tool_params } : params },
             options: hostOptions(params, method),
+            ...(subagentId ? { subagentId } : {}),
             detail: {
               ...(typeof params?.command === 'string' ? { command: params.command } : {}),
               ...(typeof params?.cwd === 'string' ? { cwd: params.cwd } : {}),
@@ -435,11 +448,17 @@ export function codex(options: CodexOptions): AgentDriver {
       const key = JSON.stringify(message.id)
       const fingerprint = permissionFingerprint(method, params)
       const denyResult: Record<string, unknown> = isPermissions ? deniedPermissionsResult() : isMcpApproval ? { action: 'decline' } : { decision: 'decline' as const }
-      const requestThreadId = agentSessionId
+      // A subagent's approval arrives with its child threadId: ask the host on its behalf, gated
+      // by the child's own running turn instead of the parent's.
+      const childThread = typeof params?.threadId === 'string' && params.threadId !== agentSessionId && children.has(params.threadId) ? params.threadId as string : undefined
+      const requestThreadId = childThread ?? agentSessionId
       const requestTurnId = typeof params?.turnId === 'string' ? params.turnId : undefined
       const unfinished = liveUnfinished()
-      const requestSlot = requestTurnId ? live.get(requestTurnId) : undefined
-      const matching = hostPermissions
+      const requestSlot = requestTurnId && !childThread ? live.get(requestTurnId) : undefined
+      const childLive = (turnId: string | undefined) => !!childThread && !!turnId && childTurns.get(childThread) === turnId
+      const matching = childThread
+        ? hostPermissions && params && requestTurnId && childLive(requestTurnId) && !closed && !fatal
+        : hostPermissions
         && requestThreadId
         && params
         && params.threadId === requestThreadId
@@ -470,8 +489,8 @@ export function codex(options: CodexOptions): AgentDriver {
         return
       }
       const controller = new AbortController()
-      const capturedGeneration = requestSlot.generation
-      const capturedTurnId = requestSlot.id
+      const capturedGeneration = requestSlot?.generation ?? -1
+      const capturedTurnId = requestSlot?.id ?? requestTurnId!
       pendingPermissions.set(key, { controller, turnId: capturedTurnId, generation: capturedGeneration, threadId: requestThreadId! })
       const settle = (optionId: string | undefined) => {
         try {
@@ -481,11 +500,13 @@ export function codex(options: CodexOptions): AgentDriver {
           const current = live.get(capturedTurnId)
           const liveOk = !controller.signal.aborted
             && !closed && !fatal
-            && current
-            && !current.finished
-            && current.generation === capturedGeneration
-            && current.id === capturedTurnId
-            && agentSessionId === requestThreadId
+            && (childThread
+              ? childLive(capturedTurnId)
+              : current
+                && !current.finished
+                && current.generation === capturedGeneration
+                && current.id === capturedTurnId
+                && agentSessionId === requestThreadId)
           let result: Record<string, unknown> = denyResult
           if (isMcpApproval) {
             if (liveOk && optionId === 'allow_once') result = { action: 'accept', content: {} }
@@ -506,13 +527,94 @@ export function codex(options: CodexOptions): AgentDriver {
           } catch { /* never reject the host-callback promise */ }
         }
       }
-      void askHost(params, controller.signal, method).then(answer => {
+      void askHost(params, controller.signal, method, childThread).then(answer => {
         settle(answer.optionId)
       }, () => {
         settle(undefined)
       })
     }
+    /** Remember child threads named by a parent collab item; returns the newly learned ids. */
+    function learnChildren(message: any): string[] {
+      const { method, params } = message
+      // Children may spawn their own (nested) children: learn from any thread we already follow.
+      if ((method !== 'item/started' && method !== 'item/completed') || (params?.threadId !== agentSessionId && !children.has(params?.threadId))) return []
+      const item = params?.item
+      const ids: string[] = []
+      if (item?.type === 'collabAgentToolCall' && Array.isArray(item.receiverThreadIds)) {
+        for (const id of item.receiverThreadIds) if (typeof id === 'string' && id) ids.push(id)
+      } else if (item?.type === 'subAgentActivity' && typeof item.agentThreadId === 'string' && item.agentThreadId) {
+        ids.push(item.agentThreadId)
+      }
+      return ids.filter(id => {
+        if (id === agentSessionId || children.has(id)) return false
+        rememberChild(id)
+        return true
+      })
+    }
+    function rememberChild(id: string) {
+      children.add(id)
+      while (children.size > MAX_CHILDREN) {
+        const oldest = children.values().next().value
+        if (oldest === undefined) break
+        children.delete(oldest)
+      }
+      // A re-attaching process must still recognise the children's frames.
+      try { rpc.setMeta({ children: [...children] }) } catch { /* transport closing */ }
+    }
+    function dispatchChild(message: any) {
+      const { method, params } = message
+      const threadId: string = params.threadId
+      if (message.id != null) {
+        if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval' || method === 'item/permissions/requestApproval' || method === 'item/tool/requestUserInput' || method === 'applyPatchApproval' || method === 'execCommandApproval' || method === 'mcpServer/elicitation/request') {
+          context.onUpdate({ protocol: 'native', value: { method, params, id: message.id } })
+        }
+        handleServerRequest(message)
+        return
+      }
+      if (method === 'turn/started' && typeof params.turn?.id === 'string') {
+        childTurns.set(threadId, params.turn.id)
+        unloadedChildren.delete(threadId)
+      }
+      if (method === 'turn/completed') {
+        const turnId = childTurns.get(threadId)
+        if (turnId && (!params.turn?.id || params.turn.id === turnId)) {
+          childTurns.delete(threadId)
+          cancelPendingPermissions(turnId)
+        }
+      }
+      // A re-attached process knows the child from keeper meta, its normalizer does not yet.
+      if (!normalizer.isChild(threadId)) normalizer.adopt(threadId)
+      context.onUpdate({ protocol: 'native', value: { method, params } })
+    }
     function dispatchNotify(message: any) {
+      const params = message?.params
+      const threadId = params?.threadId
+      if (agentSessionId && typeof threadId === 'string' && threadId !== agentSessionId) {
+        if (children.has(threadId)) {
+          const nested = learnChildren(message)
+          dispatchChild(message)
+          releaseForeign(nested)
+          return
+        }
+        if (message.id != null) { dispatchMain(message); return } // unknown thread: denied as before
+        foreign.push(message)
+        if (foreign.length > MAX_FOREIGN_BUFFER) foreign.shift()
+        return
+      }
+      const learned = agentSessionId ? learnChildren(message) : []
+      dispatchMain(message)
+      releaseForeign(learned)
+    }
+    /** Replay held frames of threads that just became known children, in arrival order. */
+    function releaseForeign(learned: string[]) {
+      if (!learned.length) return
+      const waiting = foreign.splice(0)
+      for (const held of waiting) {
+        if (learned.includes(held.params.threadId)) dispatchChild(held)
+        else foreign.push(held)
+      }
+    }
+    function dispatchMain(message: any) {
       const { method, params } = message
       if (!agentSessionId) {
         // Before thread identity nothing can be matched: buffer notices AND server requests in
@@ -633,6 +735,8 @@ export function codex(options: CodexOptions): AgentDriver {
         if (context.resumeId && context.resumeId !== threadId) throw new Error('Codex thread identity mismatch')
         agentSessionId = threadId
         hookRuntimeRequest(threadId)
+        const seededChildren = rpc.welcome.meta.children
+        if (Array.isArray(seededChildren)) for (const id of seededChildren) if (typeof id === 'string' && id) rememberChild(id)
         const liveTurns = rpc.welcome.meta.liveTurns
         if (Array.isArray(liveTurns)) {
           for (const id of liveTurns) {
@@ -682,7 +786,6 @@ export function codex(options: CodexOptions): AgentDriver {
         try { await rpc.request('turn/interrupt', { threadId: agentSessionId, turnId }) } catch (error) { if (!current.finished) throw error }
       }
     }
-    const normalizer = createCodexNormalizer()
     return {
       agentSessionId: agentSessionId!, capabilities: { resume: true, steer: true, fork: true, detach: true, configure: true, history: true, permissions: true }, close, interrupt,
       async setPermissions(spec) {
@@ -722,6 +825,45 @@ export function codex(options: CodexOptions): AgentDriver {
         const items = history.limit == null ? turns.slice(offset) : turns.slice(offset, offset + history.limit)
         const next = offset + items.length
         return { protocol: 'native' as const, items, ...(next < turns.length ? { cursor: String(next) } : {}) }
+      },
+      async messageSubagent(subagentId, content) {
+        if (fatal || closed) throw fatal ?? new Error('Codex runtime closed')
+        const converted = input(content)
+        if (!children.has(subagentId)) {
+          // Not seen by this process (e.g. after a restart): accept only this thread's own child.
+          const read = await rpc.request('thread/read', { threadId: subagentId, includeTurns: false })
+          if (read?.thread?.parentThreadId !== agentSessionId) throw new CoreError('subagent_not_found', `Unknown Codex subagent ${subagentId}`)
+          rememberChild(subagentId)
+          unloadedChildren.add(subagentId)
+        }
+        if (normalizer.messaging(subagentId) === 'none') {
+          // multi_agent_v2 children refuse direct app-server input (-32600).
+          throw new UnsupportedOperation('direct input to a multi-agent v2 subagent', options.id)
+        }
+        const running = childTurns.get(subagentId)
+        if (running) {
+          try {
+            await rpc.request('turn/steer', { threadId: subagentId, expectedTurnId: running, input: converted })
+            return { via: 'direct' as const }
+          } catch (error) {
+            // The child turn may have ended in between; a new turn delivers it instead.
+            if (childTurns.get(subagentId) === running) throw error
+          }
+        }
+        if (unloadedChildren.has(subagentId)) {
+          await rpc.request('thread/resume', { threadId: subagentId, cwd: context.cwd, approvalPolicy: livePermissions.approvalPolicy, sandbox: livePermissions.sandbox })
+          unloadedChildren.delete(subagentId)
+        }
+        // Only the policy: the child keeps its own model and effort.
+        await rpc.request('turn/start', { threadId: subagentId, input: converted, approvalPolicy: livePermissions.approvalPolicy, sandboxPolicy: sandboxPolicyObject(livePermissions.sandbox) })
+        return { via: 'direct' as const }
+      },
+      async stopSubagent(subagentId) {
+        if (fatal || closed) throw fatal ?? new Error('Codex runtime closed')
+        if (!children.has(subagentId)) throw new CoreError('subagent_not_found', `Unknown Codex subagent ${subagentId}`)
+        const running = childTurns.get(subagentId)
+        if (!running) return
+        await rpc.request('turn/interrupt', { threadId: subagentId, turnId: running })
       },
       async steer(content) {
         const converted = input(content)

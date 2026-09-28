@@ -2,6 +2,7 @@ export { createCore, Core } from "./core.js"
 export { Session } from "./session.js"
 export type {
   NormalizedBody, EventEnvelope, NativeRef, EventOrigin, TurnCompleteReason,
+  SubagentPhase, SubagentMessaging, SubagentStats,
 } from "./events/normalized.js"
 export { CoreError, UnsupportedOperation } from "./errors.js"
 export { connectKeeper } from "./keeper/index.js"
@@ -11,7 +12,7 @@ export type {
   ResumeOptions, AdoptOptions, Completion, InterruptResult, Observer, PermissionHandler, PermissionRequest, PermissionResponse,
   PermissionOptionKind, RequestAnswer, PermissionAnswer, QuestionAnswer, PendingRequest,
   QuestionRequest, QuestionResponse, AnswersHandler, UserQuestionSpec, UserQuestionOption,
-  Receipt, SendOptions,
+  Receipt, SendOptions, SubagentMessageResult, SubagentMessageOptions,
   SessionRecord, SessionState, ForkOptions, ForkSource,
   SessionConfiguration, HistoryOptions, HistoryPage,
   CloseMode, CloseOptions, CoreCloseOptions,

@@ -124,7 +124,8 @@ export type SendOptions = {
 
 /** ACP payloads stay intact; native integrations may use a separate namespace. */
 export type AgentUpdate =
-  | { protocol: "acp"; value: SessionNotification["update"]; replay?: boolean }
+  /** `sessionId` is the ACP session the update belongs to (the main session or a subagent's child session). */
+  | { protocol: "acp"; value: SessionNotification["update"]; replay?: boolean; sessionId?: string }
   | { protocol: "native"; value: unknown; replay?: boolean }
 
 export type CoreEvent =
@@ -143,6 +144,8 @@ export type Observer = (event: CoreEvent) => void | Promise<void>
 /** Driver-facing permission callback. Hosts answer via Session.requests, not this type. */
 export type PermissionRequest = RequestPermissionRequest & {
   coreSessionId: string
+  /** Set when the request was raised by a subagent (its tool call). */
+  subagentId?: string
   detail?: { command?: string; cwd?: string; blockedPath?: string }
 }
 
@@ -155,6 +158,8 @@ export type PermissionHandler = (
 
 export type QuestionRequest = {
   toolCallId?: string
+  /** Set when the question was raised by a subagent. */
+  subagentId?: string
   questions: UserQuestionSpec[]
 }
 
@@ -212,6 +217,18 @@ export function requireAgentsCloseMode(options: { agents?: unknown } | undefined
 }
 
 /** Runtime methods own their I/O. close must settle any in-flight prompt. */
+/**
+ * What a runtime did with a message for a subagent. `direct`: already delivered to the child.
+ * `relay`: the runtime cannot address the child; `relay` holds the main-thread user message
+ * that asks the parent model to forward it, and Session sends it through the normal queue.
+ */
+export type SubagentMessageResult = { via: "direct" } | { via: "relay"; relay: ContentBlock[] }
+
+export type SubagentMessageOptions = {
+  /** Only for relayed messages (they are ordinary main-thread input). Default "queue". */
+  whenBusy?: "queue" | "reject"
+}
+
 export type AgentRuntime = {
   readonly agentSessionId: string
   readonly capabilities: Capabilities
@@ -229,6 +246,10 @@ export type AgentRuntime = {
   /** Flush buffered assistant/reasoning deltas as final messages. */
   flush?(): NormalizedBody[]
   setPermissions?(spec: PermissionsSpec): Promise<{ applied: PermissionsApplied }>
+  /** Deliver input to a subagent (direct), or say how the parent must relay it. */
+  messageSubagent?(subagentId: string, content: ContentBlock[]): Promise<SubagentMessageResult>
+  /** Stop a running subagent without interrupting the main turn. */
+  stopSubagent?(subagentId: string): Promise<void>
 }
 
 export type AuthContext = {

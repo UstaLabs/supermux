@@ -1,13 +1,13 @@
 import { randomBytes } from 'node:crypto'
 import { CLIENT_METHODS, ClientSideConnection, ndJsonStream, PROTOCOL_METHODS, PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
-import type { AnyMessage, AuthMethod, McpServer, RequestPermissionResponse } from '@agentclientprotocol/sdk'
-import type { AgentDriver, AgentUpdate, AuthContext, CloseOptions, DriverContext, PermissionsSpec } from '../types.js'
+import type { AnyMessage, AuthMethod, McpServer, RequestPermissionResponse, SessionNotification } from '@agentclientprotocol/sdk'
+import type { AgentDriver, AgentRuntime, AgentUpdate, AuthContext, Capabilities, CloseOptions, ContentBlock, DriverContext, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
 import { ACTIVITY_OVERFLOW } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import { acpPermissionDecision, appliedFor, validatePermissionsSpec } from '../permissions.js'
 import { connectAcpProcess, type AcpKeeperLimits } from './process.js'
-import { createAcpNormalizer } from './normalize.js'
+import { createAcpNormalizer, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
 import type { KeeperFrameEvent } from '../keeper/client.js'
 
 export type AcpActivityHint = { id?: string; phase: 'started' | 'completed' }
@@ -48,9 +48,41 @@ export type AcpOptions = {
    * notice. Generic ACP does not parse Grok `_x.ai` payloads itself.
    */
   classifyActivity?: AcpActivityClassifier
-  /** When `'grok'`, handle vendor `_x.ai/ask_user_question` agent→client requests. */
-  vendor?: "grok"
+  /**
+   * Vendor quirks. `grok`: `_x.ai/ask_user_question` requests and `_x.ai` subagent notifications.
+   * `cursor`: advertises the ACP subagents extension (`clientCapabilities._meta.subagents`) and
+   * reads `cursor/task`. `opencode`: its `task` tool is the subagent.
+   */
+  vendor?: AcpVendor
+  /** Normalizer to use instead of a private one (the Grok wrapper keeps one across respawns). */
+  normalizer?: AcpNormalizer
   permissions: Extract<PermissionsSpec, { kind: "acp" }>
+}
+
+/**
+ * Cursor offers no client→subagent channel (prompt/load on a child session are refused); the
+ * parent model resumes the agent through its Task tool (`resume`), which keeps its context.
+ */
+export function cursorRelayPrompt(subagentId: string, content: ContentBlock[]): ContentBlock[] {
+  const parts: string[] = []
+  for (const block of content) {
+    if (block.type !== 'text') throw new CoreError('invalid_input', 'Cursor relays only text to a subagent')
+    parts.push(block.text)
+  }
+  const text = parts.join('\n')
+  if (!text.trim()) throw new CoreError('invalid_input', 'Subagent message is empty')
+  const id = JSON.stringify(subagentId)
+  return [{
+    type: 'text',
+    text: [
+      `[supermux relay] The user wrote a message for your earlier subagent ${id}. Forward it; do not act on it yourself.`,
+      `Call your Task tool exactly once with resume=${id} (agent id ${subagentId}) and prompt set to the exact text between <relay> and </relay> below, unchanged.`,
+      'Do not read files or run tools yourself. When the subagent returns, reply with its answer verbatim and nothing else.',
+      '<relay>',
+      text,
+      '</relay>',
+    ].join('\n'),
+  }]
 }
 
 function abortError() { return new CoreError('aborted', 'ACP operation aborted') }
@@ -156,7 +188,8 @@ export function acp(options: AcpOptions): AgentDriver {
       onOutgoingLine(line) {
         try {
           const parsed = JSON.parse(line)
-          if (parsed && typeof parsed.method === 'string' && parsed.method === 'session/prompt' && parsed.id !== null && parsed.id !== undefined) {
+          // Only the main session's prompt is the owned turn; a direct prompt to a child session is not.
+          if (parsed && typeof parsed.method === 'string' && parsed.method === 'session/prompt' && parsed.id !== null && parsed.id !== undefined && (!agentSessionId || parsed.params?.sessionId === agentSessionId)) {
             ownedPrompt = { requestId: parsed.id, ...(latestNativeId ? { activityId: latestNativeId } : {}) }
             try { io.setMeta({ ownedPrompt }) } catch { /* */ }
           }
@@ -176,6 +209,31 @@ export function acp(options: AcpOptions): AgentDriver {
       : { kind: 'acp', policy: 'ask', nativeMode: null }
     let advertisedModes = false
     let hasModeConfig = false
+    /** Cursor negotiated the ACP subagents extension. */
+    let cursorSubagents = false
+    const normalizer: AcpNormalizer = options.normalizer ?? createAcpNormalizer({
+      ...(options.vendor ? { vendor: options.vendor } : {}),
+      mainSessionId: () => agentSessionId || undefined,
+      cursorSubagents: () => cursorSubagents,
+    })
+    /** Child sessions loaded into this process (a direct prompt needs session/load once). */
+    const loadedChildren = new Set<string>()
+    /** Child sessions whose session/load replay is in flight: history, not live activity. */
+    const loadingChildren = new Set<string>()
+    /** Direct prompts in flight, keyed by child session id. */
+    const childPrompts = new Map<string, AbortController>()
+    /** Child tool call id → child session id, from the child's own session/update frames. */
+    const childToolSessions = new Map<string, string>()
+    const subagentOfSession = (sessionId: string) => normalizer.subagentForSession(sessionId) ?? sessionId
+    function subagentOfPermission(request: { sessionId?: unknown; toolCall?: unknown }): string | undefined {
+      const sessionId = typeof request.sessionId === 'string' ? request.sessionId : undefined
+      if (sessionId && agentSessionId && sessionId !== agentSessionId) return subagentOfSession(sessionId)
+      const callId = request.toolCall && typeof request.toolCall === 'object' ? (request.toolCall as { toolCallId?: unknown }).toolCallId : undefined
+      if (typeof callId !== 'string') return
+      const childSession = childToolSessions.get(callId)
+      if (childSession) return subagentOfSession(childSession)
+      return normalizer.subagentForTool(callId)
+    }
     const nativePermission = new Map<string, AbortController>()
     let latestNativeId: string | undefined
     let ownedUsedNative = false
@@ -219,6 +277,8 @@ export function acp(options: AcpOptions): AgentDriver {
     const emitUpdate = (update: AgentUpdate) => {
       if (closed) return
       session?.onUpdate(update)
+      // A subagent's own session never drives the parent's turn tracking.
+      if (update.protocol === 'acp' && update.sessionId && agentSessionId && update.sessionId !== agentSessionId) return
       applyActivity(update)
     }
 
@@ -309,6 +369,26 @@ export function acp(options: AcpOptions): AgentDriver {
       }
     }
 
+    function handleSessionUpdate(notification: { sessionId?: unknown; update?: unknown }) {
+      const sessionId = notification.sessionId
+      const child = typeof sessionId === 'string' && agentSessionId && sessionId !== agentSessionId
+      if (child && loadingChildren.has(sessionId)) { io.ackConsumed(); return }
+      if (child) {
+        const callId = (notification.update as { toolCallId?: unknown } | undefined)?.toolCallId
+        if (typeof callId === 'string' && callId) {
+          childToolSessions.set(callId, sessionId)
+          if (childToolSessions.size > 512) childToolSessions.delete(childToolSessions.keys().next().value as string)
+        }
+      }
+      emitUpdate({ protocol: 'acp', value: notification.update as SessionNotification['update'], ...(typeof sessionId === 'string' ? { sessionId } : {}), ...(replay ? { replay: true } : {}) })
+      io.ackConsumed()
+    }
+    /** Session updates outside the SDK schema (Cursor's subagents extension) that its validator would drop. */
+    const isExtensionUpdate = (message: unknown): message is { params: { sessionId?: unknown; update: unknown } } => {
+      if (!isOpaqueNotification(message) || message.method !== CLIENT_METHODS.session_update) return false
+      const kind = (message.params as { update?: { sessionUpdate?: unknown } } | undefined)?.update?.sessionUpdate
+      return typeof kind === 'string' && kind.startsWith('subagent_')
+    }
     const connection = new ClientSideConnection(() => ({
       async requestPermission(request) {
         io.ackConsumed()
@@ -342,9 +422,16 @@ export function acp(options: AcpOptions): AgentDriver {
           return { outcome: { outcome: 'selected', optionId: auto.optionId } }
         }
         const signals: AbortSignal[] = [lifetime.signal]
-        // SDK permission has no native generation id. Any two outstanding
-        // native activities (including cancelled-but-not-ended) are ambiguous.
-        if (unmatched.size > 1) return cancelled
+        const subagentId = subagentOfPermission(request)
+        const childPrompt = typeof request.sessionId === 'string' ? childPrompts.get(request.sessionId) : undefined
+        if (childPrompt) {
+          // A direct prompt we sent to a child session: its own turn owns the question.
+          signals.push(childPrompt.signal)
+        } else if (unmatched.size > 1) {
+          // SDK permission has no native generation id. Any two outstanding
+          // native activities (including cancelled-but-not-ended) are ambiguous.
+          return cancelled
+        } else {
         const active = [...unmatched].filter(id => {
           const controller = nativePermission.get(id)
           return controller != null && !controller.signal.aborted
@@ -359,6 +446,7 @@ export function acp(options: AcpOptions): AgentDriver {
         } else {
           return cancelled
         }
+        }
         const signal = AbortSignal.any(signals)
         if (!session || signal.aborted) return cancelled
         let cancel!: () => void
@@ -367,16 +455,13 @@ export function acp(options: AcpOptions): AgentDriver {
           if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'session/request_permission', params: request } })
           // ACP option kinds map 1:1 (allow_once / allow_always / reject_once / reject_always).
           // RequestAnswer.message is ignored: the SDK permission result has no message field.
-          const result = await Promise.race([Promise.resolve().then(() => session.requestPermission({ ...request, coreSessionId: session.sessionId }, signal)), cancellation])
+          const result = await Promise.race([Promise.resolve().then(() => session.requestPermission({ ...request, coreSessionId: session.sessionId, ...(subagentId ? { subagentId } : {}) }, signal)), cancellation])
           if (signal.aborted) return cancelled
           if (result?.outcome?.outcome === 'selected') return { outcome: { outcome: 'selected', optionId: result.outcome.optionId } }
           return result
         } finally { signal.removeEventListener('abort', cancel) }
       },
-      async sessionUpdate(notification) {
-        emitUpdate({ protocol: 'acp', value: notification.update, ...(replay ? { replay: true } : {}) })
-        io.ackConsumed()
-      },
+      async sessionUpdate(notification) { handleSessionUpdate(notification) },
       async extNotification() {},
       async extMethod(method, params) {
         io.ackConsumed()
@@ -416,6 +501,12 @@ export function acp(options: AcpOptions): AgentDriver {
           }
           return { outcome: "accepted", answers }
         }
+        if (method === "cursor/task") {
+          // Cursor reports a finished Task (description, prompt, agentId, durationMs) and waits for
+          // an answer; the payload enriches the subagent.
+          if (session && !closed) emitUpdate({ protocol: 'native', value: { method, params } })
+          return {}
+        }
         throw new Error("Method not found")
       },
     }), (() => {
@@ -431,6 +522,7 @@ export function acp(options: AcpOptions): AgentDriver {
         writable: framed.writable,
         readable: framed.readable.pipeThrough(new TransformStream<AnyMessage, AnyMessage>({
           transform(message, controller) {
+            if (isExtensionUpdate(message)) { handleSessionUpdate(message.params); return }
             forwardOpaque(message)
             controller.enqueue(message)
             const rec = message && typeof message === 'object' ? message as { method?: string } : {}
@@ -520,6 +612,98 @@ export function acp(options: AcpOptions): AgentDriver {
       try { io.setMeta({ permissions: next }) } catch { /* */ }
       return { applied: appliedFor(next) }
     }
+    async function prompt(content: ContentBlock[], signal: AbortSignal) {
+      if (closed) throw new CoreError('runtime_closed', 'ACP runtime closed')
+      signal.throwIfAborted()
+      if (turn) throw new CoreError('busy', 'ACP prompt is already running')
+      ownedUsedNative = unmatched.size > 0
+      const active = new AbortController()
+      turn = active
+      const onAbort = () => { if (turn === active) beginCancel() }
+      signal.addEventListener('abort', onAbort, { once: true })
+      try { return await ioWait(connection.prompt({ sessionId: agentSessionId, prompt: content })) }
+      finally {
+        signal.removeEventListener('abort', onAbort)
+        promptActivityIds.clear()
+        active.abort()
+        if (turn === active) {
+          turn = undefined
+          ownedUsedNative = unmatched.size > 0
+        }
+        ownedPrompt = undefined
+        try { io.setMeta({ ownedPrompt: null }) } catch { /* */ }
+        pendingCapture = false
+        let capturedOpen = false
+        for (const id of capturedIds) if (unmatched.has(id)) capturedOpen = true
+        if (!capturedOpen) {
+          cancelEpoch++
+          stopCancelRetry()
+        }
+      }
+    }
+    /** The child session a subagent is reached through (OpenCode: the task's child session). */
+    function childSessionOf(subagentId: string): string {
+      const info = normalizer.subagent(subagentId)
+      if (!info) throw new CoreError('subagent_not_found', `Unknown subagent ${subagentId}`)
+      const target = info.nativeId ?? info.id
+      if (options.vendor === 'opencode' && !info.nativeId) throw new CoreError('session_busy', 'The OpenCode subagent has not reported its session yet')
+      return target
+    }
+    function emitSubagentTurn(params: Record<string, unknown>) {
+      if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: SUBAGENT_TURN_METHOD, params } })
+    }
+    async function messageSubagent(subagentId: string, content: ContentBlock[]) {
+      if (closed) throw new CoreError('runtime_closed', 'ACP runtime closed')
+      if (options.vendor === 'cursor') return { via: 'relay' as const, relay: cursorRelayPrompt(normalizer.subagent(subagentId)?.id ?? subagentId, content) }
+      if (options.vendor !== 'grok' && options.vendor !== 'opencode') throw new UnsupportedOperation('subagent messaging', options.id)
+      const info = normalizer.subagent(subagentId)
+      const canonical = info?.id ?? subagentId
+      const child = childSessionOf(subagentId)
+      if (childPrompts.has(child)) throw new CoreError('session_busy', 'A message to this subagent is still running')
+      if (!loadedChildren.has(child)) {
+        // Grok/OpenCode serve a child session only after session/load; its replay is history.
+        loadingChildren.add(child)
+        try { await ioWait(connection.loadSession({ sessionId: child, cwd: session!.cwd, mcpServers: options.mcpServers })) }
+        finally { loadingChildren.delete(child) }
+        loadedChildren.add(child)
+      }
+      const controller = new AbortController()
+      childPrompts.set(child, controller)
+      emitSubagentTurn({ subagentId: canonical, phase: 'started' })
+      void ioWait(connection.prompt({ sessionId: child, prompt: content })).then(result => {
+        emitSubagentTurn({ subagentId: canonical, phase: result?.stopReason === 'cancelled' ? 'cancelled' : 'completed', stopReason: result?.stopReason })
+      }, error => {
+        emitSubagentTurn({ subagentId: canonical, phase: 'failed', error: error instanceof Error ? error.message : String(error) })
+      }).finally(() => {
+        controller.abort()
+        if (childPrompts.get(child) === controller) childPrompts.delete(child)
+      })
+      return { via: 'direct' as const }
+    }
+    async function stopSubagent(subagentId: string) {
+      if (closed) throw new CoreError('runtime_closed', 'ACP runtime closed')
+      if (options.vendor !== 'grok' && options.vendor !== 'opencode') throw new UnsupportedOperation('subagent stop', options.id)
+      const child = childSessionOf(subagentId)
+      childPrompts.get(child)?.abort()
+      await ioWait(connection.cancel({ sessionId: child }))
+    }
+    function makeRuntime(capabilities: Capabilities): AgentRuntime {
+      return {
+        agentSessionId,
+        capabilities,
+        normalize: normalizer,
+        flush: () => normalizer.flush(),
+        setPermissions,
+        prompt,
+        async interrupt() {
+          if (!turn && unmatched.size === 0 && !pendingCapture) return
+          beginCancel()
+        },
+        close,
+        messageSubagent,
+        stopSubagent,
+      }
+    }
     try {
       const reattach = io.welcome.agentRunning === true && typeof io.welcome.meta.agentSessionId === 'string'
       let canResume = false
@@ -561,9 +745,12 @@ export function acp(options: AcpOptions): AgentDriver {
         }
         advertisedModes = io.welcome.meta.advertisedModes === true
         hasModeConfig = io.welcome.meta.hasModeConfig === true
+        cursorSubagents = io.welcome.meta.cursorSubagents === true
         runtimeReady = true
       } else {
-      const initialized = await setup(connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {}, clientInfo: { name: 'supermux-core', version: '0.0.0' } }))
+      const clientCapabilities = options.vendor === 'cursor' ? { _meta: { subagents: true } } : {}
+      const initialized = await setup(connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities, clientInfo: { name: 'supermux-core', version: '0.0.0' } }))
+      cursorSubagents = options.vendor === 'cursor' && (initialized.agentCapabilities?.sessionCapabilities as { subagents?: unknown } | undefined)?.subagents != null
       if (initialized.protocolVersion !== PROTOCOL_VERSION) throw new CoreError('protocol_version', `Unsupported ACP protocol version ${initialized.protocolVersion}`)
       if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'initialize', params: initialized } })
       const methods = initialized.authMethods ?? []
@@ -608,99 +795,17 @@ export function acp(options: AcpOptions): AgentDriver {
       }
       hasModeConfig = configOptions.some(o => o.id === 'mode')
       if (livePermissions.nativeMode != null) await setup(applyNativeMode(livePermissions, false))
-      io.setMeta({ agentSessionId, permissions: livePermissions, advertisedModes, hasModeConfig, ...(options.sessionConfig ? { sessionConfig: appliedConfig } : {}), ...(configOptions.length ? { configOptions } : {}) })
+      io.setMeta({ agentSessionId, permissions: livePermissions, advertisedModes, hasModeConfig, cursorSubagents, ...(options.sessionConfig ? { sessionConfig: appliedConfig } : {}), ...(configOptions.length ? { configOptions } : {}) })
       finishSetup()
       runtimeReady = true
-      const normalizer = createAcpNormalizer()
-      return { runtime: {
-        agentSessionId,
-        capabilities: { resume: canResume || canLoad, steer: false, fork: false, detach: true, permissions: true },
-        normalize: normalizer,
-        flush: () => normalizer.flush(),
-        setPermissions,
-        async prompt(content: Parameters<import('../types.js').AgentRuntime['prompt']>[0], signal: AbortSignal) {
-          if (closed) throw new CoreError('runtime_closed', 'ACP runtime closed')
-          signal.throwIfAborted()
-          if (turn) throw new CoreError('busy', 'ACP prompt is already running')
-          ownedUsedNative = unmatched.size > 0
-          const active = new AbortController()
-          turn = active
-          const onAbort = () => { if (turn === active) beginCancel() }
-          signal.addEventListener('abort', onAbort, { once: true })
-          try { return await ioWait(connection.prompt({ sessionId: agentSessionId, prompt: content })) }
-          finally {
-            signal.removeEventListener('abort', onAbort)
-            promptActivityIds.clear()
-            active.abort()
-            if (turn === active) {
-              turn = undefined
-              ownedUsedNative = unmatched.size > 0
-            }
-            ownedPrompt = undefined
-            try { io.setMeta({ ownedPrompt: null }) } catch { /* */ }
-            pendingCapture = false
-            let capturedOpen = false
-            for (const id of capturedIds) if (unmatched.has(id)) capturedOpen = true
-            if (!capturedOpen) {
-              cancelEpoch++
-              stopCancelRetry()
-            }
-          }
-        },
-        async interrupt() {
-          if (!turn && unmatched.size === 0 && !pendingCapture) return
-          beginCancel()
-        },
-        close,
-      }, close, finishSetup }
+      return { runtime: makeRuntime({ resume: canResume || canLoad, steer: false, fork: false, detach: true, permissions: true }), close, finishSetup }
       }
       finishSetup()
       if (!session) {
         await close({ mode: 'shutdown' })
         return { methods: [], authenticate: async () => {}, close, finishSetup }
       }
-      const fallbackNormalizer = createAcpNormalizer()
-      return { runtime: {
-        agentSessionId,
-        capabilities: { resume: true, steer: false, fork: false, detach: true, permissions: true },
-        normalize: fallbackNormalizer,
-        flush: () => fallbackNormalizer.flush(),
-        setPermissions,
-        async prompt(content: Parameters<import('../types.js').AgentRuntime['prompt']>[0], signal: AbortSignal) {
-          if (closed) throw new CoreError('runtime_closed', 'ACP runtime closed')
-          signal.throwIfAborted()
-          if (turn) throw new CoreError('busy', 'ACP prompt is already running')
-          ownedUsedNative = unmatched.size > 0
-          const active = new AbortController()
-          turn = active
-          const onAbort = () => { if (turn === active) beginCancel() }
-          signal.addEventListener('abort', onAbort, { once: true })
-          try { return await ioWait(connection.prompt({ sessionId: agentSessionId, prompt: content })) }
-          finally {
-            signal.removeEventListener('abort', onAbort)
-            promptActivityIds.clear()
-            active.abort()
-            if (turn === active) {
-              turn = undefined
-              ownedUsedNative = unmatched.size > 0
-            }
-            ownedPrompt = undefined
-            try { io.setMeta({ ownedPrompt: null }) } catch { /* */ }
-            pendingCapture = false
-            let capturedOpen = false
-            for (const id of capturedIds) if (unmatched.has(id)) capturedOpen = true
-            if (!capturedOpen) {
-              cancelEpoch++
-              stopCancelRetry()
-            }
-          }
-        },
-        async interrupt() {
-          if (!turn && unmatched.size === 0 && !pendingCapture) return
-          beginCancel()
-        },
-        close,
-      }, close, finishSetup }
+      return { runtime: makeRuntime({ resume: true, steer: false, fork: false, detach: true, permissions: true }), close, finishSetup }
     } catch (error) { finishSetup(); await close({ mode: 'shutdown' }); throw error }
     function finishSetup() { clearTimeout(timer!); context.signal.removeEventListener('abort', abortSetup) }
   }

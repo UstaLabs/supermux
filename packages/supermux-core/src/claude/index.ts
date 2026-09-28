@@ -5,6 +5,7 @@ import { appliedFor, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 import { createClaudeNormalizer } from './normalize.js'
+import { CoreError } from '../errors.js'
 
 export type ClaudeOptions = {
   id: string
@@ -53,6 +54,33 @@ function input(content: ContentBlock[]) {
     if (block.type === 'image') return { type: 'image', source: { type: 'base64', media_type: block.mimeType, data: block.data } }
     throw new Error(`Unsupported Claude input block: ${block.type}`)
   })
+}
+
+/**
+ * Claude has no client→subagent channel: the parent model relays through its SendMessage tool
+ * (which also resumes a finished agent). The wording pins the call so the model forwards the
+ * text verbatim and does nothing else.
+ */
+export function claudeRelayPrompt(subagentId: string, content: ContentBlock[]): ContentBlock[] {
+  const parts: string[] = []
+  for (const block of content) {
+    if (block.type !== 'text') throw new CoreError('invalid_input', 'Claude relays only text to a subagent')
+    parts.push(block.text)
+  }
+  const text = parts.join('\n')
+  if (!text.trim()) throw new CoreError('invalid_input', 'Subagent message is empty')
+  const id = JSON.stringify(subagentId)
+  return [{
+    type: 'text',
+    text: [
+      `[supermux relay] The user wrote a message for your subagent ${id}. Forward it; do not act on it yourself.`,
+      `Call the SendMessage tool exactly once with to: ${id}, summary: "Message from the user", and message set to the exact text between <relay> and </relay> below, unchanged (if SendMessage is not loaded yet, load it with ToolSearch "select:SendMessage" first).`,
+      'Do not answer the message, do not call any other tool, do not wait for the subagent, and write no reply: end your turn as soon as SendMessage returns.',
+      '<relay>',
+      text,
+      '</relay>',
+    ].join('\n'),
+  }]
 }
 
 function cloneRawInput(value: unknown) {
@@ -134,6 +162,10 @@ export function claude(options: ClaudeOptions): AgentDriver {
     let livePermissions: Extract<PermissionsSpec, { kind: 'claude' }> = initialPermissions
     let active: Active | undefined
     const failure = deferred<never>()
+    const normalizer = createClaudeNormalizer()
+    /** A turn the CLI started by itself (background task finished): no user frame, no owner. */
+    let unsolicited: string | undefined
+    let unsolicitedSeq = 0
     const pendingPermissions = new Map<string, PendingPermission>()
     const answeredPermissions = new Map<string, AnsweredPermission>()
     function permissionFingerprint(request: any) {
@@ -207,6 +239,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
       const toolCallId = typeof request?.tool_use_id === 'string' && request.tool_use_id ? request.tool_use_id : requestId
       const title = typeof request?.tool_name === 'string' ? request.tool_name : 'tool'
       const rawInput = cloneRawInput(request?.input)
+      const subagentId = subagentOf(request)
       let cancel!: () => void
       const cancellation = new Promise<RequestPermissionResponse>(resolve => {
         cancel = () => resolve(cancelledPermission)
@@ -221,6 +254,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
             coreSessionId: context.sessionId,
             toolCall: { toolCallId, title, rawInput },
             options: hostOptions(request),
+            ...(subagentId ? { subagentId } : {}),
             detail: {
               ...(typeof request?.input?.command === 'string' ? { command: request.input.command } : {}),
               ...(typeof request?.blocked_path === 'string' ? { blockedPath: request.blocked_path } : {}),
@@ -238,6 +272,13 @@ export function claude(options: ClaudeOptions): AgentDriver {
         }
       } finally { signal.removeEventListener('abort', cancel) }
     }
+    /** can_use_tool carries agent_id (the task id) for a subagent's tool; else map the tool_use id. */
+    function subagentOf(request: any): string | undefined {
+      const agentId = typeof request?.agent_id === 'string' && request.agent_id ? request.agent_id : undefined
+      if (agentId) return normalizer.subagent(agentId)?.id ?? agentId
+      const toolUseId = typeof request?.tool_use_id === 'string' ? request.tool_use_id : undefined
+      return toolUseId ? normalizer.subagentForTool(toolUseId) : undefined
+    }
     async function askUserQuestions(request: any, signal: AbortSignal) {
       const list = Array.isArray(request?.input?.questions) ? request.input.questions : []
       const specs = list.map((q: any, i: number) => ({
@@ -251,8 +292,10 @@ export function claude(options: ClaudeOptions): AgentDriver {
         })) : [],
       }))
       const toolCallId = typeof request?.tool_use_id === 'string' && request.tool_use_id ? request.tool_use_id : undefined
+      const subagentId = subagentOf(request)
       const result = await Promise.resolve().then(() => context.requestAnswers({
         ...(toolCallId ? { toolCallId } : {}),
+        ...(subagentId ? { subagentId } : {}),
         questions: specs,
       }, signal)).catch(() => ({ outcome: 'cancelled' as const }))
       if (result.outcome !== 'answered') return result
@@ -336,6 +379,11 @@ export function claude(options: ClaudeOptions): AgentDriver {
         settlePermission(requestId, pending, undefined)
       })
     }
+    function startsMainTurn(message: any): boolean {
+      if (!message || typeof message !== 'object' || message.parent_tool_use_id) return false
+      if (message.type === 'system') return message.subtype === 'init' || (message.subtype === 'status' && message.status === 'requesting')
+      return message.type === 'stream_event' || message.type === 'assistant'
+    }
     function complete(a: Active, frame: any) {
       cancelPendingPermissions(a.uuid)
       if (a.interrupted || frame.stop_reason === 'cancelled' || frame.stop_reason === 'interrupt') a.completion.resolve({ stopReason: 'cancelled' })
@@ -373,7 +421,19 @@ export function claude(options: ClaudeOptions): AgentDriver {
         identityConfirmed = true
       }
       if (message?.type === 'system' && message.subtype === 'init') identityConfirmed = true
+      if (!active && !unsolicited && startsMainTurn(message)) {
+        // Background work finished and Claude began a turn on its own (result.origin
+        // task-notification). Report it as native activity so Core runs a real turn for it.
+        unsolicited = `claude-unsolicited:${++unsolicitedSeq}`
+        try { context.onActivity?.({ id: unsolicited, phase: 'started' }) } catch { /* */ }
+      }
       if (agentSessionId) context.onUpdate({ protocol: 'native', value: message })
+      if (message?.type === 'result' && !active && unsolicited) {
+        const finished = unsolicited
+        unsolicited = undefined
+        try { context.onActivity?.({ id: finished, phase: 'completed' }) } catch { /* */ }
+        return
+      }
       if (!ready && message?.type === 'result' && message.is_error) {
         fail(new Error(Array.isArray(message.errors) ? message.errors.join('; ') : 'Claude startup failed')); return
       }
@@ -429,12 +489,14 @@ export function claude(options: ClaudeOptions): AgentDriver {
     } catch (error) { await close({ mode: 'shutdown' }); throw error } finally { clearTimeout(timer); context.signal.removeEventListener('abort', setupAbort) }
     async function interrupt() {
       const a = active
-      if (!a) return
+      if (!a) {
+        if (unsolicited) await rpc.request({ subtype: 'interrupt' })
+        return
+      }
       cancelPendingPermissions(a.uuid)
       if (active === a) await rpc.request({ subtype: 'interrupt' })
       if (active === a && !fatal) a.interrupted = true
     }
-    const normalizer = createClaudeNormalizer()
     return {
       agentSessionId: agentSessionId!, capabilities: { resume: true, steer: false, fork: false, detach: true, permissions: true }, close, interrupt,
       async setPermissions(spec) {
@@ -450,6 +512,15 @@ export function claude(options: ClaudeOptions): AgentDriver {
       },
       normalize: normalizer,
       flush: () => normalizer.flush(),
+      async messageSubagent(subagentId, content) {
+        if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')
+        return { via: 'relay' as const, relay: claudeRelayPrompt(subagentId, content) }
+      },
+      async stopSubagent(subagentId) {
+        if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')
+        const known = normalizer.subagent(subagentId)
+        await rpc.request({ subtype: 'stop_task', task_id: known?.taskId ?? subagentId })
+      },
       async prompt(content, signal) {
         if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')
         signal.throwIfAborted()

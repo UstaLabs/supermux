@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path'
 import { acp, type AcpActivityHint, type AcpOptions } from '../acp/index.js'
-import { createAcpNormalizer } from '../acp/normalize.js'
+import { createAcpNormalizer, type AcpNormalizer } from '../acp/normalize.js'
 import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import type { ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, CloseOptions, DriverContext, SessionConfiguration, PermissionsSpec } from '../types.js'
@@ -129,7 +129,7 @@ function createGrokClassifyActivity(): (update: AgentUpdate) => AcpActivityHint 
   }
 }
 
-function grokAcp(options: GrokOptions, overrides: SessionConfiguration) {
+function grokAcp(options: GrokOptions & { normalizer?: AcpNormalizer }, overrides: SessionConfiguration) {
   const launched = grokCommand(options)
   return acp({
     id: options.id,
@@ -149,10 +149,11 @@ function grokAcp(options: GrokOptions, overrides: SessionConfiguration) {
     classifyActivity: createGrokClassifyActivity(),
     vendor: "grok",
     permissions: options.permissions,
+    ...(options.normalizer ? { normalizer: options.normalizer } : {}),
   })
 }
 
-type GrokChildFactory = (options: GrokOptions, overrides: SessionConfiguration) => AgentDriver
+type GrokChildFactory = (options: GrokOptions & { normalizer?: AcpNormalizer }, overrides: SessionConfiguration) => AgentDriver
 
 /** Grok's native automation transport is ACP; credential refresh stays at the
  * explicit canonical auth path, rather than following a replaceable symlink.
@@ -191,6 +192,7 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
       let candidateFailure: Error | undefined
       let liveCapabilities = { resume: false, steer: false, fork: false, detach: false, configure: false, history: false, permissions: false }
       const nativeOutstanding = new Map<string, ActivityNotice>()
+      const grokNormalizer = createAcpNormalizer({ vendor: 'grok', mainSessionId: () => inner?.agentSessionId ?? acceptedSessionId ?? pending?.agentSessionId })
       const lifetime = new AbortController()
       const childSignal = () => AbortSignal.any([context.signal, lifetime.signal])
       const nativeBusy = () => nativeOutstanding.size > 0
@@ -216,7 +218,9 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
         let published = false
         let setupFailure: Error | undefined
         const buffered = new Map<string, ActivityNotice>()
-        const runtime = await childFactory(options, overrides).open({
+        // The child shares the wrapper's normalizer: subagent state (and permission attribution)
+        // must survive a configure respawn and be the one Session actually normalizes with.
+        const runtime = await childFactory({ ...options, normalizer: grokNormalizer }, overrides).open({
           ...context,
           signal: childSignal(),
           resumeId,
@@ -277,7 +281,6 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
       }
 
       const closedError = () => new CoreError('runtime_closed', 'Grok child is not running')
-      const grokNormalizer = createAcpNormalizer({ vendor: 'grok' })
       const wrapper: AgentRuntime = {
         get agentSessionId() { return inner?.agentSessionId ?? acceptedSessionId ?? pending?.agentSessionId ?? '' },
         get capabilities() { return liveCapabilities },
@@ -299,6 +302,16 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
         async setPermissions(spec) {
           if (!inner?.setPermissions) throw new UnsupportedOperation('permissions', id)
           return inner.setPermissions(spec)
+        },
+        async messageSubagent(subagentId, content) {
+          if (closed) throw new CoreError('runtime_closed', 'Grok runtime closed')
+          if (!inner?.messageSubagent) throw closedError()
+          return inner.messageSubagent(subagentId, content)
+        },
+        async stopSubagent(subagentId) {
+          if (closed) throw new CoreError('runtime_closed', 'Grok runtime closed')
+          if (!inner?.stopSubagent) throw closedError()
+          return inner.stopSubagent(subagentId)
         },
         configuration() { return { ...overrides } },
         async configure(configuration) {
@@ -362,7 +375,7 @@ export function opencode(options: OpenCodeOptions): AgentDriver {
   if (options.model !== undefined && (typeof options.model !== 'string' || !options.model)) throw new TypeError('OpenCode model must be a nonempty string')
   const { model, ...rest } = options
   // --print-logs is the only place OpenCode reports provider failures (the ACP turn ends as a normal completion).
-  return acp({ ...rest, args: ['acp', '--print-logs', '--log-level', 'ERROR'], captureStderr: true, ...(model ? { sessionConfig: { model } } : {}) })
+  return acp({ ...rest, vendor: 'opencode', args: ['acp', '--print-logs', '--log-level', 'ERROR'], captureStderr: true, ...(model ? { sessionConfig: { model } } : {}) })
 }
 
 const CURSOR_MODES = new Set(['agent', 'plan', 'ask'])
@@ -396,6 +409,7 @@ export function cursor(options: CursorOptions): AgentDriver {
   const sessionConfig = cursorSessionConfig(options)
   return acp({
     ...rest,
+    vendor: 'cursor',
     args: [...commandArgs, 'acp'],
     captureStderr: true,
     ...(sessionConfig ? { sessionConfig } : {}),

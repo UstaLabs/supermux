@@ -113,18 +113,20 @@ describe("claude normalizer", () => {
     expect(out.some(e => e.kind === "plan" && e.entries[0]?.status === "in_progress")).toBe(true)
   })
 
-  test("Task and Agent task started then completed", () => {
+  test("Task/Agent tool calls are plain tool calls; the subagent comes from task_* frames", () => {
     const n = createClaudeNormalizer()
     const start = n(native({
       type: "assistant",
       message: { id: "m", content: [{ type: "tool_use", id: "t1", name: "Task", input: { description: "go" } }] },
     }))
-    expect(start.some(e => e.kind === "task" && e.phase === "started" && e.taskId === "t1")).toBe(true)
+    expect(start.some(e => e.kind === "tool-call" && e.phase === "started" && e.callId === "t1")).toBe(true)
+    expect(start.some(e => e.kind === "task")).toBe(false)
     const done = n(native({
       type: "user",
       message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "done" }] },
     }))
-    expect(done.some(e => e.kind === "task" && e.phase === "completed" && e.taskId === "t1")).toBe(true)
+    expect(done.some(e => e.kind === "tool-call" && e.phase === "completed" && e.callId === "t1")).toBe(true)
+    expect(done.some(e => e.kind === "task" || e.kind === "subagent")).toBe(false)
   })
 
   test("rate_limit_event and result usage then error", () => {

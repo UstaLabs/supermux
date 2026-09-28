@@ -140,7 +140,7 @@ async function runVariant(browser: Browser, storage: Awaited<ReturnType<import("
         kind: "question",
         title: "Goal",
         body: JSON.stringify(QUESTIONS),
-        options: QUESTIONS[0].options.map((o) => ({ id: o.id, label: o.label })),
+        options: QUESTIONS[0]!.options.map((o) => ({ id: o.id, label: o.label })),
         allowFreeText: true,
         blocking: true,
       },

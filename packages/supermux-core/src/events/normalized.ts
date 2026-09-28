@@ -29,6 +29,23 @@ export type TaskPhase = "started" | "interacted" | "interrupted" | "completed" |
 
 export type CompactionStatus = "in_progress" | "completed" | "failed" | "cancelled"
 
+/**
+ * Subagent lifecycle. Exactly one `started` per subagent, `progress` whenever activity or stats
+ * change, exactly one terminal phase (`completed` | `failed` | `cancelled`) per run. A subagent
+ * that is resumed after a terminal phase (Claude SendMessage, a direct Codex/ACP turn, a Cursor
+ * Task resume) emits `resumed` with the same subagentId and later a fresh terminal phase.
+ */
+export type SubagentPhase = "started" | "progress" | "completed" | "failed" | "cancelled" | "resumed"
+
+/**
+ * How a client reaches a subagent. `direct`: the library can address the child itself
+ * (Codex child thread, Grok/OpenCode child session). `relay`: only through the parent model
+ * (Claude SendMessage, Cursor Task resume). `none`: not addressable.
+ */
+export type SubagentMessaging = "direct" | "relay" | "none"
+
+export type SubagentStats = { toolCalls?: number; tokens?: number; durationMs?: number; turns?: number }
+
 export type NativeRef = {
   protocol: NativeProtocol
   method?: string
@@ -46,7 +63,7 @@ export type EventEnvelope = {
   native: NativeRef
 }
 
-export type NormalizedBody =
+export type NormalizedBodyBase =
   | { kind: "turn-start" }
   | { kind: "turn-complete"; reason: TurnCompleteReason }
   | { kind: "assistant-delta"; messageId: string; text: string }
@@ -158,6 +175,37 @@ export type NormalizedBody =
   | { kind: "compaction"; compactionId: string; status: CompactionStatus; summary?: string; error?: string }
   | { kind: "warning"; message: string; source?: string }
   | { kind: "error"; message: string; errorType?: string; recoverable?: boolean }
+  | {
+      kind: "subagent"
+      subagentId: string
+      phase: SubagentPhase
+      /** Parent tool call that spawned (or resumed) it. */
+      parentCallId?: string
+      /** subagent_type / nickname / agentPath / Cursor name. */
+      name?: string
+      /** Short human label ("Inspect work dir"). */
+      description?: string
+      /** The task given to it, when the CLI exposes it. */
+      prompt?: string
+      background?: boolean
+      /** Live one-liner: "Reading sub/secret.txt", "Running ls -la". */
+      activity?: string
+      stats?: SubagentStats
+      /** Final answer/summary (terminal phases). */
+      result?: string
+      model?: string
+      messaging?: SubagentMessaging
+      /** Child thread/session id when it differs from subagentId. */
+      nativeId?: string
+    }
+
+/**
+ * Every body may carry `subagentId`: set on bodies produced BY a subagent (its tool calls,
+ * command output, assistant/reasoning text, requests). Main-thread bodies leave it unset.
+ * Distributes over the union so every member gets the optional field.
+ */
+type WithSubagent<T> = T extends unknown ? T & { subagentId?: string } : never
+export type NormalizedBody = WithSubagent<NormalizedBodyBase>
 
 export type NormalizedEvent = EventEnvelope & { event: NormalizedBody }
 

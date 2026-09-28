@@ -9,6 +9,7 @@ import type {
   HistoryOptions, HistoryPage, SessionConfiguration, CloseOptions,
   PendingRequest, PermissionOptionKind, PermissionRequest, PermissionResponse, RequestAnswer,
   QuestionRequest, QuestionResponse, PermissionsSpec, PermissionsApplied,
+  ContentBlock, SubagentMessageOptions,
 } from "./types.js"
 import { validatePermissionsSpec } from "./permissions.js"
 import type { EventEnvelope, NormalizedBody, ToolCategory, TurnCompleteReason } from "./events/normalized.js"
@@ -311,6 +312,38 @@ export class Session {
     if (this.activity.size > 1) throw new CoreError("session_busy", "Native work is ambiguous")
     if (!this.active && this.activity.size !== 1) throw new CoreError("session_not_running", "No active work to steer")
     await this.runtime.steer(structuredClone(input.content))
+  }
+
+  /**
+   * Send input to a subagent. A runtime that reaches the child directly delivers it now (out of
+   * band from the main queue, like the child's own turn). A relay-only runtime returns the
+   * main-thread message that asks the parent model to forward it; that message goes through the
+   * normal send() queue, so `receipt` tracks it like any other input.
+   */
+  async messageSubagent(
+    subagentId: string,
+    content: ContentBlock[],
+    options: SubagentMessageOptions = {},
+  ): Promise<{ via: "direct" } | { via: "relay"; receipt: Receipt }> {
+    this.assertReady()
+    if (!this.runtime.messageSubagent) throw new UnsupportedOperation("subagent messaging", this.record.agent)
+    if (typeof subagentId !== "string" || !subagentId) throw new CoreError("invalid_input", "subagentId is required")
+    if (!Array.isArray(content) || !content.length) throw new CoreError("invalid_input", "At least one content block is required")
+    const whenBusy = options.whenBusy ?? "queue"
+    if (whenBusy !== "queue" && whenBusy !== "reject") throw new CoreError("invalid_input", "whenBusy must be queue or reject")
+    if (this.interrupting || this.state === "interrupting") throw new CoreError("session_busy", "Interrupt has not been confirmed")
+    const result = await this.runtime.messageSubagent(subagentId, structuredClone(content))
+    if (result.via === "direct") return { via: "direct" }
+    const receipt = await this.send({ content: result.relay, whenBusy })
+    return { via: "relay", receipt }
+  }
+
+  /** Stop one subagent without interrupting the main turn. */
+  async stopSubagent(subagentId: string): Promise<void> {
+    this.assertReady()
+    if (!this.runtime.stopSubagent) throw new UnsupportedOperation("subagent stop", this.record.agent)
+    if (typeof subagentId !== "string" || !subagentId) throw new CoreError("invalid_input", "subagentId is required")
+    await this.runtime.stopSubagent(subagentId)
   }
 
   async setPermissions(spec: PermissionsSpec): Promise<{ applied: PermissionsApplied }> {
@@ -633,7 +666,13 @@ function questionBody(requestId: string, request: QuestionRequest): Extract<Norm
       options,
     }
   })
-  return { kind: "user-question", requestId, blocking: true, questions }
+  return {
+    kind: "user-question",
+    requestId,
+    blocking: true,
+    questions,
+    ...(typeof request.subagentId === "string" && request.subagentId ? { subagentId: request.subagentId } : {}),
+  }
 }
 
 function mapQuestionAnswers(
@@ -706,6 +745,7 @@ function permissionBody(requestId: string, request: PermissionRequest): Extract<
     },
     options,
     ...(detail && Object.keys(detail).length ? { detail } : {}),
+    ...(typeof request.subagentId === "string" && request.subagentId ? { subagentId: request.subagentId } : {}),
   }
 }
 

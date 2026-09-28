@@ -116,10 +116,16 @@ describe("codex normalizer", () => {
     expect(out[0]).toMatchObject({ kind: "tool-call", category: "web-search", input: { query: "first query ...", action } })
   })
 
-  test("subAgentActivity and collabAgentToolCall as task", () => {
+  test("subAgentActivity and collabAgentToolCall drive subagent bodies, not tasks", () => {
     const n = createCodexNormalizer()
-    expect(n(native("item/started", { item: { type: "subAgentActivity", id: "s", kind: "started", agentThreadId: "t", agentPath: "p" } }))[0]).toMatchObject({ kind: "task", taskKind: "subagent", phase: "started" })
-    expect(n(native("item/completed", { item: { type: "collabAgentToolCall", id: "c", tool: "spawn", status: "completed", senderThreadId: "a", receiverThreadIds: [], agentsStates: {} } }))[0]).toMatchObject({ kind: "task", taskKind: "collab", phase: "completed" })
+    expect(n(native("item/started", { item: { type: "subAgentActivity", id: "s", kind: "started", agentThreadId: "t", agentPath: "p" } }))).toEqual([
+      { kind: "subagent", subagentId: "t", phase: "started", parentCallId: "s", name: "p", messaging: "none" },
+    ])
+    // A collab call with no receivers and no states says nothing about a subagent.
+    expect(n(native("item/completed", { item: { type: "collabAgentToolCall", id: "c", tool: "spawnAgent", status: "failed", senderThreadId: "a", receiverThreadIds: [], agentsStates: {} } }))).toEqual([])
+    expect(n(native("item/completed", { item: { type: "subAgentActivity", id: "s2", kind: "completed", agentThreadId: "t", agentPath: "p" } }))).toEqual([
+      { kind: "subagent", subagentId: "t", phase: "completed" },
+    ])
   })
 
   test("contextCompaction and thread/compacted", () => {

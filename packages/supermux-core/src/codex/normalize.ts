@@ -1,6 +1,6 @@
 /** Codex app-server mapper. Schema pin: `codex app-server generate-ts` dump used 2026-09-21. */
 import type { AgentUpdate } from "../types.js"
-import type { NormalizedBody, PlanEntryStatus, TaskPhase, ToolCallPhase } from "../events/normalized.js"
+import type { NormalizedBody, PlanEntryStatus, SubagentMessaging, SubagentStats, ToolCallPhase } from "../events/normalized.js"
 
 type Frame = { method?: string; params?: Record<string, unknown>; id?: unknown }
 
@@ -83,15 +83,6 @@ function planStatus(status: unknown): PlanEntryStatus {
   return "pending"
 }
 
-function taskPhase(kind: unknown, status: unknown): TaskPhase {
-  if (kind === "started" || kind === "interacted" || kind === "interrupted" || kind === "completed") return kind
-  if (status === "interrupted") return "interrupted"
-  if (status === "failed") return "failed"
-  if (status === "completed") return "completed"
-  if (status === "inProgress") return "started"
-  return "started"
-}
-
 function toolPhaseItem(started: boolean, item: Record<string, unknown>): ToolCallPhase {
   return phaseFromStatus(item.status, started)
 }
@@ -143,12 +134,156 @@ function mapQuestions(questions: unknown[], _fallback: string, opts: { freeTextF
   })
 }
 
-export type CodexNormalizer = ((update: AgentUpdate) => NormalizedBody[]) & { flush: () => NormalizedBody[] }
+export type CodexNormalizer = ((update: AgentUpdate) => NormalizedBody[]) & {
+  flush: () => NormalizedBody[]
+  /** Child thread ids learned from spawnAgent / subAgentActivity items. */
+  isChild: (threadId: string) => boolean
+  /** v2 (multi_agent_v2) children refuse direct app-server input. */
+  messaging: (threadId: string) => SubagentMessaging | undefined
+  /** Register a child known from elsewhere (keeper re-attach) without a `started` event. */
+  adopt: (threadId: string) => void
+}
+
+type Child = {
+  id: string
+  open: boolean
+  messaging: SubagentMessaging
+  activity?: string
+  result?: string
+  stats: SubagentStats
+  turnId?: string
+}
+
+const MAX_CHILDREN = 256
+
+/** "/bin/bash -lc 'ls -la'" → "ls -la" for an activity line. */
+function shortCommand(command: string): string {
+  const m = /^\S*\/(?:ba|z)?sh\s+-l?c\s+([\s\S]*)$/.exec(command.trim())
+  let inner = m ? m[1]!.trim() : command.trim()
+  if (m && inner.length >= 2 && ((inner.startsWith("'") && inner.endsWith("'")) || (inner.startsWith('"') && inner.endsWith('"')))) inner = inner.slice(1, -1)
+  return inner.split("\n")[0]!.slice(0, 200)
+}
+
+function oneLine(text: string): string {
+  const line = text.trim().split("\n").find(l => l.trim()) ?? ""
+  return line.length > 200 ? `${line.slice(0, 197)}...` : line
+}
+
+function childTerminal(status: unknown): "completed" | "failed" | "cancelled" {
+  if (status === "interrupted" || status === "shutdown" || status === "cancelled") return "cancelled"
+  if (status === "failed" || status === "errored" || status === "notFound") return "failed"
+  return "completed"
+}
 
 export function createCodexNormalizer(): CodexNormalizer {
   const assistant = new Map<string, string>()
   const reasoning = new Map<string, { text: string; summary: string[] }>()
   const plans = new Map<string, string>()
+  /** Buffered message/reasoning item id → owning child thread (flush attribution). */
+  const owners = new Map<string, string>()
+  const children = new Map<string, Child>()
+
+  function attribute<T extends NormalizedBody>(body: T, subagentId: string | undefined): T {
+    return subagentId ? { ...body, subagentId } : body
+  }
+
+  function childBody(child: Child, phase: Extract<NormalizedBody, { kind: "subagent" }>["phase"], extra: Partial<Extract<NormalizedBody, { kind: "subagent" }>> = {}): NormalizedBody {
+    return { kind: "subagent", subagentId: child.id, phase, ...extra }
+  }
+
+  function spawn(threadId: string, extra: Partial<Extract<NormalizedBody, { kind: "subagent" }>>, messaging: SubagentMessaging): NormalizedBody[] {
+    if (children.has(threadId)) return []
+    const child: Child = { id: threadId, open: true, messaging, stats: {} }
+    children.set(threadId, child)
+    while (children.size > MAX_CHILDREN) {
+      const oldest = children.keys().next().value
+      if (oldest === undefined) break
+      children.delete(oldest)
+    }
+    return [childBody(child, "started", { ...extra, messaging })]
+  }
+
+  function finish(child: Child, phase: "completed" | "failed" | "cancelled", result?: string): NormalizedBody[] {
+    if (!child.open) return []
+    child.open = false
+    const text = result ?? child.result
+    const stats = Object.keys(child.stats).length ? { ...child.stats } : undefined
+    return [childBody(child, phase, { ...(text ? { result: text } : {}), ...(stats ? { stats } : {}) })]
+  }
+
+  function activity(child: Child, line: string): NormalizedBody[] {
+    if (!line || line === child.activity || !child.open) return []
+    child.activity = line
+    const stats = Object.keys(child.stats).length ? { ...child.stats } : undefined
+    return [childBody(child, "progress", { activity: line, ...(stats ? { stats } : {}) })]
+  }
+
+  /** Main-thread collab/subAgentActivity items drive the subagent lifecycle. */
+  function mapCollab(item: Record<string, unknown>, started: boolean): NormalizedBody[] {
+    const type = itemType(item)
+    const id = str(item.id) ?? "item"
+    if (type === "subAgentActivity") {
+      const threadId = str(item.agentThreadId)
+      if (!threadId) return []
+      const kind = item.kind
+      if (kind === "started") {
+        const name = str(item.agentPath)
+        // multi_agent_v2 children refuse direct app-server input (-32600).
+        return spawn(threadId, { parentCallId: id, ...(name ? { name } : {}) }, "none")
+      }
+      const child = children.get(threadId)
+      if (!child) return []
+      if (kind === "completed") return finish(child, "completed")
+      if (kind === "interrupted") return finish(child, "cancelled")
+      return []
+    }
+    // collabAgentToolCall
+    if (started) return []
+    const tool = str(item.tool)
+    const receivers = Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds.filter((x): x is string => typeof x === "string" && !!x) : []
+    const states = rec(item.agentsStates) ?? {}
+    const out: NormalizedBody[] = []
+    if (tool === "spawnAgent") {
+      for (const threadId of receivers) {
+        const prompt = str(item.prompt)
+        const model = str(item.model)
+        out.push(...spawn(threadId, { parentCallId: id, ...(prompt ? { prompt } : {}), ...(model ? { model } : {}) }, "direct"))
+      }
+    }
+    // wait / closeAgent / interruptAgent report the children's last states.
+    for (const [threadId, raw] of Object.entries(states)) {
+      const child = children.get(threadId)
+      const state = rec(raw)
+      if (!child || !state) continue
+      const status = state.status
+      if (status === "pendingInit" || status === "running") continue
+      const message = str(state.message)
+      out.push(...finish(child, childTerminal(status), message))
+    }
+    return out
+  }
+
+  function mapChildItem(child: Child, item: Record<string, unknown>, started: boolean): NormalizedBody[] {
+    const type = itemType(item)
+    // A child's own collab items describe grandchildren: those subagent bodies keep their own id.
+    const out = mapItem(item, started).map(body => body.kind === "subagent" ? body : attribute(body, child.id))
+    if (type === "commandExecution" && started) {
+      child.stats.toolCalls = (child.stats.toolCalls ?? 0) + 1
+      const command = str(item.command)
+      if (command) out.push(...activity(child, `Running ${shortCommand(command)}`))
+    } else if ((type === "mcpToolCall" || type === "dynamicToolCall" || type === "webSearch") && started) {
+      child.stats.toolCalls = (child.stats.toolCalls ?? 0) + 1
+      out.push(...activity(child, `Using ${str(item.tool) ?? type}`))
+    } else if (type === "fileChange" && started) {
+      child.stats.toolCalls = (child.stats.toolCalls ?? 0) + 1
+      out.push(...activity(child, "Editing files"))
+    } else if (type === "agentMessage" && !started) {
+      const text = typeof item.text === "string" ? item.text : ""
+      if (item.phase === "final_answer") child.result = text
+      else if (text) out.push(...activity(child, oneLine(text)))
+    }
+    return out
+  }
 
   function mapItem(item: Record<string, unknown>, started: boolean): NormalizedBody[] {
     const type = itemType(item)
@@ -308,24 +443,7 @@ export function createCodexNormalizer(): CodexNormalizer {
         { kind: "web-search", callId: id, phase, query: str(item.query), results: item.results },
       ]
     }
-    if (type === "subAgentActivity") {
-      return [{
-        kind: "task",
-        taskId: id,
-        taskKind: "subagent",
-        phase: taskPhase(item.kind, undefined),
-        label: str(item.agentPath),
-      }]
-    }
-    if (type === "collabAgentToolCall") {
-      return [{
-        kind: "task",
-        taskId: id,
-        taskKind: "collab",
-        phase: taskPhase(undefined, item.status),
-        label: str(item.tool) ?? str(item.prompt),
-      }]
-    }
+    if (type === "subAgentActivity" || type === "collabAgentToolCall") return mapCollab(item, started)
     if (type === "contextCompaction") {
       return [{ kind: "compaction", compactionId: id, status: started ? "in_progress" : "completed" }]
     }
@@ -341,10 +459,52 @@ export function createCodexNormalizer(): CodexNormalizer {
     return []
   }
 
-  function mapNotification(frame: Frame): NormalizedBody[] {
+  function mapChild(child: Child, method: string, params: Record<string, unknown>, frame: Frame): NormalizedBody[] {
+    if (method === "turn/started") {
+      const turn = rec(params.turn)
+      child.turnId = str(turn?.id)
+      if (child.open) return []
+      // A new child turn after its run ended: a direct message (or a parent follow-up) resumed it.
+      child.open = true
+      child.activity = undefined
+      child.result = undefined
+      // Per-run counters restart; tokens stay the thread total Codex reports.
+      delete child.stats.toolCalls
+      return [childBody(child, "resumed", { messaging: child.messaging })]
+    }
+    if (method === "turn/completed") {
+      const turn = rec(params.turn)
+      child.turnId = undefined
+      const status = turn?.status
+      const error = str(rec(turn?.error)?.message)
+      return finish(child, childTerminal(status), status === "failed" ? error : undefined)
+    }
+    if (method === "item/started" || method === "item/completed") {
+      const item = rec(params.item)
+      if (!item) return []
+      return mapChildItem(child, item, method === "item/started")
+    }
+    if (method === "thread/tokenUsage/updated") {
+      const total = num(rec(rec(params.tokenUsage)?.total)?.totalTokens)
+      if (total !== undefined) child.stats.tokens = total
+      return []
+    }
+    if (method === "account/rateLimits/updated" || method === "thread/name/updated" || method === "model/rerouted") return []
+    const out = mapNotification(frame, true)
+    for (const body of out) {
+      if (body.kind === "assistant-delta") owners.set(body.messageId, child.id)
+      if (body.kind === "reasoning-delta") owners.set(body.reasoningId, child.id)
+    }
+    return out.map(body => attribute(body, child.id))
+  }
+
+  function mapNotification(frame: Frame, nested = false): NormalizedBody[] {
     const method = frame.method
     const params = rec(frame.params) ?? {}
     if (!method) return []
+    const threadId = str(params.threadId)
+    const child = !nested && threadId ? children.get(threadId) : undefined
+    if (child) return mapChild(child, method, params, frame)
     if (method === "item/started" || method === "item/completed") {
       const item = rec(params.item)
       if (!item) return []
@@ -505,20 +665,27 @@ export function createCodexNormalizer(): CodexNormalizer {
   normalize.flush = () => {
     const out: NormalizedBody[] = []
     for (const [id, text] of assistant) {
-      out.push({ kind: "assistant-message", messageId: id, text })
+      out.push(attribute({ kind: "assistant-message", messageId: id, text }, owners.get(id)))
     }
     for (const [id, value] of reasoning) {
-      out.push({
+      out.push(attribute({
         kind: "reasoning",
         reasoningId: id,
         redacted: !value.text,
         ...(value.text ? { text: value.text } : {}),
         ...(value.summary.length ? { summary: value.summary } : {}),
-      })
+      }, owners.get(id)))
     }
     assistant.clear()
     reasoning.clear()
+    owners.clear()
     return out
   }
+  normalize.isChild = (threadId: string) => children.has(threadId)
+  normalize.adopt = (threadId: string) => {
+    if (children.has(threadId)) return
+    children.set(threadId, { id: threadId, open: false, messaging: "direct", stats: {} })
+  }
+  normalize.messaging = (threadId: string) => children.get(threadId)?.messaging
   return normalize
 }
