@@ -56,6 +56,9 @@ kotlinxBrowser = "0.5.0"
 # 3.5.0: its Kotlin/Native klibs are abi_version 2.4.0, which the 2.3.21 compiler refused; the
 # Kotlin 2.4.10 toolchain reads them, so the 3.4.0 ABI pin is lifted.
 coil = "3.5.0"
+kaml = "0.104.0"
+kotlinxDatetime = "0.7.1"
+androidSvg = "1.4"
 # Compose Media Player — inline video in the desktop chat stream. MIT (vlcj, the obvious
 # alternative, is GPLv3 and would relicense the app). Per-platform native backends compiled into
 # the jar: AVPlayer on macOS, Media Foundation on Windows, GStreamer on Linux — no system install.
@@ -67,6 +70,9 @@ composeMediaPlayer = "0.11.4"
 atomicfu = "0.29.0"
 
 [libraries]
+kaml = { module = "com.charleskorn.kaml:kaml", version.ref = "kaml" }
+kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
+android-svg = { module = "com.caverock:androidsvg-aar", version.ref = "androidSvg" }
 atomicfu = { module = "org.jetbrains.kotlinx:atomicfu", version.ref = "atomicfu" }
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
