@@ -64,3 +64,4 @@ include(":editor-plugins:view")
 include(":editor-plugins:search")
 // The native editor's M4c plugins: autocompletion, lint (diagnostics), the LSP client.
 include(":editor-plugins:autocomplete")
+include(":editor-plugins:lint")

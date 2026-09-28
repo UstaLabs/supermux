@@ -57,6 +57,8 @@ internal class SurfaceFrame(
     /** The drawn placeholder chips (a fold's "⋯"), and the glyph they show. */
     val chips: List<DrawnChip> = emptyList(),
     val chipGlyph: TextLayoutResult? = null,
+    /** Squiggles (a lint diagnostic's underline): the style and the text rect it underlines. */
+    val squiggles: List<Pair<SquiggleStyle, Rect>> = emptyList(),
 ) {
     companion object {
         fun empty(size: Size, scrollX: Float, scrollY: Float, gutterWidth: Float, caret: Rect) = SurfaceFrame(
@@ -153,6 +155,18 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
         val clipped = SelectionRange(maxOf(r.from, viewStart), minOf(r.to, minOf(doc.length, viewEnd + 1)))
         for (rect in g.selectionRects(clipped, scrollY, scrollY + height)) selections += rect.translate(left, -scrollY)
     }
+    // Squiggles: marks whose class the theme underlines (lint), per row of their text.
+    val squiggles = ArrayList<Pair<SquiggleStyle, Rect>>()
+    if (theme.squiggles.isNotEmpty()) {
+        for (set in state.facet(decorationsFacet)) for (r in set.between(viewStart, viewEnd)) {
+            val m = r.value as? Decoration.Mark ?: continue
+            val style = m.classes.firstNotNullOfOrNull { theme.squiggles[it] } ?: continue
+            val a = maxOf(r.from, viewStart)
+            val b = minOf(r.to, viewEnd, doc.length)
+            if (b <= a) continue
+            for (rect in g.selectionRects(SelectionRange(a, b), scrollY, scrollY + height)) squiggles += style to rect.translate(left, -scrollY)
+        }
+    }
     // Text (a long line: only its pieces in view).
     val text = ArrayList<DrawnText>()
     val areaWidth = size.width - textLeft
@@ -231,7 +245,7 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
         }
     }
     val glyph = if (chips.isNotEmpty()) chipGlyph() else null
-    return SurfaceFrame(size, lines, scrollX, scrollY, gutterWidth, backgrounds, selections, text, cursors, numbers, spots, caret, markers, widgets, chips, glyph)
+    return SurfaceFrame(size, lines, scrollX, scrollY, gutterWidth, backgrounds, selections, text, cursors, numbers, spots, caret, markers, widgets, chips, glyph, squiggles)
 }
 
 /**
@@ -247,6 +261,7 @@ internal fun DrawScope.drawFrame(frame: SurfaceFrame, theme: EditorTheme, focuse
         for ((color, r) in frame.lineBackgrounds) drawRect(color, r.topLeft, r.size)
         for (r in frame.selections) drawRect(theme.selection, r.topLeft, r.size)
         for (t in frame.text) drawText(t.layout, topLeft = t.topLeft)
+        for ((style, r) in frame.squiggles) drawSquiggle(style, r)
         val glyph = frame.chipGlyph
         for (c in frame.chips) {
             val r = c.rect.deflate(minOf(1.5f * density, c.rect.width / 8))
@@ -308,4 +323,29 @@ private fun DrawScope.drawMarker(m: DrawnMarker, style: GutterMarkerStyle) {
             drawPath(p, style.color)
         }
     }
+}
+
+/** A squiggle under [r]'s bottom: a wave two px high (one period per 4 dp), or dots. */
+private fun DrawScope.drawSquiggle(style: SquiggleStyle, r: Rect) {
+    val w = maxOf(r.width, 3f * density)
+    val y = r.bottom - 2f * density
+    if (style.dotted) {
+        var x = r.left
+        while (x < r.left + w) { drawCircle(style.color, radius = 0.8f * density, center = Offset(x + density, y + density)); x += 3f * density }
+        return
+    }
+    val period = 4f * density
+    val amp = 1.2f * density
+    val p = Path().apply {
+        moveTo(r.left, y + amp)
+        var x = r.left
+        var up = true
+        while (x < r.left + w) {
+            val nx = minOf(x + period / 2, r.left + w)
+            lineTo(nx, if (up) y - amp else y + amp)
+            up = !up
+            x = nx
+        }
+    }
+    drawPath(p, style.color, style = androidx.compose.ui.graphics.drawscope.Stroke(width = maxOf(1f, 1f * density)))
 }

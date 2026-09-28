@@ -56,6 +56,11 @@ data class EditorTheme(
     val widgetChipBackground: Color = selection,
     /** ...and its glyph. */
     val widgetChipForeground: Color = foreground,
+    /**
+     * Mark classes drawn as a wavy underline in a colour (the lint plugin's `lint-error`,
+     * `lint-warning`, `lint-info`; `lint-hint` is a dotted one: [SquiggleStyle]).
+     */
+    val squiggles: Map<String, SquiggleStyle> = emptyMap(),
 ) {
     /** The style of mark class [cls], or null when the theme does not draw it. */
     fun styleOf(cls: String): SpanStyle? = tokens[cls] ?: classStyles[cls]
@@ -74,6 +79,7 @@ data class EditorTheme(
         classStyles = classStyles + palette.classStyles,
         lineClassBackgrounds = lineClassBackgrounds + palette.lineClassBackgrounds,
         gutterMarkers = gutterMarkers + palette.gutterMarkers,
+        squiggles = squiggles + palette.squiggles,
     )
 
     companion object {
@@ -106,6 +112,14 @@ data class EditorTheme(
         /** The autocomplete plugin's snippet fields (`snippet-field`): a faint box behind each tab stop's text. */
         fun completionClasses(field: Color): Map<String, SpanStyle> = mapOf("snippet-field" to SpanStyle(background = field))
 
+        /** The lint plugin's underlines: wavy for errors, warnings and infos, dotted for hints. */
+        fun lintSquiggles(error: Color, warning: Color, info: Color, hint: Color): Map<String, SquiggleStyle> = mapOf(
+            "lint-error" to SquiggleStyle(error),
+            "lint-warning" to SquiggleStyle(warning),
+            "lint-info" to SquiggleStyle(info),
+            "lint-hint" to SquiggleStyle(hint, dotted = true),
+        )
+
         /** The M4 plugins' columns: diff bars, lint dots, comment bubbles, fold arrows. */
         val DEFAULT_GUTTER_COLUMNS: Map<String, Dp> = mapOf("diff" to 6.dp, "lint" to 12.dp, "comment" to 16.dp, "fold" to 14.dp)
 
@@ -116,6 +130,7 @@ data class EditorTheme(
             "diff-change" to GutterMarkerStyle(change, GutterMarkerShape.BAR),
             "lint-error" to GutterMarkerStyle(error, GutterMarkerShape.DOT),
             "lint-warning" to GutterMarkerStyle(warning, GutterMarkerShape.DOT),
+            "lint-info" to GutterMarkerStyle(comment, GutterMarkerShape.DOT),
             "comment" to GutterMarkerStyle(comment, GutterMarkerShape.BUBBLE),
             "fold-open" to GutterMarkerStyle(fold, GutterMarkerShape.OPEN),
             "fold-closed" to GutterMarkerStyle(fold, GutterMarkerShape.CLOSED),
@@ -146,6 +161,7 @@ data class EditorTheme(
                 red = Color(0xFFE06C75), parameter = Color(0xFFE5A36C), punctuation = Color(0xFFA3AAA0),
                 link = Color(0xFF61AFEF),
             ),
+            squiggles = lintSquiggles(error = Color(0xFFE06C75), warning = Color(0xFFE5C07B), info = Color(0xFF61AFEF), hint = Color(0xFF8A9084)),
             fontFamily = font,
         ) }
 
@@ -174,6 +190,7 @@ data class EditorTheme(
                 red = Color(0xFFE45649), parameter = Color(0xFFB35A1F), punctuation = Color(0xFF55594F),
                 link = Color(0xFF4078F2),
             ),
+            squiggles = lintSquiggles(error = Color(0xFFD13438), warning = Color(0xFFB88600), info = Color(0xFF2F6FD6), hint = Color(0xFF6E7268)),
             fontFamily = font,
         ) }
 
@@ -222,6 +239,10 @@ data class EditorTheme(
         )
     }
 }
+
+/** A mark class drawn as an underline under its text: wavy (a squiggle), or [dotted]. */
+@Immutable
+data class SquiggleStyle(val color: Color, val dotted: Boolean = false)
 
 /** How a gutter marker kind is drawn: its [shape] in its [color]. */
 @Immutable

@@ -384,6 +384,10 @@ see it; they put semantic class names on decorations:
   `nonmatching-bracket` and `selection-match` (`EditorTheme.pluginClasses`), and the search plugin's
   `search-match` / `search-match-selected` (`EditorTheme.searchClasses`), and autocomplete's
   `snippet-field` (`EditorTheme.completionClasses`).
+- `EditorTheme.squiggles` (`SquiggleStyle(color, dotted)`): mark classes drawn as an underline under
+  their text, per row, decided in the layout pass: the lint plugin's `lint-error` / `lint-warning` /
+  `lint-info` (wavy) and `lint-hint` (dotted), in `light` and `dark` (`EditorTheme.lintSquiggles`).
+  The gutter marker kinds add `lint-info`.
 - When several marks cover the same text, styles merge in `decorationsFacet` order (highest
   precedence first) and the later one wins per attribute. `ime-composition` is the surface's own
   class (an underline).
