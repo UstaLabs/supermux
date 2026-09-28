@@ -50,6 +50,12 @@ fun main() {
                     open = { name -> SampleFile.entries.firstOrNull { it.name == name }?.let { sampleFileOpener?.invoke(it) }; Unit },
                     panel = { on -> M3cDemo.setPanel(v, on) },
                 )
+                // The search plugin, for web-bench/run.mjs `search`: open, the query, the count.
+                publishSearchHook {
+                    val st = v.state
+                    val s = dev.supermux.editor.plugins.search.Search.state(st)
+                    "{\"open\":${s.open},\"search\":${jsonString(s.query.search)},\"count\":${jsonString(dev.supermux.editor.plugins.search.Search.matchInfo(st).label)},\"focused\":${v.focused}}"
+                }
             },
         )
     }
@@ -91,6 +97,8 @@ private fun publishEditorHooks(doc: () -> String, sel: () -> String, open: (Stri
 }
 
 private fun publishPanelHook(panel: (Boolean) -> Unit) { js("{ window.__demoPanel = panel; }") }
+
+private fun publishSearchHook(probe: () -> String) { js("{ window.__search = () => JSON.parse(probe()); }") }
 
 private fun publishDemoProbe(probe: () -> String) { js("{ window.__demoProbe = () => JSON.parse(probe()); }") }
 

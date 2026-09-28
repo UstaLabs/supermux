@@ -376,10 +376,11 @@ fun SideBySidePane(a: SampleSession, b: SampleSession, theme: EditorTheme, stats
         androidx.compose.runtime.snapshotFlow { b.view.state.doc }.collect { applyDiff(a.view, b.view) }
     }
     Row(Modifier.fillMaxSize()) {
+        val widgets = rememberSearchWidgets()
         Editor(a.view, Modifier.weight(1f).fillMaxHeight(), theme = tinted, readOnly = true,
-            onFontSize = onFontSize, label = "Base (A)", linked = link, linkedSide = LinkedSide.A)
+            onFontSize = onFontSize, label = "Base (A)", linked = link, linkedSide = LinkedSide.A, widgets = widgets)
         Box(Modifier.width(1.dp).fillMaxHeight().background(theme.gutterForeground.copy(alpha = 0.5f)))
         Editor(b.view, Modifier.weight(1f).fillMaxHeight(), theme = tinted,
-            onPaint = stats?.let { s -> { s.drawEnd() } }, onFontSize = onFontSize, label = "Working copy (B)", linked = link, linkedSide = LinkedSide.B)
+            onPaint = stats?.let { s -> { s.drawEnd() } }, onFontSize = onFontSize, label = "Working copy (B)", linked = link, linkedSide = LinkedSide.B, widgets = widgets)
     }
 }

@@ -213,9 +213,21 @@ fun SampleApp(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Chip("settings", settings, ink) { settings = !settings }
+            if (session != null) {
+                // Search on a phone (no Mod-f there): the plugin's own commands, like the keys run them.
+                val v = session.view
+                val open = dev.supermux.editor.plugins.search.Search.isOpen(v.state)
+                Chip("find", open, ink) {
+                    if (open) dev.supermux.editor.plugins.search.Search.closeSearchPanel.run(v)
+                    else dev.supermux.editor.plugins.search.Search.openSearchPanel.run(v)
+                }
+                Chip("go to line", dev.supermux.editor.plugins.search.Search.state(v.state).gotoLineOpen, ink) {
+                    dev.supermux.editor.plugins.search.Search.gotoLine.run(v)
+                }
+            }
             if (file == SampleFile.DEMO && session != null) {
                 val shown = M3cDemo.panelShown(session.view.state)
-                Chip(if (shown) "find panel: on" else "find panel: off", shown, ink) { M3cDemo.setPanel(session.view, !shown) }
+                Chip(if (shown) "demo panel: on" else "demo panel: off", shown, ink) { M3cDemo.setPanel(session.view, !shown) }
             }
             for (f in SampleFile.entries) Chip(f.label, f == file, ink) { file = f }
         }

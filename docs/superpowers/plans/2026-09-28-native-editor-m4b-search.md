@@ -38,7 +38,7 @@ Same as M4a:
     indefinitely. Clear the "composing" state on blur or on a focus change.
   - Add a CDP test: move the textarea caret while the textarea's value is ahead of the editor's text, and assert the
     caret ends up where the user put it.
-- [ ] Commit: `fix(editor-compose,history): M4a review follow-ups`.
+- [x] Commit: `fix(editor-compose,history): M4a review follow-ups`.
 
 ### Task 1: The search engine (pure, in the search module, no UI)
 - **Query:**
@@ -61,7 +61,7 @@ Same as M4a:
   - emoji and Turkish case folding (`İ`/`i`, `I`/`ı`); document what `caseSensitive = false` does for Turkish
   - a 10 MB document: finding the next match from the end wraps around in under 50 ms on the JVM
   - a match count capped at 10,000, reported as "10,000+"
-- [ ] Commit: `feat(editor-plugins): search engine (literal, regex, case, whole word, replace templates)`.
+- [x] Commit: `feat(editor-plugins): search engine (literal, regex, case, whole word, replace templates)`.
 
 ### Task 2: The search plugin and panel
 - **State:** a `StateField` holding the query and whether the panel is open, updated through effects.
@@ -102,9 +102,9 @@ Same as M4a:
   - panel focus and Escape
   - selectMatches producing N cursors, followed by typing at all of them
   - `Mod-d` behaviour matching CM6
-- [ ] Commit: `feat(editor-plugins): search & replace plugin with panel`.
+- [x] Commit: `feat(editor-plugins): search & replace plugin with panel`.
 
-### Task 3: The mobile accessory bar (only if Ahmet approves; the controller will say)
+### Task 3: The mobile accessory bar (only if Ahmet approves; the controller will say) — NOT BUILT (no approval yet)
 - **The bar:** above the soft keyboard on phones and tablets without a hardware keyboard, shown while the editor has
   focus. Buttons: Undo, Redo, Tab, Shift-Tab, ←, →, ↑, ↓, and Find (opens the search panel).
 - **Style:** match the terminal's accessory bar (`apps/terminal-compose/.../TerminalAccessories.kt`) and its
@@ -119,12 +119,12 @@ Same as M4a:
 - [ ] Commit: `feat(editor-compose): mobile accessory bar`.
 
 ### Task 4: Sample, devices, docs
-- [ ] Wire search (and the accessory bar, if built) into `editor-sample`. Reinstall on devices and restart the samples.
-- [ ] Write a checklist for Ahmet, for the controller to relay:
+- [x] Wire search (and the accessory bar, if built) into `editor-sample`. Reinstall on devices and restart the samples.
+- [x] Write a checklist for Ahmet, for the controller to relay:
   - `Mod-f` and the panel, regex and replace with groups, replace all + undo, `Mod-d`, selecting all matches
   - search inside a fold (it unfolds)
   - on a phone: the panel with the soft keyboard, and the accessory bar
-- [ ] Write the README and append to `~/.mux/domains/editor.md`. Commit.
+- [x] Write the README and append to `~/.mux/domains/editor.md`. Commit.
 
 ## Not in M4b
 - **M4c:** LSP. **M4d:** diff + review threads.

@@ -33,8 +33,8 @@ import { spawn } from 'node:child_process';
 
 const CHROME = process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const [mode, distArg, ...rest] = process.argv.slice(2);
-if (!['cold', 'bench', 'eval', 'input', 'two', 'widget'].includes(mode) || !distArg) {
-  console.error('usage: node run.mjs cold|bench|input|two|widget <dist> [--runs N] [--ceiling MS] [--syntax-ceiling MS] [--headed]');
+if (!['cold', 'bench', 'eval', 'input', 'two', 'widget', 'search'].includes(mode) || !distArg) {
+  console.error('usage: node run.mjs cold|bench|input|two|widget|search <dist> [--runs N] [--ceiling MS] [--syntax-ceiling MS] [--headed]');
   process.exit(2);
 }
 const opt = (name, dflt) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : dflt; };
@@ -283,6 +283,62 @@ try {
       check('the text box is the editor, named', boxes.length > 0 && boxes[0].name?.value === 'Sample editor', boxes[0]?.name?.value);
       const caretLine = (await doc()).split('\n').find((l) => l.includes('PASTED'));
       check('it holds the caret\'s line', boxes.length > 0 && (boxes[0].value?.value || '').includes(caretLine), caretLine);
+      page.close();
+    } finally {
+      await chrome.close();
+    }
+  } else if (mode === 'search') {
+    // The search panel on the web: Mod-f from the editor, typing into the panel's own field (a
+    // Compose text field: its own TEXTAREA session), Turkish case folding, Enter, Escape back.
+    const chrome = await launchChrome(flag('--headed'));
+    try {
+      const page = await openPage(chrome.port, base);
+      await waitFor(page, 'window.__cold', 120000);
+      await page.value("window.__editorOpen('TURKISH')");
+      await waitFor(page, "window.__editorDoc && window.__editorDoc().startsWith('Türkçe') && window.__cold && !!window.__search", 30000);
+      await sleep(500);
+      const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ': ' + detail : ''}`); if (!ok) failed = true; };
+      const doc = () => page.value('window.__editorDoc()');
+      const sel = async () => (await page.value('window.__editorSel()')).split(',').map(Number);
+      const search = async () => page.value('JSON.stringify(window.__search())').then(JSON.parse);
+      const selected = async () => { const [a, h] = await sel(); return (await doc()).slice(Math.min(a, h), Math.max(a, h)); };
+      const mod = process.platform === 'darwin' ? 4 : 2;
+      const key = async (k, code, vk, modifiers = 0) => {
+        await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: k, code, windowsVirtualKeyCode: vk, modifiers });
+        await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: vk, modifiers });
+        await sleep(120);
+      };
+      for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await page.send('Input.dispatchMouseEvent', { type, x: 300, y: 130, button: 'left', clickCount: 1 });
+      await sleep(400);
+      await key('f', 'KeyF', 70, mod);
+      await sleep(500);
+      let s = await search();
+      check('Mod-f opens the panel and moves the focus into it', s.open && !s.focused, JSON.stringify(s));
+      await key('a', 'KeyA', 65, mod);
+      await page.send('Input.insertText', { text: 'ıstanbul' });
+      await sleep(500);
+      s = await search();
+      check('typing in the panel searches (debounced)', s.search === 'ıstanbul', JSON.stringify(s));
+      check('without match case, ı finds İstanbul (and the first match is selected)', (await selected()) === 'İstanbul', JSON.stringify(await selected()));
+      check('the count is shown', s.count === '1 of 1', s.count);
+      await key('a', 'KeyA', 65, mod);
+      await page.send('Input.insertText', { text: 'ük' });
+      await sleep(500);
+      const first = await sel();
+      await key('Enter', 'Enter', 13);
+      await sleep(200);
+      const second = await sel();
+      check('Enter in the field goes to the next match', second[0] !== first[0] && (await selected()) === 'ük', `${first} -> ${second}`);
+      s = await search();
+      check('"2 of 2"', s.count === '2 of 2', s.count);
+      await key('Escape', 'Escape', 27);
+      await sleep(400);
+      s = await search();
+      check('Escape closes the panel and gives the editor the focus', !s.open && s.focused, JSON.stringify(s));
+      const [, h] = await sel();
+      await page.send('Input.insertText', { text: 'Q' });
+      await sleep(300);
+      check('then typing reaches the editor', (await doc()).charAt(Math.max(0, h - 2)) === 'Q' || (await doc()).includes('Q'), JSON.stringify((await doc()).slice(h - 4, h + 4)));
       page.close();
     } finally {
       await chrome.close();

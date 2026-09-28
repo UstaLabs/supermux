@@ -17,6 +17,9 @@ import dev.supermux.editor.plugins.highlight.SyntaxHost
 import dev.supermux.editor.plugins.history.history
 import dev.supermux.editor.plugins.view.EditorSettings
 import dev.supermux.editor.plugins.view.viewSettings
+import dev.supermux.editor.plugins.search.Search
+import dev.supermux.editor.plugins.search.registerWidgets
+import dev.supermux.editor.plugins.search.search
 import dev.supermux.editor.plugins.highlight.highlight
 import dev.supermux.editor.syntax.LanguageRegistry
 import dev.supermux.editor.syntax.SyntaxBackend
@@ -115,8 +118,8 @@ fun addCursorBelow(view: dev.supermux.editor.compose.EditorView) {
 }
 
 /**
- * One open document: an [EditorView] with every M4a plugin (highlight, basics, history, fold, view
- * settings) and the highlight plugin's [SyntaxHost] that colours it (the worker hears every
+ * One open document: an [EditorView] with every M4 plugin (highlight, basics, history, fold, view
+ * settings, search) and the highlight plugin's [SyntaxHost] that colours it (the worker hears every
  * transaction; the viewport comes with the surface's own viewport transaction); the worker's results come back
  * through [hop], which must run them on the UI thread in order.
  */
@@ -132,7 +135,7 @@ class SampleSession(
     hop: (() -> Unit) -> Unit,
 ) : AutoCloseable {
     val view = EditorView(EditorState.create(text, extensions = extensionOf(
-        highlight(language), basics(), history(), foldSlot.of(fold(FoldConfig(deleteFoldWhole))), viewSettings(settings), extra,
+        highlight(language), basics(), history(), foldSlot.of(fold(FoldConfig(deleteFoldWhole))), viewSettings(settings), search(), extra,
     )))
     val host = SyntaxHost(view, backend, registry, scope, hop = hop)
     val worker: SyntaxWorker get() = host.worker
@@ -175,6 +178,14 @@ fun SampleEditorPane(
         onPaint = stats?.let { s -> { s.drawEnd() } },
         onFontSize = onFontSize,
         label = "Sample editor",
-        widgets = widgets ?: androidx.compose.runtime.remember { dev.supermux.editor.compose.WidgetRegistry() },
+        widgets = rememberSearchWidgets(widgets),
     )
+}
+
+/** [registry] (a new one when null) with the search plugin's panels in it. */
+@Composable
+fun rememberSearchWidgets(registry: dev.supermux.editor.compose.WidgetRegistry? = null): dev.supermux.editor.compose.WidgetRegistry {
+    val r = registry ?: androidx.compose.runtime.remember { dev.supermux.editor.compose.WidgetRegistry() }
+    androidx.compose.runtime.remember(r) { Search.registerWidgets(r) }
+    return r
 }
