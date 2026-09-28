@@ -49,6 +49,20 @@ Same as M4c:
 
 ---
 
+### Task 0: M4c review follow-ups
+- **`LspDocument` sync timer:** run `scheduleSync` on the client's scope, not the primary view's, so a pending edit
+  still reaches the server when the primary view detaches. Test: A types, A detaches, and the server gets the edit
+  within the batch delay.
+- **Failed sends:**
+  - Document in the `LspTransport` KDoc that an adapter must bump `connection` or report DISCONNECTED after a send
+    fails.
+  - The client stops sending queued messages after a failure until the next connection.
+- **`RangeSet.map` crash:** a zero-width `Decoration.Mark` that is exclusive at both ends throws `invalid range`
+  when text is inserted at its point. Drop empty non-point marks, or clamp them.
+  - Add a randomized `RangeSet.map` property test to core: ranges and edits compared against a freshly sorted set,
+    and `between()` compared against a full scan.
+- [ ] Commit: `fix(editor-core,lsp): M4c review follow-ups`.
+
 ### Task 1: The diff engine (pure)
 - **Line diff:** Myers or histogram diff over lines.
   - It must be robust and fast: 10k-line files with 1k changes in < 50 ms on the JVM.
