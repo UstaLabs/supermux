@@ -196,8 +196,15 @@ shown in its place (none: nothing), overlapping replaces merged.
 **Which transactions are policed.** Only LOCAL input and commands: a transaction with a userEvent
 that is not `undo`, `redo`, `disk`, `remote`, `agent` or `lsp` (or a sub-event of one, `undo.x`), and
 without `EditorAnnotations.remote` (for M4/M5's collaborators and agents, whatever their userEvent,
-`input.*` included). Undo, redo, reloads, remote edits and programmatic transactions (no userEvent)
-pass through unchanged, as in CM6. The caret clamp below applies to every transaction.
+`input.*` included). **A dispatch made while the view runs a command** (a key binding, a soft Return's
+binding, an input handler, a selection-menu item, a plugin's gutter or widget click handler) **is local
+input whatever its userEvent, or with none**: a plugin command that forgets its userEvent still cannot
+take a piece of a fold. Only the exempt userEvents above and `EditorAnnotations.remote` pass there.
+A key-bound command's edit without a userEvent is a plugin bug: it is counted in
+`EditorDiagnostics.unlabeledCommandEdits` and logged once (the debug assertion). Undo, redo,
+reloads, remote edits and programmatic transactions (no userEvent, from outside any command: a host's
+call, a plugin's effect) pass through unchanged, as in CM6. The caret clamp below applies to every
+transaction.
 
 **Replaced ranges and deletion: one unit, on every input path.** The rule is in `EditorView.dispatch`,
 so the hidden field, `typeText`, paste, key commands and the web's fast key path all meet it. It is
@@ -214,6 +221,9 @@ range is handled. A change that deletes part of a replaced range whose selection
   3. Else (no handler at all) the range is **selected**: a second Backspace deletes it as a
      selection. Never a dead key, and safe without undo.
 - A selection that covers the whole range deletes it with the selection.
+- ⚠️ **Only atomic ranges (folds) get the safe two-step Backspace** (unfold or select first). A
+  non-atomic `Replace` is deleted whole in ONE keystroke, hidden text and all; a plugin hiding text
+  the user must not lose by accident marks it `atomic` (or lists it in `atomicRangesFacet`).
 
 **The soft keyboard and folds.** The hidden field's window holds a replaced range as ONE U+FFFC
 placeholder (`FieldWindow.holes`), never its hidden text (a fold can be megabytes; the window is never

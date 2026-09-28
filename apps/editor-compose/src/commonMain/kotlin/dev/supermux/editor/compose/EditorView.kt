@@ -170,7 +170,7 @@ class EditorView(initial: EditorState) : CommandTarget {
         if (userEvent == "input" && !readOnly) {
             val from = (main.from - before).coerceAtLeast(0)
             val to = (main.to + after).coerceAtMost(st.doc.length)
-            for (h in st.facet(inputHandlerFacet)) if (h.handle(this, from, to, text)) return null
+            for (h in st.facet(inputHandlerFacet)) if (runningCommand { h.handle(this, from, to, text) }) return null
         }
         // The main range takes the edit with its extension. Another range takes the SAME extension
         // only when the text around it is the text replaced around the main range (CM6); else a
@@ -263,11 +263,36 @@ class EditorView(initial: EditorState) : CommandTarget {
 
     internal class Goal(val selection: EditorSelection, val xs: List<Float>)
 
+    /** While > 0 the view is running a command (a key binding, an input handler, a menu item, a click handler). */
+    private var commandDepth = 0
+    /** While > 0 the command running is a key binding's. */
+    private var keyDepth = 0
+
+    /**
+     * Run [block] as a command the user triggered ([key]: through a key binding): every dispatch it
+     * makes is LOCAL input for the replaced-range rules, whatever its userEvent (or lack of one), unless
+     * that userEvent is exempt or the spec carries [EditorAnnotations.remote].
+     */
+    internal fun <T> runningCommand(key: Boolean = false, block: () -> T): T {
+        commandDepth++
+        if (key) keyDepth++
+        try {
+            return block()
+        } finally {
+            commandDepth--
+            if (key) keyDepth--
+        }
+    }
+
     override fun dispatch(spec: TransactionSpec) {
         val userEdit = isUserEdit(spec)
         if (readOnly && userEdit) return
         val start = current
         var tr = start.update(spec)
+        // Debug assertion: a key-bound command's edit should say what it is (history groups by it).
+        if (tr.docChanged && keyDepth > 0 && spec.userEvent == null && !isRemote(spec) && tr.annotation(EditorAnnotations.atomicWhole) != true) {
+            EditorDiagnostics.reportUnlabeledCommandEdit(tr.changes.toString())
+        }
         // The hidden field's U+FFFC placeholder (a fold in its window) never becomes document text.
         if (tr.docChanged && tr.annotation(EditorAnnotations.fieldInput) == true && insertsPlaceholder(tr)) return
         // Replaced ranges (folds): local input never takes a piece of one, whatever path it came by
@@ -315,16 +340,20 @@ class EditorView(initial: EditorState) : CommandTarget {
     internal val sharedFoldCache: Folds.Cache get() = foldCache
 
     /**
-     * Whether [spec] is LOCAL input or a command (policed by the replaced-range rules): it has a
-     * userEvent that is not one of [POLICY_EXEMPT] (`undo`, `redo`, `disk`, `remote`, `agent`,
-     * `lsp` and their sub-events), and no [EditorAnnotations.remote]. A transaction without a
-     * userEvent is programmatic (a plugin's, a host's) and passes too.
+     * Whether [spec] is LOCAL input or a command (policed by the replaced-range rules): not
+     * [EditorAnnotations.remote], no userEvent of [POLICY_EXEMPT] (`undo`, `redo`, `disk`, `remote`,
+     * `agent`, `lsp` and their sub-events), and either some other userEvent or dispatched while a
+     * command runs ([runningCommand]: a key binding, an input handler, a menu item, a plugin's click
+     * handler), whatever its userEvent. A transaction without a userEvent from outside any command is
+     * programmatic (a host's, a plugin's effect) and passes.
      */
     private fun policed(spec: TransactionSpec): Boolean {
-        val e = spec.userEvent ?: return false
-        if (spec.annotations.any { it.type === EditorAnnotations.remote && it.value == true }) return false
+        if (isRemote(spec)) return false
+        val e = spec.userEvent ?: return commandDepth > 0
         return POLICY_EXEMPT.none { e == it || e.startsWith("$it.") }
     }
+
+    private fun isRemote(spec: TransactionSpec) = spec.annotations.any { it.type === EditorAnnotations.remote && it.value == true }
 
     /** A field edit inserting more U+FFFC than the text it replaces held (a leaked placeholder). */
     private fun insertsPlaceholder(tr: Transaction): Boolean {

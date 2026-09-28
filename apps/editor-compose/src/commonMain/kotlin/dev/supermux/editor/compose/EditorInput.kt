@@ -637,9 +637,10 @@ internal fun webKeyPath(view: EditorView, composing: Boolean, f: WebKeyFacts, st
 internal fun runBindings(view: EditorView, chord: KeyChord, apple: Boolean, altGrChar: Boolean = false): Boolean {
     val altGr = !apple && altGrChar && chord.ctrl && chord.alt
     fun matches(b: KeyBinding) = b.chord(apple) == chord && (!altGr || b.key.contains("Ctrl"))
-    for (b in view.state.facet(keymapFacet)) if (matches(b) && b.command.run(view)) return true
-    for (b in defaultBindings(apple)) if (matches(b) && b.command.run(view)) return true
-    return false
+    return view.runningCommand(key = true) {
+        view.state.facet(keymapFacet).any { b -> matches(b) && b.command.run(view) } ||
+            defaultBindings(apple).any { b -> matches(b) && b.command.run(view) }
+    }
 }
 
 /** A key as the debug log names it: its chord name, a modifier's name, else its code. */

@@ -147,6 +147,19 @@ object EditorDiagnostics {
     /** iOS only (elsewhere "n/a"): "mapped" once the space-bar trackpad moves the editor's caret. */
     var floatingCursor: String by androidx.compose.runtime.mutableStateOf("n/a")
         internal set
+
+    /**
+     * Debug assertion: how many edits a key-bound command dispatched WITHOUT a userEvent (a plugin
+     * bug: history cannot group it and a reader cannot tell what it was). Each is also logged once
+     * per process, with its changes. It is still policed as local input.
+     */
+    var unlabeledCommandEdits: Int = 0
+        private set
+
+    internal fun reportUnlabeledCommandEdit(changes: String) {
+        unlabeledCommandEdits++
+        if (unlabeledCommandEdits == 1) println("editor-compose: a key-bound command dispatched an edit without a userEvent ($changes); give it one (\"input.*\", \"delete.*\", ...)")
+    }
 }
 
 /**

@@ -847,7 +847,7 @@ internal class EditorController(
 
     /** A click or tap on a drawn chip: the plugins' handlers ([widgetClickFacet]) first, then the host's. */
     fun reportWidgetClick(chip: DrawnChip) {
-        for (h in view.state.facet(widgetClickFacet)) if (h.click(view, chip.key, chip.from, chip.to)) return
+        if (view.runningCommand { view.state.facet(widgetClickFacet).any { h -> h.click(view, chip.key, chip.from, chip.to) } }) return
         view.onWidgetClick?.invoke(chip.key, chip.from, chip.to)
     }
 
@@ -1076,7 +1076,7 @@ internal class EditorController(
     /** A click or tap on a marker column: the plugins' handlers ([gutterClickFacet]) first, then the host's. */
     fun reportGutterClick(hit: GutterHit) {
         val view = view
-        for (h in view.state.facet(gutterClickFacet)) if (h.click(view, hit.column, hit.line, hit.marker)) return
+        if (view.runningCommand { view.state.facet(gutterClickFacet).any { h -> h.click(view, hit.column, hit.line, hit.marker) } }) return
         view.onGutterClick?.invoke(hit.column, hit.line, hit.marker)
     }
 
