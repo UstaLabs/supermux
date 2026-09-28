@@ -189,6 +189,26 @@ class FoldTest {
         }
     }
 
+    @Test fun aRemoteDeleteAcrossAFoldsFirstLineKeepsItLineBased() {
+        // An agent deletes from the middle of "fun a() {" into the hidden text: the fold would start
+        // mid-line; it snaps to the end of its (new) first line, or goes when nothing is left.
+        val v = view(cursor = 2)
+        Fold.foldCode.run(v)
+        val f = v.folds().single()
+        v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(3, f.from + 6)), userEvent = "agent"))
+        val doc = v.state.doc
+        for (g in v.folds()) {
+            assertTrue(g.from == doc.length || doc.charAt(g.from) == '\n', "a fold starts mid-line: $g in '${doc}'")
+            assertTrue(g.to > g.from)
+        }
+        // Deleting the whole first line's end and all the fold's lines but the last: nothing left.
+        val w = view(cursor = 2)
+        Fold.foldCode.run(w)
+        val h = w.folds().single()
+        w.dispatch(TransactionSpec(changes = listOf(ChangeSpec(2, h.to - 1)), userEvent = "agent"))
+        for (g in w.folds()) assertTrue(w.state.doc.charAt(g.from) == '\n' && g.to > g.from)
+    }
+
     @Test fun aLocalDeleteTouchingAFoldClearsIt() {
         // CM6's rule (clearTouchedFolds for user deletes), for local edits that reach a fold's text
         // without covering it (the surface normally refuses them; the field is the last word).

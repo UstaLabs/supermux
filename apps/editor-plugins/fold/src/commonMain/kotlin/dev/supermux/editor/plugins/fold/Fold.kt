@@ -104,6 +104,17 @@ object Fold {
                     out = out.update(filter = { r -> changes.none { c -> touchesInside(c.fromA, c.toA, r.from, r.to) } })
                 }
                 out = out.map(tr.changes)
+                // Line-based after any edit: a fold starts at the end of its first line (a remote
+                // delete across that line's end left it mid-line); one with nothing left goes.
+                val doc = tr.state.doc
+                if (out.any { it.from < doc.length && doc.charAt(it.from) != '\n' }) out = RangeSet.of(out.mapNotNull { r ->
+                    val end = lineEnd(doc, doc.lineIndexAt(r.from))
+                    when {
+                        end == r.from -> r
+                        end < r.to -> Ranged(end, r.to, r.value)
+                        else -> null
+                    }
+                })
             }
             val add = ArrayList<Ranged<Decoration>>()
             val remove = HashSet<FoldRange>()
