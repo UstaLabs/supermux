@@ -176,7 +176,10 @@ object Fold {
      * (the language's), else indentation.
      */
     fun foldable(state: EditorState, lineFrom: Int, lineTo: Int): FoldRange? {
-        for (s in state.facet(foldServiceFacet)) s.foldable(state, lineFrom, lineTo)?.let { return it }
+        val services = state.facet(foldServiceFacet)
+        for (s in services) s.foldable(state, lineFrom, lineTo)?.let { return it }
+        // Where a language service has parsed, its "no fold" is the answer: no indentation folds mixed in.
+        if (services.any { it.knows(state, lineFrom) }) return null
         return indentFold(state, lineFrom, lineTo)
     }
 
@@ -260,7 +263,8 @@ object Fold {
             val closed = folds?.between(lf, lt)?.any { it.from in lf..lt } == true
             val marker = when {
                 closed -> closedMarker
-                services.any { it.foldable(st, lf, lt) != null } || indentFoldable(doc, line, tab) -> openMarker
+                services.any { it.foldable(st, lf, lt) != null } -> openMarker
+                services.none { it.knows(st, lf) } && indentFoldable(doc, line, tab) -> openMarker
                 else -> null
             }
             if (marker != null) out += Ranged(lf, lf, marker)

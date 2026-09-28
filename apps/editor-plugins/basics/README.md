@@ -31,8 +31,12 @@ EditorState.create(text, extensions = extensionOf(Syntax.extension(lang), basics
   partner `matching-bracket`, or `nonmatching-bracket` for a partner of another kind or none before
   the document's edge. CM6's candidate order (a closer before the cursor, an opener before it, then
   after it). The scan stops after 10,000 characters (nothing marked then). With syntax on, only
-  brackets of the same token context count (`tokenContextFacet`, editor-core; editor-syntax answers it
-  from its spans), so `f("(", x)` pairs the code parentheses; without it every bracket counts.
+  brackets of the same token context count (`tokenContextFacet`, editor-core: the kind, code /
+  string / comment, AND the language of the injection layer), so `f("(", x)` pairs the code
+  parentheses and a `(` in Markdown prose never pairs with one inside a fenced block. editor-syntax
+  answers from its spans (a binary search over the non-overlapping spans, no scan) and the layers
+  the worker reports. Where it does not know (outside the window it has parsed, plain text) a
+  position is unknown and counts as in a plain scan; without a language layer every bracket counts.
 - **`SelectionMatches`** (CM6's `highlightSelectionMatches`): one non-empty single-line selection of
   2 to 200 characters, not all blank, marks its other occurrences `selection-match`; one empty cursor
   in a word marks the word's other whole-word occurrences. Only in the viewport (editor-compose's
@@ -48,7 +52,8 @@ ActiveLine, BracketMatching, SelectionMatches). The theme's `light` / `dark` sty
 every range's head line). Selection matches mark the word under the cursor by default (CM6's
 `highlightWordAroundCursor` is off by default), with no delay (CM6 has none either); the word itself
 is not marked (CM6 gives it `cm-selectionMatch-main`). A selection must be 2 characters (CM6: 1).
-Bracket matching compares token contexts (code / string / comment), not tree node types.
+Bracket matching compares token contexts (code / string / comment, and the layer's language), not
+tree node types.
 
 **Every input path.** Typed text reaches the plugin through `inputHandlerFacet`, which
 `EditorView.typeText` asks first; the hidden field (soft and hardware keyboards) and the web's key

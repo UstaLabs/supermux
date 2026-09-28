@@ -37,7 +37,13 @@ class SyntaxSpansUpdate(
     val syntaxOff: Boolean = false,
     /** The [SyntaxSnapshot.epoch] it was computed for; an update for another field instance is ignored (-1: any). */
     val epoch: Long = -1,
+    /** The injected layers' ranges in [start, end): packed [from, to, depth, index into [layerLanguages]]*. */
+    val layers: IntArray = IntArray(0),
+    val layerLanguages: List<String> = emptyList(),
 )
+
+/** A range of the document in an injected layer of [language] (depth > 0; the host is everything else). */
+internal class LayerRange(val from: Int, val to: Int, val depth: Int, val language: String)
 
 /** One doc-changing transaction: [changes] turned version `version - 1` into [version]. */
 class VersionedChanges(val version: Long, val changes: ChangeSet)
@@ -72,12 +78,15 @@ internal class SyntaxValue(
     val syntaxOff: Boolean,
     /** The version of the last update applied: an older one arriving later is ignored (FIFO guard). */
     val lastUpdate: Long = -1,
+    /** Where the spans, folds and [layers] are known: the updates' windows, within what is kept. */
+    val known: IntRange = IntRange.EMPTY,
+    val layers: List<LayerRange> = emptyList(),
 ) {
     fun copy(
         version: Long = this.version, spans: RangeSet<Decoration> = this.spans, folds: IntArray = this.folds,
         viewport: IntRange = this.viewport, log: List<VersionedChanges> = this.log, syntaxOff: Boolean = this.syntaxOff,
-        lastUpdate: Long = this.lastUpdate,
-    ) = SyntaxValue(epoch, language, version, spans, folds, viewport, log, syntaxOff, lastUpdate)
+        lastUpdate: Long = this.lastUpdate, known: IntRange = this.known, layers: List<LayerRange> = this.layers,
+    ) = SyntaxValue(epoch, language, version, spans, folds, viewport, log, syntaxOff, lastUpdate, known, layers)
 }
 
 /**
@@ -106,7 +115,15 @@ object Syntax {
         languageFacet.of(language),
         field,
         tokenContextFacet.compute(FacetDep.field(field)) { st -> st.field(field).let { v -> TokenContextProvider { _, pos -> contextIn(v, pos) } } },
-        foldServiceFacet.compute(FacetDep.field(field)) { st -> st.field(field).folds.let { f -> FoldService { s, lf, lt -> foldAt(f, s.doc, lf, lt) } } },
+        foldServiceFacet.compute(FacetDep.field(field)) { st ->
+            st.field(field).let { v ->
+                object : FoldService {
+                    override fun foldable(state: EditorState, lineFrom: Int, lineTo: Int) = foldAt(v.folds, state.doc, lineFrom, lineTo)
+                    // Where the worker has parsed, its folds are the answer (no indentation fallback there).
+                    override fun knows(state: EditorState, lineFrom: Int) = v.language != null && !v.syntaxOff && lineFrom in v.known
+                }
+            }
+        },
     )
 
     /**
@@ -143,21 +160,26 @@ object Syntax {
     fun tokenContext(state: EditorState, pos: Int): TokenContext? = state.fieldOrNull(field)?.let { contextIn(it, pos) }
 
     /**
-     * From the spans: [TokenContext.STRING] under a string, regexp or escape token,
-     * [TokenContext.COMMENT] under a comment, else code; null while nothing is highlighted (plain
-     * text, syntax off, not parsed yet). Spans are kept within [KEEP_SCREENS] screens of the
-     * viewport; further away every position reads as code.
+     * From the spans and layers: kind STRING under a string, regexp or escape token, COMMENT under a
+     * comment, else CODE; the language of the deepest injected layer there (else the host's). Null
+     * where nothing is known: plain text, syntax off, or outside the window the worker has parsed
+     * (spans are kept within [KEEP_SCREENS] screens of the viewport).
      */
     private fun contextIn(v: SyntaxValue, pos: Int): TokenContext? {
-        if (v.language == null || v.syntaxOff || v.spans.isEmpty) return null
-        var ctx = TokenContext.CODE
-        for (r in v.spans.between(pos, pos + 1)) {
-            if (r.from > pos || r.to <= pos) continue
-            val classes = (r.value as? Decoration.Mark)?.classes ?: continue
-            if (TokenClasses.COMMENT in classes) return TokenContext.COMMENT
-            if (classes.any { it in STRING_CLASSES }) ctx = TokenContext.STRING
+        if (v.language == null || v.syntaxOff || pos !in v.known) return null
+        // The spans do not overlap: the one containing pos is the last starting at or before it.
+        val r = v.spans.lastStartingAtOrBefore(pos)
+        val classes = if (r != null && r.to > pos) (r.value as? Decoration.Mark)?.classes.orEmpty() else emptySet()
+        val kind = when {
+            TokenClasses.COMMENT in classes -> TokenContext.Kind.COMMENT
+            classes.any { it in STRING_CLASSES } -> TokenContext.Kind.STRING
+            else -> TokenContext.Kind.CODE
         }
-        return ctx
+        // The deepest injected layer holding pos, else the host.
+        var language = v.language
+        var depth = 0
+        for (l in v.layers) if (l.from <= pos && pos < l.to && l.depth > depth) { depth = l.depth; language = l.language }
+        return TokenContext(kind, language)
     }
 
     private val STRING_CLASSES = setOf(TokenClasses.STRING, TokenClasses.STRING_SPECIAL, TokenClasses.REGEXP, TokenClasses.ESCAPE)
@@ -207,6 +229,7 @@ object Syntax {
             v = v.copy(
                 version = version, spans = v.spans.map(c), folds = mapFolds(v.folds, c),
                 viewport = mapViewport(v.viewport, c), log = log,
+                known = mapViewport(v.known, c), layers = mapLayers(v.layers, c),
             )
         }
         for (e in tr.effects) e.valueIf(setViewport)?.let { if (it != v.viewport) v = v.copy(viewport = it) }
@@ -217,9 +240,10 @@ object Syntax {
         if (u.epoch >= 0 && u.epoch != v.epoch) return v // computed for another state's text
         if (u.version > v.version) return v // from a version this state never had
         if (u.version < v.lastUpdate) return v // overtaken: a newer update is already in
-        if (u.syntaxOff) return v.copy(spans = EMPTY, folds = IntArray(0), syntaxOff = true, lastUpdate = u.version)
+        if (u.syntaxOff) return v.copy(spans = EMPTY, folds = IntArray(0), syntaxOff = true, lastUpdate = u.version, known = IntRange.EMPTY, layers = emptyList())
         var spans = u.spans
         var folds = u.folds
+        var layers = List(u.layers.size / 4) { i -> LayerRange(u.layers[i * 4], u.layers[i * 4 + 1], u.layers[i * 4 + 2], u.layerLanguages[u.layers[i * 4 + 3]]) }
         var start = u.start
         var end = u.end
         if (u.version < v.version) {
@@ -229,6 +253,7 @@ object Syntax {
             val c = later.drop(1).fold(later[0].changes) { acc, x -> acc.compose(x.changes) }
             spans = spans.map(c)
             folds = mapFolds(folds, c)
+            layers = mapLayers(layers, c)
             start = c.mapPos(start, 1)
             end = maxOf(start, c.mapPos(end, -1))
         }
@@ -238,7 +263,15 @@ object Syntax {
             val len = v.viewport.last + 1 - v.viewport.first
             v.viewport.first - KEEP_SCREENS * len to v.viewport.last + 1 + KEEP_SCREENS * len
         }
-        return v.copy(spans = replaceIn(v.spans, spans, start, end, ks, ke), folds = replaceFolds(v.folds, folds, start, end), lastUpdate = u.version)
+        // What is known now: this update's window, joined to the old one when they touch, within what is kept.
+        val old = v.known
+        val joined = if (!old.isEmpty() && old.first <= end && old.last + 1 >= start) minOf(old.first, start) until maxOf(old.last + 1, end) else start until end
+        val known = maxOf(joined.first, ks) until minOf(joined.last + 1, ke)
+        val kept = v.layers.filter { it.to <= start || it.from >= end } + layers
+        return v.copy(
+            spans = replaceIn(v.spans, spans, start, end, ks, ke), folds = replaceFolds(v.folds, folds, start, end), lastUpdate = u.version,
+            known = known, layers = kept.filter { it.to > known.first && it.from < known.last + 1 },
+        )
     }
 
     @OptIn(ExperimentalAtomicApi::class)
@@ -296,6 +329,12 @@ object Syntax {
             if (b > a) { out += a; out += b }
         }
         return out.toIntArray()
+    }
+
+    private fun mapLayers(l: List<LayerRange>, c: ChangeSet): List<LayerRange> = if (l.isEmpty()) l else l.mapNotNull {
+        val a = c.mapPos(it.from, 1)
+        val b = c.mapPos(it.to, -1)
+        if (b > a) LayerRange(a, b, it.depth, it.language) else null
     }
 
     private fun mapViewport(r: IntRange, c: ChangeSet): IntRange {

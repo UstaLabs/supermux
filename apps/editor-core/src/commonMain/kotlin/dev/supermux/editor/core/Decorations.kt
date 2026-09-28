@@ -74,6 +74,16 @@ class RangeSet<T> private constructor(internal val ranges: List<Ranged<T>>) : It
         return out
     }
 
+    /**
+     * The last range starting at or before [pos] (binary search, no scan): in a set of
+     * NON-overlapping ranges (syntax spans), the only one that can contain [pos].
+     */
+    fun lastStartingAtOrBefore(pos: Int): Ranged<T>? {
+        var lo = 0; var hi = ranges.size
+        while (lo < hi) { val mid = (lo + hi) ushr 1; if (ranges[mid].from <= pos) lo = mid + 1 else hi = mid }
+        return if (lo == 0) null else ranges[lo - 1]
+    }
+
     fun map(changes: ChangeSet): RangeSet<T> {
         if (changes.isEmpty) return this
         val out = ArrayList<Ranged<T>>(ranges.size)

@@ -250,8 +250,21 @@ class SyntaxWorker(
         val spans = step("spans") { RangeSet.of(h.spans(doc, start, end, text)) }
         platformSliceYield?.invoke()
         val folds = step("folds") { h.folds(doc, start, end, text) }
+        // The injected layers there (a fenced block's language, a <script>): bracket matching's context.
+        val languages = ArrayList<String>()
+        val layers = ArrayList<Int>()
+        for (layer in doc.layers) {
+            if (layer.depth == 0) continue
+            val r = layer.ranges
+            for (i in r.indices step 2) {
+                if (r[i] >= end || r[i + 1] <= start) continue
+                var li = languages.indexOf(layer.language)
+                if (li < 0) { languages += layer.language; li = languages.size - 1 }
+                layers += maxOf(r[i], start); layers += minOf(r[i + 1], end); layers += layer.depth; layers += li
+            }
+        }
         sent = Triple(s.epoch, s.version, s.viewport)
-        dispatch(TransactionSpec(effects = listOf(Syntax.spans.of(SyntaxSpansUpdate(s.version, start, end, spans, folds, epoch = s.epoch)))))
+        dispatch(TransactionSpec(effects = listOf(Syntax.spans.of(SyntaxSpansUpdate(s.version, start, end, spans, folds, epoch = s.epoch, layers = layers.toIntArray(), layerLanguages = languages)))))
     }
 
     /**

@@ -146,6 +146,23 @@ class SyntaxHostTest {
         host.join()
     }
 
+    @Test fun aProseParenthesisNeverMatchesOneInAFence() = run { scope ->
+        val text = "Some (prose\n\n```kotlin\nval x = f(1))\n```\n"
+        val end = text.indexOf("))") + 2
+        val view = withContext(ui) { EditorView(EditorState.create(text, EditorSelection.cursor(end), extensionOf(highlight("markdown"), basics()))) }
+        val host = withContext(ui) { SyntaxHost(view, backend, scope = scope).also { it.start() } }
+        until("the fence's language known") {
+            view.state.facet(dev.supermux.editor.core.tokenContextFacet)?.contextAt(view.state, text.indexOf("f(1"))?.language == "kotlin"
+        }
+        val st = withContext(ui) { view.state }
+        assertTrue(st.facet(dev.supermux.editor.core.tokenContextFacet)!!.contextAt(st, text.indexOf("(prose"))?.language != "kotlin")
+        val prose = text.indexOf("(prose")
+        assertTrue(st.facet(decorationsFacet).none { set -> set.any { it.from == prose && (it.value as? Decoration.Mark)?.classes?.contains("matching-bracket") == true } },
+            "the fence's ')' matched the prose '('")
+        withContext(ui) { host.close() }
+        host.join()
+    }
+
     @Test fun foldsFromFoldsScmAreLineBasedAndKeepTheClosingBraceVisible() = run { scope ->
         val view = withContext(ui) { EditorView(EditorState.create(kotlinText, extensions = highlight("kotlin"))) }
         val host = withContext(ui) { SyntaxHost(view, backend, scope = scope).also { it.start() } }

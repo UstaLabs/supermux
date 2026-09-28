@@ -1,15 +1,26 @@
 package dev.supermux.editor.core
 
 /**
- * What the text at a position is, as the language layer sees it: code, or inside a string or a
- * comment. Bracket matching counts only brackets of the same kind as the one at the cursor, so a
- * `(` in a string never matches a `)` in code (CM6 compares syntax-tree token types the same way).
+ * What the text at a position is, as the language layer sees it: its [kind] (code, or inside a
+ * string or a comment) and the [language] of the layer it belongs to (an injection: a fenced code
+ * block in Markdown, a `<script>` in HTML; null: not known). Bracket matching counts only brackets
+ * of the SAME context as the one at the cursor, so a `(` in a string never matches a `)` in code,
+ * nor a `(` in Markdown prose one inside a fence (CM6 compares syntax-tree token types the same way).
  */
-enum class TokenContext { CODE, STRING, COMMENT }
+data class TokenContext(val kind: Kind, val language: String? = null) {
+    enum class Kind { CODE, STRING, COMMENT }
+
+    companion object {
+        val CODE = TokenContext(Kind.CODE)
+        val STRING = TokenContext(Kind.STRING)
+        val COMMENT = TokenContext(Kind.COMMENT)
+    }
+}
 
 /**
- * A language layer's answer for the character at [pos] (editor-syntax provides one from its spans):
- * null when it does not know (no syntax there yet), which callers treat as [TokenContext.CODE].
+ * A language layer's answer for the character at [pos] (editor-syntax provides one from its spans
+ * and layers): null when it does not know (no syntax there, or outside what it has parsed): callers
+ * then treat that position as they would without a language layer (a plain scan).
  */
 fun interface TokenContextProvider {
     fun contextAt(state: EditorState, pos: Int): TokenContext?
@@ -30,6 +41,12 @@ data class FoldRange(val from: Int, val to: Int) {
  */
 fun interface FoldService {
     fun foldable(state: EditorState, lineFrom: Int, lineTo: Int): FoldRange?
+
+    /**
+     * True when this service's answer for the line starting at [lineFrom] is definitive (it has
+     * parsed there): a null [foldable] then means "no fold", and no fallback (indentation) is asked.
+     */
+    fun knows(state: EditorState, lineFrom: Int): Boolean = false
 }
 
 /** Every [FoldService], highest precedence first; the first non-null answer wins. */

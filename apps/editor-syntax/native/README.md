@@ -348,9 +348,12 @@ web backend only implements `SyntaxBackend`:
 - Queries are compiled once per backend and language (`sharedQuery`), not per
   document (kotlin's highlights cost ~35 ms to compile).
 - `Syntax.extension` also answers editor-core's `tokenContextFacet` from the spans
-  (string / regexp / escape tokens are `STRING`, comments `COMMENT`, the rest code; a
-  new provider per syntax value, so bracket matching follows the worker) and, for the
-  fold plugin, `foldServiceFacet` from `folds.scm`. The worker's host (listener,
+  (string / regexp / escape tokens are `STRING`, comments `COMMENT`, the rest code, found by
+  a binary search) and the injected layers each update now carries (`SyntaxSpansUpdate.layers`:
+  the deepest layer's language, else the host's); null outside the window the worker parsed
+  (`SyntaxValue.known`). A new provider per syntax value, so bracket matching follows the
+  worker. For the fold plugin, `foldServiceFacet` from `folds.scm`, which `knows` the parsed
+  window (no indentation folds mixed in there). The worker's host (listener,
   UI hop, viewport, precompile, "syntax off" panel, disposal) is
   `editor-plugins/highlight`'s `SyntaxHost`. `SyntaxDebug.liveTrees()` (debug API)
   counts the native trees alive, for hosts' leak tests.

@@ -61,6 +61,18 @@ class FoldTest {
         assertNotNull(Fold.foldable(st, b, text.indexOf('\n', b)))
     }
 
+    @Test fun whereTheLanguageHasParsedIndentationIsNotMixedIn() {
+        // The service knows every line and folds only a(): b() gets no indentation fold (and no arrow).
+        val service = foldServiceFacet.of(object : FoldService {
+            override fun foldable(state: EditorState, lineFrom: Int, lineTo: Int) = if (lineFrom == 0) FoldRange(aLineEnd, aTo) else null
+            override fun knows(state: EditorState, lineFrom: Int) = true
+        })
+        val v = view(text, 0, service)
+        val b = text.indexOf("fun b")
+        assertEquals(null, Fold.foldable(v.state, b, text.indexOf('\n', b)))
+        assertEquals(listOf(0), markers(v).map { it.from })
+    }
+
     // ------------------------------------------------------------------ commands and keys --
 
     @Test fun foldAndUnfoldAtTheCursor() {

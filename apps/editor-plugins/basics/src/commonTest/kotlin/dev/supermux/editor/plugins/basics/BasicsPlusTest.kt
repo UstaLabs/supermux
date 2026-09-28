@@ -107,6 +107,18 @@ class BasicsPlusTest {
         assertTrue(view("$text|").state.marked("matching-bracket").none { it.first == 1 })
     }
 
+    @Test fun whereTheLanguageLayerDoesNotKnowTheScanIsPlain() {
+        // The cursor's ")" is inside a string the layer knows; the "(" far back is outside what it
+        // parsed (null): it counts, as without a layer (it used to read as code and be skipped).
+        val text = "(" + "x".repeat(50) + ")"
+        val known = tokenContextFacet.of(TokenContextProvider { _, pos -> if (pos >= 40) TokenContext.STRING else null })
+        assertEquals(listOf(0 to 1, 51 to 52), view("$text|", known).state.marked("matching-bracket"))
+        // And another language is another context: a prose "(" never pairs with a fence's ")".
+        val md = tokenContextFacet.of(TokenContextProvider { _, pos -> TokenContext(TokenContext.Kind.CODE, if (pos < 10) "markdown_inline" else "kotlin") })
+        val t2 = "(" + "x".repeat(20) + ")"
+        assertTrue(view("$t2|", md).state.marked("matching-bracket").isEmpty())
+    }
+
     @Test fun theScanStopsAfter10kCharacters() {
         val far = "(" + "x".repeat(20_000) + ")"
         assertTrue(view("$far|").state.let { it.marked("matching-bracket") + it.marked("nonmatching-bracket") }.isEmpty())

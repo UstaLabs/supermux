@@ -18,10 +18,14 @@ line's row (`fun f() {⋯}`).
   ending on a later one (CM6's syntaxFolding picks the outermost too); the fold stops at the start
   of the node's last line when that line begins with its closing token (`}` `)` `]` `end`), so the
   brace stays visible, else at the node's end (`def f():⋯`).
-- **Indentation otherwise** (for a line no service answers for, and for plain text): the lines after
+- **Indentation otherwise**, only where no service has PARSED (`FoldService.knows`): the lines after
   it that are indented deeper, blank lines among them included, trailing blank lines not
-  (`Fold.indentFold`). Syntax folds are known only where the worker has looked (around the
-  viewport), so a `foldAll` far from it folds by indentation there.
+  (`Fold.indentFold`). Where the syntax worker has parsed, its folds are the whole answer, never
+  mixed with indentation folds. Chosen (review item 15): before the first parse (or with syntax
+  off) the arrows are indentation's; when the worker's folds arrive they REPLACE them for the parsed
+  window, once (an arrow can move or go then, e.g. from a multi-line argument list that
+  `folds.scm` does not fold); after that they no longer jump. Syntax folds are known only around
+  the viewport, so a `foldAll` far from it folds by indentation there.
 - `Fold.foldable(state, lineFrom, lineTo)` is that rule, for other plugins.
 
 ## State and edits

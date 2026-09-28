@@ -80,8 +80,7 @@ object BracketMatching {
         val bracket = config.brackets.indexOf(doc.charAt(at))
         // An opener (even index) scans forward, a closer backward.
         if (bracket < 0 || (bracket % 2 == 0) != (dir > 0)) return null
-        val ctxProvider = state.facet(tokenContextFacet)
-        val startCtx = ctxProvider?.contextAt(state, at) ?: TokenContext.CODE
+        val startCtx = state.facet(tokenContextFacet)?.contextAt(state, at)
         return partner(state, at + dir, dir, bracket, startCtx, config)?.let { (end, matched) -> BracketMatch(at..at, end?.let { it..it }, matched) }
     }
 
@@ -89,9 +88,11 @@ object BracketMatching {
      * The partner of bracket [bracket] (its index in [BracketMatchingConfig.brackets]), scanning
      * [dir] from [scanFrom] inclusive with the bracket itself already counted: (its position, whether
      * it is the same kind), (null, false) when the document's edge came first, or null past the scan
-     * limit. Only brackets in [startCtx] count when the language layer says what a position is.
+     * limit. A bracket whose token context differs from [startCtx] is skipped; where either is
+     * unknown (null: no language layer, or outside what it has parsed) every bracket counts, as in a
+     * plain scan.
      */
-    internal fun partner(state: EditorState, scanFrom: Int, dir: Int, bracket: Int, startCtx: TokenContext, config: BracketMatchingConfig): Pair<Int?, Boolean>? {
+    internal fun partner(state: EditorState, scanFrom: Int, dir: Int, bracket: Int, startCtx: TokenContext?, config: BracketMatchingConfig): Pair<Int?, Boolean>? {
         val doc = state.doc
         val brackets = config.brackets
         val ctxProvider = state.facet(tokenContextFacet)
@@ -105,7 +106,7 @@ object BracketMatching {
         var i = if (dir > 0) 0 else text.length - 1
         while (i in text.indices) {
             val found = brackets.indexOf(text[i])
-            if (found >= 0 && (ctxProvider == null || (ctxProvider.contextAt(state, from + i) ?: TokenContext.CODE) == startCtx)) {
+            if (found >= 0 && (startCtx == null || ctxProvider == null || ctxProvider.contextAt(state, from + i).let { it == null || it == startCtx })) {
                 if ((found % 2 == 0) == (dir > 0)) {
                     depth++
                 } else if (depth == 1) {

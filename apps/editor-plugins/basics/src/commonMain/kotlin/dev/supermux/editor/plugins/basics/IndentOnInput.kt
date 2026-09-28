@@ -9,7 +9,6 @@ import dev.supermux.editor.core.EditorSelection
 import dev.supermux.editor.core.Extension
 import dev.supermux.editor.core.Rope
 import dev.supermux.editor.core.SelectionRange
-import dev.supermux.editor.core.TokenContext
 import dev.supermux.editor.core.TransactionSpec
 import dev.supermux.editor.core.tokenContextFacet
 
@@ -83,7 +82,7 @@ object IndentOnInput {
         val config = st.facet(bracketMatchingConfig)
         val bracket = config.brackets.indexOf(closer)
         if (bracket < 0 || head == 0) return null
-        val ctx = st.facet(tokenContextFacet)?.contextAt(st, head - 1) ?: TokenContext.CODE
+        val ctx = st.facet(tokenContextFacet)?.contextAt(st, head - 1)
         val (pos, matched) = BracketMatching.partner(st, head - 1, -1, bracket, ctx, config) ?: return null
         return if (matched) pos else null
     }

@@ -70,4 +70,14 @@ class RangeSetTest {
             }
         }
     }
+
+    @Test fun lastStartingAtOrBeforeIsABinarySearch() {
+        val set = RangeSet.of(listOf(Ranged(0, 2, "a"), Ranged(5, 9, "b"), Ranged(9, 12, "c")))
+        assertEquals(null, RangeSet.of(listOf(Ranged(3, 4, "z"))).lastStartingAtOrBefore(2))
+        assertEquals("a", set.lastStartingAtOrBefore(1)?.value)
+        assertEquals("a", set.lastStartingAtOrBefore(4)?.value)
+        assertEquals("b", set.lastStartingAtOrBefore(8)?.value)
+        assertEquals("c", set.lastStartingAtOrBefore(9)?.value)
+        assertEquals("c", set.lastStartingAtOrBefore(100)?.value)
+    }
 }
