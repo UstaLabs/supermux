@@ -89,8 +89,12 @@ object History {
         val changes: ChangeSet?,
         /** In the document the undo produces. */
         val effects: List<StateEffect<*>>,
-        /** The mapping the events below this one still need (from the document before this step). */
-        val mapped: ChangeSet?,
+        /**
+         * The mappings the events below this one still need, IN ORDER (from the document before
+         * this step): mapped one after another, not composed, so ties at one position resolve
+         * exactly as mapping at each remote change would (null: none).
+         */
+        val mapped: List<Pending>?,
         /** Where the selection was before the step (in the document the undo produces). */
         val startSelection: EditorSelection?,
         private val rawSelections: List<EditorSelection>,
@@ -104,7 +108,7 @@ object History {
         fun withSelectionsAfter(s: List<EditorSelection>) = HistEvent(changes, effects, mapped, startSelection, s)
 
         /** Mapped: new changes, effects, carried mapping and start selection; the selections lazily through [m]. */
-        fun remapped(changes: ChangeSet, effects: List<StateEffect<*>>, mapped: ChangeSet, start: EditorSelection?, m: ChangeSet) =
+        fun remapped(changes: ChangeSet, effects: List<StateEffect<*>>, mapped: List<Pending>, start: EditorSelection?, m: ChangeSet) =
             HistEvent(changes, effects, mapped, start, rawSelections, selMapping?.compose(m) ?: m)
 
         /** The same, its selections still to be mapped through [m] too. */
@@ -177,7 +181,7 @@ object History {
         }
         val changes = event.changes ?: return false
         // The events below get what this one carried for them (CM6's lazy mapping).
-        val rest = branch.dropLast(1).let { r -> event.mapped?.let { addMapping(r, it) } ?: r }
+        val rest = branch.dropLast(1).let { r -> event.mapped?.takeIf { it.isNotEmpty() }?.let { addMapping(r, it) } ?: r }
         t.dispatch(TransactionSpec(
             changeSet = changes,
             selection = event.startSelection,
@@ -206,7 +210,7 @@ object History {
             return if (from.side == Side.DONE) HistoryState(from.rest, other) else HistoryState(other, from.rest)
         }
         if (!recorded(tr)) {
-            return if (tr.docChanged) HistoryState(addMapping(h.done, tr.changes), addMapping(h.undone, tr.changes), h.prevTime, h.prevUserEvent, h.groupStart) else h
+            return if (tr.docChanged) HistoryState(addMapping(h.done, listOf(Pending(tr.changes, remote = true))), addMapping(h.undone, listOf(Pending(tr.changes, remote = true))), h.prevTime, h.prevUserEvent, h.groupStart) else h
         }
         val event = eventOf(tr, null)
         val userEvent = tr.annotation(Transaction.userEvent)
@@ -318,38 +322,106 @@ object History {
      * A top event with nothing left (its text deleted, or everything it would restore lying inside
      * text the change deleted: [inDeletedText]) is dropped and the next one mapped instead.
      */
-    private fun addMapping(branch: List<HistEvent>, mapping: ChangeSet): List<HistEvent> {
-        var m = mapping
+    private fun addMapping(branch: List<HistEvent>, mapping: List<Pending>): List<HistEvent> {
+        var ms = mapping
         var length = branch.size
         while (length > 0) {
             val e = branch[length - 1]
-            val changes = e.changes ?: return branch.subList(0, length - 1) + e.selectionsMappedBy(m)
-            val mapped = changes.map(m)
-            val before = m.map(changes, before = true)
-            val full = e.mapped?.compose(before) ?: before
-            val effects = e.effects.mapNotNull { it.map(before) }
-            val dropped = (mapped.isEmpty && effects.isEmpty()) || (effects.isEmpty() && inDeletedText(changes, m))
-            if (!dropped) {
-                return branch.subList(0, length - 1) + e.remapped(mapped, effects, full, e.startSelection?.map(before), m)
+            val changes = e.changes ?: return branch.subList(0, length - 1) + e.selectionsMappedBy(composeAll(ms))
+            val step = mapThrough(changes, ms, canDrop = e.effects.isEmpty())
+            var effects = e.effects
+            for (b in step.befores) effects = effects.mapNotNull { it.map(b.cs) }
+            var start = e.startSelection
+            for (b in step.befores) start = start?.map(b.cs)
+            val drop = step.droppedAt
+            if (drop < 0 && !(step.mapped.isEmpty && effects.isEmpty())) {
+                return branch.subList(0, length - 1) + e.remapped(step.mapped, effects, capped(e.mapped.orEmpty() + step.befores), start, composeAll(ms))
             }
-            m = full
+            // Dropped, at the mapping [drop] of [ms] that emptied it or rewrote around it (each is
+            // judged as it would have been when that change arrived). Emptied: undoing it would change
+            // nothing, so the steps below see the document as the mappings over it say (CM6).
+            // Rewritten around: it is NEVER undone, so the steps below need its forward change (the
+            // document before it -> after it) and then the remaining mappings.
+            val at = if (drop < 0) ms.size - 1 else drop
+            ms = capped(e.mapped.orEmpty() + step.befores.subList(0, if (step.inside) at else at + 1) +
+                (if (step.inside) listOf(Pending(forwardDesc(step.at), remote = false)) else emptyList()) + ms.subList(if (step.inside) at else at + 1, ms.size))
             length--
         }
         return emptyList()
     }
 
     /**
-     * Does every change of [event] (an undo step, in [remote]'s input document) lie inside text
-     * [remote] deleted or rewrote? Then undoing it would put text back into the middle of someone
-     * else's output (an agent's rewrite of the region): the step is dropped instead.
+     * [changes] mapped through [ms] one after another, and each mapping as seen before [changes]
+     * (CM6's mapDesc). With [canDrop], it stops at the first mapping that empties it or deletes
+     * around it ([inDeletedText]): [droppedAt] is that mapping's index (-1: none), [inside] which of
+     * the two, [at] the step's changes as they were just before it.
      */
-    private fun inDeletedText(event: ChangeSet, remote: ChangeSet): Boolean {
+    internal class Mapped(val mapped: ChangeSet, val befores: List<Pending>, val droppedAt: Int, val inside: Boolean, val at: ChangeSet)
+
+    /**
+     * A pending mapping: a change the steps below must be mapped through, [remote] when it is (or
+     * derives from) a change that was not ours, which the drop rule judges; a dropped step's own
+     * forward change is not remote and never drops another step.
+     */
+    internal class Pending(val cs: ChangeSet, val remote: Boolean)
+
+    internal fun mapThrough(changes: ChangeSet, ms: List<Pending>, canDrop: Boolean = true): Mapped {
+        var ch = changes
+        val befores = ArrayList<Pending>(ms.size)
+        for ((i, p) in ms.withIndex()) {
+            val m = p.cs
+            if (canDrop && p.remote && inDeletedText(ch, m)) return Mapped(ch, befores, i, true, ch)
+            val prev = ch
+            befores += Pending(m.map(ch, before = true), p.remote)
+            ch = ch.map(m)
+            if (canDrop && ch.isEmpty) return Mapped(ch, befores, i, false, prev)
+        }
+        return Mapped(ch, befores, -1, false, ch)
+    }
+
+    private fun composeAll(ms: List<Pending>): ChangeSet = ms.drop(1).fold(ms[0].cs) { a, b -> a.compose(b.cs) }
+
+    /**
+     * Past [MAX_PENDING] pending mappings (an agent streaming edits over a step nobody undoes), they
+     * are composed into one: bounded memory, at the price that insertion ties at ONE position may
+     * then resolve differently than mapping change by change would (positions are otherwise equal).
+     */
+    private fun capped(ms: List<Pending>): List<Pending> = if (ms.size <= MAX_PENDING) ms else listOf(Pending(composeAll(ms), ms.any { it.remote }))
+
+    private const val MAX_PENDING = 64
+
+    /**
+     * Does every change of [event] (an undo step, in [remote]'s input document) lie well inside text
+     * [remote] deleted or rewrote: covered, with at least [DROP_MARGIN] more characters of the
+     * deletion on BOTH sides? Then undoing it would put text back into the middle of someone else's
+     * output (an agent's rewrite of the paragraph): the step is dropped. A deletion that only touches
+     * the step's edges (`axb`, `x` deleted, then `ab` rewritten to `AB`) keeps it: the undo is mapped.
+     */
+    internal fun inDeletedText(event: ChangeSet, remote: ChangeSet): Boolean {
         val deleted = remote.iterChanges().filter { it.toA > it.fromA }
         if (deleted.isEmpty()) return false
         val own = event.iterChanges()
-        return own.isNotEmpty() && own.all { c ->
-            deleted.any { d -> if (c.fromA == c.toA) d.fromA < c.fromA && c.fromA < d.toA else d.fromA <= c.fromA && c.toA <= d.toA }
+        return own.isNotEmpty() && own.all { c -> deleted.any { d -> d.fromA <= c.fromA - DROP_MARGIN && c.toA + DROP_MARGIN <= d.toA } }
+    }
+
+    private const val DROP_MARGIN = 2
+
+    /**
+     * The forward change of the step whose inverse is [inverse] (its document before -> after), as
+     * positions only: inserted text is a placeholder of the right length. It is only ever used to
+     * MAP (a carried mapping), never applied to a document.
+     */
+    internal fun forwardDesc(inverse: ChangeSet): ChangeSet {
+        val b = ChangeSet.Builder()
+        var at = 0 // position in the inverse's OUTPUT document (the step's input)
+        for (c in inverse.iterChanges()) {
+            b.retain(c.fromB - at)
+            b.delete(c.toB - c.fromB)
+            b.insert("\u0000".repeat(c.toA - c.fromA))
+            at = c.toB
         }
+        b.retain(inverse.lengthAfter - at)
+        return b.build()
     }
 }
 

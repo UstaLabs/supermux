@@ -62,13 +62,23 @@ convergence law as its property test): the newest event maps over the change as 
 older one over the change as seen before the newer ones (`mapping.map(event, before = true)`). So an
 undo after a remote insert before the local edit undoes the local edit where it now is, and puts the
 caret back where it was, mapped. An event whose text the remote change deleted entirely is dropped,
-and so is one whose every change lies INSIDE text the remote change deleted or rewrote (the user
-deleted a word, then an agent rewrote the paragraph around it): undoing it would put the word back
-into the middle of the agent's output.
+and so is one whose every change lies WELL inside text the remote change deleted or rewrote (the
+user deleted a word, then an agent rewrote the paragraph around it): covered, with at least two
+more characters of the deletion on both sides. Undoing it would put the word back into the middle
+of the agent's output. A rewrite that only touches the step's edges (`axb`: `x` deleted, then `ab`
+rewritten) keeps the undo, mapped. A step dropped this way is never undone, so the steps below it
+are mapped through ITS forward change and then the remote change (not through its undo), which is
+what a naive lazy scheme gets wrong (the review's repro threw "change set for length 19, doc is 16").
 
 Mapping is LAZY, CM6's scheme: only the top event of each branch is mapped, its `mapped` carries
 what the events below need, and they are mapped when they become the top; remembered selections
-are mapped only when read. An agent streaming edits costs about 0.006 ms per transaction with 100
+are mapped only when read. The carried mappings are a SEQUENCE, applied one after another and each
+judged by the drop rule as when it arrived (composing them first changed how insertion ties at one
+position resolve, and two adjacent remote deletions composed into one wide "rewrite"); past 64
+pending mappings they are composed (bounded memory; ties may then resolve differently). A
+randomized test (`HistoryModelTest`, 3,000 cases: local typing, deletions, undo and redo interleaved
+with agent inserts, deletions and rewrites) checks the lazy history against an eager model after
+every step: same document, nothing thrown. An agent streaming edits costs about 0.006 ms per transaction with 100
 steps and 200 remembered selections (`HistoryPerfTest`, budget 0.1 ms).
 
 ## Soft keyboards

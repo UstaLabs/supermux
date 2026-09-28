@@ -178,6 +178,42 @@ class HistoryTest {
         assertEquals("0AGENT456789", k.doc)
     }
 
+    @Test fun undoAfterADroppedStepMapsTheStepsBelowIntoTheRightDocument() {
+        // The review's repro: this threw "change set for length 19, doc is 16".
+        val h = H("0123456789abcdefghij", 15)
+        h.at(0).type("X")
+        assertEquals("0123456789abcdeXfghij", h.doc)
+        h.at(1000).view.dispatch(TransactionSpec(selection = EditorSelection.single(4, 7), userEvent = "select"))
+        DefaultCommands.deleteBackward.run(h.view)
+        assertEquals("0123789abcdeXfghij", h.doc)
+        h.view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(2, 6, "RR")), userEvent = "agent"))
+        assertEquals("01RR9abcdeXfghij", h.doc)
+        assertTrue(h.undo())
+        assertEquals("01RR9abcdefghij", h.doc)
+        assertFalse(h.undo())
+    }
+
+    @Test fun aRemoteEditThatOnlyTouchesAStepsEdgesKeepsItsUndo() {
+        // axb: delete x, then the agent rewrites ab -> AB (one character each side): undo is mapped.
+        val h = H("axb", 2)
+        h.at(0); DefaultCommands.deleteBackward.run(h.view)
+        h.view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 2, "AB")), userEvent = "agent"))
+        assertTrue(h.undo(), "an edge-touching rewrite dropped the undo")
+        assertTrue(h.doc.contains('x') && h.doc.length == 3, h.doc)
+        // A rewrite ending right at the deletion point keeps it too.
+        val k = H("abcxdef", 4)
+        k.at(0); DefaultCommands.deleteBackward.run(k.view)
+        k.view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(0, 3, "ABC")), userEvent = "agent"))
+        assertTrue(k.undo())
+        assertEquals("ABCxdef", k.doc)
+        // A true rewrite across it (two or more characters each side) drops it.
+        val r = H("abcxdef", 4)
+        r.at(0); DefaultCommands.deleteBackward.run(r.view)
+        r.view.dispatch(TransactionSpec(changes = listOf(ChangeSpec(1, 5, "REWRITE")), userEvent = "agent"))
+        assertFalse(r.undo())
+        assertEquals("aREWRITEf", r.doc)
+    }
+
     @Test fun userTriggeredLspActionsAreUndoableAndServerEditsAreNot() {
         // The contract: `lsp` / `lsp.*` is server-initiated (not recorded, not policed); a completion
         // accepted, a rename, a code action, a format are the user's (recorded, undoable).
