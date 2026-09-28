@@ -60,7 +60,8 @@ and attaches the new one.
   line). Then `initialized`, then `didOpen` for every document a view shows (`languageId` is the
   host's: it maps its syntax registry's language, e.g. `Syntax` "kotlin" → `kotlin`).
 - **didChange**: the edits since the last sync compose into ONE change set, sent 50 ms after the last
-  edit (`syncDelayMs`) and always right before a request; incremental ranges back to front, each in
+  edit (`syncDelayMs`; the timer is the CLIENT's, so it still fires when the view that typed goes before
+  it) and always right before a request; incremental ranges back to front, each in
   the synced text (CM6's `contentChangesFor`); full text to a server that asks for full sync; none to
   kind 0. **Order**: every outgoing message goes into ONE queue synchronously, in call order (sync is
   synchronous; a request queues its message before it first suspends and builds its params in the
@@ -78,7 +79,9 @@ and attaches the new one.
   `LspTransport.connection` generation while CONNECTED, even a drop and reconnect inside one tick that a
   StateFlow of the status alone would hide) makes the client initialize again and re-open its
   documents with their text as it is then. A send that throws fails the connection (`FAILED`, pending
-  requests fail) until the next generation.
+  requests fail) and NOTHING more is sent (the rest of the queue is dropped) until the next
+  generation: an adapter whose send failed must bump `connection` or report DISCONNECTED (the
+  `LspTransport` KDoc), or the client stays FAILED.
 - **Errors**: a server error, a timeout (`requestTimeoutMs`, 15 s), a failed send or a dropped
   connection never throws out of a request (every other exception becomes `LspException(DISCONNECTED)`)
   nor out of a feature (every launched command, code action and signature request is guarded); a user-asked one (definition, references, rename, format) is reported

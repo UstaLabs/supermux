@@ -3,6 +3,7 @@ package dev.supermux.editor.core
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class RangeSetTest {
     private val mark = Decoration.Mark(setOf("m"))
@@ -79,5 +80,77 @@ class RangeSetTest {
         assertEquals("b", set.lastStartingAtOrBefore(8)?.value)
         assertEquals("c", set.lastStartingAtOrBefore(9)?.value)
         assertEquals("c", set.lastStartingAtOrBefore(100)?.value)
+    }
+
+    // ------------------------------------------------------------------ M4d task 0 --
+
+    @Test fun anEmptyExclusiveMarkAtAnInsertionIsDroppedNotACrash() {
+        val set = RangeSet.of(listOf(Ranged(3, 3, mark), Ranged(1, 4, mark)))
+        val mapped = set.map(ChangeSet.of(8, ChangeSpec(3, 3, "xy")))
+        assertEquals(listOf(Ranged(1, 6, mark)), mapped.ranges)
+        // Elsewhere it just moves.
+        assertEquals(listOf(Ranged(5, 5, mark)), RangeSet.of(listOf(Ranged(3, 3, mark))).map(ChangeSet.of(8, ChangeSpec(0, 0, "ab"))).ranges)
+    }
+
+    /** One range mapped on its own, by the documented rules (null: it goes). */
+    private fun <T> mapOne(r: Ranged<T>, cs: ChangeSet): Ranged<T>? {
+        val v = r.value
+        if (r.from == r.to && deletedAround(cs, r.from)) return null
+        val (sa, ea) = when {
+            v is Decoration.Mark -> (if (v.inclusiveStart) -1 else 1) to (if (v.inclusiveEnd) 1 else -1)
+            r.from == r.to -> ((v as? Decoration.InlineWidget)?.side ?: -1).let { it to it }
+            else -> 1 to -1
+        }
+        val from = cs.mapPos(r.from, sa)
+        val to = cs.mapPos(r.to, ea)
+        if (from > to || r.from < r.to && from == to) return null
+        return Ranged(from, to, v)
+    }
+
+    /** Strictly inside a deleted range, from the change list (not the implementation's walk). */
+    private fun deletedAround(cs: ChangeSet, pos: Int) = cs.iterChanges().any { it.toA > it.fromA && pos > it.fromA && pos < it.toA }
+
+    @Test fun mappingRandomRangesThroughRandomEditsMatchesAModelAndStaysSorted() {
+        val rnd = Random(41)
+        val kinds: List<(Random) -> Decoration> = listOf(
+            { r -> Decoration.Mark(setOf("m"), inclusiveStart = r.nextBoolean(), inclusiveEnd = r.nextBoolean()) },
+            { _ -> Decoration.LineStyle(setOf("l")) },
+            { r -> Decoration.InlineWidget(WidgetKey("w", "x"), side = if (r.nextBoolean()) 1 else -1) },
+            { r -> Decoration.BlockWidget(WidgetKey("b", "x"), above = r.nextBoolean()) },
+            { _ -> Decoration.Replace() },
+        )
+        repeat(400) { case ->
+            var len = rnd.nextInt(0, 80)
+            var set = RangeSet.of(List(rnd.nextInt(0, 30)) {
+                val d = kinds[rnd.nextInt(kinds.size)](rnd)
+                val from = rnd.nextInt(0, len + 1)
+                val point = d !is Decoration.Mark && d !is Decoration.Replace || rnd.nextInt(3) == 0
+                Ranged(from, if (point) from else rnd.nextInt(from, len + 1), d)
+            })
+            repeat(6) { step ->
+                val specs = ArrayList<ChangeSpec>()
+                var at = 0
+                while (at <= len && specs.size < 4 && rnd.nextInt(3) > 0) {
+                    val from = rnd.nextInt(at, len + 1)
+                    val to = if (rnd.nextBoolean()) from else rnd.nextInt(from, minOf(len, from + 10) + 1)
+                    specs += ChangeSpec(from, to, if (rnd.nextBoolean()) "" else "abc".take(rnd.nextInt(1, 4)))
+                    at = to + 1
+                }
+                val cs = ChangeSet.of(len, specs)
+                val model = set.ranges.mapNotNull { mapOne(it, cs) }
+                val mapped = set.map(cs)
+                assertEquals(RangeSet.of(model).ranges, mapped.ranges, "case $case step $step: $set through $cs")
+                for (i in 1 until mapped.size) {
+                    val a = mapped.ranges[i - 1]; val b = mapped.ranges[i]
+                    assertTrue(a.from < b.from || a.from == b.from && a.to <= b.to, "sorted at $i: $mapped")
+                }
+                len = cs.lengthAfter
+                repeat(8) {
+                    val from = rnd.nextInt(-2, len + 3); val to = from + rnd.nextInt(0, 12)
+                    assertEquals(mapped.ranges.filter { it.to >= from && it.from <= to }, mapped.between(from, to), "between($from, $to) of $mapped")
+                }
+                set = mapped
+            }
+        }
     }
 }

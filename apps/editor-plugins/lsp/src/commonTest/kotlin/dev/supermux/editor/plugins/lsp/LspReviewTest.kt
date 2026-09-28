@@ -127,7 +127,9 @@ class LspReviewTest {
         val v = view(c, "fun add(a, b) {\n}\nval x = add(1, 2)\n", cursor = 30)
         settle()
         server.failAfterSends = 0
-        server.failSends = 3
+        // One send breaks the pipe: the client sends nothing more on this connection (so the fake's
+        // later sends would not fail; the next connection's must work).
+        server.failSends = 1
         // Every command while the pipe is broken: none throws, pending requests fail.
         assertTrue(key(v, "F12")); assertTrue(key(v, "Shift-F12")); assertTrue(key(v, "Shift-Alt-f"))
         v.type(0, "x")
@@ -317,6 +319,42 @@ class LspReviewTest {
         val opts = (server.lastParams["textDocument/formatting"] as JsonObject)["options"] as JsonObject
         assertEquals("8", (opts["tabSize"] as JsonPrimitive).content)
         assertEquals("false", (opts["insertSpaces"] as JsonPrimitive).content)
+    }
+
+    // ------------------------------------------------------------------ M4d task 0 --
+
+    @Test fun anEditStillReachesTheServerWhenItsViewDetachesBeforeTheBatch() = runTest {
+        val server = FakeLspServer(backgroundScope)
+        val c = client(server)
+        val a = view(c, "abc\n")
+        val b = view(c, "abc\n")
+        settle()
+        a.type(0, "X")
+        // A goes (another document) before the 50 ms batch fires: B keeps the document open.
+        a.setState(EditorState.create("other"))
+        advanceTimeBy(60); runCurrent()
+        assertEquals("Xabc\n", b.text)
+        assertEquals("Xabc\n", server.documents[uri], "the pending didChange was sent within the batch delay")
+    }
+
+    @Test fun afterASendFailsNothingQueuedIsSentUntilTheNextConnection() = runTest {
+        val server = FakeLspServer(backgroundScope)
+        val c = client(server)
+        val v = view(c, "fun add(a, b) {\n}\nval x = add(1, 2)\n", cursor = 30)
+        settle()
+        val before = server.wire.size
+        server.failAfterSends = 0
+        server.failSends = 1
+        // Several messages queued in one tick (a didChange, then a request's own); the first send breaks.
+        v.type(0, "x")
+        assertTrue(key(v, "F12"))
+        settle()
+        assertEquals(LspClientState.FAILED, c.state.value)
+        assertEquals(before, server.wire.size, "nothing after the failed send: ${server.wire.drop(before)}")
+        server.blip()
+        settle()
+        assertEquals(LspClientState.READY, c.state.value)
+        assertEquals(v.text, server.documents[uri])
     }
 
     @Test fun theSlicedParserIsStrict() = runTest {

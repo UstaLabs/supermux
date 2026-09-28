@@ -232,10 +232,13 @@ internal class LspDocument(val client: LspClient, val uri: String, private val l
         })
     }
 
+    /**
+     * The batch timer runs on the CLIENT's scope, not a view's: the view that typed may go (another
+     * document shown) before it fires, and its edit must still reach the server within the delay.
+     */
     private fun scheduleSync() {
         if (syncJob?.isActive == true) return
-        val scope = primary?.scope ?: return
-        syncJob = scope.launch {
+        syncJob = client.launch("an LSP sync") {
             delay(client.config.syncDelayMs)
             syncJob = null
             sync()

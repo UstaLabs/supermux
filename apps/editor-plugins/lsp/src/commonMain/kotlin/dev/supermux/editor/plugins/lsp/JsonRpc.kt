@@ -23,7 +23,8 @@ import kotlinx.serialization.json.put
  * request posts before it first suspends), and a single sender drains it: a `didChange` queued before
  * a request always reaches the server first, however long a send takes, and a cancelled caller never
  * takes a queued message with it. A send that throws fails the connection: every pending request
- * fails with [LspException.DISCONNECTED] and [onSendFailure] runs.
+ * fails with [LspException.DISCONNECTED], [onSendFailure] runs, and nothing more is sent (the rest of
+ * the queue is dropped) until [reset] (the next connection).
  *
  * Incoming messages are parsed on the parse context (a worker; the browser: [SlicedJson] for big
  * ones) and handled on [scope] (the UI thread's).
@@ -77,8 +78,13 @@ internal class JsonRpc(
                 } catch (e: kotlin.coroutines.cancellation.CancellationException) {
                     throw e
                 } catch (e: Throwable) {
+                    // The connection is broken: nothing queued behind this message is sent (a
+                    // didChange after a lost one would corrupt the server's copy); [reset], at the
+                    // next connection, starts a new queue.
+                    box.close()
                     failAll("sending failed: ${e.message ?: e}")
                     onSendFailure(e)
+                    break
                 }
             }
         }

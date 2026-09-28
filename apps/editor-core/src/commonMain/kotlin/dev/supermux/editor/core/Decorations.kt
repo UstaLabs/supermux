@@ -98,8 +98,10 @@ class RangeSet<T> private constructor(internal val ranges: List<Ranged<T>>) : It
             } else 1 to -1
             val from = changes.mapPos(r.from, startAssoc)
             val to = changes.mapPos(r.to, endAssoc)
-            // A range whose text was all deleted carries nothing any more.
-            if (r.from < r.to && from >= to) continue
+            // A range whose text was all deleted carries nothing any more. An EMPTY mark exclusive at
+            // both ends maps its start after text inserted at its point and its end before it: it
+            // covers nothing, and goes (CM6 drops it the same way).
+            if (from > to || r.from < r.to && from == to) continue
             // Unmoved (before the edit): the same instance, so comparing the old and new sets is cheap there.
             out += if (from == r.from && to == r.to) r else Ranged(from, to, v)
         }

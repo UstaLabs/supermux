@@ -17,6 +17,12 @@ enum class LspConnState { CONNECTING, CONNECTED, DISCONNECTED }
  *
  * A new [connection] generation while [status] is [LspConnState.CONNECTED] makes the client
  * initialize and re-open its documents; [LspConnState.DISCONNECTED] fails every pending request.
+ *
+ * **A failed [send].** When [send] throws, the client treats this connection as broken: every pending
+ * request fails, its state becomes FAILED, and it sends NOTHING more (whatever was queued behind the
+ * failed message is dropped) until the next connection. So an adapter whose send fails must either
+ * bump [connection] once it is usable again (a reconnect) or report [LspConnState.DISCONNECTED]
+ * (and later CONNECTED with a new generation); otherwise the client stays FAILED for good.
  */
 interface LspTransport {
     suspend fun send(message: String)
