@@ -42,7 +42,6 @@ internal class SurfaceFrame(
     val scrollX: Float,
     val scrollY: Float,
     val gutterWidth: Float,
-    val currentLines: List<Rect>,
     val lineBackgrounds: List<Pair<Color, Rect>>,
     val selections: List<Rect>,
     val text: List<DrawnText>,
@@ -61,7 +60,7 @@ internal class SurfaceFrame(
 ) {
     companion object {
         fun empty(size: Size, scrollX: Float, scrollY: Float, gutterWidth: Float, caret: Rect) = SurfaceFrame(
-            size, IntRange.EMPTY, scrollX, scrollY, gutterWidth, emptyList(), emptyList(), emptyList(), emptyList(),
+            size, IntRange.EMPTY, scrollX, scrollY, gutterWidth, emptyList(), emptyList(), emptyList(),
             emptyList(), emptyList(), emptyList(), caret,
         )
     }
@@ -135,17 +134,6 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
     fun textRow(line: Int) = Rect(gutterWidth, top(line), size.width, top(line) + g.textHeight(line))
 
     val ranges = state.selection.ranges
-    // The current line, only while nothing is selected.
-    val current = ArrayList<Rect>()
-    if (ranges.all { it.empty }) {
-        var last = -1
-        for (r in ranges) {
-            val line = g.visualLine(doc.lineIndexAt(r.head))
-            if (line == last || line !in lines) continue
-            last = line
-            current += textRow(line)
-        }
-    }
     // Line decorations.
     val backgrounds = ArrayList<Pair<Color, Rect>>()
     if (theme.lineClassBackgrounds.isNotEmpty()) {
@@ -242,11 +230,11 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
         }
     }
     val glyph = if (chips.isNotEmpty()) chipGlyph() else null
-    return SurfaceFrame(size, lines, scrollX, scrollY, gutterWidth, current, backgrounds, selections, text, cursors, numbers, spots, caret, markers, widgets, chips, glyph)
+    return SurfaceFrame(size, lines, scrollX, scrollY, gutterWidth, backgrounds, selections, text, cursors, numbers, spots, caret, markers, widgets, chips, glyph)
 }
 
 /**
- * The draw pass: [frame] as it is, in this order: background, the current line, `LineStyle`
+ * The draw pass: [frame] as it is, in this order: background, `LineStyle` (the active line, ...)
  * backgrounds, selections (all ranges), text, cursors, the gutter, the touch handles. Nothing here
  * measures or scrolls ([DrawGuard]).
  */
@@ -255,7 +243,6 @@ internal fun DrawScope.drawFrame(frame: SurfaceFrame, theme: EditorTheme, focuse
     if (frame.lines.isEmpty()) return
     val gutter = frame.gutterWidth
     clipRect(left = gutter) {
-        for (r in frame.currentLines) drawRect(theme.currentLine, r.topLeft, r.size)
         for ((color, r) in frame.lineBackgrounds) drawRect(color, r.topLeft, r.size)
         for (r in frame.selections) drawRect(theme.selection, r.topLeft, r.size)
         for (t in frame.text) drawText(t.layout, topLeft = t.topLeft)

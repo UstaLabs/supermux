@@ -11,6 +11,9 @@ import dev.supermux.editor.core.Ranged
 import dev.supermux.editor.core.Rope
 import dev.supermux.editor.core.StateEffectType
 import dev.supermux.editor.core.StateField
+import dev.supermux.editor.core.TokenContext
+import dev.supermux.editor.core.TokenContextProvider
+import dev.supermux.editor.core.tokenContextFacet
 import dev.supermux.editor.core.Transaction
 import dev.supermux.editor.core.decorationsFacet
 import dev.supermux.editor.core.extensionOf
@@ -90,8 +93,39 @@ object Syntax {
     /** The worker's spans for a version; see [SyntaxSpansUpdate]. */
     val spans: StateEffectType<SyntaxSpansUpdate> = StateEffectType("syntax.spans")
 
-    /** The extension for one document. [language] null = plain text (no parsing). */
-    fun extension(language: String?): Extension = extensionOf(languageFacet.of(language), field)
+    /**
+     * The extension for one document. [language] null = plain text (no parsing). It also answers
+     * editor-core's language hooks: `tokenContextFacet` (strings and comments, for bracket matching;
+     * a new provider with every new syntax value, so what depends on it follows the spans).
+     */
+    fun extension(language: String?): Extension = extensionOf(
+        languageFacet.of(language),
+        field,
+        tokenContextFacet.compute(FacetDep.field(field)) { st -> st.field(field).let { v -> TokenContextProvider { _, pos -> contextIn(v, pos) } } },
+    )
+
+    /** What the character at [pos] is in [state] (see [contextIn]); null without syntax. */
+    fun tokenContext(state: EditorState, pos: Int): TokenContext? = state.fieldOrNull(field)?.let { contextIn(it, pos) }
+
+    /**
+     * From the spans: [TokenContext.STRING] under a string, regexp or escape token,
+     * [TokenContext.COMMENT] under a comment, else code; null while nothing is highlighted (plain
+     * text, syntax off, not parsed yet). Spans are kept within [KEEP_SCREENS] screens of the
+     * viewport; further away every position reads as code.
+     */
+    private fun contextIn(v: SyntaxValue, pos: Int): TokenContext? {
+        if (v.language == null || v.syntaxOff || v.spans.isEmpty) return null
+        var ctx = TokenContext.CODE
+        for (r in v.spans.between(pos, pos + 1)) {
+            if (r.from > pos || r.to <= pos) continue
+            val classes = (r.value as? Decoration.Mark)?.classes ?: continue
+            if (TokenClasses.COMMENT in classes) return TokenContext.COMMENT
+            if (classes.any { it in STRING_CLASSES }) ctx = TokenContext.STRING
+        }
+        return ctx
+    }
+
+    private val STRING_CLASSES = setOf(TokenClasses.STRING, TokenClasses.STRING_SPECIAL, TokenClasses.REGEXP, TokenClasses.ESCAPE)
 
     /** What the worker needs from a state; null when the state has no syntax extension. */
     fun snapshot(state: EditorState): SyntaxSnapshot? = state.fieldOrNull(field)?.let { v ->

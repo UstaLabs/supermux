@@ -13,6 +13,60 @@ val tabSizeFacet: Facet<Int, Int> = Facet.first("tabSize", 4)
 val indentUnitFacet: Facet<String, String> = Facet.first("indentUnit", "    ")
 
 /**
+ * Show the line-number gutter. When a plugin (basics' `lineNumbers(enabled)`, the view settings)
+ * provides it, it overrides `Editor(showLineNumbers = …)`, and a reconfigure changes it at run time.
+ */
+val lineNumbersFacet: Facet<Boolean, Boolean?> = Facet.define("lineNumbers") { it.firstOrNull() }
+
+/**
+ * The surface's viewport as STATE, for plugins that decorate only what is on screen (selection
+ * matches, fold arrows): CM6's `view.visibleRanges`. A plugin includes [extension]; the surface then
+ * dispatches [set] with the UTF-16 range of the lines it lays out (the visible ones plus overscan)
+ * whenever it changes, at most once per frame, after the frame (no userEvent: history ignores it).
+ * Between two updates the range is mapped through edits. Empty until the first paint: a plugin
+ * then falls back to a window around the selection.
+ */
+object EditorViewport {
+    val set: dev.supermux.editor.core.StateEffectType<IntRange> = dev.supermux.editor.core.StateEffectType("editor.viewport")
+
+    val field: dev.supermux.editor.core.StateField<IntRange> = dev.supermux.editor.core.StateField(
+        "editor.viewport",
+        { IntRange.EMPTY },
+        { v, tr ->
+            var r = v
+            if (tr.docChanged && !r.isEmpty()) {
+                val c = tr.changes
+                val a = c.mapPos(minOf(r.first, c.lengthBefore), -1)
+                r = a until maxOf(a, c.mapPos(minOf(r.last + 1, c.lengthBefore), 1))
+            }
+            for (e in tr.effects) e.valueIf(set)?.let { r = it }
+            r
+        },
+    )
+
+    /** What a plugin includes (a field; several plugins including it share one). */
+    val extension: dev.supermux.editor.core.Extension get() = EditorViewport.field
+
+    /** The viewport in [state], or null when no plugin asked for it. Empty before the first paint. */
+    fun of(state: dev.supermux.editor.core.EditorState): IntRange? = state.fieldOrNull(field)
+
+    /**
+     * The range to decorate in [state]: the viewport, else (before the first paint, or with no
+     * surface) [fallbackLines] lines around the main cursor.
+     */
+    fun rangeOf(state: dev.supermux.editor.core.EditorState, fallbackLines: Int = 100): IntRange {
+        val v = of(state)
+        if (v != null && !v.isEmpty()) return v.first..minOf(v.last, state.doc.length)
+        val doc = state.doc
+        val line = doc.lineIndexAt(state.selection.main.head)
+        val a = doc.lineStart(maxOf(0, line - fallbackLines))
+        val lastLine = minOf(doc.lineCount - 1, line + fallbackLines)
+        val b = if (lastLine + 1 < doc.lineCount) doc.lineStart(lastLine + 1) - 1 else doc.length
+        return a..b
+    }
+}
+
+/**
  * A plugin's say over typed text (closeBrackets, auto-indent triggers), like CM6's inputHandler:
  * given the main range [from, to) about to be replaced by [text], dispatch something else and
  * return true, or return false to let the text be typed. Called for plain typing only (`input`:

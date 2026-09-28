@@ -64,6 +64,20 @@ data class EditorTheme(
         /** The class the surface puts on text an IME is still composing (an underline). */
         const val COMPOSITION_CLASS = "ime-composition"
 
+        /** basics' active line (a `LineStyle`): painted in [currentLine]. */
+        const val ACTIVE_LINE_CLASS = "active-line"
+
+        /**
+         * The line and mark classes of the M4a plugins, given [currentLine] and the accents: basics'
+         * active line, bracket matching and selection matches.
+         */
+        fun pluginClasses(currentLine: Color, bracket: Color, nonmatching: Color, selectionMatch: Color): Pair<Map<String, Color>, Map<String, SpanStyle>> =
+            mapOf(ACTIVE_LINE_CLASS to currentLine) to mapOf(
+                "matching-bracket" to SpanStyle(background = bracket),
+                "nonmatching-bracket" to SpanStyle(color = nonmatching, background = nonmatching.copy(alpha = 0.18f)),
+                "selection-match" to SpanStyle(background = selectionMatch),
+            )
+
         /** The M4 plugins' columns: diff bars, lint dots, comment bubbles, fold arrows. */
         val DEFAULT_GUTTER_COLUMNS: Map<String, Dp> = mapOf("diff" to 6.dp, "lint" to 12.dp, "comment" to 16.dp, "fold" to 14.dp)
 
@@ -80,7 +94,11 @@ data class EditorTheme(
         )
 
         /** Tuned to supermux's dark palette: its near-black code tone, the teal accent, One Dark tokens. */
-        fun dark(font: FontFamily): EditorTheme = EditorTheme(
+        fun dark(font: FontFamily): EditorTheme = pluginClasses(
+            currentLine = Color(0xFF151713), bracket = Color(0x47BAD0F8), nonmatching = Color(0xFFE06C75), selectionMatch = Color(0x33AAFE66),
+        ).let { (lines, marks) -> EditorTheme(
+            lineClassBackgrounds = lines,
+            classStyles = marks,
             background = Color(0xFF0A0B09),
             foreground = Color(0xFFD8DED3),
             selection = Color(0x664BBAA7),
@@ -101,10 +119,14 @@ data class EditorTheme(
                 link = Color(0xFF61AFEF),
             ),
             fontFamily = font,
-        )
+        ) }
 
         /** Tuned to supermux's light palette: its paper code tone, the deep teal accent, One Light tokens. */
-        fun light(font: FontFamily): EditorTheme = EditorTheme(
+        fun light(font: FontFamily): EditorTheme = pluginClasses(
+            currentLine = Color(0xFFF0F1EB), bracket = Color(0x52328C82), nonmatching = Color(0xFFBB5555), selectionMatch = Color(0x5599FF77),
+        ).let { (lines, marks) -> EditorTheme(
+            lineClassBackgrounds = lines,
+            classStyles = marks,
             background = Color(0xFFFEFEFB),
             foreground = Color(0xFF1F221C),
             selection = Color(0x4D007368),
@@ -125,7 +147,7 @@ data class EditorTheme(
                 link = Color(0xFF4078F2),
             ),
             fontFamily = font,
-        )
+        ) }
 
         /** [dark] or [light] after the system setting, with the packaged face. */
         @Composable

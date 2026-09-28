@@ -19,6 +19,36 @@ EditorState.create(text, extensions = extensionOf(Syntax.extension(lang), basics
 - **`BlockIndent`**: Enter (and Shift-Enter) between `{}` / `[]` / `()` opens an indented block, one `indentUnitFacet`
   deeper than the current line; elsewhere Enter is `DefaultCommands.insertNewline`, which already
   keeps the line's indentation.
+- **`IndentOnInput`** (CM6's `indentOnInput`, the opener-line rule): a `}` `)` `]` typed as the first
+  non-blank character of a line re-indents the line to the indentation of its opener's line (the
+  opener found by bracket matching's scan, so string brackets do not count with syntax on). The
+  brace and the re-indent are one `input.type` transaction: one undo takes both. At every cursor.
+  Tree-based indentation (`indents.scm`) is later.
+- **`ActiveLine`** (CM6's `highlightActiveLine`): a `LineStyle` `active-line` on each empty cursor's
+  line, painted in `EditorTheme.currentLine`. The surface has no built-in current-line highlight any
+  more: an editor without basics shows none.
+- **`BracketMatching`** (CM6's `bracketMatching`): an empty cursor next to a bracket marks it and its
+  partner `matching-bracket`, or `nonmatching-bracket` for a partner of another kind or none before
+  the document's edge. CM6's candidate order (a closer before the cursor, an opener before it, then
+  after it). The scan stops after 10,000 characters (nothing marked then). With syntax on, only
+  brackets of the same token context count (`tokenContextFacet`, editor-core; editor-syntax answers it
+  from its spans), so `f("(", x)` pairs the code parentheses; without it every bracket counts.
+- **`SelectionMatches`** (CM6's `highlightSelectionMatches`): one non-empty single-line selection of
+  2 to 200 characters, not all blank, marks its other occurrences `selection-match`; one empty cursor
+  in a word marks the word's other whole-word occurrences. Only in the viewport (editor-compose's
+  `EditorViewport`; 100 lines around the cursor before the first paint); over 100 matches marks
+  nothing.
+- **`lineNumbers(enabled)`**: editor-compose's `lineNumbersFacet`, overriding
+  `Editor(showLineNumbers = …)`; in a compartment the host toggles it at run time.
+
+`basics()` is all of the above except `lineNumbers` (CloseBrackets, BlockIndent, IndentOnInput,
+ActiveLine, BracketMatching, SelectionMatches). The theme's `light` / `dark` style every class.
+
+**Deliberate differences from CM6.** The active line marks only EMPTY cursors' lines (CM6 marks
+every range's head line). Selection matches mark the word under the cursor by default (CM6's
+`highlightWordAroundCursor` is off by default), with no delay (CM6 has none either); the word itself
+is not marked (CM6 gives it `cm-selectionMatch-main`). A selection must be 2 characters (CM6: 1).
+Bracket matching compares token contexts (code / string / comment), not tree node types.
 
 **Every input path.** Typed text reaches the plugin through `inputHandlerFacet`, which
 `EditorView.typeText` asks first; the hidden field (soft and hardware keyboards) and the web's key
@@ -39,10 +69,10 @@ transactions and key bindings (data only, the sandbox-ready contract). Moving th
 facets into `:editor-core` would let plugins depend on the core alone; M4 decides that with the
 other plugins.
 
-**Not yet (follows the syntax tree):** pairing is not suppressed inside strings or comments, and no
-language-specific pairs yet (`<>` in HTML, `'` off in Rust): language plugins will provide
-`closeBracketsConfig`.
+**Not yet:** close-bracket pairing is not suppressed inside strings or comments (CM6's is not either,
+unless a language configures it; `tokenContextFacet` makes it possible), and no language-specific
+pairs yet (`<>` in HTML, `'` off in Rust): language plugins will provide `closeBracketsConfig`.
 
 Tests: `./gradlew :editor-plugins:basics:jvmTest` (commonTest: every rule, multi-cursor, emoji,
-soft Backspace; jvmTest: brackets and Return through the real hidden field of a composed `Editor`)
+soft Backspace, the basics+ features, a 1.9 MB file never stalling; jvmTest: brackets and Return through the real hidden field of a composed `Editor`)
 and `:editor-plugins:basics:iosSimulatorArm64Test`.

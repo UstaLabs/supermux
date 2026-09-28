@@ -64,5 +64,19 @@ object BlockIndent {
     }
 }
 
-/** The basics: [CloseBrackets] and [BlockIndent]. */
-fun basics(): Extension = dev.supermux.editor.core.extensionOf(CloseBrackets.extension(), BlockIndent.extension())
+/**
+ * The basics: [CloseBrackets], [BlockIndent], [IndentOnInput], [ActiveLine], [BracketMatching] and
+ * [SelectionMatches] (CM6's closeBrackets, Enter between braces, indentOnInput, highlightActiveLine,
+ * bracketMatching and highlightSelectionMatches). Line numbers are the surface's; [lineNumbers]
+ * turns them on or off from the state.
+ */
+fun basics(): Extension = dev.supermux.editor.core.extensionOf(
+    CloseBrackets.extension(), BlockIndent.extension(), IndentOnInput.extension,
+    ActiveLine.extension, BracketMatching.extension, SelectionMatches.extension,
+)
+
+/**
+ * Show or hide the line-number gutter from the state (editor-compose's `lineNumbersFacet`, which
+ * overrides `Editor(showLineNumbers = …)`); put it in a compartment to toggle it at run time.
+ */
+fun lineNumbers(enabled: Boolean): Extension = dev.supermux.editor.compose.lineNumbersFacet.of(enabled)

@@ -62,6 +62,12 @@ passed to several `Editor`s to scroll them together (clamped to the largest; anc
 shared); side-by-side views that keep corresponding LINES aligned use `LinkedScroll` (below).
 `onGutterClick` and `onWidgetClick` hear the gutter and placeholder clicks no plugin took.
 
+**Editor-level facets for plugins.** `tabSizeFacet`, `indentUnitFacet`, `lineNumbersFacet` (set, it
+overrides `Editor(showLineNumbers = …)`; a reconfigure changes it live), and `EditorViewport`: a plugin
+that decorates only what is on screen includes `EditorViewport.extension` and reads
+`EditorViewport.of(state)` / `rangeOf(state)`; the surface dispatches `EditorViewport.set` with the
+laid-out range whenever it changes (after the frame, no userEvent), and only when some plugin asked.
+
 **Coordinates.** Offsets are UTF-16 (as everywhere in the editor). Geometry works in *content*
 coordinates (x from the text area's left edge, y from the document top); the surface adds the
 gutter and the scroll.
@@ -292,7 +298,10 @@ see it; they put semantic class names on decorations:
 - `Decoration.Mark(classes)`: classes in `tokens` (the `tok-*` vocabulary of editor-syntax's
   `TokenClasses.ALL`, all 29 coloured in `light` and `dark`) or in `classStyles` (`search-match`,
   `diff-add`, ...) style the text. A class the theme does not know draws nothing.
-- `Decoration.LineStyle(classes)`: `lineClassBackgrounds` paints the line's background.
+- `Decoration.LineStyle(classes)`: `lineClassBackgrounds` paints the line's background. The surface
+  paints no current line of its own: basics' `active-line` (`EditorTheme.ACTIVE_LINE_CLASS`, in
+  `currentLine`) is one. `light` / `dark` also style basics' `matching-bracket`,
+  `nonmatching-bracket` and `selection-match` (`EditorTheme.pluginClasses`).
 - When several marks cover the same text, styles merge in `decorationsFacet` order (highest
   precedence first) and the later one wins per attribute. `ime-composition` is the surface's own
   class (an underline).

@@ -30,6 +30,16 @@ class EditorThemeTest {
         }
     }
 
+    @Test fun thePluginClassesAreStyledInBothThemes() {
+        for ((name, theme) in themes) {
+            assertEquals(theme.currentLine, theme.lineClassBackgrounds[EditorTheme.ACTIVE_LINE_CLASS], "$name: the active line")
+            for (cls in listOf("matching-bracket", "nonmatching-bracket", "selection-match")) {
+                val style = assertNotNull(theme.classStyles[cls], "$name theme has no style for $cls")
+                assertTrue(style.background != Color.Unspecified || style.color != Color.Unspecified, "$name: $cls draws nothing")
+            }
+        }
+    }
+
     @Test fun lightAndDarkAreDifferentThemes() {
         val light = themes[0].second
         val dark = themes[1].second

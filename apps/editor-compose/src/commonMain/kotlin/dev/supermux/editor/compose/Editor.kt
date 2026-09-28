@@ -57,6 +57,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
+import dev.supermux.editor.core.TransactionSpec
 import dev.supermux.editor.core.Transaction
 import dev.supermux.editor.core.EditorState
 import dev.supermux.editor.core.GutterMarker
@@ -198,7 +199,15 @@ fun Editor(
         }
     }
     val reportViewport by rememberUpdatedState(onViewport)
-    LaunchedEffect(view) { view.viewport.collect { if (!it.isEmpty()) reportViewport(it) } }
+    LaunchedEffect(view) {
+        view.viewport.collect {
+            if (it.isEmpty()) return@collect
+            // Plugins that asked for the viewport as state (EditorViewport) get it, once per change.
+            val known = EditorViewport.of(view.state)
+            if (known != null && known != it) view.dispatch(TransactionSpec(effects = listOf(EditorViewport.set.of(it))))
+            reportViewport(it)
+        }
+    }
 
     // The selection menu hides while the view scrolls and comes back once it settles.
     LaunchedEffect(controller) {
@@ -695,7 +704,9 @@ internal class EditorController(
 
     override val viewportHeightPx: Float get() = viewportSize.height
 
-    fun configure(theme: EditorTheme, density: Density, lineWrap: Boolean, showLineNumbers: Boolean) {
+    fun configure(theme: EditorTheme, density: Density, lineWrap: Boolean, showLineNumbersParam: Boolean) {
+        // A plugin's or a setting's facet overrides the parameter (and a reconfigure changes it).
+        val showLineNumbers = view.state.facet(lineNumbersFacet) ?: showLineNumbersParam
         val changed = theme != this.theme || density != this.density || lineWrap != this.lineWrap || showLineNumbers != this.showLineNumbers
         if (!changed) return
         // A new font size (a zoom): the line at the top stays at the top, the same fraction of a
