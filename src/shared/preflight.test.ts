@@ -49,9 +49,14 @@ test("readiness is not consulted at all when the caller does not pass it", () =>
   expect(r.warnings.some((w) => w.includes("Workspace terminals"))).toBe(false)
 })
 
-test("no agent CLI at all is still fatal", () => {
+// Fatal here deadlocked a fresh desktop install: the broker exited before the
+// app could offer the agent installer that runs inside it.
+test("no agent CLI at all boots with one warning instead of a fatal", () => {
   const r = checkPreflight(has([]))
-  expect(r.fatal.length).toBeGreaterThan(0)
+  expect(r.fatal).toEqual([])
+  const agentWarnings = r.warnings.filter((w) => w.toLowerCase().includes("agent cli"))
+  expect(agentWarnings).toHaveLength(1)
+  expect(agentWarnings[0].toLowerCase()).toContain("no agent cli")
 })
 
 test("tmux present produces no tmux warning", () => {

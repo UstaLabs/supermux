@@ -198,9 +198,15 @@ class BrokerSidecar(
                 ?: config.repoDir?.let { listOf(config.bunPath, it.resolve("src/main.ts").toString()) }
                 ?: error("BrokerSidecar has no broker entrypoint (set repoDir for dev or bundledBrokerPath when packaged)")
 
-        /** Env the spawned broker runs with: its web port, an optional relay domain, then any overrides. */
+        /**
+         * Env the spawned broker runs with: its web port + public URL, an optional relay domain, then
+         * any overrides. The broker refuses to boot with MUX_WEB_PORT alone (the pair is validated
+         * together), and a fresh machine has no `~/.mux/.env` to supply the URL — so the sidecar
+         * names the loopback address it probes and claims on.
+         */
         fun buildSpawnEnv(config: SidecarConfig, port: Int): Map<String, String> = buildMap {
             put("MUX_WEB_PORT", port.toString())
+            put("MUX_WEB_PUBLIC_URL", "http://${config.host}:$port")
             config.relayDomain?.let { put("MUX_RELAY_DOMAIN", it) }
             putAll(config.extraEnv)
         }

@@ -63,9 +63,15 @@ export function checkPreflight(
     )
   }
 
+  // No agent is a warning, not a fatal: the agent installer runs INSIDE the
+  // broker, so exiting here left a fresh machine (the desktop app's first run
+  // on a new Mac) with no way to ever install one.
   const present = AGENT_CLIS.filter((cli) => cli.names.some(has))
   if (present.length === 0) {
-    fatal.push(`No agent CLI found on PATH — install at least one of: ${AGENT_CLIS.map((cli) => cli.label).join(", ")}.`)
+    warnings.push(
+      `No agent CLI found on PATH — sessions cannot start until one is installed (${AGENT_CLIS.map((cli) => cli.label).join(", ")}); ` +
+        "install one from the app's agent settings or your shell.",
+    )
   } else {
     for (const cli of AGENT_CLIS) {
       if (!cli.names.some(has)) warnings.push(`Optional agent CLI '${cli.label}' not found on PATH — sessions using it will fail to spawn.`)

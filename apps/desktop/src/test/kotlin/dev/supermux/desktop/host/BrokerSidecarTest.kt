@@ -240,6 +240,14 @@ class BrokerSidecarTest {
         assertEquals("13021", env["MUX_WHATSAPP_WEBHOOK_PORT"])
     }
 
+    // Regression (fresh macOS install): MUX_WEB_PORT without MUX_WEB_PUBLIC_URL makes the broker
+    // exit at boot with web_env_invalid, and the wizard only ever sees "couldn't start".
+    @Test fun spawnEnvPairsThePortWithALoopbackPublicUrl() {
+        val env = BrokerSidecar.buildSpawnEnv(SidecarConfig(), port = 9899)
+        assertEquals("9899", env["MUX_WEB_PORT"])
+        assertEquals("http://127.0.0.1:9899", env["MUX_WEB_PUBLIC_URL"])
+    }
+
     @Test fun relayIsEnabledByDefaultForPackagedHosts() {
         val env = BrokerSidecar.buildSpawnEnv(SidecarConfig(), port = 9898)
         assertEquals("relay.supermux.dev", env["MUX_RELAY_DOMAIN"])
