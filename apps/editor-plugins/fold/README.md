@@ -29,8 +29,19 @@ line's row (`fun f() {⋯}`).
 `Fold.field` is a `RangeSet` of `Decoration.Replace(WidgetKey("fold", id), fold = true)` in
 `decorationsFacet`, mapped through every edit; `Fold.foldEffect` / `unfoldEffect` (`FoldRange`,
 mapped too) change it. A fold is atomic (the surface's rule): local input never takes a piece of
-it. An edit that does touch its hidden text (a remote, programmatic or undo edit) unfolds it, as
-CM6's does; a deletion covering it removes it. Folds survive edits outside them.
+it. Folds survive edits outside them, and a deletion covering one removes it.
+- **Edits inside a fold.** CM6's exact rule: its fold field clears the folds a transaction touches
+  only when `tr.isUserEvent("delete")` (`clearTouchedFolds` over each changed range), then maps the
+  rest through the changes; it also clears a fold the main cursor's head lands strictly inside. Here:
+  a LOCAL transaction (a userEvent that is not `undo`, `redo`, `disk`, `remote`, `agent`, `lsp` or a
+  sub-event, and no `EditorAnnotations.remote`) that reaches a fold's hidden text without covering
+  it clears that fold; everything else (a collaborator's, an agent's or the server's edit, a reload,
+  undo/redo, a programmatic edit) only MAPS the fold, which grows or shrinks with the hidden text and
+  stays folded. (The surface refuses local input into a fold anyway; the field is the last word.)
+- **Undo brings the fold back.** A deletion that removes a fold whole (Backspace with
+  `deleteFoldWhole`, a selection over it) registers, through editor-core's `invertedEffectsFacet`,
+  a `foldEffect` for it: undo restores the text AND folds it again; redo removes both. Folding and
+  unfolding themselves are not undo steps (as in CM6).
 
 ## Gutter, chip, reveal
 
@@ -68,6 +79,8 @@ bind foldKeymap at all (it is not in `cm6-entry.mjs`'s keymap); these are CM6's 
   in with a fold service).
 - A selection set inside a fold WITHOUT `scrollIntoView` is moved out to the fold's edge (the M3c
   surface rule); CM6 unfolds any fold the main cursor lands in.
+- Any local edit reaching a fold's text clears it (CM6: only `delete` events); remote-annotated
+  edits of any userEvent never do. Undo restores a fold deleted whole (CM6's fold does not).
 - Backspace next to a fold unfolds first by default (CM6 deletes it whole; that is the option).
 
 Tests: `./gradlew :editor-plugins:fold:jvmTest` (commonTest: ranges from a service and from

@@ -96,9 +96,13 @@ object Fold {
         { v, tr ->
             var out = v
             if (tr.docChanged && !out.isEmpty) {
-                val changes = tr.changes.iterChanges()
-                // CM6 clears the folds an edit touches: text changed inside one shows it again.
-                out = out.update(filter = { r -> changes.none { c -> touchesInside(c.fromA, c.toA, r.from, r.to) } })
+                // A LOCAL edit that reaches a fold's hidden text shows it again (CM6 clears the folds a
+                // user delete touches); a remote, agent, LSP, disk, undo or programmatic edit only
+                // maps the folds through it, so a collaborator typing inside a fold never opens it.
+                if (isLocal(tr)) {
+                    val changes = tr.changes.iterChanges()
+                    out = out.update(filter = { r -> changes.none { c -> touchesInside(c.fromA, c.toA, r.from, r.to) } })
+                }
                 out = out.map(tr.changes)
             }
             val add = ArrayList<Ranged<Decoration>>()
@@ -116,6 +120,29 @@ object Fold {
         },
         { f -> decorationsFacet.compute(FacetDep.field(f)) { it.field(f) } },
     )
+
+    /** A transaction of the local user: a userEvent, not one of the exempt ones, not remote-annotated. */
+    private fun isLocal(tr: dev.supermux.editor.core.Transaction): Boolean {
+        val e = tr.annotation(dev.supermux.editor.core.Transaction.userEvent) ?: return false
+        if (tr.annotation(dev.supermux.editor.compose.EditorAnnotations.remote) == true) return false
+        return NOT_LOCAL.none { e == it || e.startsWith("$it.") }
+    }
+
+    private val NOT_LOCAL = listOf("undo", "redo", "disk", "remote", "agent", "lsp")
+
+    /**
+     * Undo brings back a fold a deletion removed (with its text): registered in editor-core's
+     * `invertedEffectsFacet`, which the history reads. Only folds a change deleted whole; folding and
+     * unfolding themselves are not undo steps (as in CM6).
+     */
+    private val restoreDeleted: (dev.supermux.editor.core.Transaction) -> List<StateEffect<*>> = { tr ->
+        val before = tr.startState.fieldOrNull(field)
+        if (!tr.docChanged || before == null || before.isEmpty) emptyList() else {
+            val changes = tr.changes.iterChanges()
+            before.filter { r -> changes.any { c -> c.toA > c.fromA && c.fromA <= r.from && c.toA >= r.to } }
+                .map { foldEffect.of(FoldRange(it.from, it.to)) }
+        }
+    }
 
     /** A change of [fromA, toA) reaching the hidden text [from, to) without covering all of it. */
     private fun touchesInside(fromA: Int, toA: Int, from: Int, to: Int): Boolean {
@@ -137,6 +164,7 @@ object Fold {
         widgetClickFacet.of(chipClick),
         revealFacet.of(reveal),
         atomicDeleteFacet.of(atomicDelete),
+        dev.supermux.editor.core.invertedEffectsFacet.of(restoreDeleted),
         keymapFacet.of(keymap),
         commandsFacet.of(commands),
     )

@@ -34,3 +34,11 @@ fun interface FoldService {
 
 /** Every [FoldService], highest precedence first; the first non-null answer wins. */
 val foldServiceFacet: Facet<FoldService, List<FoldService>> = Facet.list("foldService")
+
+/**
+ * A plugin's effects to undo WITH a transaction (CM6's `invertedEffects`): given a transaction about
+ * to be recorded by a history, the effects, in the document BEFORE it, that restore what it changed
+ * of the plugin's state (the fold plugin: a fold a deletion removed). Any history reads it; a plugin
+ * registering here needs no history dependency.
+ */
+val invertedEffectsFacet: Facet<(Transaction) -> List<StateEffect<*>>, List<(Transaction) -> List<StateEffect<*>>>> = Facet.list("invertedEffects")

@@ -65,11 +65,8 @@ object History {
     /** On a transaction: false keeps it out of the history (it is mapped over, like a remote edit). */
     val addToHistory: AnnotationType<Boolean> = AnnotationType("history.add")
 
-    /**
-     * A plugin's effects that should be undone with a transaction: given a transaction about to be
-     * recorded, the effects (in the document BEFORE it) that undo its own effects. CM6's `invertedEffects`.
-     */
-    val invertedEffects: Facet<(Transaction) -> List<StateEffect<*>>, List<(Transaction) -> List<StateEffect<*>>>> = Facet.list("history.invertedEffects")
+    /** editor-core's `invertedEffectsFacet` (CM6's `invertedEffects`), where plugins register. */
+    val invertedEffects: Facet<(Transaction) -> List<StateEffect<*>>, List<(Transaction) -> List<StateEffect<*>>>> get() = dev.supermux.editor.core.invertedEffectsFacet
 
     private val config: Facet<HistoryConfig, HistoryConfig> = Facet.first("history.config", HistoryConfig())
 

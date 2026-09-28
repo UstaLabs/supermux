@@ -159,14 +159,32 @@ class FoldTest {
         assertEquals(FoldRange(before.from + 7, before.to + 7), v.folds().single(), "an edit below moved the fold")
     }
 
-    @Test fun anEditInsideAFoldUnfoldsIt() {
-        val v = view(cursor = 2)
-        Fold.foldCode.run(v)
-        val f = v.folds().single()
-        // A remote (or programmatic) edit inside the hidden text: the fold opens (CM6).
-        v.dispatch(TransactionSpec(changes = listOf(ChangeSpec(f.from + 6, f.from + 6, "X")), userEvent = "remote"))
-        assertTrue(v.folds().isEmpty())
-        assertTrue(v.doc.contains("X"))
+    @Test fun remoteAgentLspAndProgrammaticEditsInsideAFoldKeepIt() {
+        for (spec in listOf(
+            { at: Int -> TransactionSpec(changes = listOf(ChangeSpec(at, at, "X")), userEvent = "agent") },
+            { at: Int -> TransactionSpec(changes = listOf(ChangeSpec(at, at, "X")), userEvent = "lsp") },
+            { at: Int -> TransactionSpec(changes = listOf(ChangeSpec(at, at, "X")), userEvent = "disk") },
+            { at: Int -> TransactionSpec(changes = listOf(ChangeSpec(at, at, "X")), userEvent = "input", annotations = listOf(dev.supermux.editor.compose.EditorAnnotations.remote.of(true))) },
+            { at: Int -> TransactionSpec(changes = listOf(ChangeSpec(at, at, "X"))) },
+        )) {
+            val v = view(cursor = 2)
+            Fold.foldCode.run(v)
+            val f = v.folds().single()
+            val s = spec(f.from + 6)
+            v.dispatch(s)
+            assertTrue(v.doc.contains("X"))
+            assertEquals(listOf(FoldRange(f.from, f.to + 1)), v.folds(), "${s.userEvent}: the fold opened (or did not grow with the edit)")
+        }
+    }
+
+    @Test fun aLocalDeleteTouchingAFoldClearsIt() {
+        // CM6's rule (clearTouchedFolds for user deletes), for local edits that reach a fold's text
+        // without covering it (the surface normally refuses them; the field is the last word).
+        val st0 = EditorState.create(text, EditorSelection.cursor(2), fold())
+        val st1 = st0.update(TransactionSpec(effects = listOf(Fold.foldEffect.of(FoldRange(aLineEnd, text.indexOf("two") + 3))))).state
+        val f = Fold.folded(st1).single()
+        val st2 = st1.update(TransactionSpec(changes = listOf(ChangeSpec(f.to - 2, f.to + 1)), userEvent = "delete.forward")).state
+        assertTrue(Fold.folded(st2).isEmpty())
     }
 
     @Test fun aSelectionScrolledIntoAFoldUnfoldsItAndStays() {
@@ -207,8 +225,23 @@ class FoldTest {
         assertEquals(text, v.doc, "undo did not restore the fold's text")
     }
 
+    @Test fun undoOfAWholeFoldDeleteRestoresTheFoldToo() {
+        val v = EditorView(EditorState.create(text, EditorSelection.cursor(2), extensionOf(fold(FoldConfig(deleteFoldWhole = true)), history())))
+        Fold.foldCode.run(v)
+        val f = v.folds().single()
+        v.dispatch(TransactionSpec(selection = EditorSelection.cursor(f.to), userEvent = "select"))
+        DefaultCommands.deleteBackward.run(v)
+        assertTrue(v.folds().isEmpty())
+        History.undo.run(v)
+        assertEquals(text, v.doc)
+        assertEquals(listOf(f), v.folds(), "undo did not fold it again")
+        History.redo.run(v)
+        assertTrue(v.folds().isEmpty())
+        assertEquals(text.removeRange(f.from, f.to), v.doc)
+    }
+
     @Test fun undoAcrossAFoldIsNotPoliced() {
-        // Type inside a block, fold it, undo: the undo edits hidden text; it applies (and unfolds).
+        // Type inside a block, fold it, undo: the undo edits hidden text; it applies, the fold stays (CM6).
         val v = view(text, text.indexOf("two") + 3, history())
         v.typeText("!")
         v.dispatch(TransactionSpec(selection = EditorSelection.cursor(2), userEvent = "select"))
@@ -216,6 +249,7 @@ class FoldTest {
         assertEquals(1, v.folds().size)
         History.undo.run(v)
         assertEquals(text, v.doc)
+        assertEquals(1, v.folds().size)
     }
 }
 
