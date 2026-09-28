@@ -11,7 +11,7 @@ export interface RepoState {
   loadedAt: number
 }
 
-interface Slot { state?: RepoState; loading?: Promise<RepoState>; stale: boolean }
+interface Slot { state?: RepoState; loading?: Promise<RepoState>; stale: boolean; lastUsed: number }
 
 const GIT_TIMEOUT_MS = 5_000
 /** Read-only git calls must not take `index.lock` / refresh the index: a watcher on the git dir would
@@ -77,11 +77,48 @@ export class RepoInfoCache {
   loadCount = 0
 
   private readonly maxRoots: number
+  /** root → number of watched folders in it. A held repo's state never ages out: its watchers
+   *  invalidate it on change, so an idle watched repo costs no git reads at all. */
+  private readonly holds = new Map<string, number>()
+  private readonly idleEvictMs: number
+  private readonly maxSlots: number
+  private readonly now: () => number
 
-  constructor(opts: { ttlMs?: number; noRepoTtlMs?: number; maxRoots?: number } = {}) {
+  constructor(opts: { ttlMs?: number; noRepoTtlMs?: number; maxRoots?: number; idleEvictMs?: number; maxSlots?: number; now?: () => number } = {}) {
     this.ttlMs = opts.ttlMs ?? 2_000
     this.noRepoTtlMs = opts.noRepoTtlMs ?? 30_000
     this.maxRoots = opts.maxRoots ?? 10_000
+    this.idleEvictMs = opts.idleEvictMs ?? 10 * 60_000
+    this.maxSlots = opts.maxSlots ?? 1_000
+    this.now = opts.now ?? Date.now
+  }
+
+  /** Number of repos with a cached git state (tests / debug). */
+  get slotCount(): number { return this.slots.size }
+
+  /** A folder inside `root` is watched: keep its state until invalidated (no TTL re-reads). */
+  hold(root: string): void { this.holds.set(root, (this.holds.get(root) ?? 0) + 1) }
+  release(root: string): void {
+    const n = (this.holds.get(root) ?? 0) - 1
+    if (n > 0) { this.holds.set(root, n); return }
+    this.holds.delete(root)
+    const s = this.slots.get(root)
+    if (s) s.lastUsed = this.now() // idle from now on
+  }
+
+  /** Drop the state of repos nobody watches that were not used for `idleEvictMs`; cap the rest. */
+  private evictSlots(): void {
+    const now = this.now()
+    for (const [root, s] of this.slots) {
+      if (this.holds.has(root) || s.loading) continue
+      if (now - s.lastUsed >= this.idleEvictMs) this.slots.delete(root)
+    }
+    // Runs before a new slot is added: make room for it.
+    if (this.slots.size < this.maxSlots) return
+    for (const [root, s] of this.slots) { // insertion order ≈ oldest first
+      if (this.slots.size < this.maxSlots) break
+      if (!this.holds.has(root) && !s.loading) this.slots.delete(root)
+    }
   }
 
   private setRoot(dirReal: string, root: string | null): void {
@@ -141,29 +178,42 @@ export class RepoInfoCache {
 
   async state(root: string): Promise<RepoState> {
     let slot = this.slots.get(root)
-    if (!slot) { slot = { stale: true }; this.slots.set(root, slot) }
+    if (!slot) {
+      this.evictSlots()
+      slot = { stale: true, lastUsed: this.now() }
+      this.slots.set(root, slot)
+    }
+    slot.lastUsed = this.now()
     // A read in flight wins over the previous state: it was started because that state went stale.
     if (slot.loading) {
       // Invalidated after that read started: it may predate the change, so read once more after it.
       if (!slot.stale) return slot.loading
       return slot.loading.catch(() => {}).then(() => this.state(root))
     }
-    const fresh = slot.state && !slot.stale && Date.now() - slot.state.loadedAt < this.ttlMs
+    const fresh = slot.state && !slot.stale && (this.holds.has(root) || Date.now() - slot.state.loadedAt < this.ttlMs)
     if (fresh) return slot.state!
     const s = slot
     s.stale = false
     s.loading = this.load(root).then(
       (st) => { s.state = st; s.loading = undefined; return st },
-      (err) => { s.loading = undefined; s.stale = true; throw err },
+      (err) => {
+        s.loading = undefined
+        s.stale = true
+        // A failed or timed-out read keeps the previous state: replacing it with nothing would
+        // make every git badge blink off and back on.
+        if (s.state) return s.state
+        throw err
+      },
     )
     return s.loading
   }
 
   private async load(root: string): Promise<RepoState> {
     this.loadCount++
+    // Either call failing (or timing out) fails the read: `state()` then keeps the previous state.
     const [ign, stat] = await Promise.all([
-      gitAsync(root, [...GIT_READ, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], { timeoutMs: GIT_TIMEOUT_MS, trim: false }).catch(() => ""),
-      gitAsync(root, [...GIT_READ, "status", "--porcelain=v2", "-z", "--untracked-files=all"], { timeoutMs: GIT_TIMEOUT_MS, trim: false }).catch(() => ""),
+      gitAsync(root, [...GIT_READ, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], { timeoutMs: GIT_TIMEOUT_MS, trim: false }),
+      gitAsync(root, [...GIT_READ, "status", "--porcelain=v2", "-z", "--untracked-files=all"], { timeoutMs: GIT_TIMEOUT_MS, trim: false }),
     ])
     const ignored = new Set<string>()
     for (const p of ign.split("\0")) if (p) ignored.add(p.endsWith("/") ? p.slice(0, -1) : p)

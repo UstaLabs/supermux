@@ -31,6 +31,8 @@ export interface FileSystemServiceOpts<S> {
   repoDebounceMs?: number
   /** Test hook: replaces `fs.watch` for folder watches. */
   watchFn?: DirWatchersOpts["watchFn"]
+  /** Polling interval when `fs.watch` is unavailable for a folder (default 5 s). */
+  pollMs?: number
 }
 
 const toSnapshot = (path: string, c: CachedDir): DirSnapshot => ({
@@ -110,6 +112,7 @@ export class FileSystemService<S = unknown> {
     this.repoDebounceMs = opts.repoDebounceMs ?? 500
     this.watchers = new DirWatchers((real) => this.background(this.onFlush(real), real), {
       debounceMs: opts.debounceMs,
+      pollMs: opts.pollMs,
       watchFn: opts.watchFn,
       onFallback: (dir) => log.warn("fs_watch_fallback", { dir }),
     })
@@ -266,16 +269,18 @@ export class FileSystemService<S = unknown> {
   private async onFlush(real: string, ownOp = false): Promise<void> {
     if (this.closed) return
     this.searches.invalidateContaining(real)
-    await this.rewatchIfReplaced(real)
+    // The folder itself went away or was replaced: whatever git says about it may have changed.
+    const dead = this.watchers.isDead(real)
+    const replaced = (await this.rewatchIfReplaced(real)) || dead
     const known = this.repo.knownRepoFor(real)
     if (known && ownOp) this.repo.invalidate(known)
-    await this.reloadAndPush(real)
+    let changed = await this.reloadAndPush(real)
     // `git init` right here: forget the cached "no repo" answer, watch the new git dir, then re-read
     // so entries get annotated (watch first, so a `git add` right after the push is not missed).
     if (known === null && this.cache.get(real)?.entries.some((e) => e.name === ".git")) {
       this.repo.forgetRootOf(real)
       if (this.subs.isWatched(real)) await this.trackRepo(real)
-      await this.reloadAndPush(real)
+      changed = (await this.reloadAndPush(real)) || changed
     }
     const root = this.repo.knownRepoFor(real)
     if (!root) return
@@ -289,6 +294,9 @@ export class FileSystemService<S = unknown> {
     if (this.subs.isWatched(real) && (!this.repoOfWatched.has(real) || !this.gitDirOfRoot.has(root))) {
       await this.trackRepo(real)
     }
+    // Nothing in the listing changed (a spurious event, or a poll of an idle folder): no git status.
+    // Otherwise every poll would run git status every 5 s per repo, forever.
+    if (!changed && !replaced && !ownOp) return
     const affected = this.subs.watchedReals().filter((other) => isUnder(other, real) && isUnder(root, other))
     this.queueRepo(root, ownOp ? affected.filter((o) => o !== real) : affected)
   }
@@ -345,7 +353,8 @@ export class FileSystemService<S = unknown> {
     await Promise.all([...folders].filter((f) => this.subs.isWatched(f)).map((f) => this.reloadAndPush(f)))
   }
 
-  private async reloadAndPush(real: string): Promise<void> {
+  /** Re-read a folder and push it if it changed. True when the listing changed (or the folder went away). */
+  private async reloadAndPush(real: string): Promise<boolean> {
     let res: { snap: CachedDir; changed: boolean }
     try {
       res = await this.cache.load(real)
@@ -356,11 +365,13 @@ export class FileSystemService<S = unknown> {
         // watcher is closed and a later subscribe to a recreated folder starts a fresh one.
         for (const { sock, path } of this.subs.removeAllFor(real)) this.safeEmit(sock, { type: "fs_gone", path })
         this.cache.forget(real)
+        return true
       }
-      return
+      return false
     }
-    if (!res.changed) return
+    if (!res.changed) return false
     for (const { sock, path } of this.subs.subscribersOf(real)) this.safeEmit(sock, dirFrame(path, res.snap))
+    return true
   }
 
   // ── watch lifecycle ───────────────────────────────────────────────────────
@@ -385,18 +396,20 @@ export class FileSystemService<S = unknown> {
     if (st && this.watchers.has(real) && !this.idOf.has(real)) this.idOf.set(real, identityOf(st))
   }
 
-  /** Re-watch when the watch reported the folder itself went away, or the folder's identity changed. */
-  private async rewatchIfReplaced(real: string): Promise<void> {
-    if (!this.watchers.has(real)) return
+  /** Re-watch when the watch reported the folder itself went away, or the folder's identity changed.
+   *  True when it re-watched. */
+  private async rewatchIfReplaced(real: string): Promise<boolean> {
+    if (!this.watchers.has(real)) return false
     const before = this.idOf.get(real)
-    if (before === undefined && !this.watchers.isDead(real)) return
+    if (before === undefined && !this.watchers.isDead(real)) return false
     const st = await stat(real).catch(() => null)
-    if (!st || this.closed || !this.watchers.has(real)) return // gone: the reload reports it
+    if (!st || this.closed || !this.watchers.has(real)) return false // gone: the reload reports it
     const id = identityOf(st)
-    if (id === before && !this.watchers.isDead(real)) return
+    if (id === before && !this.watchers.isDead(real)) return false
     this.watchers.unwatch(real)
     this.watchers.watch(real)
     this.idOf.set(real, id)
+    return true
   }
 
   // ── git dir watching (index / HEAD changes don't touch the working folders) ─
@@ -407,6 +420,7 @@ export class FileSystemService<S = unknown> {
     if (!this.repoOfWatched.has(real)) {
       this.repoOfWatched.set(real, root)
       this.repoRefs.set(root, (this.repoRefs.get(root) ?? 0) + 1)
+      this.repo.hold(root)
     }
     await this.ensureGitWatch(root)
   }
@@ -442,6 +456,7 @@ export class FileSystemService<S = unknown> {
     const root = this.repoOfWatched.get(real)
     if (!root) return
     this.repoOfWatched.delete(real)
+    this.repo.release(root)
     const n = (this.repoRefs.get(root) ?? 1) - 1
     if (n > 0) { this.repoRefs.set(root, n); return }
     this.repoRefs.delete(root)

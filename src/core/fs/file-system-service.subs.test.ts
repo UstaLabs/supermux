@@ -330,3 +330,50 @@ test("a git dir watch that died (.git removed) is re-established on the next fol
   await waitFor((f) => !!entriesOf(f)?.some((e) => e.name === "a.txt" && e.git === "A"), 4_000)
   fss.close()
 }, 10_000)
+
+test("a folder event that changes nothing runs no git status; a real change does", async () => {
+  const d = tmp()
+  execFileSync("git", ["init", "-q"], { cwd: d })
+  writeFileSync(join(d, "a.txt"), "a")
+  const calls: Array<{ dir: string; listener: (event: string, filename?: string | null) => void }> = []
+  const watchFn = (dir: string, listener: (event: string, filename?: string | null) => void) => {
+    calls.push({ dir, listener })
+    return Object.assign(new EventEmitter(), { close() {} }) as unknown as FSWatcher
+  }
+  const { fss, frames, waitFor } = harness({ watchFn })
+  await fss.subscribe("s1", d)
+  await waitFor((f) => !!entriesOf(f)?.some((e) => e.name === "a.txt" && e.git === "?"))
+  await sleep(300)
+  const loads = fss.repo.loadCount
+  const nFrames = frames.length
+  const folder = () => calls.filter((c) => c.dir === d).at(-1)!
+  for (let i = 0; i < 3; i++) { folder().listener("change", "a.txt"); await sleep(80) }
+  await sleep(300)
+  expect(fss.repo.loadCount).toBe(loads)
+  expect(frames.length).toBe(nFrames)
+  writeFileSync(join(d, "b.txt"), "b")
+  folder().listener("rename", "b.txt")
+  await waitFor((f) => !!entriesOf(f)?.some((e) => e.name === "b.txt" && e.git === "?"))
+  expect(fss.repo.loadCount).toBeGreaterThan(loads)
+  fss.close()
+})
+
+test("the polling fallback runs git status only when a poll finds a change", async () => {
+  const d = tmp()
+  execFileSync("git", ["init", "-q"], { cwd: d })
+  writeFileSync(join(d, "a.txt"), "a")
+  const watchFn = (dir: string, listener: (event: string, filename?: string | null) => void): FSWatcher => {
+    if (dir === d) throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" })
+    return Object.assign(new EventEmitter(), { close() {} }) as unknown as FSWatcher
+  }
+  const { fss, waitFor } = harness({ watchFn, pollMs: 40 })
+  await fss.subscribe("s1", d)
+  await waitFor((f) => !!entriesOf(f)?.some((e) => e.name === "a.txt" && e.git === "?"))
+  await sleep(300)
+  const loads = fss.repo.loadCount
+  await sleep(500) // ~12 polls of an idle folder
+  expect(fss.repo.loadCount).toBe(loads)
+  writeFileSync(join(d, "c.txt"), "c")
+  await waitFor((f) => !!entriesOf(f)?.some((e) => e.name === "c.txt" && e.git === "?"))
+  fss.close()
+})

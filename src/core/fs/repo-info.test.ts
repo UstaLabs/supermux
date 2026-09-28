@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from "fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { execFileSync } from "child_process"
@@ -179,4 +179,62 @@ test("callers arriving while a refresh is in flight get the refreshed state, not
   const b = r.state(root) // previous state is younger than the TTL, but a refresh is already running
   expect((await b).status.get("later.ts")).toBe("?")
   await a
+})
+
+test("a failed git read keeps the previous state (no badge flicker); a later good read replaces it", async () => {
+  const root = repoFixture()
+  const c = new RepoInfoCache()
+  const first = await c.state(root)
+  expect(first.status.get("src/a.ts")).toBe("M")
+  const head = readFileSync(join(root, ".git", "HEAD"), "utf-8")
+  writeFileSync(join(root, ".git", "HEAD"), "garbage\n") // git no longer recognises the repo
+  c.invalidate(root)
+  const loads = c.loadCount
+  const during = await c.state(root)
+  expect(c.loadCount).toBe(loads + 1)
+  expect(during).toBe(first)
+  const entries = [e("a.ts")]
+  await c.annotate(join(root, "src"), entries)
+  expect(entries[0]!.git).toBe("M")
+  writeFileSync(join(root, ".git", "HEAD"), head)
+  writeFileSync(join(root, "src", "b.ts"), "b\n")
+  const after = await c.state(root) // the failure left it stale: the next call reads again
+  expect(after).not.toBe(first)
+  expect(after.status.get("src/b.ts")).toBe("?")
+})
+
+test("a held (watched) repo's state never ages out by TTL; only invalidate re-reads it", async () => {
+  const root = repoFixture()
+  const c = new RepoInfoCache({ ttlMs: 10 })
+  c.hold(root)
+  await c.state(root)
+  const loads = c.loadCount
+  await new Promise((r) => setTimeout(r, 30))
+  await c.state(root)
+  expect(c.loadCount).toBe(loads)
+  c.invalidate(root)
+  await c.state(root)
+  expect(c.loadCount).toBe(loads + 1)
+  c.release(root)
+  await new Promise((r) => setTimeout(r, 30))
+  await c.state(root)
+  expect(c.loadCount).toBe(loads + 2)
+})
+
+test("repo states nobody watches are evicted after 10 idle minutes; held ones stay; the map is capped", async () => {
+  const a = repoFixture(), b = repoFixture()
+  let now = 1_000_000
+  const c = new RepoInfoCache({ now: () => now })
+  c.hold(a)
+  await c.state(a)
+  await c.state(b)
+  expect(c.slotCount).toBe(2)
+  now += 10 * 60_000
+  const other = repoFixture()
+  await c.state(other) // a new slot sweeps the idle ones
+  expect(c.slotCount).toBe(2) // b evicted, a held
+  const capped = new RepoInfoCache({ maxSlots: 2 })
+  for (const r of [a, b, other]) await capped.state(r)
+  await capped.state(repoFixture())
+  expect(capped.slotCount).toBe(2)
 })
