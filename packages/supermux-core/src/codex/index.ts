@@ -3,6 +3,7 @@ import { requireCloseMode } from '../types.js'
 import { appliedFor, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse, ToolKind } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
+import { multiAgentV1Args } from './catalog.js'
 import { createCodexNormalizer } from './normalize.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 
@@ -707,7 +708,12 @@ export function codex(options: CodexOptions): AgentDriver {
         await rpc.request('turn/steer', { threadId: agentSessionId, expectedTurnId: slot.id, input: input([{ type: 'text', text }]) })
       }).catch(() => { /* turn ended or steer refused: the request was already resolved */ }).finally(() => clearInterval(watch))
     }
-    const rpc = await transport({ command: options.command, args: options.args, env: { ...(options.inheritEnv ? process.env : {}), ...options.env, ...context.profile?.env }, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper }, dispatchNotify, fail)
+    const env = { ...(options.inheritEnv ? process.env : {}), ...options.env, ...context.profile?.env }
+    // Pin subagents to multi_agent v1 (children accept direct input); see catalog.ts.
+    // A process flag, so it covers start, resume and fork alike; a reattached
+    // keeper keeps the flags its app-server was started with.
+    const args = await multiAgentV1Args(options.command, options.args, env, context.cwd)
+    const rpc = await transport({ command: options.command, args, env, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper }, dispatchNotify, fail)
     const close = async (closeOptions: CloseOptions) => {
       const mode = requireCloseMode(closeOptions)
       if (!closed) { closed = true; cancelPendingPermissions(); fail(new Error('Codex runtime closed')) }
