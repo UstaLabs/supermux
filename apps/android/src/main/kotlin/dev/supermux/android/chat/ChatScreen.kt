@@ -241,14 +241,22 @@ fun ChatScreen(
     var activePanel by remember { mutableStateOf(SessionPanel.Chat) }
 
     var pendingEditorOpen by remember(session.id) { mutableStateOf<PendingEditorOpen?>(null) }
-    val onOpenFile: (FilePathRef) -> Unit = remember(session.id) {
+    val tapScope = rememberCoroutineScope()
+    val onOpenFile: (FilePathRef) -> Unit = remember(session.id, fileSystem) {
         { ref ->
             val rel = toWorkdirRelativePath(ref.path, session.workdir, inferHomeDir(session.workdir))
             if (rel == null) {
                 Toast.makeText(context, "File is outside this session's project", Toast.LENGTH_SHORT).show()
             } else {
-                pendingEditorOpen = PendingEditorOpen(rel, ref.line, ref.endLine)
-                activePanel = SessionPanel.Editor
+                tapScope.launch {
+                    val abs = dev.supermux.ui.files.absoluteInWorkdir(session.workdir, rel)
+                    if (dev.supermux.ui.files.tappedFileMissing(fileSystem, abs)) {
+                        Toast.makeText(context, dev.supermux.ui.files.fileNotFoundNotice(ref.path), Toast.LENGTH_SHORT).show()
+                    } else {
+                        pendingEditorOpen = PendingEditorOpen(rel, ref.line, ref.endLine)
+                        activePanel = SessionPanel.Editor
+                    }
+                }
             }
         }
     }

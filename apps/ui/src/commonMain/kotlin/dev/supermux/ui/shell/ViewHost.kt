@@ -368,10 +368,22 @@ private fun ChatViewPane(
         sendToAgent = { actions.sendMessage(sessionId, it) },
     )
     // A tap on a file path in the transcript opens a `file` pane. A path outside the workspace has
-    // no workdir-relative form and is reported rather than opened.
+    // no workdir-relative form and is reported rather than opened; so is one the host says is gone.
+    val tapScope = rememberCoroutineScope()
+    val tapFileSystem = actions.sessionFileSystem(sessionId)
     val openTappedPath: (FilePathRef) -> Unit = { ref ->
         val rel = workspaceOpenPath(ref, workdir)
-        if (rel == null) notices.show("File is outside this workspace") else onOpenFile(rel, ref.line, ref.endLine)
+        if (rel == null) {
+            notices.show("File is outside this workspace")
+        } else {
+            tapScope.launch {
+                if (dev.supermux.ui.files.tappedFileMissing(tapFileSystem, dev.supermux.ui.files.absoluteInWorkdir(workdir, rel))) {
+                    notices.show(dev.supermux.ui.files.fileNotFoundNotice(ref.path))
+                } else {
+                    onOpenFile(rel, ref.line, ref.endLine)
+                }
+            }
+        }
     }
     val state = chatState(sessionId)
     val acts = chatActions(session)
