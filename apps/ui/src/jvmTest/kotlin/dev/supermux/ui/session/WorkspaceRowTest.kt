@@ -30,11 +30,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The shared workspace row (cluster F3), branched on [LocalInputMode]: desktop's sidebar row under
- * [InputMode.Pointer] (hover + right-click, preview + branch, no swipe), Android's phone card under
- * [InputMode.Touch] (swipe actions, path label, git badge, overflow menu).
+ * The shared workspace row (cluster F3): desktop's sidebar row on EVERY host since the session
+ * lists unified (b56f0a70). The touch card — swipe actions, path label, git badge — is gone; what
+ * varies is only where the actions live: a right-click menu where the platform has one, the `⋮`
+ * overflow where it does not (a phone). The path is the group header's, not the row's.
  *
- * The model half of the row lives in [WorkspaceListTest]; this pins what each branch RENDERS.
+ * The model half of the row lives in [WorkspaceListTest]; this pins what the row RENDERS under
+ * each input mode.
  */
 @OptIn(ExperimentalTestApi::class)
 class WorkspaceRowTest {
@@ -102,31 +104,36 @@ class WorkspaceRowTest {
         }
     }
 
-    // ── Touch branch ─────────────────────────────────────────────────────────────────────────
+    // ── Touch (a phone: no platform context menu) ────────────────────────────────────────────
 
-    @Test fun touchRow_swipeRevealsTheMuteAndArchiveActions() = runComposeUiTest {
+    @Test fun touchRow_hasNoSwipeLayer_theActionsLiveInTheOverflow() = runComposeUiTest {
         var muted = 0
-        setContent { Row(InputMode.Touch, onToggleMute = { muted++ }) }
-        // The touch row's Surface merges the row's semantics into its own clickable node.
+        setContent { Row(InputMode.Touch, contextMenu = false, onToggleMute = { muted++ }) }
         onNodeWithTag(WorkspaceListTestIds.row("w1"), useUnmergedTree = true)
             .performTouchInput { swipeRight() }
         waitForIdle()
-        // The swipe only REVEALS — nothing fires until the revealed button is tapped.
+        // Swipe is gone with the touch card: nothing is revealed and nothing fires.
+        onNodeWithText("Mute").assertDoesNotExist()
         assertEquals(0, muted)
+        // The same action is one tap away in the `⋮` overflow.
+        onNodeWithContentDescription("More").performClick()
+        waitForIdle()
         onNodeWithText("Mute").assertIsDisplayed().performClick()
         waitForIdle()
         assertEquals(1, muted)
     }
 
-    @Test fun touchRow_showsThePathLabelAndTheGitBadge() = runComposeUiTest {
-        setContent { Row(InputMode.Touch, model = model(git = git)) }
-        onNodeWithText("…/projects/app").assertIsDisplayed()
-        onNodeWithText("+2 ·1").assertIsDisplayed()
+    @Test fun touchRow_isDesktopsLeanRow_noPathLabel() = runComposeUiTest {
+        setContent { Row(InputMode.Touch, contextMenu = false, model = model(git = git)) }
+        onNodeWithTag(WorkspaceListTestIds.row("w1"), useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("Fix it").assertIsDisplayed()
+        // The path is the group header's; the row does not repeat it on any host.
+        onNodeWithText("…/projects/app").assertDoesNotExist()
     }
 
     @Test fun touchRow_overflowMenuOffersRenameAndNewChatHere() = runComposeUiTest {
         var newChats = 0
-        setContent { Row(InputMode.Touch, onNewChat = { newChats++ }) }
+        setContent { Row(InputMode.Touch, contextMenu = false, onNewChat = { newChats++ }) }
         onNodeWithContentDescription("More").performClick()
         waitForIdle()
         onNodeWithText("Rename").assertIsDisplayed()
@@ -217,21 +224,26 @@ class WorkspaceRowTest {
 
     // ── Archived row ─────────────────────────────────────────────────────────────────────────
 
-    @Test fun archivedRow_touchShowsPathAndTheRestoreMenu() = runComposeUiTest {
+    @Test fun archivedRow_touchShowsTheNameAndTheRestoreMenu() = runComposeUiTest {
         var restored = 0
         setContent {
             val m = deriveArchivedWorkspaceRow(
                 workspaceDto(id = "a1", name = "Old", status = "archived", archivedAt = "2026-08-02T00:00:00Z"),
                 home = "/home/u",
             )
-            CompositionLocalProvider(LocalInputMode provides InputMode.Touch) {
+            CompositionLocalProvider(
+                LocalInputMode provides InputMode.Touch,
+                LocalContextMenuAvailable provides false,
+            ) {
                 SupermuxTheme(appearance = AppearanceMode.DARK) {
                     ArchivedWorkspaceRow(model = m, onSelect = {}, onRestore = { restored++ })
                 }
             }
         }
         onNodeWithTag(WorkspaceListTestIds.archived("a1")).assertIsDisplayed()
-        onNodeWithText("…/projects/app").assertIsDisplayed()
+        onNodeWithText("Old").assertIsDisplayed()
+        // Name-only on every host; the phone's path label went with the touch card.
+        onNodeWithText("…/projects/app").assertDoesNotExist()
         onNodeWithContentDescription("More").performClick()
         waitForIdle()
         onNodeWithText("Restore").performClick()
@@ -253,7 +265,7 @@ class WorkspaceRowTest {
         }
         onNodeWithTag(WorkspaceListTestIds.archived("a1")).assertIsDisplayed()
         onNodeWithText("Old").assertIsDisplayed()
-        // Desktop's archived row is name-only; path and the overflow menu are the phone's.
+        // Name-only, and with a real context menu no visible overflow either.
         onNodeWithText("…/projects/app").assertDoesNotExist()
         onNodeWithContentDescription("More").assertDoesNotExist()
     }
