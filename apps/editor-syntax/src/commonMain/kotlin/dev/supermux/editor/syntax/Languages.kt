@@ -43,11 +43,48 @@ class LanguageRegistry(private val queries: (language: String, kind: QueryKind) 
     /** The text of [language]'s [kind] query, or null when it has none. */
     fun query(language: String, kind: QueryKind): String? = queries(language, kind)
 
+    /**
+     * [language]'s comment syntax (CM6's `commentTokens` language data, what `Mod-/` toggles), or
+     * null for a language without comments (JSON).
+     */
+    fun commentTokens(language: String): dev.supermux.editor.core.CommentTokens? = COMMENT_TOKENS[language]
+
     companion object {
         val default: LanguageRegistry by lazy { LanguageRegistry() }
 
         /** Where a code-only grammar's tables blob lives among the app's resources. */
         fun tablesResource(language: String) = "editor-syntax/tables/$language.sesz"
+
+        private fun tokens(line: String?, open: String? = null, close: String? = null) =
+            dev.supermux.editor.core.CommentTokens(line, if (open != null && close != null) dev.supermux.editor.core.CommentTokens.BlockComment(open, close) else null)
+
+        /** Comment tokens per language (CM6's language packages' `commentTokens`, and each language's own syntax). */
+        internal val COMMENT_TOKENS: Map<String, dev.supermux.editor.core.CommentTokens> = run {
+            val cLike = tokens("//", "/*", "*/")
+            val hash = tokens("#")
+            val markup = tokens(null, "<!--", "-->")
+            mapOf(
+                "c" to cLike, "cpp" to cLike, "c_sharp" to cLike, "java" to cLike, "javascript" to cLike, "typescript" to cLike,
+                "tsx" to cLike, "kotlin" to cLike, "scala" to cLike, "swift" to cLike, "go" to cLike, "rust" to cLike,
+                "dart" to cLike, "groovy" to cLike, "haxe" to cLike, "objc" to cLike, "glsl" to cLike, "php" to cLike,
+                "php_only" to cLike,
+                "css" to tokens(null, "/*", "*/"),
+                "bash" to hash, "python" to hash, "ruby" to tokens("#", "=begin", "=end"), "perl" to hash, "r" to hash,
+                "toml" to hash, "yaml" to hash, "nginx" to hash,
+                "julia" to tokens("#", "#=", "=#"),
+                "lua" to tokens("--", "--[[", "]]"),
+                "haskell" to tokens("--", "{-", "-}"),
+                "elm" to tokens("--", "{-", "-}"),
+                "sql" to tokens("--", "/*", "*/"),
+                "fsharp" to tokens("//", "(*", "*)"), "fsharp_signature" to tokens("//", "(*", "*)"),
+                "ocaml" to tokens(null, "(*", "*)"), "ocaml_interface" to tokens(null, "(*", "*)"), "ocaml_type" to tokens(null, "(*", "*)"),
+                "pascal" to tokens("//", "{", "}"),
+                "clojure" to tokens(";"),
+                "wat" to tokens(";;", "(;", ";)"),
+                "vb_dotnet" to tokens("'"),
+                "html" to markup, "xml" to markup, "dtd" to markup, "markdown" to markup, "markdown_inline" to markup, "vue" to markup,
+            )
+        }
 
         val LANGUAGE_IDS: Set<String> = setOf(
             "bash", "c", "c_sharp", "clojure", "cpp", "css", "dart", "dtd", "elm", "fsharp", "fsharp_signature",

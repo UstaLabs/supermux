@@ -65,14 +65,15 @@ object BlockIndent {
 }
 
 /**
- * The basics: [CloseBrackets], [BlockIndent], [IndentOnInput], [ActiveLine], [BracketMatching] and
- * [SelectionMatches] (CM6's closeBrackets, Enter between braces, indentOnInput, highlightActiveLine,
- * bracketMatching and highlightSelectionMatches). Line numbers are the surface's; [lineNumbers]
- * turns them on or off from the state.
+ * The basics: [CloseBrackets], [BlockIndent], [IndentOnInput], [ActiveLine], [BracketMatching],
+ * [SelectionMatches] and [Editing] (CM6's closeBrackets, Enter between braces, indentOnInput,
+ * highlightActiveLine, bracketMatching, highlightSelectionMatches and the defaultKeymap's line,
+ * comment and syntax commands). Line numbers are the surface's; [lineNumbers] turns them on or off
+ * from the state.
  */
 fun basics(): Extension = dev.supermux.editor.core.extensionOf(
     CloseBrackets.extension(), BlockIndent.extension(), IndentOnInput.extension,
-    ActiveLine.extension, BracketMatching.extension, SelectionMatches.extension,
+    ActiveLine.extension, BracketMatching.extension, SelectionMatches.extension, Editing.extension,
 )
 
 /**

@@ -117,7 +117,32 @@ class SyntaxHost(
     var isOff: Boolean by mutableStateOf(false)
         private set
 
-    private val removeListener = view.addListener { tr -> if (started) post(tr.state) }
+    private val removeListener = view.addListener { tr ->
+        if (started) post(tr.state)
+        for (e in tr.effects) e.valueIf(Syntax.parentAnswer)?.let { answer -> selectAnswered(answer) }
+    }
+
+    /**
+     * The worker's answer to a select-parent request (Mod-i, CM6's `selectParentSyntax`): the
+     * enclosing nodes, selected in ONE `select` transaction, unless the text changed since it was
+     * computed (the answer's positions would be another text's).
+     */
+    private fun selectAnswered(answer: dev.supermux.editor.syntax.ParentAnswer) {
+        hop {
+            if (closed) return@hop
+            val st = view.state
+            if (Syntax.snapshot(st)?.version != answer.version) return@hop
+            val old = st.selection.ranges
+            if (old.size * 2 != answer.ranges.size) return@hop
+            var changed = false
+            val ranges = old.mapIndexed { i, r ->
+                val a = answer.ranges[2 * i]; val h = answer.ranges[2 * i + 1]
+                if (a < 0 || h < 0 || a > st.doc.length || h > st.doc.length) r
+                else { changed = true; dev.supermux.editor.core.SelectionRange(a, h) }
+            }
+            if (changed) view.dispatch(TransactionSpec(selection = dev.supermux.editor.core.EditorSelection.create(ranges, st.selection.mainIndex), scrollIntoView = true, userEvent = "select"))
+        }
+    }
     private val removeReplace = view.addReplaceListener { st -> if (started) post(st) }
 
     /** The language of the shown document (null: plain text). */

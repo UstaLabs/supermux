@@ -59,3 +59,31 @@ val foldServiceFacet: Facet<FoldService, List<FoldService>> = Facet.list("foldSe
  * registering here needs no history dependency.
  */
 val invertedEffectsFacet: Facet<(Transaction) -> List<StateEffect<*>>, List<(Transaction) -> List<StateEffect<*>>>> = Facet.list("invertedEffects")
+
+/**
+ * A language's comment syntax (CM6's `commentTokens` language data): its [line] comment token
+ * (`//`, `#`) and its [block] comment's open and close (`/*`, `*/`); either may be absent.
+ */
+data class CommentTokens(val line: String? = null, val block: BlockComment? = null) {
+    data class BlockComment(val open: String, val close: String)
+}
+
+/** The language layer's comment tokens at a position (an injected layer's own: a `<script>` in HTML), or null. */
+fun interface CommentTokensProvider {
+    fun tokensAt(state: EditorState, pos: Int): CommentTokens?
+}
+
+/** The language layer's [CommentTokensProvider], if any (the first wins). editor-syntax provides one. */
+val commentTokensFacet: Facet<CommentTokensProvider, CommentTokensProvider?> = Facet.define("commentTokens") { it.firstOrNull() }
+
+/**
+ * Select the syntax node around each selection range (CM6's `selectParentSyntax`): a language layer
+ * that knows the syntax tree answers it. The tree may live on another thread, so the service may
+ * answer later (with its own `select` transaction); [selectParent] says whether it took the request.
+ */
+fun interface SelectParentService {
+    fun selectParent(target: CommandTarget): Boolean
+}
+
+/** The language layer's [SelectParentService], if any (the first wins). */
+val selectParentFacet: Facet<SelectParentService, SelectParentService?> = Facet.define("selectParent") { it.firstOrNull() }

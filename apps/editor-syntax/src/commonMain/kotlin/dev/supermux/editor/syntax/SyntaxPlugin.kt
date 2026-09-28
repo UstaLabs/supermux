@@ -17,6 +17,10 @@ import dev.supermux.editor.core.StateField
 import dev.supermux.editor.core.TokenContext
 import dev.supermux.editor.core.TokenContextProvider
 import dev.supermux.editor.core.tokenContextFacet
+import dev.supermux.editor.core.CommentTokensProvider
+import dev.supermux.editor.core.commentTokensFacet
+import dev.supermux.editor.core.SelectParentService
+import dev.supermux.editor.core.selectParentFacet
 import dev.supermux.editor.core.Transaction
 import dev.supermux.editor.core.decorationsFacet
 import dev.supermux.editor.core.extensionOf
@@ -48,6 +52,12 @@ internal class LayerRange(val from: Int, val to: Int, val depth: Int, val langua
 /** One doc-changing transaction: [changes] turned version `version - 1` into [version]. */
 class VersionedChanges(val version: Long, val changes: ChangeSet)
 
+/** A select-parent request (CM6's `selectParentSyntax`) for the ranges [from, to]* of the state it was made in. */
+class ParentRequest(val id: Long, val ranges: IntArray)
+
+/** The worker's answer to request [id], computed at [version]: per range (anchor, head), or (-1, -1) where nothing encloses it. */
+class ParentAnswer(val id: Long, val version: Long, val ranges: IntArray)
+
 /** What the syntax worker needs from one state. Plain data: safe to hand to another thread. */
 class SyntaxSnapshot(
     /**
@@ -64,6 +74,8 @@ class SyntaxSnapshot(
     /** The last [Syntax.LOG_SIZE] doc changes, oldest first, ending at [version]. */
     val log: List<VersionedChanges>,
     val syntaxOff: Boolean,
+    /** A pending select-parent request (answered at this version by [SyntaxWorker]). */
+    val parentRequest: ParentRequest? = null,
 )
 
 /** The syntax field's value: data only (no native handle ever sits in an EditorState). */
@@ -114,6 +126,23 @@ object Syntax {
     fun extension(language: String?): Extension = extensionOf(
         languageFacet.of(language),
         field,
+        parentField,
+        // Mod-/ : the comment tokens of the language AT the position (an injected layer's own).
+        commentTokensFacet.compute(FacetDep.field(field)) { st ->
+            st.field(field).let { v -> CommentTokensProvider { _, pos -> languageAt(v, pos)?.let { LanguageRegistry.COMMENT_TOKENS[it] } } }
+        },
+        // Mod-i : the tree is the worker's; the request rides on the state, the answer comes back as an
+        // effect the host turns into a selection (highlight's SyntaxHost).
+        selectParentFacet.compute(FacetDep.field(field)) { st ->
+            st.field(field).let { v ->
+                SelectParentService { t ->
+                    if (v.language == null || v.syntaxOff) return@SelectParentService false
+                    val ranges = t.state.selection.ranges.flatMap { listOf(it.from, it.to) }.toIntArray()
+                    t.dispatch(dev.supermux.editor.core.TransactionSpec(effects = listOf(requestParent.of(ParentRequest(nextRequest(), ranges)))))
+                    true
+                }
+            }
+        },
         tokenContextFacet.compute(FacetDep.field(field)) { st -> st.field(field).let { v -> TokenContextProvider { _, pos -> contextIn(v, pos) } } },
         foldServiceFacet.compute(FacetDep.field(field)) { st ->
             st.field(field).let { v ->
@@ -182,11 +211,46 @@ object Syntax {
         return TokenContext(kind, language)
     }
 
+    /** The language of the deepest known layer at [pos], else the document's. */
+    private fun languageAt(v: SyntaxValue, pos: Int): String? {
+        var language = v.language ?: return null
+        var depth = 0
+        for (l in v.layers) if (l.from <= pos && pos < l.to && l.depth > depth) { depth = l.depth; language = l.language }
+        return language
+    }
+
+    /** Ask the worker for each range's enclosing syntax node (see [ParentRequest]). */
+    val requestParent: StateEffectType<ParentRequest> = StateEffectType("syntax.requestParent")
+
+    /** The worker's answer (see [ParentAnswer]); the host turns it into a selection when the text did not change since. */
+    val parentAnswer: StateEffectType<ParentAnswer> = StateEffectType("syntax.parentAnswer")
+
+    /** The pending request (cleared by its answer, and by an edit: its ranges would be stale). */
+    internal val parentField: StateField<ParentRequest?> = StateField(
+        name = "syntax.parent",
+        create = { null },
+        update = { v, tr ->
+            var out = v
+            for (e in tr.effects) {
+                e.valueIf(requestParent)?.let { out = it }
+                e.valueIf(parentAnswer)?.let { a -> if (out?.id == a.id) out = null }
+            }
+            if (tr.docChanged) out = null
+            out
+        },
+    )
+
+    @OptIn(ExperimentalAtomicApi::class)
+    private val requests = AtomicLong(0)
+
+    @OptIn(ExperimentalAtomicApi::class)
+    private fun nextRequest(): Long = requests.addAndFetch(1)
+
     private val STRING_CLASSES = setOf(TokenClasses.STRING, TokenClasses.STRING_SPECIAL, TokenClasses.REGEXP, TokenClasses.ESCAPE)
 
     /** What the worker needs from a state; null when the state has no syntax extension. */
     fun snapshot(state: EditorState): SyntaxSnapshot? = state.fieldOrNull(field)?.let { v ->
-        SyntaxSnapshot(v.epoch, v.language, state.doc, v.version, v.viewport, v.log, v.syntaxOff)
+        SyntaxSnapshot(v.epoch, v.language, state.doc, v.version, v.viewport, v.log, v.syntaxOff, state.fieldOrNull(parentField))
     }
 
     /** Doc changes' inserted text kept in the log at most (then the oldest entries go). */

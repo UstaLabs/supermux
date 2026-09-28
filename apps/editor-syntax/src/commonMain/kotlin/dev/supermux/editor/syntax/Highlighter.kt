@@ -422,6 +422,35 @@ class Highlighter(
         return IntArray(sorted.size * 2) { i -> if (i % 2 == 0) (sorted[i / 2] ushr 32).toInt() else sorted[i / 2].toInt() }
     }
 
+    /**
+     * CM6's `selectParentSyntax` for one range [from, to): the smallest syntax node (of any layer
+     * there) that strictly grows it, i.e. starts before it and reaches its end, or ends after it and
+     * starts at or before it; a layer's root node never counts (CM6 stops below the top node). Null
+     * when nothing encloses it. Nodes come from a `(_) @node` query over the range.
+     */
+    fun parentRange(doc: ParsedDocument, from: Int, to: Int, text: TextSource): Pair<Int, Int>? {
+        val s = maxOf(0, from - 1)
+        val e = minOf(doc.length, maxOf(to, from) + 1)
+        var best: Pair<Int, Int>? = null
+        for (layer in doc.layers) {
+            if (layer.ranges.isNotEmpty() && !intersects(layer.ranges, s, maxOf(e, s + 1))) continue
+            val q = runCatching { backend.sharedQuery(layer.language, NODE_QUERY) }.getOrNull() ?: continue
+            val c = q.captures(layer.tree, s, maxOf(e, s + 1), text)
+            // The layer's root: the capture reaching farthest both ways (it holds every other one).
+            var rootS = Int.MAX_VALUE; var rootE = -1
+            for (i in 0 until c.size) if (c.start(i) <= rootS && c.end(i) >= rootE) { rootS = c.start(i); rootE = c.end(i) }
+            for (i in 0 until c.size) {
+                val ns = c.start(i); val ne = c.end(i)
+                if (ns == rootS && ne == rootE) continue
+                val grows = (ns < from && ne >= to) || (ne > to && ns <= from)
+                if (!grows) continue
+                val b = best
+                if (b == null || ne - ns < b.second - b.first) best = ns to ne
+            }
+        }
+        return best
+    }
+
     override fun close() {
         parsers.values.forEach { it.close() }
         parsers.clear()
@@ -711,6 +740,9 @@ class Highlighter(
             for (i in ranges.indices step 2) if (ranges[i] <= e && ranges[i + 1] >= s) return true
             return false
         }
+
+        /** Every named node (selectParentSyntax's candidates). */
+        const val NODE_QUERY = "(_) @node"
 
         fun intersects(ranges: IntArray, s: Int, e: Int): Boolean {
             for (i in ranges.indices step 2) if (ranges[i] < e && ranges[i + 1] > s) return true

@@ -260,4 +260,42 @@ class SyntaxHostTest {
             assertTrue(resolveUiDispatcher(serial, unconfined, main = { null }) === serial)
         } finally { unconfined.cancel() }
     }
+
+    /** M5 B1: Mod-i (CM6's selectParentSyntax) over the worker's tree, one enclosing node per press. */
+    @Test fun selectParentSyntaxGrowsTheSelectionNodeByNode() = run { scope ->
+        val text = "fun f() {\n    val x = g(1, 2)\n}\n"
+        val one = text.indexOf("1")
+        val view = withContext(ui) { EditorView(EditorState.create(text, EditorSelection.cursor(one), extensionOf(highlight("kotlin"), basics()))) }
+        val host = withContext(ui) { SyntaxHost(view, backend, scope = scope).also { it.start() } }
+        until("the first colours") { TokenClasses.KEYWORD in classes(view.state) }
+        var last = one..one
+        repeat(3) { step ->
+            withContext(ui) { assertTrue(dev.supermux.editor.plugins.basics.Editing.selectParentSyntax.run(view)) }
+            until("step $step's selection") { view.state.selection.main.let { r -> r.from <= last.first && r.to >= last.last && (r.to - r.from) > (last.last - last.first) } }
+            val r = withContext(ui) { view.state.selection.main }
+            last = r.from..r.to
+        }
+        // Three presses from inside `1`: at least the argument list, never past the function.
+        assertTrue(last.first >= 0 && last.last <= text.length)
+        assertTrue(text.substring(last.first, last.last).contains("1, 2"), "selected '${text.substring(last.first, last.last)}'")
+        withContext(ui) { host.close() }
+        host.join()
+    }
+
+    /** M5 B1: Mod-/ takes the comment tokens of the language at the line: Kotlin's //, and a fenced block's own. */
+    @Test fun commentTokensFollowTheLanguageAndItsInjections() = run { scope ->
+        val md = "# Title\n\n```kotlin\nval x = 1\n```\n"
+        val view = withContext(ui) { EditorView(EditorState.create(md, EditorSelection.cursor(md.indexOf("val")), extensionOf(highlight("markdown"), basics()))) }
+        val host = withContext(ui) { SyntaxHost(view, backend, scope = scope).also { it.start() } }
+        until("the fence's layer") {
+            view.state.facet(dev.supermux.editor.core.commentTokensFacet)?.tokensAt(view.state, md.indexOf("val"))?.line == "//"
+        }
+        withContext(ui) { dev.supermux.editor.plugins.basics.Editing.toggleComment.run(view) }
+        assertEquals("# Title\n\n```kotlin\n// val x = 1\n```\n", withContext(ui) { view.state.doc.toString() })
+        // Markdown prose itself has only a block comment.
+        val prose = withContext(ui) { view.state.facet(dev.supermux.editor.core.commentTokensFacet)?.tokensAt(view.state, 2) }
+        assertEquals("<!--", prose?.block?.open)
+        withContext(ui) { host.close() }
+        host.join()
+    }
 }

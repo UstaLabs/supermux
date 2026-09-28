@@ -174,7 +174,7 @@ class SyntaxWorker(
         val lang = language ?: return
         if (s.syntaxOff) { off = true; return }
         if (off) return
-        if (sent == Triple(s.epoch, s.version, s.viewport) && parsedDoc === s.doc) return // nothing new
+        if (sent == Triple(s.epoch, s.version, s.viewport) && parsedDoc === s.doc) return answerParent(s) // nothing new
         if (s.doc.length > limits.maxDocumentLength || step("longLines") { hasLongLine(s) }) return turnOff(s)
 
         val h = highlighter ?: run {
@@ -265,6 +265,28 @@ class SyntaxWorker(
         }
         sent = Triple(s.epoch, s.version, s.viewport)
         dispatch(TransactionSpec(effects = listOf(Syntax.spans.of(SyntaxSpansUpdate(s.version, start, end, spans, folds, epoch = s.epoch, layers = layers.toIntArray(), layerLanguages = languages)))))
+        answerParent(s)
+    }
+
+    private var answered = -1L
+
+    /** A select-parent request of this (parsed, current) version: the enclosing nodes, as an effect. */
+    private fun answerParent(s: SyntaxSnapshot) {
+        val req = s.parentRequest ?: return
+        if (req.id == answered) return
+        val doc = parsed ?: return
+        val h = highlighter ?: return
+        if (parsedVersion != s.version || parsedDoc !== s.doc || stale) return
+        answered = req.id
+        val text = RopeText(s.doc)
+        val out = IntArray(req.ranges.size)
+        for (i in req.ranges.indices step 2) {
+            val p = step("parent") { h.parentRange(doc, req.ranges[i], req.ranges[i + 1], text) }
+            // CM6 selects node.to .. node.from (the anchor at the end).
+            out[i] = p?.second ?: -1
+            out[i + 1] = p?.first ?: -1
+        }
+        dispatch(TransactionSpec(effects = listOf(Syntax.parentAnswer.of(ParentAnswer(req.id, s.version, out)))))
     }
 
     /**
