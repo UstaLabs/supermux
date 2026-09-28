@@ -348,3 +348,7 @@ private fun bindSoon(st: JsAny, text: String, start: Int, end: Int) {
 }
 
 internal actual fun platformCodeInputFocus(owner: Any, focused: Boolean) {}
+
+internal actual fun detectTouchFirst(): Boolean = coarsePointer()
+
+private fun coarsePointer(): Boolean = js("(typeof matchMedia === 'function') && matchMedia('(pointer: coarse)').matches")

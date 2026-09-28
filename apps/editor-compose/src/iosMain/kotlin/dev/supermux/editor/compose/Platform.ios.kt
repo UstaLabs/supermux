@@ -166,3 +166,5 @@ fun debugDriveFloatingCursor(dx: Double, dy: Double): Boolean = dev.supermux.edi
 internal actual fun platformCodeInputFocus(owner: Any, focused: Boolean) {
     SmartPunctuation.focusChanged(owner, focused)
 }
+
+internal actual fun detectTouchFirst(): Boolean = true

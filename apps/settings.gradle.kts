@@ -62,3 +62,5 @@ include(":editor-plugins:fold")
 include(":editor-plugins:view")
 // The native editor's M4b plugin: search & replace (engine + panel).
 include(":editor-plugins:search")
+// The native editor's M4c plugins: autocompletion, lint (diagnostics), the LSP client.
+include(":editor-plugins:autocomplete")

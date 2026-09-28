@@ -12,6 +12,15 @@ val isApplePlatform: Boolean by lazy { detectApplePlatform() }
 
 internal expect fun detectApplePlatform(): Boolean
 
+/**
+ * True where fingers are the main pointer (Android, iOS, a phone or tablet browser: `pointer:
+ * coarse`): plugins' popups and panels use 48 dp targets there. A desktop and a browser with a mouse:
+ * false.
+ */
+val isTouchFirstPlatform: Boolean by lazy { detectTouchFirst() }
+
+internal expect fun detectTouchFirst(): Boolean
+
 
 /**
  * The web's key path (see [webKeyDown]) and its clipboard events; elsewhere null. Installed while an editor is

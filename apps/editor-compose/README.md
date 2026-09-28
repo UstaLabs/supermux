@@ -41,6 +41,7 @@ DefaultCommands       movement, selection, insert/delete/newline/tab, select all
 | `LineLayouts.kt`, `Geometry.kt` | layout cache, tab stops, offset/position mapping |
 | `Painter.kt` | the frame: `buildFrame` (layout pass) and `drawFrame` (draw pass), gutter marker shapes |
 | `EditorWidgets.kt` | `WidgetRegistry`, `WidgetScope`, `BlockWidgets` (block heights in the height map) |
+| `EditorViewPlugins.kt` | `ViewPlugin`, `viewPluginsFacet`, the per-view instances |
 | `EditorTooltips.kt` | the tooltip layer's placement (`TooltipLayout`), `hoverTooltip`, `Hover`, the hover engine |
 | `EditorFolds.kt` | `Folds` (replaced ranges, inline widgets, hidden lines), `LineMap` (row offsets <-> document offsets) |
 | `LinkedScroll.kt` | `LinkedScroll`, `LinkedSide`: side-by-side alignment from both sides' measured heights (`LineMapping` is editor-core's) |
@@ -323,6 +324,21 @@ touch gets an explicit command instead: `Hover.showHover` asks every source at t
 touch sees it anyway (the completion list's documentation, signature help above the caret).
 `Hover.shown(state, id)` reads what a source shows.
 
+## View plugins
+
+A plugin's per-view WORK (CM6's `ViewPlugin`): `viewPluginsFacet.of(ViewPlugin { host -> instance })`.
+One instance per view per plugin value (identity), with `host.target` (the command API) and
+`host.scope` (a UI-thread scope of its own, cancelled when the instance goes). `update(tr)` runs after
+every transaction, before the view's listeners (outside any command's scope: its dispatches are judged
+on their own); `destroy()` when a reconfigure removes the plugin, when `setState` replaces the state
+(another document: the new state's instances start fresh), or when the view stops. A composed `Editor`
+runs its view's plugins (`EditorView.startPlugins(scope)`, shared between callers); a host or a test
+without a surface calls it itself. Autocompletion's runner and the LSP client are view plugins; their
+data stays in state fields. A throwing instance is counted (`EditorDiagnostics.pluginFailures`),
+never a crash.
+
+`isTouchFirstPlatform`: Android, iOS, a `pointer: coarse` browser (popups and panels use 48 dp targets).
+
 ## Linked views (side-by-side diff)
 
 `Editor(viewA, linked = s, linkedSide = LinkedSide.A)` and `Editor(viewB, linked = s, linkedSide =
@@ -366,7 +382,8 @@ see it; they put semantic class names on decorations:
   in the theme's class for it, else `currentLine` (so a host theme without the class still shows it).
   Chosen: no built-in active line. A host without `basics()` (or `ActiveLine.extension`) gets none. `light` / `dark` also style basics' `matching-bracket`,
   `nonmatching-bracket` and `selection-match` (`EditorTheme.pluginClasses`), and the search plugin's
-  `search-match` / `search-match-selected` (`EditorTheme.searchClasses`).
+  `search-match` / `search-match-selected` (`EditorTheme.searchClasses`), and autocomplete's
+  `snippet-field` (`EditorTheme.completionClasses`).
 - When several marks cover the same text, styles merge in `decorationsFacet` order (highest
   precedence first) and the later one wins per attribute. `ime-composition` is the surface's own
   class (an underline).

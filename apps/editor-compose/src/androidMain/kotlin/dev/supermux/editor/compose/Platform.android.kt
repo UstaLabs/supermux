@@ -43,3 +43,5 @@ internal actual fun platformAfterKeyboardShown() {}
 internal actual fun platformFocusChanged(c: EditorController, focused: Boolean) {}
 
 internal actual fun platformCodeInputFocus(owner: Any, focused: Boolean) {}
+
+internal actual fun detectTouchFirst(): Boolean = true

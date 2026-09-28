@@ -348,6 +348,7 @@ class EditorView(initial: EditorState) : CommandTarget {
         commandDepth = 0
         keyDepth = 0
         try {
+            plugins?.update(tr)
             for (l in listeners) l(tr)
         } finally {
             commandDepth = depth
@@ -535,10 +536,34 @@ class EditorView(initial: EditorState) : CommandTarget {
         current = state
         goal = null
         surface?.onStateReplaced()
+        plugins?.replaced(state)
         for (l in replaceListeners) l(state)
     }
 
     private var replaceListeners: List<(EditorState) -> Unit> = emptyList()
+
+    private var plugins: ViewPlugins? = null
+    private var pluginStarts = 0
+
+    /**
+     * Run this view's [ViewPlugin]s ([viewPluginsFacet]) on [scope] (a UI-thread scope; each instance
+     * gets a child of it) until the returned function is called. A composed `Editor` does this for
+     * the view it shows; a host or a test without a surface calls it itself. Several callers share
+     * one set of instances (they stop with the last one).
+     */
+    fun startPlugins(scope: CoroutineScope): () -> Unit {
+        if (pluginStarts++ == 0) {
+            val own = CoroutineScope(scope.coroutineContext + kotlinx.coroutines.SupervisorJob(scope.coroutineContext[kotlinx.coroutines.Job]))
+            plugins = ViewPlugins(this, own).also { it.sync(current) }
+        }
+        var stopped = false
+        return {
+            if (!stopped) {
+                stopped = true
+                if (--pluginStarts == 0) { plugins?.dispose(); plugins = null }
+            }
+        }
+    }
 
     /** Call [l] with the new state after every [setState]; returns the function that removes it. */
     fun addReplaceListener(l: (EditorState) -> Unit): () -> Unit {

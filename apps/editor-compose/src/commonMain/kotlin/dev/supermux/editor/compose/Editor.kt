@@ -229,6 +229,12 @@ fun Editor(
             if (controller.linked === linked) controller.scroll.onOwnScroll = null
         }
     }
+    // The view's plugins' runtimes (ViewPlugin: autocompletion's sources, an LSP client) run while it is shown.
+    val pluginScope = rememberCoroutineScope()
+    DisposableEffect(view) {
+        val stop = view.startPlugins(pluginScope)
+        onDispose { stop() }
+    }
     // The hover engine hears the "show hover" requests; it stops with the view.
     DisposableEffect(view, controller) {
         val remove = view.addListener { controller.hover.follow(it) }
