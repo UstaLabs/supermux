@@ -50,6 +50,7 @@ kotlin {
             implementation(project(":editor-compose"))
             implementation(project(":editor-syntax"))
             implementation(project(":editor-plugins:basics"))
+            implementation(project(":editor-plugins:highlight"))
             implementation(compose.runtime)
             implementation(compose.foundation)
             implementation(compose.ui)

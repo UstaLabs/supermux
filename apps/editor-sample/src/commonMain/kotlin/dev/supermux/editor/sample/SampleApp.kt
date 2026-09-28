@@ -52,6 +52,7 @@ import dev.supermux.editor.core.EditorSelection
 import dev.supermux.editor.core.EditorState
 import dev.supermux.editor.core.TransactionSpec
 import dev.supermux.editor.core.decorationsFacet
+import dev.supermux.editor.plugins.highlight.precompileSyntax
 import dev.supermux.editor.syntax.LanguageRegistry
 import dev.supermux.editor.syntax.Syntax
 import dev.supermux.editor.syntax.SyntaxBackend

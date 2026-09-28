@@ -11,9 +11,9 @@ import dev.supermux.editor.core.extensionOf
 import dev.supermux.editor.plugins.basics.basics
 import dev.supermux.editor.core.TransactionSpec
 import dev.supermux.editor.sample.resources.Res
+import dev.supermux.editor.plugins.highlight.SyntaxHost
+import dev.supermux.editor.plugins.highlight.highlight
 import dev.supermux.editor.syntax.LanguageRegistry
-import dev.supermux.editor.syntax.QueryKind
-import dev.supermux.editor.syntax.Syntax
 import dev.supermux.editor.syntax.SyntaxBackend
 import dev.supermux.editor.syntax.SyntaxWorker
 import kotlinx.coroutines.CoroutineScope
@@ -110,9 +110,10 @@ fun addCursorBelow(view: dev.supermux.editor.compose.EditorView) {
 }
 
 /**
- * One open document: an [EditorView] with the syntax extension, and the [SyntaxWorker] that colours
- * it. The worker hears about every transaction (a view listener) and the surface's viewport; its
- * results come back through [hop], which must run them on the UI thread in order.
+ * One open document: an [EditorView] with the plugins, and the highlight plugin's [SyntaxHost] that
+ * colours it (the worker hears every transaction; the surface's viewport comes through
+ * [onViewport]); the worker's results come back through [hop], which must run them on the UI
+ * thread in order.
  */
 class SampleSession(
     text: String,
@@ -123,52 +124,19 @@ class SampleSession(
     extra: dev.supermux.editor.core.Extension = extensionOf(),
     hop: (() -> Unit) -> Unit,
 ) : AutoCloseable {
-    val view = EditorView(EditorState.create(text, extensions = extensionOf(Syntax.extension(language), basics(), extra)))
-    val worker = SyntaxWorker(backend, registry, scope, dispatch = { spec -> hop { view.dispatch(spec) } })
-    private val removeListener = view.addListener { worker.onState(it.state) }
+    val view = EditorView(EditorState.create(text, extensions = extensionOf(highlight(language), basics(), extra)))
+    val host = SyntaxHost(view, backend, registry, scope, hop = hop)
+    val worker: SyntaxWorker get() = host.worker
 
     init {
-        worker.onState(view.state)
+        host.start(followViewport = false)
     }
 
-    /** The surface's viewport, for the worker: dispatched as `Syntax.setViewport` when it changed. */
-    fun onViewport(range: IntRange) {
-        if (Syntax.snapshot(view.state)?.viewport == range) return
-        view.dispatch(TransactionSpec(effects = listOf(Syntax.setViewport.of(range))))
-    }
+    /** The surface's viewport, for the worker (`Editor(onViewport = …)`). */
+    fun onViewport(range: IntRange) = host.onViewport(range)
 
-    override fun close() {
-        removeListener()
-        worker.close()
-    }
+    override fun close() = host.close()
 }
-
-/**
- * Compile [language]'s queries (and those of the languages its documents always inject) before
- * its first document is parsed. On the web a query compile is one uninterruptible call (26-116 ms
- * cold); doing each in its own task, ahead of the first paint, keeps it off the first parse.
- */
-suspend fun precompileSyntax(
-    backend: SyntaxBackend,
-    registry: LanguageRegistry,
-    language: String,
-    onCompile: (String) -> Unit = {},
-    yieldBetween: suspend () -> Unit,
-) {
-    val languages = listOf(language) + INJECTED[language].orEmpty()
-    for (l in languages) {
-        yieldBetween()
-        backend.ensureLanguage(l)
-        for (k in QueryKind.entries) {
-            val source = registry.query(l, k) ?: continue
-            yieldBetween()
-            onCompile("$l/${k.file}")
-            backend.sharedQuery(l, source)
-        }
-    }
-}
-
-private val INJECTED = mapOf("markdown" to listOf("markdown_inline"))
 
 /** The editor for [session], reporting its viewport to the worker and its paints to [stats]. */
 @Composable

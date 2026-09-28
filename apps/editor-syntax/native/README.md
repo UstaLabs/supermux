@@ -347,6 +347,13 @@ web backend only implements `SyntaxBackend`:
     60k-line file's parse forever while scrolling: 147 restarts, no spans.)
 - Queries are compiled once per backend and language (`sharedQuery`), not per
   document (kotlin's highlights cost ~35 ms to compile).
+- `Syntax.extension` also answers editor-core's `tokenContextFacet` from the spans
+  (string / regexp / escape tokens are `STRING`, comments `COMMENT`, the rest code; a
+  new provider per syntax value, so bracket matching follows the worker) and, for the
+  fold plugin, `foldServiceFacet` from `folds.scm`. The worker's host (listener,
+  UI hop, viewport, precompile, "syntax off" panel, disposal) is
+  `editor-plugins/highlight`'s `SyntaxHost`. `SyntaxDebug.liveTrees()` (debug API)
+  counts the native trees alive, for hosts' leak tests.
 
 ### On the web
 

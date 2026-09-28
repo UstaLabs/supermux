@@ -485,11 +485,23 @@ class EditorView(initial: EditorState) : CommandTarget {
         return EditorSelection.create(ranges, sel.mainIndex)
     }
 
-    /** Replace the whole state (another file, a reload that is not an edit). Listeners are not called. */
+    /**
+     * Replace the whole state (another file, a reload that is not an edit). Transaction listeners are
+     * not called; [addReplaceListener]'s are (a syntax host starts over on the new document).
+     */
     fun setState(state: EditorState) {
         current = state
         goal = null
         surface?.onStateReplaced()
+        for (l in replaceListeners) l(state)
+    }
+
+    private var replaceListeners: List<(EditorState) -> Unit> = emptyList()
+
+    /** Call [l] with the new state after every [setState]; returns the function that removes it. */
+    fun addReplaceListener(l: (EditorState) -> Unit): () -> Unit {
+        replaceListeners = replaceListeners + l
+        return { replaceListeners = replaceListeners - l }
     }
 
     /** Call [l] after every transaction; returns the function that removes it. */

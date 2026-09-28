@@ -1,0 +1,201 @@
+package dev.supermux.editor.plugins.highlight
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.supermux.editor.compose.EditorView
+import dev.supermux.editor.compose.WidgetRegistry
+import dev.supermux.editor.core.Compartment
+import dev.supermux.editor.core.EditorState
+import dev.supermux.editor.core.Extension
+import dev.supermux.editor.core.Panel
+import dev.supermux.editor.core.TransactionSpec
+import dev.supermux.editor.core.extensionOf
+import dev.supermux.editor.core.panelsFacet
+import dev.supermux.editor.syntax.LanguageRegistry
+import dev.supermux.editor.syntax.QueryKind
+import dev.supermux.editor.syntax.Syntax
+import dev.supermux.editor.syntax.SyntaxBackend
+import dev.supermux.editor.syntax.SyntaxLimits
+import dev.supermux.editor.syntax.SyntaxWorker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+/**
+ * Syntax highlighting for a document in [language] (null: plain text): editor-syntax's
+ * `Syntax.extension` (the spans field, mapped through every edit, and the language hooks) plus the
+ * slot the "syntax off" panel appears in. Data only: the worker lives in a [SyntaxHost].
+ */
+fun highlight(language: String?): Extension = extensionOf(Syntax.extension(language), SyntaxHost.offPanel.of(extensionOf()))
+
+/**
+ * Owns the [SyntaxWorker] of ONE [EditorView] (spec §5, the host's side of the syntax layer):
+ *
+ * - posts every transaction's state to the worker (a view listener), and a replaced state too
+ *   (`setState`: another file in the same view, which the worker takes as a new document);
+ * - hops the worker's results onto the UI thread ([hop], in order), dropping them once closed;
+ * - feeds `Syntax.setViewport` from `view.viewport`, the surface's laid-out range;
+ * - [precompile]s the language's queries before the first parse (the web's cold start: a query
+ *   compile is one uninterruptible call there);
+ * - when syntax turns off for the document (too big, a line too long, a parse too slow), shows the
+ *   [OFF_PANEL] panel ([registerWidgets] gives its content) and sets [isOff];
+ * - [close] stops the worker, which frees every native handle on its own thread.
+ *
+ * [scope] is the UI's (its dispatcher runs [hop] by default and the viewport collection); the
+ * worker runs on its own single thread inside it. Compose hosts use [rememberSyntaxHost].
+ */
+class SyntaxHost(
+    val view: EditorView,
+    private val backend: SyntaxBackend,
+    private val registry: LanguageRegistry = LanguageRegistry.default,
+    private val scope: CoroutineScope,
+    limits: SyntaxLimits = SyntaxLimits(),
+    private val hop: (() -> Unit) -> Unit = { run -> scope.launch { run() } },
+) : AutoCloseable {
+    private var closed = false
+    private var started = false
+
+    val worker: SyntaxWorker = SyntaxWorker(backend, registry, scope, dispatch = { spec -> hop { if (!closed) view.dispatch(spec) } }, limits = limits)
+
+    /** True once syntax is off for the shown document (snapshot state: a host's status line can show it). */
+    var isOff: Boolean by mutableStateOf(false)
+        private set
+
+    private val removeListener = view.addListener { tr -> if (started) post(tr.state) }
+    private val removeReplace = view.addReplaceListener { st -> if (started) post(st) }
+
+    /** The language of the shown document (null: plain text). */
+    val language: String? get() = Syntax.snapshot(view.state)?.language
+
+    /**
+     * Start: the worker parses the current state and follows the view from now on. [followViewport]:
+     * also collect `view.viewport` in [scope] (it must be the UI's then); a host that already hears
+     * the surface's `Editor(onViewport = …)` calls [onViewport] itself instead.
+     */
+    fun start(followViewport: Boolean = true) {
+        if (started || closed) return
+        started = true
+        post(view.state)
+        if (followViewport) scope.launch { view.viewport.collect { if (!it.isEmpty()) onViewport(it) } }
+    }
+
+    /** Compile the shown language's queries (and those it always injects), each after [yieldBetween]. */
+    suspend fun precompile(onCompile: (String) -> Unit = {}, yieldBetween: suspend () -> Unit = { delay(1) }) {
+        val lang = language ?: return
+        precompileSyntax(backend, registry, lang, onCompile, yieldBetween)
+    }
+
+    /** The surface's viewport, for the worker: dispatched as `Syntax.setViewport` when it changed. */
+    fun onViewport(range: IntRange) {
+        if (closed) return
+        if (Syntax.snapshot(view.state)?.viewport == range) return
+        view.dispatch(TransactionSpec(effects = listOf(Syntax.setViewport.of(range))))
+    }
+
+    private fun post(state: EditorState) {
+        worker.onState(state)
+        val off = Syntax.isOff(state)
+        if (off != isOff) {
+            isOff = off
+            // Show or hide the panel (a compartment of highlight()): not an edit, no userEvent.
+            if (offPanel.get(state) != null) {
+                val panel = if (off) panelsFacet.of(Panel(OFF_PANEL, top = false)) else extensionOf()
+                hop { if (!closed) view.dispatch(TransactionSpec(effects = listOf(offPanel.reconfigure(panel)))) }
+            }
+        }
+    }
+
+    /** Stop following the view and stop the worker (it frees its native handles; [join] waits). */
+    override fun close() {
+        if (closed) return
+        closed = true
+        removeListener()
+        removeReplace()
+        worker.close()
+    }
+
+    suspend fun join() = worker.join()
+
+    companion object {
+        /** The panel shown while syntax is off for the document (content: `panel:syntax-off`). */
+        const val OFF_PANEL = "syntax-off"
+
+        internal val offPanel = Compartment("highlight.syntaxOff")
+
+        /** Register the [OFF_PANEL] panel's content in [widgets]: a one-line notice in the editor's theme. */
+        fun registerWidgets(widgets: WidgetRegistry) {
+            widgets.register("panel:$OFF_PANEL") {
+                BasicText(
+                    "Syntax highlighting is off for this file (too large, a line too long, or too slow to parse).",
+                    Modifier.fillMaxWidth().background(theme.gutterBackground).padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = TextStyle(color = theme.gutterForeground, fontSize = 12.sp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A [SyntaxHost] for [view] while this composition shows it: queries precompiled, then started;
+ * closed when [view] changes or leaves the composition. [widgets], when given, gets the "syntax off"
+ * panel's content.
+ */
+@Composable
+fun rememberSyntaxHost(
+    view: EditorView,
+    backend: SyntaxBackend,
+    registry: LanguageRegistry = LanguageRegistry.default,
+    widgets: WidgetRegistry? = null,
+    limits: SyntaxLimits = SyntaxLimits(),
+): SyntaxHost {
+    val scope = rememberCoroutineScope()
+    val host = remember(view, backend) { SyntaxHost(view, backend, registry, scope, limits) }
+    DisposableEffect(host) { onDispose { host.close() } }
+    LaunchedEffect(host) {
+        host.precompile()
+        host.start()
+    }
+    if (widgets != null) DisposableEffect(widgets) { SyntaxHost.registerWidgets(widgets); onDispose { } }
+    return host
+}
+
+/**
+ * Compile [language]'s queries (and those of the languages its documents always inject) before its
+ * first document is parsed. On the web a query compile is one uninterruptible call (26-116 ms
+ * cold); doing each in its own task, ahead of the first paint, keeps it off the first parse.
+ */
+suspend fun precompileSyntax(
+    backend: SyntaxBackend,
+    registry: LanguageRegistry,
+    language: String,
+    onCompile: (String) -> Unit = {},
+    yieldBetween: suspend () -> Unit,
+) {
+    val languages = listOf(language) + INJECTED[language].orEmpty()
+    for (l in languages) {
+        yieldBetween()
+        backend.ensureLanguage(l)
+        for (k in QueryKind.entries) {
+            val source = registry.query(l, k) ?: continue
+            yieldBetween()
+            onCompile("$l/${k.file}")
+            backend.sharedQuery(l, source)
+        }
+    }
+}
+
+private val INJECTED = mapOf("markdown" to listOf("markdown_inline"))
