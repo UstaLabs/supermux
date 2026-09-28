@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -283,7 +284,9 @@ fun MarkdownBody(
                         )
                     }
                 }
-                is MdBlock.Code -> FencedCodeBlock(block.code)
+                is MdBlock.Code ->
+                    if (block.lang.equals("mermaid", ignoreCase = true)) MermaidBlock(block.code)
+                    else FencedCodeBlock(block.code)
                 is MdBlock.Heading -> Text(
                     text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
                     color = cs.onSurface,
@@ -716,4 +719,41 @@ private fun MarkdownImageLinkLine(
         style = MaterialTheme.typography.bodyLarge,
         modifier = Modifier.testTag("md_image"),
     )
+}
+
+/**
+ * TRIAL: a ```mermaid fence drawn natively; any render failure falls back to the code block. The
+ * library's default "Fit" sizing needs a bounded height, so the box takes the scene's own aspect
+ * ratio (known once the scene is laid out), shrunk to the bubble width and never scaled up.
+ */
+@Composable
+fun MermaidBlock(source: String) {
+    var failed by remember(source) { mutableStateOf(false) }
+    var sceneSize by remember(source) { mutableStateOf<Pair<Float, Float>?>(null) }
+    if (failed) {
+        FencedCodeBlock(source)
+        return
+    }
+    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val size = sceneSize
+        val density = LocalDensity.current
+        val boxModifier = if (size == null) Modifier.fillMaxWidth().height(1.dp) else {
+            val naturalW = with(density) { size.first.toDp() }
+            val w = if (naturalW < maxWidth) naturalW else maxWidth
+            Modifier.width(w).height(w * (size.second / size.first))
+        }
+        com.swithun.cmpmermaid.compose.MermaidDiagram(
+            source = source,
+            modifier = boxModifier,
+            theme = com.swithun.cmpmermaid.core.MermaidTheme.preset(
+                if (dark) com.swithun.cmpmermaid.core.MermaidThemePreset.Dark
+                else com.swithun.cmpmermaid.core.MermaidThemePreset.Default,
+            ),
+            onError = { failed = true },
+            onRenderResult = { r ->
+                if (r is com.swithun.cmpmermaid.core.GMResult.Ok) sceneSize = r.value.width to r.value.height
+            },
+        )
+    }
 }
