@@ -79,4 +79,28 @@ class FileStaleWatcherTest {
         waitForIdle()
         assertFalse(docs.isStale("a.kt"))
     }
+
+    @Test fun aGoneFolderIsWatchedAgainWhenItComesBack() = runComposeUiTest {
+        val sent = mutableListOf<ClientFrame>()
+        val fs = FileSystemService(
+            BrokerApi("http://h", "t", HttpClient(MockEngine { respond("{}") })),
+            send = { synchronized(sent) { sent += it } },
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            graceMs = 0,
+            goneRetryBaseMs = 50,
+        )
+        val docs = DocumentStore({ Result.success("x") }, { _, _ -> true }, CoroutineScope(Dispatchers.Unconfined))
+        setContent { FileStaleWatcher(fs, "/w", docs) }
+        docs.open("build/a.kt")
+        waitForIdle()
+        fs.onFrame(dir("/w/build", "1", "a.kt" to 1))
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsGone("/w/build")) // rm -rf build
+        waitForIdle()
+        synchronized(sent) { sent.clear() }
+        waitUntil(timeoutMillis = 5_000) { ClientFrame.FsSub("/w/build") in sentCopy(sent) }
+        fs.onFrame(dir("/w/build", "2", "a.kt" to 5))  // mkdir build && regenerate
+        waitForIdle()
+        assertTrue(docs.isStale("build/a.kt"))
+    }
 }

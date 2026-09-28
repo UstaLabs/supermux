@@ -17,6 +17,8 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
@@ -80,6 +82,11 @@ class FileTreeMenuValidationTest {
         assertEquals("nope", fsOpErrorMessage(FsException(400, """{"error":"EINVAL","message":"nope"}""")))
         assertEquals("Permission denied", fsOpErrorMessage(FsException(403, """{"error":"EACCES","message":"x"}""")))
         assertEquals("boom", fsOpErrorMessage(RuntimeException("boom")))
+        // EXDEV is a 409 too, but not a name clash.
+        assertEquals(
+            "Can't move to the trash across filesystems; delete permanently instead?",
+            fsOpErrorMessage(FsException(409, """{"error":"EXDEV","message":"Can't move to the trash across filesystems; delete permanently instead?"}""")),
+        )
     }
 
     @Test fun newEntriesGoInsideFoldersAndBesideFiles() {
@@ -206,6 +213,47 @@ class FileTreeMenuTest {
         onNodeWithTag("tree_dialog_confirm").performClick()
         waitUntil(timeoutMillis = 5_000) { moves.isNotEmpty() }
 
+        assertEquals(listOf<Pair<String, String?>>("/w/src" to null), moves)
+    }
+
+    @Test fun aTrashMoveAcrossFilesystemsOffersAPermanentDelete() = runComposeUiTest {
+        val bodies = mutableListOf<String>()
+        val engine = MockEngine { req ->
+            if (req.method == HttpMethod.Post && req.url.encodedPath.endsWith("/fs/ops")) {
+                val text = String(req.body.toByteArray())
+                synchronized(bodies) { bodies += text }
+                if ("permanent" !in text) {
+                    return@MockEngine respond(
+                        """{"error":"EXDEV","message":"Can't move to the trash across filesystems; delete permanently instead?"}""",
+                        io.ktor.http.HttpStatusCode.Conflict,
+                    )
+                }
+            }
+            respond("{}")
+        }
+        val fs = FileSystemService(BrokerApi("http://h", "t", HttpClient(engine)), send = {}, scope = CoroutineScope(Dispatchers.Unconfined), graceMs = 0)
+        val view = TreeViewState("/w")
+        val moves = mutableListOf<Pair<String, String?>>()
+        setContent(host { FileTreeWithActions(fs, view, onOpenFile = {}, onEntryMoved = { o, n -> moves += o to n }) })
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsDir(path = "/w", version = "1", entries = listOf(FsEntry(name = "src", type = "dir"))))
+        waitForIdle()
+
+        onNodeWithTag("tree_row:src").performTouchInput { longClick() }
+        waitForIdle()
+        onNodeWithTag("tree_menu_delete").performClick()
+        waitForIdle()
+        onNodeWithTag("tree_dialog_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("tree_dialog_delete_permanently").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithText("Delete permanently? This can't be undone.", substring = true).assertExists()
+        assertEquals(emptyList<Pair<String, String?>>(), moves) // nothing deleted yet
+        onNodeWithTag("tree_dialog_delete_permanently").performClick()
+        waitUntil(timeoutMillis = 5_000) { moves.isNotEmpty() }
+
+        val sentOps = synchronized(bodies) { bodies.map { Json.parseToJsonElement(it) as JsonObject } }
+        assertEquals(2, sentOps.size)
+        assertNull(sentOps[0]["permanent"])
+        assertEquals(JsonPrimitive(true), sentOps[1]["permanent"])
         assertEquals(listOf<Pair<String, String?>>("/w/src" to null), moves)
     }
 

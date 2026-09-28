@@ -71,14 +71,20 @@ fun validateNewName(name: String, siblings: Collection<String>, current: String?
     else -> null
 }
 
+/** The `error` code of a failed `/fs/ops` call (the body is `{error: code, message}`), or null. */
+fun fsOpErrorCode(e: Throwable): String? {
+    val obj = runCatching { Json.parseToJsonElement(e.message.orEmpty()).jsonObject }.getOrNull() ?: return null
+    return obj["error"]?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
+}
+
 /** A user-facing message for a failed `/fs/ops` call (the body is `{error: code, message}`). */
 fun fsOpErrorMessage(e: Throwable): String {
     val body = e.message.orEmpty()
     val obj = runCatching { Json.parseToJsonElement(body).jsonObject }.getOrNull()
-    val code = obj?.get("error")?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
+    val code = fsOpErrorCode(e)
     val message = obj?.get("message")?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
     return when {
-        code == "EEXIST" || (e is FsException && e.status == 409) -> "A file with that name already exists"
+        code == "EEXIST" || (code == null && e is FsException && e.status == 409) -> "A file with that name already exists"
         code == "EACCES" || code == "EPERM" -> "Permission denied"
         code == "ENOENT" -> "It no longer exists"
         !message.isNullOrBlank() -> message
@@ -353,18 +359,25 @@ private fun DeleteDialog(
     val path = dialog.path
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    // The trash is on another filesystem (409 EXDEV): the second step asks for a permanent delete.
+    var permanent by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val what = if (dialog.folder) "This folder and everything in it" else "This file"
     AlertDialog(
         // Not while the delete is in flight — see NameDialog.
         onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text("Move “${displayName(path)}” to the trash?") },
+        title = {
+            Text(if (permanent) "Delete “${displayName(path)}” permanently?" else "Move “${displayName(path)}” to the trash?")
+        },
         text = {
-            val what = if (dialog.folder) "This folder and everything in it" else "This file"
             val err = error
-            if (err == null) {
-                Text("$what will be moved to the host's trash.")
-            } else {
-                Text(err, color = cs.error, modifier = Modifier.testTag("tree_dialog_error"))
+            when {
+                err != null -> Text(err, color = cs.error, modifier = Modifier.testTag("tree_dialog_error"))
+                permanent -> Text(
+                    "$what can't be moved to the trash because the trash is on another filesystem. " +
+                        "Delete permanently? This can't be undone.",
+                )
+                else -> Text("$what will be moved to the host's trash.")
             }
         },
         confirmButton = {
@@ -372,8 +385,9 @@ private fun DeleteDialog(
                 enabled = !busy,
                 onClick = {
                     busy = true
+                    val asked = permanent
                     scope.launch {
-                        val r = fileSystem.op(FsOpRequest(op = "delete", path = path))
+                        val r = fileSystem.op(FsOpRequest(op = "delete", path = path, permanent = if (asked) true else null))
                         busy = false
                         r.onSuccess {
                             view.prune(path)
@@ -381,11 +395,14 @@ private fun DeleteDialog(
                             if (sel != null && isWithin(path, sel)) view.selected = parentOf(path)?.takeIf { it != view.rootPath }
                             onEntryMoved(path, null)
                             onDismiss()
-                        }.onFailure { error = fsOpErrorMessage(it) }
+                        }.onFailure {
+                            if (!asked && fsOpErrorCode(it) == "EXDEV") { permanent = true; error = null }
+                            else error = fsOpErrorMessage(it)
+                        }
                     }
                 },
-                modifier = Modifier.testTag("tree_dialog_confirm"),
-            ) { Text("Move to Trash", color = cs.error) }
+                modifier = Modifier.testTag(if (permanent) "tree_dialog_delete_permanently" else "tree_dialog_confirm"),
+            ) { Text(if (permanent) "Delete Permanently" else "Move to Trash", color = cs.error) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.testTag("tree_dialog_cancel")) { Text("Cancel") }

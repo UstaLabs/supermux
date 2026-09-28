@@ -107,6 +107,34 @@ class FileTreeViewTest {
         assertTrue("/w/src" !in view.expanded)
     }
 
+    @Test fun aGoneRootComesBackWhenTheFolderIsRecreatedButGoneSubfoldersStayPruned() = runComposeUiTest {
+        val sent = mutableListOf<ClientFrame>()
+        val fs = FileSystemService(
+            BrokerApi("http://h", "t", HttpClient(MockEngine { respond("{}") })),
+            send = { synchronized(sent) { sent += it } },
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            graceMs = 0,
+            goneRetryBaseMs = 50,
+        )
+        val view = TreeViewState("/w").apply { expand("/w/src") }
+        setContent(host { FileTreeView(fs, view, onOpenFile = {}) })
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsDir(path = "/w", version = "1", entries = listOf(FsEntry(name = "src", type = "dir"))))
+        fs.onFrame(ServerFrame.FsDir(path = "/w/src", version = "1"))
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsGone("/w/src"))
+        fs.onFrame(ServerFrame.FsGone("/w"))
+        waitForIdle()
+        onNodeWithText("This folder no longer exists").assertIsDisplayed()
+        synchronized(sent) { sent.clear() }
+        waitUntil(timeoutMillis = 5_000) { ClientFrame.FsSub("/w") in sentCopy(sent) }
+        fs.onFrame(ServerFrame.FsDir(path = "/w", version = "2", entries = listOf(FsEntry(name = "a.kt", type = "file"))))
+        waitForIdle()
+        onNodeWithTag("tree_row:a.kt").assertIsDisplayed()
+        Thread.sleep(300)
+        assertTrue(ClientFrame.FsSub("/w/src") !in sentCopy(sent)) // the pruned subfolder is not retried
+    }
+
     @Test fun onlyVisibleRowsAreComposed() = runComposeUiTest {
         val fs = service(mutableListOf())
         val view = TreeViewState("/w")
