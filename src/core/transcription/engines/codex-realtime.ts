@@ -120,14 +120,78 @@ async function toPcm24k(
   }
 }
 
-function mintBody(model: string): string {
+/** BCP-47 / whisper code → ISO-639-1 primary subtag ("en-US" → "en"); "" for auto/invalid. */
+function primaryLang(code: string | undefined): string {
+  if (!code || code === "auto") return ""
+  const p = code.split(/[-_]/)[0]!.toLowerCase()
+  return /^[a-z]{2,3}$/.test(p) ? p : ""
+}
+
+/** "tr" → "Turkish"; falls back to the code when the runtime has no name for it. */
+function languageName(code: string): string {
+  try {
+    return new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code
+  } catch {
+    return code
+  }
+}
+
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ""
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+}
+
+/** Cap the glossary part of the prompt so a huge list can't crowd out the audio context. */
+const PROMPT_TERMS_MAX_CHARS = 800
+
+/**
+ * Transcription hints for the Realtime session. `language` pins recognition,
+ * so it is only sent when exactly one language is expected; mixed-language
+ * speech (e.g. Turkish + English) is steered by the free-text `prompt`
+ * instead, which also always carries the glossary so project and technical
+ * names come out spelled right.
+ */
+export function transcriptionHints(
+  opts: Pick<SttTranscribeOpts, "lang" | "languages" | "keyterms">,
+): { language?: string; prompt?: string } {
+  const fromList = (opts.languages ?? []).map(primaryLang).filter(Boolean)
+  const langs = [...new Set(fromList.length ? fromList : [primaryLang(opts.lang)].filter(Boolean))]
+  const parts: string[] = []
+  const names = langs.map(languageName)
+  if (langs.length === 1) {
+    parts.push(`The speaker talks in ${names[0]}.`)
+  } else if (langs.length > 1) {
+    parts.push(
+      `The speaker mixes ${joinNames(names)}, often switching mid-sentence. ` +
+        "Write every word in the language it was spoken; do not translate.",
+    )
+  }
+  const terms: string[] = []
+  let len = 0
+  const seen = new Set<string>()
+  for (const raw of opts.keyterms ?? []) {
+    const t = raw.replace(/\s+/g, " ").trim()
+    if (!t || seen.has(t.toLowerCase())) continue
+    if (len + t.length + 2 > PROMPT_TERMS_MAX_CHARS) break
+    seen.add(t.toLowerCase())
+    terms.push(t)
+    len += t.length + 2
+  }
+  if (terms.length) parts.push(`Vocabulary, spelled exactly: ${terms.join(", ")}.`)
+  return {
+    ...(langs.length === 1 ? { language: langs[0] } : {}),
+    ...(parts.length ? { prompt: parts.join(" ") } : {}),
+  }
+}
+
+function mintBody(model: string, hints: { language?: string; prompt?: string } = {}): string {
   return JSON.stringify({
     session: {
       type: "transcription",
       audio: {
         input: {
           format: { type: "audio/pcm", rate: PCM_RATE },
-          transcription: { model },
+          transcription: { model, ...hints },
           // Offline file STT: we commit once after the full buffer is sent.
           turn_detection: null,
         },
@@ -140,6 +204,7 @@ async function mintEphemeralKey(
   fetchFn: FetchFn,
   accessToken: string,
   model: string,
+  hints: { language?: string; prompt?: string },
   signal?: AbortSignal,
 ): Promise<string> {
   const res = await fetchFn(MINT_URL, {
@@ -148,7 +213,7 @@ async function mintEphemeralKey(
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: mintBody(model),
+    body: mintBody(model, hints),
     signal,
   })
   if (!res.ok) {
@@ -298,7 +363,8 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
 
     async transcribe(audioPath: string, tOpts: SttTranscribeOpts = {}): Promise<SttResult> {
       const model = resolveModel(tOpts.model, modelDefault)
-      log.info("codex_realtime_transcribe", { audioPath, model })
+      const hints = transcriptionHints(tOpts)
+      log.info("codex_realtime_transcribe", { audioPath, model, language: hints.language ?? "auto", prompt: hints.prompt ?? "" })
 
       const auth = readJson(read, authPath)
       let tokens = auth?.tokens
@@ -311,7 +377,7 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
 
         let ek: string
         try {
-          ek = await mintEphemeralKey(fetchFn, tokens.access_token, model, signal)
+          ek = await mintEphemeralKey(fetchFn, tokens.access_token, model, hints, signal)
         } catch (e) {
           // On mint 401, refresh once and retry.
           const msg = String(e)
@@ -336,7 +402,7 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
             // best-effort
           }
           tokens = merged.tokens
-          ek = await mintEphemeralKey(fetchFn, newAccess, model, signal)
+          ek = await mintEphemeralKey(fetchFn, newAccess, model, hints, signal)
         }
 
         const text = await transcribeOverWs(connectWs, ek, pcm, timeoutMs, signal)

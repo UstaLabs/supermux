@@ -26,6 +26,21 @@ import dev.supermux.ui.theme.SupermuxTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import androidx.compose.ui.test.performClick
+import dev.supermux.fs.FileSystemService
+import dev.supermux.net.BrokerApi
+import dev.supermux.proto.ServerFrame
+import dev.supermux.ui.files.TreeViewState
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
 
 /**
  * The three workspace panes — the editor cut into parts a pane group can hold as tabs. Each case
@@ -42,7 +57,7 @@ class EditorPanesTest {
     ): @Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
-            LocalPlatform provides FakePlatform(caps = caps, editorEngine = FakeEditorEngineFactory()),
+            LocalPlatform provides FakePlatform(caps = caps),
         ) {
             SupermuxTheme(appearance = AppearanceMode.DARK) { content() }
         }
@@ -53,8 +68,8 @@ class EditorPanesTest {
         setContent(
             host {
                 ExplorerPane(
-                    fsList = { Result.success(listOf(FsEntry(name = "a.kt", type = "file"))) },
-                    explorer = ExplorerState(),
+                    fileSystem = fakeFs(),
+                    view = TreeViewState("/w"),
                     workdir = "/w",
                     onOpenFile = {},
                     modifier = Modifier,
@@ -65,7 +80,93 @@ class EditorPanesTest {
 
         onNodeWithTag("editor_explorer_pane").assertIsDisplayed()
         onNodeWithTag("editor_tree").assertIsDisplayed()
+        onNodeWithTag("tree_refresh").assertIsDisplayed()
+        onNodeWithTag("tree_collapse_all").assertIsDisplayed()
     }
+
+    @Test
+    fun an_offline_explorer_still_has_one_tree_node_and_says_so() = runComposeUiTest {
+        setContent(host { ExplorerPane(fileSystem = null, view = TreeViewState("/w"), workdir = "/w", onOpenFile = {}) })
+        waitForIdle()
+        onNodeWithTag("editor_tree").assertIsDisplayed()
+        onNodeWithText("Host offline").assertIsDisplayed()
+    }
+
+    @Test
+    fun the_explorer_opens_workdir_relative_and_reports_files_outside_it() = runComposeUiTest {
+        val fs = fakeFs()
+        val view = TreeViewState("/w")
+        val opened = mutableListOf<String>()
+        val outside = mutableListOf<String>()
+        setContent(
+            host {
+                ExplorerPane(
+                    fileSystem = fs,
+                    view = view,
+                    workdir = "/w",
+                    onOpenFile = { opened += it },
+                    onOutsideWorkdir = { outside += it },
+                )
+            },
+        )
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsDir(path = "/w", version = "1", entries = listOf(FsEntry(name = "a.kt", type = "file"))))
+        waitForIdle()
+        onNodeWithTag("tree_row:a.kt").performClick()
+        waitForIdle()
+        assertEquals(listOf("a.kt"), opened)
+
+        // Browse above the workdir via the view (what a breadcrumb does), then open a sibling file.
+        view.rootPath = "/"
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsDir(path = "/", version = "1", entries = listOf(FsEntry(name = "etc.txt", type = "file"))))
+        waitForIdle()
+        onNodeWithTag("tree_workspace_chip").assertIsDisplayed()
+        onNodeWithTag("tree_row:etc.txt").performClick()
+        waitForIdle()
+        assertEquals(listOf("/etc.txt"), outside)
+        assertEquals(listOf("a.kt"), opened)
+
+        onNodeWithTag("tree_workspace_chip").performClick()
+        waitForIdle()
+        assertEquals("/w", view.rootPath)
+    }
+
+    @Test
+    fun the_explorer_reveals_the_active_file_until_the_menu_turns_it_off() = runComposeUiTest {
+        val prefs = UiPrefs(InMemorySettingsStore())
+        val view = TreeViewState("/w")
+        var active by mutableStateOf<String?>("src/a.kt")
+        setContent {
+            CompositionLocalProvider(
+                LocalUiPrefs provides prefs,
+                LocalPlatform provides FakePlatform(caps = NO_CAPS),
+            ) {
+                SupermuxTheme(appearance = AppearanceMode.DARK) {
+                    ExplorerPane(fileSystem = fakeFs(), view = view, workdir = "/w", onOpenFile = {}, activeRelativePath = active)
+                }
+            }
+        }
+        waitForIdle()
+        assertEquals("/w/src/a.kt", view.selected)
+        assertTrue("/w/src" in view.expanded)
+
+        onNodeWithTag("tree_menu").performClick()
+        waitForIdle()
+        onNodeWithTag("tree_menu_reveal_active").performClick()
+        waitUntil(timeoutMillis = 5_000) { runBlocking { !prefs.filesRevealActive.first() } }
+        active = "lib/b.kt"
+        waitForIdle()
+        assertEquals("/w/src/a.kt", view.selected)
+        assertTrue("/w/lib" !in view.expanded)
+    }
+
+    private fun fakeFs() = FileSystemService(
+        BrokerApi("http://h", "t", HttpClient(MockEngine { respond("{}") })),
+        send = { },
+        scope = CoroutineScope(Dispatchers.Unconfined),
+        graceMs = 0,
+    )
 
     @Test
     fun a_file_pane_without_a_session_says_code_intelligence_is_off() = runComposeUiTest {

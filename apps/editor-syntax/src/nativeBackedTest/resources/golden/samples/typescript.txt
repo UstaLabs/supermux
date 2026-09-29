@@ -1,0 +1,11 @@
+import { readFile } from "fs/promises";
+
+interface User { id: number; name?: string }
+
+export async function load(path: string): Promise<User[]> {
+  const raw = await readFile(path, "utf8");
+  return JSON.parse(raw) as User[];
+}
+
+enum Color { Red = 1, Green }
+const re = /ab+c/g;

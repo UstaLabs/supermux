@@ -15,6 +15,9 @@
 package dev.supermux.ui.shell
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.runtime.CompositionLocalProvider
+import dev.supermux.ui.terminal.LocalTerminalTitleSink
+import dev.supermux.ui.terminal.TerminalTitles
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -63,9 +66,8 @@ import dev.supermux.ui.editor.DiffPane
 import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerPane
-import dev.supermux.ui.editor.ExplorerState
+import dev.supermux.ui.files.TreeViewStates
 import dev.supermux.ui.editor.FilePane
-import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
@@ -107,8 +109,8 @@ fun defaultChatHeaderMode(): ChatHeaderMode = ChatHeaderMode.PANEL
  * Draw one view's body.
  *
  * Only the ACTIVE view of each group reaches here — PaneHost composes nothing else. That is
- * load-bearing, not an optimization: the terminal and the editor are heavyweight native children,
- * and one live browser per background tab would exhaust memory. Do not compose an inactive tab.
+ * load-bearing, not an optimization: a terminal renders and an editor pane borrows its document's
+ * view only while shown. Do not compose an inactive tab.
  *
  * An unknown kind draws a hint rather than throwing. A future view kind must degrade to "this
  * client does not draw that yet".
@@ -138,10 +140,23 @@ fun ViewHost(
      */
     documents: DocumentStore? = null,
     /**
+     * The WORKSPACE's Files-pane view states, one per view id. Held by the workspace (next to
+     * [documents]) so a Files pane's open folders survive a drag/split/re-tab. Null → a holder
+     * scoped to this host (correct, just forgetful across remounts).
+     */
+    treeStates: TreeViewStates? = null,
+    /** Workdir-relative path of the workspace's active `file` view — the Files tree highlights it. */
+    activeFilePath: String? = null,
+    /**
      * "Open this workdir-relative path" — from the explorer, from a search result, from a file
      * path tapped in a chat transcript. The workspace decides which group it lands in.
      */
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit = { _, _, _ -> },
+    /**
+     * A Files pane renamed (`old → new`) or deleted (`old → null`) an entry; ABSOLUTE host paths.
+     * The workspace retargets or flags the file tabs open under it (WorkspaceSession.applyEntryMoved).
+     */
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit = { _, _ -> },
     /** Reveal/create the singleton Changes pane and switch it into walkthrough mode. */
     onOpenWalkthrough: (sessionId: String, stepId: String?) -> Unit = { _, _ -> },
     /** Session whose walkthrough the singleton Changes pane currently presents. */
@@ -198,11 +213,6 @@ fun ViewHost(
     pasteImageFor: String? = null,
     pasteImageRequestNonce: Long = 0L,
     onPasteImageRequestConsumed: () -> Unit = {},
-    /**
-     * Test seam for the `file` pane's code surface: a browser cannot boot under runComposeUiTest,
-     * so tests inject a factory that never builds an engine. Null → this platform's own.
-     */
-    editorEngineFactory: EditorEngineFactory? = null,
 ) {
     when (view.kind) {
         "chat" -> {
@@ -242,10 +252,16 @@ fun ViewHost(
                 else AgentTerminalForSession(actions, sessionId, terminalId, modifier)
             } else {
                 key(workspaceId, terminalId) {
-                    workspaceTerminalContent(
-                        { actions.connectWorkspaceTerminal(workspaceId, terminalId).orFail(workspaceId) },
-                        modifier.fillMaxSize().testTag("terminal-$workspaceId-$terminalId"),
-                    )
+                    // The program's title goes to this view's TAB, which the pane strip draws.
+                    val viewId = view.id
+                    CompositionLocalProvider(
+                        LocalTerminalTitleSink provides { title -> TerminalTitles.set(viewId, title) },
+                    ) {
+                        workspaceTerminalContent(
+                            { actions.connectWorkspaceTerminal(workspaceId, terminalId).orFail(workspaceId) },
+                            modifier.fillMaxSize().testTag("terminal-$workspaceId-$terminalId"),
+                        )
+                    }
                 }
             }
         }
@@ -266,11 +282,12 @@ fun ViewHost(
                         // LSP is still keyed by session. A workspace with no chat view gets no code
                         // intelligence — say so rather than looking broken.
                         lspSessionId = primarySessionId,
-                        engineFactory = editorEngineFactory,
+                        onNavigate = { p, line -> onOpenFile(p, line, null) },
                         modifier = modifier.testTag("editor-$workdir"),
                     )
                 "diff" -> DiffPaneForWorkspace(
                     actions = actions,
+                    documents = documents,
                     workspaceId = workspaceId,
                     viewId = view.id,
                     base = view.stateString("diffBase"),
@@ -284,8 +301,12 @@ fun ViewHost(
                 else -> ExplorerPaneForWorkspace(
                     actions = actions,
                     workspaceId = workspaceId,
+                    viewId = view.id,
                     workdir = workdir,
+                    treeStates = treeStates ?: remember(workspaceId) { TreeViewStates() },
+                    activeRelativePath = activeFilePath,
                     onOpenFile = { p -> onOpenFile(p, null, null) },
+                    onEntryMoved = onEntryMoved,
                     modifier = modifier.testTag("editor-$workdir"),
                 )
             }
@@ -351,10 +372,22 @@ private fun ChatViewPane(
         sendToAgent = { actions.sendMessage(sessionId, it) },
     )
     // A tap on a file path in the transcript opens a `file` pane. A path outside the workspace has
-    // no workdir-relative form and is reported rather than opened.
+    // no workdir-relative form and is reported rather than opened; so is one the host says is gone.
+    val tapScope = rememberCoroutineScope()
+    val tapFileSystem = actions.sessionFileSystem(sessionId)
     val openTappedPath: (FilePathRef) -> Unit = { ref ->
         val rel = workspaceOpenPath(ref, workdir)
-        if (rel == null) notices.show("File is outside this workspace") else onOpenFile(rel, ref.line, ref.endLine)
+        if (rel == null) {
+            notices.show("File is outside this workspace")
+        } else {
+            tapScope.launch {
+                if (dev.supermux.ui.files.tappedFileMissing(tapFileSystem, dev.supermux.ui.files.absoluteInWorkdir(workdir, rel))) {
+                    notices.show(dev.supermux.ui.files.fileNotFoundNotice(ref.path))
+                } else {
+                    onOpenFile(rel, ref.line, ref.endLine)
+                }
+            }
+        }
     }
     val state = chatState(sessionId)
     val acts = chatActions(session)
@@ -589,33 +622,42 @@ private fun AgentTerminalForSession(
 @Composable
 private fun rememberWorkspaceDocuments(actions: ShellActions, workspaceId: String): DocumentStore {
     val scope = rememberCoroutineScope()
-    return remember(workspaceId, actions) {
+    val store = remember(workspaceId, actions) {
         DocumentStore(
             fsRead = { p -> actions.workspaceFsRead(workspaceId, p) },
             fsWrite = { p, content -> actions.workspaceFsWrite(workspaceId, p, content) },
             scope = scope,
         )
     }
+    androidx.compose.runtime.DisposableEffect(store) { onDispose { store.disposeNative() } }
+    return store
 }
 
-/** Explorer adapter — the file tree + filename search over `/workspaces/:id/fs*`. */
+/** Explorer adapter — the live host tree ([FileSystemService]) + filename search. */
 @Composable
 private fun ExplorerPaneForWorkspace(
     actions: ShellActions,
     workspaceId: String,
+    viewId: String,
     workdir: String,
+    treeStates: TreeViewStates,
+    activeRelativePath: String?,
     onOpenFile: (String) -> Unit,
+    onEntryMoved: (String, String?) -> Unit,
     modifier: Modifier,
 ) {
-    // Per-explorer-pane state: two explorer panes may be expanded to different depths, which is
-    // fine — the tree is a view of the disk, not of anything the workspace owns.
-    val explorer = remember(workspaceId) { ExplorerState() }
+    // Per-VIEW state held outside the pane (the holder outlives it): two explorer panes may sit at
+    // different roots/depths, and a drag or split must not reset either.
+    val view = remember(treeStates, viewId, workdir) { treeStates.forView(viewId, workdir) }
+    val notices = LocalPlatform.current.notices
     ExplorerPane(
-        fsList = { p -> actions.workspaceFsListResult(workspaceId, p) },
-        explorer = explorer,
+        fileSystem = actions.fileSystemFor(workspaceId),
+        view = view,
         workdir = workdir,
         onOpenFile = onOpenFile,
-        fsSearch = { q -> actions.workspaceFsSearch(workspaceId, q) },
+        activeRelativePath = activeRelativePath,
+        onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
+        onEntryMoved = onEntryMoved,
         modifier = modifier.fillMaxSize(),
     )
 }
@@ -634,7 +676,7 @@ private fun FilePaneForWorkspace(
     path: String,
     documents: DocumentStore,
     lspSessionId: String?,
-    engineFactory: EditorEngineFactory?,
+    onNavigate: (path: String, line: Int) -> Unit,
     modifier: Modifier,
 ) {
     // Resolve the id against the LIVE session list: a workspace whose primary session has been
@@ -661,10 +703,11 @@ private fun FilePaneForWorkspace(
         lspStatusQuery = { id, p -> actions.lspStatusQuery(id, p) },
         lspOpen = { id, serverId -> actions.lspOpen(id, serverId) },
         lspRpcOut = { id, serverId, message -> actions.lspRpcOut(id, serverId, message) },
+        lspClose = { id, serverId -> actions.lspClose(id, serverId) },
         lineWrap = lineWrap,
         fontSize = fontSize,
         onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
-        engineFactory = engineFactory,
+        onNavigate = onNavigate,
         modifier = modifier.fillMaxSize(),
     )
 }
@@ -673,6 +716,7 @@ private fun FilePaneForWorkspace(
 @Composable
 private fun DiffPaneForWorkspace(
     actions: ShellActions,
+    documents: DocumentStore?,
     workspaceId: String,
     viewId: String,
     base: String?,
@@ -722,6 +766,8 @@ private fun DiffPaneForWorkspace(
         onWalkthroughClosed = onWalkthroughClosed,
         onReviewSubmit = { reviewSessionId?.let { actions.reviewSubmit(it) } },
         onClose = onClose,
+        writeDiffFile = { repo, path, text -> actions.workspaceFsWrite(workspaceId, if (repo.isBlank()) path else "$repo/$path", text) },
+        diffDocuments = documents,
         modifier = modifier.fillMaxSize(),
     )
 }

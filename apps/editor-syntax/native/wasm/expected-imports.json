@@ -1,0 +1,8 @@
+[
+  "env.ses_host_match",
+  "env.ses_host_read",
+  "wasi_snapshot_preview1.clock_time_get",
+  "wasi_snapshot_preview1.fd_close",
+  "wasi_snapshot_preview1.fd_seek",
+  "wasi_snapshot_preview1.fd_write"
+]

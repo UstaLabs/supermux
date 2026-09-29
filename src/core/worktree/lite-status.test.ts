@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test"
 import { execFileSync } from "child_process"
-import { mkdtempSync, writeFileSync } from "fs"
+import { mkdtempSync, watch, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { createWorktree } from "./manager"
@@ -100,4 +100,23 @@ test("touched: true after a commit even once merged into base; false when pristi
     expect(w?.touched).toBe(true)
     expect(w?.ahead).toBe(0) // merged → not ahead of dev, but touched
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+// The broker recomputes a session's status whenever its git dir changes (main.ts watches it).
+// A plain `git status` takes .git/index.lock to refresh the index, which fires that same watch —
+// so every repo-backed session re-ran its own status forever, ~1×/s, idle or not.
+test("computing status never touches the git dirs it is recomputed from", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x")   // a dirty file, so status has something to refresh
+  writeFileSync(join(repo, "f.txt"), "2\n")
+  const gitDir = g(h.worktreeDir, "rev-parse", "--absolute-git-dir")
+  const events: string[] = []
+  const watchers = [gitDir, join(repo, ".git")].map((d) => watch(d, (e, f) => events.push(`${e} ${f}`)))
+  try {
+    await computeLiteStatus({ workdir: h.worktreeDir, repo_root: repo, base_branch: "main", session_branch: h.sessionBranch })
+    await computeLiteStatus({ workdir: repo })   // plain-repo (remote) mode runs status too
+    await Bun.sleep(150)
+    expect(events).toEqual([])
+  } finally { for (const w of watchers) w.close() }
 })

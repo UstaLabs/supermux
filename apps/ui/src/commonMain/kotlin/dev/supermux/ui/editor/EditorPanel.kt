@@ -6,7 +6,7 @@
 // panel rather than in a group's strip, and diff is a MODE that swaps the whole panel.
 //
 // Ported from `apps/android/.../editor/EditorScreen.kt` (cluster C4). Android's behaviour is kept
-// verbatim — the fs-watch lifecycle, the `onConsumesBackChange` contract, the haptics, the reveal
+// verbatim — the `onConsumesBackChange` contract, the haptics, the reveal
 // on a chat-initiated open — with three substitutions that make it multiplatform: drawable ids
 // become Material icons, `androidx.activity.compose.BackHandler` becomes Compose Multiplatform's
 // own (inert where the platform has no back gesture), and the markdown preview renders through the
@@ -69,7 +69,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
-import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.ReviewComment
@@ -77,10 +76,16 @@ import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.proto.ServerFrame
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.MarkdownBody
+import dev.supermux.fs.FileSystemService
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
-import dev.supermux.ui.editor.engine.EditorScrollReader
-import dev.supermux.ui.editor.engine.captureOutgoingScroll
+import dev.supermux.ui.files.FileStaleWatcher
+import dev.supermux.ui.files.FileTreeWithActions
+import dev.supermux.ui.files.TreeViewState
+import dev.supermux.ui.files.childOf
+import dev.supermux.ui.files.relativeToWorkdir
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalPanes
@@ -99,13 +104,11 @@ data class PendingEditorOpen(val path: String, val line: Int?, val endLine: Int?
 
 /**
  * WHAT the panel is looking at: the session it belongs to, that session's workdir, and the
- * app-wide broker flows it filters by session (fs-watch pulses and the LSP channels).
+ * app-wide broker flows it filters by session (the LSP channels).
  */
 data class EditorPanelState(
     val sessionId: String,
     val workdir: String,
-    /** Live file-watch pulses (all sessions); the panel keeps only its own. */
-    val fsChanges: Flow<ServerFrame.FsChanged> = MutableSharedFlow(),
     val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = MutableStateFlow(emptyMap()),
     val lspRpc: Flow<ServerFrame.LspRpcIn> = MutableSharedFlow(),
 )
@@ -117,7 +120,9 @@ data class EditorPanelState(
  * nothing in the panel may key on them.
  */
 data class EditorPanelActions(
-    val fsList: suspend (String) -> Result<List<FsEntry>>,
+    /** The session host's file-system service: the sidebar tree lists through it and the "changed
+     *  on disk" banner watches the open files' folders through it; null → "Host offline". */
+    val fileSystem: FileSystemService?,
     val fsRead: suspend (String) -> Result<String>,
     val fsWrite: suspend (String, String) -> Boolean,
     val fsSearch: suspend (String) -> List<FsSearchResult>,
@@ -127,10 +132,6 @@ data class EditorPanelActions(
     val reviewAddComment: suspend (AddCommentBody) -> ReviewComment? = { null },
     val reviewResolve: suspend (String) -> Boolean = { false },
     val reviewSubmit: suspend () -> ReviewSubmitResult? = { null },
-    /** Start / stop the broker's fs-watcher for this session. Without them fs_changed never
-     *  fires and the stale banner is dead. */
-    val editorOpen: (String) -> Unit = {},
-    val editorClose: (String) -> Unit = {},
     val lspStatusQuery: (String, String) -> Unit = { _, _ -> },
     val lspOpen: (String, String) -> Unit = { _, _ -> },
     val lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
@@ -172,12 +173,20 @@ fun EditorPanel(
     // edit on each pulse. fsRead/fsWrite only ever call vm.<fs>(session.id, …) and session.id
     // is invariant for a given sessionId, so capturing the first instances stays correct.
     val editor = remember(sessionId) { EditorState(actions.fsRead, actions.fsWrite, scope) }
+    // The native editor (M5): one view per open document, living as long as this session's
+    // state, not as long as the active tab's surface.
+    rememberNativeDocuments(editor.documents, scope)
+    DisposableEffect(editor) { onDispose { editor.documents.disposeNative() } }
 
     if (editor.treeVisible == null) {
         SideEffect { editor.treeVisible = expanded }
     }
     val treeVisible = editor.treeVisible ?: expanded
     val searchResults = remember { mutableStateListOf<FsSearchResult>() }
+    // The sidebar tree's view state. This legacy panel has no view ids, so it lives for the
+    // session + workdir (a workdir change starts a fresh tree rooted at the new checkout).
+    val treeView = remember(sessionId, workdir) { TreeViewState(workdir) }
+    val notices = LocalPlatform.current.notices
 
     LaunchedEffect(editor.searchQuery) {
         delay(200)
@@ -191,8 +200,7 @@ fun EditorPanel(
     }
 
     // Editor prefs come from the shared SettingsStore (ui/prefs/UiPrefs.kt), whose reads are
-    // asynchronous. The engine no longer rebuilds on a wrap change (the surface pushes
-    // `cmSetLineWrap` into the live editor), so this wait is now only about not flashing the
+    // asynchronous. The view takes a wrap change live, so this wait is only about not flashing the
     // default: nothing renders until the persisted values have landed (a single DataStore read —
     // the panel is already mounted asynchronously anyway).
     val prefs = LocalUiPrefs.current
@@ -203,8 +211,9 @@ fun EditorPanel(
     // Live changes (Settings → Editor, or a pinch) still flow through; the seed above only fixes
     // the FIRST composition.
     val fontSize by prefs.editorFontSize.collectAsState(initialFontSize)
+    val liveLineWrap by prefs.editorLineWrap.collectAsState(lineWrap)
 
-    // LSP bridge — orchestrates the cm6 LSPClient over the Phase-2 flows, filtered by session.
+    // LSP bridge — the native editor's LSP transport over the Phase-2 flows, filtered by session.
     val bridge = remember(sessionId, state.lspStatus, state.lspRpc) {
         LspBridge(
             sessionId = sessionId,
@@ -213,56 +222,23 @@ fun EditorPanel(
             lspStatusQuery = actions.lspStatusQuery,
             lspOpen = actions.lspOpen,
             lspRpcOut = actions.lspRpcOut,
+            lspClose = actions.lspClose,
         )
     }
 
-    // The engine itself is owned by the shared [EditorSurface]; the panel reaches the live one
-    // through these seams (scroll reads for a tab switch, the LSP push channel, its ready gate).
-    val reader = remember { EditorScrollReader() }
-    val lspHandle = remember(sessionId) { EditorLspHandle() }
-    var engineReady by remember(sessionId) { mutableStateOf(false) }
+    // The native editor's code intelligence: this session's language servers, over the same bridge.
+    val lspLink = remember(bridge, workdir) { LspLink(sessionId, workdir, bridge) }
 
     val activeIsMarkdown = editor.activeTab?.path?.let(::isMarkdownPath) == true
     val showPreviewToggle = activeIsMarkdown && !editor.showDiff
     val showPreview = editor.previewMode && activeIsMarkdown && !editor.showDiff
 
-    // Editor lifecycle: tell the broker to start/stop the fs-watcher for this session.
-    // This is ALSO what makes fs_changed fire — the stale banner is dead without it.
-    DisposableEffect(sessionId) {
-        actions.editorOpen(sessionId)
-        onDispose { actions.editorClose(sessionId) }
-    }
-
-    // Live file-watch: fold fs_changed pulses for this session into the stale set.
-    LaunchedEffect(sessionId, state.fsChanges) {
-        state.fsChanges.collect { f -> if (f.session == sessionId) editor.markChanged(f.paths) }
-    }
-
-    // (Re)wire code intelligence whenever the active file (or diff/preview mode) changes.
-    // LaunchedEffect cancellation tears down the prior client on a fast tab switch, and the
-    // engine's OWN ready gate is a key — desktop's rule, replacing a fixed 1.2s "the WebView is
-    // probably up by now" sleep, so a slow first paint no longer loses code intelligence.
-    LaunchedEffect(editor.activeTabPath, editor.showDiff, showPreview, engineReady) {
-        lspHandle.disconnect()
-        val tab = editor.activeTab
-        if (editor.showDiff || showPreview || tab == null || workdir.isEmpty() || !engineReady) {
-            return@LaunchedEffect
-        }
-        val status = bridge.queryStatus(tab.path)
-        val serverId = status.serverId
-        // Status.isReady: supported && serverId != null && state == "ready" (LspBridge.swift:18).
-        if (!status.supported || serverId == null || status.state != "ready") return@LaunchedEffect
-        // Pump inbound RPC for this server in a child coroutine (cancelled with this effect).
-        launch { bridge.pumpRpcIn(serverId) { sid, msg -> lspHandle.message(sid, msg) } }
-        if (!bridge.open(serverId)) return@LaunchedEffect
-        val rootUri = dirUri(workdir)
-        val fileUri = pathToUri(joinPath(workdir, tab.path))
-        lspHandle.connect(serverId, rootUri, fileUri, status.languageId ?: "")
-    }
+    // "Changed on disk" banner: subscribe to the open files' folders on the session's host (the
+    // same watcher the workspace shell uses; our own saves are bracketed so they never raise it).
+    if (workdir.isNotEmpty()) FileStaleWatcher(actions.fileSystem, workdir, editor)
 
     fun revealFile(path: String, line: Int? = null, endLine: Int? = null) {
         focusManager.clearFocus()
-        captureOutgoingScroll(editor, reader)
         editor.openFileAtLine(path, line, endLine)
         editor.searchQuery = ""
         searchResults.clear()
@@ -329,6 +305,11 @@ fun EditorPanel(
                 onReload = { scope.launch { editor.reloadDiff(actions.fsDiff) } },
                 onClose = { editor.showDiff = false },
                 modifier = Modifier.fillMaxSize(),
+                // M5: each file on the native diff plugin, read and written through the session's fs.
+                readFile = { repo, path -> actions.fsRead(repoPath(repo, path)) },
+                writeFile = { repo, path, text -> actions.fsWrite(repoPath(repo, path), text) },
+                postComment = actions.reviewAddComment,
+                documents = editor.documents,
             )
             return@Box
         }
@@ -442,11 +423,14 @@ fun EditorPanel(
                                 .background(cs.surfaceContainerHigh)
                                 .testTag("editor_tree_pane"),
                         ) {
-                            FileTree(
-                                fsList = actions.fsList,
-                                explorer = editor.explorer,
+                            EditorTreeSidebar(
+                                fileSystem = actions.fileSystem,
+                                view = treeView,
                                 workdir = workdir,
+                                activeRelativePath = editor.activeTabPath,
                                 onOpenFile = { revealFile(it) },
+                                onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
+                                onEntryMoved = { old, new -> editor.applyEntryMoved(workdir, old, new) },
                             )
                         }
                         Box(
@@ -463,10 +447,7 @@ fun EditorPanel(
                             activeTabPath = editor.activeTabPath,
                             loadingPath = if (loadingNew) editor.loadingPath else null,
                             isDirty = editor::isDirty,
-                            onSelect = { path ->
-                                captureOutgoingScroll(editor, reader)
-                                editor.selectTab(path)
-                            },
+                            onSelect = { path -> editor.selectTab(path) },
                             onClose = editor::closeTab,
                         )
                         HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
@@ -504,31 +485,26 @@ fun EditorPanel(
                         }
 
                         Box(Modifier.weight(1f).fillMaxWidth()) {
-                            EditorSurface(
-                                content = activeTab?.content ?: "",
-                                filename = activeTab?.path ?: "",
-                                lineWrap = lineWrap,
-                                fontSize = fontSize,
-                                scrollTop = activeTab?.scrollTop ?: 0,
-                                revealLine = activeTab?.revealLine,
-                                onRevealConsumed = { activeTab?.revealLine = null },
-                                onChange = { content ->
-                                    activeTab?.path?.let { editor.updateContent(it, content) }
-                                },
-                                onSave = { editor.saveActive() },
-                                // A pinch / keyboard zoom already applied itself in-page; this only
-                                // persists it so it survives reopen (no rebuild).
-                                onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
-                                scrollReader = reader,
-                                onLspOut = { sid, msg -> bridge.rpcOut(sid, msg) },
-                                onEngineReadyChange = { engineReady = it },
-                                lspHandle = lspHandle,
-                                modifier = Modifier.fillMaxSize(),
-                            )
+                            if (activeTab != null) {
+                                // key: a tab switch is another document, another borrowed view.
+                                androidx.compose.runtime.key(activeTab.path) {
+                                    NativeDocumentEditor(
+                                        documents = editor.documents,
+                                        doc = activeTab,
+                                        lineWrap = liveLineWrap,
+                                        fontSize = fontSize,
+                                        onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
+                                        modifier = Modifier.fillMaxSize(),
+                                        lsp = lspLink,
+                                        onNavigate = { path, line -> revealFile(path, line) },
+                                        covered = showPreview,
+                                    )
+                                }
+                            }
 
                             // Markdown preview overlay — covers (but keeps warm) the code surface
                             // when toggled on a .md tab (parity EditorPane.swift:240-245). Opaque so
-                            // the editor underneath is hidden; the engine stays alive in remember.
+                            // the editor underneath is hidden; its view stays alive under it.
                             if (showPreview && activeTab != null) {
                                 Column(
                                     Modifier
@@ -632,11 +608,14 @@ fun EditorPanel(
                                 .background(cs.surfaceContainerHigh)
                                 .testTag("editor_tree_drawer"),
                         ) {
-                            FileTree(
-                                fsList = actions.fsList,
-                                explorer = editor.explorer,
+                            EditorTreeSidebar(
+                                fileSystem = actions.fileSystem,
+                                view = treeView,
                                 workdir = workdir,
+                                activeRelativePath = editor.activeTabPath,
                                 onOpenFile = { revealFile(it) },
+                                onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
+                                onEntryMoved = { old, new -> editor.applyEntryMoved(workdir, old, new) },
                             )
                         }
                     }
@@ -659,4 +638,43 @@ fun EditorPanel(
             )
         }
     }
+}
+
+/**
+ * The panel's file tree: the shared [FileTreeView] over the session host's [FileSystemService].
+ * Paths in the tree are ABSOLUTE; [onOpenFile] gets them workdir-relative (what [EditorState]
+ * speaks), and anything outside the workdir goes to [onOutsideWorkdir] instead of opening.
+ */
+@Composable
+private fun EditorTreeSidebar(
+    fileSystem: FileSystemService?,
+    view: TreeViewState,
+    workdir: String,
+    activeRelativePath: String?,
+    onOpenFile: (relativePath: String) -> Unit,
+    onOutsideWorkdir: (absolutePath: String) -> Unit,
+    /** A rename/delete succeeded in the tree — see [EditorState.applyEntryMoved]. */
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    if (fileSystem == null) {
+        Box(Modifier.fillMaxSize().testTag("editor_tree"), contentAlignment = Alignment.Center) {
+            Text("Host offline", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("editor_tree_offline"))
+        }
+        return
+    }
+    val activePath = activeRelativePath?.takeIf { it.isNotEmpty() && it != "." }?.let { rel ->
+        rel.split('/').filter { it.isNotEmpty() }.fold(workdir) { acc, seg -> childOf(acc, seg) }
+    }
+    FileTreeWithActions(
+        fileSystem = fileSystem,
+        view = view,
+        onOpenFile = { abs ->
+            val rel = relativeToWorkdir(workdir, abs)?.takeIf { it != "." }
+            if (rel != null) onOpenFile(rel) else onOutsideWorkdir(abs)
+        },
+        activePath = activePath,
+        compact = !LocalPointerAvailable.current || LocalWindowWidthClass.current == WindowWidthClass.Compact,
+        onEntryMoved = onEntryMoved,
+    )
 }

@@ -40,7 +40,6 @@ import type { AgentStateStore, AgentPhase } from "./agent-state-store"
 import type { BackgroundTaskStore } from "./background-task-store"
 import type { TerminalManager } from "../terminal/manager"
 import type { DisplayManager } from "../display/manager"
-import type { FsWatcher } from "../editor/fs-watcher"
 import type { ProxyStatus } from "../proxy/liveness"
 import type { SpawnResult } from "./spawn-helper"
 import type { WorkspaceDto } from "../workspace/dto"
@@ -93,7 +92,6 @@ export type SessionManagerPorts = {
   /** Per-session teardown collaborators (the kill/unregister ladder). */
   cleanup: {
     terminals: Pick<TerminalManager, "killAllForSession">
-    fsWatcher: Pick<FsWatcher, "killSession">
     stopClaudeTailer(sessionUuid: string): void
     releaseDraftAttachments(payload: { attachments?: Array<{ file_id?: string }> } | null | undefined): void
 
@@ -309,7 +307,6 @@ export class SessionManager {
 
     await this.ports.cleanup.terminals.killAllForSession(displayName)
     void this.ports.displays.killAllForSession(displayName)
-    this.ports.cleanup.fsWatcher.killSession(displayName)
 
     const removedProxies = this.registry.removeProxiesForSession(s.id)
     if (removedProxies.length > 0) {

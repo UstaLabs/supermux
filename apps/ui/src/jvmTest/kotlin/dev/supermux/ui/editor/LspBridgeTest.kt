@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -16,7 +17,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
- * Pure Flow-state-machine tests for [LspBridge] — no broker, no JCEF. Uses `runTest`'s
+ * Pure Flow-state-machine tests for [LspBridge] — no broker, no editor. Uses `runTest`'s
  * virtual clock so the 9s/1.5s/2s real-world timeouts in [LspBridge.queryStatus]/[LspBridge.open]
  * resolve instantly.
  */
@@ -141,5 +142,25 @@ class LspBridgeTest {
         runCurrent()
         assertEquals(listOf("ts" to "keep-me"), delivered)
         job.cancel()
+    }
+
+    /** Review: a stale entry (the broker connection was replaced) is not an answer; wait for a fresh one. */
+    @Test fun query_status_never_answers_with_a_stale_entry() = runTest {
+        val staleEntry = ServerFrame.LspStatus(session = "s1", path = "a.kt", supported = true, serverId = "kls", state = LSP_STATE_STALE)
+        val status = MutableStateFlow<Map<String, ServerFrame.LspStatus>>(mapOf("s1|a.kt" to staleEntry))
+        val b = bridge(status, MutableSharedFlow())
+        val result = async { b.queryStatus("a.kt") }
+        runCurrent()
+        advanceTimeBy(3_000); runCurrent()                  // past the 1.5 s "cached" window: still waiting
+        kotlin.test.assertFalse(result.isCompleted)
+        status.value = mapOf("s1|a.kt" to staleEntry.copy(state = "ready"))
+        runCurrent()
+        assertEquals("ready", result.await().state)
+    }
+
+    @Test fun query_status_times_out_to_unavailable_rather_than_stale() = runTest {
+        val staleEntry = ServerFrame.LspStatus(session = "s1", path = "a.kt", supported = true, serverId = "kls", state = LSP_STATE_STALE)
+        val b = bridge(MutableStateFlow(mapOf("s1|a.kt" to staleEntry)), MutableSharedFlow())
+        assertEquals("unavailable", b.queryStatus("a.kt").state)
     }
 }

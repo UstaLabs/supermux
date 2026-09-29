@@ -171,6 +171,50 @@ class DictationControllerTest {
         assertEquals("Transcription failed", ctrl.errorMessage)
     }
 
+    @Test fun a_failed_transcription_keeps_the_recording_and_retry_reposts_it() {
+        val attempts = mutableListOf<ByteArray>()
+        var appended: String? = null
+        val ctrl = controller(FakeMicCapture())
+        ctrl.transcribeAudio = { bytes, _, _ -> attempts += bytes; if (attempts.size == 1) null else "hello" }
+        ctrl.onAppend = { appended = it }
+        ctrl.startMic()
+        ctrl.stopMic()
+
+        val kept = ctrl.failedAudio
+        assertTrue(kept != null, "the failed recording must be kept for retry")
+        assertEquals("Transcription failed", ctrl.errorMessage)
+
+        ctrl.retryTranscription()
+
+        assertEquals(2, attempts.size)
+        assertTrue(attempts[0].contentEquals(attempts[1]), "retry must re-send the same audio")
+        assertEquals("hello", appended)
+        assertNull(ctrl.failedAudio)
+        assertNull(ctrl.errorMessage)
+    }
+
+    @Test fun a_throwing_transcribe_seam_is_a_recoverable_failure() {
+        val ctrl = controller(FakeMicCapture())
+        ctrl.transcribeAudio = { _, _, _ -> error("network down") }
+        ctrl.startMic()
+        ctrl.stopMic()
+
+        assertEquals("Transcription failed", ctrl.errorMessage)
+        assertTrue(ctrl.failedAudio != null)
+    }
+
+    @Test fun take_failed_audio_hands_over_the_recording_once_and_clears_the_error() {
+        val ctrl = controller(FakeMicCapture())
+        ctrl.transcribeAudio = { _, _, _ -> null }
+        ctrl.startMic()
+        ctrl.stopMic()
+
+        val audio = ctrl.takeFailedAudio()
+        assertTrue(audio != null)
+        assertNull(ctrl.takeFailedAudio())
+        assertNull(ctrl.errorMessage)
+    }
+
     @Test fun cancel_mic_while_recording_discards_via_the_recorder_and_never_transcribes() {
         val fake = FakeMicCapture()
         var transcribeCalled = false

@@ -33,10 +33,15 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
-/** Editor font-size bounds — the cm6 bundle's own range, shared by both editor engines. */
+/** Editor font-size bounds (the old CodeMirror editor's range, kept by the native one). */
 const val EDITOR_FONT_MIN = 10
 const val EDITOR_FONT_MAX = 24
 const val EDITOR_FONT_DEFAULT = 13
+
+/** Terminal font-size bounds, in sp; the default is the renderer's own. */
+const val TERMINAL_FONT_MIN = 8
+const val TERMINAL_FONT_MAX = 32
+const val TERMINAL_FONT_DEFAULT = 13
 
 /** Soft wrap is on by default (both apps agreed). */
 const val EDITOR_LINE_WRAP_DEFAULT = true
@@ -51,6 +56,14 @@ const val SIDEBAR_WIDTH_DEFAULT = 320f
 
 /** Desktop Changes pane starts as a nested folder tree. */
 const val EDITOR_DIFF_TREE_VIEW_DEFAULT = true
+
+/** The Changes pane's per-file diff starts inline (decided 2026-09-28; side by side is a toggle). */
+const val EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT = false
+
+/** The native editor's accessory bar is on (decided 2026-09-28); it only shows with a soft keyboard. */
+const val EDITOR_ACCESSORY_BAR_DEFAULT = true
+/** The Files tree reveals the active editor file by default. */
+const val FILES_REVEAL_ACTIVE_DEFAULT = true
 
 /**
  * Typed accessors over the persisted UI preferences. One `Flow` read + one `suspend put` per
@@ -79,12 +92,41 @@ class UiPrefs(private val settings: SettingsStore) {
     suspend fun putEditorFontSize(px: Int) =
         settings.putString(SettingsKeys.EDITOR_FONT_SIZE, px.coerceIn(EDITOR_FONT_MIN, EDITOR_FONT_MAX).toString())
 
+    /** Terminal font size in sp, always clamped into [TERMINAL_FONT_MIN]..[TERMINAL_FONT_MAX]. */
+    val terminalFontSize: Flow<Int> =
+        settings.string(SettingsKeys.TERMINAL_FONT_SIZE).map { raw ->
+            (raw?.toIntOrNull() ?: TERMINAL_FONT_DEFAULT).coerceIn(TERMINAL_FONT_MIN, TERMINAL_FONT_MAX)
+        }
+
+    suspend fun putTerminalFontSize(sp: Int) =
+        settings.putString(SettingsKeys.TERMINAL_FONT_SIZE, sp.coerceIn(TERMINAL_FONT_MIN, TERMINAL_FONT_MAX).toString())
+
     /** Changes pane: nested folder tree (true) vs flat path list (false). */
     val editorDiffTreeView: Flow<Boolean> =
         settings.string(SettingsKeys.EDITOR_DIFF_TREE_VIEW).map { it?.toBooleanStrictOrNull() ?: EDITOR_DIFF_TREE_VIEW_DEFAULT }
 
     suspend fun putEditorDiffTreeView(value: Boolean) =
         settings.putString(SettingsKeys.EDITOR_DIFF_TREE_VIEW, value.toString())
+
+    /** Changes pane: each file's diff side by side (true) or inline (false, the default). */
+    val editorDiffSideBySide: Flow<Boolean> =
+        settings.string(SettingsKeys.EDITOR_DIFF_SIDE_BY_SIDE).map { it?.toBooleanStrictOrNull() ?: EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT }
+
+    suspend fun putEditorDiffSideBySide(value: Boolean) =
+        settings.putString(SettingsKeys.EDITOR_DIFF_SIDE_BY_SIDE, value.toString())
+
+    /** The native editor's key row above a soft keyboard (Tab, arrows, undo, find). On by default. */
+    val editorAccessoryBar: Flow<Boolean> =
+        settings.string(SettingsKeys.EDITOR_ACCESSORY_BAR).map { it?.toBooleanStrictOrNull() ?: EDITOR_ACCESSORY_BAR_DEFAULT }
+
+    suspend fun putEditorAccessoryBar(value: Boolean) =
+        settings.putString(SettingsKeys.EDITOR_ACCESSORY_BAR, value.toString())
+    /** Files tree: expand to and select the active editor file. */
+    val filesRevealActive: Flow<Boolean> =
+        settings.string(SettingsKeys.FILES_REVEAL_ACTIVE).map { it?.toBooleanStrictOrNull() ?: FILES_REVEAL_ACTIVE_DEFAULT }
+
+    suspend fun putFilesRevealActive(value: Boolean) =
+        settings.putString(SettingsKeys.FILES_REVEAL_ACTIVE, value.toString())
 
     /** Chat transcript density (web `cmux:chat-detail` parity). Unknown/absent → MEDIUM. */
     val chatDetailLevel: Flow<ChatDetailLevel> =
@@ -354,6 +396,13 @@ class InMemorySettingsStore : SettingsStore {
 
 /** Provided by each app's theme wrapper (`AndroidTheme` / `DesktopTheme`). */
 val LocalUiPrefs = staticCompositionLocalOf<UiPrefs> { error("No UiPrefs provided") }
+
+/**
+ * The same [UiPrefs], or null where no theme wrapper provided one — for a component that has a
+ * sensible default without it and is routinely mounted bare (the terminal pane, in its tests).
+ * Every theme wrapper provides it next to [LocalUiPrefs].
+ */
+val LocalUiPrefsOrNull = staticCompositionLocalOf<UiPrefs?> { null }
 
 /**
  * The stored theme mode, seeding it from a host's LEGACY value the first time (and only the first

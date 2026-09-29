@@ -7,8 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.ui.res.painterResource
 import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -34,7 +33,6 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.platform.LocalDensity
@@ -55,7 +53,7 @@ import dev.supermux.desktop.chat.decodeImageBytes
 import dev.supermux.ui.chat.AssistantMessage
 import dev.supermux.ui.chat.fetchImageBytesWithPolicy
 import dev.supermux.desktop.platform.prunePasteCache
-import dev.supermux.desktop.editor.isMacOs
+import dev.supermux.desktop.platform.isMacOs
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.DesktopHostStores
 import dev.supermux.desktop.settings.DesktopSettingsStore
@@ -78,12 +76,11 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.Space
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalHardwareKeyboard
 import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.widthClassForPx
-import dev.supermux.desktop.ui.LocalModalPresence
-import dev.supermux.desktop.ui.ModalPresence
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.windows.tearOutTabLive
 import dev.supermux.ui.shell.windows.tearOutCanvasLive
@@ -280,14 +277,12 @@ private val desktopBindTts: (
 //                                  shows diff +/- lines with no pointer/xdotool available (M4g-2;
 //                                  desktop-only verification convenience, not an Android field).
 //                                  Off by default.                                      [EditorPanel]
-//   SMX_JCEF_FORCE_ERROR=1        — force JcefState.Error (native-fallback editor, M3)  [JcefRuntime]
 //   SM_EDITOR_SAVE_TEST           — drive the editor save path (M3)                      [EditorPanel]
 //   SM_NOTIFY_TEST="<session-name>"  — force-unselect a session so its NEXT agent reply is
 //                                  guaranteed "unviewed" (M5-3); watch stdout for the
 //                                  unconditional "[notify] session=... text=..." decision+dispatch
 //                                  log line NotificationController prints right before it would
 //                                  raise a tray toast. Off by default; harmless in production.  [main]
-//   SMX_JCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                  [JcefRuntime]
 //   SM_INTRO=1 / SM_INTRO=0       — force-show / force-suppress the first-run intro cinematic.
 //                                  Default: plays once ever (intro-seen marker), and NEVER in
 //                                  SM_PAIR_TOKEN-seeded runs so headless verification shots are
@@ -312,21 +307,17 @@ fun main() {
     // `renderApi=METAL` read off the live SkiaLayer — but the AWT child stayed
     // topmost for hit-testing, so every click still landed on the terminal and
     // the dialog's buttons were dead. Ahmet: "it renders correctly on top of
-    // the terminal. But if I try to click on any button, it doesn't work." So
-    // HeavyweightModalShield hides the child instead, and this flag is inert
-    // for modals.
+    // the terminal. But if I try to click on any button, it doesn't work."
     //
-    // SINCE PLAN 4 THE TERMINAL IS NOT A SWING CHILD AT ALL — it is pure
-    // Compose, on every host — so the one case that motivated this flag is
-    // gone. JCEF, the child that IS left, was never rescued by it (see below).
-    // It stays because it costs nothing measured on Metal and because a future
+    // SINCE PLAN 4 THE TERMINAL IS NOT A SWING CHILD AT ALL, and since M5 the
+    // editor is pure Compose too, so no interop child is left on desktop and
+    // this flag is inert. It stays because it costs nothing measured on Metal and because a future
     // Swing interop child would be back in exactly the old situation; nothing
     // in the app depends on it being on.
     //
     // Compose 1.11.1 gates blending on the render API — Direct3D and Metal only,
-    // never OpenGL — so it is a no-op on Linux by construction. It also does not
-    // rescue JCEF at all (a native NSView: the dialog comes out sheared off at
-    // the page's top edge). Still marked experimental by JetBrains.
+    // never OpenGL — so it is a no-op on Linux by construction. Still marked
+    // experimental by JetBrains.
     System.setProperty("compose.interop.blending", "true")
 
     val store = DesktopTokenStore()
@@ -540,7 +531,7 @@ fun main() {
 
         if (isTraySupported) {
             Tray(
-                icon = rememberVectorPainter(Icons.Filled.Terminal),
+                icon = painterResource("supermux-tray.png"),
                 state = trayState,
                 tooltip = "supermux",
                 onAction = {
@@ -570,6 +561,7 @@ fun main() {
             // title still paints centred over our own UI on runtimes that ignore
             // `apple.awt.windowTitleVisible`. Other platforms keep the normal caption text.
             title = if (isMacOs()) "" else "supermux",
+            icon = painterResource("supermux-icon.png"),
             state = windowState,
         ) {
             if (shuttingDown) return@Window
@@ -664,9 +656,9 @@ fun main() {
                     }
                     Menu("Edit", mnemonic = 'E') {
                         // Same paste-image path as Ctrl/Cmd+V / right-click in the composer.
-                        // Accelerator label documents the chord; the composer's onPreviewKeyEvent
-                        // owns the live key handling when the field is focused.
-                        Item("Paste image", shortcut = KeyShortcut(Key.V, ctrl = true)) {
+                        // The accelerator exists only while a chat composer has the focus: a
+                        // window-wide Ctrl+V would steal every paste from the code editor (M5 B2).
+                        Item("Paste image", shortcut = pasteImageShortcut(dev.supermux.ui.chat.ChatInputFocus.focused)) {
                             ui.requestPasteImage()
                         }
                     }
@@ -683,12 +675,6 @@ fun main() {
             }
 
             // Appearance lives on [ui] so the sidebar toggle, theme, and ui-state.json share one source.
-            // One presence for the whole window: a dialog opened anywhere must hide
-            // EVERY heavyweight AWT child (the JCEF editor), not just the one in the
-            // pane that owns it — Compose cannot paint over any of them, and a split
-            // can show a second editor next to the pane the dialog came from.
-            val modalPresence = remember { ModalPresence() }
-            CompositionLocalProvider(LocalModalPresence provides modalPresence) {
             ProvideDesktopAdaptiveLocals {
             DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) {
               // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
@@ -939,9 +925,9 @@ fun main() {
                     // resolves the named session, SELECTS it, flips its editor pane on, and opens
                     // <file-path> via the SAME externalOpen chain SM_OPEN_FILE/SM_EDITOR_PREVIEW use
                     // above. Opening the file is enough — EditorPanel's OWN connect-sequencing
-                    // LaunchedEffect (Task 5) then drives the real lsp_status_query → lsp_open →
-                    // cmLspConnect round trip against the broker's live language server once the file
-                    // becomes the active tab and the JCEF engine reports ready; no further driving is
+                    // LaunchedEffect then drives the real lsp_status_query → lsp_open → initialize
+                    // round trip against the broker's live language server once the file becomes the
+                    // active tab and its native editor view exists; no further driving is
                     // needed from here. Point <file-path> at a file extension the broker's LSP config
                     // covers (GET /settings/editor lists supported extensions per server, e.g. the
                     // typescript server covers .ts/.tsx/.js/...). Off by default; harmless in production.
@@ -1744,7 +1730,6 @@ fun main() {
             if (mdImageSrc != null) {
                 MdImageVerifyOverlay(source = mdImageSrc)
             }
-        }
 
         // Extra claimed layout windows. Close unclaims only — never exitApplication.
         // Each extra uses the bind for ITS workspace so switching sessions does not
@@ -1787,10 +1772,9 @@ fun main() {
                             it.sessionNames,
                         )
                     } ?: "supermux",
+                    icon = painterResource("supermux-icon.png"),
                     state = extraState,
                 ) {
-                    val extraModal = remember { ModalPresence() }
-                    CompositionLocalProvider(LocalModalPresence provides extraModal) {
                         ProvideDesktopAdaptiveLocals {
                             DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) {
                                 if (extraBind != null) {
@@ -1798,17 +1782,12 @@ fun main() {
                                 }
                             }
                         }
-                    }
                 }
             }
         }
         }
         }
     } finally {
-        // No-op if the editor never started. Runs after every Compose window/interoperability child
-        // has been disposed, but before JVM shutdown, so Chromium helper processes exit cleanly.
-        dev.supermux.desktop.editor.DesktopEditorEngineFactory.shared.dispose()
-        dev.supermux.desktop.editor.JcefRuntime.dispose()
         // Read-aloud is a process singleton (see SharedDesktopTts) and owns a child `say`/`ffplay`
         // process; release it here so a quit mid-sentence does not outlive the window.
         runCatching { MessageTts.stop(SharedDesktopTts) }
@@ -1902,6 +1881,11 @@ private fun ProvideDesktopAdaptiveLocals(content: @Composable () -> Unit) {
         LocalWindowWidthClass provides widthClassForPx(widthPx, density),
         LocalInputMode provides InputMode.Pointer,
         LocalPointerAvailable provides true,
+        LocalHardwareKeyboard provides true,
         content = content,
     )
 }
+
+/** Edit ▸ Paste image's accelerator: Ctrl+V while a chat composer is focused, none otherwise (the editor's paste stays its own). */
+internal fun pasteImageShortcut(chatInputFocused: Boolean): KeyShortcut? =
+    if (chatInputFocused) KeyShortcut(Key.V, ctrl = true) else null

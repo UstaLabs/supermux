@@ -25,6 +25,7 @@ class ContractTest {
             "worktree_sizes", "worktrees_removed", "agent_models_changed",
             "subagent_update", "subagents_cleared", "activity_append_subagent",
             "request_open_subagent", "message_append_subagent",
+            "fs_dir", "fs_gone", "fs_err",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -79,6 +80,9 @@ class ContractTest {
                 is ServerFrame.Error -> {}
                 is ServerFrame.WorktreeSizes -> {}
                 is ServerFrame.WorktreesRemoved -> {}
+                is ServerFrame.FsDir -> {}
+                is ServerFrame.FsGone -> {}
+                is ServerFrame.FsErr -> {}
             }
         }
     }
@@ -107,5 +111,19 @@ class ContractTest {
         assertTrue(respond is ClientFrame.RequestRespond)
         assertEquals("r1", (respond as ClientFrame.RequestRespond).requestId)
         assertTrue(respond.answer["optionId"].toString().contains("allow_once"))
+    }
+
+    @Test fun fs_dir_unchanged_and_client_fs_frames_round_trip() {
+        val f = json.decodeFromString<ServerFrame>("""{"type":"fs_dir","path":"/a","version":"x:1","unchanged":true}""")
+        kotlin.test.assertEquals(ServerFrame.FsDir(path = "/a", version = "x:1", unchanged = true), f)
+        val out = json.encodeToString(ClientFrame.serializer(), ClientFrame.FsSub("/a", since = "x:1"))
+        kotlin.test.assertEquals("""{"type":"fs_sub","path":"/a","since":"x:1"}""", out)
+        val un = json.encodeToString(ClientFrame.serializer(), ClientFrame.FsUnsub("/a"))
+        kotlin.test.assertEquals("""{"type":"fs_unsub","path":"/a"}""", un)
+    }
+
+    @Test fun fs_dir_carries_real() {
+        val f = json.decodeFromString<ServerFrame>(load("fs_dir")) as ServerFrame.FsDir
+        kotlin.test.assertEquals("/home/u/p/src", f.real)
     }
 }

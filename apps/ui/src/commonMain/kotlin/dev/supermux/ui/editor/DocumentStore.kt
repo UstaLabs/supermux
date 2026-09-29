@@ -37,29 +37,84 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** One open file's text + per-view scroll/reveal state. Owned by [DocumentStore], never duplicated
- *  per tab: the tab strip holds references to these, so N tabs over one path share one buffer. */
-class Document(path: String, content: String) {
+ *  per tab: the tab strip holds references to these, so N tabs over one path share one buffer.
+ *
+ *  With the native editor (M5) the text IS the [native] view's rope: [content] is derived from it
+ *  (read it for a save or the preview, not per keystroke) and [isDirty] compares ropes. Without
+ *  one (tests) it is a plain String as before. [content] never holds a
+ *  `\r\n`: the store normalizes on load and restores the ending ([crlf]) on save (spec §8). */
+class Document(path: String, content: String, crlf: Boolean = false) {
     val path = path
-    var content by mutableStateOf(content)
+    private var plain by mutableStateOf(content)
+    var content: String
+        get() = native?.text() ?: plain
+        set(value) {
+            val n = native
+            if (n != null) n.replaceText(value) else plain = value
+        }
     var savedContent by mutableStateOf(content)
+    /** Saved back with `\r\n` line endings (the file had them). */
+    var crlf by mutableStateOf(crlf)
     var scrollTop by mutableStateOf(0)
     var revealLine by mutableStateOf<Pair<Int, Int?>?>(null)
+
+    /** The native editor's views of this document, once a pane asked ([DocumentStore.nativeFor]). */
+    var native: NativeDocument? by mutableStateOf(null)
+        internal set
+
+    val isDirty: Boolean get() = native?.isDirty ?: (plain != savedContent)
+
+    /** The native views go (the store's owner left): the text they held stays as a plain String. */
+    internal fun dropNative() {
+        val n = native ?: return
+        plain = n.text()
+        native = null
+        n.dispose()
+    }
 }
 
 class DocumentStore(
     private val fsRead: suspend (String) -> Result<String>,
     private val fsWrite: suspend (String, String) -> Boolean,
     private val scope: CoroutineScope,
-) {
+) : WatchedDocuments {
     /** Open documents by path. A snapshot map so a composable reading [get]/[isDirty] is
      *  invalidated when a document appears or is closed, exactly as the old `tabs` list was. */
     private val docs = mutableStateMapOf<String, Document>()
 
     var loadingPath by mutableStateOf<String?>(null)
     var loadError by mutableStateOf<String?>(null)
-    var saving by mutableStateOf(false)
+    /** Paths whose save is in flight: one write per document at a time, other documents unaffected. */
+    private var savingPaths by mutableStateOf(setOf<String>())
 
-    /** Workdir-relative paths the broker reported changed on disk (fs_changed) → reload banner. */
+    /** Some document is being saved (the header spinner). Setting it false forgets every in-flight guard. */
+    var saving: Boolean
+        get() = savingPaths.isNotEmpty()
+        set(value) { if (!value) savingPaths = emptySet() }
+
+    fun isSaving(path: String): Boolean = path in savingPaths
+
+    /** Every open document's path. */
+    val paths: Set<String> get() = docs.keys.toSet()
+
+    /** Paths some pane has shown ([retainViewed]): only those can have lost their last pane. */
+    private val everViewed = mutableSetOf<String>()
+
+    /**
+     * The panes that show documents now are the ones for [viewed] (a workspace's file views): close
+     * every document whose LAST pane went (its view, syntax worker and LSP didOpen go with it). A
+     * document with unsaved edits stays open, so reopening its tab finds them; a document no pane
+     * ever showed yet (an open still resolving its view) is left alone. Returns what was closed.
+     */
+    fun retainViewed(viewed: Set<String>): List<String> {
+        everViewed += viewed
+        val gone = docs.keys.filter { it in everViewed && it !in viewed && docs[it]?.isDirty != true }
+        for (p in gone) { close(p); everViewed -= p }
+        return gone
+    }
+
+    /** Workdir-relative paths changed on disk behind an open document → reload banner. Fed by
+     *  [dev.supermux.ui.files.FileStaleWatcher]'s folder subscriptions. */
     var changedPaths by mutableStateOf(setOf<String>())
 
     /** Paths whose in-flight load was cancelled by [close] — the load result is dropped, never
@@ -81,10 +136,67 @@ class DocumentStore(
 
     fun get(path: String): Document? = docs[path]
 
-    fun isDirty(path: String): Boolean {
-        val doc = docs[path] ?: return false
-        return doc.content != doc.savedContent
+    /** Paths of the open documents (a snapshot read: a composable reading it follows opens/closes). */
+    override val openPaths: Set<String> get() = docs.keys.toSet()
+
+    private val writeObservers = mutableListOf<WatchedDocuments.WriteObserver>()
+
+    override fun observeWrites(observer: WatchedDocuments.WriteObserver): () -> Unit {
+        writeObservers += observer
+        return { writeObservers -= observer }
     }
+
+    fun isDirty(path: String): Boolean = docs[path]?.isDirty == true
+
+    // ── The native editor (M5) ──────────────────────────────────────────────────────────────
+
+    /**
+     * Set by the store's owner to give documents native views: panes then call [nativeFor]. Null
+     * (a test) keeps every document a plain String.
+     */
+    var native: NativeEditorEnv? = null
+
+    /**
+     * [doc]'s native editor, made on first ask (a pane showing it) and kept until the document
+     * closes: panes only borrow its views. Null without a [native] environment.
+     */
+    fun nativeFor(doc: Document): NativeDocument? {
+        doc.native?.let { return it }
+        val env = native ?: return null
+        if (docs[doc.path] !== doc) return null // closed meanwhile
+        return NativeDocument(doc, env, onSave = { save(doc) }).also { doc.native = it }
+    }
+
+    /** New editor settings for every native view of this store (and the ones made later). */
+    fun applySettings(settings: dev.supermux.editor.plugins.view.EditorSettings) {
+        val env = native ?: return
+        if (env.settings == settings) return
+        env.settings = settings
+        for (d in docs.values) d.native?.applySettings(settings)
+    }
+
+    /** The owner goes: every native view stops (didClose, syntax workers freed); the texts stay. */
+    fun disposeNative() {
+        for (d in docs.values) d.dropNative()
+        hub?.close()
+        hub = null
+    }
+
+    private var hub: LspHub? = null
+
+    /** The LSP clients of this store's native views (made on first use), or null without a [native] environment. */
+    fun lspHub(): LspHub? {
+        hub?.let { return it }
+        val env = native ?: return null
+        return LspHub(this, env.scope, env.lspParseOnWorker).also { hub = it }
+    }
+
+    /** The scope the store was made with: its owner's (the native views' plugins run on it). */
+    internal val ownerScope: CoroutineScope get() = scope
+
+    /** The store's own reader and writer (an LSP edit to a file nobody has open). */
+    internal suspend fun readFile(path: String): Result<String> = fsRead(path)
+    internal suspend fun writeFile(path: String, text: String): Boolean = fsWrite(path, text)
 
     fun open(path: String) {
         docs[path]?.let {
@@ -111,7 +223,7 @@ class DocumentStore(
                     // so two overlapping cross-path loads both complete — gating on `loadingPath ==
                     // path` keeps the LAST-opened file active (not the last-to-return over the
                     // network) and stops an earlier load from wiping a newer one's loading indicator.
-                    val doc = docs.getOrPut(path) { Document(path, content) }
+                    val doc = docs.getOrPut(path) { LineEndings.load(content).let { Document(path, it.text, it.crlf) } }
                     val current = loadingPath == path
                     onOpened(doc, current)
                     if (current) loadingPath = null
@@ -178,7 +290,7 @@ class DocumentStore(
             cancelledPaths.add(path)
             loadingPath = null
         }
-        docs.remove(path)
+        docs.remove(path)?.dropNative()
     }
 
     fun update(path: String, content: String) {
@@ -186,20 +298,50 @@ class DocumentStore(
     }
 
     fun save(doc: Document) {
-        if (saving) return
-        saving = true
-        scope.launch {
-            if (fsWrite(doc.path, doc.content)) {
-                doc.savedContent = doc.content
+        if (doc.path in savingPaths) return
+        // Snapshot the text NOW (before the launch): an edit typed while the write is in flight stays dirty.
+        val snapshot = snapshotOf(doc)
+        savingPaths = savingPaths + doc.path
+        writeObservers.toList().forEach { it.writeStarted(doc.path) }
+        scope.launch { write(doc, snapshot) }
+    }
+
+    /** [save], waiting for the write: true when the file was written (false also when a save of it is already running). */
+    suspend fun saveNow(doc: Document): Boolean {
+        if (doc.path in savingPaths) return false
+        val snapshot = snapshotOf(doc)
+        savingPaths = savingPaths + doc.path
+        writeObservers.toList().forEach { it.writeStarted(doc.path) }
+        return write(doc, snapshot)
+    }
+
+    /** What is written is what is marked saved: the text at the moment of the save. */
+    private fun snapshotOf(doc: Document): Pair<String, dev.supermux.editor.core.Rope?> {
+        val rope = doc.native?.primary?.state?.doc
+        return (rope?.toString() ?: doc.content) to rope
+    }
+
+    private suspend fun write(doc: Document, snapshot: Pair<String, dev.supermux.editor.core.Rope?>): Boolean {
+        val (text, rope) = snapshot
+        var ok = false
+        try {
+            ok = fsWrite(doc.path, LineEndings.save(text, doc.crlf))
+            if (ok) {
+                doc.savedContent = text
+                if (rope != null) doc.native?.markSaved(rope)
             }
-            saving = false
+            return ok
+        } finally {
+            savingPaths = savingPaths - doc.path
+            // The stale-banner tracker: our own write must not read as "changed on disk".
+            writeObservers.toList().forEach { it.writeFinished(doc.path, ok) }
         }
     }
 
     // ── Live file-watch reload (ports EditorState.swift:79-84, 130-144) ─────────
 
     /** Record disk-change notifications (workdir-relative paths, leading slash optional). */
-    fun markChanged(paths: List<String>) {
+    override fun markChanged(paths: List<String>) {
         changedPaths = changedPaths + paths.map(::normPath)
     }
 
@@ -227,9 +369,12 @@ class DocumentStore(
             return
         }
         result
-            .onSuccess { content ->
-                doc.content = content
-                doc.savedContent = content
+            .onSuccess { raw ->
+                val loaded = LineEndings.load(raw)
+                doc.crlf = loaded.crlf
+                val native = doc.native
+                if (native != null) native.replaceFromDisk(loaded.text) else doc.content = loaded.text
+                doc.savedContent = loaded.text
                 changedPaths = changedPaths - normPath(path)
             }
             .onFailure { err -> loadError = err.message ?: "Could not reload file" }

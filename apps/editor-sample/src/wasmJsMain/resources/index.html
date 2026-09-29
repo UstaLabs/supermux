@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>editor-sample</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #0a0b09; overflow: hidden; }
+    canvas { outline: none; }
+  </style>
+  <script>
+    // The cold-start monitor (web-bench/run.mjs reads it): a MessageChannel ping-pong from the very
+    // start of the page measures how long the main thread was held between two turns, per startup
+    // phase, until the first coloured frame. It runs before anything else loads.
+    (function () {
+      const t0 = performance.now();
+      let last = t0, max = 0, phaseMax = 0, phase = 'page', running = true;
+      const top = [], phases = [];
+      const ch = new MessageChannel();
+      ch.port1.onmessage = function () {
+        const now = performance.now(), gap = now - last;
+        if (gap > max) max = gap;
+        if (gap > phaseMax) phaseMax = gap;
+        if (gap > 8) top.push({ ms: Math.round(gap * 10) / 10, phase: phase, at: Math.round(now - t0) });
+        last = now;
+        if (running) ch.port2.postMessage(0);
+      };
+      ch.port2.postMessage(0);
+      // Every key event's arrival, before Compose sees it: the benchmark's key-event-to-paint clock.
+      window.addEventListener('keydown', function (e) { window.__keyTs = performance.now(); window.__keyKind = e.key; window.__inKey = true; }, true);
+      // Bubbling, after Compose's own listener on its canvas: a change made in between was synchronous.
+      window.addEventListener('keydown', function () { window.__inKey = false; }, false);
+      window.__coldPhase = function (name) {
+        const now = performance.now();
+        phases.push({ phase: phase, until: Math.round(now - t0), maxHold: Math.round(phaseMax * 10) / 10 });
+        phase = name; phaseMax = 0;
+        if (name === 'coloured') {
+          running = false;
+          top.sort(function (a, b) { return b.ms - a.ms; });
+          window.__cold = { maxHold: Math.round(max * 10) / 10, toColouredMs: Math.round(now - t0), phases: phases, top: top.slice(0, 10) };
+        }
+      };
+    })();
+  </script>
+</head>
+<body>
+  <script src="editor-sample.js"></script>
+</body>
+</html>

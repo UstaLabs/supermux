@@ -197,7 +197,8 @@ test("each desktop distribution carries its client terminal engine", () => {
   expect(composeMacJob).toContain("dev/supermux/terminal/native/macos-arm64/libsupermux_terminal_jni.dylib")
   // Windows has no pinned Zig host, so its engine is cross-built on Linux and handed over.
   expect(workflow).toContain("build-terminal-jni-windows:")
-  expect(windowsJob).toContain("needs: build-terminal-jni-windows")
+  // (Inline or list form: the job also waits on the editor grammars since M5.)
+  expect(windowsJob).toMatch(/needs: \[?[^\n]*\bbuild-terminal-jni-windows\b/)
   expect(windowsJob).toContain("dev/supermux/terminal/native/windows-x64/supermux_terminal_jni.dll")
   // And the licence files travel with it, on all three.
   for (const job of [linuxDesktopJob, composeMacJob, windowsJob]) {
@@ -261,6 +262,7 @@ test("every verification lane GATES the release instead of running beside it", (
     ["release", "is the job being gated"],
     ["publish-website", "runs AFTER the release, and needs it"],
     ["build-terminal-jni-windows", "gates transitively, through build-desktop-windows"],
+    ["editor-syntax-natives", "gates transitively, through every packaging job that needs its grammars"],
     // Deliberate: this lane WARNS rather than fails when the signing secrets are
     // absent, so that binary and docker releases keep shipping without them.
     // Requiring it would invert that decision.
@@ -293,7 +295,8 @@ test("everything that publishes waits on the tag's channel + branch guard", () =
   expect(workflow).toContain('v*-*) CHANNEL=alpha; BRANCH=dev ;;')
   expect(workflow).toContain('*) CHANNEL=stable; BRANCH=main ;;')
   expect(workflow).toContain('git merge-base --is-ancestor "$GITHUB_SHA" "origin/$BRANCH"')
-  expect(dockerJob).toContain("needs: classify")
+  // (Inline list since M5: the image's web client also waits on the editor grammars.)
+  expect(dockerJob).toMatch(/needs: \[?classify\b/)
   // The needs list moved from the inline form to a block list when the verification
   // lanes were added; what matters is that the release still waits on classify.
   expect(releaseJob).toMatch(/needs:(\s*\[classify,|\s*\n\s+- classify\b)/)

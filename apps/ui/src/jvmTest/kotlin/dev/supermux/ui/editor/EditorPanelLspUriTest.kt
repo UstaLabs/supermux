@@ -28,7 +28,7 @@ class EditorPanelLspUriTest {
     // CONVERGENCE pinned in cluster C1: Android's old `android.net.Uri.encode(abs, "/")` left the
     // sub-delims `! ~ ' ( )` literal, desktop's `java.net.URLEncoder` percent-encoded them. The one
     // shared encoder follows desktop, so an Android LSP `file://` URI now escapes them too — both
-    // forms are legal URIs and cm6's LSP client decodes either, so this is a deliberate one-way
+    // forms are legal URIs and language servers decode either, so this is a deliberate one-way
     // change, not a regression.
     @Test fun path_to_uri_percent_encodes_the_sub_delims_android_used_to_leave_literal() {
         assertEquals(

@@ -1,0 +1,5 @@
+export const Hello = ({ name }: { name: string }) => (
+  <div className="hi" onClick={() => alert(name)}>
+    Hello, {name}!
+  </div>
+);

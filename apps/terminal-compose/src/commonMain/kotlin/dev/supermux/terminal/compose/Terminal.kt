@@ -104,6 +104,13 @@ import dev.supermux.terminal.TerminalSize
  * @param onFailure the unrecoverable engine error that stopped the session, at most once. The
  *   surface keeps showing the last frame it drew — a frozen screen with an explanation beats a
  *   blank one — and the host decides whether to close, retry or show it in [overlay].
+ * @param search find-in-scrollback: when given, Cmd+F / Ctrl+Shift+F and the menu open it, the
+ *   surface runs the search, highlights every match and scrolls the current one into view. The
+ *   HOST draws the search field (see [TerminalSearchState]). Null = no find; the chord then reaches
+ *   the program.
+ * @param onZoom a font-size step the user asked for — Cmd/Ctrl +, −, 0 or a two-finger pinch. The
+ *   host owns the size (it is usually an app-wide preference) and applies it through [theme]'s
+ *   `fontSize`. Null = no zoom; the chords reach the program and a pinch does nothing.
  * @param overlay drawn on top of the grid, inside the same box: scrollbars, "connection lost"
  *   banners, a paste confirmation. It recomposes independently of the grid.
  */
@@ -120,6 +127,8 @@ fun Terminal(
     onLink: (String) -> Unit = {},
     onClipboard: (TerminalEffect.ClipboardRequest) -> Unit = {},
     onFailure: (Throwable) -> Unit = {},
+    search: TerminalSearchState? = null,
+    onZoom: ((TerminalZoom) -> Unit)? = null,
     overlay: @Composable BoxScope.() -> Unit = {},
 ) {
     val density = LocalDensity.current
@@ -242,6 +251,9 @@ fun Terminal(
     // was already running is not something the program asked for, so stop it.
     LaunchedEffect(mouseMode, scroll) { if (mouseMode) scroll.cancelFling() }
 
+    // For the menu's Copy item; derived so a new frame does not recompose the surface.
+    val hasSelection by remember(model) { derivedStateOf { model.frame?.selection != null } }
+
     val input = remember(session, model, scroll, selection, accessories, scope) {
         TerminalInputController(session, model, scroll, selection, accessories, scope, focusRequester)
     }
@@ -256,6 +268,17 @@ fun Terminal(
         input.keyboard = keyboard
         input.onLink = onLink
         input.clipboard = clipboard
+        input.onZoom = onZoom
+        input.onShortcut = { shortcut ->
+            when (shortcut) {
+                TerminalShortcut.FIND -> search?.open() != null
+                TerminalShortcut.ZOOM_IN -> onZoom?.invoke(TerminalZoom.IN) != null
+                TerminalShortcut.ZOOM_OUT -> onZoom?.invoke(TerminalZoom.OUT) != null
+                TerminalShortcut.ZOOM_RESET -> onZoom?.invoke(TerminalZoom.RESET) != null
+                else -> false
+            }
+        }
+        search?.onClosed = { input.requestFocus() }
         input.handleRadiusPx = handleRadiusPx
         input.surfaceHeightPx = viewportPx.height.toFloat()
     }
@@ -263,6 +286,8 @@ fun Terminal(
         accessories.bind(input)
         onDispose { accessories.unbind(input) }
     }
+
+    if (search != null) TerminalSearchEffects(session, model, scroll, search)
 
     CompositionLocalProvider(LocalTerminalScroll provides scroll) {
         Box(
@@ -328,6 +353,9 @@ fun Terminal(
                         cursorEnabled = active,
                         marked = ime.marked,
                     )
+                    if (search != null && search.isOpen) {
+                        drawSearchMatches(frame, search, metrics, offset, resolved)
+                    }
                     // Shifted up: the bottom edge of the grid is past the frame's last row.
                     if (offset > 0f) {
                         val below = frame.viewportTop + frame.size.rows
@@ -381,6 +409,28 @@ fun Terminal(
                 onKey = input::imeKey,
                 onComposing = input::composing,
             )
+            input.menu?.let { request ->
+                TerminalMenu(
+                    request = request,
+                    actions = buildList {
+                        add(TerminalMenuAction.COPY to hasSelection)
+                        add(TerminalMenuAction.PASTE to true)
+                        add(TerminalMenuAction.SELECT_ALL to true)
+                        if (search != null) add(TerminalMenuAction.FIND to true)
+                    },
+                    theme = resolved,
+                    onAction = input::onMenuAction,
+                    onDismiss = input::dismissMenu,
+                )
+            }
+            input.pendingPaste?.let { text ->
+                TerminalPasteConfirmation(
+                    text = text,
+                    theme = resolved,
+                    onConfirm = input::confirmPaste,
+                    onDismiss = input::cancelPaste,
+                )
+            }
             overlay()
         }
     }

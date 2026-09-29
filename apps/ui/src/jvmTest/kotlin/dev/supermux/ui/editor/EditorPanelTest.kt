@@ -9,6 +9,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.fs.FileSystemService
+import dev.supermux.net.BrokerApi
 import dev.supermux.net.FsEntry
 import dev.supermux.proto.ServerFrame
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
@@ -20,42 +22,48 @@ import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
-import kotlinx.coroutines.flow.MutableSharedFlow
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The composite panel — the phone/SessionDetail shape of the editor. Everything below is driven
- * through the [FakeEditorEngineFactory] seam, so the code surface is real shared code with no
- * browser behind it.
+ * The composite panel — the phone/SessionDetail shape of the editor, on the native editor.
  */
 @OptIn(ExperimentalTestApi::class)
 class EditorPanelTest {
 
     private val backs = mutableListOf<Boolean>()
 
+    private val fs = FileSystemService(
+        BrokerApi("http://h", "t", HttpClient(MockEngine { respond("{}") })),
+        send = {},
+        scope = CoroutineScope(Dispatchers.Unconfined),
+        graceMs = 0,
+    )
+
     private fun host(
         widthClass: WindowWidthClass,
-        fsChanges: MutableSharedFlow<ServerFrame.FsChanged> = MutableSharedFlow(),
         pendingOpen: PendingEditorOpen? = null,
-        files: List<FsEntry> = listOf(FsEntry(name = "a.kt", type = "file")),
         read: (String) -> Result<String> = { Result.success("hello") },
     ): @Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
             LocalWindowWidthClass provides widthClass,
-            LocalPlatform provides FakePlatform(editorEngine = FakeEditorEngineFactory()),
+            LocalPlatform provides FakePlatform(),
         ) {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 EditorPanel(
                     state = EditorPanelState(
                         sessionId = "s1",
                         workdir = "/w",
-                        fsChanges = fsChanges,
                     ),
                     actions = EditorPanelActions(
-                        fsList = { Result.success(files) },
+                        fileSystem = fs,
                         fsRead = { read(it) },
                         fsWrite = { _, _ -> true },
                         fsSearch = { emptyList() },
@@ -103,6 +111,18 @@ class EditorPanelTest {
     }
 
     @Test
+    fun clicking_a_file_in_the_tree_opens_it_by_its_workdir_relative_path() = runComposeUiTest {
+        setContent(host(WindowWidthClass.Expanded))
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsDir(path = "/w", version = "1", entries = listOf(FsEntry(name = "a.kt", type = "file"))))
+        waitForIdle()
+
+        onNodeWithTag("tree_row:a.kt").performClick()
+        waitForIdle()
+        onNodeWithTag("editor_tab_a.kt").assertIsDisplayed()
+    }
+
+    @Test
     fun a_pending_open_opens_the_file() = runComposeUiTest {
         setContent(host(WindowWidthClass.Expanded, pendingOpen = PendingEditorOpen("a.kt", 3, null)))
         waitForIdle()
@@ -111,30 +131,31 @@ class EditorPanelTest {
         onNodeWithTag("editor_tab_a.kt").assertIsDisplayed()
     }
 
+    private fun snap(version: String, vararg files: Pair<String, Long>) =
+        ServerFrame.FsDir(path = "/w", version = version, entries = files.map { (n, m) -> FsEntry(name = n, type = "file", mtime = m, size = 1) })
+
     @Test
-    fun an_fs_change_on_the_open_file_raises_the_stale_banner() = runComposeUiTest {
-        val changes = MutableSharedFlow<ServerFrame.FsChanged>(extraBufferCapacity = 4)
-        setContent(
-            host(WindowWidthClass.Expanded, fsChanges = changes, pendingOpen = PendingEditorOpen("a.kt", null, null)),
-        )
+    fun an_outside_change_to_the_open_file_raises_the_stale_banner() = runComposeUiTest {
+        setContent(host(WindowWidthClass.Expanded, pendingOpen = PendingEditorOpen("a.kt", null, null)))
+        waitForIdle()
+        fs.onFrame(snap("1", "a.kt" to 1, "b.kt" to 1))
         waitForIdle()
         onNodeWithTag("editor_stale_banner").assertDoesNotExist()
 
-        assertTrue(changes.tryEmit(ServerFrame.FsChanged(session = "s1", paths = listOf("a.kt"))))
+        fs.onFrame(snap("2", "a.kt" to 2, "b.kt" to 1))
         waitForIdle()
 
         onNodeWithTag("editor_stale_banner").assertIsDisplayed()
     }
 
     @Test
-    fun an_fs_change_for_another_session_is_ignored() = runComposeUiTest {
-        val changes = MutableSharedFlow<ServerFrame.FsChanged>(extraBufferCapacity = 4)
-        setContent(
-            host(WindowWidthClass.Expanded, fsChanges = changes, pendingOpen = PendingEditorOpen("a.kt", null, null)),
-        )
+    fun a_change_to_a_file_that_is_not_open_is_ignored() = runComposeUiTest {
+        setContent(host(WindowWidthClass.Expanded, pendingOpen = PendingEditorOpen("a.kt", null, null)))
+        waitForIdle()
+        fs.onFrame(snap("1", "a.kt" to 1, "b.kt" to 1))
         waitForIdle()
 
-        assertTrue(changes.tryEmit(ServerFrame.FsChanged(session = "other", paths = listOf("a.kt"))))
+        fs.onFrame(snap("2", "a.kt" to 1, "b.kt" to 7))
         waitForIdle()
 
         onNodeWithTag("editor_stale_banner").assertDoesNotExist()

@@ -35,7 +35,7 @@
 #                           app then has no workspace-terminal backend, and says so)
 # Anything not overridden is fetched/built. tmux has no upstream static release; if it can't be
 # sourced the slot is left empty (a loud warning) — the host then falls back to a system tmux on
-# $PATH (preflight only warns; codex/cursor still work), matching how KCEF isn't bundled either.
+# $PATH (preflight only warns; codex/cursor still work).
 set -eu
 
 TARGET="${1:?usage: stage-desktop-binaries.sh <target> [version] [commit]}"

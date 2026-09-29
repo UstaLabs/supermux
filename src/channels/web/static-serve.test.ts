@@ -59,9 +59,7 @@ describe("serveStatic (dual-mode)", () => {
 })
 
 describe("serveStatic security headers", () => {
-  // The editor iframe's bridge evals what its parent posts it. `frame-ancestors 'self'` is the
-  // outer half of that guard (the shim's own origin check is the inner half): a foreign page must
-  // not be able to frame this origin and become that parent in the first place.
+  // `frame-ancestors 'self'`: a foreign page must not be able to frame this origin (clickjacking).
   test("html disk hit carries frame-ancestors 'self'", () => {
     const dir = tmp()
     writeFileSync(join(dir, "index.html"), "<html>disk</html>")
@@ -69,11 +67,11 @@ describe("serveStatic security headers", () => {
     expect(res!.headers.get("content-security-policy")).toBe("frame-ancestors 'self'")
   })
 
-  test("the editor page carries it too", () => {
+  test("a nested page carries it too", () => {
     const dir = tmp()
-    mkdirSync(join(dir, "editor"))
-    writeFileSync(join(dir, "editor", "index.html"), "<html>cm6</html>")
-    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/editor/index.html" })
+    mkdirSync(join(dir, "nested"))
+    writeFileSync(join(dir, "nested", "index.html"), "<html>nested</html>")
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/nested/index.html" })
     expect(res!.headers.get("content-security-policy")).toBe("frame-ancestors 'self'")
   })
 
@@ -125,19 +123,19 @@ describe("serveStatic MIME types for the wasm bundle's composeResources fonts/te
   })
 })
 
-describe("serveStatic /editor/ gzip cache", () => {
-  test("second request for /editor/cm6.js is served from the gzip cache", () => {
+describe("serveStatic /assets/ gzip cache", () => {
+  test("second request for an /assets/ file is served from the gzip cache", () => {
     const dir = tmp()
-    mkdirSync(join(dir, "editor"))
+    mkdirSync(join(dir, "assets"))
     // Large, compressible, repetitive content so gzip clears the 15% savings bar.
-    writeFileSync(join(dir, "editor", "cm6.js"), "x".repeat(200_000))
+    writeFileSync(join(dir, "assets", "app-0123abcd.js"), "x".repeat(200_000))
     const before = _gzipCacheStats()
-    const res1 = serveStatic({ staticDir: dir, embedded: {}, path: "/editor/cm6.js", acceptEncoding: "gzip" })
+    const res1 = serveStatic({ staticDir: dir, embedded: {}, path: "/assets/app-0123abcd.js", acceptEncoding: "gzip" })
     expect(res1!.headers.get("content-encoding")).toBe("gzip")
     const afterFirst = _gzipCacheStats()
     expect(afterFirst.size).toBe(before.size + 1)
 
-    const res2 = serveStatic({ staticDir: dir, embedded: {}, path: "/editor/cm6.js", acceptEncoding: "gzip" })
+    const res2 = serveStatic({ staticDir: dir, embedded: {}, path: "/assets/app-0123abcd.js", acceptEncoding: "gzip" })
     expect(res2!.headers.get("content-encoding")).toBe("gzip")
     const afterSecond = _gzipCacheStats()
     expect(afterSecond.size).toBe(afterFirst.size) // no new entry
@@ -146,10 +144,10 @@ describe("serveStatic /editor/ gzip cache", () => {
 
   test("the cache invalidates when the file's mtime changes, replacing the entry in place", async () => {
     const dir = tmp()
-    mkdirSync(join(dir, "editor"))
-    const filePath = join(dir, "editor", "cm6.js")
+    mkdirSync(join(dir, "assets"))
+    const filePath = join(dir, "assets", "app-0123abcd.js")
     writeFileSync(filePath, "y".repeat(200_000))
-    serveStatic({ staticDir: dir, embedded: {}, path: "/editor/cm6.js", acceptEncoding: "gzip" })
+    serveStatic({ staticDir: dir, embedded: {}, path: "/assets/app-0123abcd.js", acceptEncoding: "gzip" })
     const afterFirst = _gzipCacheStats()
 
     // Bump mtime forward so it's guaranteed to differ, then rewrite the content.
@@ -157,7 +155,7 @@ describe("serveStatic /editor/ gzip cache", () => {
     writeFileSync(filePath, "z".repeat(200_000))
     utimesSync(filePath, future, future)
 
-    const res2 = serveStatic({ staticDir: dir, embedded: {}, path: "/editor/cm6.js", acceptEncoding: "gzip" })
+    const res2 = serveStatic({ staticDir: dir, embedded: {}, path: "/assets/app-0123abcd.js", acceptEncoding: "gzip" })
     const afterSecond = _gzipCacheStats()
     // The stale entry was overwritten in place, not orphaned under a new key.
     expect(afterSecond.size).toBe(afterFirst.size)

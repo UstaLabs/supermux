@@ -52,6 +52,7 @@ import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
 import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
+import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
@@ -128,7 +129,6 @@ import { TerminalManager } from "./core/terminal/manager"
 import { DisplayManager } from "./core/display/manager"
 import { LinuxXvfbProvider } from "./core/display/providers/linux-xvfb"
 import { MacosScreenProvider } from "./core/display/providers/macos-screen"
-import { FsWatcher } from "./core/editor/fs-watcher"
 import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
 import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
@@ -652,7 +652,7 @@ const channels: Record<string, Channel> = {
 // thin aliases below keep existing call sites unchanged while the handlers
 // migrate into the component stage by stage.
 // Collaborators enter as narrow ports, once, here. Everything declared later in
-// this file (terminalManager, displayManager, fsWatcher, commandRegistry, the
+// this file (terminalManager, displayManager, commandRegistry, the
 // socket server, …) is deref'd lazily inside a closure — and webChannel/agentRpc
 // are `let`-assigned much later, so their thunks must never capture the value.
 const sessionManager = new SessionManager(registry, {
@@ -676,7 +676,6 @@ const sessionManager = new SessionManager(registry, {
   },
   cleanup: {
     terminals: { killAllForSession: (name) => terminalManager.killAllForSession(name) },
-    fsWatcher: { killSession: (name) => fsWatcher.killSession(name) },
     stopClaudeTailer,
     releaseDraftAttachments: (payload) => releaseDraftAttachmentRefs(payload),
 
@@ -1382,7 +1381,6 @@ const wsDto = (id: string) => {
   const w = registry.workspaces.getById(id)
   return w ? toWsDto(w) : undefined
 }
-const fsWatcher = new FsWatcher()
 
 function spawnLoginProc(kind: string) {
   // Per-kind command lines live in each agents/<kind>/auth.ts; this stays a
@@ -2178,13 +2176,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         createdAt: oldest?.created_at ?? ws.created_at,
       }
     },
-    // sessions.workspace_id lives on disk; SessionRecord does not expose it.
-    getSessionWorkspaceId: (id) => {
-      const row = db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(id) as
-        | { workspace_id: string | null }
-        | null
-      return row?.workspace_id ?? undefined
-    },
     proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
     proxyMainHost: MUX_WEB_PUBLIC_URL ? new URL(MUX_WEB_PUBLIC_URL).host : undefined,
     proxyLookup: (domain: string) => {
@@ -2237,7 +2228,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     listDisplays: () => displayManager.list(),
     startDisplay: (args) => displayManager.start({ sessionDisplayName: args.sessionName, provider: args.provider as any, device: args.device, width: args.width, height: args.height }),
     stopDisplay: (id) => displayManager.stop(id),
-    fsWatcher,
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
     getSessionTmuxTarget: async (id) => {
       const s = registry.get(id)
@@ -2361,15 +2351,30 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       let sttEngine = "client"
       let prefersCleanup = true
       if (input.audioPath) {
+        // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
+        // answer "" (the client shows "Didn't catch that") instead of made-up text. Measured in
+        // parallel with the STT call so real speech pays no extra latency.
+        const silent = isDigitalSilence(input.audioPath)
         const t0 = Date.now()
-        const r = await runStt(input.audioPath, {
+        const stt = runStt(input.audioPath, {
           engine: cfg.voiceSttEngine ?? VOICE_STT_ENGINE,
           // whisper-specific knobs stay on app-config until engines grow their own model fields
           model: cfg.whisperModel,
-          lang: cfg.whisperLang,
-          // claude-voice biases recognition with the voice glossary (x-config-keyterms)
+          // Single-language engines get a pin only when the user dictates in exactly one
+          // language; with several (e.g. tr + en) they auto-detect, and codex-realtime gets the
+          // whole list as a prompt hint instead.
+          lang: cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang,
+          languages: cfg.voiceLanguages,
+          // claude-voice biases recognition with the voice glossary (x-config-keyterms);
+          // codex-realtime puts it in its transcription prompt.
           keyterms: cfg.voiceCleanupGlossary,
         })
+        if (await silent) {
+          stt.catch(() => {})
+          log.warn("voice_transcribe_silent", { sessionId: sessionId ?? null, note: "all-zero audio — client mic likely denied or held by another app" })
+          return { text: "" }
+        }
+        const r = await stt
         sttMs = Date.now() - t0
         draft = r.text
         sttEngine = r.fellBack ? `${r.engine}(fallback)` : r.engine

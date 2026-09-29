@@ -9,13 +9,6 @@ plugins {
     alias(libs.plugins.serialization)
 }
 
-// The iframe bridge shim, copied where the Karma test can FETCH it. `EditorBridgeIframeTest` builds
-// its stub editor page out of the real file, so the shim and the engine can never drift apart
-// unnoticed — an inlined copy in the test would assert against itself. Karma serves the test
-// compilation's processed resources under the run's base path; `karma.config.d/editor-shim.js`
-// registers this one file and proxies it to `/editor-shim.js`, which is what the test fetches.
-val editorShimTestResourceDir = layout.buildDirectory.dir("editorShimTestResource")
-
 // The browser host of the shared Compose app. Thin by design, like apps/ios: entry point,
 // WebPlatform + browser actuals, and the packaging that puts the bundle where the broker serves it.
 kotlin {
@@ -59,9 +52,6 @@ kotlin {
             }
         }
         wasmJsTest {
-            // `EditorBridgeIframeTest` mounts the REAL `editor/editor-shim.js` in its stub frame
-            // rather than a copy of it — see [editorShimTestResource] below.
-            resources.srcDir(editorShimTestResourceDir)
             dependencies {
                 implementation(kotlin("test"))
                 implementation(libs.coroutines.test)
@@ -102,6 +92,80 @@ val stageTerminalWasmAssets by tasks.registering(Copy::class) {
 }
 kotlin.sourceSets.getByName("wasmJsMain").resources.srcDir(stageTerminalWasmAssets)
 kotlin.sourceSets.getByName("wasmJsTest").resources.srcDir(stageTerminalWasmAssets)
+
+// ── The native editor's syntax module (M5) ───────────────────────────────────────────────────
+//
+// Same reason as the terminal's pair above (editor-syntax/native/README.md, "Serving it"): the
+// Kotlin/Wasm toolchain does not copy `:editor-syntax`'s klib resources next to this module, so the
+// loader and its verified wasm are re-exported as this app's own resources. webpack then emits the
+// wasm from the loader's `new URL("./supermux-syntax.wasm", import.meta.url)` and `stageForBroker`
+// hashes it into `assets/` like every other binary.
+//
+// The code-only grammars' tables (29 `.sesz` blobs, 5.4 MB) are fetched BY NAME, so they cannot be
+// content-hashed one by one. They are NOT resources (the dist root would hold them under a stable
+// path with a no-cache rule): `stageForBroker` copies them straight from `:editor-syntax:stageTables`
+// into `assets/editor-syntax/tables/<digest>/`, where the directory changes with the grammar
+// versions and the `/assets/` immutable rule is safe. `generateSyntaxAssetsKotlin` writes the same
+// directory into the app ([SYNTAX_TABLES_DIR]) for `WasmBackend.load(tablesUrl = …)`.
+val syntaxProject = project(":editor-syntax")
+val syntaxWasmResources: File = syntaxProject.layout.buildDirectory.dir("generated/wasmResources").get().asFile
+val syntaxTablesDir: File = syntaxProject.layout.buildDirectory.dir("generated/tables/editor-syntax/tables").get().asFile
+
+val syntaxWasmAssetsDir = layout.buildDirectory.dir("generated/syntaxWasmAssets")
+val stageSyntaxWasmAssets by tasks.registering(Copy::class) {
+    description = "Re-export syntax-loader.mjs + supermux-syntax.wasm as this app's wasmJs resources."
+    dependsOn(":editor-syntax:stageWasmResources")
+    from(syntaxWasmResources)
+    from(syntaxProject.file("src/wasmJsMain/resources/syntax-loader.mjs"))
+    into(syntaxWasmAssetsDir)
+    // A host without the Mac-built module (Linux dev, the CI lanes, the Docker build) still gets a
+    // bundle: webpack only has to RESOLVE the loader's `new URL("./supermux-syntax.wasm", …)`, so an
+    // empty placeholder stands in; `WasmBackend.load` then fails to compile it and every editor
+    // opens files as plain text. `stageForBroker` refuses the placeholder for a release
+    // (SUPERMUX_REQUIRE_EDITOR_SYNTAX=1 / -Peditor.requireSyntax=true).
+    doLast {
+        val wasm = syntaxWasmAssetsDir.get().asFile.resolve("supermux-syntax.wasm")
+        if (!wasm.isFile) {
+            logger.warn("web: no supermux-syntax.wasm (apps/editor-syntax/native/wasm/build.sh): staging an empty placeholder, the editor will show plain text")
+            wasm.writeBytes(ByteArray(0))
+        }
+    }
+}
+kotlin.sourceSets.getByName("wasmJsMain").resources.srcDir(stageSyntaxWasmAssets)
+kotlin.sourceSets.getByName("wasmJsTest").resources.srcDir(stageSyntaxWasmAssets)
+
+/** The tables' digest: every blob's name and bytes, in name order (the directory changes with any of them). */
+fun syntaxTablesDigest(dir: File): String {
+    val md = MessageDigest.getInstance("SHA-256")
+    dir.listFiles().orEmpty().filter { it.isFile && it.extension == "sesz" }.sortedBy { it.name }.forEach { f ->
+        md.update(f.name.toByteArray())
+        md.update(0)
+        md.update(f.readBytes())
+    }
+    return md.digest().joinToString("") { "%02x".format(it) }.take(16)
+}
+
+val syntaxAssetsKotlinDir = layout.buildDirectory.dir("generated/syntaxAssetsKotlin")
+val generateSyntaxAssetsKotlin by tasks.registering {
+    description = "Write the grammar tables' served directory (assets/editor-syntax/tables/<digest>/) into the app."
+    dependsOn(":editor-syntax:stageTables")
+    inputs.dir(syntaxTablesDir).optional()
+    outputs.dir(syntaxAssetsKotlinDir)
+    doLast {
+        val out = syntaxAssetsKotlinDir.get().asFile.resolve("dev/supermux/web/editor").apply { deleteRecursively(); mkdirs() }
+        val digest = syntaxTablesDigest(syntaxTablesDir)
+        out.resolve("SyntaxAssets.kt").writeText(
+            """
+            |// Generated by :web:generateSyntaxAssetsKotlin from :editor-syntax:stageTables. Do not edit.
+            |package dev.supermux.web.editor
+            |
+            |/** Where `stageForBroker` puts the code-only grammars' tables (relative to the page). */
+            |internal const val SYNTAX_TABLES_DIR: String = "assets/editor-syntax/tables/$digest/"
+            |""".trimMargin(),
+        )
+    }
+}
+kotlin.sourceSets.getByName("wasmJsMain").kotlin.srcDir(generateSyntaxAssetsKotlin)
 
 // `supermux-terminal.wasm` reaches the distribution TWICE, and that is the design working, not a
 // mistake: once as the wasmJs resource above (which is what lets webpack RESOLVE the loader's
@@ -155,9 +219,6 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // remains a bloat catch, NOT a target to grow into — one more feature the size of this one would
 // put the ceiling in reach.
 //
-// The staged `editor/` bundle (CodeMirror, 1.3 MB raw) sits outside assets/ and is deliberately not
-// counted: it is a separate, lazily-loaded page.
-//
 // NEITHER ARE THE FONTS, and that is now worth a number rather than a clause. `assets.listFiles()`
 // below is top level only, so everything under `assets/composeResources/` is outside this ceiling
 // by construction:
@@ -175,7 +236,32 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // headroom under the 8 MiB ceiling is still the 1.43 MiB measured on 2026-09-23 plus whatever the
 // Kotlin of that change costs in the app wasm — re-read the `stageForBroker:` line of the next
 // staged build for the exact total.
-val maxGzipBytes = 8L * 1024 * 1024
+//
+// RAISED TO 9 MiB 2026-09-29 (merge of dev into mux/supermux-core-exploratio): the shell measured
+// 8274 KB gzip — skiko 3251 KiB, supermux-apps-web.wasm 4579 KiB (was 3.00 MiB on 09-23: mermaid,
+// the native editor, the subagent/request-card UI), supermux-terminal 276 KiB, app.js 125 KiB,
+// loaders 12 KiB. Still a bloat catch: re-measure before growing into it.
+val maxGzipBytes = 9L * 1024 * 1024
+
+// THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
+// `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
+// with the shell it would leave -1.2 MiB of the 1.43 MiB headroom above. It is also not part of the
+// shell's download: `WasmBackend.load` fetches it the first time an editor opens a file, never at
+// page load. So it is measured on
+// its own against [maxSyntaxGzipBytes] (today's 2.56 MiB plus room for a few grammars), and the
+// guard fails if it is missing rather than silently counting nothing. The file reaches the dist
+// twice (the resource copy that lets webpack resolve the loader's URL, and webpack's emitted
+// asset): both copies are identified by CONTENT, only one is fetched, one is counted.
+//
+// The grammar tables (`assets/editor-syntax/tables/<digest>/`, 29 blobs, 5.4 MB, already
+// zlib-compressed) are fetched one by one when a file of that language first opens; they sit in a
+// sub-directory, so the top-level sum never saw them, and they get their own raw ceiling.
+val maxSyntaxGzipBytes = 3L * 1024 * 1024 + 512 * 1024
+/** A release refuses a web client without the syntax module (release.yml sets the variable). */
+val requireEditorSyntax: Boolean =
+    System.getenv("SUPERMUX_REQUIRE_EDITOR_SYNTAX") == "1" ||
+        providers.gradleProperty("editor.requireSyntax").orNull?.toBoolean() == true
+val maxSyntaxTablesBytes = 7L * 1024 * 1024
 
 fun sha8(bytes: ByteArray): String =
     MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }.take(8)
@@ -186,24 +272,8 @@ fun gzipSize(bytes: ByteArray): Long {
     return bos.size().toLong()
 }
 
-// Extra sources `stageForBroker` copies in beside the webpack dist. Hoisted out of the task action
-// so they can be declared as INPUTS: editing the CodeMirror bundle must re-run the task, not leave
-// a stale copy published under an up-to-date check.
-//
-// The editor bundle's single source of truth is the committed android assets dir (desktop reads
-// the same files). There is no stylesheet to lift out of KGP's yarn workspace any more — the
-// terminal was the only npm package this app had, and the Compose renderer needs no CSS.
-val editorSrcDir: File = rootProject.projectDir.resolve("android/src/main/assets/editor")
-
-// NOT under `src/wasmJsMain/resources/`: everything there is copied to the webpack dist root, where
-// the hashing pass below would rename it into `assets/editor-shim-<hash>.js` and rewrite its bare
-// name inside app.js — the iframe page would then ask for a file that no longer exists at that name.
-// This lives outside the Kotlin source set precisely so the build treats it as a plain data file.
-val editorShimFile: File = layout.projectDirectory.file("editor/editor-shim.js").asFile
-
 // The PWA shell: `sw.js`, `manifest.webmanifest`, `favicon.ico` and `icons/`. Committed (no build
-// step) and staged to the ROOT of the served tree, outside `assets/` — same reason as the editor
-// bundle and emphatically NOT `src/wasmJsMain/resources/`: the hashing pass above renames every
+// step) and staged to the ROOT of the served tree, outside `assets/` — and emphatically NOT `src/wasmJsMain/resources/`: the hashing pass above renames every
 // .js in the dist root, and a service worker that moves to `assets/sw-<hash>.js` has neither its
 // registered URL nor its `/` scope any more.
 val pwaDir = layout.projectDirectory.dir("pwa")
@@ -213,15 +283,15 @@ val stageForBroker by tasks.registering {
     description = "Build the wasm bundle and stage it (content-hashed) into src/channels/web/static"
     dependsOn(tasks.named("wasmJsBrowserDistribution"))
     inputs.dir(distDir)
-    // `files(...).optional()` rather than `file(...)`: a missing input must fail in the task action
-    // with its own explanatory message, not as an opaque Gradle snapshotting error. The shim is
-    // genuinely optional until task 4 creates it.
-    inputs.dir(editorSrcDir).withPropertyName("editorBundle")
-    inputs.files(editorShimFile).withPropertyName("editorShim").optional()
-    // `.optional()` like the editor shim above: a missing `pwa/` must fail in the task action
-    // with the explanatory check below, not as an opaque Gradle snapshotting error.
+    // `.optional()`: a missing `pwa/` must fail in the task action with the explanatory check
+    // below, not as an opaque Gradle snapshotting error.
     inputs.dir(pwaDir).withPropertyName("pwa").optional()
     inputs.property("maxGzipBytes", maxGzipBytes)
+    inputs.property("maxSyntaxGzipBytes", maxSyntaxGzipBytes)
+    inputs.property("requireEditorSyntax", requireEditorSyntax)
+    inputs.dir(syntaxTablesDir).withPropertyName("syntaxTables").optional()
+    inputs.dir(syntaxWasmResources).withPropertyName("syntaxWasm").optional()
+    dependsOn(":editor-syntax:stageTables")
     outputs.dir(brokerStaticDir)
 
     doLast {
@@ -286,38 +356,6 @@ val stageForBroker by tasks.registering {
             if (f.name == "index.html") dst.writeText(rewrite(f.readText(), "")) else f.copyTo(dst, overwrite = true)
         }
 
-        // The CodeMirror editor bundle, staged at `editor/` in the ROOT, not under assets/: the page
-        // references `cm6.js` by a relative bare name, so content-hashing would break it. 1.3 MB
-        // revalidated per editor open is acceptable (plan 5 may hash the pair together). Being
-        // outside assets/ also keeps it out of the hashing pass AND out of the gzip guard.
-        check(editorSrcDir.resolve("index.html").isFile && editorSrcDir.resolve("cm6.js").isFile) {
-            "editor bundle missing from $editorSrcDir"
-        }
-        val editorOut = staging.resolve("editor").apply { mkdirs() }
-        editorSrcDir.resolve("cm6.js").copyTo(editorOut.resolve("cm6.js"), overwrite = true)
-        // The iframe shim republishes the bundle's `window.AndroidEditor` / webkit hooks as
-        // postMessage to the parent frame. It arrives in a later task of this plan; until then the
-        // editor page is staged exactly as Android ships it.
-        val editorHtml = editorSrcDir.resolve("index.html").readText()
-        editorOut.resolve("index.html").writeText(
-            if (editorShimFile.isFile) {
-                editorShimFile.copyTo(editorOut.resolve("editor-shim.js"), overwrite = true)
-                // Must load BEFORE cm6.js: the bundle looks its host objects up at evaluation time.
-                val injected = editorHtml.replace(
-                    "<script src=\"cm6.js\">",
-                    "<script src=\"editor-shim.js\"></script><script src=\"cm6.js\">",
-                )
-                // A silent no-op here ships an editor whose bridge is never installed, and the only
-                // symptom is an iframe that never reports ready. Fail the build instead.
-                check(injected != editorHtml) {
-                    "editor/index.html no longer contains `<script src=\"cm6.js\">` — the shim injection point moved"
-                }
-                injected
-            } else {
-                editorHtml
-            }
-        )
-
         // The PWA shell, copied verbatim into the staged root: `sw.js` must be served from `/`
         // (its registration scope), the manifest and favicon are linked by bare name from
         // index.html, and `icons/` is referenced absolutely (`/icons/icon-192.png`) by both the
@@ -333,12 +371,48 @@ val stageForBroker by tasks.registering {
         }
         pwaDir.asFile.copyRecursively(staging, overwrite = true)
 
-        // Guards, BEFORE anything is published.
-        val gz = assets.listFiles()!!.filter { it.extension == "wasm" || it.extension == "js" || it.extension == "mjs" }
-            .sumOf { gzipSize(it.readBytes()) }
+        // The native editor's syntax module and grammar tables. Required for a release; elsewhere a
+        // host without the Mac-built natives ships the placeholder (plain-text editors), said loudly.
+        val requireSyntax = requireEditorSyntax
+        val syntaxWasm = syntaxWasmResources.resolve("supermux-syntax.wasm")
+        val tables = syntaxTablesDir.listFiles().orEmpty().filter { it.isFile && it.extension == "sesz" }
+        val haveSyntax = syntaxWasm.isFile && syntaxWasm.length() > 0 && tables.isNotEmpty()
+        if (!haveSyntax) {
+            val why = "no verified supermux-syntax.wasm and grammar tables (apps/editor-syntax/native/build.sh all, " +
+                "then :editor-syntax:stageWasmResources :editor-syntax:stageTables)"
+            check(!requireSyntax) { "$why: a release web client must carry them (SUPERMUX_REQUIRE_EDITOR_SYNTAX)" }
+            logger.warn("stageForBroker: $why — the web editor will open every file as plain text")
+        }
+        // The tables, under a directory named by their digest (the digest `generateSyntaxAssetsKotlin`
+        // compiled into the app).
+        if (tables.isNotEmpty()) {
+            val tablesOut = assets.resolve("editor-syntax/tables/${syntaxTablesDigest(syntaxTablesDir)}").apply { mkdirs() }
+            tables.forEach { it.copyTo(tablesOut.resolve(it.name), overwrite = true) }
+        }
+        val tablesBytes = tables.sumOf { it.length() }
+        check(tablesBytes <= maxSyntaxTablesBytes) {
+            "grammar tables total ${tablesBytes / 1024} KB exceed their ${maxSyntaxTablesBytes / 1024} KB ceiling"
+        }
+
+        // Guards, BEFORE anything is published. The syntax module's copies are recognised by
+        // CONTENT (webpack renames its own), the placeholder by being empty.
+        val syntaxSha = if (haveSyntax) MessageDigest.getInstance("SHA-256").digest(syntaxWasm.readBytes()) else null
+        fun isSyntaxWasm(f: File) = f.extension == "wasm" && (
+            f.length() == 0L ||
+                (syntaxSha != null && f.length() == syntaxWasm.length() && MessageDigest.getInstance("SHA-256").digest(f.readBytes()).contentEquals(syntaxSha))
+            )
+        val topLevel = assets.listFiles()!!.filter { it.isFile && (it.extension == "wasm" || it.extension == "js" || it.extension == "mjs") }
+        val (syntaxCopies, shell) = topLevel.partition(::isSyntaxWasm)
+        check(!haveSyntax || syntaxCopies.any { it.length() > 0 }) {
+            "supermux-syntax.wasm is not in the staged assets: the editor would have no syntax module"
+        }
+        val gz = shell.sumOf { gzipSize(it.readBytes()) }
         check(gz <= maxGzipBytes) { "web bundle gzip total ${gz / 1024} KB exceeds the ${maxGzipBytes / 1024} KB ceiling" }
+        val syntaxGz = syntaxCopies.maxOfOrNull { if (it.length() > 0) gzipSize(it.readBytes()) else 0L } ?: 0L
+        check(syntaxGz <= maxSyntaxGzipBytes) {
+            "supermux-syntax.wasm gzip ${syntaxGz / 1024} KB exceeds its ${maxSyntaxGzipBytes / 1024} KB ceiling"
+        }
         check(staging.resolve("index.html").exists()) { "index.html missing from the staged bundle" }
-        check(staging.resolve("editor/index.html").exists()) { "editor bundle missing from the staged tree" }
         check(staging.resolve("sw.js").exists() && staging.resolve("icons/icon-192.png").exists()) {
             "PWA shell missing from the staged tree"
         }
@@ -347,14 +421,10 @@ val stageForBroker by tasks.registering {
         out.deleteRecursively()
         out.mkdirs()
         staging.copyRecursively(out, overwrite = true)
-        println("stageForBroker: ${renames.size} hashed assets, gzip total ${gz / 1024} KB → $out")
+        println(
+            "stageForBroker: ${renames.size} hashed assets, gzip total ${gz / 1024} KB → $out " +
+                "(outside it, loaded when an editor opens: syntax module ${syntaxGz / 1024} KB gzip, " +
+                "${tables.size} grammar tables ${tablesBytes / 1024} KB)",
+        )
     }
 }
-
-val editorShimTestResource by tasks.registering(Copy::class) {
-    description = "Stage editor/editor-shim.js as a wasmJsTest resource so Karma can serve it"
-    from(editorShimFile)
-    into(editorShimTestResourceDir)
-}
-
-tasks.named("wasmJsTestProcessResources") { dependsOn(editorShimTestResource) }

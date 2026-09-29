@@ -2,20 +2,10 @@
 // keep in sync until a shared UI module exists. Pure androidx.compose.ui.input.key, available on
 // desktop, so this is a verbatim copy of the Android original except for the package name.
 //
-// M3-T5 conflict check (Ctrl+E vs. the cm6 bundle's own Ctrl+/−/0 font-zoom): NO conflict, for two
-// independent reasons —
-//   1. Different keys entirely. Ctrl+E toggles the editor PANE (this file); the bundle's own zoom
-//      binds Ctrl+Plus/Minus/0 (EDITOR_FONT_MIN..MAX, see :ui editor/engine/EditorBridge.kt) inside its own JS
-//      keydown handler. No letter/symbol overlaps.
-//   2. Even if they DID share a key, [Modifier.shellShortcuts] is attached to the outer Compose
-//      window and only fires via `onKeyEvent`'s BUBBLE phase — i.e. only for chords a focused
-//      Compose descendant left unhandled. The editor's JCEF surface is a HEAVYWEIGHT AWT child
-//      (SwingPanel, see :ui editor/EditorSurface.jvm.kt): once it has native AWT focus, key events
-//      go straight to the embedded Chromium widget and never reach Compose's onKeyEvent dispatch at
-//      all — so a chord typed while the CodeMirror surface is focused can't be "stolen" by
-//      shellShortcuts, and vice versa a chord typed while a Compose control has focus (search
-//      field, tree, etc.) never reaches the CEF-hosted bundle's own JS handler. The two shortcut
-//      surfaces are focus-partitioned by construction, not by a specific-key coincidence.
+// Editor keys vs. these shortcuts: [Modifier.shellShortcuts] is attached to the outer Compose
+// window and only fires via `onKeyEvent`'s BUBBLE phase — i.e. only for chords a focused Compose
+// descendant left unhandled. The native editor (M5) is such a descendant: a chord its keymap binds
+// (zoom, search, the CM6 default bindings) is consumed there, and everything else bubbles up here.
 package dev.supermux.ui.shell
 
 import androidx.compose.ui.Modifier

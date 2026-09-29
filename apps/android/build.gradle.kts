@@ -96,7 +96,8 @@ android {
             //    same way, so the reason outlived the library)
             //  - Google Tink behind EncryptedSharedPreferences -> SecureTokenStore lost the
             //    pairing across restarts
-            //  - the cm6 editor @JavascriptInterface bridge (onChange/onSave/onReady/lspOut)
+            //  - (the CodeMirror editor's @JavascriptInterface bridge, gone since the native
+            //    editor; its JNI syntax engine is kept by name in proguard-rules.pro instead)
             // Curating exhaustive keep-rules + re-verifying every subsystem isn't worth the
             // ~22MB; an unminified release == the already-verified debug build. proguard-rules.pro
             // keeps the known-required rules documented if minify is ever re-enabled.

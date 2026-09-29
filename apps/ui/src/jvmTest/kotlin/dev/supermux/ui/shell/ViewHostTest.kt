@@ -31,7 +31,6 @@ import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.chat.testHostStore
 import dev.supermux.ui.editor.DocumentStore
-import dev.supermux.ui.editor.engine.UnavailableEditorEngineFactory
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.NO_CAPS
 import dev.supermux.workspace.viewTitle
@@ -41,6 +40,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import androidx.compose.ui.test.assertCountEquals
 import kotlin.test.assertNull
 
 private fun view(kind: String, state: Map<String, String>) = ViewDto(
@@ -55,9 +56,7 @@ private fun view(kind: String, state: Map<String, String>) = ViewDto(
  * Workspace terminals inject a pure-Compose stand-in: a SwingPanel/AndroidView engine cannot be
  * hosted under runComposeUiTest.
  *
- * The `file` pane injects an engine factory instead: an unavailable one makes `EditorSurface` draw
- * its native BasicTextField fallback, which is pure Compose AND shows the document's text — so a
- * test can read the buffer a pane is displaying without booting a browser.
+ * The `file` pane needs no seam: the native editor is pure Compose.
  */
 @OptIn(ExperimentalTestApi::class)
 class ViewHostTest {
@@ -66,9 +65,6 @@ class ViewHostTest {
 
     /** A machine with the walkthrough seam installed, which is what both real hosts ship. */
     private fun platform() = FakePlatform(caps = NO_CAPS.copy(walkthrough = true))
-
-    /** No engine is ever built under test. Error picks the visible native fallback. */
-    private val noJcef = UnavailableEditorEngineFactory("no chromium under test")
 
     /**
      * Unconfined so a non-suspending fsRead resolves inside [DocumentStore.open] itself — the
@@ -104,7 +100,6 @@ class ViewHostTest {
             chatState = { sid -> rememberChatState(app, sid) },
             chatActions = { s -> rememberChatActions(app, s) },
             onOpenFile = onOpenFile,
-            editorEngineFactory = noJcef,
             workspaceTerminalContent = workspaceTerminalContent
                 ?: { _, mod -> Box(mod.fillMaxSize()) { Text("term-stand-in") } },
         )
@@ -168,18 +163,22 @@ class ViewHostTest {
     @Test
     fun modeFileDrawsOneDocumentFromTheStore() = runComposeUiTest {
         val app = fakeApp()
+        val documents0 = store("fun main() {}")
         setPlatformContent(platform()) {
             host(
                 app,
                 view("editor", mapOf("mode" to "file", "path" to "src/Main.kt")),
                 workdir = "/some/dir",
-                documents = store("fun main() {}"),
+                documents = documents0,
             )
         }
         onNodeWithTag("editor_file_pane").assertIsDisplayed()
         // No tree and no tab row of its own — the group's strip is the tab row now.
         onNodeWithTag("editor_tree").assertDoesNotExist()
-        onNodeWithTag("editor_native_input").assertTextEquals("fun main() {}")
+        // The native editor draws the store's document: its view holds the file's text (M5).
+        onNodeWithTag("editor_native").assertIsDisplayed()
+        waitForIdle()
+        assertEquals("fun main() {}", documents0?.get("src/Main.kt")?.native?.primary?.state?.doc?.toString())
     }
 
     @Test
@@ -249,12 +248,23 @@ class ViewHostTest {
             }
         }
         waitForIdle()
-        // ONE document exists for the path, and both panes hold a reference to it — an edit made
-        // through either pane's sink is the same edit.
+        // ONE document exists for the path, and both panes show it: the first borrows its view, the
+        // second a mirror of it (M5), so an edit made through either is the same edit.
+        val native = assertNotNull(documents.get("a.kt")?.native)
+        assertEquals(2, native.views.size)
+        onAllNodesWithTag("editor_native").assertCountEquals(2)
         documents.update("a.kt", "edited in one pane")
         waitForIdle()
-        onAllNodesWithTag("editor_native_input")[0].assertTextEquals("edited in one pane")
-        onAllNodesWithTag("editor_native_input")[1].assertTextEquals("edited in one pane")
+        for (v in native.views) assertEquals("edited in one pane", v.state.doc.toString())
+        // An edit in the second pane's view reaches the document too.
+        native.views[1].dispatch(
+            dev.supermux.editor.core.TransactionSpec(
+                changes = listOf(dev.supermux.editor.core.ChangeSpec(0, 0, ">")),
+                userEvent = "input.type",
+            ),
+        )
+        waitForIdle()
+        assertEquals(">edited in one pane", documents.get("a.kt")?.content)
     }
 
     // ── Tab titles ──────────────────────────────────────────────────────────────────────────
@@ -368,7 +378,6 @@ class ViewHostTest {
                 drafts = mutableStateMapOf(),
                 documents = store(),
                 primarySessionId = "ghost",
-                editorEngineFactory = noJcef,
             )
         }
         onNodeWithTag("editor-no-lsp").assertIsDisplayed()
@@ -388,7 +397,6 @@ class ViewHostTest {
                 drafts = mutableStateMapOf(),
                 documents = store(),
                 primarySessionId = "s1",
-                editorEngineFactory = noJcef,
             )
         }
         onNodeWithTag("editor-no-lsp").assertDoesNotExist()

@@ -122,6 +122,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.DEFAULT_MODEL_ID
+import dev.supermux.net.ByteArrayChunkSource
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
@@ -366,8 +367,8 @@ data class ComposerStagedFile(
 
 /**
  * Pre-spawn staging (the launcher). Non-null replaces the live upload funnel entirely: a pick is
- * handed to [onStage] instead of being uploaded, the chip strip renders name + × instead of upload
- * progress, and clipboard paste / external drop stay off (there is no session to paste against).
+ * handed to [onStage] instead of being uploaded, and the chip strip renders name + × instead of upload
+ * progress. Clipboard paste and external drop feed the same [onStage] funnel.
  *
  * The list is HOISTED because only the caller can turn it into the `staged` argument of its spawn.
  */
@@ -774,7 +775,7 @@ fun Composer(
     /** Read clipboard images off the UI thread, then stage them. Used by Ctrl/Cmd+V, the
      *  Paste-image menu entries, and the nonce hook — all one funnel. */
     fun launchPasteImages() {
-        if (onUpload == null) return
+        if (onUpload == null && staging == null) return
         if (pastePending) return
         pastePending = true
         scope.launch {
@@ -913,6 +914,9 @@ fun Composer(
     val cs = MaterialTheme.colorScheme
     val inputInteraction = remember { MutableInteractionSource() }
     val inputFocused by inputInteraction.collectIsFocusedAsState()
+    // Where Ctrl/Cmd+V means "paste an image" (desktop's Edit ▸ Paste image accelerator): only here.
+    androidx.compose.runtime.LaunchedEffect(inputFocused) { ChatInputFocus.report(inputInteraction, inputFocused) }
+    androidx.compose.runtime.DisposableEffect(inputInteraction) { onDispose { ChatInputFocus.report(inputInteraction, false) } }
     var dragOver by remember(sessionKey) { mutableStateOf(false) }
 
     val cardShape = RoundedCornerShape(Radii.lg + 8.dp) // ~24dp — matches the mock capsule
@@ -952,8 +956,7 @@ fun Composer(
                 camera = platform.caps.camera,
                 testTag = tags.attach,
                 clipboardHasImage = {
-                    // Pre-spawn staging has no clipboard path at all (nothing to paste against).
-                    staging == null && platform.caps.clipboardImages && platform.clipboard.hasImage()
+                    platform.caps.clipboardImages && platform.clipboard.hasImage()
                 },
                 onPickFiles = { kind ->
                     scope.launch { stageFiles(platform.pickFiles(kind, pickRequester)) }
@@ -1142,8 +1145,8 @@ fun Composer(
                                 ctrlPressed = e.isCtrlPressed,
                                 metaPressed = e.isMetaPressed,
                                 shiftPressed = e.isShiftPressed,
-                                // Staged mode has no live upload to paste into.
-                                uploadBound = onUpload != null,
+                                // Staged mode pastes into the caller's pre-spawn list.
+                                uploadBound = attachBound,
                                 // Probe the clipboard ONLY after the paste chord matches — not
                                 // on every keystroke (cross-process selection can stall).
                                 likelyHasImage = { platform.clipboard.hasImage() },
@@ -1408,7 +1411,7 @@ fun Composer(
                     Spacer(Modifier.height(Space.sm))
                     TranscribingIndicator()
                 }
-                if (!pointer) dictation.banner?.let { msg ->
+                if (!pointer && dictation.failedAudio == null) dictation.banner?.let { msg ->
                     Spacer(Modifier.height(Space.xs))
                     Text(msg, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag(tags.banner))
                 }
@@ -1420,7 +1423,7 @@ fun Composer(
         modifier
             .fillMaxWidth()
             .externalFileDropTarget(
-                enabled = onUpload != null,
+                enabled = attachBound,
                 onDragOver = { dragOver = it },
                 onFiles = { stageFiles(it) },
             ),
@@ -1447,7 +1450,7 @@ fun Composer(
         if (!chrome.transientLinesInsideCard) {
             // ONE transient line, not two: a touch host gets the takeover-style banner above the
             // card, a pointer host the quieter inline line under it (both carry the same text).
-            if (!pointer) dictation.banner?.let { msg ->
+            if (!pointer && dictation.failedAudio == null) dictation.banner?.let { msg ->
                 Text(
                     msg,
                     color = cs.onSurfaceVariant,
@@ -1461,6 +1464,23 @@ fun Composer(
             if (dictation.transcribing) TranscribingIndicator()
         }
 
+        // A failed transcription keeps its recording: offer Retry / Send as audio on every host.
+        if (dictation.failedAudio != null) {
+            DictationFailureBar(
+                message = dictation.errorMessage ?: "Transcription failed",
+                onRetry = { dictation.retryTranscription() },
+                onAttach = if (attachBound) {
+                    {
+                        dictation.takeFailedAudio()?.let { audio ->
+                            stage(PickedFile(audio.filename, audio.mime, ByteArrayChunkSource(audio.bytes)))
+                        }
+                    }
+                } else {
+                    null
+                },
+                onDismiss = { dictation.dismissFailure() },
+            )
+        }
         if (wholeCardRecording) {
             // Recording takes the composer over entirely (iOS/Android parity).
             RecordingBar(
@@ -1469,17 +1489,14 @@ fun Composer(
                 onStop = { dictation.stopMic() },
                 onCancel = { dictation.cancelMic() },
             )
-        } else if (staging != null) {
-            // No clipboard image path pre-spawn, so no right-click "Paste image" area either.
-            card()
         } else {
             ComposerContextMenu(
-                pasteEnabled = onUpload != null,
+                pasteEnabled = attachBound,
                 onPasteImage = { launchPasteImages() },
                 content = card,
             )
         }
-        if (pointer && onMicError == null) dictation.errorMessage?.let { msg ->
+        if (pointer && onMicError == null && dictation.failedAudio == null) dictation.errorMessage?.let { msg ->
             Text(
                 msg,
                 color = MaterialTheme.colorScheme.error,
@@ -1491,8 +1508,8 @@ fun Composer(
     if (dictation.micDenied) MicDeniedDialog(onDismiss = { dictation.micDenied = false })
     // A screen that places the error itself is told about every change, clears included.
     if (onMicError != null) {
-        LaunchedEffect(dictation.errorMessage, pointer) {
-            onMicError(dictation.errorMessage?.takeIf { pointer })
+        LaunchedEffect(dictation.errorMessage, dictation.failedAudio, pointer) {
+            onMicError(dictation.errorMessage?.takeIf { pointer && dictation.failedAudio == null })
         }
     }
 }

@@ -5,8 +5,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import dev.supermux.desktop.platform.DesktopPlatform
-import dev.supermux.desktop.ui.HeavyweightModalShield
-import dev.supermux.desktop.ui.ModalPresenceHost
 import dev.supermux.desktop.ui.SupermuxContextMenuRepresentation
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.NoticeOverlay
@@ -14,9 +12,8 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.ui.prefs.InMemorySettingsStore
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.prefs.UiPrefs
-import dev.supermux.ui.editor.LocalHeavyweightShield
-import dev.supermux.ui.widgets.LocalModalHost
 
 /**
  * Desktop's thin wrapper over the shared [SupermuxTheme].
@@ -25,16 +22,10 @@ import dev.supermux.ui.widgets.LocalModalHost
  * only supported way to restyle them is to replace the representation. Provided at the theme root
  * so every window (main, detached, dialogs) gets the same one. See `ui/DesktopContextMenu.kt`.
  *
- * The second: the shared dialogs and menus (`ui/widgets`) announce themselves through
- * `LocalModalHost`, and desktop's host is the AWT interop shield — `ModalOpen()` counts the surface
- * on `LocalModalPresence` so the heavyweight child (JCEF) lays itself out at 0×0
- * and the modal is actually visible. See `ui/ModalPresence.kt`.
+ * Desktop keeps the default `LocalModalHost` (the identity wrapper): since the M5 native editor
+ * there is no heavyweight AWT child left for a dialog to hide.
  *
- * The shared editor surface's JCEF host asks `LocalHeavyweightShield` to make the browser step
- * aside while a modal is open — the same reason, for the one heavyweight child that lives inside
- * shared code.
- *
- * The third: the persisted UI preferences (`ui/prefs/UiPrefs.kt`) are installed on `LocalUiPrefs`
+ * The second: the persisted UI preferences (`ui/prefs/UiPrefs.kt`) are installed on `LocalUiPrefs`
  * here, so every window root gets them from one place. `Main.kt` passes the real store
  * (`desktopDeps.settings`); anything else — tests, the interop probe — falls back to a
  * process-local one, which behaves identically but persists nothing.
@@ -58,9 +49,8 @@ fun DesktopTheme(
     CompositionLocalProvider(
         LocalContextMenuRepresentation provides contextMenu,
         LocalPlatform provides platform,
-        LocalModalHost provides ModalPresenceHost,
-        LocalHeavyweightShield provides HeavyweightShieldHost,
         LocalUiPrefs provides prefs,
+        LocalUiPrefsOrNull provides prefs,
     ) {
         SupermuxTheme(
             appearance = appearance,
@@ -72,11 +62,4 @@ fun DesktopTheme(
             NoticeOverlay(platform.notices) { content() }
         }
     }
-}
-
-/** Desktop's `LocalHeavyweightShield`: hide the AWT child by layout while any modal is open. A
- *  top-level val for the same reason as [ModalPresenceHost] — the local is static, so a fresh
- *  lambda per recomposition would invalidate the whole app subtree. */
-private val HeavyweightShieldHost: @Composable (@Composable () -> Unit) -> Unit = { content ->
-    HeavyweightModalShield { content() }
 }

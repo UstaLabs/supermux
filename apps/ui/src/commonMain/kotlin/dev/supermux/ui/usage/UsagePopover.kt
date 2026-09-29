@@ -6,9 +6,8 @@
 // [dev.supermux.ui.usage.UsageScreen] as its own route instead (Android's `Route.Usage`), which is
 // why this composable renders nothing without a pointer.
 //
-// The AWT interop shield stays a desktop concern: on desktop Compose cannot paint over a
-// heavyweight child (the JCEF editor), so the popover announces itself through [ModalHost] and
-// `DesktopTheme`'s host does the retain/release that `ModalOpen()` used to do here directly.
+// The popover announces itself through [ModalHost], so a host that ever embeds a heavyweight child
+// again can make it step aside (no host does since the M5 native editor).
 package dev.supermux.ui.usage
 
 import androidx.compose.foundation.focusable

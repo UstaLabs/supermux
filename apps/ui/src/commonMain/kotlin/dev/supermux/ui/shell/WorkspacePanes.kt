@@ -72,6 +72,10 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.chat.rememberChatActions
 import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.editor.WalkthroughState
+import dev.supermux.ui.files.activeFilePath
+import dev.supermux.ui.files.filePathOrNull
+import dev.supermux.ui.files.isFilesTreeView
+import dev.supermux.ui.files.nextFocusedFileView
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
@@ -87,15 +91,17 @@ import dev.supermux.ui.widgets.KeepAlivePanel
 import dev.supermux.ui.worktree.WorktreeDeleteAction
 import dev.supermux.ui.worktree.reportWorktreeDelete
 import dev.supermux.ui.workspace.WorkspaceSession
+import dev.supermux.ui.workspace.applyEntryMoved
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.NewViewPlacement
+import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.toDomainOrNull
-import dev.supermux.workspace.viewTitle
+import dev.supermux.ui.terminal.liveViewTitle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
@@ -200,10 +206,11 @@ fun WorkspacePanes(
     var walkthroughSessionId by remember(current.id) { mutableStateOf<String?>(null) }
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
+    TrackFocusedFileView(ws)
 
     PaneHost(
         layout = layout,
-        titleFor = { vid -> viewsById[vid]?.let { viewTitle(it, sessionNames::get) } ?: "view" },
+        titleFor = { vid -> viewsById[vid]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
         onCloseView = { onCloseCandidate(viewsById[it]) },
         onEdit = { edit -> layoutSync.edit(edit) },
         addSlot = { groupId ->
@@ -265,7 +272,7 @@ fun WorkspacePanes(
                         Box(Modifier.testTag("tab-move-to-window-$itemId")) {
                         DefaultTabChip(
                             itemId = itemId,
-                            title = v?.let { viewTitle(it, sessionNames::get) } ?: "view",
+                            title = v?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
                             state = tabState,
                             dot = if (v.tabUnread(tabState.selected, unreadSessions)) LocalSemantics.current.success else null,
                             labelFont = MonoFontFamily,
@@ -274,6 +281,7 @@ fun WorkspacePanes(
                         }
                     }
                 } else {
+                    Box(Modifier.observePress(itemId) { ws.focusedFileViewId = itemId }) {
                     WorkspaceFileTab(
                         itemId = itemId,
                         title = filePath.substringAfterLast('/'),
@@ -289,6 +297,7 @@ fun WorkspacePanes(
                         onClose = { _ -> onCloseCandidate(v) },
                         onMoveToNewWindow = { onTearOutTab(itemId) },
                     )
+                    }
                 }
             }
         },
@@ -429,7 +438,7 @@ fun PhoneWorkspacePanes(
                 PaneTabStrip(
                     viewIds = tabs.viewIds,
                     activeViewId = tabs.selectedId ?: "",
-                    titleFor = { id -> viewsById[id]?.let { viewTitle(it, sessionNames::get) } ?: "view" },
+                    titleFor = { id -> viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
                     onSelect = { id -> app.setActiveView(current.id, id) },
                     onClose = { id -> viewsById[id]?.let { closeOrConfirm(it) } },
                     modifier = Modifier.weight(1f),
@@ -442,7 +451,7 @@ fun PhoneWorkspacePanes(
                         ) {
                             DefaultTabChip(
                                 itemId = id,
-                                title = viewsById[id]?.let { viewTitle(it, sessionNames::get) } ?: "view",
+                                title = viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
                                 state = state,
                                 dot = if (viewsById[id].tabUnread(state.selected, unreadSessions)) LocalSemantics.current.success else null,
                                 labelFont = MonoFontFamily,
@@ -482,7 +491,7 @@ fun PhoneWorkspacePanes(
                         // KeepAlivePanel (the expect/actual container), NOT the alpha modifier: a
                         // retained pane can hold a platform view the host's compositor draws
                         // OUTSIDE the Compose layer — a `UIKitView`'s child on iOS, a heavyweight
-                        // SwingPanel (the JCEF editor) on desktop — and neither is hidden by alpha. The
+                        // SwingPanel on desktop — and neither is hidden by alpha. The
                         // Android actual is still exactly the alpha hide this used to be.
                         KeepAlivePanel(visible = id == tabs.selectedId) {
                             WorkspacePaneContent(
@@ -632,6 +641,12 @@ private fun WorkspacePaneContent(
                 chatActions = { s -> rememberChatActions(viewApp, s) },
                 drafts = drafts,
                 documents = documents,
+                treeStates = ws.treeStates,
+                // Only a Files (tree) pane reads it: the file the user last worked in, else the
+                // first group (layout order) showing a file.
+                activeFilePath = if (v.isFilesTreeView()) {
+                    activeFilePath(layoutSync.tree, viewsById, ws.focusedFileViewId)
+                } else null,
                 onOpenFile = { p, line, endLine ->
                     fileOpener.open(
                         p, line, endLine,
@@ -640,6 +655,18 @@ private fun WorkspacePaneContent(
                         onPlaced = { newId ->
                             ui.windows.expandClaim(hostId, setOf(newId), layoutSync.tree)
                         },
+                    )
+                },
+                // Tabs open on a renamed/deleted path must not keep writing to it: clean ones follow
+                // the file (or close), dirty ones stay and show the stale banner — see
+                // applyEntryMoved. Closing is the same broker close as the tab's × button.
+                onEntryMoved = { old, new ->
+                    ws.applyEntryMoved(
+                        workdir = current.workdir,
+                        oldAbs = old,
+                        newAbs = new,
+                        closeView = { id -> app.closeWorkspaceView(current.id, id) },
+                        onPlaced = { newId -> ui.windows.expandClaim(hostId, setOf(newId), layoutSync.tree) },
                     )
                 },
                 onOpenWalkthrough = { sessionId, stepId ->
@@ -681,8 +708,40 @@ private fun WorkspacePaneContent(
                 pasteImageFor = ui.selectedId,
                 pasteImageRequestNonce = ui.pasteImageRequestNonce,
                 onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().then(
+                    // A press anywhere in a file pane makes it the file the Files tree follows. (The
+                    // desktop JCEF editor is heavyweight and never reports presses; its tab does.)
+                    if (v.filePathOrNull() != null) Modifier.observePress(viewId) { ws.focusedFileViewId = viewId } else Modifier,
+                ),
             )
+        }
+    }
+}
+
+/**
+ * Keeps [WorkspaceSession.focusedFileViewId] on the file the user last activated: a file tab that
+ * just became active in its group (a tab click, a file opened from the tree) takes over.
+ */
+@Composable
+private fun TrackFocusedFileView(ws: WorkspaceSession) {
+    val tree = ws.layoutSync.tree
+    val activeIds = remember(tree) { collectActiveViewIds(tree) }
+    val previous = remember(ws) { arrayOf<List<String>>(emptyList()) }
+    val views = ws.viewsById
+    LaunchedEffect(ws, activeIds, views) {
+        ws.focusedFileViewId = nextFocusedFileView(previous[0], activeIds, views, ws.focusedFileViewId)
+        // Only ids whose view is known: one whose row lands later still counts as "newly active".
+        previous[0] = activeIds.filter { it in views }
+    }
+}
+
+/** Runs [onPress] on every press inside this element without consuming anything. */
+private fun Modifier.observePress(key: Any?, onPress: () -> Unit): Modifier = composed {
+    val latest by rememberUpdatedState(onPress)
+    pointerInput(key) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            latest()
         }
     }
 }

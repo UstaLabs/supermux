@@ -46,6 +46,7 @@ export interface AppConfig {
   voiceTtsEngine?: string
   whisperModel?: string // path or name of the Whisper model file
   whisperLang?: string // language code (e.g. "tr", "en") or "auto"
+  voiceLanguages?: string[] // ISO-639-1 codes the user dictates in (e.g. ["tr", "en"]); empty/absent = auto-detect
 }
 
 export const SETTINGS_KEY_APP = "app"
@@ -103,6 +104,14 @@ function parseGlossary(v: unknown): string[] | undefined {
   if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean)
   if (typeof v === "string") return v.split(",").map((x) => x.trim()).filter(Boolean)
   return undefined
+}
+
+/** Coerce to a deduped list of lowercase ISO-639-1/-3 codes ("en-US" → "en"); junk dropped. */
+function parseLanguages(v: unknown): string[] | undefined {
+  const raw = parseGlossary(v)
+  if (raw === undefined) return undefined
+  const codes = raw.map((x) => x.split(/[-_]/)[0]!.toLowerCase()).filter((x) => /^[a-z]{2,3}$/.test(x))
+  return [...new Set(codes)]
 }
 
 /** Coerce arbitrary input into a TunnelRecord, or undefined if shape is wrong. */
@@ -169,6 +178,7 @@ export function resolveAppConfig(stored: Partial<AppConfig>, env: AppConfigEnv):
     ...(stored.voiceTtsEngine !== undefined ? { voiceTtsEngine: stored.voiceTtsEngine } : {}),
     ...(stored.whisperModel !== undefined ? { whisperModel: stored.whisperModel } : {}),
     ...(stored.whisperLang !== undefined ? { whisperLang: stored.whisperLang } : {}),
+    ...(Array.isArray(stored.voiceLanguages) ? { voiceLanguages: stored.voiceLanguages } : {}),
   }
 }
 
@@ -213,6 +223,10 @@ export function sanitizeAppConfigPatch(input: unknown): Partial<AppConfig> {
   }
   if (typeof o.whisperModel === "string") out.whisperModel = o.whisperModel
   if (typeof o.whisperLang === "string") out.whisperLang = o.whisperLang
+  if (o.voiceLanguages !== undefined) {
+    const l = parseLanguages(o.voiceLanguages)
+    if (l !== undefined) out.voiceLanguages = l
+  }
   return out
 }
 
@@ -248,6 +262,7 @@ export function parseAppConfig(input: unknown, base: AppConfig = defaultAppConfi
     voiceCleanupGlossary: parseGlossary(o.voiceCleanupGlossary) ?? base.voiceCleanupGlossary ?? DEFAULT_VOICE_CLEANUP_GLOSSARY,
     ...(o.whisperModel !== undefined ? { whisperModel: str(o.whisperModel, base.whisperModel ?? "") || undefined } : base.whisperModel !== undefined ? { whisperModel: base.whisperModel } : {}),
     ...(o.whisperLang !== undefined ? { whisperLang: str(o.whisperLang, base.whisperLang ?? "") || undefined } : base.whisperLang !== undefined ? { whisperLang: base.whisperLang } : {}),
+    ...(o.voiceLanguages !== undefined ? { voiceLanguages: parseLanguages(o.voiceLanguages) ?? base.voiceLanguages ?? [] } : base.voiceLanguages !== undefined ? { voiceLanguages: base.voiceLanguages } : {}),
   }
 }
 

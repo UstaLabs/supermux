@@ -8,7 +8,7 @@ import kotlin.test.assertTrue
 
 /**
  * Pure-function tests for the desktop-only diff file tree (folder nesting derived from
- * [DiffFile.path], no filesystem). Sort order matches [sortedForTree]: directories first,
+ * [DiffFile.path], no filesystem). Sort order matches the file tree: directories first,
  * then files, case-insensitive within each group.
  */
 class DiffTreeTest {

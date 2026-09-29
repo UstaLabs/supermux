@@ -10,14 +10,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 
 /**
- * Heavyweight-safe keep-alive container for panes that embed a SwingPanel — the JCEF editor.
+ * Heavyweight-safe keep-alive container.
  *
- * (It was written for the terminal, which was a `JediTermWidget` in a SwingPanel. Plan 4 made the
- * terminal pure Compose; a terminal pane no longer needs the heavyweight treatment, but it still
- * needs the KEEP-ALIVE, and the editor still needs both.)
+ * (It was written for the terminal, which was a `JediTermWidget` in a SwingPanel, and then served
+ * the JCEF editor. Plan 4 made the terminal pure Compose and M5 the editor; neither needs the
+ * heavyweight treatment any more, but both still need the KEEP-ALIVE. The native editor was
+ * re-checked against the 0×0 hide in M5: see `NativeEditorPaneTest`'s keep-alive case.)
  *
  * STRATEGY: [content] stays in the SAME composition slot whether visible or not — so every
- * `remember` inside it (the TerminalClient, the engine session, the browser) survives a hide/show
+ * `remember` inside it (the TerminalClient, an editor view) survives a hide/show
  * cycle — but when hidden, the wrapping Box is laid out at **0×0** (`Modifier.size(0.dp)`; the
  * `clipToBounds` is only belt-and-braces for Compose children that would otherwise overflow a
  * zero-size box — it is the SIZE that hides the AWT child, not the clip).

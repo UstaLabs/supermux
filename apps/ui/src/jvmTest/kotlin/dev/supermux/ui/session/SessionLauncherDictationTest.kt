@@ -135,28 +135,27 @@ class SessionLauncherDictationTest {
      * in the launcher's column BELOW `launcher_error` — not the composer's 11sp line inside the
      * card. Both errors are raised here so the ORDER is what is asserted, not merely the presence.
      */
-    @Test fun the_mic_error_renders_below_the_launcher_error() = runComposeUiTest {
+    /** A failed transcription keeps its recording: Retry and Send-as-audio replace the error line. */
+    @Test fun a_failed_transcription_offers_retry_and_send_as_audio() = runComposeUiTest {
         pointerContent {
             Harness(
-                // A transcribe that yields nothing → DictationController.fail("Transcription failed").
+                // A transcribe that yields nothing → a recoverable "Transcription failed".
                 transcribeAudio = { _, _, _ -> null },
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
-                onSubmit = { _, _, _, _, _, _, _, _, _, _ -> throw IllegalStateException("spawn refused") },
             )
         }
         waitForIdle()
-        onNodeWithTag("launcher_submit").performClick()
-        waitUntil(timeoutMillis = 5_000) {
-            onAllNodesWithTag("launcher_error").fetchSemanticsNodes().isNotEmpty()
-        }
         onNodeWithTag("launcher_mic").performClick() // start
         onNodeWithTag("launcher_mic").performClick() // stop -> transcribe -> fail
         waitUntil(timeoutMillis = 5_000) {
-            onAllNodesWithTag("launcher_mic_error").fetchSemanticsNodes().isNotEmpty()
+            onAllNodesWithTag("composer_dictation_failed").fetchSemanticsNodes().isNotEmpty()
         }
-        val spawnError = onNodeWithTag("launcher_error").fetchSemanticsNode().positionInRoot.y
-        val micError = onNodeWithTag("launcher_mic_error").fetchSemanticsNode().positionInRoot.y
-        assertTrue(micError > spawnError, "launcher_mic_error must sit under launcher_error")
+        onNodeWithTag("dictation_retry").assertExists()
+        onNodeWithTag("dictation_attach").assertExists()
+        onNodeWithTag("launcher_mic_error").assertDoesNotExist()
+        onNodeWithTag("dictation_dismiss").performClick()
+        waitForIdle()
+        onNodeWithTag("composer_dictation_failed").assertDoesNotExist()
     }
 
     /** Touch has no inline error at all — the takeover banner is the one transient line there. */

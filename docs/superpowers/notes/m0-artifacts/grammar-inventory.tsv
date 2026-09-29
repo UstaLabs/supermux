@@ -1,0 +1,48 @@
+lang	package	version	license	parser	scanner	highlights	wasm	ios_obj_bytes	wasm_bytes
+javascript	tree-sitter-javascript	0.25.0	MIT	y	y	y	y	423096	411770
+typescript	tree-sitter-typescript	0.23.2	MIT	y	y	y	y	1458816	1445638
+python	tree-sitter-python	0.25.0	MIT	y	y	y	y	466392	457883
+rust	tree-sitter-rust	0.24.0	MIT	y	y	y	y	1122312	1102547
+go	tree-sitter-go	0.25.0	MIT	y	n	y	y	224336	217182
+java	tree-sitter-java	0.23.5	MIT	y	n	y	y	423712	414641
+c	tree-sitter-c	0.24.1	MIT	y	n	y	y	645392	625918
+cpp	tree-sitter-cpp	0.23.4	MIT	y	y	y	y	3468576	3434931
+php	tree-sitter-php	0.24.2	MIT	y	y	y	y	1071008	1058041
+html	tree-sitter-html	0.23.2	MIT	y	y	y	y	23600	18385
+css	tree-sitter-css	0.25.0	MIT	y	y	y	y	140016	128668
+json	tree-sitter-json	0.24.8	MIT	y	n	y	y	7600	5596
+yaml	@tree-sitter-grammars/tree-sitter-yaml	0.7.1	MIT	y	y	y	y	200200	1654
+markdown	@tree-sitter-grammars/tree-sitter-markdown	0.3.2	MIT	y	y	y	n	400136	0
+sql	@derekstride/tree-sitter-sql	0.3.11	MIT	y	y	y	n	2455048	0
+xml	@tree-sitter-grammars/tree-sitter-xml	0.7.0	MIT	y	y	y	n	52272	0
+vue	tree-sitter-vue	0.2.1	MIT	y	n	n	n	18896	0
+wast	tree-sitter-wast	MISSING
+shell	tree-sitter-bash	0.25.1	MIT	y	y	y	y	1394568	1358224
+kotlin	@tree-sitter-grammars/tree-sitter-kotlin	1.1.0	MIT	y	y	n	y	3471792	3441042
+dart	tree-sitter-dart	1.0.0	ISC	y	y	y	y	777328	759584
+csharp	tree-sitter-c-sharp	0.23.5	MIT	y	y	y	y	5355336	5350581
+scala	tree-sitter-scala	0.24.0	MIT	y	y	y	y	3809720	3786700
+objc	tree-sitter-objc	3.0.2	MIT	y	n	y	y	5349312	5317155
+ruby	tree-sitter-ruby	0.23.1	MIT	y	y	y	y	2125520	2106352
+swift	tree-sitter-swift	0.7.1	MIT	y	y	y	n	3408352	0
+groovy	tree-sitter-groovy	0.1.2	MIT	y	n	n	y	1006864	997114
+lua	@tree-sitter-grammars/tree-sitter-lua	0.4.1	MIT	y	y	y	y	56496	49488
+perl	tree-sitter-perl	2.0.0	MIT	y	y	y	n	4778040	0
+r	tree-sitter-r	MISSING	(npm placeholder: 0.0.1-security)
+julia	tree-sitter-julia	0.23.1	MIT	y	y	y	y	6350712	6223352
+haskell	tree-sitter-haskell	0.23.1	MIT	y	y	y	y	3831416	3805902
+erlang	tree-sitter-erlang	MISSING	(npm placeholder: 0.0.1-security)
+ocaml	tree-sitter-ocaml	0.24.2	MIT	y	y	y	y	5609000	4918457
+fsharp	tree-sitter-fsharp	0.3.12	MIT	y	y	y	y	11482296	11430318
+clojure	tree-sitter-clojure	0.4.0	MIT	y	n	n	n	149960	0
+elm	@elm-tooling/tree-sitter-elm	5.9.4	MIT	y	y	y	n	193440	0
+crystal	tree-sitter-crystal	MISSING
+coffeescript	tree-sitter-coffeescript	MISSING
+fortran	tree-sitter-fortran	MISSING
+pascal	tree-sitter-pascal	0.0.1	MIT	y	n	y	n	678472	0
+vb	tree-sitter-vb	MISSING
+haxe	tree-sitter-haxe	0.13.0	MIT	y	y	y	n	588872	0
+cmake	tree-sitter-cmake	MISSING
+dockerfile	tree-sitter-dockerfile	MISSING	(npm placeholder: 0.0.1-security)
+nginx	tree-sitter-nginx	1.0.1	MIT	y	y	y	n	118192	0
+glsl	tree-sitter-glsl	0.2.0	MIT	y	n	y	n	883320	0

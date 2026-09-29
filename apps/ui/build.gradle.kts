@@ -43,6 +43,8 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
+            // Native Mermaid rendering for ```mermaid fences (vendored cmp-mermaid, see mermaid-compose/README.md).
+            implementation(project(":mermaid-compose"))
             // `api`, not `implementation`: these types are in this module's OWN public signatures —
             // PaneHost takes a LayoutNode, PaneStripChrome returns a Modifier, PaneDragController exposes
             // Rect/Offset, Motion returns a FiniteAnimationSpec. Under `implementation` a second consumer
@@ -56,6 +58,25 @@ kotlin {
             // a type from here. `api`, because TerminalSession/TerminalTheme appear in that
             // factory's own public signatures.
             api(project(":terminal-compose"))
+            // The native editor (M5): the same one-way arrow as the terminal pair. editor-core,
+            // editor-compose and editor-syntax know nothing about supermux; this module adapts them
+            // (the document views, the broker's LSP channel, the review callbacks). `api` for the
+            // modules whose types sit in this module's own signatures (EditorView on a Document,
+            // SyntaxBackend on Platform, LspTransport, DiffHost); the other plugins are plain
+            // implementation details of the panes.
+            api(project(":editor-core"))
+            api(project(":editor-compose"))
+            api(project(":editor-syntax"))
+            api(project(":editor-plugins:lsp"))
+            api(project(":editor-plugins:diff"))
+            api(project(":editor-plugins:view"))
+            implementation(project(":editor-plugins:basics"))
+            implementation(project(":editor-plugins:history"))
+            implementation(project(":editor-plugins:highlight"))
+            implementation(project(":editor-plugins:fold"))
+            implementation(project(":editor-plugins:search"))
+            implementation(project(":editor-plugins:autocomplete"))
+            implementation(project(":editor-plugins:lint"))
             api(compose.runtime)
             api(libs.coroutines.core)
             api(libs.serialization.json)

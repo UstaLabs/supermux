@@ -18,7 +18,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.KeyboardHide
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -82,6 +84,8 @@ fun TerminalKeyBar(keys: TerminalKeySink, modifier: Modifier = Modifier) {
         alt = keys.alt,
         onPress = { keys.press(it) },
         onHideKeyboard = { keys.hideKeyboard() },
+        onPaste = if (keys.canPaste) ({ keys.paste() }) else null,
+        onFind = if (keys.canFind) ({ keys.find() }) else null,
         modifier = modifier,
     )
 }
@@ -105,6 +109,8 @@ fun TerminalKeyBar(
     alt: TerminalModState,
     onPress: (TerminalKey) -> Unit,
     onHideKeyboard: () -> Unit = {},
+    onPaste: (() -> Unit)? = null,
+    onFind: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -153,13 +159,25 @@ fun TerminalKeyBar(
                     }
             }
         }
-        // Trailing: dismiss the soft keyboard. A divider first, same as every other logical group
-        // above — this one is not a pty key at all, and the gap says so.
+        // Trailing: the actions that are not pty keys at all — paste, find, dismiss the soft
+        // keyboard. A divider first, same as every other logical group above, and the gap says so.
         Box(
             Modifier
                 .size(width = 1.dp, height = 22.dp)
                 .background(cs.outlineVariant),
         )
+        if (onPaste != null) {
+            KeyIconButton(icon = Icons.Filled.ContentPaste, contentDescription = "Paste", tag = "terminal_key_paste") {
+                haptic.perform(HapticKind.Tick)
+                onPaste()
+            }
+        }
+        if (onFind != null) {
+            KeyIconButton(icon = Icons.Filled.Search, contentDescription = "Find", tag = "terminal_key_find") {
+                haptic.perform(HapticKind.Tick)
+                onFind()
+            }
+        }
         KeyIconButton(icon = Icons.Filled.KeyboardHide, contentDescription = "Hide keyboard") {
             haptic.perform(HapticKind.Tick)
             onHideKeyboard()
@@ -211,13 +229,14 @@ private fun KeyButton(
 
 /**
  * An accessory key whose face is an icon rather than a label — same box, size and touch target as
- * [KeyButton], for the one bar entry ([TerminalKeyBar]'s "hide keyboard") that has no character or
+ * [KeyButton], for the bar entries (paste, find, "hide keyboard") that have no character or
  * [TerminalKey] to render as text.
  */
 @Composable
 private fun KeyIconButton(
     icon: ImageVector,
     contentDescription: String,
+    tag: String = "terminal_key_hide_keyboard",
     onClick: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -229,7 +248,7 @@ private fun KeyIconButton(
             .background(cs.surfaceContainerHighest)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp)
-            .testTag("terminal_key_hide_keyboard"),
+            .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription = contentDescription, tint = cs.onSurface, modifier = Modifier.size(20.dp))

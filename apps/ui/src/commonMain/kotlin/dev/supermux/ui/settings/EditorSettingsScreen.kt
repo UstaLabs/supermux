@@ -153,6 +153,8 @@ private fun EditorSettingsBody(
     val scope = rememberCoroutineScope()
     val lineWrap by prefs.editorLineWrap.collectAsState(EDITOR_LINE_WRAP_DEFAULT)
     val fontSize by prefs.editorFontSize.collectAsState(EDITOR_FONT_DEFAULT)
+    val sideBySide by prefs.editorDiffSideBySide.collectAsState(dev.supermux.ui.prefs.EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT)
+    val accessoryBar by prefs.editorAccessoryBar.collectAsState(dev.supermux.ui.prefs.EDITOR_ACCESSORY_BAR_DEFAULT)
 
     Column(
         modifier
@@ -220,7 +222,42 @@ private fun EditorSettingsBody(
         }
         HorizontalDivider(color = cs.outlineVariant)
 
-        // 3. Language servers (broker-backed)
+        // 3. The Changes pane's per-file diff: inline (default) or side by side. The pane's own
+        //    toggle writes the same value.
+        SettingsToggleRow(
+            label = "Side-by-side diffs",
+            desc = "Show each changed file's diff in two columns.",
+        ) {
+            Switch(
+                checked = sideBySide,
+                onCheckedChange = { on -> scope.launch { prefs.putEditorDiffSideBySide(on) } },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = cs.onPrimary,
+                    checkedTrackColor = cs.primary,
+                ),
+                modifier = Modifier.testTag("editor_side_by_side_switch"),
+            )
+        }
+        HorizontalDivider(color = cs.outlineVariant)
+
+        // 4. The key row above a soft keyboard (Tab, arrows, undo/redo, find).
+        SettingsToggleRow(
+            label = "Accessory bar",
+            desc = "Editing keys above the on-screen keyboard.",
+        ) {
+            Switch(
+                checked = accessoryBar,
+                onCheckedChange = { on -> scope.launch { prefs.putEditorAccessoryBar(on) } },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = cs.onPrimary,
+                    checkedTrackColor = cs.primary,
+                ),
+                modifier = Modifier.testTag("editor_accessory_bar_switch"),
+            )
+        }
+        HorizontalDivider(color = cs.outlineVariant)
+
+        // 5. Language servers (broker-backed)
         Spacer(Modifier.height(8.dp))
         LspSettingsScreen(
             lspLoad = lspLoad,

@@ -37,15 +37,17 @@ fun Modifier.keepAlivePanel(visible: Boolean): Modifier = this
 
 /**
  * Keep-alive container for a whole pane: [content] stays in the SAME composition slot whether
- * visible or not — so every `remember` inside it (a terminal client, a web view, a scroll state)
+ * visible or not — so every `remember` inside it (a terminal client, an editor view, a scroll state)
  * survives a hide/show cycle — but it is not shown while [visible] is false.
  *
  * HOW it hides is the one thing the platforms disagree about, hence expect/actual:
  *
- *  • JVM/desktop lays the wrapper out at **0×0**. A pane here may embed a heavyweight AWT child
- *    (the JCEF editor) which ignores Compose drawing modifiers entirely and would
- *    keep painting over every Compose sibling; the interop wrapper propagates Compose layout
- *    bounds to its AWT child, so 0×0 bounds are the only kind of hiding it respects.
+ *  • JVM/desktop lays the wrapper out at **0×0**. It was written for heavyweight AWT children
+ *    (the Swing terminal, then the JCEF editor), which ignore Compose drawing modifiers and only
+ *    respect layout bounds. Both are pure Compose now; the 0×0 hide is kept (a hidden pane costs
+ *    no layout at full size) and the native editor survives it — the view, its scroll anchor and
+ *    its selection come back intact, a 0-wide pass turning wrapping off rather than wrapping at
+ *    zero width (`NativeEditorPaneTest`, the keep-alive case).
  *  • iOS does the same, for the same reason in a different toolkit: a `UIKitView`'s child is
  *    composited by UIKit ABOVE the Compose canvas, so `Modifier.alpha` — which only dims the
  *    Compose layer — does not hide it either (H5 correction; the iOS actual used to claim it did).

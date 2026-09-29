@@ -33,8 +33,16 @@ object SettingsKeys {
     const val EDITOR_LINE_WRAP = "editor:lineWrap"
     /** Editor font size in px, clamped 10..24. Default 13. */
     const val EDITOR_FONT_SIZE = "editor:fontSize"
+    /** Terminal font size in sp, clamped 8..32. Default 13. Cmd/Ctrl +/−/0 and a pinch change it. */
+    const val TERMINAL_FONT_SIZE = "terminal:fontSize"
     /** "true"/"false" — desktop Changes pane: nested tree (true) vs flat list. Default true. */
     const val EDITOR_DIFF_TREE_VIEW = "editor:diffTreeView"
+    /** "true"/"false" — the Changes pane's per-file diff side by side (true) vs inline. Default false (M5). */
+    const val EDITOR_DIFF_SIDE_BY_SIDE = "editor:diffSideBySide"
+    /** "true"/"false" — the native editor's accessory bar above a soft keyboard. Default true (M5). */
+    const val EDITOR_ACCESSORY_BAR = "editor:accessoryBar"
+    /** "true"/"false" — the Files tree follows (reveals) the active editor file. Default true. */
+    const val FILES_REVEAL_ACTIVE = "files:revealActive"
     /** `ChatDetailLevel.wire` ("low"/"medium"/"high"). Default "medium". */
     const val CHAT_DETAIL_LEVEL = "chatDetail:level"
 

@@ -29,12 +29,13 @@ import dev.supermux.net.RepoDiff
 import dev.supermux.net.RepoRefs
 import dev.supermux.net.ReviewComment
 import kotlin.test.Test
+import kotlinx.coroutines.flow.first
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
  * Compose UI tests for [DiffView] (M4g-2 Task 4). Unlike the rest of the editor, DiffView is pure
- * Compose (no JCEF) so it hosts cleanly under [runComposeUiTest] with no engine seam needed — every
+ * Compose so it hosts cleanly under [runComposeUiTest] with no engine seam needed — every
  * interactive surface (file expand, comment composer, resolve, submit, wrap toggle) is driven and
  * asserted directly here.
  */
@@ -68,9 +69,12 @@ class DiffViewTest {
         onClose: () -> Unit = {},
         autoExpandAll: Boolean = false,
         widthClass: WindowWidthClass = WindowWidthClass.Expanded,
+        readFile: (suspend (String, String) -> Result<String>)? = null,
+        prefs: UiPrefs = UiPrefs(InMemorySettingsStore()),
     ): @androidx.compose.runtime.Composable () -> Unit = {
         CompositionLocalProvider(
-            LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
+            LocalUiPrefs provides prefs,
+            dev.supermux.ui.platform.LocalPlatform provides dev.supermux.ui.platform.FakePlatform(),
             LocalWindowWidthClass provides widthClass,
             LocalInputMode provides
                 if (widthClass == WindowWidthClass.Compact) InputMode.Touch else InputMode.Pointer,
@@ -88,9 +92,47 @@ class DiffViewTest {
                 onReload = onReload,
                 onClose = onClose,
                 autoExpandAll = autoExpandAll,
+                readFile = readFile,
             )
         }
         }
+    }
+
+    // ── M5: each file on the native diff plugin ──────────────────────────────────────────────
+
+    @Test
+    fun a_file_opens_on_the_diff_plugin_when_its_working_copy_can_be_read() = runComposeUiTest {
+        setContent(host(oneRepoDiff(), autoExpandAll = true, readFile = { _, _ -> Result.success("new\ncontext\n") }))
+        waitForIdle()
+        onNodeWithTag("diff_native_0").assertExists()
+        onNodeWithTag("diff_side_by_side_toggle").assertExists()
+    }
+
+    @Test
+    fun a_file_that_cannot_be_read_keeps_the_patch_rows() = runComposeUiTest {
+        setContent(host(oneRepoDiff(), autoExpandAll = true, readFile = { _, _ -> Result.failure(IllegalStateException("gone")) }))
+        waitForIdle()
+        onNodeWithTag("diff_native_0").assertDoesNotExist()
+        onNodeWithText("old").assertExists()
+    }
+
+    @Test
+    fun without_a_reader_the_pane_is_the_patch_rows_and_offers_no_side_by_side() = runComposeUiTest {
+        setContent(host(oneRepoDiff(), autoExpandAll = true))
+        waitForIdle()
+        onNodeWithTag("diff_native_0").assertDoesNotExist()
+        onNodeWithTag("diff_side_by_side_toggle").assertDoesNotExist()
+    }
+
+    @Test
+    fun the_side_by_side_toggle_is_persisted_and_redraws_the_file_as_a_pair() = runComposeUiTest {
+        val prefs = UiPrefs(InMemorySettingsStore())
+        setContent(host(oneRepoDiff(), autoExpandAll = true, readFile = { _, _ -> Result.success("new\ncontext\n") }, prefs = prefs))
+        waitForIdle()
+        onNodeWithTag("diff_side_by_side_toggle").performClick()
+        waitForIdle()
+        kotlinx.coroutines.runBlocking { kotlin.test.assertTrue(prefs.editorDiffSideBySide.first()) }
+        onNodeWithTag("diff_native_0").assertExists()
     }
 
     // ── Diff-base selector (DropdownMenu on a pointer window, bottom sheet under Compact) ──

@@ -1,8 +1,6 @@
 package dev.supermux.ios
 
 import dev.supermux.ui.display.VideoSurfaceFactory
-import dev.supermux.ui.editor.engine.EditorEngineFactory
-import dev.supermux.ui.editor.IosEditorEngineFactory
 import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.ClipboardAccess
@@ -115,13 +113,6 @@ class IosPlatform(
      * four members are deliberately no-ops on this platform.
      */
     override val push: PushRegistrar = IosPushRegistrar(bridge)
-
-    /**
-     * The `EditorWeb` cm6 bundle in a `WKWebView` (cluster H5) — the same committed bundle Android
-     * loads from its assets and desktop loads under JCEF, driven by the same shared
-     * `EditorPushPlanner` and the same `cm*` JS.
-     */
-    override val editorEngine: EditorEngineFactory = IosEditorEngineFactory
 
     // ── H2: UIKit ───────────────────────────────────────────────────────────────────────────
 

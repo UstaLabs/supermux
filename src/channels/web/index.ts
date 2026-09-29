@@ -10,11 +10,12 @@ import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
-import { FsService } from "../../core/editor/fs-service"
+import { FileSystemService } from "../../core/fs/file-system-service"
+import { toFsError } from "../../core/fs/errors"
+import { WorkdirFs } from "../../core/fs/legacy"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
-import { FsWatcher } from "../../core/editor/fs-watcher"
 import { LspConnection } from "../../core/lsp/bridge"
 import { encodeTouch, encodeKey, encodeText, TouchAction } from "../../core/display/scrcpy/control"
 import { redactAppConfig } from "../../core/settings/app-config"
@@ -105,6 +106,17 @@ function clientIp(req: Request): string {
 // clear. Kept as an exported no-op for tests that build a fresh channel per
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
+
+/** `scheme://host` of the request itself, from its Host header (undefined when absent). */
+function hostOrigin(req: Request): string | undefined {
+  const host = req.headers.get("host")
+  if (!host) return undefined
+  const proto = req.headers.get("x-forwarded-proto") ?? new URL(req.url).protocol.replace(":", "")
+  return `${proto}://${host}`
+}
+
+/** Largest body PUT /fs/write accepts (the editor reads at most 1 MB). */
+const FS_WRITE_MAX_BYTES = 8 * 1024 * 1024
 
 const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees"]
 const MAX_CLIENT_LOG_RING = 800
@@ -335,8 +347,6 @@ export interface WebChannelOpts {
    * workspace-scoped diff route as on the session-scoped one.
    */
   getWorkspaceDiffBase?: (id: string) => { baseCommits: Record<string, string>; createdAt?: string } | undefined
-  /** Workspace id a session belongs to (for fs_changed). */
-  getSessionWorkspaceId?: (sessionId: string) => string | undefined
   transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
   /**
    * Server-side TTS (codex). Returns either a soft platform error, or an async
@@ -377,7 +387,6 @@ export interface WebChannelOpts {
   listProxies?: () => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean; url: string }[]
   updateProxy?: (domain: string, isPublic: boolean) => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }
   terminalManager?: import("../../core/terminal/manager").TerminalManager
-  fsWatcher?: FsWatcher
   getSessionWorkdir?: (name: string) => string | undefined
   /** Resolve a claude session's tmux "session:window" target (for kind=agent
    * terminals). Returns undefined for non-claude/unknown sessions. When this opt
@@ -465,7 +474,8 @@ export class WebChannel implements Channel {
   private lastClientFrames: unknown[] = []
   private wsConnections = new Set<{ ws: import("bun").ServerWebSocket<WSData>; deviceName: string }>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
-  private readonly fsWatcher?: FsWatcher
+  /** The host's single file-system service (spec 2026-09-27). */
+  readonly fss: FileSystemService<import("bun").ServerWebSocket<WSData>>
   private readonly clientLogRing: StoredClientLogEntry[] = []
   // Per-instance auth-failure rate-limit buckets, keyed by client IP. Instance
   // (not module) scope keeps concurrent channels — e.g. the many WebChannels a
@@ -484,7 +494,9 @@ export class WebChannel implements Channel {
     this.claimStore = opts.claimStore
     this.mintDeviceToken = opts.mintDeviceToken
     this.getRelayUrl = opts.getRelayUrl
-    this.fsWatcher = opts.fsWatcher
+    this.fss = new FileSystemService<import("bun").ServerWebSocket<WSData>>({
+      emit: (ws, frame) => { try { ws.send(JSON.stringify(frame)) } catch {} },
+    })
   }
 
   get boundPort(): number {
@@ -658,6 +670,7 @@ export class WebChannel implements Channel {
   async stop(): Promise<void> {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = undefined
+    this.fss.close()
     // Force-close active/keep-alive connections (the `true`). A graceful stop
     // leaves idle keep-alive sockets open, so a stopped channel keeps serving on
     // them — which on an in-process restart (and across reused ports under
@@ -739,6 +752,14 @@ export class WebChannel implements Channel {
     if (url.pathname === "/ws") {
       const auth = this.authenticate(req)
       if (!auth.ok) return this.authFailureResponse(auth)
+      // Same rule as /ws/term: a cookie-authenticated socket must come from the app's own origin, so a
+      // proxied page on `<slug>.<base>` (which gets the `Domain=.<base>` cookie) can't open it and, e.g.,
+      // list any folder on the host with fs_sub. Native clients use a bearer token and are unaffected.
+      // The request's own Host counts as same-origin too, so a LAN/localhost address that isn't the
+      // configured public URL keeps working.
+      if (!authedViaBearer(req) && !sameOriginOk(req, this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req))) {
+        return new Response("bad origin", { status: 403 })
+      }
       const dev = auth.device
       const upgraded = server.upgrade(req, { data: { deviceName: dev.name, openedAt: Date.now() } as WSData })
       if (upgraded) return undefined  // 101 returned by Bun automatically
@@ -914,9 +935,7 @@ export class WebChannel implements Channel {
   }
 
   private onWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
-    if (this.fsWatcher && (ws.data as any)?._editorCb) {
-      this.fsWatcher.unsubscribe((ws.data as any)._editorSession, (ws.data as any)._editorCb)
-    }
+    this.fss.dropSocket(ws)
     ;((ws.data as any)?._lsp as LspConnection | undefined)?.dispose()
     for (const c of this.wsConnections) {
       if (c.ws === ws) { this.wsConnections.delete(c); break }
@@ -1470,36 +1489,18 @@ export class WebChannel implements Channel {
       if (!result.ok) ws.send(JSON.stringify({ type: "error", reason: result.error }))
       return
     }
-    if (frame.type === "editor_open" && frame.session) {
-      if (this.fsWatcher && this.opts.getSessionWorkdir) {
-        const fsWorkdir = this.opts.getSessionWorkdir(frame.session)
-        if (fsWorkdir) {
-          const workspaceIdForWatch = this.opts.getSessionWorkspaceId?.(frame.session)
-          const cb = (paths: string[]) => {
-            try {
-              ws.send(JSON.stringify({
-                type: "fs_changed",
-                session: frame.session,
-                workspace: workspaceIdForWatch,
-                paths,
-              }))
-            } catch {}
-          }
-          ;(ws.data as any)._editorCb = cb
-          ;(ws.data as any)._editorSession = frame.session
-          this.fsWatcher.subscribe(frame.session, fsWorkdir, cb)
-        }
-      }
+    if (frame.type === "fs_sub" && typeof frame.path === "string") {
+      void this.fss.subscribe(ws, frame.path, typeof frame.since === "string" ? frame.since : undefined)
       return
     }
-    if (frame.type === "editor_close" && frame.session) {
-      if (this.fsWatcher && (ws.data as any)?._editorCb) {
-        this.fsWatcher.unsubscribe(frame.session, (ws.data as any)._editorCb)
-        ;(ws.data as any)._editorCb = null
-        ;(ws.data as any)._editorSession = null
-      }
+    if (frame.type === "fs_unsub" && typeof frame.path === "string") {
+      this.fss.unsubscribe(ws, frame.path)
       return
     }
+    // Older apps still send these on editor mount/unmount. They used to start a per-session
+    // recursive watcher that answered with fs_changed; the "changed on disk" banner now comes from
+    // fs_sub folder subscriptions, so they are accepted and ignored (not "unknown frame type").
+    if (frame.type === "editor_open" || frame.type === "editor_close") return
     if (typeof frame.type === "string" && frame.type.startsWith("lsp_")) {
       this.lspFor(ws).handle(frame)
       return
@@ -1683,6 +1684,17 @@ export class WebChannel implements Channel {
 
   private json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  }
+
+  /** An /fs/* failure as `{ error: <code>, message }` with a status that matches the code. */
+  private fsErrorResponse(e: unknown): Response {
+    const err = toFsError(e)
+    const status: Record<string, number> = {
+      EINVAL: 400, ENOTDIR: 400, EISDIR: 400, ELOOP: 400, ENAMETOOLONG: 400,
+      EACCES: 403, ENOENT: 404, EEXIST: 409, ENOTEMPTY: 409, EXDEV: 409,
+      TOO_LARGE: 413, BINARY: 415,
+    }
+    return this.json({ error: err.code, message: err.message }, status[err.code] ?? 500)
   }
 
   // Mode-specific instruction text shown when self-update isn't possible
@@ -2590,32 +2602,34 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const relPath = url.searchParams.get("path") ?? "."
-      const entries = await fs.listDir(relPath)
-      return this.json(entries)
+      try {
+        return this.json(await fs.listDir(relPath))
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
+      }
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/fs\/read$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       try {
         const content = await fs.readFile(filePath)
         return new Response(content, { headers: { "content-type": "text/plain; charset=utf-8" } })
       } catch (err: any) {
         const msg = err?.message ?? String(err)
-        if (msg.includes("too large")) return new Response(msg, { status: 413 })
-        if (msg.includes("binary")) return new Response(msg, { status: 415 })
-        return new Response(msg, { status: 400 })
+        const status = err?.code === "TOO_LARGE" ? 413 : err?.code === "BINARY" ? 415 : err?.code === "ENOENT" ? 404 : 400
+        return new Response(msg, { status })
       }
     }
     if (method === "PUT" && path.match(/^\/sessions\/[^/]+\/fs\/write$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       const content = await req.text()
       try {
@@ -2629,10 +2643,14 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const query = url.searchParams.get("q") ?? ""
-      const results = await fs.searchFiles(query)
-      return this.json(results)
+      try {
+        const results = await fs.searchFiles(query)
+        return this.json(results)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
+      }
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/fs\/diff$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -2661,39 +2679,43 @@ export class WebChannel implements Channel {
     // Byte-for-byte the same handlers as the /sessions/:id/fs* block above,
     // resolving the workdir from the workspace instead of the session. Spec §7.4.
     //
-    // FsService enforces containment server-side: a path that escapes the root
-    // throws, and that is the security boundary. The client's own guard is
-    // redundant defense, not the real one.
+    // WorkdirFs (src/core/fs/legacy.ts) enforces containment server-side for these
+    // legacy RELATIVE routes: a path that escapes the root throws, and that is their
+    // boundary (the client's own guard is redundant defense). It is not the host's
+    // security boundary in general: /fs/* below takes any absolute path and is trusted
+    // at the device level (a paired device's token), like a terminal.
     if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const relPath = url.searchParams.get("path") ?? "."
-      const entries = await fs.listDir(relPath)
-      return this.json(entries)
+      try {
+        return this.json(await fs.listDir(relPath))
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
+      }
     }
     if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/read$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       try {
         const content = await fs.readFile(filePath)
         return new Response(content, { headers: { "content-type": "text/plain; charset=utf-8" } })
       } catch (err: any) {
         const msg = err?.message ?? String(err)
-        if (msg.includes("too large")) return new Response(msg, { status: 413 })
-        if (msg.includes("binary")) return new Response(msg, { status: 415 })
-        return new Response(msg, { status: 400 })
+        const status = err?.code === "TOO_LARGE" ? 413 : err?.code === "BINARY" ? 415 : err?.code === "ENOENT" ? 404 : 400
+        return new Response(msg, { status })
       }
     }
     if (method === "PUT" && path.match(/^\/workspaces\/[^/]+\/fs\/write$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       const content = await req.text()
       try {
@@ -2707,10 +2729,14 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const query = url.searchParams.get("q") ?? ""
-      const results = await fs.searchFiles(query)
-      return this.json(results)
+      try {
+        const results = await fs.searchFiles(query)
+        return this.json(results)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
+      }
     }
     if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/diff$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -2733,6 +2759,62 @@ export class WebChannel implements Channel {
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
       return this.json({ repos: listRepoRefs(workdir) })
+    }
+
+    // ── Host file system (spec 2026-09-27 §4.4) ─────────────────────────────
+    // Absolute paths anywhere on the host, no deny-list: the same trust as a terminal.
+    // That is only sound because this block sits BELOW the device-token gate above
+    // (`requireAuth`): the credential is a paired device's token (Bearer or the
+    // cmux_token cookie, which holds the same token), and requests addressed to a
+    // proxied port — subdomain host or /p/<slug>/ — are routed to the proxy before
+    // `routeRequest`, so a public proxy link can never reach here. fs-routes.test.ts
+    // pins both.
+    if (path === "/fs/list" || path === "/fs/stat" || path === "/fs/read" || path === "/fs/write" || path === "/fs/search" || path === "/fs/ops") {
+      const p = url.searchParams.get("path") ?? ""
+      try {
+        if (method === "GET" && path === "/fs/list") return this.json(await this.fss.list(p))
+        if (method === "GET" && path === "/fs/stat") return this.json(await this.fss.stat(p))
+        if (method === "GET" && path === "/fs/read") {
+          return new Response(await this.fss.read(p), { headers: { "content-type": "text/plain; charset=utf-8" } })
+        }
+        if (method === "PUT" && path === "/fs/write") {
+          // The editor can't open files over 1 MB anyway; don't buffer a huge body twice.
+          if (Number(req.headers.get("content-length") ?? "0") > FS_WRITE_MAX_BYTES) {
+            return this.json({ error: "TOO_LARGE", message: `body over ${FS_WRITE_MAX_BYTES} bytes` }, 413)
+          }
+          return this.json(await this.fss.write(p, await req.text()))
+        }
+        if (method === "GET" && path === "/fs/search") {
+          const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "50") || 50, 1), 200)
+          return this.json(await this.fss.search(url.searchParams.get("scope") ?? "", url.searchParams.get("q") ?? "", limit))
+        }
+        if (method === "POST" && path === "/fs/ops") {
+          const body = await req.json().catch(() => null) as Record<string, unknown> | null
+          const op = body?.op
+          if (!body || typeof op !== "string" || typeof body.path !== "string") {
+            return this.json({ error: "EINVAL", message: "op and path required" }, 400)
+          }
+          // `permanent` (a real, recursive delete instead of the trash) is only valid on delete,
+          // and only as an explicit boolean: the app sends it after the user confirmed an EXDEV.
+          if (body.permanent !== undefined && (op !== "delete" || typeof body.permanent !== "boolean")) {
+            return this.json({ error: "EINVAL", message: "permanent must be a boolean and is only valid for delete" }, 400)
+          }
+          if (op === "rename" || op === "move") {
+            if (typeof body.to !== "string") return this.json({ error: "EINVAL", message: `${op} needs to` }, 400)
+            await this.fss.op({ op, path: body.path, to: body.to })
+          } else if (op === "delete") {
+            await this.fss.op(body.permanent === true ? { op, path: body.path, permanent: true } : { op, path: body.path })
+          } else if (op === "mkdir" || op === "touch") {
+            await this.fss.op({ op, path: body.path })
+          } else {
+            return this.json({ error: "EINVAL", message: `unknown op: ${op}` }, 400)
+          }
+          return new Response(null, { status: 204 })
+        }
+        return this.json({ error: "method not allowed" }, 405)
+      } catch (e) {
+        return this.fsErrorResponse(e)
+      }
     }
 
     if (method === "GET" && path === "/sessions") {

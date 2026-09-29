@@ -148,26 +148,6 @@ class HostStoreActionsTest {
         assertFalse(s.projectionsActive)
     }
 
-    // Cluster C1 follow-up (a): fsList used to run through runApi, which log-and-nulls a failure
-    // into an empty list — so the file tree could not tell a broken listing from an empty directory
-    // and its inline error row was unreachable. fsListResult keeps the failure, like fsRead.
-    @Test fun fsListResultReturnsAFailureOnA500WhileFsListStillDegradesToEmpty() = runTest(UnconfinedTestDispatcher()) {
-        val http = HttpClient(MockEngine { respond("boom", HttpStatusCode.InternalServerError) })
-        val s = HostStore(
-            "http://h", "t", this, testDeps(http = http),
-            connectOnInit = false,
-            apiOverride = BrokerApi("http://h", "t", http),
-        )
-        val session = SessionInfo(id = "s1", name = "S", workdir = "/w", agent = "claude")
-
-        val result = s.fsListResult(session, "src")
-
-        assertTrue(result.isFailure)
-        assertTrue(s.fsList(session, "src").isEmpty()) // the old shape is unchanged for its callers
-        assertTrue(s.workspaceFsListResult("w1", "src").isFailure)
-        s.close()
-    }
-
     // ── onboarded (the broker's snapshot flag that gates the first-run wizard) ─────────────
     // Null until the first snapshot: the web host must show a spinner rather than flash the shell
     // or the wizard before the broker has told it which one to render.

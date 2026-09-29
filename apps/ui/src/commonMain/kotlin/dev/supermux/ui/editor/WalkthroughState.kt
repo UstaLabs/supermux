@@ -8,6 +8,7 @@ import dev.supermux.net.ReviewComment
 import dev.supermux.net.Walkthrough
 import dev.supermux.net.WalkthroughStep
 import dev.supermux.proto.ServerFrame
+import dev.supermux.editor.compose.EditorScrollPosition
 
 /** Per-session walkthrough UI state. Mutable maps are deliberately keyed by stable code anchors so
  * drafts and scroll survive a replacement walkthrough whose step indices or ids changed. */
@@ -31,6 +32,8 @@ class WalkthroughState(val sessionId: String) {
 
     private val drafts = mutableStateMapOf<CommentAnchor, String>()
     private val scrollOffsets = mutableStateMapOf<CommentAnchor, Int>()
+    /** The native editor's scroll per step anchor: a document position, not pixels (M5). */
+    private val positions = mutableStateMapOf<CommentAnchor, EditorScrollPosition>()
     private var requestedStepId: String? = null
 
     val steps: List<WalkthroughStep> get() = walkthrough?.steps.orEmpty().sortedBy { it.ord }
@@ -72,6 +75,7 @@ class WalkthroughState(val sessionId: String) {
                 if (oldAnchor != null && nextAnchor != null && oldAnchor != nextAnchor) {
                     drafts[oldAnchor]?.let { if (nextAnchor !in drafts) drafts[nextAnchor] = it }
                     scrollOffsets[oldAnchor]?.let { if (nextAnchor !in scrollOffsets) scrollOffsets[nextAnchor] = it }
+                    positions[oldAnchor]?.let { if (nextAnchor !in positions) positions[nextAnchor] = it }
                 }
             }
         }
@@ -138,6 +142,9 @@ class WalkthroughState(val sessionId: String) {
     fun clearDraft(anchor: CommentAnchor) { drafts.remove(anchor) }
     fun scroll(anchor: CommentAnchor): Int = scrollOffsets[anchor] ?: 0
     fun setScroll(anchor: CommentAnchor, value: Int) { scrollOffsets[anchor] = value }
+    /** Where the native editor was scrolled on the step at [anchor] (null: its start). */
+    fun position(anchor: CommentAnchor): EditorScrollPosition? = positions[anchor]
+    fun setPosition(anchor: CommentAnchor, value: EditorScrollPosition) { positions[anchor] = value }
 }
 
 data class CommentAnchor(

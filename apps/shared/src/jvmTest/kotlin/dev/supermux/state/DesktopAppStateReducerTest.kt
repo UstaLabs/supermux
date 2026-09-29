@@ -182,7 +182,7 @@ class DesktopAppStateReducerTest {
         val s = state()
         val received = mutableListOf<dev.supermux.state.AgentReplyEvent>()
         // UnconfinedTestDispatcher runs the collector eagerly → it subscribes before the reduce,
-        // so the replay-0 SharedFlow delivers the pulse (same pattern as fs_changed's test).
+        // so the replay-0 SharedFlow delivers the pulse .
         val job = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher()).launch {
             s.agentReplies.collect { received.add(it) }
         }
@@ -230,30 +230,11 @@ class DesktopAppStateReducerTest {
         job.cancel()
     }
 
-    // ── M3 editor: fs_changed fold + editor lifecycle senders ─────────────────────────────
-    @Test fun fs_changed_frame_is_broadcast_on_the_fs_changes_flow() {
+    // ── Legacy fs_changed: an older broker still sends it; the app decodes it and ignores it ───
+    @Test fun a_legacy_fs_changed_frame_is_ignored() {
         val s = state()
-        val received = mutableListOf<ServerFrame.FsChanged>()
-        // UnconfinedTestDispatcher runs the collector eagerly → it subscribes before the reduce,
-        // so the replay-0 SharedFlow delivers the pulse.
-        val job = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher()).launch {
-            s.fsChanges.collect { received.add(it) }
-        }
-        s.reduce(ServerFrame.FsChanged(session = "s1", paths = listOf("src/a.kt", "src/b.kt")))
-        assertEquals(1, received.size)
-        assertEquals("s1", received.first().session)
-        assertEquals(listOf("src/a.kt", "src/b.kt"), received.first().paths)
-        job.cancel()
-    }
-
-    @Test fun editor_open_and_close_send_the_lifecycle_frames() {
-        val s = state()
-        s.editorOpen(session("s1"))
-        s.editorClose(session("s1"))
-        assertEquals(
-            listOf(ClientFrame.EditorOpen("s1"), ClientFrame.EditorClose("s1")),
-            sent.filter { it is ClientFrame.EditorOpen || it is ClientFrame.EditorClose },
-        )
+        s.reduce(ServerFrame.FsChanged(session = "s1", paths = listOf("src/a.kt")))
+        assertTrue(sent.isEmpty())
     }
 
     @Test fun close_cancels_owned_scope_so_no_more_outbound_sends() {

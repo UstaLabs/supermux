@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ViewList
+import androidx.compose.material.icons.filled.VerticalSplit
 import androidx.compose.material.icons.filled.WrapText
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -87,6 +88,7 @@ import dev.supermux.net.DiffFile
 import dev.supermux.net.RepoDiff
 import dev.supermux.net.RepoRefs
 import dev.supermux.net.ReviewComment
+import dev.supermux.net.AddCommentBody
 import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
@@ -94,6 +96,7 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.prefs.EDITOR_DIFF_TREE_VIEW_DEFAULT
+import dev.supermux.ui.prefs.EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT
 import androidx.compose.runtime.collectAsState
 
 // ─── Diff colours — same semantic palette as iOS DiffView.swift:38-41 (emerald/red/
@@ -139,6 +142,21 @@ fun DiffView(
      *  EditorPanel.kt) can render diff lines to a screenshot with no pointer/xdotool available.
      *  Defaults false — the normal, Android-parity "collapsed until tapped" behavior. */
     autoExpandAll: Boolean = false,
+    /**
+     * Reads a changed file's working copy (repo, path) so its diff is drawn by the native editor's
+     * diff plugin (M5): inline, or side by side with the header's toggle, with the plugin's threads
+     * and composer. Null keeps the patch rows.
+     */
+    readFile: (suspend (repo: String, path: String) -> Result<String>)? = null,
+    /** Writes a working copy back: offers hunk revert in the native diff. Null: no revert. */
+    writeFile: (suspend (repo: String, path: String, text: String) -> Boolean)? = null,
+    /**
+     * Posts a comment or a reply and answers what the broker created (null: it failed, the
+     * composer's draft stays). The native diff uses it for both; null falls back to [onAddComment].
+     */
+    postComment: (suspend (AddCommentBody) -> ReviewComment?)? = null,
+    /** The open documents: a revert goes through the file's document when it is open (and is not offered while it is dirty). */
+    documents: DocumentStore? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -152,6 +170,26 @@ fun DiffView(
     var expandedFolders by remember { mutableStateOf(setOf<String>()) }
     val uiPrefs = LocalUiPrefs.current
     val treeView by uiPrefs.editorDiffTreeView.collectAsState(EDITOR_DIFF_TREE_VIEW_DEFAULT)
+    val sideBySide by uiPrefs.editorDiffSideBySide.collectAsState(EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT)
+    // Kept by the pane, not the (lazy) file items: a rebuilt item finds its drafts and its scroll.
+    val nativeDrafts = remember { HashMap<String, MapReviewDrafts>() }
+    val nativeScroll = remember { HashMap<String, dev.supermux.editor.compose.EditorScrollPosition>() }
+    val native = if (readFile != null) {
+        NativeDiffSupport(
+            readFile = readFile,
+            writeFile = writeFile,
+            sideBySide = sideBySide,
+            postComment = postComment ?: { body ->
+                onAddComment(body.repo, body.path, body.anchorLine, body.anchorContext, body.diffHunkHeader.orEmpty(), body.body)
+                // The legacy callback reports nothing: count it as posted.
+                ReviewComment(id = "", repo = body.repo, path = body.path, side = body.side, anchorLine = body.anchorLine, body = body.body, status = "open")
+            },
+            onResolve = onResolve,
+            documents = documents,
+            drafts = { repo, path -> nativeDrafts.getOrPut("$repo $path") { MapReviewDrafts() } },
+            scroll = nativeScroll,
+        )
+    } else null
     // `repo||path||newLine` of the line whose composer is open (null = none).
     var composerFor by remember { mutableStateOf<String?>(null) }
     var draft by remember { mutableStateOf("") }
@@ -219,6 +257,23 @@ fun DiffView(
                 onSelect = { spec -> haptic.perform(HapticKind.Tick); showBaseMenu = false; onSetBase(spec) },
             )
             Spacer(Modifier.width(Space.xs))
+            if (native != null) {
+                // Inline (the default) or side by side, for every file of the pane; persisted.
+                IconButton(
+                    onClick = {
+                        haptic.perform(HapticKind.Tick)
+                        scope.launch { uiPrefs.putEditorDiffSideBySide(!sideBySide) }
+                    },
+                    modifier = Modifier.testTag("diff_side_by_side_toggle"),
+                ) {
+                    Icon(
+                        Icons.Filled.VerticalSplit,
+                        contentDescription = if (sideBySide) "Show inline" else "Show side by side",
+                        tint = if (sideBySide) cs.primary else cs.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
             IconButton(
                 onClick = {
                     haptic.perform(HapticKind.Tick)
@@ -348,6 +403,8 @@ fun DiffView(
                                                 onResolve = { commentId ->
                                                     scope.launch { onResolve(commentId); onReload() }
                                                 },
+                                                native = native,
+                                                onReload = onReload,
                                             )
                                             HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
                                         }
@@ -391,6 +448,8 @@ fun DiffView(
                                         onResolve = { commentId ->
                                             scope.launch { onResolve(commentId); onReload() }
                                         },
+                                        native = native,
+                                        onReload = onReload,
                                     )
                                     HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
                                 }
@@ -799,6 +858,8 @@ private fun FileSection(
     onResolve: (commentId: String) -> Unit,
     depth: Int = 0,
     label: String = file.path,
+    native: NativeDiffSupport? = null,
+    onReload: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
@@ -892,14 +953,30 @@ private fun FileSection(
                             onResolve = onResolve,
                         )
                     }
-                    if (wrap) {
-                        body()
-                    } else {
-                        // No wrap → diff + its comment rows share one horizontal scroll so they stay
-                        // column-aligned (parity DiffView.swift:269-272).
-                        Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    val rows: @Composable () -> Unit = {
+                        if (wrap) {
                             body()
+                        } else {
+                            // No wrap → diff + its comment rows share one horizontal scroll so they stay
+                            // column-aligned (parity DiffView.swift:269-272).
+                            Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                                body()
+                            }
                         }
+                    }
+                    if (native != null) {
+                        NativeFileDiff(
+                            repo = repo,
+                            file = file,
+                            wrap = wrap,
+                            comments = comments,
+                            support = native,
+                            onReload = onReload,
+                            testTagIndex = testTagIndex,
+                            fallback = rows,
+                        )
+                    } else {
+                        rows()
                     }
                 }
             }
@@ -1284,3 +1361,15 @@ private fun hunkHeader(lines: List<DiffLine>, index: Int): String {
     }
     return ""
 }
+
+/** What the Changes pane needs to draw a file on the native diff plugin (M5; see [DiffView]'s readFile). */
+internal class NativeDiffSupport(
+    val readFile: suspend (repo: String, path: String) -> Result<String>,
+    val writeFile: (suspend (repo: String, path: String, text: String) -> Boolean)?,
+    val sideBySide: Boolean,
+    val postComment: suspend (AddCommentBody) -> ReviewComment?,
+    val onResolve: suspend (commentId: String) -> Unit,
+    val documents: DocumentStore? = null,
+    val drafts: (repo: String, path: String) -> ReviewDrafts = { _, _ -> MapReviewDrafts() },
+    val scroll: MutableMap<String, dev.supermux.editor.compose.EditorScrollPosition> = HashMap(),
+)

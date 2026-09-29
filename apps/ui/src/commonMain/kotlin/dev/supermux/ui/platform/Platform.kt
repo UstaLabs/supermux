@@ -4,7 +4,6 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import dev.supermux.net.ChunkSource
 import kotlinx.coroutines.flow.Flow
 import dev.supermux.ui.display.VideoSurfaceFactory
-import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 
@@ -148,12 +147,11 @@ interface Platform {
     val push: PushRegistrar?
 
     /**
-     * Builds the browser that hosts CodeMirror — a `WebView` on Android, a direct-JCEF browser on
-     * desktop. The shared editor surface reads this and never names either. A machine with no
-     * browser at all installs `UnavailableEditorEngineFactory`, and every editor pane degrades to
-     * its native fallback.
+     * The native editor's syntax backend: the native
+     * binding by default, loaded on first use. The browser overrides it with the wasm module and
+     * the hashed tables directory. A platform without the library gets plain-text editors.
      */
-    val editorEngine: EditorEngineFactory
+    val editorSyntax: dev.supermux.ui.editor.EditorSyntax get() = dev.supermux.ui.editor.DefaultEditorSyntax
 }
 
 /** Default [Platform.pickFiles] requester for screens that only ever have one picker in play. */

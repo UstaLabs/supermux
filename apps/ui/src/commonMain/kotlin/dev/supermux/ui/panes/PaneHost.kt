@@ -85,13 +85,13 @@ import dev.supermux.workspace.splitGroup
  * editor, a terminal, or a display (see ViewHost.kt).
  *
  * Only the ACTIVE view of each group is composed. That is load-bearing, not an
- * optimisation: the JCEF editor is a heavyweight AWT SwingPanel child, and one
- * live browser per background tab would exhaust memory. (The terminal was the
- * other such child until Plan 4 made it pure Compose; the rule is unchanged.)
+ * optimisation: a live terminal or editor surface per background tab costs memory
+ * and frames for nothing. (Both were heavyweight interop children once; both are
+ * pure Compose now, and the rule is unchanged.)
  *
  * While a tab drag targets a pane body, content stays mounted and a translucent
- * [PaneDropOverlay] is shown in a [Popup] above SwingPanel (JCEF).
- * Compose siblings cannot paint over heavyweight children — Popup can.
+ * [PaneDropOverlay] is shown in a [Popup] above it (a Popup also paints over a
+ * platform interop child, should a pane ever embed one again).
  */
 @Composable
 fun PaneHost(

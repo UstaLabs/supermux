@@ -45,6 +45,21 @@ class HostReducerTest {
         assertEquals(1, out.sessions.first { it.id == "a" }.sortOrder)
     }
 
+    /** A snapshot is a new broker connection, whose language servers are new too (M5: the native editor reopens them). */
+    @Test fun snapshotMarksRunningLanguageServersStale() {
+        val ready = ServerFrame.LspStatus(session = "s1", path = "a.kt", supported = true, serverId = "kls", state = "ready")
+        val missing = ServerFrame.LspStatus(session = "s1", path = "b.py", supported = true, serverId = "pyright", state = "missing")
+        val unsupported = ServerFrame.LspStatus(session = "s1", path = "c.txt", supported = false)
+        val before = HostState(lspStatus = mapOf("s1|a.kt" to ready, "s1|b.py" to missing, "s1|c.txt" to unsupported))
+        val out = reduceHostFrame(before, ServerFrame.Snapshot())
+        assertEquals(LSP_STATE_STALE, out.lspStatus["s1|a.kt"]?.state)
+        assertEquals("missing", out.lspStatus["s1|b.py"]?.state)
+        assertSame(unsupported, out.lspStatus["s1|c.txt"])
+        // An lsp_ready after the reopen makes it ready again.
+        val reopened = reduceHostFrame(out, ServerFrame.LspReady(session = "s1", serverId = "kls"))
+        assertEquals("ready", reopened.lspStatus["s1|a.kt"]?.state)
+    }
+
     @Test fun snapshotPopulatesSessionsAndLogs() {
         val entry = LogEntry(id = "m1", ts = "2026-01-01T00:00:00Z", direction = "outbound", text = "hi")
         val out = reduceHostFrame(

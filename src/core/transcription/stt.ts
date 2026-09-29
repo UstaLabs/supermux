@@ -99,6 +99,7 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
   const tOpts: SttTranscribeOpts = {
     model: opts.model,
     lang: opts.lang,
+    languages: opts.languages,
     keyterms: opts.keyterms,
     signal: opts.signal,
   }

@@ -135,6 +135,15 @@ class ScrollController(
         request(bottom.row)
     }
 
+    /**
+     * Put absolute [row] at the top of the viewport, clamped to the history that exists — a search
+     * jumping to a match. Leaves live-follow unless the row IS the bottom.
+     */
+    fun jumpTo(row: Long) {
+        cancelFling()
+        settle(ScrollPosition(row.coerceIn(0L, newestTop), 0.0))
+    }
+
     // ----------------------------------------------------------------- engine feedback ----
 
     /**

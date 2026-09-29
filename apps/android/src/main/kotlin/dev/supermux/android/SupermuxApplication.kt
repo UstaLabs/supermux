@@ -2,15 +2,13 @@ package dev.supermux.android
 
 import android.app.Activity
 import android.app.Application
-import android.os.Build
 import android.os.Bundle
 import dev.supermux.android.update.AndroidAppUpdater
-import android.webkit.WebView
 import dev.supermux.android.platform.AndroidTts
 
 /**
- * Ensures WebView uses an isolated data dir before any editor WebView is created, and owns the
- * process-wide read-aloud lifetime.
+ * Owns the process-wide read-aloud lifetime. (It also used to give the CodeMirror editor's WebView
+ * an isolated data dir; the native editor has no WebView.)
  *
  * `onTerminate` is never called on a real device, so the TTS engine is released when the LAST
  * activity is destroyed instead: `Platform.tts` is a process singleton (a rotation must not orphan
@@ -26,9 +24,6 @@ class SupermuxApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            WebView.setDataDirectorySuffix("supermux")
-        }
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, state: Bundle?) { activities++ }
             override fun onActivityDestroyed(activity: Activity) {

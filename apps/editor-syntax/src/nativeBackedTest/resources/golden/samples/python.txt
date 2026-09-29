@@ -1,0 +1,13 @@
+import os
+from typing import List
+
+@dataclass
+class Point:
+    x: int = 0
+
+def walk(root: str) -> List[str]:
+    """Yield files."""
+    out = []
+    for d, _, files in os.walk(root):
+        out += [os.path.join(d, f) for f in files if not f.startswith(".")]
+    return out  # ağ

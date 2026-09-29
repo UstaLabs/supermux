@@ -106,6 +106,46 @@ class EditorStateTest {
         assertNull(s.loadingPath)
     }
 
+    // ── a rename / delete in the Files tree ─────────────────────────────────────────────────
+
+    @Test fun deleting_a_folder_closes_its_clean_tabs_and_flags_dirty_ones() {
+        val s = state()
+        s.openFile("src/a.kt")
+        s.openFile("src/b.kt")
+        s.openFile("top.kt")
+        s.updateContent("src/b.kt", "unsaved")
+
+        s.applyEntryMoved("/w", "/w/src", null)
+
+        assertEquals(listOf("src/b.kt", "top.kt"), s.tabs.map { it.path })
+        assertEquals("unsaved", s.tabs.first().content)
+        assertTrue(s.isStale("src/b.kt"))
+        assertFalse(s.isStale("top.kt"))
+    }
+
+    @Test fun renaming_a_clean_file_reopens_it_at_the_new_path() {
+        val s = state()
+        s.openFile("src/a.kt")
+        s.openFile("top.kt")
+
+        s.applyEntryMoved("/w", "/w/src/a.kt", "/w/src/z.kt")
+
+        assertEquals(listOf("top.kt", "src/z.kt"), s.tabs.map { it.path })
+        assertEquals("body:src/z.kt", s.tabs.last().content)
+        assertFalse(s.isStale("src/z.kt"))
+    }
+
+    @Test fun renaming_a_dirty_file_keeps_its_tab_and_flags_it() {
+        val s = state()
+        s.openFile("src/a.kt")
+        s.updateContent("src/a.kt", "unsaved")
+
+        s.applyEntryMoved("/w", "/w/src", "/w/lib")
+
+        assertEquals(listOf("src/a.kt"), s.tabs.map { it.path })
+        assertTrue(s.isStale("src/a.kt"))
+    }
+
     // ── close (parity: testCloseTabRemovesAndSelectsNeighbor / testClosingInactiveTabKeepsActive) ─
 
     @Test fun close_tab_removes_and_selects_neighbor() {
@@ -340,15 +380,10 @@ class EditorStateTest {
         assertEquals(10 to 12, tab.revealLine)
     }
 
-    // ── tree / search UI state defaults — ADDED (search-query state + tree state, per plan Task 3;
-    //    sortedForTree ordering itself is covered separately in FileTreeTest.kt). ─────────────────
+    // ── tree-visibility / search UI state defaults ─────────────────────────────────────────────
 
     @Test fun tree_and_search_ui_state_defaults() {
         val s = state()
-        assertTrue(s.treeRoot.isEmpty())
-        assertFalse(s.treeRootLoaded)
-        assertTrue(s.expandedPaths.isEmpty())
-        assertTrue(s.treeLoadingPaths.isEmpty())
         assertNull(s.treeVisible)
         assertTrue(s.changedPaths.isEmpty())
         assertEquals("", s.searchQuery)
@@ -709,5 +744,70 @@ class EditorStateTest {
         s.reloadDiff { base -> seenBase = base; fakeDiff }
 
         assertEquals("commit:abc1234", seenBase) // reloadDiff re-uses the selected base, not the default
+    }
+
+    // ── WatchedDocuments: what the stale-banner watcher needs from the session editor ─────────
+
+    private class RecordingObserver : WatchedDocuments.WriteObserver {
+        val events = mutableListOf<String>()
+        override fun writeStarted(path: String) { events += "start:$path" }
+        override fun writeFinished(path: String, ok: Boolean) { events += "finish:$path:$ok" }
+    }
+
+    @Test fun open_paths_follow_the_open_tabs() {
+        val s: WatchedDocuments = state().also {
+            it.openFile("a.txt")
+            it.openFile("src/b.kt")
+            it.closeTab("a.txt")
+        }
+        assertEquals(setOf("src/b.kt"), s.openPaths.toSet())
+    }
+
+    @Test fun a_save_brackets_the_write_for_observers() {
+        val gate = CompletableDeferred<Unit>()
+        val s2 = EditorState(
+            fsRead = { Result.success("x") },
+            fsWrite = { _, _ -> gate.await(); true },
+            scope = TestScope(UnconfinedTestDispatcher()),
+        )
+        val obs = RecordingObserver()
+        val stop = s2.observeWrites(obs)
+        s2.openFile("a.txt")
+        s2.updateContent("a.txt", "edited")
+        s2.saveActive()
+        assertEquals(listOf("start:a.txt"), obs.events) // still in flight
+        gate.complete(Unit)
+        assertEquals(listOf("start:a.txt", "finish:a.txt:true"), obs.events)
+        stop()
+        s2.updateContent("a.txt", "again")
+        s2.saveActive()
+        assertEquals(2, obs.events.size) // unregistered
+        assertFalse(s2.saving)
+    }
+
+    @Test fun a_failed_save_still_finishes_the_write() {
+        val s = state(writeSucceeds = false)
+        val obs = RecordingObserver()
+        s.observeWrites(obs)
+        s.openFile("a.txt")
+        s.updateContent("a.txt", "edited")
+        s.saveActive()
+        assertEquals(listOf("start:a.txt", "finish:a.txt:false"), obs.events)
+    }
+
+    @Test fun a_throwing_save_still_finishes_the_write() {
+        val s = EditorState(
+            fsRead = { Result.success("x") },
+            fsWrite = { _, _ -> throw RuntimeException("network") },
+            scope = CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined + kotlinx.coroutines.CoroutineExceptionHandler { _, _ -> }),
+        )
+        val obs = RecordingObserver()
+        s.observeWrites(obs)
+        s.openFile("a.txt")
+        s.updateContent("a.txt", "edited")
+        s.saveActive()
+        assertEquals(listOf("start:a.txt", "finish:a.txt:false"), obs.events)
+        assertFalse(s.saving)
+        assertTrue(s.isDirty("a.txt"))
     }
 }

@@ -77,6 +77,14 @@ class UiPrefsTest {
     }
 
     @Test
+    fun files_reveal_active_defaults_on_and_round_trips() = runTest {
+        val (_, p) = prefs()
+        assertEquals(true, p.filesRevealActive.first())
+        p.putFilesRevealActive(false)
+        assertEquals(false, p.filesRevealActive.first())
+    }
+
+    @Test
     fun diff_tree_view_round_trips() = runTest {
         val (_, p) = prefs()
         p.putEditorDiffTreeView(false)

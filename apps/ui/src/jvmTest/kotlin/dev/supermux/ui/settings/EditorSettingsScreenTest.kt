@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.net.LspServer
 import dev.supermux.state.SettingsKeys
@@ -94,6 +95,20 @@ class EditorSettingsScreenTest {
         setPlatformContent(uiPrefs = UiPrefs(store)) { screen()() }
         waitForIdle()
         onNodeWithTag("editor_font_size").assertTextEquals(EDITOR_FONT_MAX.toString())
+    }
+
+    /** M5: the Changes pane's side-by-side default and the native editor's accessory bar. */
+    @Test fun the_side_by_side_and_accessory_bar_switches_persist() = runComposeUiTest {
+        val store = FakeSettingsStore()
+        setPlatformContent(uiPrefs = UiPrefs(store)) { screen()() }
+        waitForIdle()
+        // Side by side defaults OFF, the bar ON.
+        onNodeWithTag("editor_side_by_side_switch").performScrollTo().performClick()
+        waitForIdle()
+        assertEquals("true", store.map.value[SettingsKeys.EDITOR_DIFF_SIDE_BY_SIDE])
+        onNodeWithTag("editor_accessory_bar_switch").performScrollTo().performClick()
+        waitForIdle()
+        assertEquals("false", store.map.value[SettingsKeys.EDITOR_ACCESSORY_BAR])
     }
 
     @Test fun the_wrap_switch_persists() = runComposeUiTest {

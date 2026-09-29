@@ -1,0 +1,8 @@
+package demo
+
+object Main extends App {
+  case class Point(x: Int, y: Int)
+  val p = Point(1, 2)
+  def norm(q: Point): Double = math.sqrt(q.x * q.x + q.y * q.y)
+  println(s"norm = ${norm(p)}")
+}
