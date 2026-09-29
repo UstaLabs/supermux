@@ -152,6 +152,22 @@ fun interface WidgetClickHandler {
 val widgetClickFacet: Facet<WidgetClickHandler, List<WidgetClickHandler>> = Facet.list("widgetClick")
 
 /**
+ * A plugin's say over a Mod-click (Cmd on Apple platforms, Ctrl elsewhere) on text at [pos]:
+ * VS Code's Cmd-click go to definition. The cursor is already at [pos]. Return true to take it.
+ * While any handler is registered, holding Mod with the mouse over a word underlines it and shows
+ * a hand pointer (the surface's [EditorTheme.MOD_LINK_CLASS]).
+ */
+fun interface ModClickHandler {
+    fun click(target: CommandTarget, pos: Int): Boolean
+}
+
+/**
+ * Every plugin's [ModClickHandler], highest precedence first; the first to return true wins. A
+ * provider may give null (`compute`: the LSP server has no definitions), which is no handler.
+ */
+val modClickFacet: Facet<ModClickHandler?, List<ModClickHandler>> = Facet.define("modClick") { it.filterNotNull() }
+
+/**
  * The policy for a user edit that reaches INTO an atomic range (a fold, a range of
  * `atomicRangesFacet`): a Backspace at its end, a Delete at its start, a soft keyboard deleting its
  * placeholder, an autocorrect across its edge. The edit itself is never applied (it would take a

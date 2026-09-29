@@ -98,6 +98,9 @@ data class EditorTheme(
         /** The class the surface puts on text an IME is still composing (an underline). */
         const val COMPOSITION_CLASS = "ime-composition"
 
+        /** The class the surface puts on the word under the mouse while Mod is held ([modClickFacet]; an underline). */
+        const val MOD_LINK_CLASS = "mod-link"
+
         /** basics' active line (a `LineStyle`): painted in [currentLine]. */
         const val ACTIVE_LINE_CLASS = "active-line"
 
