@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { parseRawNumstat, listChanges, MAX_LIST_FILES } from "./changes"
+import { parseRawNumstat, listChanges, MAX_LIST_FILES, readBaseBlob, BLOB_LIMIT } from "./changes"
 import { execFileSync } from "child_process"
 import { mkdtempSync, writeFileSync, mkdirSync } from "fs"
 import { tmpdir } from "os"
@@ -136,5 +136,43 @@ describe("listChanges", () => {
 
   test("a missing workdir lists nothing", async () => {
     expect((await listChanges("/nonexistent/mux-changes", {})).repos).toEqual([])
+  })
+})
+
+describe("readBaseBlob", () => {
+  test("returns the blob text", async () => {
+    const { dir, base } = repo()
+    const sha = git(dir, "rev-parse", `${base}:a.txt`)
+    expect(await readBaseBlob(dir, sha)).toEqual({ ok: true, text: "one\ntwo\n" })
+  })
+
+  test("rejects a bad sha without running git", async () => {
+    const { dir } = repo()
+    expect(await readBaseBlob(dir, "HEAD")).toEqual({ ok: false, code: "BAD_SHA" })
+  })
+
+  test("a missing blob is MISSING", async () => {
+    const { dir } = repo()
+    expect(await readBaseBlob(dir, "c".repeat(40))).toEqual({ ok: false, code: "MISSING" })
+  })
+
+  test("binary blobs are BINARY", async () => {
+    const { dir } = repo()
+    writeFileSync(join(dir, "b.dat"), Buffer.from([1, 0, 2]))
+    git(dir, "add", "b.dat")
+    git(dir, "commit", "-qm", "bin")
+    const sha = git(dir, "rev-parse", "HEAD:b.dat")
+    expect(await readBaseBlob(dir, sha)).toEqual({ ok: false, code: "BINARY" })
+  })
+
+  test("large blobs are TOO_LARGE unless forced", async () => {
+    const { dir } = repo()
+    writeFileSync(join(dir, "big.txt"), "x".repeat(BLOB_LIMIT + 10))
+    git(dir, "add", "big.txt")
+    git(dir, "commit", "-qm", "big")
+    const sha = git(dir, "rev-parse", "HEAD:big.txt")
+    expect(await readBaseBlob(dir, sha)).toEqual({ ok: false, code: "TOO_LARGE", size: BLOB_LIMIT + 10 })
+    const forced = await readBaseBlob(dir, sha, { force: true })
+    expect(forced.ok && forced.text.length).toBe(BLOB_LIMIT + 10)
   })
 })

@@ -173,3 +173,32 @@ export async function listChanges(
   })
   return { repos: perRepo.filter((r) => r.files.length > 0 || r.error) }
 }
+
+export const BLOB_LIMIT = 1024 * 1024
+export const BLOB_FORCE_LIMIT = 8 * 1024 * 1024
+
+export type BlobRead =
+  | { ok: true; text: string }
+  | { ok: false; code: "BAD_SHA" | "MISSING" | "BINARY" }
+  | { ok: false; code: "TOO_LARGE"; size: number }
+
+/** One base-side blob as text (spec §2.2): size first, then the content, then a binary sniff. */
+export async function readBaseBlob(repoAbs: string, sha: string, opts?: { force?: boolean }): Promise<BlobRead> {
+  if (!/^[0-9a-f]{40}$/.test(sha)) return { ok: false, code: "BAD_SHA" }
+  let size: number
+  try {
+    size = Number(await gitAsync(repoAbs, ["cat-file", "-s", sha], { timeoutMs: 5000 }))
+  } catch {
+    return { ok: false, code: "MISSING" }
+  }
+  const limit = opts?.force ? BLOB_FORCE_LIMIT : BLOB_LIMIT
+  if (!Number.isFinite(size) || size > limit) return { ok: false, code: "TOO_LARGE", size }
+  let text: string
+  try {
+    text = await gitAsync(repoAbs, ["cat-file", "blob", sha], { trim: false })
+  } catch {
+    return { ok: false, code: "MISSING" }
+  }
+  if (text.slice(0, BINARY_SNIFF_BYTES).includes("\0")) return { ok: false, code: "BINARY" }
+  return { ok: true, text }
+}
