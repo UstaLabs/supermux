@@ -42,4 +42,26 @@ describe("parseRawNumstat", () => {
     const raw = `:100644 100644 ${A} ${Z} M\0x.ts\0`
     expect(parseRawNumstat(raw, "")[0]).toMatchObject({ path: "x.ts", added: null, removed: null, binary: false })
   })
+
+  test("a path containing a tab keeps its counts", () => {
+    const raw = `:100644 100644 ${A} ${Z} M\0we\tird.ts\0`
+    const numstat = "5\t2\twe\tird.ts\0"
+    expect(parseRawNumstat(raw, numstat)[0]).toMatchObject({ path: "we\tird.ts", added: 5, removed: 2 })
+  })
+
+  test("a copy line is a plain add", () => {
+    const raw = `:100644 100644 ${A} ${Z} C100\0src.ts\0dup.ts\0`
+    const numstat = "0\t0\t\0src.ts\0dup.ts\0"
+    expect(parseRawNumstat(raw, numstat)).toEqual([
+      { path: "dup.ts", status: "added", added: 0, removed: 0, binary: false, oldPath: null, baseBlob: null },
+    ])
+  })
+
+  test("a binary rename is binary with null counts and oldPath", () => {
+    const raw = `:100644 100644 ${A} ${Z} R100\0old.png\0new.png\0`
+    const numstat = "-\t-\t\0old.png\0new.png\0"
+    expect(parseRawNumstat(raw, numstat)).toEqual([
+      { path: "new.png", status: "renamed", added: null, removed: null, binary: true, oldPath: "old.png", baseBlob: A },
+    ])
+  })
 })

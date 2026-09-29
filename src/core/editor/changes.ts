@@ -33,8 +33,12 @@ export function parseRawNumstat(raw: string, numstat: string): ChangedFile[] {
   for (let i = 0; i < ns.length; i++) {
     const rec = ns[i]!
     if (!rec) continue
-    const [a, r, p] = rec.split("\t")
-    if (a === undefined || r === undefined || p === undefined) continue
+    const t1 = rec.indexOf("\t")
+    const t2 = t1 < 0 ? -1 : rec.indexOf("\t", t1 + 1)
+    if (t2 < 0) continue
+    const a = rec.slice(0, t1)
+    const r = rec.slice(t1 + 1, t2)
+    const p = rec.slice(t2 + 1)   // may itself contain tabs
     let path = p
     if (p === "") {           // rename/copy: the paths follow as two NUL-separated fields
       i += 2
@@ -54,7 +58,7 @@ export function parseRawNumstat(raw: string, numstat: string): ChangedFile[] {
     const letter = (parts[4] ?? "M").charAt(0)
     let oldPath: string | null = null
     let path = rw[++i] ?? ""
-    if (letter === "R" || letter === "C") {
+    if (letter === "R" || letter === "C") {   // C doesn't occur with -M; consumed only to stay aligned with the NUL fields
       oldPath = path
       path = rw[++i] ?? ""
     }
@@ -66,7 +70,7 @@ export function parseRawNumstat(raw: string, numstat: string): ChangedFile[] {
       removed: c?.removed ?? null,
       binary: c?.binary ?? false,
       oldPath: letter === "R" ? oldPath : null,
-      baseBlob: srcSha && !ZERO_SHA.test(srcSha) ? srcSha : null,
+      baseBlob: letter !== "C" && srcSha && !ZERO_SHA.test(srcSha) ? srcSha : null,
     })
   }
   return out
