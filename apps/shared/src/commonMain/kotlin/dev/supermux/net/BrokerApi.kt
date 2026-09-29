@@ -847,16 +847,85 @@ data class FsDiffResult(
 data class RepoDiff(
     val repo: String,
     val files: List<DiffFile> = emptyList(),
+    /** Lazy (`/changes`) only: the resolved base commit, the cap flag, the real count, a git error. */
+    val baseSha: String? = null,
+    val truncated: Boolean = false,
+    val total: Int? = null,
+    val error: String? = null,
 )
 
 @Serializable
 data class DiffFile(
     val path: String,
     val status: String,
-    val diff: String,
+    /** The unified patch; "" for a [lazy] file (its texts load on expand). */
+    val diff: String = "",
     val binary: Boolean = false,
     val modeChange: Boolean = false,
+    /** Lazy (`/changes`) only: +/- line counts (null: binary or not counted), the base-side path of
+     *  a rename, the base blob SHA (null: the file is new), the working-copy size. */
+    val added: Int? = null,
+    val removed: Int? = null,
+    val oldPath: String? = null,
+    val baseBlob: String? = null,
+    val size: Long? = null,
+    val lazy: Boolean = false,
 )
+
+/** GET …/changes — the Changes pane's list (spec 2026-09-29 §2.1): no file text. */
+@Serializable
+data class ChangesResult(
+    val repos: List<RepoChanges> = emptyList(),
+    val comments: List<ReviewComment> = emptyList(),
+)
+
+@Serializable
+data class RepoChanges(
+    val repo: String,
+    val baseSha: String? = null,
+    val files: List<ChangedFile> = emptyList(),
+    val truncated: Boolean = false,
+    val total: Int = 0,
+    val error: String? = null,
+)
+
+@Serializable
+data class ChangedFile(
+    val path: String,
+    val status: String,
+    val added: Int? = null,
+    val removed: Int? = null,
+    val binary: Boolean = false,
+    val oldPath: String? = null,
+    val baseBlob: String? = null,
+    val size: Long? = null,
+)
+
+/** The list in the shape the pane already renders: every file [DiffFile.lazy], no patch. */
+fun ChangesResult.toFsDiffResult(): FsDiffResult = FsDiffResult(
+    repos = repos.map { r ->
+        RepoDiff(
+            repo = r.repo,
+            files = r.files.map { f ->
+                DiffFile(
+                    path = f.path, status = f.status, binary = f.binary,
+                    added = f.added, removed = f.removed, oldPath = f.oldPath,
+                    baseBlob = f.baseBlob, size = f.size, lazy = true,
+                )
+            },
+            baseSha = r.baseSha, truncated = r.truncated, total = r.total, error = r.error,
+        )
+    },
+    comments = comments,
+)
+
+/** GET …/changes/blob: a base text, or why there is none. */
+sealed interface BlobText {
+    data class Text(val text: String) : BlobText
+    data class TooLarge(val size: Long) : BlobText
+    data object Binary : BlobText
+    data class Failed(val message: String) : BlobText
+}
 
 /** GET /sessions/<id>/fs/refs → branches + recent commits per repo, to populate the
  *  diff base picker's "Previous commit…" / "Another branch…" submenus. */
@@ -2656,6 +2725,43 @@ class BrokerApi(
     /** GET /workspaces/<id>/fs/diff?base=<spec> */
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult =
         getJson("$httpBase/workspaces/$workspaceId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
+
+    /** GET /workspaces/<id>/changes?base=<spec>; null when the broker predates it (404). */
+    suspend fun workspaceChanges(workspaceId: String, base: String? = null): ChangesResult? =
+        changesAt("$httpBase/workspaces/$workspaceId/changes" + baseQuery(base))
+
+    /** GET /sessions/<id>/changes?base=<spec>; null when the broker predates it (404). */
+    suspend fun sessionChanges(sessionId: String, base: String? = null): ChangesResult? =
+        changesAt("$httpBase/sessions/$sessionId/changes" + baseQuery(base))
+
+    /** GET /workspaces/<id>/changes/blob?repo=&sha=[&force=1] */
+    suspend fun workspaceChangesBlob(workspaceId: String, repo: String, sha: String, force: Boolean = false): BlobText =
+        blobAt("$httpBase/workspaces/$workspaceId/changes/blob", repo, sha, force)
+
+    /** GET /sessions/<id>/changes/blob?repo=&sha=[&force=1] */
+    suspend fun sessionChangesBlob(sessionId: String, repo: String, sha: String, force: Boolean = false): BlobText =
+        blobAt("$httpBase/sessions/$sessionId/changes/blob", repo, sha, force)
+
+    private fun baseQuery(base: String?): String = if (base != null) "?base=${urlEncode(base)}" else ""
+
+    private suspend fun changesAt(url: String): ChangesResult? {
+        val resp = http.get(url) { authHeader() }
+        if (resp.status == HttpStatusCode.NotFound) return null
+        return decode(resp)
+    }
+
+    private suspend fun blobAt(url: String, repo: String, sha: String, force: Boolean): BlobText {
+        val resp = http.get("$url?repo=${urlEncode(repo)}&sha=${urlEncode(sha)}" + if (force) "&force=1" else "") { authHeader() }
+        val body = resp.bodyAsText()
+        return when {
+            resp.status.isSuccess() -> BlobText.Text(body)
+            resp.status.value == 413 -> BlobText.TooLarge(
+                runCatching { json.parseToJsonElement(body).jsonObject["size"]?.jsonPrimitive?.contentOrNull?.toLong() }.getOrNull() ?: 0L,
+            )
+            resp.status.value == 415 -> BlobText.Binary
+            else -> BlobText.Failed(body.ifBlank { "HTTP ${resp.status.value}" })
+        }
+    }
 
     /** GET /workspaces/<id>/fs/refs */
     suspend fun workspaceFsRefs(workspaceId: String): FsRefsResult =
