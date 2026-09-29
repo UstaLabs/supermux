@@ -1705,12 +1705,7 @@ class BrokerApi(
     /** GET /worktrees/by-workdir — null when the workdir is not an existing worktree (404). */
     suspend fun worktreeForWorkdir(workdir: String): WorktreeForWorkdirDto? {
         val resp = http.get("$httpBase/worktrees/by-workdir?path=${percentEncode(workdir)}") { authHeader() }
-        if (resp.status == HttpStatusCode.NotFound) {
-            // A 404 carrying the broker's own "… not found" JSON error is a missing session/workspace, not a missing route.
-            val body = resp.bodyAsText()
-            if (!body.contains("not found", ignoreCase = true)) return null
-            throw FsException(404, body)
-        }
+        if (resp.status == HttpStatusCode.NotFound) return null
         return decode(resp)
     }
 
@@ -2752,9 +2747,11 @@ class BrokerApi(
     private suspend fun changesAt(url: String): ChangesResult? {
         val resp = http.get(url) { authHeader() }
         if (resp.status == HttpStatusCode.NotFound) {
-            // A 404 carrying the broker's own "… not found" JSON error is a missing session/workspace, not a missing route.
+            // The route is missing (an older broker's plain-text catch-all 404) unless the body is the
+            // broker's own JSON error object, which means an unknown session/workspace id.
             val body = resp.bodyAsText()
-            if (!body.contains("not found", ignoreCase = true)) return null
+            val unknownId = runCatching { json.parseToJsonElement(body).jsonObject.containsKey("error") }.getOrDefault(false)
+            if (!unknownId) return null
             throw FsException(404, body)
         }
         return decode(resp)

@@ -49,7 +49,7 @@ class ChangesClientTest {
     private fun app(routes: Map<String, Pair<HttpStatusCode, String>>, hits: MutableList<String>): HostStore {
         val engine = MockEngine { req ->
             hits += req.url.encodedPath
-            val (status, body) = routes[req.url.encodedPath] ?: (HttpStatusCode.NotFound to "")
+            val (status, body) = routes[req.url.encodedPath] ?: (HttpStatusCode.NotFound to "not found") // an old broker's plain-text catch-all
             respond(ByteReadChannel(body), status, headersOf(HttpHeaders.ContentType, "application/json"))
         }
         return HostStore(
