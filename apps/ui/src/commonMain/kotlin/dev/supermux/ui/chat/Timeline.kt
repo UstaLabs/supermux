@@ -43,7 +43,6 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
@@ -200,8 +199,9 @@ fun AssistantMessage(
     loadImage: (suspend (String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null,
 ) {
     Column(Modifier.fillMaxWidth()) {
-        // SelectionContainer makes the prose selectable/copyable; links inside stay clickable.
-        SelectionContainer {
+        // LinkSelectionContainer makes the prose selectable/copyable; links inside stay clickable, and a
+        // right-click on one selects the whole link.
+        LinkSelectionContainer {
             MarkdownBody(
                 text = text,
                 modifier = Modifier.fillMaxWidth(),
@@ -313,8 +313,8 @@ fun UserMessage(text: String) {
                     .border(1.dp, cs.outlineVariant, bubbleShape)
                     .padding(horizontal = Space.md, vertical = Space.sm),
             ) {
-                SelectionContainer {
-                    Text(
+                LinkSelectionContainer {
+                    MdText(
                         text = mdAnnotated(text),
                         color = cs.onSurface,
                         style = MaterialTheme.typography.bodyMedium,
