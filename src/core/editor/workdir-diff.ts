@@ -1,9 +1,14 @@
 // src/core/editor/workdir-diff.ts
-import { execFileSync } from "child_process"
-import { existsSync, readdirSync, realpathSync } from "fs"
+// Runs on the Changes pane's request path (fs/diff, fs/refs) and on walkthrough
+// authoring: every git call and directory read here is async, because the broker
+// is one event loop and a sync child process freezes every session.
+import { existsSync } from "fs"
+import { readdir, realpath } from "fs/promises"
 import { join, relative } from "path"
+import { gitAsync } from "../git/exec"
+import { mapLimit } from "../fs/pool"
 import { parseDiff, type DiffEntry } from "./fs-service"
-import { scanRepos } from "./repo-scanner"
+import { scanReposAsync } from "./repo-scanner"
 
 export interface RepoDiff {
   repo: string // relPath; "" for workdir-as-repo
@@ -19,7 +24,7 @@ export type DiffBaseSpec =
   | { kind: "commit"; sha: string }
   | { kind: "branch"; name: string }
 
-// A git ref-name safe enough to hand to execFileSync (no leading dash → no option injection).
+// A git ref-name safe enough to hand to git as an argument (no leading dash → no option injection).
 function safeRefName(name: string): boolean {
   return /^[\w][\w./-]*$/.test(name)
 }
@@ -38,32 +43,32 @@ export interface RepoRefs {
   commits: Array<{ sha: string; subject: string }>
 }
 
-export function listRepoRefs(workdir: string): RepoRefs[] {
-  const out: RepoRefs[] = []
-  for (const r of scanRepos(workdir)) {
-    let branches: string[] = []
-    let commits: Array<{ sha: string; subject: string }> = []
-    try {
-      branches = runGit(r.absPath, ["branch", "--format=%(refname:short)"])
-        .split("\n").map((s) => s.trim()).filter(Boolean)
-    } catch { /* no branches yet */ }
-    try {
-      commits = runGit(r.absPath, ["log", "-30", "--format=%h%x00%s"])
-        .split("\n").filter(Boolean)
-        .map((l) => { const i = l.indexOf("\0"); return { sha: l.slice(0, i), subject: l.slice(i + 1) } })
-    } catch { /* no history */ }
-    out.push({ repo: r.relPath, branches, commits })
-  }
-  return out
+export async function listRepoRefs(workdir: string): Promise<RepoRefs[]> {
+  return mapLimit(await scanReposAsync(workdir), REPO_CONCURRENCY, async (r) => {
+    const [branches, commits] = await Promise.all([
+      runGit(r.absPath, ["branch", "--format=%(refname:short)"])
+        .then((out) => out.split("\n").map((s) => s.trim()).filter(Boolean))
+        .catch(() => [] as string[]), // no branches yet
+      runGit(r.absPath, ["log", "-30", "--format=%h%x00%s"])
+        .then((out) => out.split("\n").filter(Boolean)
+          .map((l) => { const i = l.indexOf("\0"); return { sha: l.slice(0, i), subject: l.slice(i + 1) } }))
+        .catch(() => [] as Array<{ sha: string; subject: string }>), // no history
+    ])
+    return { repo: r.relPath, branches, commits }
+  })
 }
 
 // Dirs we should never descend into when doing extra sub-repo scanning
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", ".nuxt", "out", "vendor", "target"])
 
-function runGit(cwd: string, args: string[]): string {
-  return execFileSync("git", args, {
-    cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 5 * 1024 * 1024,
-  })
+// Repos diffed at once, and untracked files diffed at once within a repo: bounded so a
+// workdir with hundreds of new files doesn't fork hundreds of gits together.
+const REPO_CONCURRENCY = 4
+const UNTRACKED_CONCURRENCY = 8
+
+// Byte-exact stdout: parseDiff and the `-z` listing need it untrimmed.
+function runGit(cwd: string, args: string[], okExitCodes?: number[]): Promise<string> {
+  return gitAsync(cwd, args, { trim: false, okExitCodes })
 }
 
 // Resolve the diff base for a repo. Precedence:
@@ -71,11 +76,11 @@ function runGit(cwd: string, args: string[]): string {
 //   2. the commit that was HEAD at session-creation time, found by timestamp
 //      (robust fallback for legacy/missing/failed-capture sessions)
 //   3. the empty tree (repo had no history before the session — show all as added)
-function resolveBase(repoAbs: string, stored: string | undefined, createdAt?: string): string {
+async function resolveBase(repoAbs: string, stored: string | undefined, createdAt?: string): Promise<string> {
   if (stored && /^[0-9a-f]{4,40}$/i.test(stored)) return stored
   if (createdAt) {
     try {
-      const sha = runGit(repoAbs, ["rev-list", "-1", `--before=${createdAt}`, "HEAD"]).trim()
+      const sha = (await runGit(repoAbs, ["rev-list", "-1", `--before=${createdAt}`, "HEAD"])).trim()
       if (/^[0-9a-f]{7,40}$/i.test(sha)) return sha
     } catch {
       // no HEAD, or no commit at/before createdAt — fall through to empty tree
@@ -86,25 +91,25 @@ function resolveBase(repoAbs: string, stored: string | undefined, createdAt?: st
 
 // Resolve a user-chosen base spec into an effective base commit for one repo.
 // Any spec that can't be resolved in THIS repo falls back to session-start.
-function resolveSpecBase(
+async function resolveSpecBase(
   repoAbs: string,
   spec: DiffBaseSpec,
   stored: string | undefined,
   createdAt?: string,
-): string {
+): Promise<string> {
   switch (spec.kind) {
     case "session-start":
       return resolveBase(repoAbs, stored, createdAt)
     case "head":
       try {
-        const sha = runGit(repoAbs, ["rev-parse", "--verify", "HEAD"]).trim()
+        const sha = (await runGit(repoAbs, ["rev-parse", "--verify", "HEAD"])).trim()
         if (/^[0-9a-f]{7,40}$/i.test(sha)) return sha
       } catch { /* no HEAD */ }
       return EMPTY_TREE
     case "commit": {
       if (!/^[0-9a-f]{4,40}$/i.test(spec.sha)) return resolveBase(repoAbs, stored, createdAt)
       try {
-        const sha = runGit(repoAbs, ["rev-parse", "--verify", `${spec.sha}^{commit}`]).trim()
+        const sha = (await runGit(repoAbs, ["rev-parse", "--verify", `${spec.sha}^{commit}`])).trim()
         if (/^[0-9a-f]{7,40}$/i.test(sha)) return sha
       } catch { /* commit not in this repo */ }
       return resolveBase(repoAbs, stored, createdAt)
@@ -112,7 +117,7 @@ function resolveSpecBase(
     case "branch": {
       if (!safeRefName(spec.name)) return resolveBase(repoAbs, stored, createdAt)
       try {
-        const mb = runGit(repoAbs, ["merge-base", spec.name, "HEAD"]).trim()
+        const mb = (await runGit(repoAbs, ["merge-base", spec.name, "HEAD"])).trim()
         if (/^[0-9a-f]{7,40}$/i.test(mb)) return mb
       } catch { /* branch missing here */ }
       return resolveBase(repoAbs, stored, createdAt)
@@ -120,46 +125,35 @@ function resolveSpecBase(
   }
 }
 
-function trackedDiff(repoAbs: string, base: string): DiffEntry[] {
+async function trackedDiff(repoAbs: string, base: string): Promise<DiffEntry[]> {
   try {
-    const raw = runGit(repoAbs, ["diff", "-M", base])
+    const raw = await runGit(repoAbs, ["diff", "-M", base])
     return raw.trim() ? parseDiff(raw) : []
   } catch {
     return []
   }
 }
 
-function untrackedDiff(repoAbs: string): DiffEntry[] {
+async function untrackedDiff(repoAbs: string): Promise<DiffEntry[]> {
   let listing: string
   try {
-    listing = runGit(repoAbs, ["ls-files", "--others", "--exclude-standard", "-z"])
+    listing = await runGit(repoAbs, ["ls-files", "--others", "--exclude-standard", "-z"])
   } catch {
     return []
   }
-  const files = listing.split("\0").filter(Boolean)
-  const entries: DiffEntry[] = []
-  for (const file of files) {
-    // Skip sub-repo directories (they end with '/'); they are handled as separate repos
-    if (file.endsWith("/")) continue
+  // Skip sub-repo directories (they end with '/'); they are handled as separate repos
+  const files = listing.split("\0").filter((f) => f && !f.endsWith("/"))
+  const perFile = await mapLimit(files, UNTRACKED_CONCURRENCY, async (file) => {
     try {
-      // git diff --no-index takes exactly two paths and exits 1 when they
-      // differ, so execFileSync throws — the diff is on err.stdout.
-      let raw = ""
-      try {
-        raw = runGit(repoAbs, ["diff", "--no-index", "/dev/null", file])
-      } catch (err: any) {
-        raw = err?.stdout?.toString() ?? ""
-      }
-      if (!raw.trim()) continue
-      const parsed = parseDiff(raw)
-      for (const e of parsed) {
-        entries.push({ ...e, path: file, status: "added" })
-      }
+      // git diff --no-index takes exactly two paths and exits 1 when they differ.
+      const raw = await runGit(repoAbs, ["diff", "--no-index", "/dev/null", file], [1])
+      if (!raw.trim()) return []
+      return parseDiff(raw).map((e) => ({ ...e, path: file, status: "added" }))
     } catch {
-      // skip unreadable file
+      return [] // skip unreadable file
     }
-  }
-  return entries
+  })
+  return perFile.flat()
 }
 
 /**
@@ -170,19 +164,19 @@ function untrackedDiff(repoAbs: string): DiffEntry[] {
  *
  * Returns RepoInfo-like objects with relPath relative to workdirReal.
  */
-function scanNestedRepos(
+async function scanNestedRepos(
   workdirReal: string,
   alreadyKnown: Set<string>,
   maxDepth = 5,
-): Array<{ relPath: string; absPath: string }> {
+): Promise<Array<{ relPath: string; absPath: string }>> {
   const found: Array<{ relPath: string; absPath: string }> = []
   const seen = new Set<string>(alreadyKnown)
 
-  function walk(dir: string, depth: number) {
+  async function walk(dir: string, depth: number): Promise<void> {
     if (depth > maxDepth) return
     let entries: import("fs").Dirent[]
     try {
-      entries = readdirSync(dir, { withFileTypes: true })
+      entries = await readdir(dir, { withFileTypes: true })
     } catch {
       return
     }
@@ -192,12 +186,7 @@ function scanNestedRepos(
       if (SKIP_DIRS.has(e.name)) continue
 
       const sub = join(dir, e.name)
-      let canonical: string
-      try {
-        canonical = realpathSync(sub)
-      } catch {
-        canonical = sub
-      }
+      const canonical = await realpath(sub).catch(() => sub)
 
       if (seen.has(canonical)) continue
 
@@ -208,19 +197,19 @@ function scanNestedRepos(
         found.push({ relPath: rel, absPath: canonical })
       } else {
         // Not a repo — keep descending
-        walk(canonical, depth + 1)
+        await walk(canonical, depth + 1)
       }
     }
   }
 
   // Walk starting from each already-known repo to find repos nested inside them
   for (const knownAbs of alreadyKnown) {
-    walk(knownAbs, 1)
+    await walk(knownAbs, 1)
   }
 
   // Also walk workdir itself if it's not a repo (to handle multi-repo case)
   if (!alreadyKnown.has(workdirReal)) {
-    walk(workdirReal, 0)
+    await walk(workdirReal, 0)
   }
 
   return found
@@ -234,34 +223,32 @@ export async function computeWorkdirDiff(
 ): Promise<RepoDiff[]> {
   let workdirReal: string
   try {
-    workdirReal = realpathSync(workdir)
+    workdirReal = await realpath(workdir)
   } catch {
     return []
   }
 
-  // Get primary repos from scanRepos
-  const primaryRepos = scanRepos(workdir)
+  // Get primary repos from scanReposAsync
+  const primaryRepos = await scanReposAsync(workdir)
 
   // Find repos nested inside those primary repos (e.g. a new repo created inside
   // a workdir-as-repo during the session)
   const knownAbs = new Set(primaryRepos.map((r) => r.absPath))
-  const nestedRepos = scanNestedRepos(workdirReal, knownAbs)
+  const nestedRepos = await scanNestedRepos(workdirReal, knownAbs)
 
   const allRepos = [...primaryRepos, ...nestedRepos]
 
-  const result: RepoDiff[] = []
   const spec = parseBaseSpec(baseSpec)
 
-  for (const repo of allRepos) {
-    const effectiveBase = resolveSpecBase(repo.absPath, spec, baseCommits[repo.relPath], createdAt)
-    const files = [
-      ...trackedDiff(repo.absPath, effectiveBase),
-      ...untrackedDiff(repo.absPath),
-    ]
-    if (files.length > 0) {
-      result.push({ repo: repo.relPath, files })
-    }
-  }
+  // mapLimit keeps input order, so the repo list comes back in scan order as before.
+  const perRepo = await mapLimit(allRepos, REPO_CONCURRENCY, async (repo): Promise<RepoDiff> => {
+    const effectiveBase = await resolveSpecBase(repo.absPath, spec, baseCommits[repo.relPath], createdAt)
+    const [tracked, untracked] = await Promise.all([
+      trackedDiff(repo.absPath, effectiveBase),
+      untrackedDiff(repo.absPath),
+    ])
+    return { repo: repo.relPath, files: [...tracked, ...untracked] }
+  })
 
-  return result
+  return perRepo.filter((r) => r.files.length > 0)
 }

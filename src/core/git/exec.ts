@@ -4,15 +4,17 @@
 import { execFile, spawn } from "node:child_process"
 
 /** `trim: false` keeps stdout byte-exact (needed for `-z` / porcelain output whose
- *  first record may start with a space). */
+ *  first record may start with a space). `okExitCodes` lists non-zero exits that
+ *  still carry the answer on stdout (`git diff --no-index` exits 1 when the paths differ). */
 export function gitAsync(
   cwd: string,
   args: string[],
-  opts?: { timeoutMs?: number; trim?: boolean },
+  opts?: { timeoutMs?: number; trim?: boolean; okExitCodes?: number[] },
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile("git", args, { cwd, encoding: "utf-8", timeout: opts?.timeoutMs ?? 30_000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) {
+      const code = (err as { code?: unknown } | null)?.code
+      if (err && !(typeof code === "number" && opts?.okExitCodes?.includes(code))) {
         const msg = String(stderr || "").trim() || err.message
         reject(new Error(msg))
         return

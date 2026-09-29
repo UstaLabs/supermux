@@ -13,6 +13,8 @@ const FILES = [
   "core/worktree/finish.ts",
   "core/worktree/inventory.ts",
   "core/worktree/service.ts",
+  "core/editor/workdir-diff.ts",
+  "core/review/anchor.ts",
 ]
 
 for (const f of FILES) {

@@ -2603,19 +2603,19 @@ export class WebChannel implements Channel {
       const createdAt = this.opts.getSessionCreatedAt?.(id)
       const baseSpec = url.searchParams.get("base") ?? undefined
       const repos = await computeWorkdirDiff(workdir, baseCommits, createdAt, baseSpec)
-      const comments = (this.opts.reviewList?.(id) ?? []).map((c) => {
+      const comments = await Promise.all((this.opts.reviewList?.(id) ?? []).map(async (c) => {
         const sess = this.opts.reviewSession?.(id)
         const repoAbs = c.repo ? join(sess?.workdir ?? workdir, c.repo) : (sess?.workdir ?? workdir)
-        const { currentLine, outdated } = reanchor(repoAbs, c)
+        const { currentLine, outdated } = await reanchor(repoAbs, c)
         return { ...c, currentLine, outdated }
-      })
+      }))
       return this.json({ repos, comments })
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/fs\/refs$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json({ repos: listRepoRefs(workdir) })
+      return this.json({ repos: await listRepoRefs(workdir) })
     }
 
     // ── Editor filesystem routes, workspace-scoped ──────────────────────────
@@ -2701,7 +2701,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      return this.json({ repos: listRepoRefs(workdir) })
+      return this.json({ repos: await listRepoRefs(workdir) })
     }
 
     // ── Host file system (spec 2026-09-27 §4.4) ─────────────────────────────
@@ -2963,12 +2963,12 @@ export class WebChannel implements Channel {
       if (!wt) return this.json({ walkthrough: null })
       const sess = this.opts.reviewSession?.(id)
       const workdir = sess?.workdir
-      const steps = wt.steps.map((s) => {
+      const steps = await Promise.all(wt.steps.map(async (s) => {
         if (!s.path || !workdir || s.anchorLine == null) {
           return { ...s, currentLine: null as number | null, outdated: false }
         }
         const repoAbs = s.repo ? join(workdir, s.repo) : workdir
-        const { currentLine, outdated } = reanchor(repoAbs, {
+        const { currentLine, outdated } = await reanchor(repoAbs, {
           path: s.path,
           anchorLine: s.anchorLine,
           anchorContext: s.anchorContext ?? "",
@@ -2979,7 +2979,7 @@ export class WebChannel implements Channel {
           outdated,
           anchorStatus: outdated ? "outdated" : s.anchorStatus,
         }
-      })
+      }))
       return this.json({ walkthrough: toWalkthroughDto({ ...wt, steps }) })
     }
     if (method === "PATCH" && path.match(/^\/sessions\/[^/]+\/review\/comments\/[^/]+$/)) {
