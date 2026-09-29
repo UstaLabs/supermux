@@ -3,6 +3,12 @@
 // a cheap per-repo file list with counts and base blob SHAs, and base texts by blob on demand.
 // Everything here is async — the broker is one event loop.
 
+import { open, stat } from "fs/promises"
+import { join } from "path"
+import { gitAsync } from "../git/exec"
+import { mapLimit } from "../fs/pool"
+import { discoverRepos, parseBaseSpec, resolveSpecBase, REPO_CONCURRENCY } from "./workdir-diff"
+
 export interface ChangedFile {
   path: string
   status: "modified" | "added" | "deleted" | "renamed" | "typechange"
@@ -11,6 +17,8 @@ export interface ChangedFile {
   binary: boolean
   oldPath: string | null
   baseBlob: string | null
+  /** Working-copy bytes; null for a deleted file. Filled by listChanges, not by the parser. */
+  size?: number | null
 }
 
 const ZERO_SHA = /^0+$/
@@ -74,4 +82,94 @@ export function parseRawNumstat(raw: string, numstat: string): ChangedFile[] {
     })
   }
   return out
+}
+
+export const MAX_LIST_FILES = 3000
+/** Untracked files at most this big are read to count lines and sniff binary. */
+const UNTRACKED_READ_LIMIT = 1024 * 1024
+const BINARY_SNIFF_BYTES = 8 * 1024
+const UNTRACKED_CONCURRENCY = 16
+
+export interface RepoChanges {
+  repo: string
+  baseSha: string
+  files: ChangedFile[]
+  truncated: boolean
+  total: number
+  error?: string
+}
+
+export interface ChangesList { repos: RepoChanges[] }
+
+async function sizeOf(abs: string): Promise<number | null> {
+  try { return (await stat(abs)).size } catch { return null }
+}
+
+/** Line count + binary sniff for an untracked file (git's own counting: a final line without a
+ *  newline still counts). Files over UNTRACKED_READ_LIMIT get null counts, not read. */
+async function untrackedEntry(repoAbs: string, path: string): Promise<ChangedFile> {
+  const abs = join(repoAbs, path)
+  const size = await sizeOf(abs)
+  const entry: ChangedFile = { path, status: "added", added: null, removed: 0, binary: false, oldPath: null, baseBlob: null, size }
+  if (size === null || size > UNTRACKED_READ_LIMIT) return { ...entry, removed: null }
+  try {
+    const fh = await open(abs, "r")
+    try {
+      const buf = await fh.readFile()
+      const sniff = buf.subarray(0, Math.min(buf.length, BINARY_SNIFF_BYTES))
+      if (sniff.includes(0)) return { ...entry, binary: true, removed: null }
+      const text = buf.toString("utf-8")
+      let lines = 0
+      for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lines++
+      if (text.length > 0 && !text.endsWith("\n")) lines++
+      return { ...entry, added: lines }
+    } finally {
+      await fh.close()
+    }
+  } catch {
+    return { ...entry, removed: null }
+  }
+}
+
+async function repoChanges(repoAbs: string, relPath: string, baseSha: string): Promise<RepoChanges> {
+  try {
+    const [raw, numstat, others] = await Promise.all([
+      gitAsync(repoAbs, ["diff", "--raw", "-z", "--no-abbrev", "-M", baseSha], { trim: false }),
+      gitAsync(repoAbs, ["diff", "--numstat", "-z", "-M", baseSha], { trim: false }),
+      gitAsync(repoAbs, ["ls-files", "--others", "--exclude-standard", "-z"], { trim: false }),
+    ])
+    const tracked = parseRawNumstat(raw, numstat)
+    // Sub-repo directories end with '/': they are listed as their own repos.
+    const untrackedPaths = others.split("\0").filter((p) => p && !p.endsWith("/"))
+    const total = tracked.length + untrackedPaths.length
+    const keptTracked = tracked.slice(0, MAX_LIST_FILES)
+    const room = MAX_LIST_FILES - keptTracked.length
+    const [trackedSized, untracked] = await Promise.all([
+      mapLimit(keptTracked, UNTRACKED_CONCURRENCY, async (f) => ({
+        ...f,
+        size: f.status === "deleted" ? null : await sizeOf(join(repoAbs, f.path)),
+      })),
+      mapLimit(untrackedPaths.slice(0, Math.max(0, room)), UNTRACKED_CONCURRENCY, (p) => untrackedEntry(repoAbs, p)),
+    ])
+    const files = [...trackedSized, ...untracked]
+    return { repo: relPath, baseSha, files, truncated: total > files.length, total }
+  } catch (err) {
+    return { repo: relPath, baseSha, files: [], truncated: false, total: 0, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** The Changes list for a workdir (spec §2.1). Base resolution is the same as fs/diff's. */
+export async function listChanges(
+  workdir: string,
+  baseCommits: Record<string, string>,
+  createdAt?: string,
+  baseSpec?: string,
+): Promise<ChangesList> {
+  const spec = parseBaseSpec(baseSpec)
+  const repos = await discoverRepos(workdir)
+  const perRepo = await mapLimit(repos, REPO_CONCURRENCY, async (r) => {
+    const baseSha = await resolveSpecBase(r.absPath, spec, baseCommits[r.relPath], createdAt)
+    return repoChanges(r.absPath, r.relPath, baseSha)
+  })
+  return { repos: perRepo.filter((r) => r.files.length > 0 || r.error) }
 }

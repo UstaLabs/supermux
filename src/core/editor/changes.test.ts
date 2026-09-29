@@ -1,5 +1,9 @@
 import { describe, test, expect } from "bun:test"
-import { parseRawNumstat } from "./changes"
+import { parseRawNumstat, listChanges, MAX_LIST_FILES } from "./changes"
+import { execFileSync } from "child_process"
+import { mkdtempSync, writeFileSync, mkdirSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
 
 const Z = "0000000000000000000000000000000000000000"
 const A = "a".repeat(40)
@@ -63,5 +67,74 @@ describe("parseRawNumstat", () => {
     expect(parseRawNumstat(raw, numstat)).toEqual([
       { path: "new.png", status: "renamed", added: null, removed: null, binary: true, oldPath: "old.png", baseBlob: A },
     ])
+  })
+})
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim()
+}
+
+function repo(): { dir: string; base: string } {
+  const dir = mkdtempSync(join(tmpdir(), "mux-changes-"))
+  git(dir, "init", "-q", "-b", "main")
+  git(dir, "config", "user.email", "t@t")
+  git(dir, "config", "user.name", "t")
+  writeFileSync(join(dir, "a.txt"), "one\ntwo\n")
+  writeFileSync(join(dir, "gone.txt"), "bye\n")
+  git(dir, "add", ".")
+  git(dir, "commit", "-qm", "c1")
+  return { dir, base: git(dir, "rev-parse", "HEAD") }
+}
+
+describe("listChanges", () => {
+  test("tracked edits, deletes and untracked text/binary files, with base blobs and counts", async () => {
+    const { dir, base } = repo()
+    const aBlob = git(dir, "rev-parse", `${base}:a.txt`)
+    writeFileSync(join(dir, "a.txt"), "one\nTWO\nthree\n")
+    execFileSync("rm", [join(dir, "gone.txt")])
+    writeFileSync(join(dir, "new.txt"), "x\ny\n")
+    writeFileSync(join(dir, "bin.dat"), Buffer.from([1, 0, 2, 3]))
+
+    const res = await listChanges(dir, { "": base })
+    expect(res.repos).toHaveLength(1)
+    const r = res.repos[0]!
+    expect(r.repo).toBe("")
+    expect(r.baseSha).toBe(base)
+    expect(r.truncated).toBe(false)
+    expect(r.total).toBe(4)
+    const by = Object.fromEntries(r.files.map((f) => [f.path, f]))
+    expect(by["a.txt"]).toMatchObject({ status: "modified", added: 2, removed: 1, baseBlob: aBlob, binary: false, size: 14 })
+    expect(by["gone.txt"]).toMatchObject({ status: "deleted", added: 0, removed: 1, size: null })
+    expect(by["new.txt"]).toMatchObject({ status: "added", added: 2, removed: 0, baseBlob: null, binary: false, size: 4 })
+    expect(by["bin.dat"]).toMatchObject({ status: "added", added: null, removed: null, binary: true, baseBlob: null, size: 4 })
+  })
+
+  test("a clean repo is omitted", async () => {
+    const { dir, base } = repo()
+    expect((await listChanges(dir, { "": base })).repos).toEqual([])
+  })
+
+  test("the head base spec diffs against HEAD", async () => {
+    const { dir } = repo()
+    writeFileSync(join(dir, "a.txt"), "changed\n")
+    git(dir, "commit", "-qam", "c2")
+    writeFileSync(join(dir, "a.txt"), "changed again\n")
+    const res = await listChanges(dir, {}, undefined, "head")
+    expect(res.repos[0]!.baseSha).toBe(git(dir, "rev-parse", "HEAD"))
+    expect(res.repos[0]!.files.map((f) => f.path)).toEqual(["a.txt"])
+  })
+
+  test("the list is capped and says so", async () => {
+    const { dir, base } = repo()
+    mkdirSync(join(dir, "many"))
+    for (let i = 0; i < MAX_LIST_FILES + 5; i++) writeFileSync(join(dir, "many", `f${i}.txt`), "x\n")
+    const r = (await listChanges(dir, { "": base })).repos[0]!
+    expect(r.files).toHaveLength(MAX_LIST_FILES)
+    expect(r.truncated).toBe(true)
+    expect(r.total).toBe(MAX_LIST_FILES + 5)
+  }, 30_000)
+
+  test("a missing workdir lists nothing", async () => {
+    expect((await listChanges("/nonexistent/mux-changes", {})).repos).toEqual([])
   })
 })
