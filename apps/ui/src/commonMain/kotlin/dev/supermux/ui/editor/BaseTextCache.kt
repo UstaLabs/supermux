@@ -9,7 +9,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 class BaseTextCache(private val maxChars: Long = 16L * 1024 * 1024) {
-    private val texts = LinkedHashMap<String, String>(16, 0.75f, true)
+    private val texts = LinkedHashMap<String, String>()
     private var chars = 0L
     private val lock = Mutex()
 
@@ -20,16 +20,17 @@ class BaseTextCache(private val maxChars: Long = 16L * 1024 * 1024) {
         fetch: suspend (repo: String, sha: String, force: Boolean) -> BlobText,
     ): BlobText {
         val key = "$repo\u0000$sha"
-        lock.withLock { texts[key]?.let { return BlobText.Text(it) } }
+        lock.withLock { texts.remove(key)?.also { texts[key] = it }?.let { return BlobText.Text(it) } }
         val r = fetch(repo, sha, force)
         if (r is BlobText.Text) lock.withLock {
-            if (texts.put(key, r.text) == null) chars += r.text.length
-            val it = texts.entries.iterator()
-            while (chars > maxChars && texts.size > 1 && it.hasNext()) {
-                val e = it.next()
+            texts.put(key, r.text)?.let { chars -= it.length }
+            chars += r.text.length
+            val iter = texts.entries.iterator()
+            while (chars > maxChars && texts.size > 1 && iter.hasNext()) {
+                val e = iter.next()
                 if (e.key == key) continue
                 chars -= e.value.length
-                it.remove()
+                iter.remove()
             }
         }
         return r
@@ -39,7 +40,9 @@ class BaseTextCache(private val maxChars: Long = 16L * 1024 * 1024) {
 /**
  * The `@@ -a,b +c,d @@` header (3 context lines, like git) of the hunk holding new-side [line]
  * (1-based), else the nearest hunk above it, else "". What a lazy file's comments carry as
- * `diffHunkHeader`, computed from the two texts instead of a patch.
+ * `diffHunkHeader`, computed from the two texts instead of a patch. An empty side counts as 0 lines
+ * and prints start 0, like git. Unlike git, nearby changes are not merged into one hunk (the header
+ * is informational).
  */
 fun hunkHeaderAt(base: String, working: String, line: Int): String {
     val a = LineDiff.lines(base)
@@ -48,9 +51,15 @@ fun hunkHeaderAt(base: String, working: String, line: Int): String {
     val target = line - 1
     val h = hunks.lastOrNull { it.bFrom <= target || (it.bFrom == it.bTo && it.bFrom <= target + 1) } ?: return ""
     val ctx = 3
-    val aStart = maxOf(0, h.aFrom - ctx)
-    val bStart = maxOf(0, h.bFrom - ctx)
-    val aEnd = minOf(a.size - (if (base.endsWith("\n")) 1 else 0), h.aTo + ctx)
-    val bEnd = minOf(b.size - (if (working.endsWith("\n")) 1 else 0), h.bTo + ctx)
-    return "@@ -${aStart + 1},${aEnd - aStart} +${bStart + 1},${bEnd - bStart} @@"
+    fun count(text: String, lines: List<String>) =
+        if (text.isEmpty()) 0 else lines.size - (if (text.endsWith("\n")) 1 else 0)
+    val aCount = count(base, a)
+    val bCount = count(working, b)
+    val aStart = minOf(maxOf(0, h.aFrom - ctx), aCount)
+    val bStart = minOf(maxOf(0, h.bFrom - ctx), bCount)
+    val aEnd = minOf(aCount, h.aTo + ctx)
+    val bEnd = minOf(bCount, h.bTo + ctx)
+    val aLen = aEnd - aStart
+    val bLen = bEnd - bStart
+    return "@@ -${if (aLen == 0) 0 else aStart + 1},$aLen +${if (bLen == 0) 0 else bStart + 1},$bLen @@"
 }
