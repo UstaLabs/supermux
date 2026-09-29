@@ -35,3 +35,9 @@ test("missing file → outdated", async () => {
   const dir = tmpRepo()
   expect(await reanchor(dir, { path: "nope.ts", anchorLine: 1, anchorContext: "x", headBlobSha: "s" })).toEqual({ currentLine: null, outdated: true })
 })
+
+test("text search matches a CRLF file against a \\n-normalised context", async () => {
+  const dir = tmpRepo()
+  writeFileSync(join(dir, "a.ts"), "new0\r\nl1\r\nTARGET\r\n")
+  expect(await reanchor(dir, { path: "a.ts", anchorLine: 2, anchorContext: "TARGET", headBlobSha: "stale" })).toEqual({ currentLine: 3, outdated: false })
+})

@@ -25,7 +25,8 @@ export async function reanchor(
 
   // Text search: exact match of the stored line, nearest to the original position first.
   let lines: string[]
-  try { lines = (await readFile(filePath, "utf-8")).split("\n") } catch { return { currentLine: null, outdated: true } }
+  // The clients send \n-normalised line text, so a CRLF file compares without its \r.
+  try { lines = (await readFile(filePath, "utf-8")).split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l)) } catch { return { currentLine: null, outdated: true } }
   const origIdx = c.anchorLine - 1
   const lo = Math.max(0, origIdx - WINDOW)
   const hi = Math.min(lines.length - 1, origIdx + WINDOW)
