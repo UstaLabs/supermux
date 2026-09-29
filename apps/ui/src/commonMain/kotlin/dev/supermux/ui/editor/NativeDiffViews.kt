@@ -64,6 +64,7 @@ import dev.supermux.editor.syntax.SyntaxBackend
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.BlobText
 import dev.supermux.net.DiffFile
+import dev.supermux.net.FsException
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.WalkthroughStep
 import dev.supermux.ui.platform.LocalPlatform
@@ -236,7 +237,9 @@ internal fun NativeFileDiff(
     val deleted = file.status == "deleted"
     var force by remember(repo, file.path, file.baseBlob) { mutableStateOf(false) }
     var attempt by remember(repo, file.path, file.baseBlob) { mutableStateOf(0) }
-    val loaded by produceState<Result<LineEndings.Loaded>?>(null, repo, file.path, file.diff, file.size, file.status) {
+    // Keyed on the pane's reload generation too: a lazy file has no patch text, so a same-size edit
+    // (or a revert) would otherwise keep the stale working copy and refuse the next revert.
+    val loaded by produceState<Result<LineEndings.Loaded>?>(null, repo, file.path, file.diff, file.size, file.status, support.generation, attempt) {
         value = if (deleted) Result.success(LineEndings.Loaded("", false)) else support.readFile(repo, file.path).map(LineEndings::load)
     }
     // Lazy files: the base is the blob (none: a new file); legacy files: the patch applied in reverse.
@@ -261,8 +264,10 @@ internal fun NativeFileDiff(
         when {
             b is BlobText.TooLarge -> { LazyFileCard("Large file (${b.size / 1024} KB)", "Load anyway", testTagIndex) { force = true }; return }
             b is BlobText.Binary -> { LazyFileCard("Binary file changed", null, testTagIndex) {}; return }
-            b is BlobText.Failed -> { LazyFileCard("Couldn't load the base: ${b.message}", "Retry", testTagIndex) { attempt++ }; return }
-            readError != null -> { LazyFileCard(readError.message ?: "Couldn't read the file", null, testTagIndex) {}; return }
+            // No fetcher: a retry could never work.
+            b is BlobText.Failed -> { LazyFileCard("Couldn't load the base: ${b.message}", if (support.baseText != null) "Retry" else null, testTagIndex) { attempt++ }; return }
+            readError is FsException && readError.status == 413 -> { LazyFileCard("Large file", null, testTagIndex) {}; return }
+            readError != null -> { LazyFileCard(readError.message ?: "Couldn't read the file", "Retry", testTagIndex) { attempt++ }; return }
         }
         val baseText = LineEndings.load((b as BlobText.Text).text).text
         NativeFileDiffEditor(repo, file, patch = null, working!!, baseText, wrap, comments, support, deleted, onReload, testTagIndex)
@@ -401,12 +406,9 @@ private fun NativeFileDiffEditor(
     val theme = rememberAppEditorTheme()
     // The editor scrolls itself: give it about what the patch shows (its rows and a folded run per
     // hunk), bounded so a huge file never takes the whole pane.
-    val rows = remember(patch, base, working.text) {
-        if (patch != null) parseDiffLines(patch).size + 1
-        else dev.supermux.editor.plugins.diff.LineDiff.diff(
-            dev.supermux.editor.plugins.diff.LineDiff.lines(base),
-            dev.supermux.editor.plugins.diff.LineDiff.lines(working.text),
-        ).hunks.sumOf { (it.aTo - it.aFrom) + (it.bTo - it.bFrom) + 7 } + 1
+    // A lazy file: its list counts (no diff on the main thread just to size the box; it is clamped).
+    val rows = remember(patch, file.added, file.removed) {
+        if (patch != null) parseDiffLines(patch).size + 1 else (file.added ?: 0) + (file.removed ?: 0) + 8
     }
     val height = (rows * (fontSize * 1.55f) + 16f).coerceIn(120f, 560f).dp
 

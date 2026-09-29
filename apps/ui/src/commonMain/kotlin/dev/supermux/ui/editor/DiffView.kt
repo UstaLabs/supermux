@@ -177,6 +177,8 @@ fun DiffView(
     // Kept by the pane, not the (lazy) file items: a rebuilt item finds its drafts and its scroll.
     val nativeDrafts = remember { HashMap<String, MapReviewDrafts>() }
     val baseCache = remember { BaseTextCache() }
+    // Bumped by every new `repos` (a reload, even of an equal list): the files' working copies are re-read.
+    val generation = remember { ReloadGeneration() }.of(repos)
     val nativeScroll = remember { HashMap<String, dev.supermux.editor.compose.EditorScrollPosition>() }
     val native = if (readFile != null) {
         NativeDiffSupport(
@@ -194,6 +196,7 @@ fun DiffView(
             scroll = nativeScroll,
             baseText = baseText,
             baseCache = baseCache,
+            generation = generation,
         )
     } else null
     // `repo||path||newLine` of the line whose composer is open (null = none).
@@ -336,7 +339,7 @@ fun DiffView(
             // A repo whose listing failed has no files either: say why instead of "no changes".
             repos.forEach { RepoBanner(it) }
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text("No changes found", color = cs.onSurfaceVariant, fontSize = 13.sp)
+                if (repos.none { it.error != null }) Text("No changes found", color = cs.onSurfaceVariant, fontSize = 13.sp)
             }
         } else {
             LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
@@ -1401,4 +1404,16 @@ internal class NativeDiffSupport(
     val scroll: MutableMap<String, dev.supermux.editor.compose.EditorScrollPosition> = HashMap(),
     val baseText: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
     val baseCache: BaseTextCache = BaseTextCache(),
+    /** The pane's reload count: a file's working copy is re-read when it changes. */
+    val generation: Int = 0,
 )
+
+/** Counts the distinct `repos` lists (by identity) a pane was given: see [NativeDiffSupport.generation]. */
+private class ReloadGeneration {
+    private var last: Any? = null
+    private var n = 0
+    fun of(repos: Any): Int {
+        if (repos !== last) { last = repos; n++ }
+        return n
+    }
+}
