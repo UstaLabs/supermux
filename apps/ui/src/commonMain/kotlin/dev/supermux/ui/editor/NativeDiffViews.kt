@@ -62,6 +62,7 @@ import dev.supermux.editor.plugins.view.ViewSettings
 import dev.supermux.editor.plugins.view.viewSettings
 import dev.supermux.editor.syntax.SyntaxBackend
 import dev.supermux.net.AddCommentBody
+import dev.supermux.net.BlobText
 import dev.supermux.net.DiffFile
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.WalkthroughStep
@@ -233,12 +234,38 @@ internal fun NativeFileDiff(
     fallback: @Composable () -> Unit,
 ) {
     val deleted = file.status == "deleted"
-    val loaded by produceState<Result<LineEndings.Loaded>?>(null, repo, file.path, file.diff) {
+    var force by remember(repo, file.path, file.baseBlob) { mutableStateOf(false) }
+    var attempt by remember(repo, file.path, file.baseBlob) { mutableStateOf(0) }
+    val loaded by produceState<Result<LineEndings.Loaded>?>(null, repo, file.path, file.diff, file.size, file.status) {
         value = if (deleted) Result.success(LineEndings.Loaded("", false)) else support.readFile(repo, file.path).map(LineEndings::load)
     }
+    // Lazy files: the base is the blob (none: a new file); legacy files: the patch applied in reverse.
+    val lazyBase by produceState<BlobText?>(null, repo, file.baseBlob, force, attempt, file.lazy) {
+        val sha = file.baseBlob
+        val fetch = support.baseText
+        value = when {
+            !file.lazy -> null
+            sha == null -> BlobText.Text("")
+            fetch == null -> BlobText.Failed("Base text unavailable")
+            else -> support.baseCache.get(repo, sha, force, fetch)
+        }
+    }
     val working = loaded?.getOrNull()
-    if (loaded == null) {
+    if (loaded == null || (file.lazy && lazyBase == null)) {
         Text("Loading…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
+        return
+    }
+    if (file.lazy) {
+        val b = lazyBase
+        val readError = loaded?.exceptionOrNull()
+        when {
+            b is BlobText.TooLarge -> { LazyFileCard("Large file (${b.size / 1024} KB)", "Load anyway", testTagIndex) { force = true }; return }
+            b is BlobText.Binary -> { LazyFileCard("Binary file changed", null, testTagIndex) {}; return }
+            b is BlobText.Failed -> { LazyFileCard("Couldn't load the base: ${b.message}", "Retry", testTagIndex) { attempt++ }; return }
+            readError != null -> { LazyFileCard(readError.message ?: "Couldn't read the file", null, testTagIndex) {}; return }
+        }
+        val baseText = LineEndings.load((b as BlobText.Text).text).text
+        NativeFileDiffEditor(repo, file, patch = null, working!!, baseText, wrap, comments, support, deleted, onReload, testTagIndex)
         return
     }
     val patch = remember(file.diff) { file.diff.replace("\r\n", "\n") }
@@ -250,11 +277,24 @@ internal fun NativeFileDiff(
     NativeFileDiffEditor(repo, file, patch, working, base, wrap, comments, support, deleted, onReload, testTagIndex)
 }
 
+/** A lazy file that has no diff to show yet: too large, binary, or a failed load. */
+@Composable
+private fun LazyFileCard(message: String, action: String?, testTagIndex: Int, onAction: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).testTag("diff_lazy_card_$testTagIndex"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(message, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+        if (action != null) TextButton(onClick = onAction) { Text(action) }
+    }
+}
+
 @Composable
 private fun NativeFileDiffEditor(
     repo: String,
     file: DiffFile,
-    patch: String,
+    /** The file's patch; null for a lazy file (hunk headers and the height come from the two texts). */
+    patch: String?,
     working: LineEndings.Loaded,
     base: String,
     wrap: Boolean,
@@ -289,7 +329,7 @@ private fun NativeFileDiffEditor(
             comments = { currentComments },
             submit = { line, context, body ->
                 val created = support.postComment(
-                    AddCommentBody(repo = repo, path = path, side = "RIGHT", anchorLine = line, anchorContext = context, body = body, diffHunkHeader = hunkHeaderFor(patch, line)),
+                    AddCommentBody(repo = repo, path = path, side = "RIGHT", anchorLine = line, anchorContext = context, body = body, diffHunkHeader = if (patch != null) hunkHeaderFor(patch, line) else hunkHeaderAt(base, working.text, line)),
                 )
                 currentReload()
                 created != null
@@ -361,7 +401,13 @@ private fun NativeFileDiffEditor(
     val theme = rememberAppEditorTheme()
     // The editor scrolls itself: give it about what the patch shows (its rows and a folded run per
     // hunk), bounded so a huge file never takes the whole pane.
-    val rows = remember(patch) { parseDiffLines(patch).size + 1 }
+    val rows = remember(patch, base, working.text) {
+        if (patch != null) parseDiffLines(patch).size + 1
+        else dev.supermux.editor.plugins.diff.LineDiff.diff(
+            dev.supermux.editor.plugins.diff.LineDiff.lines(base),
+            dev.supermux.editor.plugins.diff.LineDiff.lines(working.text),
+        ).hunks.sumOf { (it.aTo - it.aFrom) + (it.bTo - it.bFrom) + 7 } + 1
+    }
     val height = (rows * (fontSize * 1.55f) + 16f).coerceIn(120f, 560f).dp
 
     Column(Modifier.fillMaxWidth().testTag("diff_native_$testTagIndex")) {
