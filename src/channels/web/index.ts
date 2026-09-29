@@ -13,8 +13,8 @@ import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOrig
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
-import { computeWorkdirDiff, listRepoRefs, discoverRepos } from "../../core/editor/workdir-diff"
-import { listChanges, readBaseBlob } from "../../core/editor/changes"
+import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
+import { listChanges, readBaseBlob, discoverReposCached } from "../../core/editor/changes"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
 import { LspConnection } from "../../core/lsp/bridge"
@@ -1641,19 +1641,22 @@ export class WebChannel implements Channel {
   }
 
   /** GET …/changes/blob for a resolved workdir (spec §2.2). */
-  private async changesBlob(workdir: string, url: URL): Promise<Response> {
+  private async changesBlob(workdir: string, url: URL, req: Request): Promise<Response> {
     const repo = url.searchParams.get("repo") ?? ""
     const sha = url.searchParams.get("sha") ?? ""
     if (!/^[0-9a-f]{40}$/.test(sha)) return this.json({ error: "BAD_SHA" }, 400)
-    const found = (await discoverRepos(workdir)).find((r) => r.relPath === repo)
+    const etag = `"${sha}"`
+    const cacheHeaders = { etag, "cache-control": "private, max-age=31536000, immutable" }
+    if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers: cacheHeaders })
+    let found = (await discoverReposCached(workdir)).find((r) => r.relPath === repo)
+    if (!found) found = (await discoverReposCached(workdir, { fresh: true })).find((r) => r.relPath === repo)
     if (!found) return this.json({ error: "repo not found" }, 404)
     const r = await readBaseBlob(found.absPath, sha, { force: url.searchParams.get("force") === "1" })
     if (r.ok) {
       return new Response(r.text, {
         headers: {
           "content-type": "text/plain; charset=utf-8",
-          etag: `"${sha}"`,
-          "cache-control": "private, max-age=31536000, immutable",
+          ...cacheHeaders,
         },
       })
     }
@@ -2661,7 +2664,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.changesBlob(workdir, url)
+      return this.changesBlob(workdir, url, req)
     }
 
     // ── Editor filesystem routes, workspace-scoped ──────────────────────────
@@ -2762,7 +2765,7 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      return this.changesBlob(workdir, url)
+      return this.changesBlob(workdir, url, req)
     }
 
     // ── Host file system (spec 2026-09-27 §4.4) ─────────────────────────────

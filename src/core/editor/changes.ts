@@ -206,6 +206,38 @@ async function repoChanges(repoAbs: string, relPath: string, baseSha: string): P
 }
 
 /** The Changes list for a workdir (spec §2.1). Base resolution is the same as fs/diff's. */
+export type RepoRef = { relPath: string; absPath: string }
+
+export const REPO_CACHE_TTL_MS = 60_000
+
+/** Workdir -> repo list with a TTL and in-flight dedup. `fresh` always rescans (and stores). */
+export function createRepoCache(
+  scan: (workdir: string) => Promise<RepoRef[]>,
+  now: () => number = Date.now,
+  ttlMs = REPO_CACHE_TTL_MS,
+) {
+  const done = new Map<string, { at: number; repos: RepoRef[] }>()
+  const inflight = new Map<string, Promise<RepoRef[]>>()
+  return async (workdir: string, opts?: { fresh?: boolean }): Promise<RepoRef[]> => {
+    if (!opts?.fresh) {
+      const hit = done.get(workdir)
+      if (hit && now() - hit.at < ttlMs) return hit.repos
+      const pending = inflight.get(workdir)
+      if (pending) return pending
+    }
+    const p = scan(workdir).then((repos) => {
+      const t = now()
+      for (const [k, v] of done) if (t - v.at >= ttlMs) done.delete(k)
+      done.set(workdir, { at: t, repos })
+      return repos
+    }).finally(() => { if (inflight.get(workdir) === p) inflight.delete(workdir) })
+    inflight.set(workdir, p)
+    return p
+  }
+}
+
+export const discoverReposCached = createRepoCache(discoverRepos)
+
 export async function listChanges(
   workdir: string,
   baseCommits: Record<string, string>,
@@ -213,7 +245,7 @@ export async function listChanges(
   baseSpec?: string,
 ): Promise<ChangesList> {
   const spec = parseBaseSpec(baseSpec)
-  const repos = await discoverRepos(workdir)
+  const repos = await discoverReposCached(workdir, { fresh: true })
   const perRepo = await mapLimit(repos, REPO_CONCURRENCY, async (r) => {
     const baseSha = await resolveSpecBase(r.absPath, spec, baseCommits[r.relPath], createdAt)
     return repoChanges(r.absPath, r.relPath, baseSha)

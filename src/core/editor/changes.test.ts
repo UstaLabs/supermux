@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { parseRawNumstat, listChanges, MAX_LIST_FILES, readBaseBlob, BLOB_LIMIT } from "./changes"
+import { parseRawNumstat, listChanges, createRepoCache, MAX_LIST_FILES, readBaseBlob, BLOB_LIMIT } from "./changes"
 import { execFileSync } from "child_process"
 import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync } from "fs"
 import { tmpdir } from "os"
@@ -206,5 +206,31 @@ describe("readBaseBlob edge", () => {
     const { dir } = repo()
     // an all-zero sha is a valid 40-hex string git cannot resolve
     expect(await readBaseBlob(dir, "0".repeat(40))).toEqual({ ok: false, code: "MISSING" })
+  })
+})
+
+describe("createRepoCache", () => {
+  const repo = (n: string) => [{ relPath: n, absPath: `/x/${n}` }]
+  test("serves within the TTL, rescans after it, and fresh always rescans", async () => {
+    let t = 0, scans = 0
+    const cache = createRepoCache(async () => { scans++; return repo(String(scans)) }, () => t, 1000)
+    expect((await cache("/w"))[0]!.relPath).toBe("1")
+    t = 999
+    expect((await cache("/w"))[0]!.relPath).toBe("1")
+    expect(scans).toBe(1)
+    expect((await cache("/w", { fresh: true }))[0]!.relPath).toBe("2")
+    expect((await cache("/w"))[0]!.relPath).toBe("2")
+    t = 999 + 1000
+    expect((await cache("/w"))[0]!.relPath).toBe("3")
+  })
+  test("concurrent callers share one scan and old entries are evicted", async () => {
+    let t = 0, scans = 0
+    const cache = createRepoCache(async () => { scans++; await Promise.resolve(); return repo("a") }, () => t, 1000)
+    await Promise.all([cache("/w"), cache("/w"), cache("/w")])
+    expect(scans).toBe(1)
+    t = 5000
+    await cache("/other")
+    await cache("/w")
+    expect(scans).toBe(3)
   })
 })
