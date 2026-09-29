@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -49,6 +50,7 @@ class WalkthroughViewTest {
         state: WalkthroughState,
         repos: List<dev.supermux.net.RepoDiff> = emptyList(),
         read: (String, String) -> Result<String> = { _, _ -> Result.success("") },
+        baseText: (suspend (String, String, Boolean) -> dev.supermux.net.BlobText)? = null,
     ): @Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
@@ -64,6 +66,7 @@ class WalkthroughViewTest {
                     onOpenFile = { _, _, _ -> },
                     onClose = {},
                     modifier = Modifier,
+                    baseText = baseText,
                 )
             }
         }
@@ -128,5 +131,50 @@ class WalkthroughViewTest {
         waitForIdle()
         onNodeWithTag("walkthrough_native_region").assertExists()
         onNodeWithText("Why this name?").assertExists()
+    }
+
+    /** A lazy Changes file has no patch: the step's base is its blob, so the step still shows a diff. */
+    @Test
+    fun a_lazy_file_step_diffs_against_its_blob() = runComposeUiTest {
+        val state = WalkthroughState("s1").apply {
+            applyWalkthrough(
+                Walkthrough(
+                    id = "w1", sessionId = "s1", title = "Tour", revision = 1,
+                    steps = listOf(WalkthroughStep(id = "a", ord = 0, title = "The change", bodyMd = "Look", repo = "", path = "f.txt", rangeStart = 1, rangeEnd = 1)),
+                ),
+            )
+        }
+        val sha = "b".repeat(40)
+        val repos = listOf(dev.supermux.net.RepoDiff(repo = "", files = listOf(dev.supermux.net.DiffFile(path = "f.txt", status = "modified", added = 1, removed = 1, baseBlob = sha, lazy = true))))
+        val calls = mutableListOf<Triple<String, String, Boolean>>()
+        setContent(
+            host(state, repos = repos, read = { _, _ -> Result.success("two\n") }, baseText = { repo, s, force ->
+                calls += Triple(repo, s, force)
+                dev.supermux.net.BlobText.Text("one\n")
+            }),
+        )
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("walkthrough_native_region").fetchSemanticsNodes().isNotEmpty() }
+        waitForIdle()
+        assertEquals(listOf(Triple("", sha, false)), calls)
+        // The blob's line is on the base side: the inline diff draws it as a deleted line.
+        onNodeWithText("one", useUnmergedTree = true).assertExists()
+    }
+
+    /** No fetcher (or a failed one): the step still renders, against the working copy, no crash. */
+    @Test
+    fun a_lazy_file_step_without_a_fetcher_shows_the_file() = runComposeUiTest {
+        val state = WalkthroughState("s1").apply {
+            applyWalkthrough(
+                Walkthrough(
+                    id = "w1", sessionId = "s1", title = "Tour", revision = 1,
+                    steps = listOf(WalkthroughStep(id = "a", ord = 0, title = "The change", bodyMd = "Look", repo = "", path = "f.txt", rangeStart = 1, rangeEnd = 1)),
+                ),
+            )
+        }
+        val repos = listOf(dev.supermux.net.RepoDiff(repo = "", files = listOf(dev.supermux.net.DiffFile(path = "f.txt", status = "modified", added = 1, removed = 1, baseBlob = "b".repeat(40), lazy = true))))
+        setContent(host(state, repos = repos, read = { _, _ -> Result.success("two\n") }, baseText = { _, _, _ -> dev.supermux.net.BlobText.Failed("boom") }))
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("walkthrough_native_region").fetchSemanticsNodes().isNotEmpty() }
+        waitForIdle()
+        onNodeWithText("one", useUnmergedTree = true).assertDoesNotExist()
     }
 }

@@ -491,6 +491,7 @@ fun DiffPane(
                     onWalkthroughClosed()
                 },
                 modifier = Modifier.weight(1f),
+                baseText = baseText,
             )
         } else {
           DiffView(

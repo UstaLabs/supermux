@@ -116,11 +116,13 @@ internal fun NativeWalkthroughRegion(
     onAddComment: suspend (AddCommentBody) -> ReviewComment?,
     onResolve: suspend (String) -> Boolean,
     modifier: Modifier = Modifier,
+    /** The file's base text when the caller has it (a lazy Changes file: its blob); null: [patch] reversed. */
+    base: String? = null,
 ) {
     val scope = rememberCoroutineScope()
     val syntax = LocalPlatform.current.editorSyntax
     val inDiff = step.anchorStatus != "not_in_diff"
-    val base = remember(text, patch, inDiff) { if (inDiff) diffBase(text, patch) else text }
+    val shownBase = remember(text, patch, base, inDiff) { if (!inDiff) text else base ?: diffBase(text, patch) }
     val lineCount = remember(text) { text.count { it == '\n' } + 1 }
     val config = walkthroughDiffConfig(step, lineCount)
     val fontSize = rememberEditorFontSize()
@@ -161,7 +163,7 @@ internal fun NativeWalkthroughRegion(
             page = { dir -> if (dir == DiffPage.NEXT) state.next() else state.previous() },
         )
     }
-    val view = remember(host, text, base) {
+    val view = remember(host, text, shownBase) {
         EditorView(
             EditorState.create(
                 text,
@@ -170,7 +172,7 @@ internal fun NativeWalkthroughRegion(
                     basics(),
                     search(),
                     viewSettings(EditorSettings(fontSize = fontSize.toFloat(), lineWrap = true)),
-                    inlineDiff(base, config, host),
+                    inlineDiff(shownBase, config, host),
                     review(host),
                 ),
             ),
@@ -181,7 +183,7 @@ internal fun NativeWalkthroughRegion(
     var shown by remember(view) { mutableStateOf(config) }
     LaunchedEffect(view, config) {
         if (config != shown) {
-            Diff.load(view, base, text, config)
+            Diff.load(view, shownBase, text, config)
             shown = config
         }
         state.position(anchor)?.let(view::restoreScroll)
