@@ -95,6 +95,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.navigation3.runtime.entryProvider
@@ -1271,6 +1272,22 @@ private fun ShellHome(
             // navigation bar; the whole two-pane frame steps inside them here and CONSUMES them,
             // so a pane that pads for a bar on its own (the phone-layer screens do) does not pad
             // twice. Desktop insets are zero: this is the row it always was.
+            // Hoisted out of the Row: the divider overlay below must sit on the edge the
+            // sidebar is ACTUALLY drawn at, and must switch the spring off while it drags.
+            // (It used to read the target width while the sidebar sprang after it, so the
+            // edge and its divider drifted apart during every drag.)
+            var resizing by remember { mutableStateOf(false) }
+            var dragStartWidth by remember { mutableStateOf(0.dp) }
+            val targetWidth = if (ui.sidebarCollapsed) 64.dp else ui.sidebarWidth
+            val springWidth by animateDpAsState(
+                targetValue = targetWidth,
+                animationSpec = if (resizing) snap() else spring(stiffness = Spring.StiffnessMediumLow),
+                label = "sidebarWidth",
+            )
+            // While dragging, draw the target directly: even a snap() runs in the animation's
+            // coroutine and lands a frame after the drag, which reads as the sidebar trailing
+            // the cursor. The spring is only for collapse/expand.
+            val animatedWidth = if (resizing) targetWidth else springWidth
             Row(
                 Modifier
                     .fillMaxSize()
@@ -1279,12 +1296,6 @@ private fun ShellHome(
             ) {
                 // ── Sidebar: collapsed rail, or the full list ──
                 val collapsed = ui.sidebarCollapsed
-                var resizing by remember { mutableStateOf(false) }
-                val animatedWidth by animateDpAsState(
-                    targetValue = if (collapsed) 64.dp else ui.sidebarWidth,
-                    animationSpec = if (resizing) snap() else spring(stiffness = Spring.StiffnessMediumLow),
-                    label = "sidebarWidth",
-                )
                 Box(
                     Modifier
                         .width(animatedWidth)
@@ -1340,10 +1351,18 @@ private fun ShellHome(
                 )
             } else {
                 SidebarDivider(
-                    onDragDelta = { d -> ui.setSidebarWidth(ui.sidebarWidth + d) },
+                    // Start width + total travel, clamped by setSidebarWidth: an overshoot
+                    // past min/max is not lost, so the edge waits for the cursor to return.
+                    onDrag = { travel -> ui.setSidebarWidth(dragStartWidth + travel) },
+                    onStartDrag = {
+                        dragStartWidth = ui.sidebarWidth
+                        resizing = true
+                    },
+                    onEndDrag = { resizing = false },
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .offset(x = ui.sidebarWidth - SidebarDividerCenterOffset)
+                        // Read in the placement phase, from the width the sidebar is drawn at.
+                        .offset { IntOffset((animatedWidth - SidebarDividerCenterOffset).roundToPx(), 0) }
                         .zIndex(20f),
                 )
             }
