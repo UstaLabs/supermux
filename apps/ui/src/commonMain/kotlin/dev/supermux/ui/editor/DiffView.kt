@@ -877,7 +877,7 @@ private fun FileSection(
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
-    val stats = remember(file) { if (file.lazy) (file.added ?: 0) to (file.removed ?: 0) else diffStats(file.diff) }
+    val stats = remember(file) { fileStats(file) }
     Column(
         Modifier
             .fillMaxWidth()
