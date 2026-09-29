@@ -3,7 +3,8 @@
 // a cheap per-repo file list with counts and base blob SHAs, and base texts by blob on demand.
 // Everything here is async — the broker is one event loop.
 
-import { open, stat } from "fs/promises"
+import { spawn } from "node:child_process"
+import { lstat, open } from "fs/promises"
 import { join } from "path"
 import { gitAsync } from "../git/exec"
 import { mapLimit } from "../fs/pool"
@@ -101,27 +102,74 @@ export interface RepoChanges {
 
 export interface ChangesList { repos: RepoChanges[] }
 
+/** lstat, never stat: a symlink is measured (and later diffed) as its target string, not followed. */
 async function sizeOf(abs: string): Promise<number | null> {
-  try { return (await stat(abs)).size } catch { return null }
+  try { return (await lstat(abs)).size } catch { return null }
+}
+
+const LS_FILES_TIMEOUT_MS = 30_000
+
+/** Streams `git ls-files --others` so a huge untracked tree (an un-ignored node_modules) can't
+ *  overflow a buffer: only the first `keep` paths are held, the rest are just counted. Sub-repo
+ *  directories (trailing '/') are skipped. On timeout/error the partial result is returned. */
+function listUntracked(repoAbs: string, keep: number): Promise<{ paths: string[]; total: number; error?: string }> {
+  return new Promise((resolve) => {
+    const paths: string[] = []
+    let total = 0
+    let rest = ""
+    let error: string | undefined
+    let done = false
+    const child = spawn("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: repoAbs, stdio: ["ignore", "pipe", "ignore"] })
+    const take = (p: string) => {
+      if (!p || p.endsWith("/")) return
+      total++
+      if (paths.length < keep) paths.push(p)
+    }
+    const finish = () => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve({ paths, total, ...(error ? { error } : {}) })
+    }
+    const timer = setTimeout(() => { error = "git ls-files timed out"; child.kill("SIGKILL") }, LS_FILES_TIMEOUT_MS)
+    child.stdout.setEncoding("utf-8")
+    child.stdout.on("data", (chunk: string) => {
+      const parts = (rest + chunk).split("\0")
+      rest = parts.pop() ?? ""
+      for (const p of parts) take(p)
+    })
+    child.on("error", (e) => { error = e.message; finish() })
+    child.on("close", (code) => {
+      take(rest)
+      if (code !== 0 && !error) error = `git ls-files exited with ${code}`
+      finish()
+    })
+  })
 }
 
 /** Line count + binary sniff for an untracked file (git's own counting: a final line without a
- *  newline still counts). Files over UNTRACKED_READ_LIMIT get null counts, not read. */
+ *  newline still counts). Symlinks and non-regular files are never opened; files over
+ *  UNTRACKED_READ_LIMIT get null counts. */
 async function untrackedEntry(repoAbs: string, path: string): Promise<ChangedFile> {
   const abs = join(repoAbs, path)
-  const size = await sizeOf(abs)
-  const entry: ChangedFile = { path, status: "added", added: null, removed: 0, binary: false, oldPath: null, baseBlob: null, size }
-  if (size === null || size > UNTRACKED_READ_LIMIT) return { ...entry, removed: null }
+  const entry: ChangedFile = { path, status: "added", added: null, removed: 0, binary: false, oldPath: null, baseBlob: null, size: null }
+  let st
+  try { st = await lstat(abs) } catch { return { ...entry, removed: null } }
+  entry.size = st.size
+  // git diffs a symlink as its target string: one line.
+  if (st.isSymbolicLink()) return { ...entry, added: 1 }
+  if (!st.isFile() || st.size > UNTRACKED_READ_LIMIT) return { ...entry, removed: null }
   try {
     const fh = await open(abs, "r")
     try {
-      const buf = await fh.readFile()
-      const sniff = buf.subarray(0, Math.min(buf.length, BINARY_SNIFF_BYTES))
-      if (sniff.includes(0)) return { ...entry, binary: true, removed: null }
-      const text = buf.toString("utf-8")
+      const buf = Buffer.alloc(UNTRACKED_READ_LIMIT + 1)
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0)
+      if (bytesRead > UNTRACKED_READ_LIMIT) return { ...entry, removed: null }
+      const data = buf.subarray(0, bytesRead)
+      if (data.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return { ...entry, binary: true, removed: null }
       let lines = 0
-      for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lines++
-      if (text.length > 0 && !text.endsWith("\n")) lines++
+      for (let i = data.indexOf(10); i >= 0; i = data.indexOf(10, i + 1)) lines++
+      if (bytesRead > 0 && data[bytesRead - 1] !== 10) lines++
       return { ...entry, added: lines }
     } finally {
       await fh.close()
@@ -133,26 +181,24 @@ async function untrackedEntry(repoAbs: string, path: string): Promise<ChangedFil
 
 async function repoChanges(repoAbs: string, relPath: string, baseSha: string): Promise<RepoChanges> {
   try {
-    const [raw, numstat, others] = await Promise.all([
+    const [raw, numstat] = await Promise.all([
       gitAsync(repoAbs, ["diff", "--raw", "-z", "--no-abbrev", "-M", baseSha], { trim: false }),
       gitAsync(repoAbs, ["diff", "--numstat", "-z", "-M", baseSha], { trim: false }),
-      gitAsync(repoAbs, ["ls-files", "--others", "--exclude-standard", "-z"], { trim: false }),
     ])
     const tracked = parseRawNumstat(raw, numstat)
-    // Sub-repo directories end with '/': they are listed as their own repos.
-    const untrackedPaths = others.split("\0").filter((p) => p && !p.endsWith("/"))
-    const total = tracked.length + untrackedPaths.length
     const keptTracked = tracked.slice(0, MAX_LIST_FILES)
-    const room = MAX_LIST_FILES - keptTracked.length
+    const room = Math.max(0, MAX_LIST_FILES - keptTracked.length)
+    const others = await listUntracked(repoAbs, room)
+    const total = tracked.length + others.total
     const [trackedSized, untracked] = await Promise.all([
       mapLimit(keptTracked, UNTRACKED_CONCURRENCY, async (f) => ({
         ...f,
         size: f.status === "deleted" ? null : await sizeOf(join(repoAbs, f.path)),
       })),
-      mapLimit(untrackedPaths.slice(0, Math.max(0, room)), UNTRACKED_CONCURRENCY, (p) => untrackedEntry(repoAbs, p)),
+      mapLimit(others.paths, UNTRACKED_CONCURRENCY, (p) => untrackedEntry(repoAbs, p)),
     ])
     const files = [...trackedSized, ...untracked]
-    return { repo: relPath, baseSha, files, truncated: total > files.length, total }
+    return { repo: relPath, baseSha, files, truncated: total > files.length, total, ...(others.error ? { error: others.error } : {}) }
   } catch (err) {
     return { repo: relPath, baseSha, files: [], truncated: false, total: 0, error: err instanceof Error ? err.message : String(err) }
   }
@@ -192,7 +238,8 @@ export async function readBaseBlob(repoAbs: string, sha: string, opts?: { force?
     return { ok: false, code: "MISSING" }
   }
   const limit = opts?.force ? BLOB_FORCE_LIMIT : BLOB_LIMIT
-  if (!Number.isFinite(size) || size > limit) return { ok: false, code: "TOO_LARGE", size }
+  if (!Number.isFinite(size)) return { ok: false, code: "MISSING" }
+  if (size > limit) return { ok: false, code: "TOO_LARGE", size }
   let text: string
   try {
     text = await gitAsync(repoAbs, ["cat-file", "blob", sha], { trim: false })

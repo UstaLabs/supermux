@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { parseRawNumstat, listChanges, MAX_LIST_FILES, readBaseBlob, BLOB_LIMIT } from "./changes"
 import { execFileSync } from "child_process"
-import { mkdtempSync, writeFileSync, mkdirSync } from "fs"
+import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 
@@ -134,6 +134,30 @@ describe("listChanges", () => {
     expect(r.total).toBe(MAX_LIST_FILES + 5)
   }, 30_000)
 
+  test("a tracked edit survives a huge untracked listing", async () => {
+    const { dir, base } = repo()
+    writeFileSync(join(dir, "a.txt"), "edited\n")
+    mkdirSync(join(dir, "many"))
+    for (let i = 0; i < MAX_LIST_FILES + 100; i++) writeFileSync(join(dir, "many", `f${i}.txt`), "x\n")
+    const r = (await listChanges(dir, { "": base })).repos[0]!
+    expect(r.files.some((f) => f.path === "a.txt")).toBe(true)
+    expect(r.files).toHaveLength(MAX_LIST_FILES)
+    expect(r.total).toBe(MAX_LIST_FILES + 101)
+    expect(r.truncated).toBe(true)
+  }, 30_000)
+
+  test("untracked symlinks are never followed", async () => {
+    const { dir, base } = repo()
+    symlinkSync("/dev/zero", join(dir, "z"))
+    writeFileSync(join(dir, "target.txt"), "a\nb\nc\n")
+    symlinkSync("target.txt", join(dir, "link"))
+    const r = (await listChanges(dir, { "": base })).repos[0]!
+    const by = Object.fromEntries(r.files.map((f) => [f.path, f]))
+    expect(by["z"]).toMatchObject({ status: "added", added: 1, removed: 0, binary: false, size: "/dev/zero".length })
+    expect(by["link"]).toMatchObject({ added: 1, removed: 0, binary: false, size: "target.txt".length })
+    expect(by["target.txt"]).toMatchObject({ added: 3 })
+  }, 10_000)
+
   test("a missing workdir lists nothing", async () => {
     expect((await listChanges("/nonexistent/mux-changes", {})).repos).toEqual([])
   })
@@ -174,5 +198,13 @@ describe("readBaseBlob", () => {
     expect(await readBaseBlob(dir, sha)).toEqual({ ok: false, code: "TOO_LARGE", size: BLOB_LIMIT + 10 })
     const forced = await readBaseBlob(dir, sha, { force: true })
     expect(forced.ok && forced.text.length).toBe(BLOB_LIMIT + 10)
+  })
+})
+
+describe("readBaseBlob edge", () => {
+  test("a non-numeric size is MISSING", async () => {
+    const { dir } = repo()
+    // an all-zero sha is a valid 40-hex string git cannot resolve
+    expect(await readBaseBlob(dir, "0".repeat(40))).toEqual({ ok: false, code: "MISSING" })
   })
 })
