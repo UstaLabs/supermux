@@ -14,6 +14,7 @@ const FILES = [
   "core/worktree/inventory.ts",
   "core/worktree/service.ts",
   "core/editor/workdir-diff.ts",
+  "core/editor/changes.ts",
   "core/review/anchor.ts",
 ]
 

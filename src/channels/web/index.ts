@@ -13,7 +13,8 @@ import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOrig
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
-import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
+import { computeWorkdirDiff, listRepoRefs, discoverRepos } from "../../core/editor/workdir-diff"
+import { listChanges, readBaseBlob } from "../../core/editor/changes"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
 import { LspConnection } from "../../core/lsp/bridge"
@@ -1639,6 +1640,29 @@ export class WebChannel implements Channel {
     }
   }
 
+  /** GET …/changes/blob for a resolved workdir (spec §2.2). */
+  private async changesBlob(workdir: string, url: URL): Promise<Response> {
+    const repo = url.searchParams.get("repo") ?? ""
+    const sha = url.searchParams.get("sha") ?? ""
+    if (!/^[0-9a-f]{40}$/.test(sha)) return this.json({ error: "BAD_SHA" }, 400)
+    const found = (await discoverRepos(workdir)).find((r) => r.relPath === repo)
+    if (!found) return this.json({ error: "repo not found" }, 404)
+    const r = await readBaseBlob(found.absPath, sha, { force: url.searchParams.get("force") === "1" })
+    if (r.ok) {
+      return new Response(r.text, {
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          etag: `"${sha}"`,
+          "cache-control": "private, max-age=31536000, immutable",
+        },
+      })
+    }
+    if (r.code === "TOO_LARGE") return this.json({ error: "TOO_LARGE", size: r.size }, 413)
+    if (r.code === "BINARY") return this.json({ error: "BINARY" }, 415)
+    if (r.code === "BAD_SHA") return this.json({ error: "BAD_SHA" }, 400)
+    return this.json({ error: "MISSING" }, 404)
+  }
+
   private json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
   }
@@ -2595,6 +2619,7 @@ export class WebChannel implements Channel {
         return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
       }
     }
+    // Deprecated: shipped clients only. Current clients use /changes + /changes/blob.
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/fs\/diff$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
@@ -2616,6 +2641,27 @@ export class WebChannel implements Channel {
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
       return this.json({ repos: await listRepoRefs(workdir) })
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/changes$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      const baseCommits = this.opts.getSessionBaseCommits?.(id) ?? {}
+      const createdAt = this.opts.getSessionCreatedAt?.(id)
+      const { repos } = await listChanges(workdir, baseCommits, createdAt, url.searchParams.get("base") ?? undefined)
+      const comments = await Promise.all((this.opts.reviewList?.(id) ?? []).map(async (c) => {
+        const sess = this.opts.reviewSession?.(id)
+        const repoAbs = c.repo ? join(sess?.workdir ?? workdir, c.repo) : (sess?.workdir ?? workdir)
+        const { currentLine, outdated } = await reanchor(repoAbs, c)
+        return { ...c, currentLine, outdated }
+      }))
+      return this.json({ repos, comments })
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/changes\/blob$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      return this.changesBlob(workdir, url)
     }
 
     // ── Editor filesystem routes, workspace-scoped ──────────────────────────
@@ -2681,6 +2727,7 @@ export class WebChannel implements Channel {
         return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
       }
     }
+    // Deprecated: shipped clients only. Current clients use /changes + /changes/blob.
     if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/diff$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
@@ -2702,6 +2749,20 @@ export class WebChannel implements Channel {
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
       return this.json({ repos: await listRepoRefs(workdir) })
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/changes$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      const base = this.opts.getWorkspaceDiffBase?.(id)
+      const { repos } = await listChanges(workdir, base?.baseCommits ?? {}, base?.createdAt, url.searchParams.get("base") ?? undefined)
+      return this.json({ repos, comments: [] })
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/changes\/blob$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      return this.changesBlob(workdir, url)
     }
 
     // ── Host file system (spec 2026-09-27 §4.4) ─────────────────────────────
