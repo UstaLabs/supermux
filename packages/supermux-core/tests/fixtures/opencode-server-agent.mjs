@@ -26,6 +26,12 @@ const http = createServer((req, res) => {
     return send(200, [{ info: { id: 'msg_1', sessionID: PARENT, role: 'assistant' }, parts }])
   }
   if (req.method === 'GET' && url.pathname === `/session/${CHILD}`) return send(200, { id: CHILD, parentID: PARENT })
+  if (req.method === 'POST' && url.pathname === `/session/${CHILD}/abort`) {
+    // Like OpenCode: aborting the child drops its pending ask and fails its task tool call.
+    log({ aborted: CHILD })
+    if (taskRunning) { ask = undefined; answer?.('aborted-http') }
+    return send(200, true)
+  }
   const m = /^\/permission\/([^/]+)\/reply$/.exec(url.pathname)
   if (req.method === 'POST' && m) {
     let body = ''
@@ -59,6 +65,12 @@ async function runTask(id) {
   })
   taskRunning = false
   const output = `<task id="${CHILD}" state="completed">\n<task_result>\nREPLY=${reply}\n</task_result>\n</task>`
+  if (reply === 'aborted-http') {
+    update(PARENT, { sessionUpdate: 'tool_call_update', toolCallId: TASK, status: 'failed', title: 'Run ls', kind: 'think', rawInput: input, rawOutput: { error: 'Tool execution aborted', metadata: { sessionId: CHILD, parentSessionId: PARENT } } })
+    update(PARENT, { sessionUpdate: 'agent_message_chunk', messageId: 'msg_2', content: { type: 'text', text: 'the subagent was stopped' } })
+    write({ id, result: { stopReason: 'end_turn' } })
+    return
+  }
   update(PARENT, { sessionUpdate: 'tool_call_update', toolCallId: TASK, status: 'completed', title: 'Run ls', kind: 'think', rawInput: input, content: [{ type: 'content', content: { type: 'text', text: output } }], rawOutput: { output, metadata: { sessionId: CHILD, parentSessionId: PARENT } } })
   update(PARENT, { sessionUpdate: 'agent_message_chunk', messageId: 'msg_2', content: { type: 'text', text: `subagent said ${reply}` } })
   write({ id, result: { stopReason: 'end_turn' } })

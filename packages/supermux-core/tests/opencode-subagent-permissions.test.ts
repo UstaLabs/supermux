@@ -124,3 +124,17 @@ test("interrupting the parent withdraws the subagent's pending request; nothing 
   expect(sent.length).toBeGreaterThan(0)
   expect(sent.every(r => r.cancelled === true || r.reply === "reject")).toBe(true)
 })
+
+test("stopping a running subagent aborts its child through OpenCode's HTTP server (ACP cancel would be ignored)", async () => {
+  const { session, events, replies } = await setup(ASK)
+  const receipt = await session.send({ content: text("spawn"), whenBusy: "queue" })
+  // The child is stuck (here: on its unanswered ask; live: a hung webfetch) and its id is known.
+  await until(() => session.requests.list().length === 1)
+  await until(() => events.some(e => e.kind === "subagent" && (e as { nativeId?: string }).nativeId === "ses_child"))
+  await session.stopSubagent("call_task")
+  expect((await receipt.completed).status).toBe("completed")
+  expect(await replies()).toContainEqual({ aborted: "ses_child" })
+  const terminal = events.filter(e => e.kind === "subagent" && e.subagentId === "call_task").map(e => (e as { phase: string }).phase).at(-1)
+  expect(terminal).toBe("cancelled")
+  await until(() => session.requests.list().length === 0)
+})

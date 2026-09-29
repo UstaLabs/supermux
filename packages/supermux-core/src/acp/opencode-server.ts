@@ -97,6 +97,8 @@ export type OpenCodeServerClient = {
   /** Running task tool calls of `sessionId`'s latest messages → their child session ids. */
   runningTaskChildren(sessionId: string, signal: AbortSignal): Promise<Map<string, string>>
   parentOf(sessionId: string, signal: AbortSignal): Promise<string | undefined>
+  /** Abort a session's running work (`POST /session/:id/abort`) — reaches task children, which ACP cannot. */
+  abort(sessionId: string, signal: AbortSignal): Promise<void>
 }
 
 export function openCodeServerClient(info: OpenCodeServerInfo, directory: string, timeoutMs = 5000): OpenCodeServerClient {
@@ -137,6 +139,9 @@ export function openCodeServerClient(info: OpenCodeServerInfo, directory: string
         }
       }
       return out
+    },
+    async abort(sessionId, signal) {
+      await call(`/session/${encodeURIComponent(sessionId)}/abort`, signal, { method: 'POST' })
     },
     async parentOf(sessionId, signal) {
       const info = await call(`/session/${encodeURIComponent(sessionId)}`, signal) as { parentID?: unknown } | null

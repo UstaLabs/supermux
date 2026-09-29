@@ -797,7 +797,15 @@ export function acp(options: AcpOptions): AgentDriver {
       if (closed) throw new CoreError('runtime_closed', 'ACP runtime closed')
       if (options.vendor !== 'grok' && options.vendor !== 'opencode') throw new UnsupportedOperation('subagent stop', options.id)
       const child = childSessionOf(subagentId)
+      normalizer.markStopRequested(subagentId)
       childPrompts.get(child)?.abort()
+      // OpenCode's ACP layer ignores session/cancel for task children it did not create (the same
+      // gap as their permission asks), so a stuck child — e.g. a hung webfetch — kept its parent's
+      // Task waiting forever. Its own HTTP server aborts any session.
+      if (options.vendor === 'opencode' && openCodeServer) {
+        await openCodeServer.abort(child, sideChannelAbort.signal)
+        return
+      }
       await ioWait(connection.cancel({ sessionId: child }))
     }
     function makeRuntime(capabilities: Capabilities): AgentRuntime {

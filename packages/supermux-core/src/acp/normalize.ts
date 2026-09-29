@@ -99,6 +99,8 @@ export type AcpNormalizer = ((update: AgentUpdate) => NormalizedBody[]) & {
   subagent: (id: string) => AcpSubagentInfo | undefined
   /** Open subagents (OpenCode side channel: which running tasks still lack a child session). */
   openSubagents: () => AcpSubagentInfo[]
+  /** Mark a subagent as stopped by the client, so its failed/aborted end reads as `cancelled`. */
+  markStopRequested: (id: string) => void
 }
 
 /** Driver-synthesized native frame for a turn the client started directly on a child session. */
@@ -130,6 +132,8 @@ type Sub = {
   pending?: { phase: "completed" | "failed" | "cancelled"; result?: string }
   /** Cursor Task tool call id (also the key cursor/task reports). */
   taskCallId?: string
+  /** The client asked to stop it: a failed/aborted end is reported as `cancelled`. */
+  stopRequested?: boolean
 }
 
 type SpawnCall = { callId: string; description?: string; prompt?: string; subagentType?: string; background?: boolean; resumeFrom?: string }
@@ -265,6 +269,7 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
 
   function finish(sub: Sub, phase: "completed" | "failed" | "cancelled", result?: string, extra: Partial<Extract<NormalizedBody, { kind: "subagent" }>> = {}): NormalizedBody[] {
     if (!sub.open) return []
+    if (sub.stopRequested && phase === "failed") phase = "cancelled"
     const scope = scopeFor(sub.id)
     const out = [...takeThoughts(scope), ...takeAssistant(scope)]
     sub.open = false
@@ -770,6 +775,7 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   }
   normalize.subagentForTool = (toolCallId: string) => childTools.get(toolCallId)
   normalize.subagentForSession = (sessionId: string) => (isMain(sessionId) ? undefined : lookup(sessionId)?.id)
+  normalize.markStopRequested = (id: string) => { const sub = subs.get(id); if (sub) sub.stopRequested = true }
   normalize.openSubagents = () => [...subs.values()].filter(sub => sub.open).map(sub => ({ id: sub.id, ...(sub.nativeId ? { nativeId: sub.nativeId } : {}), open: true }))
   normalize.subagent = (id: string) => {
     const sub = lookup(id)
