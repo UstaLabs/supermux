@@ -22,6 +22,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
@@ -345,6 +347,7 @@ fun Editor(
             // INSIDE the scrollables: this node sees the Main pass first and consumes what is a
             // selection (mouse presses and drags), leaving a finger's drag to scroll.
             .pointerInput(pointer) { pointer.handle(this) }
+            .then(if (controller.modLink != null) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier)
             .editorMagnifier { controller.magnifierAt }
             .onGloballyPositioned { controller.coordinates = it },
     ) {
@@ -386,9 +389,9 @@ fun Editor(
                                 surfaceInput.focused = it.hasFocus
                                 controller.view.focused = it.hasFocus
                                 platformFocusChanged(controller, it.hasFocus)
-                                if (!it.hasFocus) { controller.handles = TouchHandles.NONE; controller.menuShown = false; controller.onBlur() }
+                                if (!it.hasFocus) { controller.handles = TouchHandles.NONE; controller.menuShown = false; controller.modBlur(); controller.onBlur() }
                             }
-                            .onPreviewKeyEvent { handleEditorKey(controller.view, it, controller.composing) },
+                            .onPreviewKeyEvent { controller.modKey(it); handleEditorKey(controller.view, it, controller.composing) },
                     )
                 },
                 // A pointer shield exactly over the hidden field's touch target: the topmost hit sibling
@@ -663,6 +666,56 @@ internal class EditorController(
 
     /** The document range the IME is composing, underlined by the painter. */
     var composition: IntRange? by mutableStateOf(null)
+
+    /** The word under the mouse while Mod is held and a [modClickFacet] handler exists: underlined, a hand pointer. */
+    var modLink: IntRange? by mutableStateOf(null)
+
+    /** Mod is down, as the key events say (reset on blur: its release may go elsewhere). */
+    private var modKeyHeld = false
+
+    /** Where the mouse last hovered the surface (null: it left), so pressing Mod alone can underline. */
+    private var mouseAt: androidx.compose.ui.geometry.Offset? = null
+
+    /**
+     * The mouse moved to [p] (null: it left the surface) or Mod went down or up ([modDown]): the
+     * word under it becomes [modLink] when Mod is held over a word and a plugin takes Mod-clicks.
+     */
+    fun updateModLink(p: androidx.compose.ui.geometry.Offset?, modDown: Boolean, moved: Boolean = true) {
+        if (moved) mouseAt = p
+        val at = mouseAt
+        // A synthetic move (Compose re-sends one after a relayout) may not carry the modifiers: the
+        // key events' word counts too.
+        modLink = if (!(modDown || modKeyHeld) || at == null || view.state.facet(modClickFacet).isEmpty()) null else {
+            val pos = hover.textAt(at)?.first
+            if (pos == null) null else {
+                val doc = view.state.doc
+                val w = TextBoundaries.wordAt(doc, pos)
+                if (w.isEmpty() || !doc.slice(w.first, w.last + 1).any { it.isLetterOrDigit() || it == '_' }) null else w
+            }
+        }
+    }
+
+    /** Mod pressed or released with the mouse still: the word under it is underlined, or no longer. */
+    fun modKey(e: androidx.compose.ui.input.key.KeyEvent) {
+        val k = e.key
+        val mod = if (isApplePlatform) k == androidx.compose.ui.input.key.Key.MetaLeft || k == androidx.compose.ui.input.key.Key.MetaRight
+        else k == androidx.compose.ui.input.key.Key.CtrlLeft || k == androidx.compose.ui.input.key.Key.CtrlRight
+        if (!mod) { if (modLink != null) modLink = null; return }
+        modKeyHeld = e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown
+        updateModLink(null, modKeyHeld, moved = false)
+    }
+
+    /** Focus left: a Mod released elsewhere is never heard, so it counts as released. */
+    fun modBlur() {
+        modKeyHeld = false
+        modLink = null
+    }
+
+    /** A Mod-click at [pos]: the cursor goes there, then the first [modClickFacet] handler to take it. */
+    fun modClick(pos: Int) {
+        modLink = null
+        view.runningCommand { view.state.facet(modClickFacet).any { h -> view.guarded("mod-click handler", true) { h.click(view, pos) } } }
+    }
 
     /** The platform's soft keyboard, or null where there is none (a desktop). */
     var keyboard: SoftwareKeyboardController? = null

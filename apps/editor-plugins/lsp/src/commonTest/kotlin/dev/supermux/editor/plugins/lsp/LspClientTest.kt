@@ -2,6 +2,7 @@ package dev.supermux.editor.plugins.lsp
 
 import dev.supermux.editor.compose.EditorView
 import dev.supermux.editor.compose.isApplePlatform
+import dev.supermux.editor.compose.modClickFacet
 import dev.supermux.editor.core.ChangeSpec
 import dev.supermux.editor.core.EditorSelection
 import dev.supermux.editor.core.EditorState
@@ -264,6 +265,19 @@ class LspClientTest {
         settle()
         assertEquals(at("add"), s.view.state.selection.main.head)
         assertEquals(0, s.view.state.field(Fold.field).size, "the fold holding it opened")
+    }
+
+    @Test fun modClickJumpsToTheDefinition() = runTest {
+        val s = setup()
+        settle()
+        val handlers = s.view.state.facet(modClickFacet)
+        assertEquals(1, handlers.size, "no Mod-click handler once the server offers definitions")
+        // The surface puts the cursor at the click, then asks the handler.
+        val pos = at("add", 1) + 1
+        s.view.dispatch(TransactionSpec(selection = EditorSelection.cursor(pos)))
+        assertTrue(handlers.single().click(s.view, pos))
+        settle()
+        assertEquals(at("add"), s.view.state.selection.main.head)
     }
 
     @Test fun anotherDocumentsDefinitionGoesToTheHost() = runTest {

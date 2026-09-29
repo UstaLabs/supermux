@@ -186,7 +186,7 @@ internal class HoverEngine(private val c: EditorController) {
     private fun sources() = c.view.state.facet(hoverSourcesFacet)
 
     /** The position under [p] (surface pixels) and the side of it the pointer is on, or null off text. */
-    private fun textAt(p: Offset): Pair<Int, Int>? {
+    fun textAt(p: Offset): Pair<Int, Int>? {
         if (p.x < c.gutterWidth || p.y < 0f || p.y > c.viewportSize.height) return null
         val content = Offset(p.x - c.textLeft + c.scroll.x, p.y + c.scroll.y)
         val pos = c.geometry.offsetAt(content)

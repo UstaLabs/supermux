@@ -208,7 +208,7 @@ class LineLayouts(
         val t = theme
         var out: SpanStyle? = null
         for (c in classes) {
-            val s = t?.styleOf(c) ?: if (c == EditorTheme.COMPOSITION_CLASS) COMPOSITION_STYLE else null
+            val s = t?.styleOf(c) ?: if (c == EditorTheme.COMPOSITION_CLASS || c == EditorTheme.MOD_LINK_CLASS) COMPOSITION_STYLE else null
             if (s != null) out = out?.merge(s) ?: s
         }
         resolved[classes] = out

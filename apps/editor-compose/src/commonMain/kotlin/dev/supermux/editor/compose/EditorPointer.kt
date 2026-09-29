@@ -8,7 +8,10 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.PointerKeyboardModifiers
 import androidx.compose.ui.input.pointer.isAltPressed
+import androidx.compose.ui.input.pointer.isCtrlPressed
+import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import dev.supermux.editor.core.EditorSelection
@@ -215,6 +218,14 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         val at = offsetAt(pos)
         val mods = event.keyboardModifiers
         when {
+            // Cmd-click (Ctrl-click off Apple): the cursor goes there, then a plugin's (go to definition).
+            change.type == PointerType.Mouse && mods.isMod() && c.view.state.facet(modClickFacet).isNotEmpty() -> {
+                drag = null
+                select(EditorSelection.cursor(at))
+                change.consume()
+                c.modClick(at)
+                return
+            }
             mods.isAltPressed -> {
                 drag = Drag(Mode.COLUMN, SelectionRange(at), contentOf(pos))
                 select(EditorSelection.cursor(at))
@@ -249,6 +260,7 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         // A mouse moving with no button: the hover tooltips' (CM6's hoverTooltip).
         if (change.type == PointerType.Mouse && !change.pressed && drag == null) {
             if (event.type == PointerEventType.Exit) c.hover.exit() else c.hover.move(change.position)
+            c.updateModLink(if (event.type == PointerEventType.Exit) null else change.position, event.keyboardModifiers.isMod())
         }
         val h = handleDrag
         if (h != null) {
@@ -488,3 +500,6 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         }
     }
 }
+
+/** Mod, as a keymap's `Mod-`: Cmd on Apple platforms, Ctrl elsewhere. */
+internal fun PointerKeyboardModifiers.isMod(): Boolean = if (isApplePlatform) isMetaPressed else isCtrlPressed

@@ -1,8 +1,10 @@
 package dev.supermux.editor.plugins.lsp
 
 import dev.supermux.editor.compose.Hover
+import dev.supermux.editor.compose.ModClickHandler
 import dev.supermux.editor.compose.ViewPlugin
 import dev.supermux.editor.compose.hoverTooltip
+import dev.supermux.editor.compose.modClickFacet
 import dev.supermux.editor.compose.viewPluginsFacet
 import dev.supermux.editor.core.Command
 import dev.supermux.editor.core.CommandTarget
@@ -53,6 +55,7 @@ data class LspViewState(
  * | key | command | |
  * |---|---|---|
  * | `F12` | [jumpToDefinition] | same document: the cursor moves there (a fold opens); another: `onNavigate` |
+ * | Mod-click | [jumpToDefinition] | at the click ([modClickFacet]); Mod-hover underlines the word |
  * | `Shift-F12` | [findReferences] | the `lsp-references` panel; `Escape` closes it |
  * | `F2` | [renameSymbol] | the `lsp-rename` prompt, then the server's edits (`edit.rename`) |
  * | `Shift-Alt-f` | [formatDocument] | the server's edits (`edit.format`) |
@@ -187,6 +190,8 @@ object LspPlugin {
                 val f = state(st).features
                 if (!f.completion) emptySet() else f.completionTriggers.ifEmpty { client.config.fallbackTriggers }
             },
+            // Cmd-click (Ctrl-click): VS Code's go to definition, once the server says it has one.
+            modClickFacet.compute(FacetDep.field(field)) { st -> if (state(st).features.definition) ModClickHandler { t, _ -> def.run(t) } else null },
             hoverTooltip(HOVER_ID) { st, pos, _ -> client.workspace.viewFor(st)?.hover(st, pos) },
             tooltipsFacet.compute(FacetDep.field(field)) { st ->
                 state(st).signature?.let { Tooltip(it.pos.coerceIn(0, st.doc.length), WidgetKey(SIGNATURE_TOOLTIP, "sig"), above = true) }

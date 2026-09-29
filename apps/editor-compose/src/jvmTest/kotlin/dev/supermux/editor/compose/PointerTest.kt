@@ -6,6 +6,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performMultiModalInput
 import androidx.compose.ui.test.performTouchInput
@@ -129,5 +130,52 @@ class PointerTest {
         waitForIdle()
         assertTrue(f.controller.scroll.y > 50f, "a finger drag did not scroll")
         assertEquals(EditorSelection.cursor(0), f.view.state.selection, "a finger drag selected")
+    }
+
+    /** Mod, as the platform means it: Cmd on Apple, Ctrl elsewhere. */
+    private val modKey = if (isApplePlatform) Key.MetaLeft else Key.CtrlLeft
+
+    @Test fun modClickPlacesTheCursorAndGoesToTheHandler() {
+        val clicked = ArrayList<Int>()
+        val handler = modClickFacet.of(ModClickHandler { _, pos -> clicked += pos; true })
+        editorTest(EditorState.create(text, extensions = handler)) { f ->
+            val line = f.view.state.doc.lineStart(2)
+            val inWord = line + "line 2 has s".length // inside "some"
+            // Focused (key events reach the editor), the mouse still over a word, then Mod alone.
+            onNodeWithTag(EDITOR_TAG).performMouseInput { click(f.at(0)) }
+            onNodeWithTag(EDITOR_TAG).performMouseInput { moveTo(f.at(inWord)) }
+            onNode(hasEditorField()).performKeyInput { keyDown(modKey) }
+            waitForIdle()
+            assertEquals(line + 11 until line + 15, f.controller.modLink, "Mod over a word did not underline it")
+            onNode(hasEditorField()).performKeyInput { keyUp(modKey) }
+            waitForIdle()
+            assertEquals(null, f.controller.modLink, "the underline outlived Mod")
+            onNodeWithTag(EDITOR_TAG).performMultiModalInput {
+                key { keyDown(modKey) }
+                mouse { click(f.at(inWord)) }
+                key { keyUp(modKey) }
+            }
+            waitForIdle()
+            assertEquals(listOf(inWord), clicked)
+            assertEquals(EditorSelection.cursor(inWord), f.view.state.selection)
+            assertEquals(null, f.controller.modLink, "the underline outlived Mod")
+        }
+    }
+
+    @Test fun modClickWithoutAHandlerIsAPlainClick() = editorTest(EditorState.create(text)) { f ->
+        val target = f.view.state.doc.lineStart(3) + 5
+        onNodeWithTag(EDITOR_TAG).performMouseInput { click(f.at(0)) }
+        onNodeWithTag(EDITOR_TAG).performMultiModalInput {
+            key { keyDown(modKey) }
+            mouse { moveTo(f.at(target)) }
+        }
+        waitForIdle()
+        assertEquals(null, f.controller.modLink, "underlined with nothing to go to")
+        onNodeWithTag(EDITOR_TAG).performMultiModalInput {
+            mouse { click(f.at(target)) }
+            key { keyUp(modKey) }
+        }
+        waitForIdle()
+        assertEquals(EditorSelection.cursor(target), f.view.state.selection)
     }
 }
