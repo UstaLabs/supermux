@@ -16,7 +16,7 @@ export interface RepoDiff {
 }
 
 // git's well-known empty-tree object SHA — constant across all repos
-const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 export type DiffBaseSpec =
   | { kind: "session-start" }
@@ -63,7 +63,7 @@ const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", ".n
 
 // Repos diffed at once, and untracked files diffed at once within a repo: bounded so a
 // workdir with hundreds of new files doesn't fork hundreds of gits together.
-const REPO_CONCURRENCY = 4
+export const REPO_CONCURRENCY = 4
 const UNTRACKED_CONCURRENCY = 8
 
 // Byte-exact stdout: parseDiff and the `-z` listing need it untrimmed.
@@ -91,7 +91,7 @@ async function resolveBase(repoAbs: string, stored: string | undefined, createdA
 
 // Resolve a user-chosen base spec into an effective base commit for one repo.
 // Any spec that can't be resolved in THIS repo falls back to session-start.
-async function resolveSpecBase(
+export async function resolveSpecBase(
   repoAbs: string,
   spec: DiffBaseSpec,
   stored: string | undefined,
@@ -215,28 +215,28 @@ async function scanNestedRepos(
   return found
 }
 
-export async function computeWorkdirDiff(
-  workdir: string,
-  baseCommits: Record<string, string>,
-  createdAt?: string,
-  baseSpec?: string,
-): Promise<RepoDiff[]> {
+/** Every repo under a workdir: the primary ones plus repos nested inside them (e.g. a new
+ *  repo created inside a workdir-as-repo during the session). Empty when the workdir is gone. */
+export async function discoverRepos(workdir: string): Promise<Array<{ relPath: string; absPath: string }>> {
   let workdirReal: string
   try {
     workdirReal = await realpath(workdir)
   } catch {
     return []
   }
-
-  // Get primary repos from scanReposAsync
   const primaryRepos = await scanReposAsync(workdir)
-
-  // Find repos nested inside those primary repos (e.g. a new repo created inside
-  // a workdir-as-repo during the session)
   const knownAbs = new Set(primaryRepos.map((r) => r.absPath))
   const nestedRepos = await scanNestedRepos(workdirReal, knownAbs)
+  return [...primaryRepos, ...nestedRepos]
+}
 
-  const allRepos = [...primaryRepos, ...nestedRepos]
+export async function computeWorkdirDiff(
+  workdir: string,
+  baseCommits: Record<string, string>,
+  createdAt?: string,
+  baseSpec?: string,
+): Promise<RepoDiff[]> {
+  const allRepos = await discoverRepos(workdir)
 
   const spec = parseBaseSpec(baseSpec)
 
