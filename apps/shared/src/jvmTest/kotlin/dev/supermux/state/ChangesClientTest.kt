@@ -6,6 +6,7 @@ import dev.supermux.net.ChangedFile
 import dev.supermux.net.ChangesResult
 import dev.supermux.net.RepoChanges
 import dev.supermux.net.toFsDiffResult
+import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -20,6 +21,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -92,5 +94,59 @@ class ChangesClientTest {
         )
         assertEquals(BlobText.TooLarge(2_000_000), app.workspaceChangesBlob("w-1", "", "a".repeat(40), force = false))
         assertEquals(BlobText.Text("text\n"), app.changesBlob(session, "", "a".repeat(40), force = false))
+    }
+
+    @Test fun a_500_on_changes_does_not_fall_back() = runTest {
+        val hits = mutableListOf<String>()
+        val app = app(mapOf("/sessions/s-1/changes" to (HttpStatusCode.InternalServerError to "boom")), hits)
+        assertNull(app.fsDiff(session))
+        assertEquals(listOf("/sessions/s-1/changes"), hits)
+    }
+
+    @Test fun the_missing_route_is_remembered_and_a_snapshot_resets_it() = runTest {
+        val hits = mutableListOf<String>()
+        val app = app(mapOf("/sessions/s-1/fs/diff" to (HttpStatusCode.OK to """{"repos":[],"comments":[]}""")), hits)
+        app.fsDiff(session)
+        app.fsDiff(session)
+        assertEquals(listOf("/sessions/s-1/changes", "/sessions/s-1/fs/diff", "/sessions/s-1/fs/diff"), hits)
+        app.reduce(ServerFrame.Snapshot(sessions = emptyList()))
+        hits.clear()
+        app.fsDiff(session)
+        // the snapshot's own side-effect requests (e.g. /agents/models) are irrelevant here
+        assertEquals(listOf("/sessions/s-1/changes", "/sessions/s-1/fs/diff"), hits.filter { it.startsWith("/sessions/") })
+    }
+
+    @Test fun an_unknown_session_404_does_not_fall_back_or_pin_the_flag() = runTest {
+        val hits = mutableListOf<String>()
+        val app = app(mapOf("/sessions/s-1/changes" to (HttpStatusCode.NotFound to """{"error":"session not found"}""")), hits)
+        assertNull(app.fsDiff(session))
+        assertNull(app.fsDiff(session))
+        assertEquals(listOf("/sessions/s-1/changes", "/sessions/s-1/changes"), hits)
+    }
+
+    @Test fun blob_error_statuses_are_readable() = runTest {
+        val hits = mutableListOf<String>()
+        val app = app(
+            mapOf(
+                "/sessions/s-1/changes/blob" to (HttpStatusCode.UnsupportedMediaType to """{"error":"BINARY"}"""),
+                "/workspaces/w-1/changes/blob" to (HttpStatusCode.NotFound to """{"error":"MISSING"}"""),
+                "/workspaces/w-2/changes/blob" to (HttpStatusCode.PayloadTooLarge to """{"error":"TOO_LARGE"}"""),
+                "/workspaces/w-3/changes/blob" to (HttpStatusCode.BadGateway to "<html>"),
+            ),
+            hits,
+        )
+        assertEquals(BlobText.Binary, app.changesBlob(session, "", "a", false))
+        assertEquals(BlobText.Failed("MISSING"), app.workspaceChangesBlob("w-1", "", "a", false))
+        assertEquals(BlobText.TooLarge(0), app.workspaceChangesBlob("w-2", "", "a", false))
+        assertEquals(BlobText.Failed("HTTP 502"), app.workspaceChangesBlob("w-3", "", "a", false))
+    }
+
+    @Test fun changes_payload_with_nulls_and_unknown_fields_decodes() = runTest {
+        val hits = mutableListOf<String>()
+        val body = """{"repos":[{"repo":"","baseSha":null,"future":1,"files":[{"path":"a","status":"added","added":null,"removed":null,"oldPath":null,"baseBlob":null,"size":null,"extra":true}],"error":null}],"comments":[],"more":{}}"""
+        val app = app(mapOf("/sessions/s-1/changes" to (HttpStatusCode.OK to body)), hits)
+        val f = app.fsDiff(session)!!.repos.single().files.single()
+        assertNull(f.baseBlob)
+        assertTrue(f.lazy)
     }
 }

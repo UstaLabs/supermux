@@ -400,6 +400,9 @@ class HostStore(
             null
         }
 
+    /** True once a broker answered a bare 404 on `/changes` (route missing); reset on a Snapshot (reconnect). */
+    @Volatile private var noChangesRoute = false
+
     @Suppress("UNCHECKED_CAST")
     private fun applyWalkthroughFrame(sessionId: String, frame: ServerFrame) {
         val seam = (walkthroughSeam ?: return) as WalkthroughSeam<Any>
@@ -422,6 +425,7 @@ class HostStore(
         when (frame) {
             is ServerFrame.Snapshot -> {
                 _onboarded.value = frame.onboarded
+                noChangesRoute = false
                 lastSentViewing = null
                 sendViewingIfChanged()
                 refreshAgentModels()
@@ -1162,10 +1166,17 @@ class HostStore(
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
         runApi("workspaceFsWrite") { api.workspaceFsWrite(workspaceId, path, content) } ?: false
 
-    /** GET /workspaces/<id>/fs/diff. Null on any failure. */
-    suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =
-        runApi("workspaceChanges") { api.workspaceChanges(workspaceId, base) }?.toFsDiffResult()
-            ?: runApi("workspaceFsDiff") { api.workspaceFsDiff(workspaceId, base) }
+    /** The Changes list (`/changes`, lazy files); the old full-patch `fs/diff` only on a broker that has no `/changes`. */
+    suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? {
+        if (!noChangesRoute) {
+            var missing = false
+            runApi("workspaceChanges") { api.workspaceChanges(workspaceId, base).also { missing = it == null } }
+                ?.let { return it.toFsDiffResult() }
+            if (!missing) return null
+            noChangesRoute = true
+        }
+        return runApi("workspaceFsDiff") { api.workspaceFsDiff(workspaceId, base) }
+    }
 
     suspend fun workspaceChangesBlob(workspaceId: String, repo: String, sha: String, force: Boolean): BlobText =
         runApi("workspaceChangesBlob") { api.workspaceChangesBlob(workspaceId, repo, sha, force) } ?: BlobText.Failed("Couldn't load the base text")
@@ -1206,12 +1217,17 @@ class HostStore(
     // SessionDetail.DesktopEditorPanel already has it in hand), degrading through [runApi]
     // exactly like the fs* wrappers.
 
-    /** GET /sessions/<id>/fs/diff?base=<spec> → repos + existing review comments. [base] is the
-     *  diff-base spec (null/"session-start" default · "head" · "commit:<sha>" · "branch:<name>"); the
-     *  compare target always stays the working tree. Null on any failure. */
-    suspend fun fsDiff(session: SessionInfo, base: String? = null): FsDiffResult? =
-        runApi("sessionChanges") { api.sessionChanges(session.id, base) }?.toFsDiffResult()
-            ?: runApi("fsDiff") { api.fsDiff(session.id, base) }
+    /** The Changes list (`/changes`, lazy files); the old full-patch `fs/diff` only on a broker that has no `/changes`. */
+    suspend fun fsDiff(session: SessionInfo, base: String? = null): FsDiffResult? {
+        if (!noChangesRoute) {
+            var missing = false
+            runApi("sessionChanges") { api.sessionChanges(session.id, base).also { missing = it == null } }
+                ?.let { return it.toFsDiffResult() }
+            if (!missing) return null
+            noChangesRoute = true
+        }
+        return runApi("fsDiff") { api.fsDiff(session.id, base) }
+    }
 
     /** A lazy file's base text by blob. Never throws: a transport failure is [BlobText.Failed]. */
     suspend fun changesBlob(session: SessionInfo, repo: String, sha: String, force: Boolean): BlobText =
