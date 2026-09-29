@@ -84,6 +84,11 @@ val hostOs = System.getProperty("os.name").orEmpty().lowercase()
 val hostArch = System.getProperty("os.arch").orEmpty().lowercase()
 val macBuildHost = hostOs.let { it.contains("mac") || it.contains("darwin") }
 
+// A trackpad pinch reaches Java on macOS only through com.apple.eawt.event (MacTrackpadMagnify.kt),
+// a package java.desktop keeps unexported. macOS-only: elsewhere the package does not exist and the
+// JVM would warn about the flag.
+val macJvmArgs = if (macBuildHost) listOf("--add-exports=java.desktop/com.apple.eawt.event=ALL-UNNAMED") else emptyList()
+
 // The app runs on — and ships with — a pinned JetBrains Runtime (plain JBR, no JCEF since the M5
 // native-editor cutover). A JBR is what makes MacWindowChrome's custom title bar and its drag
 // arbitration work (libs.jbr.api is a no-op facade on any other JVM), and it is the runtime Compose
@@ -195,12 +200,14 @@ tasks.withType<ComposeHotRun>().configureEach {
     mainClass.set("dev.supermux.desktop.MainKt")
     dependsOn(prepareJbrRuntime)
     javaLauncher.set(jbrLauncher)
+    jvmArgs(macJvmArgs)
 }
 
 // The normal Compose run task uses the same JBR as packaged builds.
 tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
     dependsOn(prepareJbrRuntime)
     javaLauncher.set(jbrLauncher)
+    jvmArgs(macJvmArgs)
 }
 
 // Never launch a real system browser from unit/UI tests (Agent OAuth, timeline links, etc.).
@@ -225,6 +232,7 @@ tasks.register<JavaExec>("previewWorkspaceList") {
 compose.desktop {
     application {
         mainClass = "dev.supermux.desktop.MainKt"
+        jvmArgs += macJvmArgs
         nativeDistributions {
             // Host-scoped: jpackage can only ever build the formats of the OS it runs on, AND on
             // macOS Compose eagerly creates a `notarize<Format>` task per declared format —

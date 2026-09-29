@@ -52,6 +52,7 @@ import dev.supermux.ui.chat.MessageTts
 import dev.supermux.desktop.chat.decodeImageBytes
 import dev.supermux.ui.chat.AssistantMessage
 import dev.supermux.ui.chat.fetchImageBytesWithPolicy
+import dev.supermux.desktop.platform.installMacTrackpadMagnify
 import dev.supermux.desktop.platform.prunePasteCache
 import dev.supermux.desktop.platform.isMacOs
 import dev.supermux.desktop.host.DesktopHostBootstrap
@@ -578,6 +579,7 @@ fun main() {
             // inset under the traffic lights for the sidebar toggle (see MacChrome.kt).
             // No-ops off macOS, but gated anyway to keep it obvious.
             val macChrome = if (isMacOs()) rememberMacWindowChrome(window) else null
+            if (isMacOs()) LaunchedEffect(window) { installMacTrackpadMagnify(window.rootPane) }
             if (isMacOs() && macChrome?.titleBar == null) {
                 LaunchedEffect(window) {
                     window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)

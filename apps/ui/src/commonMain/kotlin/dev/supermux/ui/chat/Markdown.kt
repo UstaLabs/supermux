@@ -291,10 +291,12 @@ internal fun AnnotatedString.Builder.appendLinkified(
 /**
  * Elegant mono code block for fenced ``` content.
  * Left accent + subtle header-tinted background + horizontal scroll.
- * A top-end copy button copies the raw code, flashing a check for ~1.5s.
+ * A top-end copy button copies the raw code, flashing a check for ~1.5s. [extraAction] is one more
+ * 28dp button drawn just before it (the mermaid block's back-to-diagram toggle), in the same row so
+ * the two never overlap.
  */
 @Composable
-fun FencedCodeBlock(code: String) {
+fun FencedCodeBlock(code: String, extraAction: (@Composable () -> Unit)? = null) {
     val cs = MaterialTheme.colorScheme
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -318,7 +320,12 @@ fun FencedCodeBlock(code: String) {
                 Modifier
                     .horizontalScroll(rememberScrollState())
                     // pad the right so the copy button never overlaps the first line of code
-                    .padding(start = Space.md, end = Space.xl + Space.md, top = Space.sm, bottom = Space.sm),
+                    .padding(
+                        start = Space.md,
+                        end = Space.xl + Space.md + if (extraAction != null) 28.dp else 0.dp,
+                        top = Space.sm,
+                        bottom = Space.sm,
+                    ),
             ) {
                 Text(
                     text = code,
@@ -329,23 +336,23 @@ fun FencedCodeBlock(code: String) {
                 )
             }
         }
-        IconButton(
-            onClick = {
-                clipboard.setText(AnnotatedString(code))
-                copied = true
-                scope.launch { delay(1500); copied = false }
-            },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(Space.xs)
-                .size(28.dp),
-        ) {
-            Icon(
-                imageVector = if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy,
-                contentDescription = if (copied) "Copied" else "Copy",
-                tint = if (copied) cs.primary else cs.onSurfaceVariant,
-                modifier = Modifier.size(14.dp),
-            )
+        Row(Modifier.align(Alignment.TopEnd).padding(Space.xs)) {
+            extraAction?.invoke()
+            IconButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(code))
+                    copied = true
+                    scope.launch { delay(1500); copied = false }
+                },
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    imageVector = if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy,
+                    contentDescription = if (copied) "Copied" else "Copy",
+                    tint = if (copied) cs.primary else cs.onSurfaceVariant,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
         }
     }
 }

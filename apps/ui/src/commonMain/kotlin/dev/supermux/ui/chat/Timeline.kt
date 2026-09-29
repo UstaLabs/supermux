@@ -903,7 +903,26 @@ internal class LightboxTransform {
     /** The viewport in px, from the backdrop's own layout — the clamp needs it. */
     var viewport by mutableStateOf(androidx.compose.ui.geometry.Size.Zero)
 
+    /**
+     * The content's unscaled size in px when it is smaller than [viewport] and centred in it (an
+     * inline diagram narrower than the chat column), so a zoom can spill into the spare room while
+     * the pan still stops at the content's edges. Null means the content fills the viewport.
+     */
+    var content by mutableStateOf<androidx.compose.ui.geometry.Size?>(null)
+
     fun zoomBy(factor: Float) = scaleTo(scale * factor)
+
+    /**
+     * Zoom keeping the content under [focus] (viewport px, from its top-left) where it is — a pinch
+     * centroid or the cursor — rather than about the centre, so what you aim at stays put.
+     */
+    fun zoomBy(factor: Float, focus: Offset) {
+        val next = (scale * factor).coerceIn(MIN, MAX)
+        val ratio = next / scale
+        val fromCentre = focus - Offset(viewport.width / 2f, viewport.height / 2f)
+        scale = next
+        offset = clamp(fromCentre - (fromCentre - offset) * ratio)
+    }
 
     fun scaleTo(value: Float) {
         scale = value.coerceIn(MIN, MAX)
@@ -919,10 +938,17 @@ internal class LightboxTransform {
         scaleTo(if (scale > MIN) MIN else DOUBLE_TAP)
     }
 
+    /** As [toggleZoom], but zooming in on the tapped point. */
+    fun toggleZoom(focus: Offset) {
+        if (scale > MIN) scaleTo(MIN) else zoomBy(DOUBLE_TAP / scale, focus)
+    }
+
     private fun clamp(candidate: Offset): Offset {
-        val maxX = (viewport.width * (scale - 1f) / 2f).coerceAtLeast(0f)
-        val maxY = (viewport.height * (scale - 1f) / 2f).coerceAtLeast(0f)
-        return Offset(candidate.x.coerceIn(-maxX, maxX), candidate.y.coerceIn(-maxY, maxY))
+        val c = content ?: viewport
+        val maxX = ((c.width * scale - viewport.width) / 2f).coerceAtLeast(0f)
+        val maxY = ((c.height * scale - viewport.height) / 2f).coerceAtLeast(0f)
+        // `+ 0f` turns a clamped -0.0 into 0.0: Offset compares packed bits, so -0.0 != Offset.Zero.
+        return Offset(candidate.x.coerceIn(-maxX, maxX) + 0f, candidate.y.coerceIn(-maxY, maxY) + 0f)
     }
 
     companion object {
