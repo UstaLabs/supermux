@@ -83,6 +83,7 @@ import dev.supermux.net.AddViewBody
 import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.net.MoveViewBody
 import dev.supermux.net.PatchViewBody
+import kotlin.concurrent.Volatile
 import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.serialization.json.JsonArray
