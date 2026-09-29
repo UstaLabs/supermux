@@ -235,19 +235,19 @@ private fun StepSlide(
     val diffFile = walkthroughDiffFile(repos, step)
     val lazy = diffFile?.lazy == true
     val baseBlob = diffFile?.baseBlob
-    val lazyBase by produceState<Result<String?>?>(null, step.repo, path, baseBlob, lazy) {
+    val lazyBase by produceState<LazyBase?>(null, step.repo, path, baseBlob, lazy) {
         value = null
-        value = Result.success(
-            when {
-                !lazy -> null
-                baseBlob == null -> ""
-                baseText == null -> null
-                else -> when (val r = try { baseCache.get(step.repo, baseBlob, false, baseText) } catch (e: CancellationException) { throw e } catch (_: Exception) { null }) {
-                    is BlobText.Text -> LineEndings.load(r.text).text
-                    else -> null
-                }
-            },
-        )
+        value = when {
+            !lazy -> LazyBase(null)
+            baseBlob == null -> LazyBase("")
+            baseText == null -> LazyBase(null)
+            else -> when (val r = try { baseCache.get(step.repo, baseBlob, false, baseText) } catch (e: CancellationException) { throw e } catch (_: Exception) { BlobText.Failed("") }) {
+                is BlobText.Text -> LazyBase(LineEndings.load(r.text).text)
+                is BlobText.TooLarge -> LazyBase(null, "Large file — changes not shown")
+                is BlobText.Binary -> LazyBase(null, "Binary file — changes not shown")
+                is BlobText.Failed -> LazyBase(null, "Couldn't load the previous version — changes not shown")
+            }
+        }
     }
     var content by remember(step.repo, path) { mutableStateOf<String?>(null) }
     var loadError by remember(step.repo, path) { mutableStateOf<String?>(null) }
@@ -306,6 +306,9 @@ private fun StepSlide(
             loadError != null -> Text(loadError ?: "Could not load file", color = cs.error)
             content == null || lazyBase == null -> Text("Loading code…", color = cs.onSurfaceVariant)
             else -> {
+                lazyBase?.notice?.let {
+                    Text(it, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("walkthrough_base_notice"))
+                }
                 // The step's code on the diff plugin (threads, composer and paging inside).
                 Box(Modifier.fillMaxWidth().weight(1f).heightIn(min = 240.dp)) {
                     NativeWalkthroughRegion(
@@ -317,13 +320,16 @@ private fun StepSlide(
                         onAddComment = onAddComment,
                         onResolve = onResolve,
                         modifier = Modifier.fillMaxSize(),
-                        base = lazyBase?.getOrNull(),
+                        base = lazyBase?.text,
                     )
                 }
             }
         }
     }
 }
+
+/** A lazy step's base text (null: none to give) and, when the blob couldn't be used, why. */
+private class LazyBase(val text: String?, val notice: String? = null)
 
 private fun walkthroughDiffFile(repos: List<RepoDiff>, step: WalkthroughStep) =
     repos.firstOrNull { it.repo == step.repo }?.files?.firstOrNull { it.path == step.path }

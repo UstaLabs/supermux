@@ -188,6 +188,8 @@ class WalkthroughViewTest {
     fun a_lazy_file_step_with_a_failing_fetcher_shows_the_file() = runComposeUiTest {
         setContent(host(lazyStep(), repos = lazyRepos(), read = { _, _ -> Result.success("two\n") }, baseText = { _, _, _ -> dev.supermux.net.BlobText.Failed("boom") }))
         waitForRegion()
+        onNodeWithTag("walkthrough_base_notice").assertExists()
+        onNodeWithText("Couldn't load the previous version — changes not shown").assertExists()
         onNodeWithText("one", useUnmergedTree = true).assertDoesNotExist()
     }
 
@@ -196,6 +198,7 @@ class WalkthroughViewTest {
     fun a_lazy_file_step_without_a_fetcher_shows_the_file() = runComposeUiTest {
         setContent(host(lazyStep(), repos = lazyRepos(), read = { _, _ -> Result.success("two\n") }, baseText = null))
         waitForRegion()
+        kotlin.test.assertTrue(onAllNodesWithTag("walkthrough_base_notice").fetchSemanticsNodes().isEmpty())
         onAllNodesWithText("two", substring = true, useUnmergedTree = true).onFirst().assertExists()
         onNodeWithText("one", useUnmergedTree = true).assertDoesNotExist()
     }
