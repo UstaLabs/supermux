@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import dev.supermux.net.AddCommentBody
+import dev.supermux.net.BlobText
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
@@ -128,6 +129,8 @@ class ShellActions(
     val workspaceFsWrite: suspend (workspaceId: String, path: String, content: String) -> Boolean =
         { _, _, _ -> false },
     val workspaceFsDiff: suspend (workspaceId: String, base: String?) -> FsDiffResult? = { _, _ -> null },
+    val workspaceChangesBlob: suspend (workspaceId: String, repo: String, sha: String, force: Boolean) -> BlobText =
+        { _, _, _, _ -> BlobText.Failed("unavailable") },
     val workspaceFsRefs: suspend (workspaceId: String) -> FsRefsResult? = { null },
     /** The host file-system service owning [workspaceId]'s host (spec 2026-09-27), or null offline. */
     val fileSystemFor: (workspaceId: String) -> dev.supermux.fs.FileSystemService? = { null },
@@ -207,6 +210,7 @@ fun rememberShellActions(
             workspaceFsRead = { wsId, path -> app.workspaceFsRead(wsId, path) },
             workspaceFsWrite = { wsId, path, content -> app.workspaceFsWrite(wsId, path, content) },
             workspaceFsDiff = { wsId, base -> app.workspaceFsDiff(wsId, base) },
+            workspaceChangesBlob = { wsId, repo, sha, force -> app.workspaceChangesBlob(wsId, repo, sha, force) },
             workspaceFsRefs = { wsId -> app.workspaceFsRefs(wsId) },
             fileSystemFor = { app.fileSystem },
             sessionFileSystem = { app.fileSystem },
@@ -270,6 +274,7 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             workspaceFsRead = { wsId, path -> fleet.workspaceFsRead(wsId, path) },
             workspaceFsWrite = { wsId, path, content -> fleet.workspaceFsWrite(wsId, path, content) },
             workspaceFsDiff = { wsId, base -> fleet.workspaceFsDiff(wsId, base) },
+            workspaceChangesBlob = { wsId, repo, sha, force -> fleet.workspaceChangesBlob(wsId, repo, sha, force) },
             workspaceFsRefs = { wsId -> fleet.workspaceFsRefs(wsId) },
             fileSystemFor = { wsId -> fleet.appForWorkspace(wsId)?.fileSystem },
             sessionFileSystem = { sid -> fleet.appFor(sid)?.fileSystem },

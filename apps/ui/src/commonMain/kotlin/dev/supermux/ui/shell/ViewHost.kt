@@ -768,6 +768,7 @@ private fun DiffPaneForWorkspace(
         onClose = onClose,
         writeDiffFile = { repo, path, text -> actions.workspaceFsWrite(workspaceId, if (repo.isBlank()) path else "$repo/$path", text) },
         diffDocuments = documents,
+        baseText = { repo, sha, force -> actions.workspaceChangesBlob(workspaceId, repo, sha, force) },
         modifier = modifier.fillMaxSize(),
     )
 }

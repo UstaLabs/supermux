@@ -187,6 +187,8 @@ fun ChatScreen(
     // Editor diff + inline code-review (bound to session.id in SessionKeepAlive).
     fsDiff: suspend (String) -> dev.supermux.net.FsDiffResult? = { null },
     fsRefs: suspend () -> dev.supermux.net.FsRefsResult? = { null },
+    /** A lazy Changes file's base text by blob (repo, sha, force). */
+    changesBlob: (suspend (repo: String, sha: String, force: Boolean) -> dev.supermux.net.BlobText)? = null,
     reviewAddComment: suspend (dev.supermux.net.AddCommentBody) -> dev.supermux.net.ReviewComment? = { null },
     reviewResolve: suspend (String) -> Boolean = { false },
     reviewSubmit: suspend () -> dev.supermux.net.ReviewSubmitResult? = { null },
@@ -705,6 +707,7 @@ fun ChatScreen(
                         fsSearch = fsSearch,
                         fsDiff = fsDiff,
                         fsRefs = fsRefs,
+                        changesBlob = changesBlob,
                         reviewAddComment = reviewAddComment,
                         reviewResolve = reviewResolve,
                         reviewSubmit = reviewSubmit,

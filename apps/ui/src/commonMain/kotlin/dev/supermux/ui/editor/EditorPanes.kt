@@ -68,6 +68,7 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.net.AddCommentBody
+import dev.supermux.net.BlobText
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.ReviewComment
@@ -421,6 +422,8 @@ fun DiffPane(
     writeDiffFile: (suspend (repo: String, path: String, text: String) -> Boolean)? = null,
     /** The workspace's open documents: a revert of an open file goes through its tab's document. */
     diffDocuments: DocumentStore? = null,
+    /** A lazy file's base text by blob (repo, sha, force). */
+    baseText: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -521,6 +524,7 @@ fun DiffPane(
             writeFile = writeDiffFile,
             postComment = onReviewAddComment,
             documents = diffDocuments,
+            baseText = baseText,
         )
         }
     }

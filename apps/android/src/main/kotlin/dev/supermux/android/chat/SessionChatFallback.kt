@@ -112,6 +112,7 @@ fun SessionChatFallback(
             // Editor diff + inline code-review (bound to this session).
             fsDiff = { base -> vm.fleet.fsDiff(session.id, base) },
             fsRefs = { vm.fleet.fsRefs(session.id) },
+            changesBlob = { repo, sha, force -> vm.fleet.changesBlob(session.id, repo, sha, force) },
             reviewAddComment = { body -> vm.fleet.reviewAddComment(session.id, body) },
             reviewResolve = { commentId -> vm.fleet.reviewResolve(session.id, commentId) },
             reviewSubmit = { vm.fleet.reviewSubmit(session.id) },

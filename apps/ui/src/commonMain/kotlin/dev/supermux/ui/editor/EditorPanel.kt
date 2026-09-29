@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import dev.supermux.net.AddCommentBody
+import dev.supermux.net.BlobText
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
@@ -129,6 +130,8 @@ data class EditorPanelActions(
     /** Takes the base spec; [fsRefs] lists refs for the adjustable diff-base picker. */
     val fsDiff: suspend (String) -> FsDiffResult? = { null },
     val fsRefs: suspend () -> FsRefsResult? = { null },
+    /** A lazy Changes file's base text by blob (repo, sha, force); null: lazy files can't load. */
+    val changesBlob: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
     val reviewAddComment: suspend (AddCommentBody) -> ReviewComment? = { null },
     val reviewResolve: suspend (String) -> Boolean = { false },
     val reviewSubmit: suspend () -> ReviewSubmitResult? = { null },
@@ -310,6 +313,7 @@ fun EditorPanel(
                 writeFile = { repo, path, text -> actions.fsWrite(repoPath(repo, path), text) },
                 postComment = actions.reviewAddComment,
                 documents = editor.documents,
+                baseText = actions.changesBlob,
             )
             return@Box
         }
