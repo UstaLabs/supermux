@@ -205,7 +205,6 @@ async function repoChanges(repoAbs: string, relPath: string, baseSha: string): P
   }
 }
 
-/** The Changes list for a workdir (spec §2.1). Base resolution is the same as fs/diff's. */
 export type RepoRef = { relPath: string; absPath: string }
 
 export const REPO_CACHE_TTL_MS = 60_000
@@ -238,6 +237,7 @@ export function createRepoCache(
 
 export const discoverReposCached = createRepoCache(discoverRepos)
 
+/** The Changes list for a workdir (spec §2.1). Base resolution is the same as fs/diff's. */
 export async function listChanges(
   workdir: string,
   baseCommits: Record<string, string>,
