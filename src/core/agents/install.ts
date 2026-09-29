@@ -14,7 +14,8 @@ const log = makeLogger("agents/install")
 /** Official, non-interactive installer per agent. */
 export const INSTALL_RECIPES: Record<AgentKind, string> = {
   claude: "curl -fsSL https://claude.ai/install.sh | bash",
-  codex: "npm install -g @openai/codex",
+  // Native standalone binary into ~/.local/bin — no node/npm (a fresh Mac has neither).
+  codex: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
   cursor: "curl https://cursor.com/install -fsS | bash",
   opencode: "curl -fsSL https://opencode.ai/install | bash",
   grok: "curl -fsSL https://x.ai/cli/install.sh | bash",
@@ -64,6 +65,8 @@ export function startInstall(kind: AgentKind, deps: InstallDeps): { job: Install
     NONINTERACTIVE: "1",
     DEBIAN_FRONTEND: "noninteractive",
     npm_config_yes: "true",
+    // The codex installer reads /dev/tty for "Start Codex now?" unless told not to.
+    CODEX_NON_INTERACTIVE: "1",
   }
   env.PATH = withNodeBinDirs(env.PATH, deps.home ?? homedir())
 

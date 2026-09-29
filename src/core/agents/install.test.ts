@@ -27,6 +27,13 @@ test("runs bash -lc <recipe> with stdin ignored and a non-interactive env", () =
   expect(captured.opts.env.CI).toBe("1")
   expect(captured.opts.env.NONINTERACTIVE).toBe("1")
   expect(captured.opts.env.npm_config_yes).toBe("true")
+  expect(captured.opts.env.CODEX_NON_INTERACTIVE).toBe("1")
+})
+
+// A fresh Mac has no node/npm, so an `npm install -g` recipe could never succeed there.
+test("codex installs through its native standalone installer, not npm", () => {
+  expect(INSTALL_RECIPES.codex).not.toContain("npm")
+  expect(INSTALL_RECIPES.codex).toContain("chatgpt.com/codex/install.sh")
 })
 
 test("marks done when the installer exits 0 and the binary is now detected", async () => {

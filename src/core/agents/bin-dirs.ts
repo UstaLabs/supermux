@@ -8,7 +8,7 @@ import { readdirSync } from "fs"
 // (`hasBinary`) and spawning unless these dirs are on the broker's PATH.
 //
 //   • opencode      → ~/.opencode/bin   (NOT ~/.local/bin — this is the one that bit us)
-//   • claude, cursor → ~/.local/bin
+//   • claude, cursor, codex → ~/.local/bin
 //   • bun globals    → ~/.bun/bin
 //   • npm global     → ~/.npm-global/bin (common user prefix; system prefixes are already on PATH)
 //
@@ -33,8 +33,8 @@ export function withAgentBinDirs(path: string | undefined, home: string): string
 
 // Common Node.js / npm binary locations. The broker spawns installers via
 // `bash -lc`, but on macOS the user's PATH setup (nvm, volta, Homebrew) often
-// lives in .zshrc — which bash never sources. Prepending these lets npm-based
-// recipes (codex) find the binary without requiring the user to duplicate their
+// lives in .zshrc — which bash never sources. Prepending these lets any npm-based
+// recipe find the binary without requiring the user to duplicate their
 // shell config into .bash_profile.
 export function nodeBinDirs(home: string): string[] {
   const dirs = [
