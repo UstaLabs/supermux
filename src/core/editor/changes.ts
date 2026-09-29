@@ -162,9 +162,10 @@ async function untrackedEntry(repoAbs: string, path: string): Promise<ChangedFil
   try {
     const fh = await open(abs, "r")
     try {
-      const buf = Buffer.alloc(UNTRACKED_READ_LIMIT + 1)
+      // One byte more than we expect: filling the whole buffer means the file grew past its lstat size.
+      const buf = Buffer.alloc(Math.min(st.size, UNTRACKED_READ_LIMIT) + 1)
       const { bytesRead } = await fh.read(buf, 0, buf.length, 0)
-      if (bytesRead > UNTRACKED_READ_LIMIT) return { ...entry, removed: null }
+      if (bytesRead >= buf.length) return { ...entry, removed: null }
       const data = buf.subarray(0, bytesRead)
       if (data.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return { ...entry, binary: true, removed: null }
       let lines = 0
