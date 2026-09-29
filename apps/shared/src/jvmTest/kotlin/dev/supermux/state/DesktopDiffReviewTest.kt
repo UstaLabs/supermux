@@ -101,7 +101,7 @@ class DesktopDiffReviewTest {
 
         val rec = recorded.single()
         assertEquals(HttpMethod.Get, rec.method)
-        assertEquals("/sessions/sess-1/fs/diff", rec.path)
+        assertEquals("/sessions/sess-1/changes", rec.path)
         assertEquals(2, result?.repos?.size)
         assertEquals("", result?.repos?.get(0)?.repo)
         assertEquals("lib", result?.repos?.get(1)?.repo)

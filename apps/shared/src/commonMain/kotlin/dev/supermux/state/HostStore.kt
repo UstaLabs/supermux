@@ -21,6 +21,7 @@ import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
+import dev.supermux.net.BlobText
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
 import dev.supermux.util.StartupTrace
@@ -60,6 +61,7 @@ import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.SpawnRequest
 import dev.supermux.net.SpawnResponse
 import dev.supermux.net.TerminalClient
+import dev.supermux.net.toFsDiffResult
 import dev.supermux.net.TerminalSummary
 import dev.supermux.net.TranscribeResponse
 import dev.supermux.net.UpdateCommentBody
@@ -1162,7 +1164,11 @@ class HostStore(
 
     /** GET /workspaces/<id>/fs/diff. Null on any failure. */
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =
-        runApi("workspaceFsDiff") { api.workspaceFsDiff(workspaceId, base) }
+        runApi("workspaceChanges") { api.workspaceChanges(workspaceId, base) }?.toFsDiffResult()
+            ?: runApi("workspaceFsDiff") { api.workspaceFsDiff(workspaceId, base) }
+
+    suspend fun workspaceChangesBlob(workspaceId: String, repo: String, sha: String, force: Boolean): BlobText =
+        runApi("workspaceChangesBlob") { api.workspaceChangesBlob(workspaceId, repo, sha, force) } ?: BlobText.Failed("Couldn't load the base text")
 
     /** GET /workspaces/<id>/fs/refs. Null on any failure. */
     suspend fun workspaceFsRefs(workspaceId: String): FsRefsResult? =
@@ -1204,7 +1210,12 @@ class HostStore(
      *  diff-base spec (null/"session-start" default · "head" · "commit:<sha>" · "branch:<name>"); the
      *  compare target always stays the working tree. Null on any failure. */
     suspend fun fsDiff(session: SessionInfo, base: String? = null): FsDiffResult? =
-        runApi("fsDiff") { api.fsDiff(session.id, base) }
+        runApi("sessionChanges") { api.sessionChanges(session.id, base) }?.toFsDiffResult()
+            ?: runApi("fsDiff") { api.fsDiff(session.id, base) }
+
+    /** A lazy file's base text by blob. Never throws: a transport failure is [BlobText.Failed]. */
+    suspend fun changesBlob(session: SessionInfo, repo: String, sha: String, force: Boolean): BlobText =
+        runApi("changesBlob") { api.sessionChangesBlob(session.id, repo, sha, force) } ?: BlobText.Failed("Couldn't load the base text")
 
     /** GET the current authored walkthrough. Null on a missing/failed endpoint. */
     suspend fun getWalkthrough(session: SessionInfo): Walkthrough? =

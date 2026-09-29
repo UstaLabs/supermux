@@ -62,7 +62,7 @@ class DesktopDiffBaseTest {
         app.fsDiff(session("sess-1"))
 
         val rec = recorded.single()
-        assertEquals("/sessions/sess-1/fs/diff", rec.path)
+        assertEquals("/sessions/sess-1/changes", rec.path)
         assertNull(rec.baseParam) // null base → no ?base= sent at all (server picks session-start)
     }
 
