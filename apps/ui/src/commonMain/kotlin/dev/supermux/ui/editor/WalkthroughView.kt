@@ -255,7 +255,10 @@ private fun StepSlide(
     LaunchedEffect(step.repo, path, state.walkthrough?.revision) {
         content = null
         loadError = null
-        if (path != null) readFile(step.repo, path).fold(onSuccess = { content = it }, onFailure = { loadError = it.message })
+        if (path != null) readFile(step.repo, path).fold(
+            // The editor rope is \n-only, as is the base (the blob, or the patch diffBase strips).
+            onSuccess = { content = LineEndings.load(it).text },
+            onFailure = { loadError = it.message })
     }
 
     Column(modifier.padding(horizontal = Space.md, vertical = Space.sm), verticalArrangement = Arrangement.spacedBy(Space.sm)) {

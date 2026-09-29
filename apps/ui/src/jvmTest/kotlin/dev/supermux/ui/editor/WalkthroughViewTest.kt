@@ -8,6 +8,8 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -160,21 +162,55 @@ class WalkthroughViewTest {
         onNodeWithText("one", useUnmergedTree = true).assertExists()
     }
 
-    /** No fetcher (or a failed one): the step still renders, against the working copy, no crash. */
-    @Test
-    fun a_lazy_file_step_without_a_fetcher_shows_the_file() = runComposeUiTest {
-        val state = WalkthroughState("s1").apply {
-            applyWalkthrough(
-                Walkthrough(
-                    id = "w1", sessionId = "s1", title = "Tour", revision = 1,
-                    steps = listOf(WalkthroughStep(id = "a", ord = 0, title = "The change", bodyMd = "Look", repo = "", path = "f.txt", rangeStart = 1, rangeEnd = 1)),
-                ),
-            )
-        }
-        val repos = listOf(dev.supermux.net.RepoDiff(repo = "", files = listOf(dev.supermux.net.DiffFile(path = "f.txt", status = "modified", added = 1, removed = 1, baseBlob = "b".repeat(40), lazy = true))))
-        setContent(host(state, repos = repos, read = { _, _ -> Result.success("two\n") }, baseText = { _, _, _ -> dev.supermux.net.BlobText.Failed("boom") }))
+    private fun lazyStep() = WalkthroughState("s1").apply {
+        applyWalkthrough(
+            Walkthrough(
+                id = "w1", sessionId = "s1", title = "Tour", revision = 1,
+                steps = listOf(WalkthroughStep(id = "a", ord = 0, title = "The change", bodyMd = "Look", repo = "", path = "f.txt", rangeStart = 1, rangeEnd = 2)),
+            ),
+        )
+    }
+
+    private fun lazyRepos() = listOf(
+        dev.supermux.net.RepoDiff(
+            repo = "",
+            files = listOf(dev.supermux.net.DiffFile(path = "f.txt", status = "modified", added = 1, removed = 1, baseBlob = "b".repeat(40), lazy = true)),
+        ),
+    )
+
+    private fun androidx.compose.ui.test.ComposeUiTest.waitForRegion() {
         waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("walkthrough_native_region").fetchSemanticsNodes().isNotEmpty() }
         waitForIdle()
+    }
+
+    /** A failing fetcher: the step still renders, against the working copy (no diff), no crash. */
+    @Test
+    fun a_lazy_file_step_with_a_failing_fetcher_shows_the_file() = runComposeUiTest {
+        setContent(host(lazyStep(), repos = lazyRepos(), read = { _, _ -> Result.success("two\n") }, baseText = { _, _, _ -> dev.supermux.net.BlobText.Failed("boom") }))
+        waitForRegion()
         onNodeWithText("one", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    /** No fetcher at all: the same fallback, no crash. */
+    @Test
+    fun a_lazy_file_step_without_a_fetcher_shows_the_file() = runComposeUiTest {
+        setContent(host(lazyStep(), repos = lazyRepos(), read = { _, _ -> Result.success("two\n") }, baseText = null))
+        waitForRegion()
+        onAllNodesWithText("two", substring = true, useUnmergedTree = true).onFirst().assertExists()
+        onNodeWithText("one", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    /** CRLF on both sides: normalised alike, so only the really changed line is changed. */
+    @Test
+    fun a_crlf_lazy_file_step_shows_only_the_changed_line() = runComposeUiTest {
+        setContent(
+            host(lazyStep(), repos = lazyRepos(), read = { _, _ -> Result.success("a\r\nB\r\n") }, baseText = { _, _, _ ->
+                dev.supermux.net.BlobText.Text("a\r\nb\r\n")
+            }),
+        )
+        waitForRegion()
+        // The deleted base line is drawn; the unchanged "a" is not drawn as deleted.
+        onNodeWithText("b", useUnmergedTree = true).assertExists()
+        onNodeWithText("a", useUnmergedTree = true).assertDoesNotExist()
     }
 }

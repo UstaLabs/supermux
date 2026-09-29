@@ -129,8 +129,8 @@ class ShellActions(
     val workspaceFsWrite: suspend (workspaceId: String, path: String, content: String) -> Boolean =
         { _, _, _ -> false },
     val workspaceFsDiff: suspend (workspaceId: String, base: String?) -> FsDiffResult? = { _, _ -> null },
-    val workspaceChangesBlob: suspend (workspaceId: String, repo: String, sha: String, force: Boolean) -> BlobText =
-        { _, _, _, _ -> BlobText.Failed("unavailable") },
+    /** A lazy Changes file's base text by blob; null: this host can't load one (no Retry offered). */
+    val workspaceChangesBlob: (suspend (workspaceId: String, repo: String, sha: String, force: Boolean) -> BlobText)? = null,
     val workspaceFsRefs: suspend (workspaceId: String) -> FsRefsResult? = { null },
     /** The host file-system service owning [workspaceId]'s host (spec 2026-09-27), or null offline. */
     val fileSystemFor: (workspaceId: String) -> dev.supermux.fs.FileSystemService? = { null },
