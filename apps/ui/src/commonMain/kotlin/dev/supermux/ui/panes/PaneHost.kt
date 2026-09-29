@@ -26,7 +26,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
@@ -34,6 +36,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -43,8 +46,11 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
@@ -53,6 +59,7 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -63,12 +70,18 @@ import androidx.compose.ui.zIndex
 import dev.supermux.ui.theme.Motion
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.groupIdOf
+import dev.supermux.workspace.layoutNodeAt
 import dev.supermux.workspace.moveViewToGroup
 import dev.supermux.workspace.normalizeLayout
 import dev.supermux.workspace.reorderWithinGroup
+import dev.supermux.workspace.resizeSplitSeam
 import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.workspace.setSplitSizes
 import dev.supermux.workspace.splitGroup
+import dev.supermux.workspace.splitSizesByPath
+import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 
 /**
  * Renders a workspace [LayoutNode] as nested resizable splits with tab groups at
@@ -247,10 +260,27 @@ fun PaneHost(
     // Root box owns the floating drag ghost (session-list style). Ghost coords are
     // root-space; subtract this box's origin so the chip tracks the pointer.
     var hostRoot by remember { mutableStateOf(Offset.Zero) }
+
+    // Whole-area resizes (window edge, sidebar) keep every seam still on screen;
+    // see PaneAreaFit. The fit is drawn at once and written to the tree once the
+    // resize settles, so the broker sees one PATCH, not one per frame.
+    val fit = remember { PaneAreaFit() }
+    val windowBounds = rememberWindowScreenBounds()
+    val minPanePx = with(LocalDensity.current) { PaneMinSize.toPx() }.toDouble()
+    LaunchedEffect(fit) {
+        snapshotFlow { fit.tick }.collectLatest {
+            delay(PaneFitCommitDelayMs)
+            val pending = fit.adjusted ?: return@collectLatest
+            val writes = splitSizesByPath(pending)
+            applyEdit { root -> writes.fold(root) { t, (p, sizes) -> setSplitSizes(t, p, sizes) } }
+        }
+    }
+
     Box(
         modifier
             .onGloballyPositioned { hostRoot = it.positionInRoot() },
     ) {
+        CompositionLocalProvider(LocalPaneAreaFit provides fit) {
         PaneHostNode(
             layout = layout,
             path = emptyList(),
@@ -258,7 +288,16 @@ fun PaneHost(
             dragState = drag,
             onDrop = { applyDrop(it) },
             onDragEndMiss = { onDragEndMissState.value(it) },
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .layout { measurable, constraints ->
+                    if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+                        fit.measure(layoutState.value, constraints.maxWidth, constraints.maxHeight, windowBounds(), minPanePx)
+                    }
+                    val p = measurable.measure(constraints)
+                    layout(p.width, p.height) { p.place(0, 0) }
+                }
+                .onPlaced { if (fit.adjusted != null) fit.tick++ },
             titleFor = titleFor,
             onCloseView = onCloseView,
             addSlot = addSlot,
@@ -268,6 +307,7 @@ fun PaneHost(
             chrome = chrome,
             content = content,
         )
+        }
         val g = drag.ghost
         if (drag.isDragging && g != null && g.visible) {
             PaneDragGhostChip(
@@ -288,6 +328,12 @@ fun PaneHost(
         }
     }
 }
+
+/** Smallest a pane gets when the whole pane area shrinks; past it the next pane inward gives. */
+private val PaneMinSize = 120.dp
+
+/** Quiet time after a whole-area resize before the re-fit is written to the tree. */
+private const val PaneFitCommitDelayMs = 300L
 
 /** Floating tab chip that follows the pointer during a drag. */
 @Composable
@@ -515,6 +561,10 @@ private fun SplitHost(
     chrome: PaneStripChrome,
     content: @Composable (String) -> Unit,
 ) {
+    val currentSplit by rememberUpdatedState(split)
+    val fit = LocalPaneAreaFit.current
+    // (pending area fit, this split) captured at drag start; see onSeamDrag below.
+    val dragStart = remember { mutableStateOf<Pair<LayoutNode?, LayoutNode.Split>?>(null) }
     // Reuse the existing ResizableSplit drag chrome rather than writing new
     // splitter hit-testing: it already handles the handle and the pointer
     // cursor, and it is the widget the rest of the app drags.
@@ -527,7 +577,25 @@ private fun SplitHost(
         // whichever `split` was current when it was last built, and every resize
         // restored that node's children — reviving a closed view or dropping a
         // new one.
-        onSizesChange = { next -> applyEdit { setSplitSizes(it, path, next) } },
+        // The resize is computed here against the current node, then written
+        // back as absolute per-path sizes: a delta would compound when a pending
+        // edit is replayed onto the broker's echo. Nested same-direction splits
+        // are included so only the dragged seam moves on screen.
+        // A window/sidebar re-fit still pending is drawn but not yet in the tree:
+        // commit it in the same edit, and resize from what is on screen.
+        //
+        // Every move is computed from the split AS IT WAS when the drag started plus the
+        // pointer's total travel, then clamped — so dragging past a limit and back leaves
+        // the seam pinned until the pointer reaches it again, instead of losing the overshoot.
+        onSeamDragStart = { dragStart.value = fit?.adjusted to currentSplit },
+        onSeamDrag = { seam, travel ->
+            val (pending, own) = dragStart.value ?: (fit?.adjusted to currentSplit)
+            val base = pending?.let { layoutNodeAt(it, path) as? LayoutNode.Split } ?: own
+            val writes = (pending?.let { splitSizesByPath(it) } ?: emptyList()) +
+                splitSizesByPath(resizeSplitSeam(base, seam, travel)).map { (rel, sizes) -> (path + rel) to sizes }
+            applyEdit { root -> writes.fold(root) { t, (p, sizes) -> setSplitSizes(t, p, sizes) } }
+        },
+        liveSizes = { fit?.sizesAt(path) },
         modifier = modifier,
     ) { index ->
         PaneHostNode(
@@ -892,8 +960,11 @@ private fun Modifier.tabDragGestures(
 
 /**
  * N-pane generalisation of [ResizableSplit]. [n] children means [n]-1 splitters,
- * tagged `splitter-0` … `splitter-(n-2)`. A drag on splitter [i] moves weight
- * between children [i] and [i]+1 only; the total stays 1.
+ * tagged `splitter-0` … `splitter-(n-2)`. A drag on splitter [i] reports
+ * [onSeamDragStart] (i) and then [onSeamDrag] (i, the pointer's TOTAL travel since the
+ * press, as a fraction of this split's extent); the caller
+ * decides the new sizes — see [resizeSplitSeam], which also keeps nested seams
+ * in place.
  *
  * Same seam model as [SidebarDivider] / [ResizableSplit]: panes abut (no layout
  * gap); overlay hairlines sit on cumulative fraction boundaries.
@@ -902,14 +973,18 @@ private fun Modifier.tabDragGestures(
 fun PaneSplit(
     direction: String,
     sizes: List<Double>,
-    onSizesChange: (List<Double>) -> Unit,
+    onSeamDrag: (seam: Int, totalFraction: Double) -> Unit,
     modifier: Modifier = Modifier,
+    onSeamDragStart: (seam: Int) -> Unit = {},
+    /**
+     * Sizes to draw instead of [sizes], read in the LAYOUT pass — how a pending
+     * whole-area re-fit ([PaneAreaFit]) reaches this split in the same frame the
+     * area was resized. Null or a wrong-length list falls back to [sizes].
+     */
+    liveSizes: () -> List<Double>? = { null },
     child: @Composable (index: Int) -> Unit,
 ) {
-    val n = sizes.size.coerceAtMost(
-        // Prefer children count if the tree is inconsistent; never index OOB.
-        sizes.size,
-    )
+    val n = sizes.size
     if (n <= 0) return
     if (n == 1) {
         Box(modifier.fillMaxSize()) { child(0) }
@@ -917,78 +992,72 @@ fun PaneSplit(
     }
 
     val horizontal = direction == "row"
-    var totalPx by remember { mutableStateOf(0) }
-    val currentSizes by rememberUpdatedState(sizes)
-    // The drag handler below lives in `pointerInput(totalPx, index)`, so it is
-    // rebuilt only when the pane count or geometry changes — never when the tree
-    // does. Anything it captures directly goes stale. `sizes` was already guarded
-    // this way; the callback needs the same guard, or a caller that closes over
-    // tree state sends yesterday's tree.
-    val currentOnSizesChange by rememberUpdatedState(onSizesChange)
-    val density = LocalDensity.current
+    // Read by the seams' drag handlers, which outlive recompositions; only used to
+    // turn a pixel drag into a fraction, so the value from the last layout is fine.
+    val totalPx = remember { IntArray(1) }
+    // The seam's drag handler lives in a long-lived `pointerInput`, so it is
+    // not rebuilt when the tree changes. Anything it captures directly goes
+    // stale, so the callback goes through rememberUpdatedState, or a caller that
+    // closes over tree state sends yesterday's tree.
+    val currentOnSeamDrag by rememberUpdatedState(onSeamDrag)
+    val currentOnSeamDragStart by rememberUpdatedState(onSeamDragStart)
+    val sizesState = rememberUpdatedState(sizes)
+    val liveState = rememberUpdatedState(liveSizes)
 
-    Box(
-        modifier
-            .fillMaxSize()
-            .onSizeChanged { totalPx = if (horizontal) it.width else it.height },
-    ) {
-        if (horizontal) {
-            Row(Modifier.fillMaxSize()) {
-                for (i in 0 until n) {
-                    val weight = sizes.getOrElse(i) { 1.0 / n }.toFloat().coerceAtLeast(0.001f)
-                    Box(Modifier.weight(weight).fillMaxHeight()) { child(i) }
-                }
+    // One layout for panes AND seams: pane boundaries and seam positions come
+    // from the same numbers in the same pass, so a seam can never sit a frame
+    // (or a rounding pixel) away from the edge it resizes.
+    Layout(
+        content = {
+            for (i in 0 until n) {
+                Box { child(i) }
             }
-        } else {
-            Column(Modifier.fillMaxSize()) {
-                for (i in 0 until n) {
-                    val weight = sizes.getOrElse(i) { 1.0 / n }.toFloat().coerceAtLeast(0.001f)
-                    Box(Modifier.weight(weight).fillMaxWidth()) { child(i) }
-                }
-            }
-        }
-
-        if (totalPx > 0) {
-            // Cumulative fraction of the first (i+1) panes → seam after index i.
-            var cum = 0.0
             for (i in 0 until n - 1) {
-                cum += sizes.getOrElse(i) { 1.0 / n }
-                val seamPx = (totalPx * cum).toFloat()
-                val seamDp = with(density) { seamPx.toDp() }
-                val index = i
                 SplitSeamOverlay(
                     horizontal = horizontal,
-                    onDragDeltaPx = { deltaPx ->
-                        if (totalPx <= 0) return@SplitSeamOverlay
-                        val delta = deltaPx / totalPx
-                        val cur = currentSizes
-                        if (index < 0 || index + 1 >= cur.size) return@SplitSeamOverlay
-                        val a = cur[index]
-                        val b = cur[index + 1]
-                        val pair = a + b
-                        val minFrac = 0.05
-                        val nextA = (a + delta).coerceIn(minFrac * pair, (1.0 - minFrac) * pair)
-                        val nextB = pair - nextA
-                        currentOnSizesChange(
-                            cur.toMutableList().also {
-                                it[index] = nextA
-                                it[index + 1] = nextB
-                            },
-                        )
+                    onDragStart = { currentOnSeamDragStart(i) },
+                    onDragPx = { travelPx ->
+                        val total = totalPx[0]
+                        if (total > 0) currentOnSeamDrag(i, (travelPx / total).toDouble())
                     },
-                    modifier = if (horizontal) {
-                        Modifier
-                            .align(Alignment.TopStart)
-                            .offset(x = seamDp - SplitSeamCenterOffset)
-                            .fillMaxHeight()
-                    } else {
-                        Modifier
-                            .align(Alignment.TopStart)
-                            .offset(y = seamDp - SplitSeamCenterOffset)
-                            .fillMaxWidth()
-                    },
-                    testTag = "splitter-$index",
+                    testTag = "splitter-$i",
                 )
+            }
+        },
+        modifier = modifier.fillMaxSize(),
+    ) { measurables, constraints ->
+        val w = constraints.maxWidth
+        val h = constraints.maxHeight
+        val extent = if (horizontal) w else h
+        totalPx[0] = extent
+        val fractions = liveState.value()?.takeIf { it.size == n } ?: sizesState.value
+        val sum = fractions.sum().takeIf { it > 0.0 } ?: 1.0
+        // Boundaries rounded from cumulative fractions: pane i spans edges[i]..edges[i+1].
+        val edges = IntArray(n + 1)
+        var cum = 0.0
+        for (i in 0 until n) {
+            cum += fractions[i]
+            edges[i + 1] = if (i == n - 1) extent else (extent * cum / sum).roundToInt().coerceIn(edges[i], extent)
+        }
+        val panes = (0 until n).map { i ->
+            val len = edges[i + 1] - edges[i]
+            measurables[i].measure(
+                if (horizontal) Constraints.fixed(len, h) else Constraints.fixed(w, len),
+            )
+        }
+        val seams = (0 until n - 1).map { i ->
+            measurables[n + i].measure(
+                if (horizontal) Constraints(maxWidth = w, minHeight = h, maxHeight = h)
+                else Constraints(minWidth = w, maxWidth = w, maxHeight = h),
+            )
+        }
+        layout(w, h) {
+            panes.forEachIndexed { i, p ->
+                if (horizontal) p.place(edges[i], 0) else p.place(0, edges[i])
+            }
+            seams.forEachIndexed { i, p ->
+                val at = edges[i + 1] - (if (horizontal) p.width else p.height) / 2
+                if (horizontal) p.place(at, 0, zIndex = 20f) else p.place(0, at, zIndex = 20f)
             }
         }
     }

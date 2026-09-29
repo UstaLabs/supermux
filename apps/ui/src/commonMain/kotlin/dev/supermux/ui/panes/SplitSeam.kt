@@ -11,7 +11,12 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.horizontalDrag
+import androidx.compose.foundation.gestures.verticalDrag
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -25,12 +30,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -41,13 +51,16 @@ import androidx.compose.ui.zIndex
  * primary highlight on hover/drag. Does **not** consume layout space in a Row/Column of panes.
  *
  * @param horizontal true when panes are side-by-side (vertical hairline, col-resize).
- * @param onDragDeltaPx drag delta in **pixels** along the split axis (x for horizontal, y for vertical).
+ * @param onDragStart a drag began; the caller records what [onDragPx] is relative to.
+ * @param onDragPx how far the pointer is from where the drag STARTED, in pixels along the
+ *   split axis — a total, not a per-event step (see [seamDrag]).
  */
 @Composable
 fun SplitSeamOverlay(
     horizontal: Boolean,
-    onDragDeltaPx: (Float) -> Unit,
+    onDragPx: (totalPx: Float) -> Unit,
     modifier: Modifier = Modifier,
+    onDragStart: () -> Unit = {},
     testTag: String = "split_seam",
 ) {
     val cs = MaterialTheme.colorScheme
@@ -90,15 +103,12 @@ fun SplitSeamOverlay(
                 .matchParentSize()
                 .hoverable(interaction)
                 .pointerHoverIcon(resizeIcon)
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { dragging = true },
-                        onDragEnd = { dragging = false },
-                        onDragCancel = { dragging = false },
-                    ) { _, drag ->
-                        onDragDeltaPx(if (horizontal) drag.x else drag.y)
-                    }
-                }
+                .seamDrag(
+                    horizontal = horizontal,
+                    onStart = { dragging = true; onDragStart() },
+                    onMove = onDragPx,
+                    onEnd = { dragging = false },
+                )
                 .testTag(testTag),
         )
     }
@@ -116,3 +126,56 @@ expect val ColResizeIcon: PointerIcon
 
 /** CSS `row-resize` equivalent for horizontal (top/bottom) splits. */
 expect val RowResizeIcon: PointerIcon
+
+/**
+ * Drag gesture for a resize seam that reports the pointer's TOTAL travel since the press,
+ * measured in window space.
+ *
+ * Summing per-event deltas loses whatever the caller clamped away: drag past a minimum,
+ * come back, and the seam starts moving again at once, a full overshoot away from the
+ * cursor. With a total, the caller computes `start + total`, clamps it, and the seam
+ * stays pinned until the pointer returns to it. Window space, because the seam itself
+ * moves under the pointer during the drag; and from the PRESS, not from where the touch
+ * slop was passed, so the grabbed point stays under the cursor.
+ */
+@Composable
+fun Modifier.seamDrag(
+    horizontal: Boolean,
+    onStart: () -> Unit,
+    onMove: (totalPx: Float) -> Unit,
+    onEnd: () -> Unit,
+): Modifier {
+    val coords = remember { arrayOfNulls<LayoutCoordinates>(1) }
+    val start by rememberUpdatedState(onStart)
+    val move by rememberUpdatedState(onMove)
+    val end by rememberUpdatedState(onEnd)
+    return this
+        .onGloballyPositioned { coords[0] = it }
+        .pointerInput(horizontal) {
+            fun along(local: Offset): Float? {
+                val c = coords[0]?.takeIf { it.isAttached } ?: return null
+                val w = c.localToWindow(local)
+                return if (horizontal) w.x else w.y
+            }
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                val origin = along(down.position) ?: return@awaitEachGesture
+                val first = if (horizontal) {
+                    awaitHorizontalTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
+                } else {
+                    awaitVerticalTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
+                } ?: return@awaitEachGesture
+                start()
+                try {
+                    along(first.position)?.let { move(it - origin) }
+                    val onChange: (PointerInputChange) -> Unit = { c ->
+                        along(c.position)?.let { move(it - origin) }
+                        c.consume()
+                    }
+                    if (horizontal) horizontalDrag(first.id, onChange) else verticalDrag(first.id, onChange)
+                } finally {
+                    end()
+                }
+            }
+        }
+}

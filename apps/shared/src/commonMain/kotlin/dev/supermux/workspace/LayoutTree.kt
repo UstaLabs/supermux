@@ -203,6 +203,189 @@ fun setSplitSizes(node: LayoutNode, path: List<Int>, sizes: List<Double>): Layou
     return node.copy(children = node.children.toMutableList().also { it[i] = child })
 }
 
+/**
+ * Move seam [seam] of [split] (the boundary between children `seam` and
+ * `seam + 1`) by [delta], a fraction of the split's own extent, WITHOUT moving
+ * any other seam on screen.
+ *
+ * Sizes are fractions of the parent, so plainly rewriting this split's two
+ * sizes rescales every same-direction split nested inside those two children:
+ * in `A | [B | C]`, dragging A|B would drag B|C along with it. Instead only the
+ * descendant pane that touches the dragged seam absorbs the change, and every
+ * other nested seam keeps its absolute position. Splits running the other way
+ * are unaffected along this axis and are just walked through.
+ *
+ * No pane on the dragged seam's path shrinks below [minLeaf] of the two
+ * children's combined extent; a drag past that clamps. Pure and total — an out
+ * of range [seam] returns [split] unchanged.
+ *
+ * No TypeScript counterpart — the broker only stores what the client computes.
+ */
+fun resizeSplitSeam(
+    split: LayoutNode.Split,
+    seam: Int,
+    delta: Double,
+    minLeaf: Double = 0.05,
+): LayoutNode.Split {
+    if (seam < 0 || seam + 1 >= split.children.size || seam + 1 >= split.sizes.size) return split
+    val dir = split.direction
+    val a = split.sizes[seam]
+    val b = split.sizes[seam + 1]
+    val pair = a + b
+    val min = minLeaf * pair
+    val lo = minExtent(split.children[seam], dir, a, edgeAtEnd = true, min)
+    val hi = pair - minExtent(split.children[seam + 1], dir, b, edgeAtEnd = false, min)
+    if (lo > hi) return split
+    val nextA = (a + delta).coerceIn(lo, hi)
+    val nextB = pair - nextA
+    return split.copy(
+        sizes = split.sizes.toMutableList().also {
+            it[seam] = nextA
+            it[seam + 1] = nextB
+        },
+        children = split.children.toMutableList().also {
+            it[seam] = rescaleEdge(it[seam], dir, a, nextA, edgeAtEnd = true, min)
+            it[seam + 1] = rescaleEdge(it[seam + 1], dir, b, nextB, edgeAtEnd = false, min)
+        },
+    )
+}
+
+/**
+ * Every split in [node] as (path relative to [node], sizes), [node] first. Lets
+ * a caller replay a [resizeSplitSeam] result as plain [setSplitSizes] writes,
+ * which stay idempotent when a pending edit is rebased onto a newer tree.
+ */
+fun splitSizesByPath(node: LayoutNode): List<Pair<List<Int>, List<Double>>> {
+    val out = mutableListOf<Pair<List<Int>, List<Double>>>()
+    fun walk(n: LayoutNode, path: List<Int>) {
+        if (n !is LayoutNode.Split) return
+        out += path to n.sizes
+        n.children.forEachIndexed { i, c -> walk(c, path + i) }
+    }
+    walk(node, emptyList())
+    return out
+}
+
+/** Smallest extent [node] can take along [dir] if only its [edgeAtEnd] side moves. */
+private fun minExtent(node: LayoutNode, dir: String, extent: Double, edgeAtEnd: Boolean, min: Double): Double =
+    when (node) {
+        is LayoutNode.Group -> min
+        is LayoutNode.Split -> if (node.direction != dir) {
+            node.children.maxOfOrNull { minExtent(it, dir, extent, edgeAtEnd, min) } ?: min
+        } else {
+            val k = if (edgeAtEnd) node.children.lastIndex else 0
+            node.children.indices.sumOf { i ->
+                val e = node.sizes.getOrElse(i) { 0.0 } * extent
+                if (i == k) minExtent(node.children[i], dir, e, edgeAtEnd, min) else e
+            }
+        }
+    }
+
+/**
+ * Resize [node] from [old] to [new] along [dir], giving the change to the pane on
+ * its moving edge ([edgeAtEnd]: the right/bottom edge, else the left/top one).
+ * A shrink that would take that pane below [min] passes the rest on to the next
+ * pane inward, and so on; if every pane is already at [min], what is left is
+ * shared proportionally rather than dropped, so sizes still add up to 1.
+ */
+private fun rescaleEdge(
+    node: LayoutNode,
+    dir: String,
+    old: Double,
+    new: Double,
+    edgeAtEnd: Boolean,
+    min: Double,
+): LayoutNode = when (node) {
+    is LayoutNode.Group -> node
+    is LayoutNode.Split -> when {
+        node.direction != dir ->
+            node.copy(children = node.children.map { rescaleEdge(it, dir, old, new, edgeAtEnd, min) })
+        new <= 0.0 || old <= 0.0 || node.sizes.size != node.children.size -> node
+        else -> {
+            val oldE = node.sizes.map { it * old }
+            val newE = oldE.toMutableList()
+            val order = if (edgeAtEnd) node.children.indices.reversed() else node.children.indices
+            var change = new - old
+            if (change >= 0) {
+                newE[order.first()] += change
+            } else {
+                for (i in order) {
+                    if (change >= 0) break
+                    val give = minOf(-change, (oldE[i] - minExtent(node.children[i], dir, oldE[i], edgeAtEnd, min)).coerceAtLeast(0.0))
+                    newE[i] -= give
+                    change += give
+                }
+                if (change < 0) {
+                    // Every pane is at its minimum: squeeze them all alike.
+                    val sum = newE.sum()
+                    for (i in newE.indices) newE[i] = newE[i] * new / sum
+                }
+            }
+            val total = newE.sum()
+            node.copy(
+                sizes = newE.map { it / total },
+                children = node.children.mapIndexed { i, c ->
+                    if (newE[i] == oldE[i]) c else rescaleEdge(c, dir, oldE[i], newE[i], edgeAtEnd, min)
+                },
+            )
+        }
+    }
+}
+
+/**
+ * Re-fit [node] to a pane area whose edges moved, keeping every inner seam where
+ * it was on screen: only the panes along an edge that moved grow or shrink.
+ *
+ * Extents are in any one unit (pixels, in practice). [oldWidth] → [newWidth] is
+ * the area's width; [startShiftX] is how far its LEFT edge moved (positive =
+ * rightwards); the right edge moved by the rest. The same for height/top. Panes
+ * stay at least [min]; a shrink past that cascades inward (see [rescaleEdge]).
+ * Returns [node] itself when nothing changed.
+ *
+ * No TypeScript counterpart — the broker only stores what the client computes.
+ */
+fun resizeLayoutEdges(
+    node: LayoutNode,
+    oldWidth: Double,
+    newWidth: Double,
+    startShiftX: Double,
+    oldHeight: Double,
+    newHeight: Double,
+    startShiftY: Double,
+    min: Double,
+): LayoutNode {
+    if (oldWidth <= 0 || newWidth <= 0 || oldHeight <= 0 || newHeight <= 0) return node
+    var n = node
+    if (oldWidth != newWidth || startShiftX != 0.0) {
+        val mid = oldWidth - startShiftX
+        if (mid > 0) {
+            n = rescaleEdge(n, "row", oldWidth, mid, edgeAtEnd = false, min)
+            n = rescaleEdge(n, "row", mid, newWidth, edgeAtEnd = true, min)
+        } else {
+            n = rescaleEdge(n, "row", oldWidth, newWidth, edgeAtEnd = true, min)
+        }
+    }
+    if (oldHeight != newHeight || startShiftY != 0.0) {
+        val mid = oldHeight - startShiftY
+        if (mid > 0) {
+            n = rescaleEdge(n, "column", oldHeight, mid, edgeAtEnd = false, min)
+            n = rescaleEdge(n, "column", mid, newHeight, edgeAtEnd = true, min)
+        } else {
+            n = rescaleEdge(n, "column", oldHeight, newHeight, edgeAtEnd = true, min)
+        }
+    }
+    return n
+}
+
+/** The node at [path] (child indices from [node]), or null when the path runs off the tree. */
+fun layoutNodeAt(node: LayoutNode, path: List<Int>): LayoutNode? {
+    var n = node
+    for (i in path) {
+        n = (n as? LayoutNode.Split)?.children?.getOrNull(i) ?: return null
+    }
+    return n
+}
+
 /** Remove a view wherever it is, then normalize. Null when the tree empties. */
 fun removeViewFromLayout(node: LayoutNode, viewId: String): LayoutNode? {
     fun strip(n: LayoutNode): LayoutNode = when (n) {
