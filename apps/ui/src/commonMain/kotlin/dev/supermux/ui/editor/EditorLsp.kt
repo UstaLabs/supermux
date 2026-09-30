@@ -52,6 +52,9 @@ class LspHub internal constructor(private val store: DocumentStore, private val 
             if (current.first == link.sessionId) { entries[current]?.transport?.ensureConnected(); return }
             native.detachLsp()
         }
+        // A file outside the workdir (an absolute editor key) is not in the language server's
+        // project: it edits as plain text with highlighting, no code intelligence.
+        if (dev.supermux.ui.isAbsoluteEditorPath(native.document.path)) return
         val status = link.bridge.queryStatus(native.document.path)
         val serverId = status.serverId
         if (!status.supported || serverId == null || status.state != "ready") {
@@ -90,8 +93,9 @@ class LspHub internal constructor(private val store: DocumentStore, private val 
             LspClientConfig(
                 rootUri = dirUri(link.workdir),
                 onNavigate = { uri, range ->
-                    val path = uriToWorkdirPath(uri, link.workdir)
-                    if (path == null) println("[lsp] $uri is outside the workdir: not opened")
+                    // A definition outside the workdir (a dependency's source, the SDK) opens by its absolute path.
+                    val path = uriToWorkdirPath(uri, link.workdir) ?: decodeFileUri(uri)
+                    if (path == null) println("[lsp] $uri is not a file: not opened")
                     else onNavigate(path, range.start.line + 1)
                 },
                 onWorkspaceEdit = { uri, edits -> applyElsewhere(link.workdir, uri, edits, client.features.value.positionEncoding) },

@@ -1642,8 +1642,8 @@ private fun WorkspacePanel(
         val rel = workspaceOpenPath(req.second, current.workdir)
         // Cleared only AFTER the host check: clearing it restarts (cancels) this effect.
         if (rel == null) {
-            println("[SupermuxApp] externalOpen: '${req.second.path}' is outside '${current.workdir}' — dropped")
-        } else if (dev.supermux.ui.files.tappedFileMissing(wsApp.fileSystem, dev.supermux.ui.files.absoluteInWorkdir(current.workdir, rel))) {
+            println("[SupermuxApp] externalOpen: '${req.second.path}' is the workdir '${current.workdir}' itself — dropped")
+        } else if (dev.supermux.ui.files.tappedFileMissing(wsApp.fileSystem, dev.supermux.ui.files.editorAbsolutePath(current.workdir, rel))) {
             notices.show(dev.supermux.ui.files.fileNotFoundNotice(req.second.path))
         } else {
             ws.fileOpener.open(rel, req.second.line, req.second.endLine, sourceViewId = null)

@@ -72,6 +72,7 @@ test("every /fs/* route refuses a request without a device credential", async ()
     [`/fs/list?path=${encodeURIComponent(d)}`, {}],
     [`/fs/stat?${q}`, {}],
     [`/fs/read?${q}`, {}],
+    [`/fs/raw?${q}`, {}],
     [`/fs/search?scope=${encodeURIComponent(d)}&q=x`, {}],
     [`/fs/write?${q}`, { method: "PUT", body: "pwned" }],
     [`/fs/ops`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "touch", path: f }) }],
@@ -276,4 +277,24 @@ test("PUT /fs/write refuses an oversized body with 413", async () => {
   const r = await fetch(`${base}/fs/write?path=${encodeURIComponent(join(d, "big.txt"))}`, { method: "PUT", headers: auth, body: big })
   expect(r.status).toBe(413)
   expect(existsSync(join(d, "big.txt"))).toBe(false)
+})
+
+test("GET /fs/raw serves a file's bytes, typed, as a sandboxed attachment", async () => {
+  const { base, auth } = await boot()
+  const d = tmp()
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])
+  writeFileSync(join(d, "a.png"), png)
+  writeFileSync(join(d, "x.svg"), "<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>")
+  const r = await fetch(`${base}/fs/raw?path=${encodeURIComponent(join(d, "a.png"))}`, { headers: auth })
+  expect(r.status).toBe(200)
+  expect(r.headers.get("content-type")).toBe("image/png")
+  expect(Buffer.from(await r.arrayBuffer()).equals(png)).toBe(true)
+  const svg = await fetch(`${base}/fs/raw?path=${encodeURIComponent(join(d, "x.svg"))}`, { headers: auth })
+  expect(svg.headers.get("content-security-policy")).toBe("sandbox")
+  expect(svg.headers.get("content-disposition")).toBe("attachment")
+  expect(svg.headers.get("x-content-type-options")).toBe("nosniff")
+  await svg.arrayBuffer()
+  expect((await fetch(`${base}/fs/raw?path=${encodeURIComponent(d)}`, { headers: auth })).status).toBe(400)
+  expect((await fetch(`${base}/fs/raw?path=${encodeURIComponent(join(d, "nope.png"))}`, { headers: auth })).status).toBe(404)
+  expect((await fetch(`${base}/fs/raw?path=relative.png`, { headers: auth })).status).toBe(400)
 })

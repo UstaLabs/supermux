@@ -11,6 +11,7 @@
 // reducer stays a faithful subset of AppViewModel's `when (frame)`.
 package dev.supermux.state
 
+import dev.supermux.ui.isAbsoluteEditorPath
 import dev.supermux.state.AgentReplyEvent
 import dev.supermux.state.StagedUpload
 import dev.supermux.net.AddCommentBody
@@ -1155,7 +1156,8 @@ class HostStore(
      */
     suspend fun workspaceFsRead(workspaceId: String, path: String): Result<String> =
         try {
-            Result.success(api.workspaceFsRead(workspaceId, path))
+            // An absolute path is a file outside the workdir: the host routes, not the relative ones.
+            Result.success(if (isAbsoluteEditorPath(path)) api.hostFsRead(path) else api.workspaceFsRead(workspaceId, path))
         } catch (c: CancellationException) {
             currentCoroutineContext().ensureActive()
             Result.failure(c)
@@ -1165,7 +1167,9 @@ class HostStore(
 
     /** PUT /workspaces/<id>/fs/write → true on success. */
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
-        runApi("workspaceFsWrite") { api.workspaceFsWrite(workspaceId, path, content) } ?: false
+        runApi("workspaceFsWrite") {
+            if (isAbsoluteEditorPath(path)) { api.hostFsWrite(path, content); true } else api.workspaceFsWrite(workspaceId, path, content)
+        } ?: false
 
     /** The Changes list (`/changes`, lazy files); the old full-patch `fs/diff` only on a broker that has no `/changes`. */
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? {
@@ -1195,7 +1199,7 @@ class HostStore(
      */
     suspend fun fsRead(session: SessionInfo, path: String): Result<String> =
         try {
-            Result.success(api.fsRead(session.id, path))
+            Result.success(if (isAbsoluteEditorPath(path)) api.hostFsRead(path) else api.fsRead(session.id, path))
         } catch (c: CancellationException) {
             currentCoroutineContext().ensureActive() // real cancel → propagate
             Result.failure(c)
@@ -1205,7 +1209,9 @@ class HostStore(
 
     /** PUT /sessions/<id>/fs/write → true on success, false on any failure. */
     suspend fun fsWrite(session: SessionInfo, path: String, content: String): Boolean =
-        runApi("fsWrite") { api.fsWrite(session.id, path, content) } ?: false
+        runApi("fsWrite") {
+            if (isAbsoluteEditorPath(path)) { api.hostFsWrite(path, content); true } else api.fsWrite(session.id, path, content)
+        } ?: false
 
     /** GET /sessions/<id>/fs/search → filename matches. Empty on any failure. */
     suspend fun fsSearch(session: SessionInfo, q: String): List<FsSearchResult> =

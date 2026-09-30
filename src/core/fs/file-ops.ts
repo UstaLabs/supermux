@@ -24,6 +24,22 @@ export async function readText(path: string): Promise<string> {
   return buf.toString("utf-8")
 }
 
+/** Largest file `/fs/raw` serves (a preview is held in memory on the client). */
+export const MAX_RAW_BYTES = 64 * 1024 * 1024
+
+/** A regular file's size, checked against [MAX_RAW_BYTES], for serving its bytes as-is. */
+export async function rawFile(path: string): Promise<{ size: number }> {
+  try {
+    const s = await stat(path)
+    if (s.isDirectory()) throw new FsError("EISDIR", `is a directory: ${path}`)
+    if (!s.isFile()) throw new FsError("EINVAL", `not a regular file: ${path}`)
+    if (s.size > MAX_RAW_BYTES) throw new FsError("TOO_LARGE", `File too large (${s.size} bytes); limit is 64MB`)
+    return { size: s.size }
+  } catch (e) {
+    throw toFsErrorKeep(e)
+  }
+}
+
 export async function writeText(path: string, text: string): Promise<{ size: number; mtime: number }> {
   const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`
   try {

@@ -5,7 +5,7 @@ import { gitAsync } from "../git/exec"
 import { DirCache, type CachedDir } from "./dir-cache"
 import { DirWatchers, type DirWatchersOpts } from "./dir-watchers"
 import { toFsError } from "./errors"
-import { applyOp, readText, statEntry, writeText, type OpOptions } from "./file-ops"
+import { applyOp, rawFile, readText, statEntry, writeText, type OpOptions } from "./file-ops"
 import { normalizeAbsPath, realKey } from "./paths"
 import { RepoInfoCache } from "./repo-info"
 import { SearchIndexes } from "./search-index"
@@ -149,6 +149,12 @@ export class FileSystemService<S = unknown> {
 
   async read(path: string): Promise<string> {
     return readText(normalizeAbsPath(path))
+  }
+
+  /** A file to serve byte-for-byte (images and other binaries the editor previews). */
+  async raw(path: string): Promise<{ path: string; size: number }> {
+    const p = normalizeAbsPath(path)
+    return { path: p, ...(await rawFile(p)) }
   }
 
   async write(path: string, text: string): Promise<{ size: number; mtime: number }> {

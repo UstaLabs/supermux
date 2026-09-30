@@ -2642,10 +2642,26 @@ class BrokerApi(
             authHeader()
         }
         if (!resp.status.isSuccess()) {
-            val body = resp.bodyAsText()
-            throw FsException(resp.status.value, body.ifBlank { "read failed (${resp.status.value})" })
+            throw FsException(resp.status.value, hostFsErrorMessage(resp.bodyAsText()) ?: "read failed (${resp.status.value})")
         }
         return resp.bodyAsText()
+    }
+
+    /** GET /fs/raw?path=<abs> → the file's bytes (image/binary previews). Throws FsException on non-2xx (413 over 64 MB / 404 / 403). */
+    suspend fun hostFsRaw(path: String): ByteArray {
+        val resp = http.get("$httpBase/fs/raw?path=${urlEncode(path)}") {
+            authHeader()
+        }
+        if (!resp.status.isSuccess()) {
+            throw FsException(resp.status.value, hostFsErrorMessage(resp.bodyAsText()) ?: "read failed (${resp.status.value})")
+        }
+        return resp.bodyAsBytes()
+    }
+
+    /** A host fs route's `{ error, message }` body as its message (what the editor shows); null when blank. */
+    private fun hostFsErrorMessage(body: String): String? {
+        if (body.isBlank()) return null
+        return runCatching { json.parseToJsonElement(body).jsonObject["message"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: body
     }
 
     /** PUT /fs/write?path=<abs> (text/plain body) → { size, mtime }. Throws FsException on non-2xx. */

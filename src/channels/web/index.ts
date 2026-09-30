@@ -2776,13 +2776,28 @@ export class WebChannel implements Channel {
     // proxied port — subdomain host or /p/<slug>/ — are routed to the proxy before
     // `routeRequest`, so a public proxy link can never reach here. fs-routes.test.ts
     // pins both.
-    if (path === "/fs/list" || path === "/fs/stat" || path === "/fs/read" || path === "/fs/write" || path === "/fs/search" || path === "/fs/ops") {
+    if (path === "/fs/list" || path === "/fs/stat" || path === "/fs/read" || path === "/fs/raw" || path === "/fs/write" || path === "/fs/search" || path === "/fs/ops") {
       const p = url.searchParams.get("path") ?? ""
       try {
         if (method === "GET" && path === "/fs/list") return this.json(await this.fss.list(p))
         if (method === "GET" && path === "/fs/stat") return this.json(await this.fss.stat(p))
         if (method === "GET" && path === "/fs/read") {
           return new Response(await this.fss.read(p), { headers: { "content-type": "text/plain; charset=utf-8" } })
+        }
+        if (method === "GET" && path === "/fs/raw") {
+          const f = await this.fss.raw(p)
+          // Bytes for an in-app preview, never a page: `attachment` + a sandbox CSP + nosniff keep
+          // an HTML or SVG file from running script on this origin if it is ever navigated to.
+          return new Response(Bun.file(f.path), {
+            headers: {
+              "content-type": Bun.file(f.path).type || "application/octet-stream",
+              "content-length": String(f.size),
+              "content-disposition": "attachment",
+              "content-security-policy": "sandbox",
+              "x-content-type-options": "nosniff",
+              "cache-control": "private, no-store",
+            },
+          })
         }
         if (method === "PUT" && path === "/fs/write") {
           // The editor can't open files over 1 MB anyway; don't buffer a huge body twice.
