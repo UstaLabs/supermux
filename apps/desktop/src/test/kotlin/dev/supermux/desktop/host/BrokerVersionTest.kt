@@ -31,4 +31,9 @@ class BrokerVersionTest {
         assertEquals("1.5.0-alpha.3", BrokerVersion.versionOf("1.5.0-alpha.3 (abc1234)"))
         assertNull(BrokerVersion.versionOf(null))
     }
+
+    @Test fun alphanumericPrereleaseBeatsNumeric() =
+        assertTrue(BrokerVersion.isNewer(found = "1.0.0-alpha.beta", bundled = "1.0.0-alpha.1"))
+    @Test fun overflowIsNotNewerAndDoesNotThrow() =
+        assertFalse(BrokerVersion.isNewer(found = "99999999999.0.0", bundled = "1.0.0"))
 }

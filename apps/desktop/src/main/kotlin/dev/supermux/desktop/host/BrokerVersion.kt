@@ -23,7 +23,7 @@ object BrokerVersion {
     private fun parse(v: String): Sem? {
         val m = Regex("""^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$""").matchEntire(v) ?: return null
         val (a, b, c, pre) = m.destructured
-        return Sem(a.toInt(), b.toInt(), c.toInt(), if (pre.isEmpty()) emptyList() else pre.split('.'))
+        return Sem(a.toIntOrNull() ?: return null, b.toIntOrNull() ?: return null, c.toIntOrNull() ?: return null, if (pre.isEmpty()) emptyList() else pre.split('.'))
     }
 
     private fun compare(x: Sem, y: Sem): Int {
@@ -36,8 +36,12 @@ object BrokerVersion {
         for (i in 0 until maxOf(x.pre.size, y.pre.size)) {
             val p = x.pre.getOrNull(i) ?: return -1
             val q = y.pre.getOrNull(i) ?: return 1
+            val pn = p.toBigIntegerOrNull()
+            val qn = q.toBigIntegerOrNull()
             val c = when {
-                p.toIntOrNull() != null && q.toIntOrNull() != null -> compareValues(p.toInt(), q.toInt())
+                pn != null && qn != null -> pn.compareTo(qn)
+                pn != null -> -1   // numeric identifiers rank below alphanumeric ones
+                qn != null -> 1
                 else -> p.compareTo(q)
             }
             if (c != 0) return c
@@ -45,12 +49,32 @@ object BrokerVersion {
         return 0
     }
 
+    private val BUILD_LINE = Regex("""^\S+ \([^)]+\)$""")
+
     /** `<broker> version` → "1.5.0 (abc1234)", or null. Blocking; call off the main thread. */
-    fun readBundledBuild(broker: Path?): String? = broker?.let {
-        runCatching {
-            val p = ProcessBuilder(it.toString(), "version").redirectErrorStream(true).start()
-            if (!p.waitFor(10, TimeUnit.SECONDS)) { p.destroyForcibly(); return null }
-            p.inputStream.bufferedReader().readText().trim().lineSequence().lastOrNull()?.takeIf { l -> l.isNotBlank() }
-        }.getOrNull()
+    fun readBundledBuild(broker: Path?): String? {
+        if (broker == null) return null
+        var p: Process? = null
+        return try {
+            p = ProcessBuilder(broker.toString(), "version")
+                .redirectError(ProcessBuilder.Redirect.DISCARD).start()
+            // Read on this thread before waiting so a hung child can't be missed; cap the read at 4 KB.
+            val buf = ByteArray(4096)
+            var n = 0
+            p.inputStream.use { ins ->
+                while (n < buf.size) {
+                    val r = ins.read(buf, n, buf.size - n)
+                    if (r < 0) break
+                    n += r
+                }
+            }
+            if (!p.waitFor(10, TimeUnit.SECONDS) || p.exitValue() != 0) return null
+            String(buf, 0, n, Charsets.UTF_8).lineSequence().map { it.trim() }.lastOrNull { it.isNotEmpty() }
+                ?.takeIf { BUILD_LINE.matches(it) }
+        } catch (_: Exception) {
+            null
+        } finally {
+            if (p?.isAlive == true) p.destroyForcibly()
+        }
     }
 }

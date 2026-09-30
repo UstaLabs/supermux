@@ -4,8 +4,6 @@ import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.host.PairedHostStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.net.URI

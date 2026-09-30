@@ -29,9 +29,6 @@ class HostProbeTest {
     @Test fun outsideBinaryInOurStateDirAsksToTakeOver() =
         assertEquals(HostPlan.AskTakeover("h1"), decide(sm()))
 
-    @Test fun legacyWithoutHostIsTreatedAsOutsideAndAsked() =
-        assertEquals(HostPlan.AskTakeover(null), decide(HostProbeResult.LegacySupermux))
-
     @Test fun leftAloneIsReadOnly() =
         assertEquals(HostPlan.ReadOnly, decide(sm(), prefs.copy(leftAloneHostIds = setOf("h1"))))
 
@@ -51,6 +48,38 @@ class HostProbeTest {
         HostProbeResult.Supermux("h1", "1.5.0 (abc)", "binary", "desktop", "/s"),
         HostProber.parse("""{"hostId":"h1","name":"n","protocolVersion":1,"build":"1.5.0 (abc)","mode":"binary","managedBy":"desktop","stateDir":"/s"}"""),
     )
-    @Test fun parseWithoutHostIdIsLegacy() = assertEquals(HostProbeResult.LegacySupermux, HostProber.parse("""{"name":"x"}"""))
+    @Test fun parseWithoutHostIdIsForeign() = assertEquals(HostProbeResult.ForeignProcess, HostProber.parse("""{"name":"x"}"""))
     @Test fun parseGarbageIsForeign() = assertEquals(HostProbeResult.ForeignProcess, HostProber.parse("<html>"))
+
+    @Test fun unknownModeAndDirIsReadOnly() = assertEquals(HostPlan.ReadOnly, decide(sm(mode = null, dir = null)))
+    @Test fun binaryWithoutStateDirIsReadOnly() = assertEquals(HostPlan.ReadOnly, decide(sm(dir = null)))
+    @Test fun managedWithUnknownBundledBuildIsUsed() =
+        assertEquals(HostPlan.UseOwn, decide(sm(managedBy = "desktop", build = "1.4.0 (old)"), bundled = null))
+    @Test fun managedSourceModeIsNeverUpdated() =
+        assertEquals(HostPlan.UseOwn, decide(sm(managedBy = "desktop", mode = "source", build = "1.4.0 (old)")))
+    @Test fun managedWithForeignStateDirIsReadOnly() =
+        assertEquals(HostPlan.ReadOnly, decide(sm(managedBy = "desktop", dir = "/elsewhere/state")))
+    @Test fun busyWaits() = assertEquals(HostPlan.Wait, decide(HostProbeResult.Busy))
+
+    private fun withServer(status: Int, body: String, block: (Int) -> Unit) {
+        val srv = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        srv.createContext("/host") { ex ->
+            val bytes = body.toByteArray()
+            ex.sendResponseHeaders(status, bytes.size.toLong())
+            ex.responseBody.use { it.write(bytes) }
+        }
+        srv.start()
+        try { block(srv.address.port) } finally { srv.stop(0) }
+    }
+
+    @Test fun probe503IsBusy() = withServer(503, "{}") { assertEquals(HostProbeResult.Busy, HostProber.probe(it)) }
+    @Test fun probe404IsForeign() = withServer(404, "no") { assertEquals(HostProbeResult.ForeignProcess, HostProber.probe(it)) }
+    @Test fun probeHtmlIsForeign() = withServer(200, "<html>") { assertEquals(HostProbeResult.ForeignProcess, HostProber.probe(it)) }
+    @Test fun probeSupermuxJson() = withServer(200, """{"hostId":"h9","protocolVersion":1}""") {
+        assertEquals(HostProbeResult.Supermux("h9", null, null, null, null), HostProber.probe(it))
+    }
+    @Test fun probeClosedPortIsFree() {
+        val port = java.net.ServerSocket(0).use { it.localPort }
+        assertEquals(HostProbeResult.PortFree, HostProber.probe(port))
+    }
 }

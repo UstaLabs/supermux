@@ -2,12 +2,14 @@ package dev.supermux.desktop.host
 
 import dev.supermux.net.HostIdentity
 import kotlinx.serialization.json.Json
+import java.io.File
 import java.io.IOException
 import java.net.ConnectException
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URI
 import java.net.http.HttpClient
+import java.net.http.HttpTimeoutException
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse.BodyHandlers
 import java.nio.file.Path
@@ -22,8 +24,9 @@ sealed interface HostProbeResult {
         val managedBy: String?,
         val stateDir: String?,
     ) : HostProbeResult
-    object LegacySupermux : HostProbeResult   // answers HTTP 200 on /host but with no hostId (pre-/host broker)
-    object ForeignProcess : HostProbeResult   // the port is held by something else
+    /** Something answers but is not ready (HTTP 5xx, or accepts TCP but times out): may be a broker still starting. */
+    object Busy : HostProbeResult
+    object ForeignProcess : HostProbeResult   // the port is held by something that is not a supermux broker
     object PortFree : HostProbeResult
 }
 
@@ -32,6 +35,8 @@ sealed interface HostPlan {
     data object NotHosting : HostPlan
     data object Start : HostPlan
     data object MovePort : HostPlan
+    /** The port is busy (maybe a broker still starting). The supervisor (Task 8) retries for up to 30 s before treating it as [MovePort]. */
+    data object Wait : HostPlan
     data object UseOwn : HostPlan
     data object UpdateOwn : HostPlan
     data object ReadOnly : HostPlan
@@ -51,20 +56,31 @@ fun decideHost(probe: HostProbeResult, prefs: HostingPrefs, bundledBuild: String
     return when (probe) {
         HostProbeResult.PortFree -> HostPlan.Start
         HostProbeResult.ForeignProcess -> HostPlan.MovePort
-        HostProbeResult.LegacySupermux -> HostPlan.AskTakeover(null)
+        HostProbeResult.Busy -> HostPlan.Wait
         is HostProbeResult.Supermux -> when {
-            probe.managedBy == "desktop" ->
-                if (BrokerVersion.sameBuild(probe.build, bundledBuild)) HostPlan.UseOwn else HostPlan.UpdateOwn
+            probe.managedBy == "desktop" -> when {
+                probe.stateDir != null && !sameDir(probe.stateDir, appStateDir) -> HostPlan.ReadOnly
+                bundledBuild == null || probe.mode != "binary" -> HostPlan.UseOwn
+                BrokerVersion.sameBuild(probe.build, bundledBuild) -> HostPlan.UseOwn
+                else -> HostPlan.UpdateOwn
+            }
             probe.hostId in prefs.leftAloneHostIds -> HostPlan.ReadOnly
             probe.mode != "binary" -> HostPlan.ReadOnly
-            probe.stateDir == null || normalize(probe.stateDir) != normalize(appStateDir) -> HostPlan.ReadOnly
+            probe.stateDir == null || !sameDir(probe.stateDir, appStateDir) -> HostPlan.ReadOnly
             BrokerVersion.isNewer(found = probe.build, bundled = bundledBuild) -> HostPlan.AskDowngrade(probe.hostId)
             else -> HostPlan.AskTakeover(probe.hostId)
         }
     }
 }
 
-private fun normalize(p: String): String = runCatching { Path.of(p).toAbsolutePath().normalize().toString() }.getOrDefault(p)
+private fun canonical(p: String): String {
+    val path = runCatching { Path.of(p) }.getOrNull() ?: return p
+    val c = runCatching { path.toRealPath().toString() }.getOrNull()
+        ?: runCatching { path.toAbsolutePath().normalize().toString() }.getOrDefault(p)
+    return if (File.separatorChar == '\\') c.lowercase() else c
+}
+
+private fun sameDir(a: String, b: String): Boolean = canonical(a) == canonical(b)
 
 /** Where the broker's state lives (mirrors src/shared/paths.ts). */
 object BrokerPaths {
@@ -78,15 +94,24 @@ object BrokerPaths {
 /** Real HTTP probe of `GET /host` from loopback (so the local-only fields are included). */
 object HostProber {
     private val json = Json { ignoreUnknownKeys = true }
+    private val client: HttpClient by lazy { HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build() }
 
     fun probe(port: Int, host: String = "127.0.0.1"): HostProbeResult {
-        val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build()
         val req = HttpRequest.newBuilder(URI.create("http://$host:$port/host")).timeout(Duration.ofSeconds(3)).GET().build()
         return try {
             val resp = client.send(req, BodyHandlers.ofString())
-            if (resp.statusCode() == 200) parse(resp.body()) else HostProbeResult.ForeignProcess
+            when (val code = resp.statusCode()) {
+                200 -> parse(resp.body())
+                in 500..599 -> HostProbeResult.Busy
+                else -> HostProbeResult.ForeignProcess
+            }
         } catch (_: ConnectException) {
             HostProbeResult.PortFree
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw e
+        } catch (_: HttpTimeoutException) {
+            if (tcpConnectable(host, port)) HostProbeResult.Busy else HostProbeResult.PortFree
         } catch (_: IOException) {
             if (tcpConnectable(host, port)) HostProbeResult.ForeignProcess else HostProbeResult.PortFree
         } catch (_: Exception) {
@@ -97,7 +122,7 @@ object HostProber {
     internal fun parse(body: String): HostProbeResult {
         val id = runCatching { json.decodeFromString(HostIdentity.serializer(), body) }.getOrNull()
             ?: return HostProbeResult.ForeignProcess
-        if (id.hostId.isBlank()) return HostProbeResult.LegacySupermux
+        if (id.hostId.isBlank()) return HostProbeResult.ForeignProcess
         return HostProbeResult.Supermux(id.hostId, id.build, id.mode, id.managedBy, id.stateDir)
     }
 
