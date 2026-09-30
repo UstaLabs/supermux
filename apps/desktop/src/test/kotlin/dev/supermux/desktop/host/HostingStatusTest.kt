@@ -66,4 +66,9 @@ class HostingStatusTest {
         assertNull(QuitText.of(HostingStatus.Running(9898, readOnly = true), fg, 3))   // app only, no prompt
         assertNull(QuitText.of(HostingStatus.NotHosting, fg, 0))
     }
+
+    @Test fun quitTextWithNoSessions() {
+        assertEquals("This stops supermux.", QuitText.stops(0))
+        assertEquals("This stops supermux.", QuitText.of(HostingStatus.Running(9898, false), fg, 0))
+    }
 }

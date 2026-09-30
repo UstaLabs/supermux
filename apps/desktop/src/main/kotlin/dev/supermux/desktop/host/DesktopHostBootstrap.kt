@@ -1,6 +1,7 @@
 package dev.supermux.desktop.host
 
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,10 +52,28 @@ object DesktopHostBootstrap {
      * The production [HostSupervisor]: `hosting.json` prefs, the materialized bundled binaries
      * ([HostBinaries.resolve]) under the broker's state dir, and the real OS ([SystemOsEnv]).
      */
-    fun supervisor(): HostSupervisor = sharedSupervisor
+    fun supervisor(): HostSupervisor = sharedSupervisor.value
+
+    /**
+     * Every exit path (window quit, `finally`, shutdown hook) stops a child broker. Idempotent; a
+     * no-op when the supervisor was never built (a client-only platform).
+     */
+    fun quitIfStarted() {
+        if (sharedSupervisor.isInitialized()) sharedSupervisor.value.quit()
+    }
+
+    /**
+     * Before the supervisor exists: write the first `hosting.json` when [initialHostingPrefs] says
+     * so (an upgrade paired only to other computers starts with hosting OFF). Best-effort.
+     */
+    fun seedHostingPrefs(hosts: List<PairedHost>, store: HostingPrefsStore = HostingPrefsStore()) {
+        runCatching {
+            initialHostingPrefs(hosts, store.exists(), store.load())?.let(store::save)
+        }.onFailure { System.err.println("supermux host: seeding hosting prefs failed: ${it.message}") }
+    }
 
     /** One supervisor per process: two would each think they own the broker. */
-    private val sharedSupervisor: HostSupervisor by lazy {
+    private val sharedSupervisor: Lazy<HostSupervisor> = lazy {
         val stateDir = BrokerPaths.defaultStateDir()
         val prefsStore = HostingPrefsStore()
         HostSupervisor(

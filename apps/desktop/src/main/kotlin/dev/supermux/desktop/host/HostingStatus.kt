@@ -24,6 +24,9 @@ data class TrayModel(
     val keepRunningEnabled: Boolean,
 ) {
     companion object {
+        /** While the app's quit runs (the child's stop grace): just the header, Open and Quit. */
+        val QUITTING = TrayModel(Dot.YELLOW, "Quitting…", false, null, false, false, false)
+
         /** [remoteReachable]: whether [remoteName]'s host is connected (spec state 9 when not). */
         fun of(
             s: HostingStatus,
@@ -60,11 +63,20 @@ data class TrayModel(
 }
 
 object QuitText {
+    const val BACKGROUND = "supermux will keep running in the background."
+
+    /** The confirm text: what stops. */
+    fun stops(sessions: Int): String = when {
+        sessions <= 0 -> "This stops supermux."
+        sessions == 1 -> "This stops supermux and your 1 running session."
+        else -> "This stops supermux and your $sessions running sessions."
+    }
+
     /** null => quit without a prompt. */
     fun of(s: HostingStatus, prefs: HostingPrefs, sessions: Int): String? = when {
         s is HostingStatus.Running && s.readOnly -> null
         s == HostingStatus.NotHosting -> null
-        prefs.background -> "supermux will keep running in the background."
-        else -> "This stops supermux and your ${if (sessions == 1) "1 running session" else "$sessions running sessions"}."
+        prefs.background -> BACKGROUND
+        else -> stops(sessions)
     }
 }

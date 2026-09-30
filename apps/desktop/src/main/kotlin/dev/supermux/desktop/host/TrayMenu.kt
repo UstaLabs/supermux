@@ -36,19 +36,24 @@ data class FleetFacts(
 }
 
 /**
- * Pure: [localHostId] is the supervisor's broker. Sessions count when their owning record
- * ([sessionHost]: sessionId → recordId) is the fleet host with that hostId; 0 while that host is
- * not in the fleet yet. The "remote" host is the first fleet host whose hostId is not ours.
+ * Pure: [localHostId] is the supervisor's broker. This computer's record is the fleet host with that
+ * hostId, else one with a loopback direct URL ([loopbackRecordIds]). Sessions count when their
+ * owning record ([sessionHost]: sessionId → recordId) is that record; 0 while it is not in the fleet.
+ * The "remote" host is the first fleet host that is neither: after hosting is turned off the user's
+ * own former "This computer" must not read as the remote.
  */
 fun fleetFacts(
     localHostId: String?,
     hosts: List<HostView>,
     sessions: List<SessionInfo>,
     sessionHost: Map<String, String>,
+    loopbackRecordIds: Set<String> = emptySet(),
 ): FleetFacts {
+    fun isLocal(h: HostView) = (localHostId != null && h.hostId == localHostId) || h.recordId in loopbackRecordIds
     val local = localHostId?.let { id -> hosts.firstOrNull { it.hostId == id } }
+        ?: hosts.firstOrNull { it.recordId in loopbackRecordIds }
     val count = local?.let { h -> sessions.count { sessionHost[it.id] == h.recordId } } ?: 0
-    val remote = hosts.firstOrNull { localHostId == null || it.hostId != localHostId }
+    val remote = hosts.firstOrNull { !isLocal(it) }
     return FleetFacts(
         localSessions = count,
         remoteName = remote?.displayLabel,
@@ -59,7 +64,9 @@ fun fleetFacts(
 /** [fleetFacts] kept live. Distinct, so a session's activity does not recompose the app root. */
 fun FleetStore.hostingFacts(localHostId: Flow<String?>): Flow<FleetFacts> =
     combine(localHostId, hostViews, sessions, sessionHost) { id, hosts, list, owners ->
-        fleetFacts(id, hosts, list, owners)
+        // Records change only with hostViews (add/forget/rename), so reading them here stays current.
+        val loopback = store.list().filter { isLoopbackUrl(it.directUrl) }.map { it.recordId }.toSet()
+        fleetFacts(id, hosts, list, owners, loopback)
     }.distinctUntilChanged()
 
 /** Open [file] with the OS default app (the log). Best-effort. */
@@ -85,48 +92,60 @@ sealed interface QuitAction {
 
     companion object {
         /**
-         * Pure. Only a running, app-owned broker without the background box gets the confirm
-         * dialog; background ON quits at once with its notice (unless [noticeShown]); read-only,
-         * not hosting, starting and can't-start quit silently.
+         * Pure. [quitStopsBroker] ([HostSupervisor.quitStopsBroker]) is whether quitting stops the
+         * broker: a running, app-owned broker that stops gets the confirm dialog; one that keeps
+         * running (a service, the XDG stand-in) quits at once with the one-time notice (unless
+         * [noticeShown]); read-only, not hosting, starting, can't-start quit at once, silently.
          */
-        fun of(s: HostingStatus, prefs: HostingPrefs, sessions: Int, noticeShown: Boolean): QuitAction {
-            val text = QuitText.of(s, prefs, sessions) ?: return Now()
-            return when {
-                prefs.background -> Now(text.takeUnless { noticeShown })
-                s is HostingStatus.Running -> Confirm(text)
-                else -> Now()
-            }
+        fun of(s: HostingStatus, sessions: Int, quitStopsBroker: Boolean, noticeShown: Boolean): QuitAction = when {
+            s !is HostingStatus.Running || s.readOnly -> Now()
+            quitStopsBroker -> Confirm(QuitText.stops(sessions))
+            else -> Now(QuitText.BACKGROUND.takeUnless { noticeShown })
         }
     }
 }
 
+/** One tray menu row, as a pure model ([trayMenuItems]) so the menu's shape is testable without AWT. */
+sealed interface TrayItem {
+    data class Header(val text: String) : TrayItem
+    data class Action(val id: TrayAction, val label: String, val enabled: Boolean = true) : TrayItem
+    data class Checkbox(val label: String, val checked: Boolean, val enabled: Boolean) : TrayItem
+    data object Separator : TrayItem
+}
+
+enum class TrayAction { OPEN, SHOW_LOG, RESTART, QUIT }
+
 /** The tray menu (spec §States, "Tray menu"). Hosting off: header, Open, Quit. */
+fun trayMenuItems(model: TrayModel, background: Boolean): List<TrayItem> = buildList {
+    add(TrayItem.Header(trayHeaderLine(model)))
+    add(TrayItem.Action(TrayAction.OPEN, "Open supermux"))
+    if (model.showLog) add(TrayItem.Action(TrayAction.SHOW_LOG, "Show log"))
+    if (model.restartLabel != null || model.showKeepRunning) {
+        add(TrayItem.Separator)
+        model.restartLabel?.let { add(TrayItem.Action(TrayAction.RESTART, it, model.restartEnabled)) }
+        if (model.showKeepRunning) {
+            add(TrayItem.Checkbox("Keep running in the background", background, model.keepRunningEnabled))
+        }
+    }
+    add(TrayItem.Separator)
+    add(TrayItem.Action(TrayAction.QUIT, "Quit supermux"))
+}
+
+/** Renders [trayMenuItems]. */
 @Composable
 fun MenuScope.HostingTrayMenu(
     model: TrayModel,
     background: Boolean,
-    onOpen: () -> Unit,
-    onShowLog: () -> Unit,
-    onRestart: () -> Unit,
+    onAction: (TrayAction) -> Unit,
     onBackground: (Boolean) -> Unit,
-    onQuit: () -> Unit,
 ) {
-    Item(trayHeaderLine(model), enabled = false, onClick = {})
-    Item("Open supermux", onClick = onOpen)
-    if (model.showLog) Item("Show log", onClick = onShowLog)
-    val hostingItems = model.restartLabel != null || model.showKeepRunning
-    if (hostingItems) {
-        Separator()
-        model.restartLabel?.let { label -> Item(label, enabled = model.restartEnabled, onClick = onRestart) }
-        if (model.showKeepRunning) {
-            CheckboxItem(
-                "Keep running in the background",
-                checked = background,
-                enabled = model.keepRunningEnabled,
-                onCheckedChange = onBackground,
-            )
+    for (item in trayMenuItems(model, background)) {
+        when (item) {
+            is TrayItem.Header -> Item(item.text, enabled = false, onClick = {})
+            is TrayItem.Action -> Item(item.label, enabled = item.enabled, onClick = { onAction(item.id) })
+            is TrayItem.Checkbox ->
+                CheckboxItem(item.label, checked = item.checked, enabled = item.enabled, onCheckedChange = onBackground)
+            TrayItem.Separator -> Separator()
         }
     }
-    Separator()
-    Item("Quit supermux", onClick = onQuit)
 }

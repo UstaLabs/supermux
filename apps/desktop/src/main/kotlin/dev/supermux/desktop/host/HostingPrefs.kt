@@ -1,5 +1,7 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.host.PairedHost
+
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.nio.file.Files
@@ -40,6 +42,9 @@ class HostingPrefsStore(
         return HostingPrefs(port = legacyPort ?: HostingPrefs.DEFAULT_PORT)
     }
 
+    /** True once `hosting.json` has been written (an upgrade from a pre-hosting build has none). */
+    fun exists(): Boolean = Files.exists(file)
+
     /** Atomic write (unique tmp → move) so a crash or a concurrent save never leaves a half-written file. */
     @Synchronized
     fun save(prefs: HostingPrefs) {
@@ -59,4 +64,30 @@ class HostingPrefsStore(
         fun defaultFile(): Path =
             Path.of(System.getProperty("user.home") ?: ".", ".config", "supermux-desktop", "hosting.json")
     }
+}
+/** A paired record for THIS computer's broker: its direct URL is loopback. */
+fun isLoopbackUrl(url: String?): Boolean {
+    if (url.isNullOrBlank()) return false
+    val host = runCatching { java.net.URI(url.trim()).host }.getOrNull()?.lowercase()?.removeSurrounding("[", "]")
+        ?: return false
+    return host == "localhost" || host == "::1" || host == "0:0:0:0:0:0:0:1" || host.startsWith("127.")
+}
+
+/**
+ * The first prefs, decided before the first `ensure()` so an upgrade never starts hosting by surprise.
+ * Returns null when nothing should be written:
+ *  - `hosting.json` exists: the user's choice stands;
+ *  - no paired host: first run, the wizard decides (its Done implies hosting);
+ *  - a paired record for this computer (loopback directUrl): the defaults, hosting on.
+ * Otherwise (paired only to other computers) hosting starts OFF.
+ */
+fun initialHostingPrefs(
+    hosts: List<PairedHost>,
+    prefsFileExists: Boolean,
+    base: HostingPrefs = HostingPrefs(),
+): HostingPrefs? = when {
+    prefsFileExists -> null
+    hosts.isEmpty() -> null
+    hosts.any { isLoopbackUrl(it.directUrl) } -> null
+    else -> base.copy(hosting = false)
 }

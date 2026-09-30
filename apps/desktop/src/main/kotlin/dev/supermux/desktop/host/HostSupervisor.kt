@@ -113,6 +113,15 @@ class HostSupervisor(
     /** The child stands in for the Linux XDG autostart (starts only at login): it outlives the app. */
     @Volatile internal var childDetached = false
     @Volatile internal var quitting = false
+    /** Serialises [quit] (the window, the `finally` and the shutdown hook may all call it); never [lock]. */
+    private val quitMonitor = Any()
+
+    /**
+     * Quitting the app stops the broker: it is our attached child (child mode, including the fallback
+     * when the background install failed). False for a service, the detached XDG stand-in, read-only
+     * and orphan modes, which keep running after the app.
+     */
+    val quitStopsBroker: Boolean get() = mode == Mode.CHILD && child != null && !childDetached
     @Volatile private var watchJob: Job? = null
     @Volatile internal var watchGen = 0L
     internal val retries = Retries(timing)
@@ -282,7 +291,7 @@ class HostSupervisor(
      * The app is exiting. Child mode stops the child (destroy, 5 s grace, destroyForcibly). Service and
      * read-only modes make no OS calls. Blocking, never throws, never waits for [lock].
      */
-    fun quit() {
+    fun quit() = synchronized(quitMonitor) {
         try {
             quitting = true
             stopWatch()

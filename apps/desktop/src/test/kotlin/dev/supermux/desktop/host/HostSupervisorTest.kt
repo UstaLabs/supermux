@@ -393,9 +393,12 @@ class HostSupervisorTest {
         val h = Harness(this)
         h.probeFn = h.healthyIfChild()
         h.sup.ensure()
+        assertTrue(h.sup.quitStopsBroker)
         h.sup.quit()
+        h.sup.quit() // idempotent: the finally and the shutdown hook call it again
         assertEquals(1, h.children[0].destroyed)
         assertFalse(h.children[0].isAlive)
+        assertFalse(h.sup.quitStopsBroker)
         assertFalse(Files.exists(h.state.resolve("desktop-broker.pid")))
         advanceTimeBy(30_000)
         assertEquals(1, h.launches.size) // the watch loop doesn't respawn after quit
@@ -406,6 +409,7 @@ class HostSupervisorTest {
         h.probeFn = { if (h.bootstrapped()) h.desktop() else HostProbeResult.PortFree }
         h.sup.ensure()
         val before = h.env.ran.size
+        assertFalse(h.sup.quitStopsBroker)
         h.sup.quit()
         assertEquals(before, h.env.ran.size)
     }
@@ -499,6 +503,7 @@ class HostSupervisorTest {
         assertEquals(1, h.launches.size)
         assertTrue(h.saved.background)
         assertEquals(running, h.sup.status.value)
+        assertFalse(h.sup.quitStopsBroker) // the XDG stand-in keeps running
         h.sup.quit()
         assertTrue(h.children[0].isAlive)
     }
@@ -514,6 +519,7 @@ class HostSupervisorTest {
         assertTrue(h.sup.backgroundError.value!!.startsWith("Couldn't keep supermux running in the background:"))
         assertTrue(h.saved.background)
         assertFalse(Files.exists(h.ourPlist)) // removed before the child fallback
+        assertTrue(h.sup.quitStopsBroker) // background ON, but quitting stops this child
     }
 
     // ── setters ──

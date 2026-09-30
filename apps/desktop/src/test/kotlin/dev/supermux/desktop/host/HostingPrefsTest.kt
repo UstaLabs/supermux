@@ -56,4 +56,50 @@ class HostingPrefsTest {
         Files.writeString(dir.resolve("hosting.json"), """{"port":0}""")
         assertEquals(9898, HostingPrefsStore(dir.resolve("hosting.json"), legacyPortFile = dir.resolve("none.json")).load().port)
     }
+
+    // ── initialHostingPrefs: no surprise hosting on upgrade ──
+
+    private fun host(id: String, directUrl: String?) =
+        dev.supermux.host.PairedHost(recordId = id, displayName = id, directUrl = directUrl, token = "t")
+
+    @Test fun upgradePairedOnlyToOtherComputersStartsWithHostingOff() {
+        val p = initialHostingPrefs(listOf(host("a", "http://192.168.1.5:9898"), host("b", null)), prefsFileExists = false)
+        assertEquals(HostingPrefs(hosting = false), p)
+    }
+
+    @Test fun keepsTheLegacyPortWhenTurningHostingOff() {
+        val p = initialHostingPrefs(listOf(host("a", null)), false, base = HostingPrefs(port = 9912))
+        assertEquals(HostingPrefs(hosting = false, port = 9912), p)
+    }
+
+    @Test fun firstRunLeavesItToTheWizard() {
+        assertEquals(null, initialHostingPrefs(emptyList(), prefsFileExists = false))
+    }
+
+    @Test fun aLocalRecordKeepsTheDefaults() {
+        for (url in listOf("http://127.0.0.1:9898", "http://localhost:9898", "http://[::1]:9898")) {
+            assertEquals(null, initialHostingPrefs(listOf(host("r", "https://h.relay.supermux.dev"), host("l", url)), false), url)
+        }
+    }
+
+    @Test fun anExistingFileIsNeverOverwritten() {
+        assertEquals(null, initialHostingPrefs(listOf(host("a", "http://192.168.1.5:9898")), prefsFileExists = true))
+    }
+
+    @Test fun loopbackUrls() {
+        assertTrue(isLoopbackUrl("http://127.0.0.1:9898"))
+        assertTrue(isLoopbackUrl("http://LOCALHOST:1"))
+        assertTrue(isLoopbackUrl("http://[::1]:9898"))
+        assertTrue(!isLoopbackUrl("http://192.168.1.5:9898"))
+        assertTrue(!isLoopbackUrl(null))
+        assertTrue(!isLoopbackUrl("not a url"))
+    }
+
+    @Test fun storeExists() {
+        val dir = createTempDirectory()
+        val store = HostingPrefsStore(dir.resolve("hosting.json"), legacyPortFile = dir.resolve("none.json"))
+        assertTrue(!store.exists())
+        store.save(HostingPrefs())
+        assertTrue(store.exists())
+    }
 }

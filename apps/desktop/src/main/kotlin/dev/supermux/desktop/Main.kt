@@ -62,7 +62,10 @@ import dev.supermux.desktop.host.HostingDialogs
 import dev.supermux.desktop.host.HostingStatus
 import dev.supermux.desktop.host.HostingTrayMenu
 import dev.supermux.desktop.host.QuitAction
+import dev.supermux.desktop.host.TrayAction
 import dev.supermux.desktop.host.TrayModel
+import java.awt.desktop.QuitResponse
+import java.util.concurrent.atomic.AtomicReference
 import dev.supermux.desktop.host.hostingFacts
 import dev.supermux.desktop.host.openFile
 import kotlinx.coroutines.flow.flowOf
@@ -367,6 +370,15 @@ fun main() {
     val hostStore = DesktopHostStores.store()
     runCatching { DesktopHostStores.migrateFromLegacyIfNeeded(hostStore, store) }
         .onFailure { println("[Main] legacy→fleet migration failed (falling through): $it") }
+    // No surprise hosting on upgrade: decide the first hosting.json from the fleet BEFORE the
+    // supervisor is built (and so before its first ensure()).
+    DesktopHostBootstrap.seedHostingPrefs(hostStore.list())
+    // Every exit path stops a child broker: the window's quit, the finally below, and this hook
+    // (a signal, System.exit, or macOS performQuit). quit() is idempotent and never takes the lock.
+    Runtime.getRuntime().addShutdownHook(Thread({ DesktopHostBootstrap.quitIfStarted() }, "supermux-host-quit"))
+    // A macOS system quit (Cmd-Q, Dock ▸ Quit, logout/restart/shutdown) waits on this answer: it is
+    // cancelled only when the user cancels the confirm, and performed once the app has exited.
+    val systemQuit = AtomicReference<QuitResponse?>(null)
 
     try {
         application {
@@ -409,12 +421,16 @@ fun main() {
         val fleetFacts by remember(pairedFleet) {
             pairedFleet?.hostingFacts(supervisor.hostId) ?: flowOf(FleetFacts.EMPTY)
         }.collectAsState(FleetFacts.EMPTY)
-        val trayModel = TrayModel.of(
-            hostingStatus, hostingPrefs, fleetFacts.localSessions, fleetFacts.remoteName, fleetFacts.remoteReachable,
-        )
         var windowVisible by remember { mutableStateOf(true) }
         var confirmQuit by remember { mutableStateOf<String?>(null) }
         var quitting by remember { mutableStateOf(false) }
+        val trayModel = if (quitting) {
+            TrayModel.QUITTING
+        } else {
+            TrayModel.of(
+                hostingStatus, hostingPrefs, fleetFacts.localSessions, fleetFacts.remoteName, fleetFacts.remoteReachable,
+            )
+        }
         fun showWindow() {
             windowVisible = true
             windowState.isMinimized = false
@@ -430,21 +446,34 @@ fun main() {
                 shuttingDown = true
             }
         }
+        fun cancelQuit() {
+            confirmQuit = null
+            systemQuit.getAndSet(null)?.let { r -> runCatching { r.cancelQuit() } }
+        }
         fun requestQuit() {
+            if (quitting) return
             if (!hostsNatively) return quitNow()
+            // In-memory read: DesktopSettingsStore holds its map in an eager StateFlow.
             val noticeShown = runCatching {
                 runBlocking { desktopDeps.settings.string(BackgroundQuitNotice.SHOWN_KEY).first() } != null
             }.getOrDefault(true)
-            when (val a = QuitAction.of(hostingStatus, hostingPrefs, fleetFacts.localSessions, noticeShown)) {
+            val action = QuitAction.of(
+                hostingStatus, fleetFacts.localSessions, supervisor.quitStopsBroker,
+                // No tray, no notification: never mark it shown there.
+                noticeShown = noticeShown || !isTraySupported,
+            )
+            when (action) {
                 is QuitAction.Confirm -> {
                     showWindow()
-                    confirmQuit = a.text
+                    confirmQuit = action.text
                 }
                 is QuitAction.Now -> {
-                    val notice = a.notice
+                    val notice = action.notice
                     if (notice != null) {
                         DesktopNotifications.notify("", BackgroundQuitNotice.TITLE, notice)
-                        runCatching { runBlocking { desktopDeps.settings.putString(BackgroundQuitNotice.SHOWN_KEY, "1") } }
+                        hostScope.launch(Dispatchers.IO) {
+                            runCatching { desktopDeps.settings.putString(BackgroundQuitNotice.SHOWN_KEY, "1") }
+                        }
                     }
                     quitNow(lingerMs = if (notice != null) 1_500 else 0)
                 }
@@ -454,18 +483,25 @@ fun main() {
         LaunchedEffect(hostingStatus) {
             if (hostingStatus is HostingStatus.AskTakeover || hostingStatus is HostingStatus.AskDowngrade) showWindow()
         }
-        // A background-service failure is said once, as a notification (Settings ▸ Hosting shows it too).
+        // A background-service failure is said once per distinct message, as a notification
+        // (Settings ▸ Hosting shows it too). No tray, no notification.
+        var lastNotifiedError by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(backgroundError) {
-            backgroundError?.let { DesktopNotifications.notify("", BackgroundQuitNotice.TITLE, it) }
+            val e = backgroundError
+            if (e != null && e != lastNotifiedError && isTraySupported) {
+                lastNotifiedError = e
+                DesktopNotifications.notify("", BackgroundQuitNotice.TITLE, e)
+            }
         }
-        // macOS: Cmd-Q / Dock ▸ Quit take the same path as the tray's Quit, and clicking the Dock
-        // icon while hidden in the tray brings the window back.
+        // macOS: Cmd-Q / Dock ▸ Quit / logout take the same path as the tray's Quit, and clicking the
+        // Dock icon while hidden in the tray brings the window back.
         DisposableEffect(Unit) {
             val desktop = runCatching { if (Desktop.isDesktopSupported()) Desktop.getDesktop() else null }.getOrNull()
             val quitHandled = desktop != null && desktop.isSupported(Desktop.Action.APP_QUIT_HANDLER)
             if (quitHandled) {
                 desktop.setQuitHandler { _, response ->
-                    response.cancelQuit()
+                    // Held until the user cancels (cancelQuit) or the app has exited (performQuit).
+                    systemQuit.getAndSet(response)?.let { old -> runCatching { old.cancelQuit() } }
                     SwingUtilities.invokeLater { requestQuit() }
                 }
             }
@@ -648,15 +684,17 @@ fun main() {
                     HostingTrayMenu(
                         model = trayModel,
                         background = hostingPrefs.background,
-                        onOpen = ::showWindow,
-                        onShowLog = { openFile(supervisor.logFile) },
-                        onRestart = {
-                            hostScope.launch {
-                                if (hostingStatus is HostingStatus.CantStart) supervisor.ensure() else supervisor.restart()
+                        onAction = { action ->
+                            when (action) {
+                                TrayAction.OPEN -> showWindow()
+                                TrayAction.SHOW_LOG -> openFile(supervisor.logFile)
+                                TrayAction.RESTART -> hostScope.launch(Dispatchers.Default) {
+                                    if (supervisor.status.value is HostingStatus.CantStart) supervisor.ensure() else supervisor.restart()
+                                }
+                                TrayAction.QUIT -> requestQuit()
                             }
                         },
-                        onBackground = { on -> hostScope.launch { supervisor.setBackground(on) } },
-                        onQuit = ::requestQuit,
+                        onBackground = { on -> hostScope.launch(Dispatchers.Default) { supervisor.setBackground(on) } },
                     )
                 },
             )
@@ -824,7 +862,7 @@ fun main() {
                             },
                             onConnectInstead = {
                                 connectInstead = true
-                                hostScope.launch { supervisor.setHosting(false) }
+                                hostScope.launch(Dispatchers.Default) { supervisor.setHosting(false) }
                             },
                         )
                     } else {
@@ -1810,7 +1848,7 @@ fun main() {
                   onTakeover = { supervisor.answerTakeover(it) },
                   onDowngrade = { supervisor.answerDowngrade(it) },
                   onQuit = { confirmQuit = null; quitNow() },
-                  onCancelQuit = { confirmQuit = null },
+                  onCancelQuit = { cancelQuit() },
               )
             }
             } // ProvideDesktopAdaptiveLocals
@@ -1920,10 +1958,13 @@ fun main() {
         }
         }
     } finally {
+        runCatching { DesktopHostBootstrap.quitIfStarted() }
         // Read-aloud is a process singleton (see SharedDesktopTts) and owns a child `say`/`ffplay`
         // process; release it here so a quit mid-sentence does not outlive the window.
         runCatching { MessageTts.stop(SharedDesktopTts) }
         runCatching { SharedDesktopTts.shutdown() }
+        // The app has exited: let a pending macOS system quit (logout, shutdown) carry on.
+        systemQuit.getAndSet(null)?.let { r -> runCatching { r.performQuit() } }
     }
 }
 
