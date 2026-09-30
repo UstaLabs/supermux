@@ -4,7 +4,11 @@ import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.host.PairedHostStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import java.net.URI
 import java.net.http.HttpClient
@@ -16,7 +20,7 @@ import java.time.Duration
 
 /**
  * Production wiring for the first-run [HostWizard] (Plan 3 Task 3): starts/adopts the local broker via
- * a [BrokerSidecar], bootstraps a local device token, mints the phone claim, and builds a
+ * the [HostSupervisor], bootstraps a local device token, mints the phone claim, and builds a
  * [HostWizardModel]. All network work is best-effort (never throws); the pieces are runtime-gated (a
  * live local broker) and so are verified via the sidecar smoke + the wizard's unit/Compose tests, not
  * a headless run of the full app.
@@ -32,8 +36,8 @@ object DesktopHostBootstrap {
 
     /**
      * Walk up from the working dir to find the dev repo root (the dir containing `src/main.ts`) so a
-     * source checkout can spawn `bun src/main.ts`. Returns null in a packaged app, where the sidecar
-     * instead spawns the bundled broker binary ([HostBinaries.resolve] → [sidecar]).
+     * source checkout can spawn `bun src/main.ts`. Returns null in a packaged app, where the supervisor
+     * instead runs the bundled broker binary ([HostBinaries.resolve] → [supervisor]).
      */
     fun detectRepoDir(start: Path = Path.of(System.getProperty("user.dir") ?: ".")): Path? {
         var dir: Path? = start.toAbsolutePath()
@@ -46,7 +50,21 @@ object DesktopHostBootstrap {
         return null
     }
 
-    // Task 8: HostSupervisor replaces the deleted BrokerSidecar.sidecar() factory.
+    /**
+     * The production [HostSupervisor]: `hosting.json` prefs, the materialized bundled binaries
+     * ([HostBinaries.resolve]) under the broker's state dir, and the real OS ([SystemOsEnv]).
+     */
+    fun supervisor(): HostSupervisor {
+        val stateDir = BrokerPaths.defaultStateDir()
+        val prefsStore = HostingPrefsStore()
+        return HostSupervisor(
+            stateDir = stateDir,
+            loadPrefs = prefsStore::load,
+            savePrefs = prefsStore::save,
+            osEnv = SystemOsEnv,
+            materialize = { HostBinaries.resolve(stateDir) },
+        )
+    }
 
     internal fun buildSidecarEnvironment(
         bins: HostBinaries.SidecarBinaries,
@@ -120,22 +138,31 @@ object DesktopHostBootstrap {
     }
 
     /**
-     * Build the production [HostWizardModel]. Starts the [sidecar] (best-effort) and awaits its hostId,
-     * mints the claim, and on finish auto-pairs "This computer" into [hostStore] + installs the login
-     * keep-alive when the box is checked.
+     * Build the production [HostWizardModel]. Runs [HostSupervisor.ensure] and awaits its hostId,
+     * mints the claim, and on finish auto-pairs "This computer" into [hostStore] and applies the
+     * "keep running in the background" box through [HostSupervisor.setBackground].
      */
     fun buildModel(
         scope: CoroutineScope,
         hostStore: PairedHostStore,
+        supervisor: HostSupervisor,
         hostName: String = defaultHostName(),
         tokenStore: DesktopTokenStore = DesktopTokenStore(),
     ): HostWizardModel = HostWizardModel(
         scope = scope,
         hostName = hostName,
-        // Task 8: these three are wired to HostSupervisor.
-        provideHostId = { TODO("Task 8") },
-        provideLocalUrl = { TODO("Task 8") },
-        mintClaim = { TODO("Task 8") },
+        provideHostId = {
+            supervisor.hostId.value ?: withTimeoutOrNull(90_000) {
+                supervisor.ensure()
+                supervisor.hostId.filterNotNull().first()
+            }
+        },
+        provideLocalUrl = { supervisor.localBaseUrl },
+        mintClaim = {
+            // Reuse an existing "This computer" token if we already have one (reconnect), else bootstrap.
+            val existing = hostStore.list().firstOrNull { it.hostId == supervisor.hostId.value }?.token
+            mintLocalClaim(supervisor.localBaseUrl, hostName, existing)
+        },
         onPairThisComputer = { localToken, directUrl, hostId ->
             hostStore.addOrUpdate(
                 displayName = hostName,
@@ -145,9 +172,7 @@ object DesktopHostBootstrap {
                 platform = System.getProperty("os.name"),
             )
         },
-        onInstallKeepAlive = { _ ->
-            /* Task 8 wires the supervisor */
-        },
+        onInstallKeepAlive = { keepRunning -> scope.launch { supervisor.setBackground(keepRunning) } },
     )
 
     /** The machine's actual hostname; fleet clients must not see every host as "This". */

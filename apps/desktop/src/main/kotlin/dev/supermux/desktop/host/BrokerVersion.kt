@@ -55,9 +55,19 @@ object BrokerVersion {
     fun readBundledBuild(broker: Path?): String? {
         if (broker == null) return null
         var p: Process? = null
+        var watchdog: Thread? = null
         return try {
             p = ProcessBuilder(broker.toString(), "version")
                 .redirectError(ProcessBuilder.Redirect.DISCARD).start()
+            // A child that hangs without closing stdout would block the read below forever:
+            // kill it after 10 s so the read sees EOF.
+            val proc = p
+            watchdog = Thread({
+                try {
+                    if (!proc.waitFor(10, TimeUnit.SECONDS)) proc.destroyForcibly()
+                } catch (_: InterruptedException) {
+                }
+            }, "broker-version-watchdog").apply { isDaemon = true; start() }
             // Read on this thread before waiting so a hung child can't be missed; cap the read at 4 KB.
             val buf = ByteArray(4096)
             var n = 0
@@ -74,6 +84,7 @@ object BrokerVersion {
         } catch (_: Exception) {
             null
         } finally {
+            watchdog?.interrupt()
             if (p?.isAlive == true) p.destroyForcibly()
         }
     }

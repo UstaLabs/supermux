@@ -697,11 +697,11 @@ fun main() {
                     val showHostWizard = DesktopHostBootstrap.isNativeHostPlatform() && !connectInstead
 
                     if (showHostWizard) {
-                        // The sidecar spawns OR adopts the local broker (adopt = read-only probe of an
-                        // already-running :9898 broker; it never stops a broker it didn't start). NOT
-                        // stopped on dispose — a freshly-spawned managed broker must keep hosting after
-                        // the wizard closes (the login keep-alive agent owns its persistence).
-                        val model = remember { DesktopHostBootstrap.buildModel(scope, hostStore) }
+                        // The supervisor starts, updates or adopts the local broker (Task 9 moves it
+                        // to app launch). NOT stopped on dispose — the broker keeps hosting after the
+                        // wizard closes.
+                        val supervisor = remember { DesktopHostBootstrap.supervisor() }
+                        val model = remember { DesktopHostBootstrap.buildModel(scope, hostStore, supervisor) }
                         HostWizard(
                             model = model,
                             onDone = {
