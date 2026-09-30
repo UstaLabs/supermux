@@ -48,8 +48,26 @@ class FilePathRefTest {
         assertEquals("src/file.ts", m[0].display) // ":abc" left out of the match
     }
 
-    @Test fun unknown_extension_skipped() =
-        assertEquals(emptyList(), findFilePathRefs("assets/logo.png"))
+    @Test fun any_extension_shape_links() {
+        val m = findFilePathRefs(
+            "src/Greenmate.Domain/Constants/AdminPermissions.cs:90, " +
+                "/home/u/app/lib/main.dart and assets/logo.png",
+        )
+        assertEquals(
+            listOf(
+                FilePathRef("src/Greenmate.Domain/Constants/AdminPermissions.cs", 90),
+                FilePathRef("/home/u/app/lib/main.dart"),
+                FilePathRef("assets/logo.png"),
+            ),
+            m.map { it.ref },
+        )
+    }
+
+    @Test fun numeric_extension_skipped() =
+        assertEquals(emptyList(), findFilePathRefs("1/2.5 cups, v1.2/1.3 and 2026/09.30"))
+
+    @Test fun overlong_extension_skipped() =
+        assertEquals(emptyList(), findFilePathRefs("a/b.abcdefghijk"))
 
     @Test fun bare_filename_without_dir_skipped() =
         assertEquals(emptyList(), findFilePathRefs("file.ts:42"))

@@ -32,16 +32,15 @@ val FILE_PATH_MATCH_RE = Regex("""(?<!\w)($FILE_PATH_BODY)(?::\d+(?:-\d+)?|:[^\s
  *  whole URL to the renderer's URL linkifier. */
 private val URL_RUN_RE = Regex("""[A-Za-z][A-Za-z0-9+.-]*://\S+""")
 
-/** Same 34-entry set as web's FILE_EXTENSIONS (markdown.ts). */
-private val FILE_EXTENSIONS = setOf(
-    "ts", "tsx", "js", "jsx", "vue", "py", "json", "md", "css", "html",
-    "yml", "yaml", "toml", "sql", "sh", "bash", "zsh", "go", "rs",
-    "rb", "java", "kt", "swift", "c", "cpp", "h", "hpp", "txt",
-    "env", "gitignore", "dockerfile", "xml", "svg", "lock",
-)
+/** A file extension by shape: up to 10 word chars with at least one letter.
+ *
+ *  This replaced a fixed allowlist (ported from the Vue PWA), which left every language it didn't
+ *  name as plain text: C# paths never linked, not even absolute with a line. The letter keeps
+ *  numbers that look like paths (`1/2.5`, `v1.2/1.3`, `2026/09.30`) as text. */
+private val FILE_EXTENSION_RE = Regex("""^(?=\w*[A-Za-z])\w{1,10}$""")
 
-fun hasKnownExtension(path: String): Boolean =
-    FILE_EXTENSIONS.contains(path.substringAfterLast('.', "").lowercase())
+fun hasFileExtension(path: String): Boolean =
+    FILE_EXTENSION_RE.matches(path.substringAfterLast('.', ""))
 
 /** Parse a whole path token (anchored). Returns null on a non-numeric or inverted suffix. */
 fun parseFilePathRef(raw: String): FilePathRef? {
@@ -87,7 +86,7 @@ fun findFilePathRefs(text: String): List<FilePathMatch> {
     return FILE_PATH_MATCH_RE.findAll(text).mapNotNull { m ->
         if (urls.any { m.range.first <= it.last && it.first <= m.range.last }) return@mapNotNull null
         val ref = parseFilePathRef(m.value) ?: return@mapNotNull null
-        if (!hasKnownExtension(ref.path)) return@mapNotNull null
+        if (!hasFileExtension(ref.path)) return@mapNotNull null
         FilePathMatch(m.range.first, m.range.last + 1, ref, m.value)
     }.toList()
 }
