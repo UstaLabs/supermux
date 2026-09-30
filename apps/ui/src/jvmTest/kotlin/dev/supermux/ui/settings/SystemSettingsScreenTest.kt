@@ -221,6 +221,27 @@ class SystemSettingsScreenTest {
         onNodeWithTag("system_update_broker").assertDoesNotExist()
     }
 
+    @Test fun managed_mode_shows_updated_with_the_app_and_no_update_button() = runComposeUiTest {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(updateStatus = {
+                    sampleStatus(updateAvailable = true, latest = "2.0.0", mode = "managed")
+                })()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("system_broker_version").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("system_update_managed").assertExists()
+        onNodeWithTag("system_update_broker").assertDoesNotExist()
+    }
+
     @Test fun load_failure_shows_error_with_retry() = runComposeUiTest {
         val loads = AtomicInteger(0)
         systemContent {

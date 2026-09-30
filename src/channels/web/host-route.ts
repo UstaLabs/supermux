@@ -1,4 +1,6 @@
-export type HostMode = "binary" | "source" | "docker"
+import type { InstallMode } from "../../core/update/mode"
+
+export type HostMode = InstallMode
 
 export interface HostInfo {
   hostId: string

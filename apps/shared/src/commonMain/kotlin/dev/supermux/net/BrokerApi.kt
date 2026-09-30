@@ -60,6 +60,14 @@ data class HostIdentity(
     val protocolVersion: Int = 0,
     val platform: String? = null,
     val version: String? = null,
+    /** Local-only (direct loopback callers): version + commit, e.g. "1.5.0 (abc1234)". */
+    val build: String? = null,
+    /** Local-only: "binary" | "source" | "docker". */
+    val mode: String? = null,
+    /** Local-only: "desktop" when the desktop app manages this broker. */
+    val managedBy: String? = null,
+    /** Local-only: the broker's state dir. */
+    val stateDir: String? = null,
 )
 
 /** POST /pair/claim body — a one-time claimSecret + this device's chosen display name. */
@@ -1064,7 +1072,7 @@ data class LspMutationResult(
 
 // ─── System: in-app updater (GET /api/update/status) ──────────────────────────
 /** Mirrors the broker UpdateStatus (src/core/update/checker.ts).
- *  `mode`: "binary" | "source" | "docker".
+ *  `mode`: "binary" | "source" | "docker" | "managed".
  *  `state`: "idle" | "checking" | "downloading" | "swapping" | "restart-required" | "failed".
  *  `lastChecked` is epoch-millis. `disabled` is true only in the no-checker fallback. */
 @Serializable

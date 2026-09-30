@@ -1671,6 +1671,7 @@ export class WebChannel implements Channel {
   // Mode-specific instruction text shown when self-update isn't possible
   // (source/docker installs, or checks disabled). Mirrors the CLI's wording.
   private updateInstruction(mode: import("../../core/update/checker").UpdateMode): string {
+    if (mode === "managed") return "Updated with the supermux app."
     if (mode === "docker") return "Docker install — update with: docker compose pull && docker compose up -d"
     return "Source install — update via git (git pull && restart)."
   }

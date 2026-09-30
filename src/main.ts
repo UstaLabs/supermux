@@ -80,7 +80,7 @@ import { ClaimStore } from "./channels/web/pair-claim"
 import { NullRelayProvider } from "./core/relay/provider"
 import { FrpRelayProvider, parentBoundFrpcCommand } from "./core/relay/frp-provider"
 import { UpdateChecker } from "./core/update/checker"
-import { detectUpdateMode } from "./core/update/mode"
+import { detectInstallMode, detectUpdateMode } from "./core/update/mode"
 import { ReviewStore } from "./core/review/store"
 import { WalkthroughStore } from "./core/walkthrough/store"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "./core/walkthrough/author"
@@ -1429,7 +1429,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       version: BUILD_VERSION,
       protocolVersion: 1,
       build: versionString(),
-      mode: detectUpdateMode(),
+      mode: detectInstallMode(),
       managedBy: process.env.MUX_MANAGED_BY || undefined,
       stateDir: STATE_DIR,
     }),
