@@ -6,6 +6,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -107,6 +108,14 @@ class HostingSettingsScreenTest {
         )
         onNodeWithTag("hosting_off_confirm").performClick()
         assertEquals(listOf("hosting:false"), rec.calls)
+    }
+
+    @Test fun with_no_sessions_the_confirm_does_not_count_them() = runComposeUiTest {
+        setPlatformContent { HostingSettingsScreen(running().copy(sessions = 0), Recorder()) }
+        onNodeWithTag("hosting_switch").performClick()
+        onNodeWithTag("hosting_off_confirm_text").assertTextEquals(
+            "Stop hosting? This stops supermux and removes it from startup. Your data stays in ~/.mux.",
+        )
     }
 
     @Test fun turning_off_can_be_cancelled() = runComposeUiTest {

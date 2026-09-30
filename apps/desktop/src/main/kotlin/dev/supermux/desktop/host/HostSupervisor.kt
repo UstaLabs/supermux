@@ -131,6 +131,11 @@ class HostSupervisor(
     /** An update restart ran on this launch: never restart for an update again (it would loop). */
     private var updateTried = false
     internal var lastHealthyBuild: String? = null
+        set(v) { field = v; _build.value = v }
+
+    private val _build = MutableStateFlow<String?>(null)
+    /** The running broker's build ("1.5.0 (abc)") as its `/host` last reported it; null when unknown. */
+    val build: StateFlow<String?> = _build.asStateFlow()
     /** The last [binaries] call couldn't copy the broker out of the packaged app. */
     @Volatile internal var lastCopyFailed = false
 
@@ -244,6 +249,7 @@ class HostSupervisor(
                 }
             }
             _hostId.value = null
+            _build.value = null
             _status.value = HostingStatus.NotHosting
         }
     }
@@ -376,9 +382,15 @@ class HostSupervisor(
                 val bins = binaries()
                 afterLaunch(prefs, launchLocked(prefs, bins, carriedStore.load(), allowChildFallback = true))
             }
-            HostPlan.UseOwn -> useOwnLocked(prefs, (found as HostProbeResult.Supermux).hostId)
+            HostPlan.UseOwn -> {
+                _build.value = (found as HostProbeResult.Supermux).build
+                useOwnLocked(prefs, found.hostId)
+            }
             HostPlan.UpdateOwn -> updateOwnLocked(prefs)
-            HostPlan.ReadOnly -> readOnlyLocked(prefs, (found as HostProbeResult.Supermux).hostId)
+            HostPlan.ReadOnly -> {
+                _build.value = (found as HostProbeResult.Supermux).build
+                readOnlyLocked(prefs, found.hostId)
+            }
             is HostPlan.AskTakeover -> return ask(Question.Takeover(plan.hostId, prefs.port))
             is HostPlan.AskDowngrade -> return ask(Question.Downgrade(plan.hostId, prefs.port))
             HostPlan.Wait -> Unit // unreachable: turned into MovePort above
@@ -615,6 +627,10 @@ class HostSupervisor(
 
     internal fun publishHostId(id: String) {
         _hostId.value = id
+    }
+
+    internal fun publishBuild(b: String?) {
+        _build.value = b
     }
 
     internal fun fail(reason: String) {

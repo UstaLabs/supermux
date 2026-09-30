@@ -103,6 +103,7 @@ import dev.supermux.ui.shell.windows.tearOutTabLive
 import dev.supermux.ui.shell.windows.tearOutCanvasLive
 import dev.supermux.desktop.settings.DesktopSettingsExtra
 import dev.supermux.desktop.settings.LocalHostSupervisor
+import dev.supermux.desktop.settings.LocalHostingFleet
 import dev.supermux.desktop.settings.LocalHostingSessions
 import dev.supermux.desktop.settings.LocalPairedHostStore
 import dev.supermux.desktop.settings.DesktopSettingsSection
@@ -1748,6 +1749,7 @@ fun main() {
                         // Settings ▸ Hosting reads the app-wide supervisor (null where the app does not host).
                         LocalHostSupervisor provides supervisor.takeIf { hostsNatively },
                         LocalPairedHostStore provides hostStore,
+                        LocalHostingFleet provides fleet,
                         LocalHostingSessions provides fleetFacts.localSessions,
                         LocalMacWindowChrome provides macChrome?.regions,
                         LocalMacTrafficLightsInset provides (

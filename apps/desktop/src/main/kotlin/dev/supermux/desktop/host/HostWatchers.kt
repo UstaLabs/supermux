@@ -132,6 +132,7 @@ internal suspend fun HostSupervisor.watchService(gen: Long) {
                 downSince = null
                 kicked = false
                 publishHostId(r.hostId)
+                publishBuild(r.build)
                 if (currentStatus !is HostingStatus.Running) publish(HostingStatus.Running(port, readOnly = false))
                 return@withLock
             }
@@ -164,6 +165,7 @@ internal suspend fun HostSupervisor.watchReadOnly(gen: Long) {
             if (gen != watchGen) return
             if (r is HostProbeResult.Supermux) {
                 downSince = null
+                publishBuild(r.build)
                 if (currentStatus !is HostingStatus.Running) publish(HostingStatus.Running(port, readOnly = true))
                 return@withLock
             }

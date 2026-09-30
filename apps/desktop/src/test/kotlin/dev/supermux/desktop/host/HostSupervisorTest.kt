@@ -180,6 +180,21 @@ class HostSupervisorTest {
         assertEquals(running, h.sup.status.value)
     }
 
+    @Test fun buildIsPublishedForAStartedAndAnAdoptedBroker() = runTest {
+        val h = Harness(this)
+        h.probeFn = h.healthyIfChild()
+        assertNull(h.sup.build.value)
+        h.sup.ensure()
+        assertEquals(BUNDLED, h.sup.build.value)
+        // UseOwn: our service already on the bundled build is adopted as-is and reports its build.
+        val h2 = Harness(this, prefs = HostingPrefs(background = true))
+        h2.writeOurPlist()
+        h2.probeFn = { h2.desktop() }
+        h2.sup.ensure()
+        assertEquals(BUNDLED, h2.sup.build.value)
+        assertTrue(h2.launches.isEmpty())
+    }
+
     @Test fun ownServiceOnTheBundledBuildIsUsedAsIs() = runTest {
         val h = Harness(this, prefs = HostingPrefs(background = true))
         h.writeOurPlist()

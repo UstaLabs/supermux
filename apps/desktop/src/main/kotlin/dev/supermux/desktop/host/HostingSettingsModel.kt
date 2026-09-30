@@ -31,17 +31,30 @@ fun hostingStatusLine(s: HostingStatus, prefs: HostingPrefs, sessions: Int, vers
     return HostingStatusLine(dot, text)
 }
 
-/** Pure: the first non-loopback, site-local IPv4 in [addresses] (192.168/16, 10/8, 172.16/12). */
-fun lanIpv4(addresses: Sequence<InetAddress>): String? =
-    addresses.firstOrNull { it is Inet4Address && !it.isLoopbackAddress && it.isSiteLocalAddress }?.hostAddress
+/** One network interface, as [lanIpv4] needs it (injected in tests). */
+data class NetIf(val name: String, val virtual: Boolean, val addresses: List<InetAddress>)
 
-/** Every address on the machine's up, non-loopback interfaces. Best-effort: empty on failure. */
-fun systemInetAddresses(): Sequence<InetAddress> = runCatching {
-    NetworkInterface.getNetworkInterfaces().toList().asSequence()
+private val VIRTUAL_PREFIXES = listOf("docker", "br-", "veth", "virbr", "vmnet", "utun", "tun", "tap")
+private val PHYSICAL_PREFIXES = listOf("en", "eth", "wl")
+
+/**
+ * Pure: a site-local IPv4 (192.168/16, 10/8, 172.16/12) another device on the LAN can reach.
+ * Virtual interfaces (containers, VMs, VPN tunnels) are skipped; `en*`/`eth*`/`wl*` come first.
+ */
+fun lanIpv4(ifaces: List<NetIf>): String? {
+    fun lanAddress(i: NetIf) =
+        i.addresses.firstOrNull { it is Inet4Address && !it.isLoopbackAddress && it.isSiteLocalAddress }?.hostAddress
+    val real = ifaces.filter { i -> !i.virtual && VIRTUAL_PREFIXES.none { i.name.startsWith(it) } }
+    val (physical, other) = real.partition { i -> PHYSICAL_PREFIXES.any { i.name.startsWith(it) } }
+    return (physical + other).firstNotNullOfOrNull(::lanAddress)
+}
+
+/** The machine's up, non-loopback interfaces. Best-effort: empty on failure. */
+fun systemNetIfs(): List<NetIf> = runCatching {
+    NetworkInterface.getNetworkInterfaces().toList()
         .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
-        .flatMap { it.inetAddresses.toList().asSequence() }
-        .toList().asSequence()
-}.getOrDefault(emptySequence())
+        .map { NetIf(it.name, it.isVirtual, it.inetAddresses.toList()) }
+}.getOrDefault(emptyList())
 
 /** Pure: [localBaseUrl] with its host swapped for [lanIp], or unchanged when there is none. */
 fun displayLocalUrl(localBaseUrl: String, lanIp: String?): String {

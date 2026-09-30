@@ -981,6 +981,12 @@ class FleetStore(
         publishing { stageAll(it) }
     }
 
+    /**
+     * Re-read [store] after something outside the fleet wrote to it (desktop's hosting wizard pairs
+     * "This computer" straight into the store): dials new records, drops removed ones.
+     */
+    fun refreshFromStore() = onHostsChanged()
+
     private fun onHostsChanged() {
         sync(store.list())
         publishing { pub ->

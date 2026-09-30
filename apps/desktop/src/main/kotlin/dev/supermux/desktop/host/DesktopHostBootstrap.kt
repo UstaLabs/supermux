@@ -3,6 +3,8 @@ package dev.supermux.desktop.host
 import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
+import androidx.compose.ui.graphics.ImageBitmap
+import dev.supermux.ui.widgets.qrBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -92,14 +94,102 @@ object DesktopHostBootstrap {
      *  2. POST /pair/mint-claim (authed) → the one-time claimSecret.
      * Returns null on any failure (e.g. the broker is already set up and we hold no token).
      */
-    suspend fun mintLocalClaim(localUrl: String, deviceName: String, existingToken: String?): HostClaim? =
-        withContext(Dispatchers.IO) {
-            val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
-            val token = existingToken?.takeIf { it.isNotBlank() } ?: secretlessClaimToken(client, localUrl, deviceName)
-            if (token.isNullOrBlank()) return@withContext null
-            val secret = mintClaimSecret(client, localUrl, token) ?: return@withContext null
-            HostClaim(localToken = token, claimSecret = secret, relayUrl = fetchRelayUrl(client, localUrl, token))
-        }
+    suspend fun mintLocalClaim(
+        localUrl: String,
+        deviceName: String,
+        existingToken: String?,
+        onNewToken: (String) -> Unit = {},
+    ): HostClaim? = withContext(Dispatchers.IO) {
+        val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
+        mintClaimWith(
+            existingToken = existingToken,
+            secretless = { secretlessClaimToken(client, localUrl, deviceName) },
+            mintSecret = { mintClaimSecret(client, localUrl, it) },
+            relay = { fetchRelayUrl(client, localUrl, it) },
+            onNewToken = onNewToken,
+        )
+    }
+
+    /** A claim minted with [token] only: never a secretless claim ("Pair a device…"). */
+    suspend fun mintClaimForToken(localUrl: String, token: String): HostClaim? = withContext(Dispatchers.IO) {
+        val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
+        mintClaimWith(
+            existingToken = token,
+            secretless = null,
+            mintSecret = { mintClaimSecret(client, localUrl, it) },
+            relay = { fetchRelayUrl(client, localUrl, it) },
+        )
+    }
+
+    /**
+     * The mint sequence with its HTTP calls injected. [existingToken] is used when present; otherwise
+     * [secretless] (trust-on-first-connect) mints one, and it goes to [onNewToken] BEFORE the claim
+     * secret is minted, so a failure or a closed window after that point never strands a claimed
+     * broker with no stored token. [secretless] null = never make a secretless claim.
+     */
+    internal suspend fun mintClaimWith(
+        existingToken: String?,
+        secretless: (suspend () -> String?)?,
+        mintSecret: suspend (token: String) -> String?,
+        relay: suspend (token: String) -> String?,
+        onNewToken: (String) -> Unit = {},
+    ): HostClaim? {
+        val token = existingToken?.takeIf { it.isNotBlank() }
+            ?: secretless?.invoke()?.takeIf { it.isNotBlank() }?.also(onNewToken)
+            ?: return null
+        val secret = mintSecret(token)?.takeIf { it.isNotBlank() } ?: return null
+        return HostClaim(localToken = token, claimSecret = secret, relayUrl = relay(token))
+    }
+
+    /** "This computer"'s record: the one with [hostId], else one whose direct URL is loopback. */
+    fun thisComputerRecord(hosts: List<PairedHost>, hostId: String?): PairedHost? =
+        hosts.firstOrNull { hostId != null && it.hostId == hostId } ?: hosts.firstOrNull { isLoopbackUrl(it.directUrl) }
+
+    /** Store (or refresh) "This computer" in [hostStore], then tell the live fleet. */
+    fun saveThisComputer(
+        hostStore: PairedHostStore,
+        hostName: String,
+        token: String,
+        directUrl: String?,
+        hostId: String,
+        onStoreChanged: () -> Unit,
+    ) {
+        hostStore.addOrUpdate(
+            displayName = hostName,
+            token = token,
+            directUrl = directUrl,
+            hostId = hostId,
+            platform = System.getProperty("os.name"),
+        )
+        runCatching(onStoreChanged).onFailure { System.err.println("supermux host: fleet refresh failed: ${it.message}") }
+    }
+
+    /**
+     * "Pair a device…": a model that only mints a claim with "This computer"'s [token] and shows its
+     * QR. It never starts the broker, never makes a secretless claim, and its finish does nothing.
+     * Null when there is no token: nothing may touch the network then.
+     */
+    fun pairOnlyModel(
+        scope: CoroutineScope,
+        hostName: String,
+        token: String?,
+        hostId: () -> String?,
+        directUrl: () -> String?,
+        mint: suspend (token: String) -> HostClaim?,
+        qrOf: (String) -> ImageBitmap = { qrBitmap(it) },
+    ): HostWizardModel? {
+        val t = token?.takeIf { it.isNotBlank() } ?: return null
+        return HostWizardModel(
+            scope = scope,
+            hostName = hostName,
+            provideHostId = { hostId() },
+            provideLocalUrl = directUrl,
+            mintClaim = { mint(t) },
+            onPairThisComputer = { _, _, _ -> },
+            onInstallKeepAlive = {},
+            qrOf = qrOf,
+        )
+    }
 
     /** The local broker's relay URL from `/me` (Settings ▸ Hosting's Remote row). Null when off or unknown. */
     suspend fun localRelayUrl(localUrl: String, token: String): String? = withContext(Dispatchers.IO) {
@@ -160,6 +250,7 @@ object DesktopHostBootstrap {
         supervisor: HostSupervisor,
         hostName: String = defaultHostName(),
         tokenStore: DesktopTokenStore = DesktopTokenStore(),
+        onStoreChanged: () -> Unit = {},
     ): HostWizardModel = HostWizardModel(
         scope = scope,
         hostName = hostName,
@@ -175,19 +266,34 @@ object DesktopHostBootstrap {
         mintClaim = {
             // Reuse an existing "This computer" token if we already have one (reconnect), else bootstrap.
             val existing = hostStore.list().firstOrNull { it.hostId == supervisor.hostId.value }?.token
-            mintLocalClaim(supervisor.localBaseUrl, hostName, existing)
-        },
-        onPairThisComputer = { localToken, directUrl, hostId ->
-            hostStore.addOrUpdate(
-                displayName = hostName,
-                token = localToken,
-                directUrl = directUrl,
-                hostId = hostId,
-                platform = System.getProperty("os.name"),
+            mintLocalClaim(
+                supervisor.localBaseUrl, hostName, existing,
+                // A trust-on-first-connect token is stored at once, not only on Done.
+                onNewToken = tofuSaver(hostStore, hostName, supervisor.localBaseUrl, { supervisor.hostId.value }, onStoreChanged),
             )
         },
-        onInstallKeepAlive = { keepRunning -> scope.launch { supervisor.setBackground(keepRunning) } },
+        onPairThisComputer = { localToken, directUrl, hostId ->
+            saveThisComputer(hostStore, hostName, localToken, directUrl, hostId, onStoreChanged)
+        },
+        onInstallKeepAlive = { keepRunning ->
+            // A broker set up outside the app is not ours to move into or out of the background.
+            if (!isReadOnly(supervisor.status.value)) scope.launch { supervisor.setBackground(keepRunning) }
+        },
     )
+
+    /** What [buildModel] does with a freshly minted trust-on-first-connect token. */
+    internal fun tofuSaver(
+        hostStore: PairedHostStore,
+        hostName: String,
+        directUrl: String,
+        hostId: () -> String?,
+        onStoreChanged: () -> Unit,
+    ): (String) -> Unit = { token ->
+        val id = hostId()
+        if (id != null) saveThisComputer(hostStore, hostName, token, directUrl, id, onStoreChanged)
+    }
+
+    internal fun isReadOnly(s: HostingStatus): Boolean = s is HostingStatus.Running && s.readOnly
 
     /** The machine's actual hostname; fleet clients must not see every host as "This". */
     fun defaultHostName(): String {

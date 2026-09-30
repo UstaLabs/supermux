@@ -106,9 +106,12 @@ object HostingCopy {
 
     /** The confirm shown before turning hosting off. */
     fun stopConfirm(sessions: Int): String {
-        val running = if (sessions == 1) "your 1 running session" else "your $sessions running sessions"
-        return "Stop hosting? This stops supermux and $running, and removes it from startup. " +
-            "Your data stays in ~/.mux."
+        val stops = when {
+            sessions <= 0 -> "This stops supermux and removes it from startup."
+            sessions == 1 -> "This stops supermux and your 1 running session, and removes it from startup."
+            else -> "This stops supermux and your $sessions running sessions, and removes it from startup."
+        }
+        return "Stop hosting? $stops Your data stays in ~/.mux."
     }
 }
 
