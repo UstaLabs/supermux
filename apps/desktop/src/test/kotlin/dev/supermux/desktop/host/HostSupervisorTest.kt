@@ -452,10 +452,11 @@ class HostSupervisorTest {
         assertEquals(Path.of("/s/state").toString(), env["MUX_STATE_DIR"])
     }
 
-    @Test fun brokerEnvWithoutCarriedLeavesThePublicUrlAndDefaultsThePath() {
+    @Test fun brokerEnvWithoutCarriedUsesTheLoopbackPublicUrlAndDefaultsThePath() {
         val bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
-        val env = brokerEnv(HostingPrefs(), bins, emptyMap(), Path.of("/s"), "box", existingPath = null, home = "/h", os = OsEnv.Os.LINUX)
-        assertFalse("MUX_WEB_PUBLIC_URL" in env)
+        val env = brokerEnv(HostingPrefs(port = 9912), bins, emptyMap(), Path.of("/s"), "box", existingPath = null, home = "/h", os = OsEnv.Os.LINUX)
+        // The broker's web channel needs MUX_WEB_PORT and MUX_WEB_PUBLIC_URL together (web_env_invalid).
+        assertEquals("http://127.0.0.1:9912", env["MUX_WEB_PUBLIC_URL"])
         assertEquals("relay.supermux.dev", env["MUX_RELAY_DOMAIN"])
         assertEquals("/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin:/h/.local/bin", env["PATH"])
     }

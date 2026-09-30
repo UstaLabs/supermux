@@ -6,8 +6,10 @@ const val RELAY_DOMAIN = "relay.supermux.dev"
 
 /**
  * The broker's env for BOTH modes. [carried] (from a takeover) goes UNDER ours, so ours
- * wins. `MUX_WEB_PUBLIC_URL` is only ever set when carried. `MUX_STATE_DIR` is always the app's
- * state dir, so the broker and the app agree on it whatever the app inherited.
+ * wins. `MUX_WEB_PUBLIC_URL` is the carried value when there is one (a real tunnel or domain),
+ * otherwise the loopback origin on our port: the broker refuses to enable its web channel with
+ * `MUX_WEB_PORT` alone (`web_env_invalid`), and remote access goes through the relay anyway.
+ * `MUX_STATE_DIR` is always the app's state dir, so the broker and the app agree on it.
  */
 fun brokerEnv(
     prefs: HostingPrefs,
@@ -21,6 +23,7 @@ fun brokerEnv(
 ): Map<String, String> {
     val out = LinkedHashMap(carried)
     out["MUX_WEB_PORT"] = prefs.port.toString()
+    if (out["MUX_WEB_PUBLIC_URL"].isNullOrBlank()) out["MUX_WEB_PUBLIC_URL"] = "http://127.0.0.1:${prefs.port}"
     out["MUX_MANAGED_BY"] = "desktop"
     out["MUX_STATE_DIR"] = stateDir.toString()
     out["MUX_HOST_NAME"] = hostName
