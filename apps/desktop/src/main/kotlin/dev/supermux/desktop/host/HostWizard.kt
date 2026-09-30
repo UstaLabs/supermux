@@ -104,7 +104,7 @@ sealed interface HostWizardUiState {
 /**
  * Drives the wizard: awaits the supervisor's hostId, mints a claim ([mintClaim]), builds + encodes the
  * payload, renders the QR ([qrOf]), and on finish auto-pairs "This computer" into the fleet
- * ([onPairThisComputer]) and installs/skips the login keep-alive ([onInstallKeepAlive]) per the box.
+ * ([onPairThisComputer]) and turns the background keep-alive (OS service that keeps the broker running after quit/sign-out) on or off ([onInstallKeepAlive]) per the box.
  */
 class HostWizardModel(
     private val scope: CoroutineScope,
@@ -149,7 +149,7 @@ class HostWizardModel(
         }
     }
 
-    /** Finish: auto-pair "This computer" and install (or skip) the login keep-alive per [keepAlive]. */
+    /** Finish: auto-pair "This computer" and enable (or skip) the background keep-alive service per [keepAlive]. */
     fun finish(keepAlive: Boolean) {
         val c = claim; val id = hostId
         if (c != null && id != null) onPairThisComputer(c.localToken, directUrl, id)
@@ -161,9 +161,10 @@ class HostWizardModel(
 
 /** Spec §6 copy — kept as constants so the UI test asserts the exact strings. */
 const val HOST_WIZARD_HEADLINE = "This computer is ready to host your agents. Scan the QR with your phone."
-const val HOST_WIZARD_KEEPALIVE_LABEL = "Keep this computer available when the app is closed and after I sign in"
+const val HOST_WIZARD_KEEPALIVE_LABEL = "Keep running in the background"
+const val HOST_WIZARD_KEEPALIVE_HELP = "Your agents stay reachable after you quit, sign out or restart."
 private const val RELAY_ON_DISCLOSURE =
-    "Remote access is on through relay.supermux.dev. Connections are encrypted in transit; relay traffic is not end-to-end encrypted yet."
+    "Remote access is on through relay.supermux.dev."
 private const val RELAY_OFF_DISCLOSURE =
     "Your phone reaches this computer directly on your local network. Turn on remote access later to reach it from anywhere through the supermux relay."
 
@@ -253,12 +254,18 @@ fun HostWizardContent(
                             onCheckedChange = onKeepAliveChange,
                             modifier = Modifier.testTag("host_wizard_keepalive_checkbox"),
                         )
-                        Text(
-                            HOST_WIZARD_KEEPALIVE_LABEL,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = cs.onSurface,
-                            modifier = Modifier.weight(1f),
-                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                HOST_WIZARD_KEEPALIVE_LABEL,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = cs.onSurface,
+                            )
+                            Text(
+                                HOST_WIZARD_KEEPALIVE_HELP,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = cs.onSurfaceVariant,
+                            )
+                        }
                     }
 
                     Text(

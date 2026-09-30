@@ -80,6 +80,8 @@ class HostWizardTest {
         onNodeWithTag("host_wizard_qr").assertIsDisplayed()
         onNodeWithTag("host_wizard_keepalive_checkbox").assertIsOn() // CHECKED by default (spec §6)
         onNodeWithText(HOST_WIZARD_KEEPALIVE_LABEL).assertIsDisplayed()
+        onNodeWithText(HOST_WIZARD_KEEPALIVE_HELP).assertIsDisplayed()
+        assertEquals("Keep running in the background", HOST_WIZARD_KEEPALIVE_LABEL)
         onNodeWithTag("host_wizard_relay_disclosure").assertIsDisplayed()
         onNodeWithTag("host_wizard_done").assertIsDisplayed()
     }
@@ -96,7 +98,7 @@ class HostWizardTest {
             )
         }
         // The relay-on copy names the supermux relay so the disclosure is truthful about remote access.
-        onNodeWithText("relay.supermux.dev", substring = true).assertIsDisplayed()
+        onNodeWithText("Remote access is on through relay.supermux.dev.").assertIsDisplayed()
     }
 
     @Test fun renders_preparingSpinner() = runComposeUiTest {
