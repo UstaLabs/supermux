@@ -32,6 +32,11 @@ object BrokerService {
         data class Failed(val message: String) : Result
     }
 
+    /** Every definition we write carries these so [Takeover] can never mistake it for an old service. */
+    const val MANAGED_MARKER = "supermux-managed: desktop"
+
+    private fun withManaged(env: Map<String, String>): Map<String, String> = env + ("MUX_MANAGED_BY" to "desktop")
+
     private fun xml(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     private fun powershellLiteral(value: String): String =
@@ -63,11 +68,12 @@ object BrokerService {
     }
 
     fun launchdPlist(spec: Spec): String {
-        val env = spec.env.entries.joinToString("") { (k, v) -> "\n    <key>${xml(k)}</key>\n    <string>${xml(v)}</string>" }
+        val env = withManaged(spec.env).entries.joinToString("") { (k, v) -> "\n    <key>${xml(k)}</key>\n    <string>${xml(v)}</string>" }
         return """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <!-- $MANAGED_MARKER -->
   <key>Label</key>
   <string>$LAUNCHD_LABEL</string>
   <key>ProgramArguments</key>
@@ -106,9 +112,9 @@ object BrokerService {
     }
 
     fun systemdUnit(spec: Spec): String {
-        val env = spec.env.entries.joinToString("") { (k, v) -> "\nEnvironment=${sdQuote("$k=$v")}" }
+        val env = withManaged(spec.env).entries.joinToString("") { (k, v) -> "\nEnvironment=${sdQuote("$k=$v")}" }
         return """[Unit]
-Description=supermux broker (managed by the supermux app)
+Description=supermux broker ($MANAGED_MARKER)
 After=network-online.target
 Wants=network-online.target
 
@@ -126,8 +132,9 @@ WantedBy=default.target
     }
 
     fun xdgAutostart(spec: Spec): String {
-        val envArgs = spec.env.entries.joinToString(" ") { (k, v) -> xdgQuote("$k=$v") }
+        val envArgs = withManaged(spec.env).entries.joinToString(" ") { (k, v) -> xdgQuote("$k=$v") }
         return """[Desktop Entry]
+# $MANAGED_MARKER
 Type=Application
 Name=supermux
 Comment=Keep supermux running in the background
@@ -139,7 +146,7 @@ Terminal=false
 
     /** Windows Task Scheduler 1.4 XML for the current interactive user. */
     fun windowsTaskXml(spec: Spec): String {
-        val sets = spec.env.entries.joinToString("; ") { (k, v) -> "\$env:$k = ${powershellLiteral(v)}" }
+        val sets = withManaged(spec.env).entries.joinToString("; ") { (k, v) -> "\$env:$k = ${powershellLiteral(v)}" }
         val script = "\$PSDefaultParameterValues['Out-File:Encoding']='utf8'; $sets; " +
             "while (\$true) { & ${powershellLiteral(spec.broker.toString())} 2>&1 | ForEach-Object { \"\$_\" } | " +
             "Out-File -Append -FilePath ${powershellLiteral(spec.log.toString())}; Start-Sleep -Seconds 5 }"
@@ -159,6 +166,7 @@ Terminal=false
         val workingDirectory = if (separator > 0) executable.substring(0, separator) else "."
         return """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <!-- $MANAGED_MARKER -->
   <Triggers>
     <LogonTrigger>
       <Enabled>true</Enabled>
@@ -234,16 +242,22 @@ Terminal=false
                 val domain = "gui/${env.uid}"
                 env.runResult(listOf("launchctl", "bootout", "$domain/$LAUNCHD_LABEL")) // ignore: first install has none
                 env.runResult(listOf("launchctl", "enable", "$domain/$LAUNCHD_LABEL"))
-                var last = OsEnv.RunResult(-1, "", "")
-                for (attempt in 1..5) {
-                    last = env.runResult(listOf("launchctl", "bootstrap", domain, plist.toString()))
-                    if (last.exit == 0) break
-                    if (attempt < 5) env.sleep(500)
-                }
+                val last = bootstrapWithRetry(domain, plist, env)
                 if (last.exit != 0) return Result.Failed("launchctl bootstrap failed: ${last.err.trim()}")
                 Result.Installed(plist, true)
             } else Result.Installed(plist, false)
         }.getOrElse { Result.Failed("launchd install failed: ${it.message}") }
+    }
+
+    /** `launchctl bootstrap`, retried (the just-booted-out label can still be tearing down). */
+    internal fun bootstrapWithRetry(domain: String, plist: Path, env: OsEnv): OsEnv.RunResult {
+        var last = OsEnv.RunResult(-1, "", "")
+        for (attempt in 1..5) {
+            last = env.runResult(listOf("launchctl", "bootstrap", domain, plist.toString()))
+            if (last.exit == 0) break
+            if (attempt < 5) env.sleep(500)
+        }
+        return last
     }
 
     private fun removeLaunchd(env: OsEnv): Result {

@@ -32,6 +32,24 @@ class BrokerServiceTest {
         assertTrue("<string>dev.supermux.host</string>" in xml)
     }
 
+    @Test fun everyDefinitionIsMarkedManagedEvenWhenTheSpecEnvLacksIt() {
+        val bare = spec.copy(env = mapOf("MUX_WEB_PORT" to "9898"))
+        val marker = "supermux-managed: desktop"
+        val plist = BrokerService.launchdPlist(bare)
+        assertTrue("<!-- $marker -->" in plist && "<key>MUX_MANAGED_BY</key>\n    <string>desktop</string>" in plist)
+        val unit = BrokerService.systemdUnit(bare)
+        assertTrue("Description=supermux broker ($marker)" in unit && "Environment=\"MUX_MANAGED_BY=desktop\"" in unit)
+        val xdg = BrokerService.xdgAutostart(bare)
+        assertTrue("# $marker" in xdg && "MUX_MANAGED_BY=desktop" in xdg)
+        val task = BrokerService.windowsTaskXml(bare)
+        assertTrue("<!-- $marker -->" in task && "MUX_MANAGED_BY" in task)
+    }
+
+    @Test fun specEnvCannotOverrideManagedBy() {
+        val plist = BrokerService.launchdPlist(spec.copy(env = mapOf("MUX_MANAGED_BY" to "someone")))
+        assertTrue("<key>MUX_MANAGED_BY</key>\n    <string>desktop</string>" in plist)
+    }
+
     @Test fun systemdUnitQuotesEnvAndExecsTheBroker() {
         val unit = BrokerService.systemdUnit(spec)
         assertTrue("ExecStart=\"/Users/a/.mux/state/desktop-assets/bin/supermux-broker\"" in unit)
