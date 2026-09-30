@@ -96,6 +96,12 @@ export const DEFAULT_TRUSTED_PROXY_PEERS = ["127.0.0.1", "::1", "::ffff:127.0.0.
 // throttled every other client on the host.
 const rateLimitBucket = new WeakMap<Request, string>()
 
+// Set per request in resolveRateLimitBucket: a loopback socket peer with NO proxy-declared client.
+// frpc (relay) and nginx forward from loopback but always add X-Forwarded-For, so relay traffic
+// never counts as local.
+const directLoopback = new WeakMap<Request, boolean>()
+const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"])
+
 function clientIp(req: Request): string {
   return rateLimitBucket.get(req) ?? "unknown"
 }
@@ -504,6 +510,8 @@ export class WebChannel implements Channel {
       ? (req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim())
       : undefined
     rateLimitBucket.set(req, forwarded || peer || "unknown")
+    const proxied = req.headers.has("x-forwarded-for") || req.headers.has("cf-connecting-ip")
+    directLoopback.set(req, LOOPBACK_PEERS.has(peer) && !proxied)
   }
 
   private checkRateLimit(req: Request): boolean {
@@ -2200,7 +2208,7 @@ export class WebChannel implements Channel {
     if (method === "GET" && path === "/host") {
       const info = this.getHostInfo?.()
       if (!info) return this.json({ error: "host identity unavailable" }, 503)
-      return this.json(buildHostBody(info, this.requireAuth(req).ok))
+      return this.json(buildHostBody(info, this.requireAuth(req).ok, directLoopback.get(req) === true))
     }
     // Paired-status probe for the PWA (200 when the cookie is valid, else 401/429).
     // Under throttling this must NOT claim `paired: false` — the device may well be paired

@@ -12,3 +12,21 @@ test("authenticated body adds platform + version", () => {
     hostId: "abc23def", name: "Ahmet-MBP", protocolVersion: 1, platform: "macos", version: "0.11.0",
   })
 })
+
+test("direct loopback callers also get build, mode, managedBy and stateDir", () => {
+  const full = { ...info, build: "1.5.0 (abc1234)", mode: "binary" as const, managedBy: "desktop", stateDir: "/Users/a/.mux/state" }
+  expect(buildHostBody(full, false, true)).toEqual({
+    hostId: info.hostId, name: info.name, protocolVersion: info.protocolVersion,
+    platform: info.platform, version: info.version,
+    build: "1.5.0 (abc1234)", mode: "binary", managedBy: "desktop", stateDir: "/Users/a/.mux/state",
+  })
+})
+
+test("remote callers never see the local-only fields, even when authed", () => {
+  const full = { ...info, build: "1.5.0 (abc1234)", mode: "binary" as const, managedBy: "desktop", stateDir: "/s" }
+  const body = buildHostBody(full, true, false)
+  expect(body).not.toHaveProperty("stateDir")
+  expect(body).not.toHaveProperty("managedBy")
+  expect(body).not.toHaveProperty("build")
+  expect(body).not.toHaveProperty("mode")
+})

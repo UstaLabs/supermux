@@ -74,7 +74,7 @@ import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
-import { BUILD_VERSION, BUILD_COMMIT } from "./shared/build-info"
+import { BUILD_VERSION, BUILD_COMMIT, versionString } from "./shared/build-info"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
 import { NullRelayProvider } from "./core/relay/provider"
@@ -1428,6 +1428,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       platform: hostPlatform,
       version: BUILD_VERSION,
       protocolVersion: 1,
+      build: versionString(),
+      mode: detectUpdateMode(),
+      managedBy: process.env.MUX_MANAGED_BY || undefined,
+      stateDir: STATE_DIR,
     }),
     claimStore,
     // CSRF trusts this as a second allowed Origin for cookie browsers on the
