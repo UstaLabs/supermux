@@ -74,6 +74,18 @@ class FilePathRefTest {
         )
     }
 
+    @Test fun dotfile_links() {
+        val m = findFilePathRefs("see apps/.gitignore, ~/p/.env.local:2 and /srv/app/.dockerignore")
+        assertEquals(
+            listOf(
+                FilePathRef("apps/.gitignore"),
+                FilePathRef("~/p/.env.local", 2),
+                FilePathRef("/srv/app/.dockerignore"),
+            ),
+            m.map { it.ref },
+        )
+    }
+
     @Test fun bare_filename_without_dir_skipped() =
         assertEquals(emptyList(), findFilePathRefs("file.ts:42"))
 

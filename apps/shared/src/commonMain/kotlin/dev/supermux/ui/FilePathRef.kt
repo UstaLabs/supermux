@@ -9,9 +9,10 @@ data class FilePathMatch(val start: Int, val end: Int, val ref: FilePathRef, val
  *
  *  Exposed so Apple clients can compile the SAME pattern with Foundation's regex engine — see
  *  the note on [findFilePathRefs]. It began as a port of the retired Vue PWA's file-path-ref
- *  helper (retired Vue PWA; see git history before 2026-09-12); this file is now the source of truth. */
+ *  helper (retired Vue PWA; see git history before 2026-09-12); this file is now the source of truth.
+ *  The file name may start with its dot, so dotfiles (`apps/.gitignore`, `deploy/.env.local`) match. */
 const val FILE_PATH_BODY: String =
-    """(?:\.{0,2}/)?(?:[\w@.-]+/)+[\w.-]+\.[\w]+|(?:/|~/)(?:[\w@.-]+/)+[\w.-]+\.[\w]+"""
+    """(?:\.{0,2}/)?(?:[\w@.-]+/)+[\w.-]*\.[\w]+|(?:/|~/)(?:[\w@.-]+/)+[\w.-]*\.[\w]+"""
 
 private val FILE_PATH_REF_RE = Regex("""^($FILE_PATH_BODY)(?::(.*))?$""")
 
