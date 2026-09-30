@@ -17,7 +17,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.io.RandomAccessFile
 import java.net.ServerSocket
 import java.nio.file.Files
 import java.nio.file.Path
@@ -48,19 +47,19 @@ class HostSupervisor(
     private val packaged: () -> Boolean = { HostBinaries.isPackaged() },
     /** The bundled broker's build ("1.5.0 (abc)"), or null in a dev checkout / on failure. */
     private val bundledBuild: suspend () -> String? = { BrokerVersion.defaultBundledBuild(stateDir) },
-    private val startChild: (ChildLaunch) -> ChildHandle = ::defaultStartChild,
-    private val processes: ProcessTable = SystemProcessTable,
+    internal val startChild: (ChildLaunch) -> ChildHandle = ::defaultStartChild,
+    internal val processes: ProcessTable = SystemProcessTable,
     /** The app's own environment; the child gets it minus every `MUX_*` key, plus [brokerEnv]. */
-    private val baseEnv: () -> Map<String, String> = System::getenv,
-    private val repoDir: () -> Path? = { DesktopHostBootstrap.detectRepoDir() },
-    private val bunPath: () -> String = ::defaultBunPath,
-    private val hostName: String = DesktopHostBootstrap.defaultHostName(),
+    internal val baseEnv: () -> Map<String, String> = System::getenv,
+    internal val repoDir: () -> Path? = { DesktopHostBootstrap.detectRepoDir() },
+    internal val bunPath: () -> String = ::defaultBunPath,
+    internal val hostName: String = DesktopHostBootstrap.defaultHostName(),
     private val freePort: () -> Int = { ServerSocket(0).use { it.localPort } },
     internal val now: () -> Long = System::currentTimeMillis,
     internal val io: CoroutineDispatcher = Dispatchers.IO,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
-    private val existingPath: String? = System.getenv("PATH"),
-    private val userHome: String = System.getProperty("user.home") ?: ".",
+    internal val existingPath: String? = System.getenv("PATH"),
+    internal val userHome: String = System.getProperty("user.home") ?: ".",
     internal val timing: Timing = Timing(),
     internal val log: (String) -> Unit = { System.err.println("supermux host: $it") },
     internal val carriedStore: CarriedEnvStore = CarriedEnvStore(stateDir.resolve("desktop-carried-env.json"), log),
@@ -94,24 +93,24 @@ class HostSupervisor(
     private val _prefs = MutableStateFlow(runCatching(loadPrefs).getOrDefault(HostingPrefs()))
     val prefs: StateFlow<HostingPrefs> = _prefs.asStateFlow()
 
-    private val _hostId = MutableStateFlow<String?>(null)
+    internal val _hostId = MutableStateFlow<String?>(null)
     val hostId: StateFlow<String?> = _hostId.asStateFlow()
 
     /** Why the broker isn't running in the background although the user asked for it (then it runs as a child). */
-    private val _backgroundError = MutableStateFlow<String?>(null)
+    internal val _backgroundError = MutableStateFlow<String?>(null)
     val backgroundError: StateFlow<String?> = _backgroundError.asStateFlow()
 
     val localBaseUrl: String get() = "http://127.0.0.1:${_prefs.value.port}"
     val logFile: Path = stateDir.resolve("desktop-broker.log")
     internal val pidFile = ChildPidFile(stateDir.resolve("desktop-broker.pid"))
-    private val brokerPidFile: Path = stateDir.resolve("broker.pid")
+    internal val brokerPidFile: Path = stateDir.resolve("broker.pid")
 
     internal val lock = Mutex()
     @Volatile internal var mode: Mode? = null
     @Volatile internal var child: ChildHandle? = null
     /** The child stands in for the Linux XDG autostart (starts only at login): it outlives the app. */
     @Volatile internal var childDetached = false
-    @Volatile private var quitting = false
+    @Volatile internal var quitting = false
     @Volatile private var watchJob: Job? = null
     @Volatile internal var watchGen = 0L
     internal val retries = Retries(timing)
@@ -120,7 +119,7 @@ class HostSupervisor(
     private var bundled: String? = null
     /** An update restart ran on this launch: never restart for an update again (it would loop). */
     private var updateTried = false
-    private var lastHealthyBuild: String? = null
+    internal var lastHealthyBuild: String? = null
 
     private sealed interface Question {
         val hostId: String?
@@ -516,121 +515,6 @@ class HostSupervisor(
         cantStart("Couldn't take over: $why" + if (restored) "" else " The old service couldn't be restored either.")
     }
 
-    // ── launching ──────────────────────────────────────────────────────────────────────
-
-    /**
-     * Start the broker the way [prefs] says. Returns null once `/host` is healthy, else the reason.
-     * Background mode installs the OS service; the dev checkout (no packaged broker) and, when
-     * [allowChildFallback], a failed install (after removing its leftovers) run it as a child instead.
-     */
-    internal suspend fun launchLocked(
-        prefs: HostingPrefs,
-        bins: HostBinaries.SidecarBinaries,
-        carried: Map<String, String>,
-        allowChildFallback: Boolean,
-        healthTimeoutMs: Long = timing.healthTimeoutMs,
-    ): String? {
-        _backgroundError.value = null
-        if (!prefs.background) return launchChildLocked(prefs, bins, carried, healthTimeoutMs)
-        val broker = bins.brokerPath
-        if (broker == null) {
-            _backgroundError.value = DEV_BACKGROUND
-            log(DEV_BACKGROUND)
-            return launchChildLocked(prefs, bins, carried, healthTimeoutMs)
-        }
-        val spec = BrokerService.Spec(broker, brokerEnvFor(prefs, bins, carried), logFile)
-        val failure = when (val result = withContext(io) { BrokerService.install(spec, osEnv) }) {
-            is BrokerService.Result.Installed -> when {
-                // Linux XDG autostart: nothing runs until the next login, so run it now ourselves.
-                // Still background mode for the prefs and UI; the child outlives the app.
-                result.path == BrokerService.xdgAutostartPath(osEnv) ->
-                    return launchChildLocked(prefs, bins, carried, healthTimeoutMs, detached = true)
-                result.enabled -> {
-                    mode = Mode.SERVICE
-                    childDetached = false
-                    return awaitHealthy(prefs.port, null, healthTimeoutMs)
-                }
-                else -> {
-                    // systemd: `enable --now` failed, though the restart may still have started it.
-                    mode = Mode.SERVICE
-                    if (awaitHealthy(prefs.port, null, minOf(timing.systemdHealthMs, healthTimeoutMs)) == null) return null
-                    "the service didn't start"
-                }
-            }
-            is BrokerService.Result.Failed -> result.message
-            BrokerService.Result.Unsupported -> "not supported on this system"
-            is BrokerService.Result.Removed -> result.toString()
-        }
-        if (!allowChildFallback) return failure
-        withContext(io) { BrokerService.remove(osEnv) } // never leave a definition that could start a second broker
-        mode = null
-        _backgroundError.value = "Couldn't keep supermux running in the background: $failure"
-        log(_backgroundError.value!!)
-        return launchChildLocked(prefs, bins, carried, healthTimeoutMs)
-    }
-
-    internal suspend fun launchChildLocked(
-        prefs: HostingPrefs,
-        bins: HostBinaries.SidecarBinaries,
-        carried: Map<String, String>,
-        healthTimeoutMs: Long = timing.healthTimeoutMs,
-        detached: Boolean = false,
-    ): String? {
-        if (quitting) return QUITTING
-        stopChildLocked()
-        secondBrokerReason(prefs.port)?.let { return it }
-        val repo = if (bins.brokerPath == null) repoDir() else null
-        val argv = bins.brokerPath?.let { listOf(it.toString()) }
-            ?: repo?.let { listOf(bunPath(), it.resolve("src/main.ts").toString()) }
-            ?: return "the supermux broker isn't bundled with this app"
-        val env = childEnv(prefs, bins, carried)
-        // Spawn and record atomically: a cancel here must never leave an untracked broker running.
-        val c = withContext(NonCancellable) {
-            runCatching { Files.createDirectories(stateDir) }
-            val c = withContext(io) { startChild(ChildLaunch(argv, env, repo, logFile)) }
-            if (quitting) {
-                c.destroy()
-                null
-            } else {
-                child = c
-                childDetached = detached
-                mode = Mode.CHILD
-                c.pid?.let { pidFile.write(it, c.startMillis) }
-                c
-            }
-        } ?: return QUITTING
-        val why = awaitHealthy(prefs.port, c, healthTimeoutMs)
-        if (why != null) stopChildLocked()
-        return why
-    }
-
-    private fun brokerEnvFor(prefs: HostingPrefs, bins: HostBinaries.SidecarBinaries, carried: Map<String, String>) =
-        brokerEnv(prefs, bins, carried, stateDir, hostName, existingPath, userHome, osEnv.os)
-
-    /** The app's env minus every inherited `MUX_*` key, plus ours. */
-    private fun childEnv(prefs: HostingPrefs, bins: HostBinaries.SidecarBinaries, carried: Map<String, String>): Map<String, String> {
-        val out = LinkedHashMap<String, String>()
-        for ((k, v) in baseEnv()) if (!k.uppercase().startsWith("MUX_")) out[k] = v
-        out.putAll(brokerEnvFor(prefs, bins, carried))
-        return out
-    }
-
-    /** Poll `/host` until OUR broker answers. Null = healthy (and [hostId] set), else why not. */
-    internal suspend fun awaitHealthy(port: Int, c: ChildHandle?, timeoutMs: Long): String? {
-        val deadline = now() + timeoutMs
-        while (true) {
-            if (c != null && !c.isAlive) return "supermux stopped while starting." + logTail()
-            val r = probe(port)
-            if (r is HostProbeResult.Supermux && r.managedBy == "desktop") {
-                _hostId.value = r.hostId
-                lastHealthyBuild = r.build
-                return null
-            }
-            if (now() >= deadline) return "supermux didn't answer on port $port." + logTail()
-            delay(timing.healthPollMs)
-        }
-    }
-
     /** Publish the outcome of a launch and start watching. */
     internal fun afterLaunch(prefs: HostingPrefs, why: String?) {
         if (why == null) {
@@ -658,46 +542,6 @@ class HostSupervisor(
             else launchChildLocked(p, bins, carriedStore.load())
         }
         afterLaunch(p, why)
-    }
-
-    internal suspend fun stopChildLocked() = withContext(NonCancellable) {
-        val c = child ?: return@withContext
-        child = null
-        childDetached = false
-        pidFile.delete()
-        if (!c.isAlive) return@withContext
-        c.destroy()
-        if (!awaitExit(c, timing.stopGraceMs)) {
-            c.destroyForcibly()
-            awaitExit(c, 2_000)
-        }
-    }
-
-    private fun adoptOrphanLocked(): Boolean {
-        val rec = pidFile.read() ?: return false
-        val c = runCatching { adoptFromPidFile(rec, processes) }.getOrNull()?.takeIf { it.isAlive } ?: return false
-        child = c
-        childDetached = false
-        return true
-    }
-
-    /** Our service definition (not the XDG autostart, which is supervised like a child). */
-    internal suspend fun ourServiceInstalled(): Boolean =
-        withContext(io) { BrokerService.isOursInstalled(osEnv) && !BrokerService.isOursXdgAutostart(osEnv) }
-
-    /**
-     * The broker's own guard against a second broker on one state dir reads /proc (Linux only), so
-     * check its pid file here: a live process that isn't our child means don't start another.
-     */
-    internal fun secondBrokerReason(port: Int): String? {
-        val pid = runCatching { Files.readString(brokerPidFile).trim().toLong() }.getOrNull() ?: return null
-        if (pid == child?.pid) return null
-        val info = processes.info(pid) ?: return null
-        // A process that started after the pid file was written can't be the broker that wrote it (pid reuse).
-        val written = runCatching { Files.getLastModifiedTime(brokerPidFile).toMillis() }.getOrNull()
-        val started = info.startMillis
-        if (written != null && started != null && started > written + 1_000) return null
-        return "supermux is already running on this computer (pid $pid) but isn't answering on port $port. Quit it, then try again."
     }
 
     // ── watching (loops in HostWatchers.kt) ────────────────────────────────────────────
@@ -786,20 +630,6 @@ class HostSupervisor(
     private fun savePrefsNow(p: HostingPrefs) {
         _prefs.value = p
         try { savePrefs(p) } catch (e: Exception) { log("couldn't save hosting prefs: ${e.message}") }
-    }
-
-    internal fun logTail(lines: Int = 20): String {
-        val tail = runCatching {
-            RandomAccessFile(logFile.toFile(), "r").use { f ->
-                val len = f.length()
-                val start = maxOf(0L, len - 16_384)
-                f.seek(start)
-                val buf = ByteArray((len - start).toInt())
-                f.readFully(buf)
-                String(buf, Charsets.UTF_8).lines().filter { it.isNotBlank() }.takeLast(lines)
-            }
-        }.getOrDefault(emptyList())
-        return if (tail.isEmpty()) "" else "\n" + tail.joinToString("\n")
     }
 
     companion object {
