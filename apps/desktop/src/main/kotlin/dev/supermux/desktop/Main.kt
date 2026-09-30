@@ -102,6 +102,9 @@ import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.windows.tearOutTabLive
 import dev.supermux.ui.shell.windows.tearOutCanvasLive
 import dev.supermux.desktop.settings.DesktopSettingsExtra
+import dev.supermux.desktop.settings.LocalHostSupervisor
+import dev.supermux.desktop.settings.LocalHostingSessions
+import dev.supermux.desktop.settings.LocalPairedHostStore
 import dev.supermux.desktop.settings.DesktopSettingsSection
 import dev.supermux.ui.prefs.seedLauncher
 import dev.supermux.ui.prefs.seedCollapsedProjectPaths
@@ -1742,6 +1745,10 @@ fun main() {
                     // modifiers inside AppShell resolve it via LocalMacWindowChrome; overlays and
                     // onboarding have no chrome in the title-bar band. Null provider = no-op.
                     CompositionLocalProvider(
+                        // Settings ▸ Hosting reads the app-wide supervisor (null where the app does not host).
+                        LocalHostSupervisor provides supervisor.takeIf { hostsNatively },
+                        LocalPairedHostStore provides hostStore,
+                        LocalHostingSessions provides fleetFacts.localSessions,
                         LocalMacWindowChrome provides macChrome?.regions,
                         LocalMacTrafficLightsInset provides (
                             macChrome?.trafficLightsInset ?: MacTrafficLightsWidth

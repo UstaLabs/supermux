@@ -101,6 +101,12 @@ object DesktopHostBootstrap {
             HostClaim(localToken = token, claimSecret = secret, relayUrl = fetchRelayUrl(client, localUrl, token))
         }
 
+    /** The local broker's relay URL from `/me` (Settings ▸ Hosting's Remote row). Null when off or unknown. */
+    suspend fun localRelayUrl(localUrl: String, token: String): String? = withContext(Dispatchers.IO) {
+        val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
+        fetchRelayUrl(client, localUrl, token)
+    }
+
     /** POST /pair/claim with no secret (brand-new broker) → the minted token from the Set-Cookie header. */
     private fun secretlessClaimToken(client: HttpClient, localUrl: String, deviceName: String): String? = runCatching {
         val body = json.encodeToString(ClaimBody.serializer(), ClaimBody(deviceName = deviceName))
