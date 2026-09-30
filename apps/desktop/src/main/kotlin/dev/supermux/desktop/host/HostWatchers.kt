@@ -15,19 +15,29 @@ internal class Retries(private val t: HostSupervisor.Timing) {
     private val exits = ArrayDeque<Long>()
     private var unhealthy = 0
     private var healthySince: Long? = null
+    /** Consecutive exits that each came after less than [HostSupervisor.Timing.healthyResetMs] of healthy uptime. */
+    private var shortRuns = 0
 
-    @Synchronized fun reset() { exits.clear(); unhealthy = 0; healthySince = null }
+    @Synchronized fun reset() { exits.clear(); unhealthy = 0; shortRuns = 0; healthySince = null }
 
     @Synchronized fun healthy(now: Long) { unhealthy = 0; healthySince = now }
 
-    /** Records an exit; returns the exits within the crash window. */
-    @Synchronized fun exit(now: Long): Int {
+    /**
+     * Records an exit. True when it hits a cap: more than [HostSupervisor.Timing.maxExits] exits in the
+     * crash window, or [HostSupervisor.Timing.maxShortRuns] short runs in a row (a child that crashes
+     * 25 s after every start never fills the window, but must not loop forever either).
+     */
+    @Synchronized fun exit(now: Long): Boolean {
         val since = healthySince
-        if (since != null && now - since >= t.healthyResetMs) { exits.clear(); unhealthy = 0 }
+        if (since != null && now - since >= t.healthyResetMs) {
+            exits.clear(); unhealthy = 0; shortRuns = 0
+        } else {
+            shortRuns++
+        }
         healthySince = null
         exits.addLast(now)
         while (exits.isNotEmpty() && now - exits.first() > t.crashWindowMs) exits.removeFirst()
-        return exits.size
+        return exits.size > t.maxExits || shortRuns >= t.maxShortRuns
     }
 
     /** Records a start that never became healthy; returns how many in a row. */
@@ -74,7 +84,7 @@ private suspend fun HostSupervisor.restartAfterExit(gen: Long, c: ChildHandle): 
             startWatch()
             return false
         }
-        if (retries.exit(now()) > timing.maxExits) {
+        if (retries.exit(now())) {
             fail("supermux keeps stopping." + logTail())
             return false
         }
@@ -89,7 +99,7 @@ private suspend fun HostSupervisor.restartAfterExit(gen: Long, c: ChildHandle): 
         val started = lock.withLock {
             if (gen != watchGen) return false
             val p = currentPrefs
-            val bins = withContext(io) { materialize() }
+            val bins = binaries()
             val why = launchChildLocked(p, bins, carriedStore.load(), detached = detached)
             if (why == null) {
                 retries.healthy(now())
@@ -188,7 +198,7 @@ internal suspend fun HostSupervisor.watchOrphan(gen: Long) {
                 return
             }
             publish(HostingStatus.Restarting(1))
-            val bins = withContext(io) { materialize() }
+            val bins = binaries()
             afterLaunch(p, launchLocked(p, bins, carriedStore.load(), allowChildFallback = true))
             return
         }

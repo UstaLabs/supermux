@@ -32,6 +32,8 @@ internal suspend fun HostSupervisor.launchLocked(
         log(HostSupervisor.DEV_BACKGROUND)
         return launchChildLocked(prefs, bins, carried, healthTimeoutMs)
     }
+    // Installing over OUR service replaces its broker (restart), so only a fresh install can add a second one.
+    if (!ourServiceInstalled()) secondBrokerReason(prefs.port)?.let { return it }
     val spec = BrokerService.Spec(broker, brokerEnvFor(prefs, bins, carried), logFile)
     val failure = when (val result = withContext(io) { BrokerService.install(spec, osEnv) }) {
         is BrokerService.Result.Installed -> when {
@@ -56,11 +58,56 @@ internal suspend fun HostSupervisor.launchLocked(
         is BrokerService.Result.Removed -> result.toString()
     }
     if (!allowChildFallback) return failure
-    withContext(io) { BrokerService.remove(osEnv) } // never leave a definition that could start a second broker
+    // Never leave a definition that could start a second broker; if it can't be removed, no child either.
+    removeServiceLocked(prefs.port)?.let { return it }
     mode = null
     _backgroundError.value = "Couldn't keep supermux running in the background: $failure"
     log(_backgroundError.value!!)
     return launchChildLocked(prefs, bins, carried, healthTimeoutMs)
+}
+
+/**
+ * Copy the bundled binaries out of the app. In a packaged app whose copy failed, fall back to the
+ * broker a previous version installed (and flag [HostSupervisor.lastCopyFailed]).
+ */
+internal suspend fun HostSupervisor.binaries(): HostBinaries.SidecarBinaries {
+    val bins = withContext(io) { materialize() }
+    lastCopyFailed = bins.brokerPath == null && packaged()
+    if (!lastCopyFailed) return bins
+    val os = when (osEnv.os) {
+        OsEnv.Os.MAC -> HostBinaries.Os.MAC
+        OsEnv.Os.LINUX -> HostBinaries.Os.LINUX
+        OsEnv.Os.WINDOWS -> HostBinaries.Os.WINDOWS
+        OsEnv.Os.OTHER -> HostBinaries.Os.OTHER
+    }
+    val previous = stateDir.resolve(HostBinaries.BIN_SUBDIR).resolve(HostBinaries.fileName(HostBinaries.Binary.Broker, os))
+    if (!Files.isRegularFile(previous)) {
+        log("couldn't copy the broker out of the app")
+        return bins
+    }
+    log("couldn't copy the update out of the app; using the broker a previous version installed")
+    return bins.copy(brokerPath = previous, binDir = bins.binDir ?: previous.parent)
+}
+
+/**
+ * Remove our service, then wait (up to [HostSupervisor.Timing.portFreeMs]) for its broker to let go of
+ * [port]. Null when done; else why not, and then no child may be started.
+ */
+internal suspend fun HostSupervisor.removeServiceLocked(port: Int): String? {
+    val r = withContext(io) { BrokerService.remove(osEnv) }
+    if (r is BrokerService.Result.Failed) return "Couldn't stop the background service: ${r.message}"
+    awaitPortFree(port)
+    return null
+}
+
+/** True once nothing answers on [port]; false after [timeoutMs]. */
+internal suspend fun HostSupervisor.awaitPortFree(port: Int, timeoutMs: Long = timing.portFreeMs): Boolean {
+    val deadline = now() + timeoutMs
+    while (true) {
+        if (probe(port) == HostProbeResult.PortFree) return true
+        if (now() >= deadline) return false
+        delay(timing.healthPollMs)
+    }
 }
 
 internal suspend fun HostSupervisor.launchChildLocked(

@@ -44,7 +44,7 @@ class HostSupervisor(
     /** Copies the bundled broker/tmux/frpc/zmx out of the app image (blocking; run on [io]). */
     internal val materialize: () -> HostBinaries.SidecarBinaries = { HostBinaries.resolve(stateDir) },
     /** True in a packaged app (a resources dir): a null broker path then means the copy failed. */
-    private val packaged: () -> Boolean = { HostBinaries.isPackaged() },
+    internal val packaged: () -> Boolean = { HostBinaries.isPackaged() },
     /** The bundled broker's build ("1.5.0 (abc)"), or null in a dev checkout / on failure. */
     private val bundledBuild: suspend () -> String? = { BrokerVersion.defaultBundledBuild(stateDir) },
     internal val startChild: (ChildLaunch) -> ChildHandle = ::defaultStartChild,
@@ -83,6 +83,8 @@ class HostSupervisor(
         val maxUnhealthyStarts: Int = 5,
         val healthyResetMs: Long = 60_000,
         val stopGraceMs: Long = 5_000,
+        val portFreeMs: Long = 10_000,
+        val maxShortRuns: Int = 5,
     )
 
     internal enum class Mode { CHILD, SERVICE, READ_ONLY, ORPHAN }
@@ -120,6 +122,8 @@ class HostSupervisor(
     /** An update restart ran on this launch: never restart for an update again (it would loop). */
     private var updateTried = false
     internal var lastHealthyBuild: String? = null
+    /** The last [binaries] call couldn't copy the broker out of the packaged app. */
+    @Volatile internal var lastCopyFailed = false
 
     private sealed interface Question {
         val hostId: String?
@@ -178,7 +182,7 @@ class HostSupervisor(
             if (!p.hosting || mode == Mode.READ_ONLY || mode == Mode.ORPHAN || mode == null) return@withLock
             if (on) {
                 if (mode == Mode.SERVICE) return@withLock
-                val bins = withContext(io) { materialize() }
+                val bins = binaries()
                 if (bins.brokerPath == null) {
                     _backgroundError.value = DEV_BACKGROUND
                     log(DEV_BACKGROUND)
@@ -192,10 +196,17 @@ class HostSupervisor(
                 _backgroundError.value = null
                 if (mode == Mode.CHILD && !childDetached && child?.isAlive == true) return@withLock
                 stopWatch()
-                if (ourServiceInstalled()) withContext(io) { BrokerService.remove(osEnv) }
+                if (ourServiceInstalled()) {
+                    removeServiceLocked(p.port)?.let { why ->
+                        // Still registered (e.g. UAC declined): it would respawn next to a child.
+                        savePrefsNow(p.copy(background = true))
+                        cantStart(why)
+                        return@withLock
+                    }
+                }
                 stopChildLocked()
                 _status.value = HostingStatus.Starting
-                val bins = withContext(io) { materialize() }
+                val bins = binaries()
                 afterLaunch(p, launchChildLocked(p, bins, carriedStore.load()))
             }
         }
@@ -347,13 +358,13 @@ class HostSupervisor(
         when (plan) {
             HostPlan.NotHosting -> { mode = null; _status.value = HostingStatus.NotHosting }
             HostPlan.Start -> {
-                val bins = withContext(io) { materialize() }
+                val bins = binaries()
                 afterLaunch(prefs, launchLocked(prefs, bins, carriedStore.load(), allowChildFallback = true))
             }
             HostPlan.MovePort -> {
                 prefs = prefs.copy(port = freePort())
                 savePrefsNow(prefs)
-                val bins = withContext(io) { materialize() }
+                val bins = binaries()
                 afterLaunch(prefs, launchLocked(prefs, bins, carriedStore.load(), allowChildFallback = true))
             }
             HostPlan.UseOwn -> useOwnLocked(prefs, (found as HostProbeResult.Supermux).hostId)
@@ -390,6 +401,7 @@ class HostSupervisor(
 
     private suspend fun useOwnLocked(prefs: HostingPrefs, hostId: String) {
         _hostId.value = hostId
+        if (serviceOverPreviousChildLocked(prefs.port)) return
         mode = when {
             claimChildLocked() -> Mode.CHILD
             ourServiceInstalled() -> Mode.SERVICE
@@ -399,6 +411,22 @@ class HostSupervisor(
         }
         _status.value = HostingStatus.Running(prefs.port, readOnly = false)
         startWatch()
+    }
+
+    /**
+     * Our child from a previous run is alive, but our (non-XDG) service definition is installed: the
+     * service wins, never a service+child pair. Stop the child, wait for the port, reinstall the
+     * service. Not [BrokerService.remove]: on Windows its taskkill would hit the child too.
+     */
+    private suspend fun serviceOverPreviousChildLocked(port: Int): Boolean {
+        if (child?.isAlive == true || !ourServiceInstalled() || !adoptOrphanLocked()) return false
+        log("our broker child from a previous session runs next to our installed service; switching to the service")
+        stopChildLocked()
+        awaitPortFree(port)
+        val p = _prefs.value.copy(background = true)
+        savePrefsNow(p)
+        afterLaunch(p, launchLocked(p, binaries(), carriedStore.load(), allowChildFallback = true))
+        return true
     }
 
     /** Our live child, or our child from a previous run re-parented: child mode whatever the prefs say. */
@@ -418,12 +446,13 @@ class HostSupervisor(
     private suspend fun updateOwnLocked(prefs0: HostingPrefs) {
         updateTried = true
         val windows = osEnv.os == OsEnv.Os.WINDOWS
+        if (serviceOverPreviousChildLocked(prefs0.port)) { warnIfStillOld(); return }
         if (claimChildLocked()) {
             val prefs = _prefs.value
             val detached = childDetached
             if (windows) stopChildLocked() // Windows can't replace a running .exe
-            val bins = withContext(io) { materialize() }
-            if (copyFailed(bins) && !windows) return keepRunning(prefs, Mode.CHILD)
+            val bins = binaries()
+            if (lastCopyFailed && !windows) return keepRunning(prefs, Mode.CHILD)
             stopChildLocked()
             val why = if (detached) launchLocked(prefs, bins, carriedStore.load(), allowChildFallback = true)
             else launchChildLocked(prefs, bins, carriedStore.load())
@@ -433,21 +462,19 @@ class HostSupervisor(
         }
         if (ourServiceInstalled()) {
             // Our service: restart it the way it runs, whatever prefs.background says.
-            if (windows) withContext(io) { BrokerService.remove(osEnv) } // re-creating the task doesn't restart it
-            val bins = withContext(io) { materialize() }
-            if (copyFailed(bins) && !windows) return keepRunning(prefs0, Mode.SERVICE)
+            if (windows) removeServiceLocked(prefs0.port)?.let { afterLaunch(prefs0, it); return } // re-creating the task doesn't restart it
+            val bins = binaries()
+            if (lastCopyFailed && !windows) return keepRunning(prefs0, Mode.SERVICE)
             afterLaunch(prefs0, launchLocked(prefs0.copy(background = true), bins, carriedStore.load(), allowChildFallback = true))
             warnIfStillOld()
             return
         }
         log("our broker is running outside this app's control; the new build applies when it restarts")
-        withContext(io) { materialize() }
+        binaries()
         mode = Mode.ORPHAN
         _status.value = HostingStatus.Running(prefs0.port, readOnly = false)
         startWatch()
     }
-
-    private fun copyFailed(bins: HostBinaries.SidecarBinaries) = bins.brokerPath == null && packaged()
 
     private fun keepRunning(prefs: HostingPrefs, m: Mode) {
         log("couldn't copy the new broker out of the app; keeping the running one")
@@ -495,7 +522,7 @@ class HostSupervisor(
             carriedStore.savePending(prepared.carriedEnv)
             val p = prefsBefore.copy(relay = prepared.oldRelay ?: prefsBefore.relay)
             savePrefsNow(p)
-            val bins = withContext(io) { materialize() }
+            val bins = binaries()
             launchLocked(p, bins, prepared.carriedEnv, allowChildFallback = false, healthTimeoutMs = timing.takeoverHealthTimeoutMs)
         } catch (e: CancellationException) {
             throw e
@@ -531,10 +558,10 @@ class HostSupervisor(
         stopWatch()
         retries.reset()
         _status.value = HostingStatus.Starting
-        val bins = withContext(io) { materialize() }
+        val bins = binaries()
         val why = if (mode == Mode.SERVICE) {
-            if (osEnv.os == OsEnv.Os.WINDOWS) withContext(io) { BrokerService.remove(osEnv) }
-            launchLocked(p.copy(background = true), bins, carriedStore.load(), allowChildFallback = true)
+            (if (osEnv.os == OsEnv.Os.WINDOWS) removeServiceLocked(p.port) else null)
+                ?: launchLocked(p.copy(background = true), bins, carriedStore.load(), allowChildFallback = true)
         } else {
             val detached = childDetached
             stopChildLocked()

@@ -343,20 +343,36 @@ class HostSupervisorTest {
         assertEquals(2, h.launches.size)
     }
 
-    @Test fun sixExitsWithinTwoMinutesIsACrashLoop() = runTest {
+    @Test fun fiveQuickExitsIsACrashLoop() = runTest {
         val h = Harness(this)
         Files.writeString(h.state.resolve("desktop-broker.log"), "starting\nerror: EADDRINUSE 9898\n")
         h.probeFn = h.healthyIfChild()
         h.sup.ensure()
-        repeat(6) {
+        repeat(5) {
             h.liveChild!!.exit(1)
             advanceTimeBy(19_000)
         }
         val s = assertIs<HostingStatus.CantStart>(h.sup.status.value)
         assertTrue("EADDRINUSE" in s.reason, s.reason)
-        assertEquals(6, h.launches.size)
+        assertEquals(5, h.launches.size)
         advanceTimeBy(60_000)
-        assertEquals(6, h.launches.size) // no infinite respawn
+        assertEquals(5, h.launches.size) // no infinite respawn
+    }
+
+    @Test fun aChildThatCrashesTwentyFiveSecondsAfterEveryStartIsCapped() = runTest {
+        val h = Harness(this)
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        // Too slow to fill the 120 s window with more than 5 exits, too short to count as healthy.
+        repeat(5) {
+            advanceTimeBy(25_000)
+            h.liveChild!!.exit(1)
+        }
+        advanceTimeBy(1_000)
+        assertIs<HostingStatus.CantStart>(h.sup.status.value)
+        assertEquals(5, h.launches.size)
+        advanceTimeBy(120_000)
+        assertEquals(5, h.launches.size)
     }
 
     // 9
@@ -462,6 +478,7 @@ class HostSupervisorTest {
         val repo = createTempDirectory("repo")
         val h = Harness(this, prefs = HostingPrefs(background = true), repo = repo)
         h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.packaged = false
         h.probeFn = h.healthyIfChild()
         h.sup.ensure()
         val l = h.launches.single()
@@ -496,6 +513,7 @@ class HostSupervisorTest {
         assertEquals(running, h.sup.status.value)
         assertTrue(h.sup.backgroundError.value!!.startsWith("Couldn't keep supermux running in the background:"))
         assertTrue(h.saved.background)
+        assertFalse(Files.exists(h.ourPlist)) // removed before the child fallback
     }
 
     // ── setters ──
@@ -684,21 +702,132 @@ class HostSupervisorTest {
         assertEquals(running, h.sup.status.value)
     }
 
-    @Test fun ourPlistPlusALivePreviousChildIsChildModeWithNoInstall() = runTest {
-        val h = Harness(this, prefs = HostingPrefs(background = true))
+    @Test fun ourPlistPlusALivePreviousChildStopsTheChildAndUsesTheService() = runTest {
+        val h = Harness(this, prefs = HostingPrefs(background = false))
         h.writeOurPlist()
+        Files.writeString(h.state.resolve("desktop-broker.pid"), "777:1000")
+        val orphan = FakeChild(777, startMillis = 1_000)
+        h.table.procs[777] = ProcInfo(1_000, "/s/supermux-broker") to orphan
+        h.probeFn = { if (orphan.isAlive || h.bootstrapped()) h.desktop() else HostProbeResult.PortFree }
+        h.sup.ensure()
+        assertEquals(1, orphan.destroyed)
+        assertTrue(h.bootstrapped())
+        // stopped via the child handle only: remove (bootout + delete) would also hit the child on Windows
+        assertTrue(Files.exists(h.ourPlist))
+        assertTrue(h.saved.background)
+        assertTrue(h.launches.isEmpty())
+        assertEquals(running, h.sup.status.value)
+        val before = h.env.ran.size
+        h.sup.quit() // service mode: nothing to stop
+        assertEquals(before, h.env.ran.size)
+    }
+
+    @Test fun aLivePreviousChildWithNoServiceTurnsBackgroundOff() = runTest {
+        val h = Harness(this, prefs = HostingPrefs(background = true))
         Files.writeString(h.state.resolve("desktop-broker.pid"), "777:1000")
         val orphan = FakeChild(777, startMillis = 1_000)
         h.table.procs[777] = ProcInfo(1_000, "/s/supermux-broker") to orphan
         h.probeFn = { h.desktop() }
         h.sup.ensure()
-        assertTrue(h.env.ran.isEmpty())
-        assertTrue(h.launches.isEmpty())
+        assertTrue(h.env.ran.isEmpty() && h.launches.isEmpty())
         assertFalse(h.saved.background)
         assertEquals(HostSupervisor.PREVIOUS_CHILD, h.sup.backgroundError.value)
         assertEquals(running, h.sup.status.value)
+    }
+
+    @Test fun ourChildExitingWhileOurServiceIsInstalledHandsOverToTheService() = runTest {
+        val h = Harness(this)
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        h.writeOurPlist() // e.g. background mode was set up by another path meanwhile
+        h.probeFn = { h.desktop() } // the service's broker answers
+        h.children[0].exit(1)
+        advanceTimeBy(30_000)
+        assertEquals(1, h.launches.size) // no respawn next to the service
+        assertEquals(running, h.sup.status.value)
+        val before = h.env.ran.size
         h.sup.quit()
-        assertEquals(1, orphan.destroyed)
+        assertEquals(before, h.env.ran.size) // service mode now
+    }
+
+    @Test fun orphanStartIntoBackgroundModeRespectsAForeignBrokerPid() = runTest {
+        val h = Harness(this, prefs = HostingPrefs(background = true))
+        h.probeFn = { h.desktop() }
+        h.sup.ensure() // ours, no service, no child: orphan
+        Files.writeString(h.state.resolve("broker.pid"), "999")
+        h.table.procs[999] = ProcInfo(0, "/usr/local/bin/supermux") to null
+        h.probeFn = { HostProbeResult.PortFree }
+        advanceTimeBy(30_000)
+        val s = assertIs<HostingStatus.CantStart>(h.sup.status.value)
+        assertTrue("pid 999" in s.reason, s.reason)
+        assertFalse(h.bootstrapped())
+        assertTrue(h.launches.isEmpty())
+    }
+
+    @Test fun backgroundOffWhenTheServiceCantBeRemovedStartsNoChild() = runTest {
+        val h = Harness(this, prefs = HostingPrefs(background = true))
+        h.probeFn = { if (h.bootstrapped()) h.desktop() else HostProbeResult.PortFree }
+        h.sup.ensure()
+        val agents = h.ourPlist.parent
+        agents.toFile().setWritable(false) // the plist can't be deleted: remove() fails
+        try {
+            h.sup.setBackground(false)
+        } finally {
+            agents.toFile().setWritable(true)
+        }
+        val s = assertIs<HostingStatus.CantStart>(h.sup.status.value)
+        assertTrue(s.reason.startsWith("Couldn't stop the background service:"), s.reason)
+        assertTrue(h.saved.background)
+        assertTrue(h.launches.isEmpty())
+    }
+
+    @Test fun backgroundOffWaitsForThePortBeforeStartingTheChild() = runTest {
+        val h = Harness(this, prefs = HostingPrefs(background = true))
+        val bootout = listOf("launchctl", "bootout", "gui/501/dev.supermux.host")
+        var freeAt = Long.MAX_VALUE
+        h.probeFn = { port ->
+            val removed = h.env.ran.count { it == bootout } >= 2 // install boots out once, remove once more
+            if (removed && freeAt == Long.MAX_VALUE) freeAt = testScheduler.currentTime + 3_000
+            when {
+                !removed -> if (h.bootstrapped()) h.desktop() else HostProbeResult.PortFree
+                testScheduler.currentTime < freeAt -> h.desktop() // the service's broker is still stopping
+                else -> h.healthyIfChild()(port)
+            }
+        }
+        h.sup.ensure()
+        var startedAt = -1L
+        h.onStart = { startedAt = testScheduler.currentTime }
+        h.sup.setBackground(false)
+        assertTrue(startedAt >= freeAt, "started at $startedAt, port free at $freeAt")
+        assertEquals(1, h.launches.size)
+        assertEquals(running, h.sup.status.value)
+    }
+
+    @Test fun aFailedCopyUsesTheBrokerAPreviousVersionInstalled() = runTest {
+        val h = Harness(this)
+        val previous = h.state.resolve("desktop-assets/bin/supermux-broker")
+        Files.createDirectories(previous.parent)
+        Files.writeString(previous, "old broker")
+        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        assertEquals(listOf(previous.toString()), h.launches.single().argv)
+        assertTrue(h.events.any { "using the broker a previous version installed" in it })
+        assertEquals(running, h.sup.status.value)
+    }
+
+    @Test fun aFailedCopyInBackgroundModeInstallsThePreviousBroker() = runTest {
+        val h = Harness(this, prefs = HostingPrefs(background = true))
+        val previous = h.state.resolve("desktop-assets/bin/supermux-broker")
+        Files.createDirectories(previous.parent)
+        Files.writeString(previous, "old broker")
+        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.probeFn = { if (h.bootstrapped()) h.desktop() else HostProbeResult.PortFree }
+        h.sup.ensure()
+        assertTrue("<string>$previous</string>" in Files.readString(h.ourPlist))
+        assertNull(h.sup.backgroundError.value)
+        assertTrue(h.launches.isEmpty())
+        assertEquals(running, h.sup.status.value)
     }
 
     @Test fun pidFileChildWithAnotherStartTimeIsNotAdopted() = runTest {
