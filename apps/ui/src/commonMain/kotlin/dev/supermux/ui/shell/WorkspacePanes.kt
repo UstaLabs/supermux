@@ -45,6 +45,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -207,6 +208,24 @@ fun WorkspacePanes(
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
     TrackFocusedFileView(ws)
+    // Tabs a bulk close (tab menu ▸ Close to the Right / Left / All) still has to close, fed one at
+    // a time to the tab's own close action (see nextBulkClose).
+    val bulkQueue = remember(current.id) { mutableStateListOf<String>() }
+    LaunchedEffect(closeCandidate == null, bulkQueue.size) {
+        if (closeCandidate == null) nextBulkClose(bulkQueue) { viewsById[it] }?.let(onCloseCandidate)
+    }
+
+    fun bulkClose(anchorId: String, which: BulkClose, ids: List<String>) {
+        // The anchor survives a one-sided close, so it becomes the tab on show rather than whatever
+        // neighbour the broker would pick.
+        if (which != BulkClose.ALL) {
+            groupIdOf(layoutSync.tree, anchorId)?.let { g -> layoutSync.edit { setActiveViewInGroup(it, g, anchorId) } }
+        }
+        bulkQueue.addAll(ids.filterNot { it in bulkQueue })
+    }
+
+    fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
+        bulkCloseEntries(groupViewIdsOf(layout, itemId), itemId) { which, ids -> bulkClose(itemId, which, ids) }
 
     PaneHost(
         layout = layout,
@@ -261,13 +280,17 @@ fun WorkspacePanes(
             // New Window" on a long press instead. A held finger never reaches the strip's drag
             // threshold, so this does not fight the tab drag.
             TabLongPressMenu(
-                enabled = windowsSeam != null && !LocalContextMenuAvailable.current,
+                enabled = !LocalContextMenuAvailable.current,
                 itemId = itemId,
-                onMoveToNewWindow = { onTearOutTab(itemId) },
+                onMoveToNewWindow = if (windowsSeam != null) ({ onTearOutTab(itemId) }) else null,
+                bulkEntries = { bulkEntries(itemId) },
             ) {
                 if (filePath == null) {
                     RowContextMenu(
-                        items = { listOf(RowContextMenuEntry("Move to New Window") { onTearOutTab(itemId) }) },
+                        items = {
+                            listOf(RowContextMenuEntry("Move to New Window") { onTearOutTab(itemId) }) +
+                                bulkEntries(itemId)
+                        },
                     ) {
                         Box(Modifier.testTag("tab-move-to-window-$itemId")) {
                         DefaultTabChip(
@@ -296,6 +319,7 @@ fun WorkspacePanes(
                         },
                         onClose = { _ -> onCloseCandidate(v) },
                         onMoveToNewWindow = { onTearOutTab(itemId) },
+                        extraMenu = { bulkEntries(itemId) },
                     )
                     }
                 }
@@ -400,6 +424,19 @@ fun PhoneWorkspacePanes(
         else app.closeWorkspaceView(current.id, view.id)
     }
 
+    // Same as the wide strip: a bulk close feeds each tab to its own close, one at a time.
+    val bulkQueue = remember(current.id) { mutableStateListOf<String>() }
+    LaunchedEffect(closeCandidate == null, bulkQueue.size) {
+        // An editor closes on the spot (no candidate), so keep going until one needs its question.
+        while (closeCandidate == null) closeOrConfirm(nextBulkClose(bulkQueue) { viewsById[it] } ?: break)
+    }
+
+    fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
+        bulkCloseEntries(tabs.viewIds, itemId) { which, ids ->
+            if (which != BulkClose.ALL) app.setActiveView(current.id, itemId)
+            bulkQueue.addAll(ids.filterNot { it in bulkQueue })
+        }
+
     Column(modifier.fillMaxSize().testTag("phone_workspace_tabs")) {
         if (tabs.viewIds.isNotEmpty()) {
             // The strip is the TOP-MOST surface on a phone when a workspace has views: the compact
@@ -445,10 +482,12 @@ fun PhoneWorkspacePanes(
                     // Touch: long-press a tab for "Move to New Window" (see the wide strip).
                     tabSlot = { id, state ->
                         TabLongPressMenu(
-                            enabled = windowsSeam != null && !LocalContextMenuAvailable.current,
+                            enabled = !LocalContextMenuAvailable.current,
                             itemId = id,
-                            onMoveToNewWindow = { windowsSeam?.tearOutTab(id) },
+                            onMoveToNewWindow = windowsSeam?.let { w -> { w.tearOutTab(id) } },
+                            bulkEntries = { bulkEntries(id) },
                         ) {
+                            RowContextMenu(items = { bulkEntries(id) }) {
                             DefaultTabChip(
                                 itemId = id,
                                 title = viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
@@ -457,6 +496,7 @@ fun PhoneWorkspacePanes(
                                 labelFont = MonoFontFamily,
                                 onClose = { vid -> viewsById[vid]?.let { closeOrConfirm(it) } },
                             )
+                            }
                         }
                     },
                     addSlot = {
@@ -786,15 +826,16 @@ internal fun Modifier.longPress(key: Any?, onLongPress: () -> Unit): Modifier = 
 }
 
 /**
- * A long-press menu around one tab, carrying "Move to New Window" — the touch stand-in for the
- * desktop tab's right-click menu. [enabled] false (desktop, a host with one window) is a plain
- * passthrough.
+ * A long-press menu around one tab — the touch stand-in for the desktop tab's right-click menu:
+ * "Move to New Window" (only where [onMoveToNewWindow] is set, a host that can open one) and the
+ * strip's bulk closes. [enabled] false (a host with right-click) is a plain passthrough.
  */
 @Composable
 private fun TabLongPressMenu(
     enabled: Boolean,
     itemId: String,
-    onMoveToNewWindow: () -> Unit,
+    onMoveToNewWindow: (() -> Unit)?,
+    bulkEntries: () -> List<RowContextMenuEntry>,
     content: @Composable () -> Unit,
 ) {
     if (!enabled) {
@@ -809,15 +850,30 @@ private fun TabLongPressMenu(
             onDismissRequest = { open = false },
             modifier = Modifier.testTag("tab-menu-$itemId"),
         ) {
-            DropdownMenuItem(
-                text = { Text("Move to New Window") },
-                leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null) },
-                onClick = {
-                    open = false
-                    onMoveToNewWindow()
-                },
-                modifier = Modifier.testTag("tab-menu-new-window-$itemId"),
-            )
+            if (onMoveToNewWindow != null) {
+                DropdownMenuItem(
+                    text = { Text("Move to New Window") },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null) },
+                    onClick = {
+                        open = false
+                        onMoveToNewWindow()
+                    },
+                    modifier = Modifier.testTag("tab-menu-new-window-$itemId"),
+                )
+            }
+            // Evaluated only while open, like the right-click menu's `items`.
+            if (open) {
+                bulkEntries().forEach { entry ->
+                    DropdownMenuItem(
+                        text = { Text(entry.label) },
+                        onClick = {
+                            open = false
+                            entry.onClick()
+                        },
+                        modifier = Modifier.testTag("tab-menu-${entry.label.lowercase().replace(' ', '-')}-$itemId"),
+                    )
+                }
+            }
         }
     }
 }
