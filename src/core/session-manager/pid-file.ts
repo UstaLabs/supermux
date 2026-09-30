@@ -6,13 +6,52 @@ export function isProcessAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
-function isBrokerProcess(pid: number): boolean {
+export interface BrokerProbeDeps {
+  platform: string
+  readProcCmdline: (pid: number) => string
+  /** Runs a command; returns stdout on success, null when it fails or cannot run. */
+  run: (cmd: string[]) => string | null
+}
+
+const defaultProbeDeps: BrokerProbeDeps = {
+  platform: process.platform,
+  readProcCmdline: (pid) => readFileSync(`/proc/${pid}/cmdline`, "utf8"),
+  run: (cmd) => {
+    try {
+      const r = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" })
+      return r.exitCode === 0 ? r.stdout.toString() : null
+    } catch {
+      return null
+    }
+  },
+}
+
+const looksLikeBroker = (s: string): boolean => /bun|mux/i.test(s)
+
+/**
+ * True when the live process `pid` looks like a broker (bun / mux / supermux).
+ * If the platform check itself fails, assume it IS a broker: never steal a live pid's lock on uncertainty.
+ */
+export function isBrokerProcessWith(pid: number, deps: BrokerProbeDeps): boolean {
   try {
-    const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8")
-    return cmdline.includes("bun") || cmdline.includes("mux")
+    if (deps.platform === "linux") return looksLikeBroker(deps.readProcCmdline(pid))
+    if (deps.platform === "win32") {
+      const ps = deps.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid}).Path`])
+      if (ps !== null && ps.trim()) return looksLikeBroker(ps)
+      const tl = deps.run(["tasklist", "/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"])
+      if (tl !== null && tl.trim()) return looksLikeBroker(tl)
+      return true
+    }
+    const out = deps.run(["ps", "-p", String(pid), "-o", "command="])
+    if (out === null || !out.trim()) return true
+    return looksLikeBroker(out)
   } catch {
-    return false
+    return true
   }
+}
+
+function isBrokerProcess(pid: number): boolean {
+  return isBrokerProcessWith(pid, defaultProbeDeps)
 }
 
 export function acquirePidFile(path: string): void {
