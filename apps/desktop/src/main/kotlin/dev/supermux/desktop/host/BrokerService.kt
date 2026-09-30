@@ -246,6 +246,12 @@ Terminal=false
         }
     }.getOrDefault(false)
 
+    /** True iff OUR "service" is the Linux XDG autostart fallback (no systemd unit of ours): it only starts at login. */
+    fun isOursXdgAutostart(env: OsEnv = SystemOsEnv): Boolean = env.os == OsEnv.Os.LINUX && runCatching {
+        fun ours(p: Path) = Files.isRegularFile(p) && MANAGED_MARKER in Files.readString(p)
+        ours(xdgAutostartPath(env)) && !ours(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT"))
+    }.getOrDefault(false)
+
     /** The XDG autostart fallback file (Linux without systemd --user). */
     fun xdgAutostartPath(env: OsEnv): Path = env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE")
 

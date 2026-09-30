@@ -4,11 +4,8 @@ import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.host.PairedHostStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import java.net.URI
 import java.net.http.HttpClient
@@ -22,7 +19,7 @@ import java.time.Duration
  * Production wiring for the first-run [HostWizard] (Plan 3 Task 3): starts/adopts the local broker via
  * the [HostSupervisor], bootstraps a local device token, mints the phone claim, and builds a
  * [HostWizardModel]. All network work is best-effort (never throws); the pieces are runtime-gated (a
- * live local broker) and so are verified via the sidecar smoke + the wizard's unit/Compose tests, not
+ * live local broker) and so are verified via the supervisor's unit tests + the wizard's unit/Compose tests, not
  * a headless run of the full app.
  */
 object DesktopHostBootstrap {
@@ -54,29 +51,19 @@ object DesktopHostBootstrap {
      * The production [HostSupervisor]: `hosting.json` prefs, the materialized bundled binaries
      * ([HostBinaries.resolve]) under the broker's state dir, and the real OS ([SystemOsEnv]).
      */
-    fun supervisor(): HostSupervisor {
+    fun supervisor(): HostSupervisor = sharedSupervisor
+
+    /** One supervisor per process: two would each think they own the broker. */
+    private val sharedSupervisor: HostSupervisor by lazy {
         val stateDir = BrokerPaths.defaultStateDir()
         val prefsStore = HostingPrefsStore()
-        return HostSupervisor(
+        HostSupervisor(
             stateDir = stateDir,
             loadPrefs = prefsStore::load,
             savePrefs = prefsStore::save,
             osEnv = SystemOsEnv,
             materialize = { HostBinaries.resolve(stateDir) },
         )
-    }
-
-    internal fun buildSidecarEnvironment(
-        bins: HostBinaries.SidecarBinaries,
-        hostName: String,
-        existingPath: String? = System.getenv("PATH"),
-    ): Map<String, String> = buildMap {
-        bins.binDir?.let { put("PATH", HostBinaries.prependPath(it, existingPath)) }
-        bins.sessiondPath?.let { put("MUX_SESSIOND_PATH", it.toString()) }
-        // The workspace-terminal backend is named, not searched for: the broker execs exactly the
-        // pinned+patched zmx this app shipped, and never a `zmx` that happens to be on PATH.
-        bins.zmxDir?.let { put("MUX_ZMX_BIN_DIR", it.toString()) }
-        put("MUX_HOST_NAME", hostName)
     }
 
     /**
@@ -152,9 +139,11 @@ object DesktopHostBootstrap {
         scope = scope,
         hostName = hostName,
         provideHostId = {
-            supervisor.hostId.value ?: withTimeoutOrNull(90_000) {
+            // Already running: done. Otherwise run the launch decision and report what it ended in
+            // (no waiting on a hostId that a CantStart will never produce).
+            supervisor.hostId.value?.takeIf { supervisor.status.value is HostingStatus.Running } ?: run {
                 supervisor.ensure()
-                supervisor.hostId.filterNotNull().first()
+                supervisor.hostId.value?.takeIf { supervisor.status.value is HostingStatus.Running }
             }
         },
         provideLocalUrl = { supervisor.localBaseUrl },

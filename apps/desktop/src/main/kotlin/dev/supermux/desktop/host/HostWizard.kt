@@ -50,8 +50,8 @@ import kotlinx.serialization.json.Json
 
 /**
  * First-run desktop-as-host wizard (Plan 3 Task 3 / spec §6, D6 choice A). Makes THIS computer a
- * host: the [BrokerSidecar] brings up/adopts the local broker, the wizard mints a one-time claim from
- * it, builds a v1 [PairingPayload] (hostId from the sidecar, `relayUrl` when hosting-remote), and
+ * host: the [HostSupervisor] brings up/adopts the local broker, the wizard mints a one-time claim from
+ * it, builds a v1 [PairingPayload] (hostId from the supervisor, `relayUrl` when hosting-remote), and
  * renders it as a scannable QR next to the spec §6 copy, a CHECKED-by-default keep-alive box, and the
  * relay-disclosure line.
  *
@@ -92,7 +92,7 @@ fun encodePairingPayload(payload: PairingPayload): String = json.encodeToString(
 // ── UI state ─────────────────────────────────────────────────────────────────────
 
 sealed interface HostWizardUiState {
-    /** Sidecar coming up / claim minting. */
+    /** The local broker coming up / claim minting. */
     data object Preparing : HostWizardUiState
     /** Ready to show the QR. [relayEnabled] switches the disclosure copy. */
     data class Ready(val payloadJson: String, val qr: ImageBitmap, val relayEnabled: Boolean) : HostWizardUiState
@@ -102,7 +102,7 @@ sealed interface HostWizardUiState {
 // ── Stateful model (async claim + QR + keep-alive) ─────────────────────────────────
 
 /**
- * Drives the wizard: awaits the sidecar's hostId, mints a claim ([mintClaim]), builds + encodes the
+ * Drives the wizard: awaits the supervisor's hostId, mints a claim ([mintClaim]), builds + encodes the
  * payload, renders the QR ([qrOf]), and on finish auto-pairs "This computer" into the fleet
  * ([onPairThisComputer]) and installs/skips the login keep-alive ([onInstallKeepAlive]) per the box.
  */
@@ -169,7 +169,7 @@ private const val RELAY_OFF_DISCLOSURE =
 
 /**
  * Pure render of the wizard for a resolved [state]. Stateless so the Compose test drives it with a
- * ready payload (no sidecar/broker). [keepAlive] is hoisted (CHECKED by default at the call site).
+ * ready payload (no supervisor/broker). [keepAlive] is hoisted (CHECKED by default at the call site).
  */
 @Composable
 fun HostWizardContent(

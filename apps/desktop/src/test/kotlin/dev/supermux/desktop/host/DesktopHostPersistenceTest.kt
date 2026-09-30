@@ -36,26 +36,6 @@ class DesktopHostPersistenceTest {
         assertTrue(DesktopHostBootstrap.isNativeHostPlatform(FakeKeepAliveEnv(OsEnv.Os.WINDOWS)))
     }
 
-    @Test fun windowsSidecarEnvironmentPointsBrokerAtMaterializedSessiond() {
-        val binDir = Path.of("C:/Users/test/.mux/state/desktop-assets/bin")
-        val sessiond = binDir.resolve("mux-sessiond.exe")
-        val env = DesktopHostBootstrap.buildSidecarEnvironment(
-            HostBinaries.SidecarBinaries(
-                brokerPath = binDir.resolve("supermux-broker.exe"),
-                binDir = binDir,
-                sessiondPath = sessiond,
-                frpcPath = binDir.resolve("frpc.exe"),
-                tmuxPath = null,
-            ),
-            hostName = "winbox",
-            existingPath = "C:/Windows/System32",
-        )
-
-        assertEquals(sessiond.toString(), env["MUX_SESSIOND_PATH"])
-        assertEquals("winbox", env["MUX_HOST_NAME"])
-        assertTrue(env.getValue("PATH").startsWith(binDir.toString()))
-    }
-
     @Test fun roundTripsMetadataAndTokensAcrossInstances() {
         val p = tempPersistence()
         val hosts = listOf(

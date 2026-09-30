@@ -19,7 +19,7 @@ import java.nio.file.attribute.PosixFilePermissions
  * `bun build --compile` artifact — named `supermux-broker` inside the app image — instead of a
  * separate `bun build --compile src/main.ts` so the desktop host runs the exact release-smoked
  * broker (PWA + pty-helper embedded), with no second compile path to drift. The desktop spawns it
- * with `MUX_WEB_PORT` (see [BrokerSidecar.buildSpawnEnv]); with no args it is the broker.
+ * with `MUX_WEB_PORT` (see [brokerEnv]); with no args it is the broker.
  *
  * ### zmx: an owned directory, never a PATH lookup
  * Workspace terminals run on a PINNED, PATCHED zmx (Plan 4): the broker verifies the daemon and
@@ -43,7 +43,7 @@ import java.nio.file.attribute.PosixFilePermissions
  * system property (jpackage passes `-Dcompose.application.resources.dir=<image>/resources`); that
  * dir is the merged `appResourcesRootDir` `common/ <os>/ <os>-<arch>/` subtree, so a lookup is
  * just `<resourcesDir>/<fileName>`. In a dev checkout the property is absent → tmux/frpc resolve
- * off `$PATH` and the broker path is null (the sidecar then runs `bun <repo>/src/main.ts`).
+ * off `$PATH` and the broker path is null (the supervisor then runs `bun <repo>/src/main.ts`).
  *
  * ### Materialization (mirrors `src/core/runtime-assets.ts`)
  * A bundled binary inside an installed image may be read-only or lose its exec bit through
@@ -52,14 +52,14 @@ import java.nio.file.attribute.PosixFilePermissions
  * shipping a fresh binary re-materializes rather than serving a stale copy, exactly like the
  * broker's own `materializeAsset`. The path/name/policy helpers are pure and unit-tested
  * ([HostBinariesTest]); the copy is exercised by a temp-dir round-trip there and end-to-end by
- * the sidecar smoke pointed at a real bundled broker.
+ * a packaged app running the real bundled broker.
  */
 object HostBinaries {
 
     /** System property Compose Desktop sets in a packaged/jpackaged app image (absent in dev). */
     const val RESOURCES_PROP = "compose.application.resources.dir"
 
-    /** Where materialized execs live under the sidecar state dir (`~/.mux/state`). */
+    /** Where materialized execs live under the broker's state dir (`~/.mux/state`). */
     const val BIN_SUBDIR = "desktop-assets/bin"
 
     /** The zmx bundle's own root, kept OUT of [BIN_SUBDIR] so nothing in it is ever on PATH. */
@@ -71,7 +71,7 @@ object HostBinaries {
 
     enum class Binary { Broker, Sessiond, Tmux, Frpc, Zmx, ZmxHelper, ZmxManifest }
 
-    /** The materialized host binaries handed to the sidecar. Nulls = not bundled / not found. */
+    /** The materialized host binaries the supervisor runs. Nulls = not bundled / not found. */
     data class SidecarBinaries(
         val brokerPath: Path?, // packaged: the bundled broker exec; dev: null (→ bun src/main.ts)
         val binDir: Path?,     // the dir to prepend to the broker's PATH (holds platform helpers), or null

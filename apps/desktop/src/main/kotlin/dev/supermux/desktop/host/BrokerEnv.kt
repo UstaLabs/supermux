@@ -6,12 +6,14 @@ const val RELAY_DOMAIN = "relay.supermux.dev"
 
 /**
  * The broker's env for BOTH modes. [carried] (from a takeover) goes UNDER ours, so ours
- * wins. `MUX_WEB_PUBLIC_URL` is only ever set when carried.
+ * wins. `MUX_WEB_PUBLIC_URL` is only ever set when carried. `MUX_STATE_DIR` is always the app's
+ * state dir, so the broker and the app agree on it whatever the app inherited.
  */
 fun brokerEnv(
     prefs: HostingPrefs,
     bins: HostBinaries.SidecarBinaries,
     carried: Map<String, String>,
+    stateDir: Path,
     hostName: String = DesktopHostBootstrap.defaultHostName(),
     existingPath: String? = System.getenv("PATH"),
     home: String = System.getProperty("user.home") ?: ".",
@@ -20,6 +22,7 @@ fun brokerEnv(
     val out = LinkedHashMap(carried)
     out["MUX_WEB_PORT"] = prefs.port.toString()
     out["MUX_MANAGED_BY"] = "desktop"
+    out["MUX_STATE_DIR"] = stateDir.toString()
     out["MUX_HOST_NAME"] = hostName
     out["MUX_RELAY_DOMAIN"] = if (prefs.relay) RELAY_DOMAIN else ""
     bins.zmxDir?.let { out["MUX_ZMX_BIN_DIR"] = it.toString() }
