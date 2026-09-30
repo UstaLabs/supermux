@@ -2261,12 +2261,13 @@ export class WebChannel implements Channel {
     }
 
     // ── System: broker restart ──────────────────────────────────────────
+    // Only a service manager (systemd / launchd) can bring the broker back, so a
+    // broker that isn't under one — e.g. spawned by the desktop app — refuses
+    // rather than stopping for good.
     if (method === "POST" && path === "/system/restart") {
-      const cp = await import("child_process")
-      cp.spawn("systemctl", ["--user", "restart", "mux.service"], {
-        detached: true,
-        stdio: "ignore",
-      })
+      if (!restartService()) {
+        return this.json({ ok: false, error: "the broker is not running under a service manager, so it can't restart itself" }, 409)
+      }
       return this.json({ ok: true })
     }
 

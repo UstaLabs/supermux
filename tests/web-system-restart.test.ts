@@ -63,6 +63,28 @@ test("POST /system/restart returns 403 cross-origin", async () => {
   expect(res.status).toBe(403)
 })
 
+test("POST /system/restart refuses with 409 when not under a service manager", async () => {
+  // Clearing both gates guarantees restartService() returns false without
+  // spawning anything — safe even when the test runner lives in mux.service.
+  const savedInv = process.env.INVOCATION_ID
+  const savedXpc = process.env.XPC_SERVICE_NAME
+  delete process.env.INVOCATION_ID
+  delete process.env.XPC_SERVICE_NAME
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}/system/restart`, {
+      method: "POST",
+      headers: auth(),
+      body: "{}",
+    })
+    expect(res.status).toBe(409)
+    const body = await res.json() as any
+    expect(body.ok).toBe(false)
+  } finally {
+    if (savedInv !== undefined) process.env.INVOCATION_ID = savedInv
+    if (savedXpc !== undefined) process.env.XPC_SERVICE_NAME = savedXpc
+  }
+})
+
 test.skip("POST /system/restart spawns systemctl and returns ok", async () => {
   // DANGER: this test cannot be safely mocked.
   // The broker uses `await import("child_process")` (ESM dynamic import)

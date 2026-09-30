@@ -16,11 +16,13 @@ import {
   applyUpdate,
   archAssetKeyFor,
   assetKeyFor,
+  launchdLabelFromXpc,
   resolveAndApply,
   restartService,
   restartViaLaunchd,
   restartViaSystemd,
   rollback,
+  systemdUnitFromCgroup,
   type UpdateApplyError,
 } from "./apply"
 import type { FetchLike } from "./checker"
@@ -738,6 +740,44 @@ describe("restartViaLaunchd", () => {
     expect(restartViaLaunchd({})).toBe(false)
     process.env.XPC_SERVICE_NAME = "0"
     expect(restartViaLaunchd({})).toBe(false)
+  })
+
+  test("returns false for a GUI app's XPC name (a broker spawned by the desktop app)", () => {
+    process.env.XPC_SERVICE_NAME = "application.dev.supermux.desktop.120069.120203"
+    expect(restartViaLaunchd({})).toBe(false)
+  })
+})
+
+describe("launchdLabelFromXpc", () => {
+  test("a LaunchAgent's XPC_SERVICE_NAME is its label", () => {
+    expect(launchdLabelFromXpc("dev.supermux.host")).toBe("dev.supermux.host")
+    expect(launchdLabelFromXpc("dev.supermux.broker")).toBe("dev.supermux.broker")
+  })
+
+  test("not launchd-managed: unset, '0', or a LaunchServices app instance", () => {
+    expect(launchdLabelFromXpc(undefined)).toBeNull()
+    expect(launchdLabelFromXpc("")).toBeNull()
+    expect(launchdLabelFromXpc("0")).toBeNull()
+    expect(launchdLabelFromXpc("application.dev.supermux.desktop.120069.120203")).toBeNull()
+  })
+})
+
+describe("systemdUnitFromCgroup", () => {
+  test("reads the user unit the broker actually runs under", () => {
+    expect(
+      systemdUnitFromCgroup("0::/user.slice/user-1000.slice/user@1000.service/app.slice/mux.service\n"),
+    ).toBe("mux.service")
+    expect(
+      systemdUnitFromCgroup("0::/user.slice/user-1000.slice/user@1000.service/app.slice/supermux.service"),
+    ).toBe("supermux.service")
+  })
+
+  test("null outside a service unit (a login scope, a container, no cgroup)", () => {
+    expect(systemdUnitFromCgroup("0::/user.slice/user-1000.slice/session-3.scope")).toBeNull()
+    expect(systemdUnitFromCgroup("0::/")).toBeNull()
+    expect(systemdUnitFromCgroup("")).toBeNull()
+    // The user manager itself is not the broker's unit.
+    expect(systemdUnitFromCgroup("0::/user.slice/user-1000.slice/user@1000.service/init.scope")).toBeNull()
   })
 })
 

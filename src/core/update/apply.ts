@@ -46,7 +46,7 @@
 //   apply/rollback while the lock is held returns `busy`. A lock older than
 //   STALE_LOCK_MS is assumed to be from a crashed process: it's unlinked and the
 //   acquire is retried once.
-import { chmodSync, closeSync, existsSync, linkSync, openSync, renameSync, statSync, unlinkSync } from "fs"
+import { chmodSync, closeSync, existsSync, linkSync, openSync, readFileSync, renameSync, statSync, unlinkSync } from "fs"
 import { dirname, join } from "path"
 import { channelFor, isUpdateAvailable, parseVersionsJson, type VersionsJson } from "./versions"
 import type { FetchLike } from "./checker"
@@ -556,9 +556,30 @@ export function rollback(opts: { execPathOverride?: string }):
  * a "restart required" state). The actual spawn is intentionally NOT unit-tested
  * (no systemd in CI); the INVOCATION_ID gate is factored so the false path is.
  */
+/**
+ * The systemd unit this process runs in, read from its cgroup v2 path
+ * (`0::/user.slice/…/app.slice/mux.service` → "mux.service"). Null outside a
+ * `.service` (login scope, container, no cgroup). Lets a restart target the unit
+ * that actually runs us — installs name it `supermux.service` or `mux.service`.
+ */
+export function systemdUnitFromCgroup(cgroup: string): string | null {
+  const path = cgroup.split("\n").find((l) => l.startsWith("0::"))?.slice(3).trim()
+  const leaf = path?.split("/").pop() ?? ""
+  if (!leaf.endsWith(".service") || /^user@\d+\.service$/.test(leaf)) return null
+  return leaf
+}
+
+function ownSystemdUnit(): string | null {
+  try {
+    return systemdUnitFromCgroup(readFileSync("/proc/self/cgroup", "utf8"))
+  } catch {
+    return null
+  }
+}
+
 export function restartViaSystemd(opts: { unit?: string }): boolean {
   if (!process.env.INVOCATION_ID) return false
-  const unit = opts.unit ?? process.env.MUX_SERVICE_UNIT ?? "supermux"
+  const unit = opts.unit ?? process.env.MUX_SERVICE_UNIT ?? ownSystemdUnit() ?? "supermux"
   // Detached so it survives this process exiting; the `sleep 1` lets the current
   // process exit cleanly before systemctl restarts the unit. The unit name is
   // passed as an ARGV positional ("$1"), NOT interpolated into the script, so a
@@ -577,15 +598,27 @@ export function restartViaSystemd(opts: { unit?: string }): boolean {
 }
 
 /**
- * macOS launchd analogue of restartViaSystemd. A launchd-managed LaunchAgent has
- * XPC_SERVICE_NAME set to its label; a shell-launched process has it unset or
- * "0". Gate on that so we only kickstart when actually service-managed, then
- * schedule a detached `launchctl kickstart -k gui/<uid>/<label>` and return true.
+ * The launchd label from XPC_SERVICE_NAME, or null when not a launchd job. A
+ * LaunchAgent gets its label; a shell-launched process gets nothing or "0"; a
+ * GUI app (and so a broker the desktop app spawned) gets a LaunchServices
+ * instance name, `application.<bundle-id>.<n>.<n>`, which is not kickstartable.
+ */
+export function launchdLabelFromXpc(xpc: string | undefined): string | null {
+  if (!xpc || xpc === "0" || xpc.startsWith("application.")) return null
+  return xpc
+}
+
+/**
+ * macOS launchd analogue of restartViaSystemd. Gate on XPC_SERVICE_NAME so we
+ * only kickstart when actually service-managed, then schedule a detached
+ * `launchctl kickstart -k gui/<uid>/<label>` and return true. The label defaults
+ * to our own job's, since installs differ (`dev.supermux.broker` from
+ * `supermux setup`, `dev.supermux.host` from the native host).
  */
 export function restartViaLaunchd(opts: { label?: string }): boolean {
-  const xpc = process.env.XPC_SERVICE_NAME
-  if (!xpc || xpc === "0") return false
-  const label = opts.label ?? process.env.MUX_SERVICE_LABEL ?? "dev.supermux.broker"
+  const ownLabel = launchdLabelFromXpc(process.env.XPC_SERVICE_NAME)
+  if (!ownLabel) return false
+  const label = opts.label ?? process.env.MUX_SERVICE_LABEL ?? ownLabel
   const uid = typeof process.getuid === "function" ? process.getuid() : 0
   // Detached; `sleep 1` lets this process exit before the kickstart -k restart.
   // The label is passed as an ARGV positional ("$1"), never interpolated into the
