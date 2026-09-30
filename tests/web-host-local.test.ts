@@ -1,5 +1,6 @@
 import { test, expect, beforeEach, afterEach } from "bun:test"
 import { existsSync, unlinkSync } from "fs"
+import { request } from "node:http"
 import { WebChannel, __resetAuthFailures } from "../src/channels/web"
 
 const DEV_PATH = `/tmp/devices-host-local-${process.pid}.json`
@@ -36,6 +37,8 @@ test("a direct loopback request sees managedBy and stateDir", async () => {
   expect(body.managedBy).toBe("desktop")
   expect(body.stateDir).toBe("/s")
   expect(body.build).toBe("1.5.0 (abc)")
+  expect(body.mode).toBe("binary")
+  expect(body.platform).toBe("darwin")
 })
 
 test("a loopback request that went through the relay (X-Forwarded-For) does not", async () => {
@@ -44,4 +47,31 @@ test("a loopback request that went through the relay (X-Forwarded-For) does not"
   })).json() as any
   expect(body.managedBy).toBeUndefined()
   expect(body.stateDir).toBeUndefined()
+})
+
+test("a loopback request that carries CF-Connecting-IP does not", async () => {
+  const body = await (await fetch(`http://127.0.0.1:${PORT}/host`, {
+    headers: { "cf-connecting-ip": "203.0.113.9" },
+  })).json() as any
+  expect(body.managedBy).toBeUndefined()
+  expect(body.stateDir).toBeUndefined()
+  expect(body.build).toBeUndefined()
+})
+
+// DNS rebinding: a page on evil.example resolved to 127.0.0.1 arrives from a loopback peer with
+// no forwarding headers, but its Host header is the attacker's domain.
+test("a loopback request with a non-loopback Host header does not", async () => {
+  const body = await new Promise<any>((resolve, reject) => {
+    const r = request({ host: "127.0.0.1", port: PORT, path: "/host", headers: { host: `evil.example:${PORT}` } }, res => {
+      let d = ""
+      res.on("data", c => (d += c))
+      res.on("end", () => resolve(JSON.parse(d)))
+    })
+    r.on("error", reject)
+    r.end()
+  })
+  expect(body.hostId).toBe("h1")
+  expect(body.managedBy).toBeUndefined()
+  expect(body.stateDir).toBeUndefined()
+  expect(body.build).toBeUndefined()
 })

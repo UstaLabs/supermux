@@ -88,7 +88,8 @@ export const SERVE_IDLE_TIMEOUT_SECONDS = 255
 // as this user can simply read the device token out of the state dir, so the limiter was
 // never a boundary against it. The boundary that matters is remote traffic, which arrives
 // either directly (peer IP, header ignored) or via the proxy (bucketed per real client).
-export const DEFAULT_TRUSTED_PROXY_PEERS = ["127.0.0.1", "::1", "::ffff:127.0.0.1"]
+const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"])
+export const DEFAULT_TRUSTED_PROXY_PEERS = [...LOOPBACK_PEERS]
 
 // Resolved once per request at the single entry point, where Bun's `server` — and so the
 // real socket peer — is in scope. Without a peer fallback every direct client (the native
@@ -96,11 +97,12 @@ export const DEFAULT_TRUSTED_PROXY_PEERS = ["127.0.0.1", "::1", "::ffff:127.0.0.
 // throttled every other client on the host.
 const rateLimitBucket = new WeakMap<Request, string>()
 
-// Set per request in resolveRateLimitBucket: a loopback socket peer with NO proxy-declared client.
+// Set per request in classifyPeer: a loopback socket peer with NO proxy-declared client AND a
+// loopback Host header (a DNS-rebinding page reaches us from loopback but carries its own domain).
 // frpc (relay) and nginx forward from loopback but always add X-Forwarded-For, so relay traffic
 // never counts as local.
 const directLoopback = new WeakMap<Request, boolean>()
-const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"])
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"])
 
 function clientIp(req: Request): string {
   return rateLimitBucket.get(req) ?? "unknown"
@@ -501,9 +503,11 @@ export class WebChannel implements Channel {
     if (event === "inbound") this.inboundHandlers.push(handler)
   }
 
-  /** Bucket this request by its real origin: the proxy-declared client when we trust the
-   *  peer to declare one, otherwise the socket peer itself. */
-  private resolveRateLimitBucket(req: Request, server: import("bun").Server<WSData>): void {
+  /** Classify this request's origin: (1) its rate-limit bucket — the proxy-declared client when
+   *  we trust the peer to declare one, otherwise the socket peer itself; (2) whether it is a
+   *  direct local caller (loopback peer, no forwarding headers, loopback Host), which /host uses
+   *  to decide whether to reveal local-only facts. */
+  private classifyPeer(req: Request, server: import("bun").Server<WSData>): void {
     const peer = server.requestIP(req)?.address ?? ""
     const trusted = this.opts.trustedProxyPeers ?? DEFAULT_TRUSTED_PROXY_PEERS
     const forwarded = trusted.includes(peer)
@@ -511,7 +515,9 @@ export class WebChannel implements Channel {
       : undefined
     rateLimitBucket.set(req, forwarded || peer || "unknown")
     const proxied = req.headers.has("x-forwarded-for") || req.headers.has("cf-connecting-ip")
-    directLoopback.set(req, LOOPBACK_PEERS.has(peer) && !proxied)
+    let hostName = ""
+    try { hostName = new URL(`http://${req.headers.get("host") ?? ""}`).hostname } catch { /* malformed Host */ }
+    directLoopback.set(req, LOOPBACK_PEERS.has(peer) && !proxied && LOOPBACK_HOSTS.has(hostName))
   }
 
   private checkRateLimit(req: Request): boolean {
@@ -723,7 +729,7 @@ export class WebChannel implements Channel {
   }
 
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
-    this.resolveRateLimitBucket(req, server)
+    this.classifyPeer(req, server)
     const url = new URL(req.url)
     if (this.opts.proxyBaseDomain) {
       const host = req.headers.get("host") ?? ""
