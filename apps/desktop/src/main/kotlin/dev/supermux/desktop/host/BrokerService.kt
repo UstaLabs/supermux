@@ -362,7 +362,13 @@ Terminal=false
                 Files.deleteIfExists(taskXml)
                 return Result.Removed(null)
             }
-            runElevatedSchtasksBatch(env, listOf(listOf("/Delete", "/TN", WINDOWS_TASK_NAME, "/F")))
+            // /End first: the task's PowerShell loop would otherwise respawn the broker ~5 s after taskkill.
+            val ended = runElevatedSchtasksBatch(env, listOf(
+                listOf("/End", "/TN", WINDOWS_TASK_NAME),
+                listOf("/Delete", "/TN", WINDOWS_TASK_NAME, "/F"),
+            ))
+            // Declined UAC or a failed /Delete leaves the task registered; its loop would respawn the broker.
+            if (!ended) return Result.Failed("Windows Scheduled Task remove failed: the elevated /End + /Delete did not succeed")
             env.run(listOf("taskkill", "/F", "/IM", WINDOWS_BROKER_EXE))
             val existed = Files.deleteIfExists(taskXml)
             Result.Removed(if (existed) taskXml else null)
@@ -376,7 +382,9 @@ Terminal=false
      */
     private fun runElevatedSchtasksBatch(env: OsEnv, calls: List<List<String>>): Boolean {
         val inner = calls.joinToString("; ") { args ->
-            "& schtasks.exe ${args.joinToString(" ") { powershellLiteral(it) }}; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }"
+            val call = "& schtasks.exe ${args.joinToString(" ") { powershellLiteral(it) }}"
+            // /End fails when the task is not running, which is fine: keep going to the next call.
+            if (args.firstOrNull() == "/End") call else "$call; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }"
         }
         val innerArgs = listOf("-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsArgument(inner))
             .joinToString(" ")

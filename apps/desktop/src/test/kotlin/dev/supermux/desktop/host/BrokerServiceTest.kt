@@ -217,6 +217,31 @@ class BrokerServiceTest {
         assertTrue("/Create" in elevated[0].last() && "/Run" in elevated[0].last())
     }
 
+    @Test fun windowsRemoveEndsTheTaskBeforeDeletingThenKillsTheBroker() {
+        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory())
+        BrokerService.install(winSpec, env)
+        env.ran.clear()
+        BrokerService.remove(env)
+        val elevated = env.ran.filter { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") }
+        assertEquals(1, elevated.size)
+        val script = elevated[0].last()
+        assertTrue("/End" in script && "/Delete" in script && script.indexOf("/End") < script.indexOf("/Delete"), script)
+        val kill = listOf("taskkill", "/F", "/IM", "supermux-broker.exe")
+        assertTrue(env.ran.indexOf(kill) > env.ran.indexOf(elevated[0]))
+    }
+
+    @Test fun windowsRemoveFailsWhenTheElevatedBatchFails() {
+        val home = createTempDirectory()
+        val installEnv = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home)
+        BrokerService.install(winSpec, installEnv)
+        val taskXml = installEnv.localAppData.resolve("Supermux/supermux-host-task.xml")
+        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home,
+            failIf = { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") })
+        assertIs<BrokerService.Result.Failed>(BrokerService.remove(env))
+        assertTrue(env.ran.none { it.firstOrNull() == "taskkill" })
+        assertTrue(Files.exists(taskXml))
+    }
+
     @Test fun windowsRestartIsTaskkillWithoutElevation() {
         val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory())
         assertTrue(BrokerService.restart(env))
@@ -258,6 +283,7 @@ class FakeOsEnv(
     private val failing: Set<List<String>> = emptySet(),
     /** Per-argv scripted results, consumed in order; once empty (or absent) the default applies. */
     private val scripted: Map<List<String>, List<OsEnv.RunResult>> = emptyMap(),
+    private val failIf: (List<String>) -> Boolean = { false },
 ) : OsEnv {
     val ran = mutableListOf<List<String>>()
     val sleeps = mutableListOf<Long>()
@@ -268,7 +294,7 @@ class FakeOsEnv(
         ran += argv
         val n = calls.merge(argv, 1, Int::plus)!! - 1
         scripted[argv]?.getOrNull(n)?.let { return it }
-        return if (argv in failing) OsEnv.RunResult(1, "", "failed") else OsEnv.RunResult(0, "", "")
+        return if (argv in failing || failIf(argv)) OsEnv.RunResult(1, "", "failed") else OsEnv.RunResult(0, "", "")
     }
     override fun runCapture(argv: List<String>): String? { ran += argv; return captures[argv] }
     override fun sleep(ms: Long) { sleeps += ms }
