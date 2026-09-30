@@ -27,8 +27,8 @@ object DesktopHostBootstrap {
     private const val AUTH_COOKIE = "cmux_token" // matches the broker's src/channels/web/cookies.ts
 
     /** Every supported desktop OS hosts natively; unknown platforms fall back to client onboarding. */
-    fun isNativeHostPlatform(env: KeepAliveEnv = SystemKeepAliveEnv): Boolean =
-        env.os == KeepAlive.Os.MAC || env.os == KeepAlive.Os.LINUX || env.os == KeepAlive.Os.WINDOWS
+    fun isNativeHostPlatform(env: OsEnv = SystemOsEnv): Boolean =
+        env.os == OsEnv.Os.MAC || env.os == OsEnv.Os.LINUX || env.os == OsEnv.Os.WINDOWS
 
     /**
      * Walk up from the working dir to find the dev repo root (the dir containing `src/main.ts`) so a
@@ -147,17 +147,8 @@ object DesktopHostBootstrap {
             )
         },
         onInstallKeepAlive = { keepAlive ->
-            if (keepAlive) {
-                runCatching {
-                    KeepAlive.install(
-                        KeepAlive.Spec(
-                            exec = keepAliveExec,
-                            hostId = TODO("Task 8"),
-                            hostName = hostName,
-                        ),
-                    )
-                }
-            }
+            // Task 8 rewires this to the HostSupervisor / BrokerService.
+            if (keepAlive) TODO("Task 8")
         },
     )
 

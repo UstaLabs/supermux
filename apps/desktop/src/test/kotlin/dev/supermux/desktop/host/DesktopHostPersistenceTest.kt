@@ -11,13 +11,14 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopHostPersistenceTest {
-    private class FakeKeepAliveEnv(override val os: KeepAlive.Os) : KeepAliveEnv {
+    private class FakeKeepAliveEnv(override val os: OsEnv.Os) : OsEnv {
         override val home: Path = Path.of(".")
         override val localAppData: Path = home.resolve("AppData/Local")
         override val uid: Long? = null
         override val xdgRuntimeDir: String? = null
         override fun hasCommand(name: String) = false
         override fun run(argv: List<String>) = false
+        override fun runCapture(argv: List<String>): String? = null
     }
 
     private fun tempPersistence(): DesktopHostPersistence {
@@ -30,7 +31,7 @@ class DesktopHostPersistenceTest {
     }
 
     @Test fun windowsUsesTheSameNativeHostOnboardingAsPosix() {
-        assertTrue(DesktopHostBootstrap.isNativeHostPlatform(FakeKeepAliveEnv(KeepAlive.Os.WINDOWS)))
+        assertTrue(DesktopHostBootstrap.isNativeHostPlatform(FakeKeepAliveEnv(OsEnv.Os.WINDOWS)))
     }
 
     @Test fun windowsSidecarEnvironmentPointsBrokerAtMaterializedSessiond() {
