@@ -6,6 +6,7 @@ package dev.supermux.ui.editor
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.runtime.setValue
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
@@ -17,7 +18,9 @@ import dev.supermux.net.ReviewComment
  *  (Android EditorState.kt:44-47 parity). */
 class DiffState {
     var showDiff by mutableStateOf(false)
-    var diffRepos by mutableStateOf<List<RepoDiff>>(emptyList())
+    // neverEqualPolicy: a reload that lists the same files (a lazy list has no patch text, so a
+    // same-size edit or a revert can look equal) must still reach DiffView, which re-reads the files.
+    var diffRepos by mutableStateOf<List<RepoDiff>>(emptyList(), neverEqualPolicy())
     var diffComments by mutableStateOf<List<ReviewComment>>(emptyList())
     var diffLoading by mutableStateOf(false)
 

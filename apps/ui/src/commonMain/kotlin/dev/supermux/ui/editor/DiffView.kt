@@ -84,6 +84,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
+import dev.supermux.net.BlobText
 import dev.supermux.net.DiffFile
 import dev.supermux.net.RepoDiff
 import dev.supermux.net.RepoRefs
@@ -157,6 +158,8 @@ fun DiffView(
     postComment: (suspend (AddCommentBody) -> ReviewComment?)? = null,
     /** The open documents: a revert goes through the file's document when it is open (and is not offered while it is dirty). */
     documents: DocumentStore? = null,
+    /** A lazy file's base text by blob (repo, sha, force). Null: lazy files show "Couldn't load". */
+    baseText: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -173,6 +176,9 @@ fun DiffView(
     val sideBySide by uiPrefs.editorDiffSideBySide.collectAsState(EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT)
     // Kept by the pane, not the (lazy) file items: a rebuilt item finds its drafts and its scroll.
     val nativeDrafts = remember { HashMap<String, MapReviewDrafts>() }
+    val baseCache = remember { BaseTextCache() }
+    // Bumped by every new `repos` (a reload, even of an equal list): the files' working copies are re-read.
+    val generation = remember { ReloadGeneration() }.of(repos)
     val nativeScroll = remember { HashMap<String, dev.supermux.editor.compose.EditorScrollPosition>() }
     val native = if (readFile != null) {
         NativeDiffSupport(
@@ -188,6 +194,9 @@ fun DiffView(
             documents = documents,
             drafts = { repo, path -> nativeDrafts.getOrPut("$repo $path") { MapReviewDrafts() } },
             scroll = nativeScroll,
+            baseText = baseText,
+            baseCache = baseCache,
+            generation = generation,
         )
     } else null
     // `repo||path||newLine` of the line whose composer is open (null = none).
@@ -327,8 +336,10 @@ fun DiffView(
 
         // ── Body ──────────────────────────────────────────────────────────────
         if (totalFiles == 0) {
+            // A repo whose listing failed has no files either: say why instead of "no changes".
+            repos.forEach { RepoBanner(it) }
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text("No changes found", color = cs.onSurfaceVariant, fontSize = 13.sp)
+                if (repos.none { it.error != null }) Text("No changes found", color = cs.onSurfaceVariant, fontSize = 13.sp)
             }
         } else {
             LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
@@ -345,7 +356,10 @@ fun DiffView(
                                 },
                             )
                             HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
+                            RepoBanner(repo)
                         }
+                    } else if (repo.error != null || repo.truncated) {
+                        item(key = "repo-banner:${repo.repo}") { RepoBanner(repo) }
                     }
                     if (!multiRepo || repo.repo in expandedRepos) {
                         if (treeView) {
@@ -863,7 +877,7 @@ private fun FileSection(
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
-    val stats = remember(file.diff) { diffStats(file.diff) }
+    val stats = remember(file) { fileStats(file) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -934,7 +948,7 @@ private fun FileSection(
             val lines = remember(file.diff) { parseDiffLines(file.diff) }
             when {
                 file.binary -> Placeholder("Binary file — no text diff")
-                file.modeChange && lines.isEmpty() -> Placeholder("File mode changed")
+                !file.lazy && file.modeChange && lines.isEmpty() -> Placeholder("File mode changed")
                 else -> {
                     val body: @Composable () -> Unit = {
                         DiffRows(
@@ -975,6 +989,8 @@ private fun FileSection(
                             testTagIndex = testTagIndex,
                             fallback = rows,
                         )
+                    } else if (file.lazy) {
+                        Placeholder("Open this file to see its changes")
                     } else {
                         rows()
                     }
@@ -1232,6 +1248,20 @@ private fun Tag(text: String) {
     Text(text, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = Space.xs))
 }
 
+/** Under a repo's header (above the list with one repo): its listing failed, or was cut short. */
+@Composable
+private fun RepoBanner(repo: RepoDiff) {
+    repo.error?.let { Placeholder("Couldn't list changes: $it") }
+    if (repo.truncated) {
+        Text(
+            "Showing ${repo.files.size} of ${repo.total ?: repo.files.size} files",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.xs).testTag("diff_truncated"),
+        )
+    }
+}
+
 @Composable
 private fun Placeholder(text: String) {
     val cs = MaterialTheme.colorScheme
@@ -1372,4 +1402,18 @@ internal class NativeDiffSupport(
     val documents: DocumentStore? = null,
     val drafts: (repo: String, path: String) -> ReviewDrafts = { _, _ -> MapReviewDrafts() },
     val scroll: MutableMap<String, dev.supermux.editor.compose.EditorScrollPosition> = HashMap(),
+    val baseText: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
+    val baseCache: BaseTextCache = BaseTextCache(),
+    /** The pane's reload count: a file's working copy is re-read when it changes. */
+    val generation: Int = 0,
 )
+
+/** Counts the distinct `repos` lists (by identity) a pane was given: see [NativeDiffSupport.generation]. */
+private class ReloadGeneration {
+    private var last: Any? = null
+    private var n = 0
+    fun of(repos: Any): Int {
+        if (repos !== last) { last = repos; n++ }
+        return n
+    }
+}

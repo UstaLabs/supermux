@@ -34,6 +34,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,9 +57,11 @@ import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.net.AddCommentBody
+import dev.supermux.net.BlobText
 import dev.supermux.net.RepoDiff
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.WalkthroughStep
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.runtime.snapshotFlow
@@ -77,8 +80,11 @@ fun WalkthroughView(
     onOpenFile: (repo: String, path: String, line: Int?) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    /** A lazy Changes file's base text by blob (repo, sha, force); null: a lazy step shows no diff. */
+    baseText: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
+    val baseCache = remember { BaseTextCache() }
     val focusRequester = remember { FocusRequester() }
     var drawerOpen by remember { mutableStateOf(false) }
     var dragTotal by remember { mutableFloatStateOf(0f) }
@@ -134,6 +140,8 @@ fun WalkthroughView(
                     onAddComment = onAddComment,
                     onResolve = onResolve,
                     onOpenFile = onOpenFile,
+                    baseText = baseText,
+                    baseCache = baseCache,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -216,17 +224,41 @@ private fun StepSlide(
     onAddComment: suspend (AddCommentBody) -> ReviewComment?,
     onResolve: suspend (String) -> Boolean,
     onOpenFile: (String, String, Int?) -> Unit,
+    baseText: (suspend (String, String, Boolean) -> BlobText)?,
+    baseCache: BaseTextCache,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
     val path = step.path
+    // A lazy Changes file has no patch: its base is the blob (none: a new file). Loading → null;
+    // loaded → Result(base or null, null: no base to give, so the region reverses the (empty) patch).
+    val diffFile = walkthroughDiffFile(repos, step)
+    val lazy = diffFile?.lazy == true
+    val baseBlob = diffFile?.baseBlob
+    val lazyBase by produceState<LazyBase?>(null, step.repo, path, baseBlob, lazy) {
+        value = null
+        value = when {
+            !lazy -> LazyBase(null)
+            baseBlob == null -> LazyBase("")
+            baseText == null -> LazyBase(null)
+            else -> when (val r = try { baseCache.get(step.repo, baseBlob, false, baseText) } catch (e: CancellationException) { throw e } catch (_: Exception) { BlobText.Failed("") }) {
+                is BlobText.Text -> LazyBase(LineEndings.load(r.text).text)
+                is BlobText.TooLarge -> LazyBase(null, "Large file — changes not shown")
+                is BlobText.Binary -> LazyBase(null, "Binary file — changes not shown")
+                is BlobText.Failed -> LazyBase(null, "Couldn't load the previous version — changes not shown")
+            }
+        }
+    }
     var content by remember(step.repo, path) { mutableStateOf<String?>(null) }
     var loadError by remember(step.repo, path) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(step.repo, path, state.walkthrough?.revision) {
         content = null
         loadError = null
-        if (path != null) readFile(step.repo, path).fold(onSuccess = { content = it }, onFailure = { loadError = it.message })
+        if (path != null) readFile(step.repo, path).fold(
+            // The editor rope is \n-only, as is the base (the blob, or the patch diffBase strips).
+            onSuccess = { content = LineEndings.load(it).text },
+            onFailure = { loadError = it.message })
     }
 
     Column(modifier.padding(horizontal = Space.md, vertical = Space.sm), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
@@ -272,8 +304,11 @@ private fun StepSlide(
         }
         when {
             loadError != null -> Text(loadError ?: "Could not load file", color = cs.error)
-            content == null -> Text("Loading code…", color = cs.onSurfaceVariant)
+            content == null || lazyBase == null -> Text("Loading code…", color = cs.onSurfaceVariant)
             else -> {
+                lazyBase?.notice?.let {
+                    Text(it, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("walkthrough_base_notice"))
+                }
                 // The step's code on the diff plugin (threads, composer and paging inside).
                 Box(Modifier.fillMaxWidth().weight(1f).heightIn(min = 240.dp)) {
                     NativeWalkthroughRegion(
@@ -281,16 +316,20 @@ private fun StepSlide(
                         step = step,
                         path = path,
                         text = content.orEmpty(),
-                        patch = walkthroughDiffFile(repos, step)?.diff,
+                        patch = diffFile?.diff,
                         onAddComment = onAddComment,
                         onResolve = onResolve,
                         modifier = Modifier.fillMaxSize(),
+                        base = lazyBase?.text,
                     )
                 }
             }
         }
     }
 }
+
+/** A lazy step's base text (null: none to give) and, when the blob couldn't be used, why. */
+private class LazyBase(val text: String?, val notice: String? = null)
 
 private fun walkthroughDiffFile(repos: List<RepoDiff>, step: WalkthroughStep) =
     repos.firstOrNull { it.repo == step.repo }?.files?.firstOrNull { it.path == step.path }

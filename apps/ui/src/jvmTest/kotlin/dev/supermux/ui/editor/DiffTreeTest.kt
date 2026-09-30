@@ -129,4 +129,16 @@ class DiffTreeTest {
         // a.kt: +2 -1; b.kt: +1 -1; pic.png ignored as binary
         assertEquals(3 to 2, folderDiffStats(src))
     }
+
+    @Test fun folder_diff_stats_sum_lazy_files_list_counts() {
+        val tree = buildDiffTree(
+            listOf(
+                DiffFile(path = "src/a.kt", status = "modified", lazy = true, added = 4, removed = 1),
+                DiffFile(path = "src/b.kt", status = "modified", lazy = true, added = 2, removed = null),
+                file("src/c.kt", diff = "@@ -1 +1 @@\n-x\n+y\n"),
+            ),
+        )
+        val src = assertIs<DiffTreeNode.Folder>(tree.single())
+        assertEquals(7 to 2, folderDiffStats(src))
+    }
 }
