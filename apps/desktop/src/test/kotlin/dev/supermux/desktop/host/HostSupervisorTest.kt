@@ -48,12 +48,13 @@ private class Harness(
     prefs: HostingPrefs = HostingPrefs(background = false),
     failing: Set<List<String>> = emptySet(),
     commands: Set<String> = setOf("launchctl", "systemctl", "loginctl", "schtasks", "powershell.exe"),
+    scripted: Map<List<String>, List<OsEnv.RunResult>> = emptyMap(),
     val repo: Path? = null,
     xdg: String? = null,
     val home: Path = createTempDirectory("sup-home"),
     val state: Path = createTempDirectory("sup-state"),
 ) {
-    val env = FakeOsEnv(os = os, home = home, uid = 501, xdgRuntimeDir = xdg, commands = commands, failing = failing)
+    val env = FakeOsEnv(os = os, home = home, uid = 501, xdgRuntimeDir = xdg, commands = commands, failing = failing, scripted = scripted)
     val events = mutableListOf<String>()
     var saved = prefs
     val children = mutableListOf<FakeChild>()
@@ -1160,6 +1161,65 @@ class HostSupervisorTest {
         assertEquals(HostingStatus.CantStart(HostSupervisor.RESTORED_SILENT), h.sup.status.value)
         assertTrue(h.launches.isEmpty())
         assertFalse(Files.exists(h.state.resolve("desktop-carried-env.pending.json")))
+    }
+
+    // ── service update on real launchd (VM scenario S7) ──
+
+    private fun updateWithBootstrapFailing(ts: TestScope, failures: Int): Harness {
+        val home = createTempDirectory("sup-home")
+        val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist")
+        val boot = listOf("launchctl", "bootstrap", "gui/501", plist.toString())
+        val io5 = OsEnv.RunResult(5, "", "Bootstrap failed: 5: Input/output error")
+        val h = Harness(ts, home = home, prefs = HostingPrefs(background = true), scripted = mapOf(boot to List(failures) { io5 }))
+        h.writeOurPlist()
+        // The old broker's pid never goes away, so the child fallback is refused.
+        Files.writeString(h.state.resolve("broker.pid"), "999")
+        h.table.procs[999] = ProcInfo(0, "/s/desktop-assets/bin/supermux-broker") to null
+        h.probeFn = { if (h.env.ran.count { it == boot } > failures) h.desktop() else h.desktop(build = "1.4.0 (old)") }
+        return h
+    }
+
+    @Test fun serviceUpdateThatCantInstallOrFallBackStillLeavesOurDefinitionAndSaysWhy() = runTest {
+        val h = updateWithBootstrapFailing(this, failures = 100)
+        h.sup.ensure()
+        val s = assertIs<HostingStatus.CantStart>(h.sup.status.value)
+        assertTrue("Input/output error" in s.reason, s.reason)
+        assertTrue(Files.exists(h.ourPlist)) // never "plist deleted and nothing running"
+        assertTrue(BrokerService.MANAGED_MARKER in Files.readString(h.ourPlist))
+        assertTrue(h.launches.isEmpty())
+    }
+
+    @Test fun serviceUpdateWhoseInstallFailsOnceIsReinstalledWhenTheChildIsRefused() = runTest {
+        val h = updateWithBootstrapFailing(this, failures = 10)
+        h.sup.ensure()
+        assertEquals(running, h.sup.status.value)
+        assertTrue(Files.exists(h.ourPlist))
+        assertTrue(h.launches.isEmpty())
+        assertNull(h.sup.backgroundError.value)
+    }
+
+    @Test fun anExitingBrokerPidIsWaitedForThenTheChildStarts() = runTest {
+        val h = Harness(this)
+        val exiting = FakeChild(999)
+        Files.writeString(h.state.resolve("broker.pid"), "999")
+        h.table.procs[999] = ProcInfo(0, "/s/desktop-assets/bin/supermux-broker") to exiting
+        backgroundScope.launch { kotlinx.coroutines.delay(5_000); exiting.exit(0) }
+        h.probeFn = h.healthyIfChild()
+        var startedAt = -1L
+        h.onStart = { startedAt = testScheduler.currentTime }
+        h.sup.ensure()
+        assertEquals(1, h.launches.size)
+        assertTrue(startedAt >= 5_000, "started at $startedAt")
+        assertEquals(running, h.sup.status.value)
+    }
+
+    @Test fun theHostLogRotatesAtItsLimit() {
+        val dir = createTempDirectory("hostlog")
+        val log = HostLogFile(dir.resolve("desktop-host.log"), maxBytes = 64)
+        repeat(5) { log.append("line $it with some padding to pass the limit") }
+        assertTrue(Files.exists(dir.resolve("desktop-host.log.1")))
+        assertTrue(Files.size(dir.resolve("desktop-host.log")) < 200)
+        assertFalse(Files.exists(dir.resolve("desktop-host.log.2")))
     }
 
     private fun writeJournal(h: Harness, old: Path) {

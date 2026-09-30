@@ -33,7 +33,8 @@ internal suspend fun HostSupervisor.launchLocked(
         return launchChildLocked(prefs, bins, carried, healthTimeoutMs)
     }
     // Installing over OUR service replaces its broker (restart), so only a fresh install can add a second one.
-    if (!ourServiceInstalled()) secondBrokerReason(prefs.port)?.let { return it }
+    val replacingOurs = ourServiceInstalled()
+    if (!replacingOurs) secondBrokerReason(prefs.port)?.let { return it }
     val spec = BrokerService.Spec(broker, brokerEnvFor(prefs, bins, carried), logFile)
     val failure = when (val result = withContext(io) { BrokerService.install(spec, osEnv) }) {
         is BrokerService.Result.Installed -> when {
@@ -63,7 +64,21 @@ internal suspend fun HostSupervisor.launchLocked(
     mode = null
     _backgroundError.value = "Couldn't keep supermux running in the background: $failure"
     log(_backgroundError.value!!)
-    return launchChildLocked(prefs, bins, carried, healthTimeoutMs)
+    val childWhy = launchChildLocked(prefs, bins, carried, healthTimeoutMs) ?: return null
+    if (!replacingOurs) return childWhy
+    // We replaced our own running service, removed it, and the child was refused too. Never end with
+    // nothing running and our definition gone: put the service back (the old job is gone by now).
+    log("the child fallback failed too ($childWhy); reinstalling the background service")
+    return when (val again = withContext(io) { BrokerService.install(spec, osEnv) }) {
+        is BrokerService.Result.Installed -> {
+            mode = HostSupervisor.Mode.SERVICE
+            childDetached = false
+            _backgroundError.value = null
+            awaitHealthy(prefs.port, null, healthTimeoutMs)
+        }
+        is BrokerService.Result.Failed -> "Couldn't restart the background service: ${again.message}"
+        else -> "Couldn't restart the background service: $failure"
+    }
 }
 
 /**
@@ -201,7 +216,22 @@ internal suspend fun HostSupervisor.ourServiceInstalled(): Boolean =
  * The broker's own guard against a second broker on one state dir reads /proc (Linux only), so
  * check its pid file here: a live process that isn't our child means don't start another.
  */
-internal fun HostSupervisor.secondBrokerReason(port: Int): String? {
+internal suspend fun HostSupervisor.secondBrokerReason(port: Int): String? {
+    val pid = otherLiveBrokerPid() ?: return null
+    // It may be exiting (a service job launchd is tearing down, a child we just stopped): a graceful
+    // shutdown takes a few seconds. Wait for it to finish and the port to be free; still alive after
+    // [HostSupervisor.Timing.exitingBrokerMs] means a real second broker.
+    val deadline = now() + timing.exitingBrokerMs
+    while (now() < deadline) {
+        delay(timing.healthPollMs)
+        if (otherLiveBrokerPid() == null && probe(port) == HostProbeResult.PortFree) return null
+    }
+    if (otherLiveBrokerPid() == null) return null
+    return "supermux is already running on this computer (pid $pid) but isn't answering on port $port. Quit it, then try again."
+}
+
+/** The live pid in `broker.pid` when it isn't our child (and isn't a reused pid), else null. */
+private fun HostSupervisor.otherLiveBrokerPid(): Long? {
     val pid = runCatching { Files.readString(brokerPidFile).trim().toLong() }.getOrNull() ?: return null
     if (pid == child?.pid) return null
     val info = processes.info(pid) ?: return null
@@ -209,7 +239,7 @@ internal fun HostSupervisor.secondBrokerReason(port: Int): String? {
     val written = runCatching { Files.getLastModifiedTime(brokerPidFile).toMillis() }.getOrNull()
     val started = info.startMillis
     if (written != null && started != null && started > written + 1_000) return null
-    return "supermux is already running on this computer (pid $pid) but isn't answering on port $port. Quit it, then try again."
+    return pid
 }
 
 internal fun HostSupervisor.logTail(lines: Int = 20): String {

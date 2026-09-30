@@ -264,6 +264,9 @@ Terminal=false
             if (env.hasCommand("launchctl") && env.uid != null) {
                 val domain = "gui/${env.uid}"
                 env.runResult(listOf("launchctl", "bootout", "$domain/$LAUNCHD_LABEL")) // ignore: first install has none
+                // bootout returns while the old job is still shutting down (graceful SIGTERM); bootstrapping
+                // over it fails with "Input/output error". Wait until launchd has dropped it.
+                awaitLaunchdGone("$domain/$LAUNCHD_LABEL", env)
                 env.runResult(listOf("launchctl", "enable", "$domain/$LAUNCHD_LABEL"))
                 val last = bootstrapWithRetry(domain, plist, env)
                 if (last.exit != 0) return Result.Failed("launchctl bootstrap failed: ${last.err.trim()}")
@@ -272,13 +275,25 @@ Terminal=false
         }.getOrElse { Result.Failed("launchd install failed: ${it.message}") }
     }
 
-    /** `launchctl bootstrap`, retried (the just-booted-out label can still be tearing down). */
+    /**
+     * Poll `launchctl print <target>` until it fails (launchd no longer knows the job), up to 20 × 500 ms.
+     * True once it's gone. Call after a bootout and before bootstrapping the same label again.
+     */
+    internal fun awaitLaunchdGone(target: String, env: OsEnv): Boolean {
+        for (i in 1..20) {
+            if (env.runResult(listOf("launchctl", "print", target)).exit != 0) return true
+            env.sleep(500)
+        }
+        return env.runResult(listOf("launchctl", "print", target)).exit != 0
+    }
+
+    /** `launchctl bootstrap`, retried 10 × 1 s (the just-booted-out label can still be tearing down). */
     internal fun bootstrapWithRetry(domain: String, plist: Path, env: OsEnv): OsEnv.RunResult {
         var last = OsEnv.RunResult(-1, "", "")
-        for (attempt in 1..5) {
+        for (attempt in 1..10) {
             last = env.runResult(listOf("launchctl", "bootstrap", domain, plist.toString()))
             if (last.exit == 0) break
-            if (attempt < 5) env.sleep(500)
+            if (attempt < 10) env.sleep(1_000)
         }
         return last
     }
@@ -286,7 +301,10 @@ Terminal=false
     private fun removeLaunchd(env: OsEnv): Result {
         val plist = env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist")
         return runCatching {
-            if (env.hasCommand("launchctl") && env.uid != null) env.run(listOf("launchctl", "bootout", "gui/${env.uid}/$LAUNCHD_LABEL"))
+            if (env.hasCommand("launchctl") && env.uid != null) {
+                env.run(listOf("launchctl", "bootout", "gui/${env.uid}/$LAUNCHD_LABEL"))
+                awaitLaunchdGone("gui/${env.uid}/$LAUNCHD_LABEL", env)
+            }
             Result.Removed(if (Files.deleteIfExists(plist)) plist else null)
         }.getOrElse { Result.Failed("launchd remove failed: ${it.message}") }
     }

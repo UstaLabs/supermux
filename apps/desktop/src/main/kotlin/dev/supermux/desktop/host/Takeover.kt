@@ -308,6 +308,8 @@ object Takeover {
                 val restored = when (old.kind) {
                     Kind.LAUNCHD -> env.uid != null && run {
                         val domain = "gui/${env.uid}"
+                        // Ours was just booted out (and may share this label): wait until launchd dropped it.
+                        BrokerService.awaitLaunchdGone("$domain/${old.name}", env)
                         env.run(listOf("launchctl", "enable", "$domain/${old.name}"))
                         BrokerService.bootstrapWithRetry(domain, old.path, env).exit == 0
                     }

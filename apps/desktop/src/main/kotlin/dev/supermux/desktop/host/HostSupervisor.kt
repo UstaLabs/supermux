@@ -61,7 +61,8 @@ class HostSupervisor(
     internal val existingPath: String? = System.getenv("PATH"),
     internal val userHome: String = System.getProperty("user.home") ?: ".",
     internal val timing: Timing = Timing(),
-    internal val log: (String) -> Unit = { System.err.println("supermux host: $it") },
+    /** Stderr, plus `<stateDir>/desktop-host.log`: an app launched from Finder has no stdout. */
+    internal val log: (String) -> Unit = defaultLog(stateDir),
     internal val carriedStore: CarriedEnvStore = CarriedEnvStore(stateDir.resolve("desktop-carried-env.json"), log),
 ) {
     data class Timing(
@@ -84,6 +85,7 @@ class HostSupervisor(
         val healthyResetMs: Long = 60_000,
         val stopGraceMs: Long = 5_000,
         val portFreeMs: Long = 10_000,
+        val exitingBrokerMs: Long = 15_000,
         val maxShortRuns: Int = 5,
     )
 
@@ -692,6 +694,14 @@ class HostSupervisor(
             "supermux was already running with the app from a previous session, so it isn't running in the background. Turn background mode on again to switch."
         const val STILL_RUNNING = "supermux is still running from a previous session. Quit it to stop hosting."
         const val RESTORED_SILENT = "The previous supermux service was restored but isn't answering. Check it, then try again."
+
+        fun defaultLog(stateDir: Path): (String) -> Unit {
+            val file = HostLogFile(stateDir.resolve("desktop-host.log"))
+            return { msg ->
+                System.err.println("supermux host: $msg")
+                file.append(msg)
+            }
+        }
 
         fun defaultBunPath(): String {
             HostBinaries.whichOnPath("bun")?.let { return it.toString() }

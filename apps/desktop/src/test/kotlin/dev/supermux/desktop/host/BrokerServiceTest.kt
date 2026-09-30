@@ -57,15 +57,32 @@ class BrokerServiceTest {
         assertTrue("Restart=always" in unit)
     }
 
+    private val printHost = listOf("launchctl", "print", "gui/501/dev.supermux.host")
+
     @Test fun macInstallWritesPlistAndBootstraps() {
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501)
+        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, failing = setOf(printHost))
         val r = BrokerService.install(spec, env)
         assertTrue(r is BrokerService.Result.Installed)
         assertTrue(Files.exists(home.resolve("Library/LaunchAgents/dev.supermux.host.plist")))
         assertEquals(listOf("launchctl", "bootout", "gui/501/dev.supermux.host"), env.ran[0])
-        assertEquals(listOf("launchctl", "enable", "gui/501/dev.supermux.host"), env.ran[1])
-        assertEquals(listOf("launchctl", "bootstrap", "gui/501", home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()), env.ran[2])
+        assertEquals(printHost, env.ran[1]) // gone: launchd dropped the old job
+        assertEquals(listOf("launchctl", "enable", "gui/501/dev.supermux.host"), env.ran[2])
+        assertEquals(listOf("launchctl", "bootstrap", "gui/501", home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()), env.ran[3])
+    }
+
+    @Test fun macInstallWaitsUntilLaunchdDropsTheOldJob() {
+        val home = createTempDirectory()
+        val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()
+        val alive = OsEnv.RunResult(0, "state = running", "")
+        val gone = OsEnv.RunResult(113, "", "Could not find service")
+        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, scripted = mapOf(printHost to listOf(alive, alive, alive, gone)))
+        assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env))
+        val bootout = env.ran.indexOf(listOf("launchctl", "bootout", "gui/501/dev.supermux.host"))
+        val enable = env.ran.indexOf(listOf("launchctl", "enable", "gui/501/dev.supermux.host"))
+        assertEquals(List(4) { printHost }, env.ran.subList(bootout + 1, enable))
+        assertEquals(1, env.ran.count { it == listOf("launchctl", "bootstrap", "gui/501", plist) })
+        assertEquals(listOf(500L, 500L, 500L), env.sleeps)
     }
 
     @Test fun macRestartKickstarts() {
@@ -158,24 +175,35 @@ class BrokerServiceTest {
         assertTrue("StandardError=append:/tmp/100%%/x.log" in unit)
     }
 
-    @Test fun macBootstrapFailingFiveTimesFails() {
+    @Test fun macBootstrapFailingTenTimesFails() {
         val home = createTempDirectory()
         val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()
         val bs = listOf("launchctl", "bootstrap", "gui/501", plist)
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501,
-            scripted = mapOf(bs to List(5) { OsEnv.RunResult(5, "", " Bootstrap failed: 5 \n") }))
+        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, failing = setOf(printHost),
+            scripted = mapOf(bs to List(10) { OsEnv.RunResult(5, "", " Bootstrap failed: 5 \n") }))
         val r = BrokerService.install(spec, env)
         val f = assertIs<BrokerService.Result.Failed>(r)
         assertTrue("Bootstrap failed: 5" in f.message)
-        assertEquals(4, env.sleeps.size)
-        assertEquals(5, env.ran.count { it == bs })
+        assertEquals(List(9) { 1_000L }, env.sleeps)
+        assertEquals(10, env.ran.count { it == bs })
+    }
+
+    @Test fun macBootstrapFailingThreeTimesThenSucceeds() {
+        val home = createTempDirectory()
+        val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()
+        val bs = listOf("launchctl", "bootstrap", "gui/501", plist)
+        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, failing = setOf(printHost),
+            scripted = mapOf(bs to List(3) { OsEnv.RunResult(5, "", "Bootstrap failed: 5: Input/output error") }))
+        assertTrue(assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env)).enabled)
+        assertEquals(4, env.ran.count { it == bs })
+        assertEquals(List(3) { 1_000L }, env.sleeps)
     }
 
     @Test fun macBootstrapRetriesThenSucceeds() {
         val home = createTempDirectory()
         val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()
         val bs = listOf("launchctl", "bootstrap", "gui/501", plist)
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501,
+        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, failing = setOf(printHost),
             scripted = mapOf(bs to listOf(OsEnv.RunResult(5, "", "busy"))))
         val r = assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env))
         assertTrue(r.enabled)

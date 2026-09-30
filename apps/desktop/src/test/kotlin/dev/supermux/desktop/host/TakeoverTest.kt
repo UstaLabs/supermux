@@ -225,15 +225,30 @@ class TakeoverTest {
         assertEquals(listOf("launchctl", "bootstrap", "gui/501", plist.toString()), env.ran.last())
     }
 
+    @Test fun rollbackWaitsForOursToBeGoneBeforeBootstrappingTheSameLabel() {
+        val m = Mac(); val plist = m.plist("dev.supermux.host", plistText)
+        val env0 = macEnv(m, failing = setOf(printHost))
+        val p = ok(Takeover.prepare(Takeover.findOldServices(env0), m.state, env0))
+        val alive = OsEnv.RunResult(0, "", "")
+        val gone = OsEnv.RunResult(113, "", "Could not find service")
+        // remove() waits once (3 polls alive), rollback's own wait then finds it gone at once
+        val env = macEnv(m, scripted = mapOf(printHost to listOf(alive, alive, alive, gone, gone)))
+        assertTrue(Takeover.rollback(p, env))
+        val boot = env.ran.indexOf(listOf("launchctl", "bootstrap", "gui/501", plist.toString()))
+        val lastPrint = env.ran.lastIndexOf(printHost)
+        assertTrue(lastPrint in 0 until boot)
+    }
+
     @Test fun rollbackRetriesBootstrap() {
         val m = Mac(); val plist = m.plist("dev.supermux.host", plistText)
         val env0 = macEnv(m, failing = setOf(printHost))
         val p = ok(Takeover.prepare(Takeover.findOldServices(env0), m.state, env0))
         val boot = listOf("launchctl", "bootstrap", "gui/501", plist.toString())
-        val env = macEnv(m, scripted = mapOf(boot to listOf(OsEnv.RunResult(5, "", "busy"), OsEnv.RunResult(5, "", "busy"), OsEnv.RunResult(0, "", ""))))
+        val env = macEnv(m, failing = setOf(printHost),
+            scripted = mapOf(boot to listOf(OsEnv.RunResult(5, "", "busy"), OsEnv.RunResult(5, "", "busy"), OsEnv.RunResult(0, "", ""))))
         assertTrue(Takeover.rollback(p, env))
         assertEquals(3, env.ran.count { it == boot })
-        assertEquals(2, env.sleeps.size)
+        assertEquals(listOf(1_000L, 1_000L), env.sleeps)
     }
 
     @Test fun rollbackReportsFalseWhenBootstrapNeverSucceedsOrBackupGone() {
