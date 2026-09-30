@@ -54,6 +54,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
@@ -289,52 +291,37 @@ internal fun AnnotatedString.Builder.appendLinkified(
 }
 
 /**
- * Elegant mono code block for fenced ``` content.
- * Left accent + subtle header-tinted background + horizontal scroll.
+ * Fenced ``` content on the native editor, read-only ([CodeBlockEditor]): highlighted as [lang]
+ * (the fence's info string), selectable, scrolling sideways; a left accent on a subtle
+ * header-tinted background.
  * A top-end copy button copies the raw code, flashing a check for ~1.5s. [extraAction] is one more
  * 28dp button drawn just before it (the mermaid block's back-to-diagram toggle), in the same row so
  * the two never overlap.
  */
 @Composable
-fun FencedCodeBlock(code: String, extraAction: (@Composable () -> Unit)? = null) {
+fun FencedCodeBlock(code: String, lang: String? = null, extraAction: (@Composable () -> Unit)? = null) {
     val cs = MaterialTheme.colorScheme
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
+    val accent = cs.primary.copy(alpha = 0.4f)
     Box(Modifier.fillMaxWidth()) {
-        Row(
+        Box(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(topStart = 0.dp, topEnd = Radii.sm, bottomStart = 0.dp, bottomEnd = Radii.sm))
                 .background(cs.surfaceContainerLow)
-                .padding(start = 0.dp),
+                // 2dp left accent
+                .drawBehind { drawRect(accent, size = Size(2.dp.toPx(), size.height)) }
+                // pad the right so the copy button never overlaps the first line of code
+                .padding(
+                    start = 2.dp + Space.md,
+                    end = Space.xl + Space.md + if (extraAction != null) 28.dp else 0.dp,
+                    top = Space.sm,
+                    bottom = Space.sm,
+                ),
         ) {
-            // 2dp left accent
-            Box(
-                Modifier
-                    .width(2.dp)
-                    .height(1.dp) // stretches with the Row's intrinsic content height
-                    .background(cs.primary.copy(alpha = 0.4f)),
-            )
-            Box(
-                Modifier
-                    .horizontalScroll(rememberScrollState())
-                    // pad the right so the copy button never overlaps the first line of code
-                    .padding(
-                        start = Space.md,
-                        end = Space.xl + Space.md + if (extraAction != null) 28.dp else 0.dp,
-                        top = Space.sm,
-                        bottom = Space.sm,
-                    ),
-            ) {
-                Text(
-                    text = code,
-                    fontFamily = MonoFontFamily,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
-                    color = cs.onSurface.copy(alpha = 0.9f),
-                )
-            }
+            CodeBlockEditor(code, lang, Modifier.fillMaxWidth())
         }
         Row(Modifier.align(Alignment.TopEnd).padding(Space.xs)) {
             extraAction?.invoke()
@@ -399,7 +386,7 @@ fun MarkdownBody(
                 }
                 is MdBlock.Code ->
                     if (block.lang.equals("mermaid", ignoreCase = true)) MermaidBlock(block.code)
-                    else FencedCodeBlock(block.code)
+                    else FencedCodeBlock(block.code, block.lang)
                 is MdBlock.Heading -> MdText(
                     text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
                     color = cs.onSurface,
