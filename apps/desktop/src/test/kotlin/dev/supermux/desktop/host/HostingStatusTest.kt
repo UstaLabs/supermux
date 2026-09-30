@@ -42,6 +42,23 @@ class HostingStatusTest {
         assertEquals("Connected to ustalabs-linux", m.header); assertNull(m.restartLabel)
     }
 
+    @Test fun notHostingUnreachableRemoteIsRetrying() {
+        val m = TrayModel.of(HostingStatus.NotHosting, bg.copy(hosting = false), 0, "ustalabs-linux", remoteReachable = false)
+        assertEquals("Can't reach ustalabs-linux · retrying", m.header)
+        assertEquals(Dot.YELLOW, m.dot)
+        assertNull(m.restartLabel); assertFalse(m.showKeepRunning)
+    }
+
+    @Test fun notHostingReachableRemoteStaysGrey() {
+        val m = TrayModel.of(HostingStatus.NotHosting, bg.copy(hosting = false), 0, "ustalabs-linux", remoteReachable = true)
+        assertEquals(Dot.GREY, m.dot)
+    }
+
+    @Test fun notHostingWithNoRemoteIgnoresReachability() {
+        val m = TrayModel.of(HostingStatus.NotHosting, bg.copy(hosting = false), 0, null, remoteReachable = false)
+        assertEquals("Not hosting", m.header); assertEquals(Dot.GREY, m.dot)
+    }
+
     @Test fun quitTextFollowsTheCheckbox() {
         assertEquals("supermux will keep running in the background.", QuitText.of(HostingStatus.Running(9898, false), bg, 3))
         assertEquals("This stops supermux and your 3 running sessions.", QuitText.of(HostingStatus.Running(9898, false), fg, 3))

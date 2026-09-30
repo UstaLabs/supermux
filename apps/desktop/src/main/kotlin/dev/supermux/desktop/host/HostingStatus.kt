@@ -24,12 +24,23 @@ data class TrayModel(
     val keepRunningEnabled: Boolean,
 ) {
     companion object {
-        fun of(s: HostingStatus, prefs: HostingPrefs, sessions: Int, remoteName: String?): TrayModel {
+        /** [remoteReachable]: whether [remoteName]'s host is connected (spec state 9 when not). */
+        fun of(
+            s: HostingStatus,
+            prefs: HostingPrefs,
+            sessions: Int,
+            remoteName: String?,
+            remoteReachable: Boolean = true,
+        ): TrayModel {
             val n = if (sessions == 1) "1 session" else "$sessions sessions"
             return when (s) {
-                HostingStatus.NotHosting -> TrayModel(
-                    Dot.GREY, remoteName?.let { "Connected to $it" } ?: "Not hosting", false, null, false, false, false,
-                )
+                HostingStatus.NotHosting -> when {
+                    remoteName != null && !remoteReachable ->
+                        TrayModel(Dot.YELLOW, "Can't reach $remoteName · retrying", false, null, false, false, false)
+                    else -> TrayModel(
+                        Dot.GREY, remoteName?.let { "Connected to $it" } ?: "Not hosting", false, null, false, false, false,
+                    )
+                }
                 HostingStatus.Starting -> TrayModel(Dot.YELLOW, "Starting supermux…", false, "Restart", false, true, true)
                 is HostingStatus.Restarting -> TrayModel(
                     Dot.YELLOW, "supermux stopped unexpectedly · restarting (attempt ${s.attempt})", true, "Restart", false, true, true,

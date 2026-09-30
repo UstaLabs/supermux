@@ -56,6 +56,19 @@ import dev.supermux.desktop.platform.installMacTrackpadMagnify
 import dev.supermux.desktop.platform.prunePasteCache
 import dev.supermux.desktop.platform.isMacOs
 import dev.supermux.desktop.host.DesktopHostBootstrap
+import dev.supermux.desktop.host.BackgroundQuitNotice
+import dev.supermux.desktop.host.FleetFacts
+import dev.supermux.desktop.host.HostingDialogs
+import dev.supermux.desktop.host.HostingStatus
+import dev.supermux.desktop.host.HostingTrayMenu
+import dev.supermux.desktop.host.QuitAction
+import dev.supermux.desktop.host.TrayModel
+import dev.supermux.desktop.host.hostingFacts
+import dev.supermux.desktop.host.openFile
+import kotlinx.coroutines.flow.flowOf
+import java.awt.Desktop
+import java.awt.desktop.AppReopenedListener
+import javax.swing.SwingUtilities
 import dev.supermux.desktop.host.DesktopHostStores
 import dev.supermux.desktop.settings.DesktopSettingsStore
 import dev.supermux.state.FleetStore
@@ -380,6 +393,90 @@ fun main() {
         // and after unpair, when there is no shell to select into — the click handler
         // no-ops in that case (see onAction below).
         var pairedUi by remember { mutableStateOf<ShellUiState?>(null) }
+        // Same, for the fleet: the tray reads this computer's session count and the remote host.
+        var pairedFleet by remember { mutableStateOf<FleetStore?>(null) }
+
+        // ── Hosting lifecycle (spec: HostSupervisor, Tray, D3) ──
+        // The supervisor starts, updates or adopts the local broker on EVERY launch, paired or not.
+        // The wizard's own ensure() is serialised with this one by the supervisor.
+        val hostScope = rememberCoroutineScope()
+        val supervisor = remember { DesktopHostBootstrap.supervisor() }
+        val hostsNatively = remember { DesktopHostBootstrap.isNativeHostPlatform() }
+        LaunchedEffect(Unit) { if (hostsNatively) supervisor.ensure() }
+        val hostingStatus by supervisor.status.collectAsState()
+        val hostingPrefs by supervisor.prefs.collectAsState()
+        val backgroundError by supervisor.backgroundError.collectAsState()
+        val fleetFacts by remember(pairedFleet) {
+            pairedFleet?.hostingFacts(supervisor.hostId) ?: flowOf(FleetFacts.EMPTY)
+        }.collectAsState(FleetFacts.EMPTY)
+        val trayModel = TrayModel.of(
+            hostingStatus, hostingPrefs, fleetFacts.localSessions, fleetFacts.remoteName, fleetFacts.remoteReachable,
+        )
+        var windowVisible by remember { mutableStateOf(true) }
+        var confirmQuit by remember { mutableStateOf<String?>(null) }
+        var quitting by remember { mutableStateOf(false) }
+        fun showWindow() {
+            windowVisible = true
+            windowState.isMinimized = false
+        }
+        // supervisor.quit() can block for the child's stop grace, so it runs off the UI thread.
+        fun quitNow(lingerMs: Long = 0) {
+            if (quitting) return
+            quitting = true
+            hostScope.launch {
+                withContext(Dispatchers.IO) { supervisor.quit() }
+                // Give a just-posted notification a moment before the tray icon goes away.
+                delay(lingerMs)
+                shuttingDown = true
+            }
+        }
+        fun requestQuit() {
+            if (!hostsNatively) return quitNow()
+            val noticeShown = runCatching {
+                runBlocking { desktopDeps.settings.string(BackgroundQuitNotice.SHOWN_KEY).first() } != null
+            }.getOrDefault(true)
+            when (val a = QuitAction.of(hostingStatus, hostingPrefs, fleetFacts.localSessions, noticeShown)) {
+                is QuitAction.Confirm -> {
+                    showWindow()
+                    confirmQuit = a.text
+                }
+                is QuitAction.Now -> {
+                    val notice = a.notice
+                    if (notice != null) {
+                        DesktopNotifications.notify("", BackgroundQuitNotice.TITLE, notice)
+                        runCatching { runBlocking { desktopDeps.settings.putString(BackgroundQuitNotice.SHOWN_KEY, "1") } }
+                    }
+                    quitNow(lingerMs = if (notice != null) 1_500 else 0)
+                }
+            }
+        }
+        // A takeover/downgrade question needs the window, even when it is hidden in the tray.
+        LaunchedEffect(hostingStatus) {
+            if (hostingStatus is HostingStatus.AskTakeover || hostingStatus is HostingStatus.AskDowngrade) showWindow()
+        }
+        // A background-service failure is said once, as a notification (Settings ▸ Hosting shows it too).
+        LaunchedEffect(backgroundError) {
+            backgroundError?.let { DesktopNotifications.notify("", BackgroundQuitNotice.TITLE, it) }
+        }
+        // macOS: Cmd-Q / Dock ▸ Quit take the same path as the tray's Quit, and clicking the Dock
+        // icon while hidden in the tray brings the window back.
+        DisposableEffect(Unit) {
+            val desktop = runCatching { if (Desktop.isDesktopSupported()) Desktop.getDesktop() else null }.getOrNull()
+            val quitHandled = desktop != null && desktop.isSupported(Desktop.Action.APP_QUIT_HANDLER)
+            if (quitHandled) {
+                desktop.setQuitHandler { _, response ->
+                    response.cancelQuit()
+                    SwingUtilities.invokeLater { requestQuit() }
+                }
+            }
+            val reopen = AppReopenedListener { SwingUtilities.invokeLater { showWindow() } }
+            val reopenHandled = desktop != null && desktop.isSupported(Desktop.Action.APP_EVENT_REOPENED)
+            if (reopenHandled) desktop.addAppEventListener(reopen)
+            onDispose {
+                if (quitHandled) runCatching { desktop.setQuitHandler(null) }
+                if (reopenHandled) runCatching { desktop.removeAppEventListener(reopen) }
+            }
+        }
         val uiStore = remember { ShellStateStore() }
         val persistedUi = remember { uiStore.load() }
         // Appearance is NOT in ui-state.json any more (cluster E7): it lives in the shared settings
@@ -534,8 +631,9 @@ fun main() {
             Tray(
                 icon = painterResource("supermux-tray.png"),
                 state = trayState,
-                tooltip = "supermux",
+                tooltip = trayModel.header,
                 onAction = {
+                    windowVisible = true
                     // Best-effort "bring the app forward": un-minimizing is portable; actually
                     // RAISING the window above others is window-manager-dependent (especially
                     // under a bare Xvfb with no WM) and not attempted further. Compose's
@@ -545,6 +643,21 @@ fun main() {
                     // meant if several stacked up. See this plan's Goal, scoping decision 3.
                     windowState.isMinimized = false
                     notificationController.lastNotifiedSession?.let { sid -> pairedUi?.selectedId = sid }
+                },
+                menu = {
+                    HostingTrayMenu(
+                        model = trayModel,
+                        background = hostingPrefs.background,
+                        onOpen = ::showWindow,
+                        onShowLog = { openFile(supervisor.logFile) },
+                        onRestart = {
+                            hostScope.launch {
+                                if (hostingStatus is HostingStatus.CantStart) supervisor.ensure() else supervisor.restart()
+                            }
+                        },
+                        onBackground = { on -> hostScope.launch { supervisor.setBackground(on) } },
+                        onQuit = ::requestQuit,
+                    )
                 },
             )
         } else {
@@ -557,7 +670,9 @@ fun main() {
         }
 
         Window(
-            onCloseRequest = { shuttingDown = true },
+            // Close hides to the tray (spec D3); without a tray there is nowhere to hide, so it quits.
+            onCloseRequest = { if (isTraySupported) windowVisible = false else requestQuit() },
+            visible = windowVisible,
             // Empty on macOS: with the transparent/full-size-content title bar below, a non-empty
             // title still paints centred over our own UI on runtimes that ignore
             // `apple.awt.windowTitleVisible`. Other platforms keep the normal caption text.
@@ -697,10 +812,8 @@ fun main() {
                     val showHostWizard = DesktopHostBootstrap.isNativeHostPlatform() && !connectInstead
 
                     if (showHostWizard) {
-                        // The supervisor starts, updates or adopts the local broker (Task 9 moves it
-                        // to app launch). NOT stopped on dispose — the broker keeps hosting after the
-                        // wizard closes.
-                        val supervisor = remember { DesktopHostBootstrap.supervisor() }
+                        // The app-wide supervisor (started at launch, above). NOT stopped on dispose —
+                        // the broker keeps hosting after the wizard closes.
                         val model = remember { DesktopHostBootstrap.buildModel(scope, hostStore, supervisor) }
                         HostWizard(
                             model = model,
@@ -709,7 +822,10 @@ fun main() {
                                 paired = hostStore.list().isNotEmpty()
                                 if (!paired) connectInstead = true // bootstrap failed → fall back to onboarding
                             },
-                            onConnectInstead = { connectInstead = true },
+                            onConnectInstead = {
+                                connectInstead = true
+                                hostScope.launch { supervisor.setHosting(false) }
+                            },
                         )
                     } else {
                         val pairing = remember {
@@ -743,6 +859,11 @@ fun main() {
                         )
                     }
                     DisposableEffect(Unit) { onDispose { fleet.close() } }
+                    // Published up to the tray (session count, the remote host's name/reachability).
+                    DisposableEffect(fleet) {
+                        pairedFleet = fleet
+                        onDispose { pairedFleet = null }
+                    }
                     // The active host's app backs the single-host headless hooks below and is
                     // AppShell's fallback; AppShell itself routes through `fleet`. Non-null
                     // because `paired` ⟹ the store holds a host ⟹ FleetStore opened its connection.
@@ -1681,6 +1802,16 @@ fun main() {
                     }
                 }
               }
+              // Hosting questions and the quit confirm, over the wizard AND the shell: the wizard's
+              // own ensure() waits on a takeover answer too.
+              HostingDialogs(
+                  status = hostingStatus,
+                  confirmQuit = confirmQuit,
+                  onTakeover = { supervisor.answerTakeover(it) },
+                  onDowngrade = { supervisor.answerDowngrade(it) },
+                  onQuit = { confirmQuit = null; quitNow() },
+                  onCancelQuit = { confirmQuit = null },
+              )
             }
             } // ProvideDesktopAdaptiveLocals
 
