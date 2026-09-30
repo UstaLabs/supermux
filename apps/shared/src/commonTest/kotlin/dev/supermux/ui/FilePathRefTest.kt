@@ -66,8 +66,13 @@ class FilePathRefTest {
     @Test fun numeric_extension_skipped() =
         assertEquals(emptyList(), findFilePathRefs("1/2.5 cups, v1.2/1.3 and 2026/09.30"))
 
-    @Test fun overlong_extension_skipped() =
-        assertEquals(emptyList(), findFilePathRefs("a/b.abcdefghijk"))
+    @Test fun long_extension_links() {
+        val m = findFilePathRefs("ios/Supermux.xcworkspace and ios/App/App.entitlements:3")
+        assertEquals(
+            listOf(FilePathRef("ios/Supermux.xcworkspace"), FilePathRef("ios/App/App.entitlements", 3)),
+            m.map { it.ref },
+        )
+    }
 
     @Test fun bare_filename_without_dir_skipped() =
         assertEquals(emptyList(), findFilePathRefs("file.ts:42"))

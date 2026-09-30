@@ -32,12 +32,13 @@ val FILE_PATH_MATCH_RE = Regex("""(?<!\w)($FILE_PATH_BODY)(?::\d+(?:-\d+)?|:[^\s
  *  whole URL to the renderer's URL linkifier. */
 private val URL_RUN_RE = Regex("""[A-Za-z][A-Za-z0-9+.-]*://\S+""")
 
-/** A file extension by shape: up to 10 word chars with at least one letter.
+/** A file extension by shape: word chars with at least one letter, any length.
  *
  *  This replaced a fixed allowlist (ported from the Vue PWA), which left every language it didn't
  *  name as plain text: C# paths never linked, not even absolute with a line. The letter keeps
- *  numbers that look like paths (`1/2.5`, `v1.2/1.3`, `2026/09.30`) as text. */
-private val FILE_EXTENSION_RE = Regex("""^(?=\w*[A-Za-z])\w{1,10}$""")
+ *  numbers that look like paths (`1/2.5`, `v1.2/1.3`, `2026/09.30`) as text. No length cap: real
+ *  extensions run long (`.entitlements`, `.xcworkspace`, `.swiftinterface`). */
+private val FILE_EXTENSION_RE = Regex("""\w*[A-Za-z]\w*""")
 
 fun hasFileExtension(path: String): Boolean =
     FILE_EXTENSION_RE.matches(path.substringAfterLast('.', ""))
