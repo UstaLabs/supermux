@@ -84,6 +84,8 @@ class DocumentStore(
 
     var loadingPath by mutableStateOf<String?>(null)
     var loadError by mutableStateOf<String?>(null)
+    /** [loadError] is the host refusing a binary file (415): the pane offers to open it elsewhere. */
+    var loadErrorBinary by mutableStateOf(false)
     /** Paths whose save is in flight: one write per document at a time, other documents unaffected. */
     private var savingPaths by mutableStateOf(setOf<String>())
 
@@ -237,6 +239,7 @@ class DocumentStore(
                     // open — a superseded load's failure must not stomp the newer load in progress.
                     if (loadingPath == path) {
                         loadError = err.message ?: "Could not open file"
+                        loadErrorBinary = (err as? dev.supermux.net.FsException)?.status == 415
                         loadingPath = null
                     }
                 }

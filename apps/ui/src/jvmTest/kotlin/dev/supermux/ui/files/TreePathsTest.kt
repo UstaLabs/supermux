@@ -69,22 +69,31 @@ class TreePathsTest {
         )
     }
 
-    @Test fun aLeadingSlashOrDuplicateIsToleratedAndKeptAsGiven() {
+    @Test fun aDuplicateIsToleratedAndKeptAsGiven() {
         assertEquals(
-            listOf(MovedOpenPath("/src/a.kt", "src/z.kt")),
-            affectedOpenPaths("/w", "/w/src/a.kt", "/w/src/z.kt", listOf("/src/a.kt", "/src/a.kt")),
+            listOf(MovedOpenPath("src/a.kt", "src/z.kt")),
+            affectedOpenPaths("/w", "/w/src/a.kt", "/w/src/z.kt", listOf("src/a.kt", "src/a.kt")),
         )
     }
 
-    @Test fun aMoveOutsideTheWorkdirCountsAsGone() {
+    @Test fun aMoveOutsideTheWorkdirFollowsTheFileByItsAbsolutePath() {
         assertEquals(
-            listOf(MovedOpenPath("a.kt", null)),
+            listOf(MovedOpenPath("a.kt", "/elsewhere/a.kt")),
             affectedOpenPaths("/w", "/w/a.kt", "/elsewhere/a.kt", listOf("a.kt")),
         )
     }
 
-    @Test fun entriesOutsideTheWorkdirOrANoOpRenameAffectNothing() {
-        assertEquals(emptyList(), affectedOpenPaths("/w", "/other/a.kt", null, listOf("a.kt")))
+    @Test fun filesOpenOutsideTheWorkdirFollowMovesToo() {
+        assertEquals(
+            listOf(MovedOpenPath("/other/a.kt", "/other/b.kt"), MovedOpenPath("/other/c.kt", "c.kt")),
+            affectedOpenPaths("/w", "/other/a.kt", "/other/b.kt", listOf("/other/a.kt", "a.kt")) +
+                affectedOpenPaths("/w", "/other/c.kt", "/w/c.kt", listOf("/other/c.kt")),
+        )
+        assertEquals(listOf(MovedOpenPath("/other/a.kt", null)), affectedOpenPaths("/w", "/other", null, listOf("/other/a.kt")))
+    }
+
+    @Test fun unrelatedEntriesOrANoOpRenameAffectNothing() {
+        assertEquals(emptyList(), affectedOpenPaths("/w", "/other/a.kt", null, listOf("a.kt", "/other/b.kt")))
         assertEquals(emptyList(), affectedOpenPaths("/w", "/w/a.kt", "/w/a.kt", listOf("a.kt")))
         assertEquals(emptyList(), affectedOpenPaths("/w", "/", null, listOf("a.kt")))
     }

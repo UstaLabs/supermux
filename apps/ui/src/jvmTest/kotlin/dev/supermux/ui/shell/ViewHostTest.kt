@@ -286,8 +286,14 @@ class ViewHostTest {
     }
 
     @Test
-    fun aTappedPathOutsideTheWorkspaceIsNotOpenable() {
-        assertNull(workspaceOpenPath(FilePathRef("/etc/passwd"), "/w"))
+    fun aTappedPathOutsideTheWorkspaceOpensByItsAbsolutePath() {
+        assertEquals("/etc/passwd", workspaceOpenPath(FilePathRef("/etc/passwd"), "/w"))
+        assertEquals("/other/x.kt", workspaceOpenPath(FilePathRef("../other/x.kt"), "/w"))
+    }
+
+    @Test
+    fun theWorkspaceFolderItselfIsNotAFileToOpen() {
+        assertNull(workspaceOpenPath(FilePathRef("/w"), "/w"))
     }
 
     /**

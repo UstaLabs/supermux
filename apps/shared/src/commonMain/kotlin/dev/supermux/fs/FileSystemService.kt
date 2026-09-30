@@ -284,6 +284,8 @@ class FileSystemService(
     }
     suspend fun stat(path: String): Result<FsStat> = call { api.hostFsStat(path) }
     suspend fun read(path: String): Result<String> = call { api.hostFsRead(path) }
+    /** The file's bytes as-is, for a preview (an image, a video) the text reader refuses. */
+    suspend fun raw(path: String): Result<ByteArray> = call { api.hostFsRaw(path) }
     suspend fun write(path: String, text: String): Result<FsWriteResult> = call { api.hostFsWrite(path, text) }
     suspend fun search(scope: String, q: String, limit: Int = 50): Result<List<SearchHit>> = call { api.hostFsSearch(scope, q, limit) }
     suspend fun op(op: FsOpRequest): Result<Unit> = call { api.hostFsOp(op) }

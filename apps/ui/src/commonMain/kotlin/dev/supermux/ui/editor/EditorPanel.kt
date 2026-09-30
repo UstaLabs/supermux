@@ -84,9 +84,6 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.files.FileStaleWatcher
 import dev.supermux.ui.files.FileTreeWithActions
 import dev.supermux.ui.files.TreeViewState
-import dev.supermux.ui.files.childOf
-import dev.supermux.ui.files.relativeToWorkdir
-import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalPanes
@@ -189,7 +186,6 @@ fun EditorPanel(
     // The sidebar tree's view state. This legacy panel has no view ids, so it lives for the
     // session + workdir (a workdir change starts a fresh tree rooted at the new checkout).
     val treeView = remember(sessionId, workdir) { TreeViewState(workdir) }
-    val notices = LocalPlatform.current.notices
 
     LaunchedEffect(editor.searchQuery) {
         delay(200)
@@ -433,7 +429,6 @@ fun EditorPanel(
                                 workdir = workdir,
                                 activeRelativePath = editor.activeTabPath,
                                 onOpenFile = { revealFile(it) },
-                                onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
                                 onEntryMoved = { old, new -> editor.applyEntryMoved(workdir, old, new) },
                             )
                         }
@@ -618,7 +613,6 @@ fun EditorPanel(
                                 workdir = workdir,
                                 activeRelativePath = editor.activeTabPath,
                                 onOpenFile = { revealFile(it) },
-                                onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
                                 onEntryMoved = { old, new -> editor.applyEntryMoved(workdir, old, new) },
                             )
                         }
@@ -646,8 +640,8 @@ fun EditorPanel(
 
 /**
  * The panel's file tree: the shared [FileTreeView] over the session host's [FileSystemService].
- * Paths in the tree are ABSOLUTE; [onOpenFile] gets them workdir-relative (what [EditorState]
- * speaks), and anything outside the workdir goes to [onOutsideWorkdir] instead of opening.
+ * Paths in the tree are ABSOLUTE; [onOpenFile] gets editor keys (what [EditorState] speaks):
+ * workdir-relative inside the workdir, absolute outside it.
  */
 @Composable
 private fun EditorTreeSidebar(
@@ -655,8 +649,7 @@ private fun EditorTreeSidebar(
     view: TreeViewState,
     workdir: String,
     activeRelativePath: String?,
-    onOpenFile: (relativePath: String) -> Unit,
-    onOutsideWorkdir: (absolutePath: String) -> Unit,
+    onOpenFile: (editorPath: String) -> Unit,
     /** A rename/delete succeeded in the tree — see [EditorState.applyEntryMoved]. */
     onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit,
 ) {
@@ -667,16 +660,11 @@ private fun EditorTreeSidebar(
         }
         return
     }
-    val activePath = activeRelativePath?.takeIf { it.isNotEmpty() && it != "." }?.let { rel ->
-        rel.split('/').filter { it.isNotEmpty() }.fold(workdir) { acc, seg -> childOf(acc, seg) }
-    }
+    val activePath = activeRelativePath?.takeIf { it.isNotEmpty() && it != "." }?.let { dev.supermux.ui.files.editorAbsolutePath(workdir, it) }
     FileTreeWithActions(
         fileSystem = fileSystem,
         view = view,
-        onOpenFile = { abs ->
-            val rel = relativeToWorkdir(workdir, abs)?.takeIf { it != "." }
-            if (rel != null) onOpenFile(rel) else onOutsideWorkdir(abs)
-        },
+        onOpenFile = { abs -> onOpenFile(dev.supermux.ui.files.editorPathFor(workdir, abs)) },
         activePath = activePath,
         compact = !LocalPointerAvailable.current || LocalWindowWidthClass.current == WindowWidthClass.Compact,
         onEntryMoved = onEntryMoved,

@@ -74,7 +74,7 @@ import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
-import dev.supermux.ui.toWorkdirRelativePath
+import dev.supermux.ui.toEditorPath
 import dev.supermux.ui.widgets.KeepAlivePanel
 import dev.supermux.ui.widgets.keepAlivePanel
 import kotlinx.coroutines.launch
@@ -371,17 +371,17 @@ private fun ChatViewPane(
         verifySave = { actions.verifySave(sessionId, it) },
         sendToAgent = { actions.sendMessage(sessionId, it) },
     )
-    // A tap on a file path in the transcript opens a `file` pane. A path outside the workspace has
-    // no workdir-relative form and is reported rather than opened; so is one the host says is gone.
+    // A tap on a file path in the transcript opens a `file` pane — by its absolute path when it lies
+    // outside the workspace. One the host says is gone is reported rather than opened.
     val tapScope = rememberCoroutineScope()
     val tapFileSystem = actions.sessionFileSystem(sessionId)
     val openTappedPath: (FilePathRef) -> Unit = { ref ->
         val rel = workspaceOpenPath(ref, workdir)
         if (rel == null) {
-            notices.show("File is outside this workspace")
+            notices.show("That's the workspace folder itself")
         } else {
             tapScope.launch {
-                if (dev.supermux.ui.files.tappedFileMissing(tapFileSystem, dev.supermux.ui.files.absoluteInWorkdir(workdir, rel))) {
+                if (dev.supermux.ui.files.tappedFileMissing(tapFileSystem, dev.supermux.ui.files.editorAbsolutePath(workdir, rel))) {
                     notices.show(dev.supermux.ui.files.fileNotFoundNotice(ref.path))
                 } else {
                     onOpenFile(rel, ref.line, ref.endLine)
@@ -576,12 +576,12 @@ private fun TerminalClient?.orFail(id: String): TerminalClient =
     this ?: error("No host owns '$id' — cannot open a terminal")
 
 /**
- * A tapped file-path reference as a workdir-relative path, or null when it points outside the
- * workspace (nothing the workspace's fs endpoints could read). Split out of the composable so the
+ * A tapped file-path reference as an editor key: workdir-relative inside the workspace, absolute
+ * outside it; null only for the workspace folder itself. Split out of the composable so the
  * conversion is testable without hosting a transcript.
  */
 fun workspaceOpenPath(ref: FilePathRef, workdir: String): String? =
-    toWorkdirRelativePath(ref.path, workdir, inferHomeDir(workdir))
+    toEditorPath(ref.path, workdir, inferHomeDir(workdir))
 
 /**
  * Session-scoped terminal adapter:
@@ -649,14 +649,12 @@ private fun ExplorerPaneForWorkspace(
     // Per-VIEW state held outside the pane (the holder outlives it): two explorer panes may sit at
     // different roots/depths, and a drag or split must not reset either.
     val view = remember(treeStates, viewId, workdir) { treeStates.forView(viewId, workdir) }
-    val notices = LocalPlatform.current.notices
     ExplorerPane(
         fileSystem = actions.fileSystemFor(workspaceId),
         view = view,
         workdir = workdir,
         onOpenFile = onOpenFile,
         activeRelativePath = activeRelativePath,
-        onOutsideWorkdir = { notices.show("Opening files outside the workspace isn't supported yet") },
         onEntryMoved = onEntryMoved,
         modifier = modifier.fillMaxSize(),
     )
@@ -708,6 +706,8 @@ private fun FilePaneForWorkspace(
         fontSize = fontSize,
         onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
         onNavigate = onNavigate,
+        rawBytes = { abs -> actions.fileSystemFor(workspaceId)?.raw(abs) ?: Result.failure(IllegalStateException("Host offline")) },
+        fileSystem = actions.fileSystemFor(workspaceId),
         modifier = modifier.fillMaxSize(),
     )
 }

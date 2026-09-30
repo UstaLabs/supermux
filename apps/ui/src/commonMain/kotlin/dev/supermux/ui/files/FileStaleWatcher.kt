@@ -23,8 +23,8 @@ import dev.supermux.ui.editor.WatchedDocuments
 fun FileStaleWatcher(fileSystem: FileSystemService?, workdir: String, documents: WatchedDocuments) {
     if (fileSystem == null) return
     val tracker = remember(fileSystem, workdir, documents) { FileChangeTracker() }
-    // abs → the workdir-relative path the document store knows it by.
-    val relByAbs = documents.openPaths.associateBy { absoluteInWorkdir(workdir, it) }
+    // abs → the key the document store knows it by (workdir-relative, or absolute outside the workdir).
+    val relByAbs = documents.openPaths.associateBy { editorAbsolutePath(workdir, it) }
     val currentRelByAbs = rememberUpdatedState(relByAbs)
     // Runs after composition and before the collectors below start, so a folder's first snapshot
     // always finds its files tracked.
@@ -34,8 +34,8 @@ fun FileStaleWatcher(fileSystem: FileSystemService?, workdir: String, documents:
     }
     DisposableEffect(tracker) {
         val stop = documents.observeWrites(object : WatchedDocuments.WriteObserver {
-            override fun writeStarted(path: String) = tracker.beginWrite(absoluteInWorkdir(workdir, path))
-            override fun writeFinished(path: String, ok: Boolean) = tracker.endWrite(absoluteInWorkdir(workdir, path))
+            override fun writeStarted(path: String) = tracker.beginWrite(editorAbsolutePath(workdir, path))
+            override fun writeFinished(path: String, ok: Boolean) = tracker.endWrite(editorAbsolutePath(workdir, path))
         })
         onDispose { stop() }
     }

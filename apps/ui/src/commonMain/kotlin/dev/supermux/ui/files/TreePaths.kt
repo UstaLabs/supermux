@@ -45,20 +45,31 @@ fun relativeToWorkdir(workdir: String, path: String): String? {
     }
 }
 
+/**
+ * The editor's key for the absolute [abs]: workdir-relative inside [workdir], [abs] itself outside
+ * it (see [dev.supermux.ui.toEditorPath]). A key starting with `/` is always absolute.
+ */
+fun editorPathFor(workdir: String, abs: String): String =
+    relativeToWorkdir(workdir, abs)?.takeIf { it != "." && it.isNotEmpty() } ?: trimEnd(abs)
+
+/** The absolute path of the editor key [path]: an absolute key as it is, a relative one under [workdir]. */
+fun editorAbsolutePath(workdir: String, path: String): String =
+    if (dev.supermux.ui.isAbsoluteEditorPath(path)) trimEnd(path) else absoluteInWorkdir(workdir, path)
+
 fun displayName(path: String): String = trimEnd(path).substringAfterLast('/').ifEmpty { "/" }
 
 /**
- * One open document hit by a rename/delete in the tree: its workdir-relative path as the caller
- * gave it ([oldPath]) and where it lives now ([newPath], workdir-relative; null = gone — deleted,
- * or moved out of the workdir where the editor can't follow it).
+ * One open document hit by a rename/delete in the tree: its editor key as the caller gave it
+ * ([oldPath]) and where it lives now ([newPath], an editor key — workdir-relative, or absolute once
+ * it moved out of the workdir; null = deleted).
  */
 data class MovedOpenPath(val oldPath: String, val newPath: String?)
 
 /**
- * Which of the [open] workdir-relative paths a move of the tree entry [oldAbs] → [newAbs] touches
- * ([newAbs] null = deleted): the entry itself and, for a folder, everything under it — never a
- * sibling that merely shares a name prefix (`src` vs `srcx`). Order follows [open]; duplicates
- * collapse. A no-op rename, an entry outside [workdir], or `/` itself touch nothing.
+ * Which of the [open] editor keys (workdir-relative, or absolute for files outside [workdir]) a move
+ * of the tree entry [oldAbs] → [newAbs] touches ([newAbs] null = deleted): the entry itself and, for
+ * a folder, everything under it — never a sibling that merely shares a name prefix (`src` vs
+ * `srcx`). Order follows [open]; duplicates collapse. A no-op rename or `/` itself touch nothing.
  */
 fun affectedOpenPaths(workdir: String, oldAbs: String, newAbs: String?, open: Collection<String>): List<MovedOpenPath> {
     val from = trimEnd(oldAbs)
@@ -68,13 +79,14 @@ fun affectedOpenPaths(workdir: String, oldAbs: String, newAbs: String?, open: Co
     val seen = HashSet<String>()
     for (rel in open) {
         if (!seen.add(rel)) continue
-        val segs = rel.split('/').filter { it.isNotEmpty() }
-        if (segs.isEmpty() || segs == listOf(".")) continue
-        val abs = segs.fold(trimEnd(workdir)) { acc, seg -> childOf(acc, seg) }
+        if (!dev.supermux.ui.isAbsoluteEditorPath(rel)) {
+            val segs = rel.split('/').filter { it.isNotEmpty() }
+            if (segs.isEmpty() || segs == listOf(".")) continue
+        }
+        val abs = editorAbsolutePath(workdir, rel)
         if (!isWithin(from, abs)) continue
         val moved = to?.let { it + abs.substring(from.length) }
-        val newRel = moved?.let { relativeToWorkdir(workdir, it) }?.takeIf { it != "." }
-        out += MovedOpenPath(rel, newRel)
+        out += MovedOpenPath(rel, moved?.let { editorPathFor(workdir, it) })
     }
     return out
 }
