@@ -375,7 +375,7 @@ class HostSupervisorTest {
             brokerPath = Path.of("/s/bin/supermux-broker"), binDir = Path.of("/s/bin"),
             sessiondPath = null, frpcPath = null, tmuxPath = null, zmxDir = Path.of("/s/zmx"),
         )
-        val env = HostSupervisor.brokerEnv(
+        val env = brokerEnv(
             HostingPrefs(port = 9898, relay = false), bins,
             carried = mapOf("MUX_WEB_PORT" to "1", "MUX_TELEGRAM_BOT_TOKEN" to "1:a", "MUX_WEB_PUBLIC_URL" to "https://me.example"),
             hostName = "box", existingPath = "/usr/bin:/bin", home = "/Users/a", os = OsEnv.Os.MAC,
@@ -393,7 +393,7 @@ class HostSupervisorTest {
 
     @Test fun brokerEnvWithoutCarriedLeavesThePublicUrlAndDefaultsThePath() {
         val bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
-        val env = HostSupervisor.brokerEnv(HostingPrefs(), bins, emptyMap(), "box", existingPath = null, home = "/h", os = OsEnv.Os.LINUX)
+        val env = brokerEnv(HostingPrefs(), bins, emptyMap(), "box", existingPath = null, home = "/h", os = OsEnv.Os.LINUX)
         assertFalse("MUX_WEB_PUBLIC_URL" in env)
         assertEquals("relay.supermux.dev", env["MUX_RELAY_DOMAIN"])
         assertEquals("/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin:/h/.local/bin", env["PATH"])
@@ -402,7 +402,7 @@ class HostSupervisorTest {
     @Test fun brokerEnvOnWindowsCarriesSessiondAndUsesSemicolons() {
         val bin = Path.of("C:/s/bin")
         val bins = HostBinaries.SidecarBinaries(bin.resolve("supermux-broker.exe"), bin, bin.resolve("mux-sessiond.exe"), null, null, null)
-        val env = HostSupervisor.brokerEnv(HostingPrefs(), bins, emptyMap(), "win", existingPath = "C:/Windows", home = "C:/u", os = OsEnv.Os.WINDOWS)
+        val env = brokerEnv(HostingPrefs(), bins, emptyMap(), "win", existingPath = "C:/Windows", home = "C:/u", os = OsEnv.Os.WINDOWS)
         assertEquals(bin.resolve("mux-sessiond.exe").toString(), env["MUX_SESSIOND_PATH"])
         assertEquals("$bin;C:/Windows", env["PATH"])
     }

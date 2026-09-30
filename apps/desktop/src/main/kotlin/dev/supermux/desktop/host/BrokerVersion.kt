@@ -1,5 +1,10 @@
 package dev.supermux.desktop.host
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
@@ -86,6 +91,27 @@ object BrokerVersion {
         } finally {
             watchdog?.interrupt()
             if (p?.isAlive == true) p.destroyForcibly()
+        }
+    }
+
+    /**
+     * The bundled broker's build, read from the app image without touching the running copy
+     * (Windows can't overwrite a running .exe). If packaging dropped the exec bit, a probe copy
+     * under `desktop-assets/probe` is used. Blocking work runs on IO with a 15 s cap; the
+     * reader itself kills a hung child after 10 s.
+     */
+    suspend fun defaultBundledBuild(stateDir: Path): String? = withContext(Dispatchers.IO) {
+        val res = HostBinaries.resourcesDir() ?: return@withContext null
+        val os = HostBinaries.detectOs()
+        val name = HostBinaries.fileName(HostBinaries.Binary.Broker, os)
+        val src = res.resolve(name)
+        if (!Files.exists(src)) return@withContext null
+        withTimeoutOrNull(15_000) {
+            runInterruptible {
+                val exe = if (os == HostBinaries.Os.WINDOWS || Files.isExecutable(src)) src
+                else HostBinaries.materialize(src, stateDir.resolve("desktop-assets/probe"), name, executable = true)
+                BrokerVersion.readBundledBuild(exe)
+            }
         }
     }
 }

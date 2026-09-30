@@ -11,84 +11,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.builtins.MapSerializer
-import kotlinx.serialization.builtins.serializer
-import kotlinx.serialization.json.Json
 import java.io.RandomAccessFile
 import java.net.ServerSocket
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
-import java.nio.file.attribute.PosixFilePermissions
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
-
-/** A running broker process the app holds: a real [Process], an adopted [ProcessHandle], or a test fake. */
-interface ChildHandle {
-    val pid: Long?
-    val isAlive: Boolean
-    /** Null while running, or when unknown (an adopted process). */
-    val exitCode: Int?
-    fun destroy()
-    fun destroyForcibly()
-    /** Completes when the process exits. Cancelling the returned future must not affect the process. */
-    fun onExit(): CompletableFuture<*>
-}
-
-class ProcessChild(private val p: Process) : ChildHandle {
-    override val pid: Long? get() = runCatching { p.pid() }.getOrNull()
-    override val isAlive: Boolean get() = p.isAlive
-    override val exitCode: Int? get() = if (p.isAlive) null else runCatching { p.exitValue() }.getOrNull()
-    override fun destroy() = p.destroy()
-    override fun destroyForcibly() { p.destroyForcibly() }
-    override fun onExit(): CompletableFuture<*> = p.onExit()
-}
-
-/** A broker child of a previous app run (the app restarted without stopping it), re-parented by pid. */
-class ProcessHandleChild(private val h: ProcessHandle) : ChildHandle {
-    override val pid: Long? get() = h.pid()
-    override val isAlive: Boolean get() = h.isAlive
-    override val exitCode: Int? get() = null
-    override fun destroy() { h.destroy() }
-    override fun destroyForcibly() { h.destroyForcibly() }
-    override fun onExit(): CompletableFuture<*> = h.onExit()
-}
-
-/** How to launch the broker as the app's child. */
-data class ChildLaunch(val argv: List<String>, val env: Map<String, String>, val workDir: Path?, val log: Path)
-
-/**
- * MUX_* settings carried over from a service the app took over (spec §Takeover). Kept apart from
- * `hosting.json` because it can hold secrets (bot tokens), and it must outlive the takeover journal:
- * every later install/update/child start rebuilds the broker env from it.
- */
-class CarriedEnvStore(private val file: Path) {
-    private val json = Json { ignoreUnknownKeys = true }
-    private val serializer = MapSerializer(String.serializer(), String.serializer())
-
-    fun load(): Map<String, String> =
-        runCatching { json.decodeFromString(serializer, Files.readString(file)) }.getOrDefault(emptyMap())
-
-    @Synchronized
-    fun save(env: Map<String, String>) {
-        Files.createDirectories(file.parent)
-        val tmp = Files.createTempFile(file.parent, "carried", ".tmp")
-        try {
-            runCatching { Files.setPosixFilePermissions(tmp, PosixFilePermissions.fromString("rw-------")) }
-            Files.writeString(tmp, json.encodeToString(serializer, env))
-            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-        } finally {
-            Files.deleteIfExists(tmp)
-        }
-    }
-}
 
 /**
  * Starts, updates, supervises and takes over the local broker on every launch (spec §HostSupervisor).
@@ -109,7 +40,7 @@ class HostSupervisor(
     /** Copies the bundled broker/tmux/frpc/zmx out of the app image (blocking; run on [io]). */
     private val materialize: () -> HostBinaries.SidecarBinaries = { HostBinaries.resolve(stateDir) },
     /** The bundled broker's build ("1.5.0 (abc)"), or null in a dev checkout / on failure. */
-    private val bundledBuild: suspend () -> String? = { defaultBundledBuild(stateDir) },
+    private val bundledBuild: suspend () -> String? = { BrokerVersion.defaultBundledBuild(stateDir) },
     private val startChild: (ChildLaunch) -> ChildHandle = ::defaultStartChild,
     /** Re-parent a broker child left by a previous app run, if [pid] is still that broker. */
     private val adoptChild: (pid: Long) -> ChildHandle? = ::defaultAdoptChild,
@@ -792,19 +723,7 @@ class HostSupervisor(
         try { savePrefs(p) } catch (e: Exception) { log("couldn't save hosting prefs: ${e.message}") }
     }
 
-    /** Only a definition WE wrote counts: the retired Swift app used the same launchd label. */
-    private suspend fun ourServiceInstalled(): Boolean = withContext(io) { ourServiceInstalledBlocking() }
-
-    private fun ourServiceInstalledBlocking(): Boolean = runCatching {
-        fun ours(p: Path) = Files.isRegularFile(p) && BrokerService.MANAGED_MARKER in Files.readString(p)
-        when (osEnv.os) {
-            OsEnv.Os.MAC -> ours(osEnv.home.resolve("Library/LaunchAgents/${BrokerService.LAUNCHD_LABEL}.plist"))
-            OsEnv.Os.LINUX -> ours(osEnv.home.resolve(".config/systemd/user/${BrokerService.SYSTEMD_UNIT}")) ||
-                ours(osEnv.home.resolve(".config/autostart/${BrokerService.XDG_AUTOSTART_FILE}"))
-            OsEnv.Os.WINDOWS -> BrokerService.isInstalled(osEnv)
-            OsEnv.Os.OTHER -> false
-        }
-    }.getOrDefault(false)
+    private suspend fun ourServiceInstalled(): Boolean = withContext(io) { BrokerService.isOursInstalled(osEnv) }
 
     private fun logTail(lines: Int = 20): String {
         val tail = runCatching {
@@ -821,95 +740,11 @@ class HostSupervisor(
     }
 
     companion object {
-        const val RELAY_DOMAIN = "relay.supermux.dev"
-
-        /**
-         * The broker's env for BOTH modes. [carried] (from a takeover) goes UNDER ours, so ours
-         * wins. `MUX_WEB_PUBLIC_URL` is only ever set when carried.
-         */
-        fun brokerEnv(
-            prefs: HostingPrefs,
-            bins: HostBinaries.SidecarBinaries,
-            carried: Map<String, String>,
-            hostName: String = DesktopHostBootstrap.defaultHostName(),
-            existingPath: String? = System.getenv("PATH"),
-            home: String = System.getProperty("user.home") ?: ".",
-            os: OsEnv.Os = SystemOsEnv.os,
-        ): Map<String, String> {
-            val out = LinkedHashMap(carried)
-            out["MUX_WEB_PORT"] = prefs.port.toString()
-            out["MUX_MANAGED_BY"] = "desktop"
-            out["MUX_HOST_NAME"] = hostName
-            out["MUX_RELAY_DOMAIN"] = if (prefs.relay) RELAY_DOMAIN else ""
-            bins.zmxDir?.let { out["MUX_ZMX_BIN_DIR"] = it.toString() }
-            bins.sessiondPath?.let { out["MUX_SESSIOND_PATH"] = it.toString() }
-            out["PATH"] = servicePath(bins.binDir, existingPath, home, os)
-            return out
-        }
-
-        /** bin dir + existing PATH (or /usr/bin:/bin) + the agent CLI dirs `supermux setup` adds. */
-        fun servicePath(binDir: Path?, existingPath: String?, home: String, os: OsEnv.Os): String {
-            val windows = os == OsEnv.Os.WINDOWS
-            val sep = if (windows) ";" else ":"
-            val parts = mutableListOf<String>()
-            binDir?.let { parts += it.toString() }
-            val existing = existingPath?.takeIf { it.isNotBlank() } ?: if (windows) "" else "/usr/bin:/bin"
-            parts += existing.split(sep)
-            if (!windows) parts += listOf("/opt/homebrew/bin", "/usr/local/bin", "$home/.local/bin")
-            return parts.filter { it.isNotBlank() }.distinct().joinToString(sep)
-        }
-
-        fun defaultStartChild(l: ChildLaunch): ChildHandle {
-            val pb = ProcessBuilder(l.argv)
-            l.workDir?.let { pb.directory(it.toFile()) }
-            pb.environment().putAll(l.env)
-            l.log.parent?.let { Files.createDirectories(it) }
-            pb.redirectOutput(ProcessBuilder.Redirect.appendTo(l.log.toFile()))
-            pb.redirectError(ProcessBuilder.Redirect.appendTo(l.log.toFile()))
-            return ProcessChild(pb.start())
-        }
-
-        /** Only re-parent a live process whose command is a supermux broker (guards against pid reuse). */
-        fun defaultAdoptChild(pid: Long): ChildHandle? {
-            val h = ProcessHandle.of(pid).orElse(null) ?: return null
-            if (!h.isAlive) return null
-            val cmd = h.info().command().orElse("") + " " + h.info().arguments().map { it.joinToString(" ") }.orElse("")
-            val isBroker = "supermux-broker" in cmd || ("bun" in cmd && "src/main.ts" in cmd)
-            return if (isBroker) ProcessHandleChild(h) else null
-        }
-
         fun defaultBunPath(): String {
             HostBinaries.whichOnPath("bun")?.let { return it.toString() }
             val home = System.getProperty("user.home") ?: return "bun"
             val local = Path.of(home, ".bun", "bin", "bun")
             return if (Files.isExecutable(local)) local.toString() else "bun"
-        }
-
-        /**
-         * The bundled broker's build, read from the app image without touching the running copy
-         * (Windows can't overwrite a running .exe). If packaging dropped the exec bit, a probe copy
-         * under `desktop-assets/probe` is used. Blocking work runs on IO with a 15 s cap; the
-         * reader itself kills a hung child after 10 s.
-         */
-        suspend fun defaultBundledBuild(stateDir: Path): String? = withContext(Dispatchers.IO) {
-            val res = HostBinaries.resourcesDir() ?: return@withContext null
-            val os = HostBinaries.detectOs()
-            val name = HostBinaries.fileName(HostBinaries.Binary.Broker, os)
-            val src = res.resolve(name)
-            if (!Files.exists(src)) return@withContext null
-            withTimeoutOrNull(15_000) {
-                runInterruptible {
-                    val exe = if (os == HostBinaries.Os.WINDOWS || Files.isExecutable(src)) src
-                    else HostBinaries.materialize(src, stateDir.resolve("desktop-assets/probe"), name, executable = true)
-                    BrokerVersion.readBundledBuild(exe)
-                }
-            }
-        }
-
-        private suspend fun awaitExit(c: ChildHandle, ms: Long): Boolean {
-            if (!c.isAlive) return true
-            // thenApply: a dependent future, so a timeout cancels it and never the process's own future.
-            return withTimeoutOrNull(ms) { c.onExit().thenApply { }.await(); true } ?: !c.isAlive
         }
     }
 }

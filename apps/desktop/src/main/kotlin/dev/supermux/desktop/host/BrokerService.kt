@@ -232,6 +232,23 @@ Terminal=false
         OsEnv.Os.OTHER -> false
     }
 
+    /**
+     * True iff a definition WE wrote (it carries [MANAGED_MARKER]) is installed. The retired Swift
+     * app used the same launchd label, so file existence alone is not enough.
+     */
+    fun isOursInstalled(env: OsEnv = SystemOsEnv): Boolean = runCatching {
+        fun ours(p: Path) = Files.isRegularFile(p) && MANAGED_MARKER in Files.readString(p)
+        when (env.os) {
+            OsEnv.Os.MAC -> ours(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))
+            OsEnv.Os.LINUX -> ours(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")) || ours(xdgAutostartPath(env))
+            OsEnv.Os.WINDOWS -> isInstalled(env)
+            OsEnv.Os.OTHER -> false
+        }
+    }.getOrDefault(false)
+
+    /** The XDG autostart fallback file (Linux without systemd --user). */
+    fun xdgAutostartPath(env: OsEnv): Path = env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE")
+
     private fun installLaunchd(spec: Spec, env: OsEnv): Result {
         val plist = env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist")
         return runCatching {
