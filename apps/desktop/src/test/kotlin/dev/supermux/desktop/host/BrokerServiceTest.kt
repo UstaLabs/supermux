@@ -5,6 +5,7 @@ import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -18,7 +19,7 @@ class BrokerServiceTest {
             "MUX_HOST_NAME" to "Ahmet's Mac & Co",
             "PATH" to "/Users/a/.mux/state/desktop-assets/bin:/opt/homebrew/bin:/usr/bin:/bin",
         ),
-        log = Path.of("/Users/a/.mux/state/desktop-broker.log"),
+        log = createTempDirectory().resolve("desktop-broker.log"),
     )
 
     @Test fun plistRunsTheBrokerAsItsOwnArgvElement() {
@@ -45,7 +46,8 @@ class BrokerServiceTest {
         assertTrue(r is BrokerService.Result.Installed)
         assertTrue(Files.exists(home.resolve("Library/LaunchAgents/dev.supermux.host.plist")))
         assertEquals(listOf("launchctl", "bootout", "gui/501/dev.supermux.host"), env.ran[0])
-        assertEquals(listOf("launchctl", "bootstrap", "gui/501", home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()), env.ran[1])
+        assertEquals(listOf("launchctl", "enable", "gui/501/dev.supermux.host"), env.ran[1])
+        assertEquals(listOf("launchctl", "bootstrap", "gui/501", home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()), env.ran[2])
     }
 
     @Test fun macRestartKickstarts() {
@@ -79,7 +81,7 @@ class BrokerServiceTest {
         assertTrue("<Command>powershell.exe</Command>" in xml)
         assertTrue("\$env:MUX_MANAGED_BY = 'desktop'" in xml)
         assertTrue("'C:\\Users\\a\\.mux\\state\\desktop-assets\\bin\\supermux-broker.exe'" in xml, "PowerShell-quotes the broker")
-        assertTrue("*&gt;&gt; 'C:\\Users\\a\\.mux\\state\\desktop-broker.log'" in xml, "appends output to the log")
+        assertTrue("Out-File -Append -FilePath 'C:\\Users\\a\\.mux\\state\\desktop-broker.log'" in xml, "appends output to the log")
         assertTrue("Ahmet&apos;s" !in xml && "&amp;" in xml, "XML-escapes ampersands")
         assertTrue("'Ahmet''s" in xml, "doubles single quotes in PowerShell literals")
         assertTrue("\\\"Win\\\"" in xml, "escapes double quotes for the Windows command line")
@@ -108,6 +110,115 @@ class BrokerServiceTest {
         assertTrue(env.ran.any { it.firstOrNull() == "powershell.exe" && it.last().contains("/Delete") })
     }
 
+    private fun parse(xml: String) {
+        val f = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+        f.isValidating = false
+        f.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+        f.newDocumentBuilder().parse(org.xml.sax.InputSource(java.io.StringReader(xml)))
+    }
+
+    private val nasty = spec.copy(env = linkedMapOf("MUX_HOST_NAME" to "A & <b> \"q\" \u2019s"))
+
+    @Test fun plistAndTaskXmlAreWellFormedWithNastyValues() {
+        parse(BrokerService.launchdPlist(nasty))
+        parse(BrokerService.windowsTaskXml(nasty))
+    }
+
+    @Test fun windowsTaskXmlHasHiddenSupervisionLoopAndCurlyQuoteDoubled() {
+        val xml = BrokerService.windowsTaskXml(winSpec.copy(env = linkedMapOf("MUX_HOST_NAME" to "Ahmet\u2019s")))
+        parse(xml)
+        assertTrue("-WindowStyle Hidden" in xml)
+        assertTrue("while (\$true)" in xml)
+        assertTrue("Out-File -Append" in xml)
+        assertTrue("'Ahmet\u2019\u2019s'" in xml, "curly apostrophe doubled in the PowerShell literal")
+    }
+
+    @Test fun systemdEscapesDollarInExecStartAndPercentInLog() {
+        val unit = BrokerService.systemdUnit(spec.copy(broker = Path.of("/opt/a\$b/broker"), log = Path.of("/tmp/100%/x.log")))
+        assertTrue("ExecStart=\"/opt/a\$\$b/broker\"" in unit)
+        assertTrue("StandardOutput=append:/tmp/100%%/x.log" in unit)
+        assertTrue("StandardError=append:/tmp/100%%/x.log" in unit)
+    }
+
+    @Test fun macBootstrapFailingFiveTimesFails() {
+        val home = createTempDirectory()
+        val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()
+        val bs = listOf("launchctl", "bootstrap", "gui/501", plist)
+        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501,
+            scripted = mapOf(bs to List(5) { OsEnv.RunResult(5, "", " Bootstrap failed: 5 \n") }))
+        val r = BrokerService.install(spec, env)
+        val f = assertIs<BrokerService.Result.Failed>(r)
+        assertTrue("Bootstrap failed: 5" in f.message)
+        assertEquals(4, env.sleeps.size)
+        assertEquals(5, env.ran.count { it == bs })
+    }
+
+    @Test fun macBootstrapRetriesThenSucceeds() {
+        val home = createTempDirectory()
+        val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()
+        val bs = listOf("launchctl", "bootstrap", "gui/501", plist)
+        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501,
+            scripted = mapOf(bs to listOf(OsEnv.RunResult(5, "", "busy"))))
+        val r = assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env))
+        assertTrue(r.enabled)
+        assertEquals(1, env.sleeps.size)
+    }
+
+    @Test fun linuxInstallEnablesThenRestarts() {
+        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = createTempDirectory(), uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        BrokerService.install(spec, env)
+        val enable = env.ran.indexOf(listOf("systemctl", "--user", "enable", "--now", "supermux-host"))
+        val restart = env.ran.indexOf(listOf("systemctl", "--user", "restart", "supermux-host"))
+        assertTrue(enable >= 0 && restart > enable)
+    }
+
+    @Test fun linuxXdgFallbackIsNotEnabledAndRemoveCleansUp() {
+        val home = createTempDirectory()
+        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = null)
+        val r = assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env))
+        assertFalse(r.enabled)
+        val desktop = home.resolve(".config/autostart/supermux-host.desktop")
+        assertTrue(Files.exists(desktop))
+        val unit = home.resolve(".config/systemd/user/supermux-host.service")
+        Files.createDirectories(unit.parent); Files.writeString(unit, "x")
+        BrokerService.remove(env)
+        assertFalse(Files.exists(desktop))
+        assertFalse(Files.exists(unit))
+    }
+
+    @Test fun xdgExecQuotesReservedCharacters() {
+        val d = BrokerService.xdgAutostart(spec.copy(env = linkedMapOf("A" to "x\$y%z")))
+        assertTrue("\"A=x\\\\\$y%%z\"" in d, d)
+    }
+
+    @Test fun windowsInstallIsOneElevatedCallWithCreateAndRun() {
+        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory())
+        BrokerService.install(winSpec, env)
+        val elevated = env.ran.filter { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") }
+        assertEquals(1, elevated.size)
+        assertTrue("/Create" in elevated[0].last() && "/Run" in elevated[0].last())
+    }
+
+    @Test fun windowsRestartIsTaskkillWithoutElevation() {
+        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory())
+        assertTrue(BrokerService.restart(env))
+        assertEquals(listOf(listOf("taskkill", "/F", "/IM", "supermux-broker.exe")), env.ran)
+    }
+
+    @Test fun windowsRemoveWhenNotInstalledDoesNotElevate() {
+        val q = listOf("schtasks", "/Query", "/TN", "Supermux Host")
+        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory(),
+            scripted = mapOf(q to listOf(OsEnv.RunResult(1, "", "not found"))))
+        val r = assertIs<BrokerService.Result.Removed>(BrokerService.remove(env))
+        assertEquals(null, r.path)
+        assertTrue(env.ran.none { it.firstOrNull() == "powershell.exe" })
+    }
+
+    @Test fun specRejectsLineBreaks() {
+        assertFailsWith<IllegalArgumentException> { spec.copy(env = mapOf("A" to "x\ny")) }
+        assertFailsWith<IllegalArgumentException> { spec.copy(env = mapOf("A\r" to "x")) }
+    }
+
     @Test fun removeOnMacBootsOutAndDeletes() {
         val home = createTempDirectory()
         val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501)
@@ -127,9 +238,20 @@ class FakeOsEnv(
     private val commands: Set<String> = setOf("launchctl", "systemctl", "loginctl", "schtasks", "powershell.exe"),
     private val captures: Map<List<String>, String> = emptyMap(),
     private val failing: Set<List<String>> = emptySet(),
+    /** Per-argv scripted results, consumed in order; once empty (or absent) the default applies. */
+    private val scripted: Map<List<String>, List<OsEnv.RunResult>> = emptyMap(),
 ) : OsEnv {
     val ran = mutableListOf<List<String>>()
+    val sleeps = mutableListOf<Long>()
+    private val calls = mutableMapOf<List<String>, Int>()
     override fun hasCommand(name: String) = name in commands
-    override fun run(argv: List<String>): Boolean { ran += argv; return argv !in failing }
+    override fun run(argv: List<String>): Boolean = runResult(argv).exit == 0
+    override fun runResult(argv: List<String>): OsEnv.RunResult {
+        ran += argv
+        val n = calls.merge(argv, 1, Int::plus)!! - 1
+        scripted[argv]?.getOrNull(n)?.let { return it }
+        return if (argv in failing) OsEnv.RunResult(1, "", "failed") else OsEnv.RunResult(0, "", "")
+    }
     override fun runCapture(argv: List<String>): String? { ran += argv; return captures[argv] }
+    override fun sleep(ms: Long) { sleeps += ms }
 }

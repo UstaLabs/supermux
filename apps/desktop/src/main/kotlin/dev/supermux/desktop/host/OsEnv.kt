@@ -19,6 +19,14 @@ interface OsEnv {
     /** Run [argv] best-effort; true iff it exited 0. Never throws. */
     fun run(argv: List<String>): Boolean
 
+    data class RunResult(val exit: Int, val out: String, val err: String)
+
+    /** Run [argv], capturing exit code, stdout and stderr. Never throws (failure to start = exit -1). */
+    fun runResult(argv: List<String>): RunResult
+
+    /** Sleep [ms] (a seam so retry loops do not slow tests). */
+    fun sleep(ms: Long)
+
     /** Run [argv] and return its stdout, or null on failure. Never throws. */
     fun runCapture(argv: List<String>): String?
 }
@@ -57,13 +65,26 @@ object SystemOsEnv : OsEnv {
                 .start().waitFor() == 0
         }.getOrDefault(false)
 
-    override fun run(argv: List<String>): Boolean =
-        runCatching {
-            ProcessBuilder(argv)
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start().waitFor() == 0
-        }.getOrDefault(false)
+    override fun run(argv: List<String>): Boolean = runResult(argv).exit == 0
+
+    override fun runResult(argv: List<String>): OsEnv.RunResult = try {
+        val p = ProcessBuilder(argv).start()
+        p.outputStream.close()
+        var err = ""
+        val t = Thread { err = runCatching { p.errorStream.bufferedReader().readText() }.getOrDefault("") }
+        t.isDaemon = true
+        t.start()
+        val out = p.inputStream.bufferedReader().readText()
+        val exit = p.waitFor()
+        t.join(2000)
+        OsEnv.RunResult(exit, out, err)
+    } catch (e: Exception) {
+        OsEnv.RunResult(-1, "", e.message ?: e.toString())
+    }
+
+    override fun sleep(ms: Long) {
+        Thread.sleep(ms)
+    }
 
     override fun runCapture(argv: List<String>): String? = runCatching {
         val p = ProcessBuilder(argv).redirectError(ProcessBuilder.Redirect.DISCARD).start()

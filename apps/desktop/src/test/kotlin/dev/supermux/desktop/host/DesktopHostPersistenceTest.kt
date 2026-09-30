@@ -19,6 +19,8 @@ class DesktopHostPersistenceTest {
         override fun hasCommand(name: String) = false
         override fun run(argv: List<String>) = false
         override fun runCapture(argv: List<String>): String? = null
+        override fun runResult(argv: List<String>) = OsEnv.RunResult(1, "", "")
+        override fun sleep(ms: Long) {}
     }
 
     private fun tempPersistence(): DesktopHostPersistence {

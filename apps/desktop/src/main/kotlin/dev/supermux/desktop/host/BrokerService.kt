@@ -14,9 +14,16 @@ object BrokerService {
     const val SYSTEMD_NAME = "supermux-host"
     const val XDG_AUTOSTART_FILE = "supermux-host.desktop"
     const val WINDOWS_TASK_NAME = "Supermux Host"
+    const val WINDOWS_BROKER_EXE = "supermux-broker.exe"
     const val WINDOWS_TASK_XML = "Supermux/supermux-host-task.xml"
 
-    data class Spec(val broker: Path, val env: Map<String, String>, val log: Path)
+    data class Spec(val broker: Path, val env: Map<String, String>, val log: Path) {
+        init {
+            fun bad(x: String) = x.contains('\n') || x.contains('\r')
+            require(env.none { (k, v) -> bad(k) || bad(v) }) { "env must not contain line breaks" }
+            require(!bad(broker.toString()) && !bad(log.toString())) { "paths must not contain line breaks" }
+        }
+    }
 
     sealed interface Result {
         data class Installed(val path: Path, val enabled: Boolean) : Result
@@ -27,7 +34,8 @@ object BrokerService {
 
     private fun xml(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    private fun powershellLiteral(value: String): String = "'${value.replace("'", "''")}'"
+    private fun powershellLiteral(value: String): String =
+        "'${value.replace(Regex("['\u2018\u2019\u201A\u201B]")) { it.value + it.value }}'"
 
     /**
      * Quote one CreateProcess argument using the CommandLineToArgvW backslash/quote rules.
@@ -73,7 +81,7 @@ object BrokerService {
   <key>ThrottleInterval</key>
   <integer>5</integer>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Standard</string>
   <key>EnvironmentVariables</key>
   <dict>$env
   </dict>
@@ -88,6 +96,15 @@ object BrokerService {
 
     private fun sdQuote(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("%", "%%") + "\""
 
+    /** ExecStart additionally expands `$VAR`, so a literal `$` must be `$$`. */
+    private fun sdExecQuote(s: String) = sdQuote(s).replace("$", "$$")
+
+    /** Desktop Entry `Exec=` argument: quoted, reserved chars backslashed, backslashes doubled, `%` doubled. */
+    private fun xdgQuote(s: String): String {
+        val reserved = s.replace(Regex("[\"`$\\\\]")) { "\\" + it.value }
+        return "\"" + reserved.replace("\\", "\\\\").replace("%", "%%") + "\""
+    }
+
     fun systemdUnit(spec: Spec): String {
         val env = spec.env.entries.joinToString("") { (k, v) -> "\nEnvironment=${sdQuote("$k=$v")}" }
         return """[Unit]
@@ -97,11 +114,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${sdQuote(spec.broker.toString())}
+ExecStart=${sdExecQuote(spec.broker.toString())}
 Restart=always
 RestartSec=3$env
-StandardOutput=append:${spec.log}
-StandardError=append:${spec.log}
+StandardOutput=append:${spec.log.toString().replace("%", "%%")}
+StandardError=append:${spec.log.toString().replace("%", "%%")}
 
 [Install]
 WantedBy=default.target
@@ -109,12 +126,12 @@ WantedBy=default.target
     }
 
     fun xdgAutostart(spec: Spec): String {
-        val envArgs = spec.env.entries.joinToString(" ") { (k, v) -> sdQuote("$k=$v") }
+        val envArgs = spec.env.entries.joinToString(" ") { (k, v) -> xdgQuote("$k=$v") }
         return """[Desktop Entry]
 Type=Application
 Name=supermux
 Comment=Keep supermux running in the background
-Exec=env $envArgs ${sdQuote(spec.broker.toString())}
+Exec=env $envArgs ${xdgQuote(spec.broker.toString())}
 X-GNOME-Autostart-enabled=true
 Terminal=false
 """
@@ -123,11 +140,15 @@ Terminal=false
     /** Windows Task Scheduler 1.4 XML for the current interactive user. */
     fun windowsTaskXml(spec: Spec): String {
         val sets = spec.env.entries.joinToString("; ") { (k, v) -> "\$env:$k = ${powershellLiteral(v)}" }
-        val script = "& { $sets; & ${powershellLiteral(spec.broker.toString())} *>> ${powershellLiteral(spec.log.toString())} }"
+        val script = "\$PSDefaultParameterValues['Out-File:Encoding']='utf8'; $sets; " +
+            "while (\$true) { & ${powershellLiteral(spec.broker.toString())} 2>&1 | ForEach-Object { \"\$_\" } | " +
+            "Out-File -Append -FilePath ${powershellLiteral(spec.log.toString())}; Start-Sleep -Seconds 5 }"
         val arguments = listOf(
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
@@ -186,17 +207,12 @@ Terminal=false
         OsEnv.Os.OTHER -> Result.Unsupported
     }
 
-    /**
-     * Restart the running service in place. True iff the OS accepted the command. On Windows this
-     * raises a UAC prompt, so it is only called from an explicit user action, never automatically.
-     */
+    /** Restart the running service in place. True iff the OS accepted the command. */
     fun restart(env: OsEnv = SystemOsEnv): Boolean = when (env.os) {
         OsEnv.Os.MAC -> env.uid != null && env.run(listOf("launchctl", "kickstart", "-k", "gui/${env.uid}/$LAUNCHD_LABEL"))
         OsEnv.Os.LINUX -> env.run(listOf("systemctl", "--user", "restart", SYSTEMD_NAME))
-        OsEnv.Os.WINDOWS -> {
-            runElevatedSchtasks(env, listOf("/End", "/TN", WINDOWS_TASK_NAME))
-            runElevatedSchtasks(env, listOf("/Run", "/TN", WINDOWS_TASK_NAME))
-        }
+        // The task's loop respawns the broker ~5 s after it dies; no elevation needed.
+        OsEnv.Os.WINDOWS -> env.run(listOf("taskkill", "/F", "/IM", WINDOWS_BROKER_EXE))
         OsEnv.Os.OTHER -> false
     }
 
@@ -204,7 +220,7 @@ Terminal=false
         OsEnv.Os.MAC -> Files.exists(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))
         OsEnv.Os.LINUX -> Files.exists(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")) ||
             Files.exists(env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE"))
-        OsEnv.Os.WINDOWS -> Files.exists(env.localAppData.resolve(WINDOWS_TASK_XML))
+        OsEnv.Os.WINDOWS -> env.runResult(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME)).exit == 0
         OsEnv.Os.OTHER -> false
     }
 
@@ -212,15 +228,21 @@ Terminal=false
         val plist = env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist")
         return runCatching {
             Files.createDirectories(plist.parent)
+            spec.log.parent?.let { Files.createDirectories(it) }
             Files.writeString(plist, launchdPlist(spec))
-            val enabled = if (env.hasCommand("launchctl") && env.uid != null) {
+            if (env.hasCommand("launchctl") && env.uid != null) {
                 val domain = "gui/${env.uid}"
-                env.run(listOf("launchctl", "bootout", "$domain/$LAUNCHD_LABEL")) // ignore: first install has none
-                val ok = env.run(listOf("launchctl", "bootstrap", domain, plist.toString()))
-                env.run(listOf("launchctl", "enable", "$domain/$LAUNCHD_LABEL"))
-                ok
-            } else false
-            Result.Installed(plist, enabled)
+                env.runResult(listOf("launchctl", "bootout", "$domain/$LAUNCHD_LABEL")) // ignore: first install has none
+                env.runResult(listOf("launchctl", "enable", "$domain/$LAUNCHD_LABEL"))
+                var last = OsEnv.RunResult(-1, "", "")
+                for (attempt in 1..5) {
+                    last = env.runResult(listOf("launchctl", "bootstrap", domain, plist.toString()))
+                    if (last.exit == 0) break
+                    if (attempt < 5) env.sleep(500)
+                }
+                if (last.exit != 0) return Result.Failed("launchctl bootstrap failed: ${last.err.trim()}")
+                Result.Installed(plist, true)
+            } else Result.Installed(plist, false)
         }.getOrElse { Result.Failed("launchd install failed: ${it.message}") }
     }
 
@@ -240,9 +262,12 @@ Terminal=false
         val unit = env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")
         return runCatching {
             Files.createDirectories(unit.parent)
+            spec.log.parent?.let { Files.createDirectories(it) }
             Files.writeString(unit, systemdUnit(spec))
             env.run(listOf("systemctl", "--user", "daemon-reload"))
             val enabled = env.run(listOf("systemctl", "--user", "enable", "--now", SYSTEMD_NAME))
+            // enable --now is a no-op for an already-running unit; restart applies a new env/binary.
+            env.run(listOf("systemctl", "--user", "restart", SYSTEMD_NAME))
             // Best-effort linger so the host survives logout (no sudo needed for one's own user).
             env.uid?.let { env.run(listOf("loginctl", "enable-linger", it.toString())) }
             Result.Installed(unit, enabled)
@@ -254,7 +279,7 @@ Terminal=false
         return runCatching {
             Files.createDirectories(file.parent)
             Files.writeString(file, xdgAutostart(spec))
-            Result.Installed(file, enabled = true)
+            Result.Installed(file, enabled = false) // only starts at next login
         }.getOrElse { Result.Failed("xdg autostart install failed: ${it.message}") }
     }
 
@@ -267,6 +292,7 @@ Terminal=false
                 env.run(listOf("systemctl", "--user", "daemon-reload"))
             }
             val a = Files.deleteIfExists(unit)
+            Files.deleteIfExists(env.home.resolve(".config/systemd/user/default.target.wants/$SYSTEMD_UNIT"))
             val b = Files.deleteIfExists(autostart)
             Result.Removed(when { a -> unit; b -> autostart; else -> null })
         }.getOrElse { Result.Failed("systemd remove failed: ${it.message}") }
@@ -276,19 +302,31 @@ Terminal=false
         val taskXml = env.localAppData.resolve(WINDOWS_TASK_XML)
         return runCatching {
             Files.createDirectories(taskXml.parent)
-            Files.writeString(taskXml, windowsTaskXml(spec), Charsets.UTF_16)
-            val enabled = runElevatedSchtasks(
+            Files.writeString(taskXml, "\uFEFF" + windowsTaskXml(spec), Charsets.UTF_16LE)
+            // ONE elevated invocation (one UAC prompt): create the task, then start it now.
+            val ok = runElevatedSchtasksBatch(
                 env,
-                listOf("/Create", "/TN", WINDOWS_TASK_NAME, "/XML", taskXml.toString(), "/F"),
+                listOf(
+                    listOf("/Create", "/TN", WINDOWS_TASK_NAME, "/XML", taskXml.toString(), "/F"),
+                    listOf("/Run", "/TN", WINDOWS_TASK_NAME),
+                ),
             )
-            Result.Installed(taskXml, enabled)
+            if (!ok) {
+                Files.deleteIfExists(taskXml)
+                Result.Failed("Windows Scheduled Task install failed (elevation declined or schtasks error)")
+            } else Result.Installed(taskXml, true)
         }.getOrElse { Result.Failed("Windows Scheduled Task install failed: ${it.message}") }
     }
 
     private fun removeWindowsTask(env: OsEnv): Result {
         val taskXml = env.localAppData.resolve(WINDOWS_TASK_XML)
         return runCatching {
-            runElevatedSchtasks(env, listOf("/Delete", "/TN", WINDOWS_TASK_NAME, "/F"))
+            if (!isInstalled(env)) {
+                Files.deleteIfExists(taskXml)
+                return Result.Removed(null)
+            }
+            runElevatedSchtasksBatch(env, listOf(listOf("/Delete", "/TN", WINDOWS_TASK_NAME, "/F")))
+            env.run(listOf("taskkill", "/F", "/IM", WINDOWS_BROKER_EXE))
             val existed = Files.deleteIfExists(taskXml)
             Result.Removed(if (existed) taskXml else null)
         }.getOrElse { Result.Failed("Windows Scheduled Task remove failed: ${it.message}") }
@@ -296,23 +334,22 @@ Terminal=false
 
     /**
      * Windows 11 denies even current-user Task Scheduler registration to a non-elevated process.
-     * Elevate only schtasks (the registered task itself remains InteractiveToken/LeastPrivilege).
+     * Elevate once (one UAC prompt) and run every schtasks call inside that elevated PowerShell;
+     * false if any exit code is non-zero. The registered task itself stays InteractiveToken/LeastPrivilege.
      */
-    private fun runElevatedSchtasks(env: OsEnv, args: List<String>): Boolean {
-        val argumentLine = args.joinToString(" ") { windowsArgument(it) }
+    private fun runElevatedSchtasksBatch(env: OsEnv, calls: List<List<String>>): Boolean {
+        val inner = calls.joinToString("; ") { args ->
+            "& schtasks.exe ${args.joinToString(" ") { powershellLiteral(it) }}; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }"
+        }
+        val innerArgs = listOf("-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsArgument(inner))
+            .joinToString(" ")
         val script =
-            "\$process = Start-Process -FilePath 'schtasks.exe' -Verb RunAs -Wait -PassThru " +
-                "-ArgumentList ${powershellLiteral(argumentLine)}; exit \$process.ExitCode"
+            "\$process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru " +
+                "-ArgumentList ${powershellLiteral(innerArgs)}; exit \$process.ExitCode"
         return env.run(
             listOf(
-                "powershell.exe",
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                script,
+                "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                "-Command", script,
             ),
         )
     }

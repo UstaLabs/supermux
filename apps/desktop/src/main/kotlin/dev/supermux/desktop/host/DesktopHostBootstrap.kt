@@ -128,7 +128,6 @@ object DesktopHostBootstrap {
         scope: CoroutineScope,
         hostStore: PairedHostStore,
         hostName: String = defaultHostName(),
-        keepAliveExec: List<String> = currentAppCommand(),
         tokenStore: DesktopTokenStore = DesktopTokenStore(),
     ): HostWizardModel = HostWizardModel(
         scope = scope,
@@ -146,9 +145,8 @@ object DesktopHostBootstrap {
                 platform = System.getProperty("os.name"),
             )
         },
-        onInstallKeepAlive = { keepAlive ->
-            // Task 8 rewires this to the HostSupervisor / BrokerService.
-            if (keepAlive) TODO("Task 8")
+        onInstallKeepAlive = { _ ->
+            /* Task 8 wires the supervisor */
         },
     )
 
@@ -157,12 +155,6 @@ object DesktopHostBootstrap {
         val h = runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.takeIf { it.isNotBlank() }
         return h ?: "Desktop host"
     }
-
-    /** Best-effort argv for the login keep-alive to relaunch (the packaged app, or the dev java cmd). */
-    fun currentAppCommand(): List<String> =
-        runCatching { ProcessHandle.current().info().commandLine().orElse(null) }
-            .getOrNull()?.takeIf { it.isNotBlank() }?.let { listOf(it) }
-            ?: listOf(System.getProperty("java.home") + "/bin/java")
 
     @kotlinx.serialization.Serializable
     private data class ClaimBody(val deviceName: String)
