@@ -701,8 +701,7 @@ fun main() {
                         // already-running :9898 broker; it never stops a broker it didn't start). NOT
                         // stopped on dispose — a freshly-spawned managed broker must keep hosting after
                         // the wizard closes (the login keep-alive agent owns its persistence).
-                        val sidecar = remember { DesktopHostBootstrap.sidecar() }
-                        val model = remember { DesktopHostBootstrap.buildModel(scope, hostStore, sidecar) }
+                        val model = remember { DesktopHostBootstrap.buildModel(scope, hostStore) }
                         HostWizard(
                             model = model,
                             onDone = {

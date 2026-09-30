@@ -27,7 +27,7 @@ data class HostingPrefs(
 
 class HostingPrefsStore(
     private val file: Path = defaultFile(),
-    private val legacyPortFile: Path = inlineStateDir().resolve("desktop-sidecar.json"),
+    private val legacyPortFile: Path = BrokerPaths.defaultStateDir().resolve("desktop-sidecar.json"),
 ) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -55,6 +55,3 @@ class HostingPrefsStore(
             Path.of(System.getProperty("user.home") ?: ".", ".config", "supermux-desktop", "hosting.json")
     }
 }
-// Task 3 only: replaced by BrokerPaths.defaultStateDir() in Task 4.
-private fun inlineStateDir(): Path =
-    Path.of(System.getenv("MUX_STATE_DIR") ?: "${System.getenv("MUX_HOME") ?: (System.getProperty("user.home") + "/.mux")}/state")

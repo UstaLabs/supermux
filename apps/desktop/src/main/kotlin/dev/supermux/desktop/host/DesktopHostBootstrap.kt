@@ -48,35 +48,7 @@ object DesktopHostBootstrap {
         return null
     }
 
-    /**
-     * A sidecar pointed at the local broker, aware of BOTH modes (Plan 3 Task 5). In a packaged app
-     * it spawns the BUNDLED broker binary and prepends the materialized bin dir (bundled runtime/frpc)
-     * to the broker's `PATH` so the broker's bare `tmux`/`frpc` execs resolve to our copies; in a
-     * dev checkout it runs `bun <repo>/src/main.ts` and the helpers come off the ambient `$PATH`.
-     * Caller owns start()/stop().
-     */
-    fun sidecar(port: Int = 9898): BrokerSidecar {
-        val bins = runCatching { HostBinaries.resolve(BrokerSidecar.defaultStateDir()) }
-            .getOrDefault(
-                HostBinaries.SidecarBinaries(
-                    brokerPath = null,
-                    binDir = null,
-                    sessiondPath = null,
-                    frpcPath = null,
-                    tmuxPath = null,
-                    zmxDir = null,
-                ),
-            )
-        val extraEnv = buildSidecarEnvironment(bins, defaultHostName())
-        return BrokerSidecar(
-            SidecarConfig(
-                port = port,
-                repoDir = detectRepoDir(),
-                bundledBrokerPath = bins.brokerPath,
-                extraEnv = extraEnv,
-            ),
-        )
-    }
+    // Task 8: HostSupervisor replaces the deleted BrokerSidecar.sidecar() factory.
 
     internal fun buildSidecarEnvironment(
         bins: HostBinaries.SidecarBinaries,
@@ -157,30 +129,16 @@ object DesktopHostBootstrap {
     fun buildModel(
         scope: CoroutineScope,
         hostStore: PairedHostStore,
-        sidecar: BrokerSidecar,
         hostName: String = defaultHostName(),
         keepAliveExec: List<String> = currentAppCommand(),
         tokenStore: DesktopTokenStore = DesktopTokenStore(),
     ): HostWizardModel = HostWizardModel(
         scope = scope,
         hostName = hostName,
-        provideHostId = {
-            // Kick the sidecar if it hasn't run, then wait (≤60s) for it to learn a hostId.
-            if (sidecar.state.value == BrokerSidecar.Phase.Idle) scope.launch { sidecar.start() }
-            var id = sidecar.hostId.value
-            val deadline = System.currentTimeMillis() + 60_000
-            while (id.isNullOrBlank() && System.currentTimeMillis() < deadline) {
-                delay(500)
-                id = sidecar.hostId.value
-            }
-            id
-        },
-        provideLocalUrl = { sidecar.localBaseUrl },
-        mintClaim = {
-            // Reuse an existing "This computer" token if we already have one (reconnect), else bootstrap.
-            val existing = hostStore.list().firstOrNull { it.hostId == sidecar.hostId.value }?.token
-            mintLocalClaim(sidecar.localBaseUrl, hostName, existing)
-        },
+        // Task 8: these three are wired to HostSupervisor.
+        provideHostId = { TODO("Task 8") },
+        provideLocalUrl = { TODO("Task 8") },
+        mintClaim = { TODO("Task 8") },
         onPairThisComputer = { localToken, directUrl, hostId ->
             hostStore.addOrUpdate(
                 displayName = hostName,
@@ -196,7 +154,7 @@ object DesktopHostBootstrap {
                     KeepAlive.install(
                         KeepAlive.Spec(
                             exec = keepAliveExec,
-                            hostId = sidecar.hostId.value,
+                            hostId = TODO("Task 8"),
                             hostName = hostName,
                         ),
                     )
