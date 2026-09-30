@@ -1,0 +1,59 @@
+package dev.supermux.desktop.host
+
+/** What the supervisor is doing right now (spec §States). */
+sealed interface HostingStatus {
+    data object NotHosting : HostingStatus
+    data object Starting : HostingStatus
+    data class Running(val port: Int, val readOnly: Boolean) : HostingStatus
+    data class Restarting(val attempt: Int) : HostingStatus
+    data class CantStart(val reason: String) : HostingStatus
+    data class AskTakeover(val hostId: String?) : HostingStatus
+    data class AskDowngrade(val hostId: String) : HostingStatus
+}
+
+enum class Dot { GREEN, YELLOW, RED, GREY }
+
+data class TrayModel(
+    val dot: Dot,
+    val header: String,
+    val showLog: Boolean,
+    /** null => no Restart item (not hosting). */
+    val restartLabel: String?,
+    val restartEnabled: Boolean,
+    val showKeepRunning: Boolean,
+    val keepRunningEnabled: Boolean,
+) {
+    companion object {
+        fun of(s: HostingStatus, prefs: HostingPrefs, sessions: Int, remoteName: String?): TrayModel {
+            val n = if (sessions == 1) "1 session" else "$sessions sessions"
+            return when (s) {
+                HostingStatus.NotHosting -> TrayModel(
+                    Dot.GREY, remoteName?.let { "Connected to $it" } ?: "Not hosting", false, null, false, false, false,
+                )
+                HostingStatus.Starting -> TrayModel(Dot.YELLOW, "Starting supermux…", false, "Restart", false, true, true)
+                is HostingStatus.Restarting -> TrayModel(
+                    Dot.YELLOW, "supermux stopped unexpectedly · restarting (attempt ${s.attempt})", true, "Restart", false, true, true,
+                )
+                is HostingStatus.CantStart -> TrayModel(Dot.RED, "supermux can't start", true, "Try again", true, true, true)
+                is HostingStatus.AskTakeover, is HostingStatus.AskDowngrade ->
+                    TrayModel(Dot.YELLOW, "supermux is waiting for you", false, null, false, false, false)
+                is HostingStatus.Running -> when {
+                    s.readOnly -> TrayModel(Dot.GREEN, "supermux is running · $n · managed outside the app", false, "Restart", false, true, false)
+                    s.port != HostingPrefs.DEFAULT_PORT ->
+                        TrayModel(Dot.YELLOW, "supermux is running on port ${s.port} (${HostingPrefs.DEFAULT_PORT} is in use)", false, "Restart", true, true, true)
+                    else -> TrayModel(Dot.GREEN, "supermux is running · $n", false, "Restart", true, true, true)
+                }
+            }
+        }
+    }
+}
+
+object QuitText {
+    /** null => quit without a prompt. */
+    fun of(s: HostingStatus, prefs: HostingPrefs, sessions: Int): String? = when {
+        s is HostingStatus.Running && s.readOnly -> null
+        s == HostingStatus.NotHosting -> null
+        prefs.background -> "supermux will keep running in the background."
+        else -> "This stops supermux and your ${if (sessions == 1) "1 running session" else "$sessions running sessions"}."
+    }
+}
