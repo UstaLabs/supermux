@@ -16,7 +16,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
@@ -33,10 +35,11 @@ class FileStaleWatcherTest {
     private fun dir(path: String, version: String, vararg files: Pair<String, Long>) =
         ServerFrame.FsDir(path = path, version = version, entries = files.map { (n, m) -> FsEntry(name = n, type = "file", mtime = m, size = 1) })
 
-    @Test fun anOutsideChangeRaisesTheBannerAndClosingReleasesTheFolder() = runComposeUiTest {
+    @Test fun anOutsideChangeReloadsACleanFileAndFlagsADirtyOneAndClosingReleasesTheFolder() = runComposeUiTest {
         val sent = mutableListOf<ClientFrame>()
         val fs = service(sent)
-        val docs = DocumentStore({ Result.success("x") }, { _, _ -> true }, CoroutineScope(Dispatchers.Unconfined))
+        val disk = mutableMapOf("src/a.kt" to "a1", "src/b.kt" to "b1")
+        val docs = DocumentStore({ p -> Result.success(disk.getValue(p)) }, { _, _ -> true }, CoroutineScope(Dispatchers.Unconfined))
         setContent { FileStaleWatcher(fs, "/w", docs) }
         docs.open("src/a.kt")
         docs.open("src/b.kt")
@@ -46,16 +49,46 @@ class FileStaleWatcherTest {
         fs.onFrame(dir("/w/src", "1", "a.kt" to 1, "b.kt" to 1))
         waitForIdle()
         assertFalse(docs.isStale("src/a.kt"))
-        fs.onFrame(dir("/w/src", "2", "a.kt" to 2, "b.kt" to 1))
+        docs.update("src/b.kt", "unsaved")
+        disk["src/a.kt"] = "a2"
+        disk["src/b.kt"] = "b2"
+        fs.onFrame(dir("/w/src", "2", "a.kt" to 2, "b.kt" to 2))
         waitForIdle()
-        assertTrue(docs.isStale("src/a.kt"))
-        assertFalse(docs.isStale("src/b.kt"))
+        // Clean: the new text, no banner.
+        assertEquals("a2", docs.get("src/a.kt")?.content)
+        assertFalse(docs.isDirty("src/a.kt"))
+        assertFalse(docs.isStale("src/a.kt"))
+        // Dirty: his edits kept, banner up.
+        assertEquals("unsaved", docs.get("src/b.kt")?.content)
+        assertTrue(docs.isStale("src/b.kt"))
         docs.close("src/a.kt")
         waitForIdle()
         assertFalse(ClientFrame.FsUnsub("/w/src") in sentCopy(sent))
         docs.close("src/b.kt")
         waitForIdle()
         assertTrue(ClientFrame.FsUnsub("/w/src") in sentCopy(sent))
+    }
+
+    @Test fun aCleanFileDeletedOnDiskStillRaisesTheBanner() = runComposeUiTest {
+        val sent = mutableListOf<ClientFrame>()
+        val fs = service(sent)
+        var gone = false
+        val docs = DocumentStore(
+            { if (gone) Result.failure(RuntimeException("not found")) else Result.success("x") },
+            { _, _ -> true },
+            CoroutineScope(Dispatchers.Unconfined),
+        )
+        setContent { FileStaleWatcher(fs, "/w", docs) }
+        docs.open("a.kt")
+        waitForIdle()
+        fs.onFrame(dir("/w", "1", "a.kt" to 1))
+        waitForIdle()
+        gone = true
+        fs.onFrame(dir("/w", "2"))
+        waitForIdle()
+        assertEquals("x", docs.get("a.kt")?.content)
+        assertTrue(docs.isStale("a.kt"))
+        assertNull(docs.loadError)
     }
 
     @Test fun ourOwnSaveDoesNotRaiseTheBanner() = runComposeUiTest {
@@ -100,6 +133,7 @@ class FileStaleWatcherTest {
         waitForIdle()
         synchronized(sent) { sent.clear() }
         waitUntil(timeoutMillis = 5_000) { ClientFrame.FsSub("/w/build") in sentCopy(sent) }
+        docs.update("build/a.kt", "unsaved")
         fs.onFrame(dir("/w/build", "2", "a.kt" to 5))  // mkdir build && regenerate
         waitForIdle()
         assertTrue(docs.isStale("build/a.kt"))
@@ -127,7 +161,8 @@ class FileStaleWatcherTest {
         write.complete(true)
         waitForIdle()
         assertFalse(editor.isStale("src/a.kt"))
-        // Someone else touches b.kt.
+        // Someone else touches b.kt while it has unsaved edits.
+        editor.updateContent("src/b.kt", "unsaved")
         fs.onFrame(dir("/w/src", "3", "a.kt" to 2, "b.kt" to 9))
         waitForIdle()
         assertTrue(editor.isStale("src/b.kt"))

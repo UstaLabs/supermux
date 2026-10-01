@@ -23,4 +23,8 @@ interface WatchedDocuments {
 
     /** Record disk-change notifications → the reload banner. */
     fun markChanged(paths: List<String>)
+
+    /** The watcher saw [paths] change on disk. A file with no unsaved edits just takes the new
+     *  text; only one that has them (or can no longer be read) gets the banner via [markChanged]. */
+    fun changedOnDisk(paths: List<String>) = markChanged(paths)
 }
