@@ -59,9 +59,61 @@ private fun parseTree(src: CharSequence): ASTNode = MarkdownParser(gfmFlavour).b
  * GFM tables and standalone images become their own structured blocks.
  */
 fun parseMarkdownBlocks(input: String): List<MdBlock> {
+    val src = separateTablesFromParagraphs(input)
     val out = mutableListOf<MdBlock>()
-    for (child in parseTree(input).children) collectBlock(child, input, out)
+    for (child in parseTree(src).children) collectBlock(child, src, out)
     return out
+}
+
+// A line's container prefix (indentation and `>` quote markers), then what follows it.
+private val containerPrefix = Regex("""^[ \t]*(?:>[ \t]?)*""")
+private val delimiterRow = Regex("""^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$""")
+private val fenceOpen = Regex("""^(`{3,}|~{3,})""")
+
+/**
+ * GFM lets a table interrupt a paragraph — agents write `Results:` and start the table on the very
+ * next line — but the intellij-markdown parser needs a blank line first, so such a table fell
+ * through as one prose blob of pipes. Insert that blank line (keeping any `>` quote prefix) before
+ * a header row that sits right under text and is followed by a delimiter row with the same number
+ * of cells. Lines inside ``` / ~~~ fences are never touched.
+ */
+internal fun separateTablesFromParagraphs(input: String): String {
+    if ('|' !in input || '-' !in input) return input
+    val lines = input.split('\n')
+    val out = ArrayList<String>(lines.size + 4)
+    var fence: String? = null
+    for ((i, line) in lines.withIndex()) {
+        val prefix = containerPrefix.find(line)?.value.orEmpty()
+        val content = line.substring(prefix.length)
+        val fenceMark = fenceOpen.find(content.trimEnd())?.groupValues?.get(1)
+        if (fence != null) {
+            // A fence closes on a run of its own character at least as long as the opener.
+            if (fenceMark != null && fenceMark[0] == fence[0] && fenceMark.length >= fence.length &&
+                content.trimEnd() == fenceMark
+            ) fence = null
+            out.add(line)
+            continue
+        }
+        if (fenceMark != null) {
+            fence = fenceMark
+            out.add(line)
+            continue
+        }
+        val next = lines.getOrNull(i + 1)
+        val prev = lines.getOrNull(i - 1)
+        if (next != null && prev != null && '|' in content) {
+            val nextPrefix = containerPrefix.find(next)?.value.orEmpty()
+            val nextContent = next.substring(nextPrefix.length)
+            val prevContent = prev.substring(containerPrefix.find(prev)?.value.orEmpty().length)
+            if (prevContent.isNotBlank() && '|' !in prevContent &&
+                nextPrefix.trimEnd() == prefix.trimEnd() &&
+                '|' in nextContent && delimiterRow.matches(nextContent.trim()) &&
+                splitTableRow(content).size == splitTableRow(nextContent).size
+            ) out.add(prefix.trimEnd())
+        }
+        out.add(line)
+    }
+    return out.joinToString("\n")
 }
 
 private fun collectBlock(node: ASTNode, src: String, out: MutableList<MdBlock>) {

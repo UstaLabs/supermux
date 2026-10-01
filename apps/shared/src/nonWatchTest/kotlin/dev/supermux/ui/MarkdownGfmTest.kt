@@ -1,6 +1,5 @@
 package dev.supermux.ui
 
-import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -121,20 +120,42 @@ class MarkdownGfmTest {
     }
 
     /**
-     * Agents write "Results:" and start the table on the very next line, constantly. The old iOS
-     * parser detected that; the intellij-markdown GFM parser backing [parseMarkdownBlocks] follows
-     * the spec instead and needs a blank line, so the whole table falls through as one prose blob
-     * of pipes. KNOWN REGRESSION, left failing on purpose: the fix is a pre-pass that inserts the
-     * blank line before a header+delimiter pair, which needs its own fence/quote/list tracking to
-     * not corrupt other markdown — too big to smuggle in here, and weakening this assertion would
-     * just hide the bug.
+     * Agents write "Results:" and start the table on the very next line, constantly. GFM allows it;
+     * the intellij-markdown parser needs a blank line, which [separateTablesFromParagraphs] inserts.
      */
-    @Ignore
     @Test fun table_on_the_line_right_after_text_still_parses() {
         val blocks = parseMarkdownBlocks("Results:\n| A | B |\n|---|---|\n| 1 | 2 |")
         val tables = blocks.filterIsInstance<MdBlock.Table>()
         assertEquals(1, tables.size, "no table found in $blocks")
         assertEquals(listOf(listOf("1", "2")), tables[0].rows)
+        assertEquals("Results:", (blocks.first() as MdBlock.Prose).text)
+    }
+
+    @Test fun table_right_after_a_bold_label_parses() {
+        val md = "**Summary (number of endpoints per kind):**\n" +
+            "| Area | Permissions today | read | create | update | delete | special |\n" +
+            "|---|---|---:|---:|---:|---:|---:|\n" +
+            "| Ürünler | product:read/write | 5 | 2 | 3 | 1 | 1 (publish) |"
+        val table = parseMarkdownBlocks(md).filterIsInstance<MdBlock.Table>().single()
+        assertEquals(7, table.headers.size)
+        assertEquals("1 (publish)", table.rows.single().last())
+    }
+
+    @Test fun table_right_after_text_inside_a_quote_parses() {
+        val blocks = parseMarkdownBlocks("> Results:\n> | A | B |\n> |---|---|\n> | 1 | 2 |")
+        assertTrue(blocks.any { it is MdBlock.Quote && "Results:" in it.text }, "$blocks")
+        assertEquals("> Results:\n>\n> | A | B |\n> |---|---|\n> | 1 | 2 |",
+            separateTablesFromParagraphs("> Results:\n> | A | B |\n> |---|---|\n> | 1 | 2 |"))
+    }
+
+    @Test fun pipes_inside_a_code_fence_are_left_alone() {
+        val md = "```\nResults:\n| A | B |\n|---|---|\n```"
+        assertEquals(md, separateTablesFromParagraphs(md))
+    }
+
+    @Test fun mismatched_header_and_delimiter_is_not_a_table() {
+        val md = "Results:\n| A | B | C |\n|---|---|"
+        assertEquals(md, separateTablesFromParagraphs(md))
     }
 
     /** Surrounding prose survives on both sides — the table must not swallow its neighbours. */
