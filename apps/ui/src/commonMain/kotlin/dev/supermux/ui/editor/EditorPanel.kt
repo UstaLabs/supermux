@@ -79,6 +79,7 @@ import dev.supermux.proto.ServerFrame
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.LocalMarkdownFiles
 import dev.supermux.ui.chat.MarkdownBody
+import dev.supermux.ui.chat.markdownPreviewColumn
 import dev.supermux.ui.chat.MarkdownFiles
 import dev.supermux.ui.files.editorAbsolutePath
 import dev.supermux.ui.files.parentOf
@@ -515,8 +516,9 @@ fun EditorPanel(
                                         .fillMaxSize()
                                         .background(Color(c.code))
                                         .verticalScroll(rememberScrollState())
-                                        .padding(Space.lg)
+                                        .padding(horizontal = Space.lg, vertical = Space.xl)
                                         .testTag("editor_preview"),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
                                 ) {
                                     // `![](img/a.png)` resolves against the file's own folder, read through the host.
                                     val fs = actions.fileSystem
@@ -527,6 +529,8 @@ fun EditorPanel(
                                     CompositionLocalProvider(LocalMarkdownFiles provides mdFiles) {
                                         MarkdownBody(
                                             text = activeTab.content,
+                                            modifier = Modifier.markdownPreviewColumn(),
+                                            document = true,
                                             linkify = true,
                                             onOpenFile = { ref ->
                                                 val open = onOpenFile

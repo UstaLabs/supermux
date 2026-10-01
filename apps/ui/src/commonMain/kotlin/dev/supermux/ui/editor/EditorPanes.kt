@@ -69,6 +69,7 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.LocalMarkdownFiles
 import dev.supermux.ui.chat.MarkdownBody
+import dev.supermux.ui.chat.markdownPreviewColumn
 import dev.supermux.ui.chat.MarkdownFiles
 import dev.supermux.ui.files.parentOf
 import dev.supermux.net.AddCommentBody
@@ -366,15 +367,22 @@ fun FilePane(
                         .fillMaxSize()
                         .background(Color(c.code))
                         .verticalScroll(rememberScrollState())
-                        .padding(Space.lg)
+                        .padding(horizontal = Space.lg, vertical = Space.xl)
                         .testTag("editor_preview"),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     // `![](img/a.png)` resolves against the file's own folder, read through the host.
                     val mdFiles = remember(absPath, rawBytes) {
                         if (absPath != null && rawBytes != null) MarkdownFiles(parentOf(absPath), rawBytes) else null
                     }
                     CompositionLocalProvider(LocalMarkdownFiles provides mdFiles) {
-                        MarkdownBody(doc?.content ?: "", linkify = true, onOpenFile = onOpenFile)
+                        MarkdownBody(
+                            doc?.content ?: "",
+                            modifier = Modifier.markdownPreviewColumn(),
+                            linkify = true,
+                            onOpenFile = onOpenFile,
+                            document = true,
+                        )
                     }
                 }
             }

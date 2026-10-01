@@ -33,9 +33,14 @@ sealed interface MdBlock {
     // ADDITIVE — existing Prose/Code unchanged. Consumers with an exhaustive `when` must add arms.
     data class Heading(val level: Int, val text: String) : MdBlock
     data class Quote(val text: String) : MdBlock
-    /** [task] null = plain bullet, false = unchecked `☐`, true = checked `☑` (GFM task list, display-only). */
-    data class Bullet(val text: String, val task: Boolean? = null) : MdBlock
-    data class Numbered(val n: Int, val text: String) : MdBlock
+    /**
+     * [task] null = plain bullet, false = unchecked `☐`, true = checked `☑` (GFM task list, display-only).
+     * [depth] is the list nesting level, 0 for a top-level item.
+     */
+    data class Bullet(val text: String, val task: Boolean? = null, val depth: Int = 0) : MdBlock
+    data class Numbered(val n: Int, val text: String, val depth: Int = 0) : MdBlock
+    /** A thematic break (`---`, `***`, `___`). */
+    data object Rule : MdBlock
     /** GFM table. [headers].size is the canonical column count; rows are padded/truncated to it. */
     data class Table(
         val headers: List<String>,
@@ -150,12 +155,10 @@ private fun collectBlock(node: ASTNode, src: String, out: MutableList<MdBlock>) 
             out.add(MdBlock.Code(null, code))
         }
         MarkdownElementTypes.BLOCK_QUOTE -> out.add(MdBlock.Quote(quoteText(node, src)))
-        MarkdownElementTypes.UNORDERED_LIST ->
-            node.children.filter { it.type == MarkdownElementTypes.LIST_ITEM }.forEach { listItem(it, src, out, ordered = false) }
-        MarkdownElementTypes.ORDERED_LIST ->
-            node.children.filter { it.type == MarkdownElementTypes.LIST_ITEM }.forEach { listItem(it, src, out, ordered = true) }
+        MarkdownElementTypes.UNORDERED_LIST, MarkdownElementTypes.ORDERED_LIST -> listBlock(node, src, out, depth = 0)
         GFMElementTypes.TABLE -> tableBlock(node, src)?.let { out.add(it) }
-        // HTML blocks, link-reference definitions, horizontal rules, blank lines: nothing to render.
+        MarkdownTokenTypes.HORIZONTAL_RULE -> out.add(MdBlock.Rule)
+        // HTML blocks, link-reference definitions, blank lines: nothing to render.
         else -> {}
     }
 }
@@ -175,7 +178,12 @@ private fun quoteText(node: ASTNode, src: String): String =
 
 private val taskPrefix = Regex("""^\[([ xX])]\s+""")
 
-private fun listItem(item: ASTNode, src: String, out: MutableList<MdBlock>, ordered: Boolean) {
+private fun listBlock(list: ASTNode, src: String, out: MutableList<MdBlock>, depth: Int) {
+    val ordered = list.type == MarkdownElementTypes.ORDERED_LIST
+    list.children.filter { it.type == MarkdownElementTypes.LIST_ITEM }.forEach { listItem(it, src, out, ordered, depth) }
+}
+
+private fun listItem(item: ASTNode, src: String, out: MutableList<MdBlock>, ordered: Boolean, depth: Int) {
     val para = item.findChildOfType(MarkdownElementTypes.PARAGRAPH)
     var text = (para?.getTextInNode(src)?.toString() ?: directInlineText(item, src)).trim()
 
@@ -190,14 +198,14 @@ private fun listItem(item: ASTNode, src: String, out: MutableList<MdBlock>, orde
     if (ordered) {
         val n = item.findChildOfType(MarkdownTokenTypes.LIST_NUMBER)?.getTextInNode(src)?.toString()
             ?.trim()?.trimEnd('.', ')')?.toIntOrNull() ?: 1
-        out.add(MdBlock.Numbered(n, text))
+        out.add(MdBlock.Numbered(n, text, depth))
     } else {
-        out.add(MdBlock.Bullet(text, task))
+        out.add(MdBlock.Bullet(text, task, depth))
     }
 
-    // Flatten nested lists into sibling bullets (the flat model has no indent level, matching iOS).
+    // Nested lists stay flat blocks, one level deeper; the renderer indents by [depth].
     item.children.filter { it.type == MarkdownElementTypes.UNORDERED_LIST || it.type == MarkdownElementTypes.ORDERED_LIST }
-        .forEach { collectBlock(it, src, out) }
+        .forEach { listBlock(it, src, out, depth + 1) }
 }
 
 private fun directInlineText(item: ASTNode, src: String): String {
@@ -296,7 +304,8 @@ private fun emitInline(node: ASTNode, src: String, kind: SpanStyleKind, sink: Sp
         else -> {
             if (node.children.isEmpty()) {
                 val t = when (node.type) {
-                    MarkdownTokenTypes.EOL -> " "
+                    // The line end that follows a hard break is part of that break, not a space.
+                    MarkdownTokenTypes.EOL -> if (sink.endsWithNewline()) "" else " "
                     MarkdownTokenTypes.HARD_LINE_BREAK -> "\n"
                     else -> node.getTextInNode(src).toString()
                 }
@@ -381,6 +390,8 @@ private class SpanSink {
         curKind = kind
         buf.append(text)
     }
+
+    fun endsWithNewline(): Boolean = if (buf.isNotEmpty()) buf.last() == '\n' else out.lastOrNull()?.text?.endsWith('\n') == true
 
     fun addSpan(span: MdSpan) {
         flush()

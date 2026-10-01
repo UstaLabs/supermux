@@ -17,12 +17,14 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -69,6 +71,8 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -84,6 +88,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import coil3.SingletonImageLoader
 import coil3.compose.LocalPlatformContext
@@ -124,14 +129,20 @@ fun mdAnnotated(
     onOpenFile: (FilePathRef) -> Unit = {},
     linkify: Boolean = false,
     onOpenUrl: ((String) -> Unit)? = null,
+    softBreaks: Boolean = false,
 ): AnnotatedString {
     val platform = LocalPlatform.current
     val openUrl: (String) -> Unit = onOpenUrl ?: { url -> runCatching { platform.openUrl(url) } }
     val linkColor = MaterialTheme.colorScheme.primary
+    val codeFill = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     val linkStyles = TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
     return buildAnnotatedString {
-        text.split("\n").forEachIndexed { i, line ->
-            if (i > 0) append("\n")
+        // Chat keeps every source line break (agents format with them); a document follows
+        // markdown, where a single newline is a space and only a hard break (`  ⏎`, `\⏎`) breaks.
+        // A quote can hold several paragraphs; those stay apart.
+        val sep = if (softBreaks) "\n\n" else "\n"
+        text.split(sep).forEachIndexed { i, line ->
+            if (i > 0) append(sep)
             for (s in parseInlineMarkdown(line)) {
                 when (s.kind) {
                     SpanStyleKind.BOLD -> withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
@@ -143,8 +154,9 @@ fun mdAnnotated(
                     SpanStyleKind.CODE -> withStyle(
                         SpanStyle(
                             fontFamily = MonoFontFamily,
-                            fontSize = 12.sp,
+                            fontSize = 0.9.em, // relative, so code in a heading scales with it
                             fontWeight = FontWeight.Normal,
+                            background = codeFill,
                         ),
                     ) { append(s.text) } // never linkify inside inline code
                     SpanStyleKind.STRIKE -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) {
@@ -355,6 +367,9 @@ fun FencedCodeBlock(code: String, lang: String? = null, extraAction: (@Composabl
  * chat, the editor's markdown preview and the walkthrough body. Splits via the shared
  * [parseMarkdownBlocks]. Keep all markdown surfaces routed through this so they never drift.
  *
+ * [document] is the editor's markdown preview: a file read top to bottom, so headings are larger,
+ * H1/H2 carry a rule under them and sections breathe. Chat keeps the compact scale.
+ *
  * [loadImage] and [onOpenUrl] are TEST seams: left null, images fetch through the production Ktor
  * policy and decode through Coil, and links open through `Platform.openUrl`.
  */
@@ -366,22 +381,27 @@ fun MarkdownBody(
     linkify: Boolean = false,
     loadImage: (suspend (String) -> ImageBitmap?)? = null,
     onOpenUrl: ((String) -> Unit)? = null,
+    document: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
+    // A document reads at a looser line height than a chat bubble.
+    val body = if (document) typography.bodyLarge.copy(lineHeight = typography.bodyLarge.fontSize * 1.6f) else typography.bodyLarge
     val blocks = parseMarkdownBlocks(text)
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(Space.sm),
-    ) {
+    @Composable
+    fun annotated(t: String) = mdAnnotated(t, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl, softBreaks = document)
+    Column(modifier = modifier) {
+        var prev: MdBlock? = null
         for (block in blocks) {
+            if (prev != null) Box(Modifier.height(mdBlockGap(prev, block, document)))
+            prev = block
             when (block) {
                 is MdBlock.Prose -> {
                     if (block.text.isNotBlank()) {
                         MdText(
-                            text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
+                            text = annotated(block.text),
                             color = cs.onSurface,
-                            style = typography.bodyLarge,
+                            style = body,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -389,69 +409,201 @@ fun MarkdownBody(
                 is MdBlock.Code ->
                     if (block.lang.equals("mermaid", ignoreCase = true)) MermaidBlock(block.code)
                     else FencedCodeBlock(block.code, block.lang)
-                is MdBlock.Heading -> MdText(
-                    text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
-                    color = cs.onSurface,
-                    style = when (block.level) {
-                        1 -> typography.titleLarge
-                        2 -> typography.titleMedium
-                        else -> typography.titleSmall
-                    },
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                is MdBlock.Heading -> MarkdownHeading(block, annotated(block.text), body, document)
                 is MdBlock.Quote -> Row(
-                    modifier = Modifier.height(IntrinsicSize.Min),
-                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Min)
+                        .clip(RoundedCornerShape(topEnd = Radii.sm, bottomEnd = Radii.sm))
+                        .background(cs.surfaceContainerLow),
                 ) {
-                    Box(
-                        Modifier
-                            .width(3.dp)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(1.dp))
-                            .background(cs.primary.copy(alpha = 0.5f)),
-                    )
+                    Box(Modifier.width(3.dp).fillMaxHeight().background(cs.primary.copy(alpha = 0.6f)))
                     MdText(
-                        text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
+                        text = annotated(block.text),
                         color = cs.onSurfaceVariant,
-                        style = typography.bodyLarge,
+                        style = body,
+                        modifier = Modifier.weight(1f).padding(horizontal = Space.md, vertical = Space.sm),
                     )
                 }
-                is MdBlock.Bullet -> Row(
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
-                ) {
-                    // Task-list items show a checkbox glyph (display-only); plain bullets keep the dot.
-                    val marker = when (block.task) {
-                        true -> "☑"
-                        false -> "☐"
-                        null -> "•"
+                is MdBlock.Bullet -> MarkdownListItem(block.depth, body) {
+                    val task = block.task
+                    if (task != null) {
+                        MarkdownCheckbox(task, body, Modifier.width(MdListDimens.MarkerWidth))
+                    } else {
+                        Text(
+                            mdBulletGlyph(block.depth),
+                            color = cs.primary.copy(alpha = 0.8f),
+                            style = body,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.width(MdListDimens.MarkerWidth),
+                        )
                     }
-                    Text(marker, color = cs.onSurfaceVariant, style = typography.bodyLarge)
                     MdText(
-                        text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
-                        color = cs.onSurface,
-                        style = typography.bodyLarge,
+                        text = annotated(block.text),
+                        // A done task steps back so the open ones stand out.
+                        color = if (block.task == true) cs.onSurfaceVariant else cs.onSurface,
+                        style = body,
                         modifier = Modifier.weight(1f),
                     )
                 }
-                is MdBlock.Numbered -> Row(
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
-                ) {
-                    Text("${block.n}.", color = cs.onSurfaceVariant, style = typography.bodyLarge)
+                is MdBlock.Numbered -> MarkdownListItem(block.depth, body) {
+                    Text(
+                        "${block.n}.",
+                        color = cs.primary.copy(alpha = 0.8f),
+                        style = body,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.width(MdListDimens.MarkerWidth),
+                    )
                     MdText(
-                        text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
+                        text = annotated(block.text),
                         color = cs.onSurface,
-                        style = typography.bodyLarge,
+                        style = body,
                         modifier = Modifier.weight(1f),
                     )
                 }
+                is MdBlock.Rule -> Box(
+                    Modifier.fillMaxWidth().padding(vertical = Space.xs).height(1.dp).background(cs.outlineVariant),
+                )
                 is MdBlock.Table -> MarkdownTable(block, onOpenFile, linkify, onOpenUrl)
                 is MdBlock.Image -> MarkdownImage(block, loadImage = loadImage, onOpenUrl = onOpenUrl, onOpenFile = onOpenFile)
             }
         }
     }
+}
+
+/**
+ * The editor preview's text column: full width up to a comfortable reading measure, so a wide
+ * window does not stretch lines across the screen. The caller centres it.
+ */
+fun Modifier.markdownPreviewColumn(): Modifier = widthIn(max = MdDocumentDimens.MaxWidth).fillMaxWidth()
+
+object MdDocumentDimens {
+    /** About 90 characters of body text. */
+    val MaxWidth = 780.dp
+}
+
+/** Layout tokens for list items. */
+object MdListDimens {
+    /** Indent per nesting level. */
+    val Indent = Space.lg + Space.xs
+    /** The marker column, wide enough for `10.` so item text lines up down a numbered list. */
+    val MarkerWidth = Space.lg + Space.sm
+    val CheckboxSize = 14.dp
+}
+
+/** The bullet for a list item at [depth]: filled, hollow, square, then round again. */
+internal fun mdBulletGlyph(depth: Int): String = when (depth % 3) {
+    0 -> "•"
+    1 -> "◦"
+    else -> "▪"
+}
+
+/**
+ * The space above [block] when it follows [prev]. Items of one list sit close together, a heading
+ * opens a section with more air above it than below, and everything else gets one step. Pure;
+ * unit-tested.
+ */
+internal fun mdBlockGap(prev: MdBlock, block: MdBlock, document: Boolean): Dp {
+    val isItem = { b: MdBlock -> b is MdBlock.Bullet || b is MdBlock.Numbered }
+    return when {
+        block is MdBlock.Heading && document -> if (block.level <= 2) Space.xl + Space.xs else Space.lg + Space.xs
+        block is MdBlock.Heading -> Space.md
+        prev is MdBlock.Heading -> if (document) Space.md else Space.sm - Space.xs
+        // Same list: close. A bullet list straight after a numbered one is a new list, unless nested.
+        isItem(prev) && isItem(block) && (prev::class == block::class || mdDepth(prev) != mdDepth(block)) -> Space.xs
+        document -> Space.md
+        else -> Space.sm
+    }
+}
+
+private fun mdDepth(b: MdBlock): Int = when (b) {
+    is MdBlock.Bullet -> b.depth
+    is MdBlock.Numbered -> b.depth
+    else -> 0
+}
+
+/**
+ * A heading's size as a multiple of the body text. Sized off the body rather than the theme's
+ * `title*` roles: those are chrome sizes, and on desktop `titleMedium` is smaller than the prose,
+ * which made an H2 read as a footnote. Pure; unit-tested.
+ */
+internal fun mdHeadingScale(level: Int, document: Boolean): Float =
+    if (document) when (level) {
+        1 -> 1.85f
+        2 -> 1.45f
+        3 -> 1.2f
+        4 -> 1.05f
+        else -> 0.95f
+    } else when (level) {
+        1 -> 1.3f
+        2 -> 1.15f
+        3 -> 1.05f
+        else -> 1f
+    }
+
+@Composable
+private fun MarkdownHeading(block: MdBlock.Heading, text: AnnotatedString, body: TextStyle, document: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    val size = body.fontSize * mdHeadingScale(block.level, document)
+    // H5/H6 in a document are small section labels: muted, so they rank below H4 despite the weight.
+    val minor = document && block.level >= 5
+    Column(Modifier.fillMaxWidth()) {
+        MdText(
+            text = text,
+            color = if (minor) cs.onSurfaceVariant else cs.onSurface,
+            style = body.copy(
+                fontSize = size,
+                lineHeight = size * 1.3f,
+                letterSpacing = if (block.level <= 2) size * -0.015f else body.letterSpacing,
+            ),
+            fontWeight = if (block.level <= 2) FontWeight.Bold else FontWeight.SemiBold,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (document && block.level <= 2) {
+            Box(
+                Modifier
+                    .padding(top = Space.sm)
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(if (block.level == 1) cs.outline.copy(alpha = 0.5f) else cs.outlineVariant),
+            )
+        }
+    }
+}
+
+/**
+ * A task-list box, drawn rather than a `☑` glyph (which most fonts paint as a colour emoji). Its
+ * own height is the body's line height, so the box centres on the item's first line.
+ */
+@Composable
+private fun MarkdownCheckbox(checked: Boolean, body: TextStyle, modifier: Modifier) {
+    val cs = MaterialTheme.colorScheme
+    val lineHeight = with(LocalDensity.current) { body.lineHeight.takeIf { it.isSp }?.toDp() ?: Space.lg + Space.xs }
+    Box(modifier.height(lineHeight), contentAlignment = Alignment.CenterEnd) {
+        val shape = RoundedCornerShape(3.dp)
+        Box(
+            Modifier
+                .size(MdListDimens.CheckboxSize)
+                .semantics { contentDescription = if (checked) "Done" else "To do" }
+                .clip(shape)
+                .then(if (checked) Modifier.background(cs.primary) else Modifier.border(1.5.dp, cs.outline, shape)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (checked) Icon(Icons.Filled.Check, contentDescription = null, tint = cs.onPrimary, modifier = Modifier.size(11.dp))
+        }
+    }
+}
+
+/** One list item: indented by [depth], the [content] lays out its marker then its text. */
+@Composable
+private fun MarkdownListItem(depth: Int, body: TextStyle, content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = MdListDimens.Indent * depth),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+        content = content,
+    )
 }
 
 /** ColumnAlign → Compose [TextAlign] (pure; unit-tested). */
