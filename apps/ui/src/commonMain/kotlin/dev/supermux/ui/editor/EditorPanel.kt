@@ -54,6 +54,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -76,7 +77,11 @@ import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.proto.ServerFrame
 import dev.supermux.ui.FilePathRef
+import dev.supermux.ui.chat.LocalMarkdownFiles
 import dev.supermux.ui.chat.MarkdownBody
+import dev.supermux.ui.chat.MarkdownFiles
+import dev.supermux.ui.files.editorAbsolutePath
+import dev.supermux.ui.files.parentOf
 import dev.supermux.fs.FileSystemService
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
@@ -513,15 +518,23 @@ fun EditorPanel(
                                         .padding(Space.lg)
                                         .testTag("editor_preview"),
                                 ) {
-                                    MarkdownBody(
-                                        text = activeTab.content,
-                                        linkify = true,
-                                        onOpenFile = { ref ->
-                                            val open = onOpenFile
-                                            if (open != null) open(ref)
-                                            else revealFile(ref.path, ref.line, ref.endLine)
-                                        },
-                                    )
+                                    // `![](img/a.png)` resolves against the file's own folder, read through the host.
+                                    val fs = actions.fileSystem
+                                    val mdFiles = remember(fs, workdir, activeTab.path) {
+                                        if (fs == null || workdir.isEmpty()) null
+                                        else MarkdownFiles(parentOf(editorAbsolutePath(workdir, activeTab.path))) { abs -> fs.raw(abs) }
+                                    }
+                                    CompositionLocalProvider(LocalMarkdownFiles provides mdFiles) {
+                                        MarkdownBody(
+                                            text = activeTab.content,
+                                            linkify = true,
+                                            onOpenFile = { ref ->
+                                                val open = onOpenFile
+                                                if (open != null) open(ref)
+                                                else revealFile(ref.path, ref.line, ref.endLine)
+                                            },
+                                        )
+                                    }
                                 }
                             }
 

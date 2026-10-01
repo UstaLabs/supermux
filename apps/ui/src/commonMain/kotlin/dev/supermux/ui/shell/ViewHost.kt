@@ -57,6 +57,8 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.ChatActions
 import dev.supermux.ui.chat.collapseVertically
 import dev.supermux.ui.chat.ChatPanel
+import dev.supermux.ui.chat.LocalMarkdownFiles
+import dev.supermux.ui.chat.MarkdownFiles
 import dev.supermux.ui.chat.ChatState
 import dev.supermux.ui.chat.ComposerExternalAttach
 import dev.supermux.ui.chat.ComposerExternalDictate
@@ -391,68 +393,75 @@ private fun ChatViewPane(
     }
     val state = chatState(sessionId)
     val acts = chatActions(session)
+    // Images an agent writes as host paths (`![](out/shot.png)`) read through this host; relative
+    // ones resolve against the session's workdir.
+    val markdownFiles = remember(tapFileSystem, workdir) {
+        tapFileSystem?.let { fs -> MarkdownFiles(workdir.ifEmpty { null }) { abs -> fs.raw(abs) } }
+    }
 
     if (headerMode == ChatHeaderMode.PANEL) {
-        ChatPanel(
-            session = session,
-            state = state,
-            actions = acts,
-            draft = drafts[sessionId] ?: "",
-            onDraftChange = { drafts[sessionId] = it },
-            modifier = modifier.fillMaxSize().testTag(WorkspaceChatPaneTestIds.VIEW_CHAT),
-            showHeader = true,
-            onOpenWalkthrough = onOpenWalkthrough,
-            // Mute is the one session control this panel can perform without a dialog; rename/kill
-            // live in OverflowMenu (the header slot below), so they stay out of the slash menu here.
-            onRequestMute = { actions.setMute(sessionId, !(session.mute ?: false)) },
-            finish = finish,
-            forceLinksMenu = forceLinksMenu,
-            onForceLinksMenuConsumed = onForceLinksMenuConsumed,
-            headerLinks = { proxies, force, onForceConsumed ->
-                SessionLinksMenu(
-                    session = session,
-                    proxies = proxies,
-                    forceOpen = force,
-                    onForceOpenConsumed = onForceConsumed,
-                )
-            },
-            headerActions = {
-                OverflowMenu(
-                    session = session,
-                    onRename = { name -> actions.rename(sessionId, name) },
-                    onToggleMute = { muted -> actions.setMute(sessionId, muted) },
-                    onKill = { actions.kill(sessionId) },
-                    onContinue = { handoff ->
-                        actions.continueConversation(
-                            session,
-                            handoff.message,
-                            handoff.agent,
-                            handoff.model,
-                            handoff.reasoningLevel,
-                        )
-                    },
-                    loadContinueAgents = { actions.launcherAgents() },
-                    loadContinueModels = { actions.launcherModels(it) },
-                    loadContinueReasoning = { agent, model -> actions.launcherReasoning(agent, model) },
-                    onContinued = onSelectSession,
-                    showManagementRows = false,
-                )
-            },
-            // key(sessionId) so a view rebound to another session never reuses the previous
-            // session's agent PTY: a terminal surface's `remember { connect() }` is unkeyed.
-            nativeContent = { onExit ->
-                key(sessionId) {
-                    nativeContent({ actions.connectAgentTerminal(sessionId).orFail(sessionId) }, true, onExit)
-                }
-            },
-            externalAttach = externalAttach,
-            onExternalAttachConsumed = onExternalAttachConsumed,
-            externalDictate = externalDictate,
-            onExternalDictateConsumed = onExternalDictateConsumed,
-            pasteImageRequestNonce = pasteImageRequestNonce,
-            onPasteImageRequestConsumed = onPasteImageRequestConsumed,
-            onOpenFile = openTappedPath,
-        )
+        CompositionLocalProvider(LocalMarkdownFiles provides markdownFiles) {
+            ChatPanel(
+                session = session,
+                state = state,
+                actions = acts,
+                draft = drafts[sessionId] ?: "",
+                onDraftChange = { drafts[sessionId] = it },
+                modifier = modifier.fillMaxSize().testTag(WorkspaceChatPaneTestIds.VIEW_CHAT),
+                showHeader = true,
+                onOpenWalkthrough = onOpenWalkthrough,
+                // Mute is the one session control this panel can perform without a dialog; rename/kill
+                // live in OverflowMenu (the header slot below), so they stay out of the slash menu here.
+                onRequestMute = { actions.setMute(sessionId, !(session.mute ?: false)) },
+                finish = finish,
+                forceLinksMenu = forceLinksMenu,
+                onForceLinksMenuConsumed = onForceLinksMenuConsumed,
+                headerLinks = { proxies, force, onForceConsumed ->
+                    SessionLinksMenu(
+                        session = session,
+                        proxies = proxies,
+                        forceOpen = force,
+                        onForceOpenConsumed = onForceConsumed,
+                    )
+                },
+                headerActions = {
+                    OverflowMenu(
+                        session = session,
+                        onRename = { name -> actions.rename(sessionId, name) },
+                        onToggleMute = { muted -> actions.setMute(sessionId, muted) },
+                        onKill = { actions.kill(sessionId) },
+                        onContinue = { handoff ->
+                            actions.continueConversation(
+                                session,
+                                handoff.message,
+                                handoff.agent,
+                                handoff.model,
+                                handoff.reasoningLevel,
+                            )
+                        },
+                        loadContinueAgents = { actions.launcherAgents() },
+                        loadContinueModels = { actions.launcherModels(it) },
+                        loadContinueReasoning = { agent, model -> actions.launcherReasoning(agent, model) },
+                        onContinued = onSelectSession,
+                        showManagementRows = false,
+                    )
+                },
+                // key(sessionId) so a view rebound to another session never reuses the previous
+                // session's agent PTY: a terminal surface's `remember { connect() }` is unkeyed.
+                nativeContent = { onExit ->
+                    key(sessionId) {
+                        nativeContent({ actions.connectAgentTerminal(sessionId).orFail(sessionId) }, true, onExit)
+                    }
+                },
+                externalAttach = externalAttach,
+                onExternalAttachConsumed = onExternalAttachConsumed,
+                externalDictate = externalDictate,
+                onExternalDictateConsumed = onExternalDictateConsumed,
+                pasteImageRequestNonce = pasteImageRequestNonce,
+                onPasteImageRequestConsumed = onPasteImageRequestConsumed,
+                onOpenFile = openTappedPath,
+            )
+        }
         return
     }
 
@@ -461,26 +470,28 @@ private fun ChatViewPane(
     // The panel's scroll-to-hide on a short view; the BAR shape tucks its own header away with it.
     var chromeHidden by remember(sessionId) { mutableStateOf(false) }
     val body: @Composable (Modifier) -> Unit = { paneMod ->
-        ChatPanel(
-            session = session,
-            state = state,
-            actions = acts,
-            draft = drafts[sessionId] ?: "",
-            onDraftChange = { drafts[sessionId] = it },
-            showHeader = false,
-            active = !nativeView,
-            onOpenWalkthrough = onOpenWalkthrough,
-            onRequestMute = { actions.setMute(sessionId, !(session.mute ?: false)) },
-            externalAttach = externalAttach,
-            onExternalAttachConsumed = onExternalAttachConsumed,
-            externalDictate = externalDictate,
-            onExternalDictateConsumed = onExternalDictateConsumed,
-            pasteImageRequestNonce = pasteImageRequestNonce,
-            onPasteImageRequestConsumed = onPasteImageRequestConsumed,
-            onOpenFile = openTappedPath,
-            onChromeHiddenChange = { chromeHidden = it },
-            modifier = paneMod.fillMaxSize().testTag(WorkspaceChatPaneTestIds.VIEW_CHAT),
-        )
+        CompositionLocalProvider(LocalMarkdownFiles provides markdownFiles) {
+            ChatPanel(
+                session = session,
+                state = state,
+                actions = acts,
+                draft = drafts[sessionId] ?: "",
+                onDraftChange = { drafts[sessionId] = it },
+                showHeader = false,
+                active = !nativeView,
+                onOpenWalkthrough = onOpenWalkthrough,
+                onRequestMute = { actions.setMute(sessionId, !(session.mute ?: false)) },
+                externalAttach = externalAttach,
+                onExternalAttachConsumed = onExternalAttachConsumed,
+                externalDictate = externalDictate,
+                onExternalDictateConsumed = onExternalDictateConsumed,
+                pasteImageRequestNonce = pasteImageRequestNonce,
+                onPasteImageRequestConsumed = onPasteImageRequestConsumed,
+                onOpenFile = openTappedPath,
+                onChromeHiddenChange = { chromeHidden = it },
+                modifier = paneMod.fillMaxSize().testTag(WorkspaceChatPaneTestIds.VIEW_CHAT),
+            )
+        }
     }
     if (headerMode == ChatHeaderMode.NONE) {
         Box(modifier.fillMaxSize().testTag(WorkspaceChatPaneTestIds.CHAT_VIEW)) { body(Modifier) }
