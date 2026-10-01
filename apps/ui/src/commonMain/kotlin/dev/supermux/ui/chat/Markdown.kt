@@ -62,6 +62,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -134,7 +135,7 @@ fun mdAnnotated(
     val platform = LocalPlatform.current
     val openUrl: (String) -> Unit = onOpenUrl ?: { url -> runCatching { platform.openUrl(url) } }
     val linkColor = MaterialTheme.colorScheme.primary
-    val codeFill = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    val codeFill = mdPalette().codeFill
     val linkStyles = TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
     return buildAnnotatedString {
         // Chat keeps every source line break (agents format with them); a document follows
@@ -324,7 +325,7 @@ fun FencedCodeBlock(code: String, lang: String? = null, extraAction: (@Composabl
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(topStart = 0.dp, topEnd = Radii.sm, bottomStart = 0.dp, bottomEnd = Radii.sm))
-                .background(cs.surfaceContainerLow)
+                .background(mdPalette().panel)
                 // 2dp left accent
                 .drawBehind { drawRect(accent, size = Size(2.dp.toPx(), size.height)) }
                 // pad the right so the copy button never overlaps the first line of code
@@ -388,9 +389,10 @@ fun MarkdownBody(
     // A document reads at a looser line height than a chat bubble.
     val body = if (document) typography.bodyLarge.copy(lineHeight = typography.bodyLarge.fontSize * 1.6f) else typography.bodyLarge
     val blocks = parseMarkdownBlocks(text)
+    val palette = if (document) mdDocumentPalette() else mdPalette()
     @Composable
     fun annotated(t: String) = mdAnnotated(t, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl, softBreaks = document)
-    Column(modifier = modifier) {
+    CompositionLocalProvider(LocalMdPalette provides palette) { Column(modifier = modifier) {
         var prev: MdBlock? = null
         for (block in blocks) {
             if (prev != null) Box(Modifier.height(mdBlockGap(prev, block, document)))
@@ -400,7 +402,7 @@ fun MarkdownBody(
                     if (block.text.isNotBlank()) {
                         MdText(
                             text = annotated(block.text),
-                            color = cs.onSurface,
+                            color = palette.body,
                             style = body,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -415,7 +417,7 @@ fun MarkdownBody(
                         .fillMaxWidth()
                         .height(IntrinsicSize.Min)
                         .clip(RoundedCornerShape(topEnd = Radii.sm, bottomEnd = Radii.sm))
-                        .background(cs.surfaceContainerLow),
+                        .background(palette.quote),
                 ) {
                     Box(Modifier.width(3.dp).fillMaxHeight().background(cs.primary.copy(alpha = 0.6f)))
                     MdText(
@@ -441,7 +443,7 @@ fun MarkdownBody(
                     MdText(
                         text = annotated(block.text),
                         // A done task steps back so the open ones stand out.
-                        color = if (block.task == true) cs.onSurfaceVariant else cs.onSurface,
+                        color = if (block.task == true) cs.onSurfaceVariant else palette.body,
                         style = body,
                         modifier = Modifier.weight(1f),
                     )
@@ -457,19 +459,72 @@ fun MarkdownBody(
                     )
                     MdText(
                         text = annotated(block.text),
-                        color = cs.onSurface,
+                        color = palette.body,
                         style = body,
                         modifier = Modifier.weight(1f),
                     )
                 }
                 is MdBlock.Rule -> Box(
-                    Modifier.fillMaxWidth().padding(vertical = Space.xs).height(1.dp).background(cs.outlineVariant),
+                    Modifier.fillMaxWidth().padding(vertical = Space.xs).height(1.dp).background(palette.rule),
                 )
                 is MdBlock.Table -> MarkdownTable(block, onOpenFile, linkify, onOpenUrl)
                 is MdBlock.Image -> MarkdownImage(block, loadImage = loadImage, onOpenUrl = onOpenUrl, onOpenFile = onOpenFile)
             }
         }
-    }
+    } }
+}
+
+/**
+ * The fills and rules markdown paints with. Chat takes the theme's own tones ([mdPalette]'s
+ * default). The editor preview sits on the darkest tone, where those tones all but vanish in dark
+ * mode, so [mdDocumentPalette] derives its fills as translucent text colour instead: they read on
+ * any background, and in dark mode body text steps down from pure white so headings outrank it.
+ */
+data class MdPalette(
+    val panel: Color,
+    val quote: Color,
+    val rule: Color,
+    val strongRule: Color,
+    val codeFill: Color,
+    val body: Color,
+)
+
+private val LocalMdPalette = staticCompositionLocalOf<MdPalette?> { null }
+
+@Composable
+internal fun mdPalette(): MdPalette {
+    LocalMdPalette.current?.let { return it }
+    val cs = MaterialTheme.colorScheme
+    return MdPalette(
+        panel = cs.surfaceContainerLow,
+        quote = cs.surfaceContainerLow,
+        rule = cs.outlineVariant,
+        strongRule = cs.outline.copy(alpha = 0.5f),
+        codeFill = cs.onSurface.copy(alpha = 0.08f),
+        body = cs.onSurface,
+    )
+}
+
+@Composable
+internal fun mdDocumentPalette(): MdPalette {
+    val cs = MaterialTheme.colorScheme
+    val dark = cs.background.luminance() < 0.5f
+    val ink = cs.onSurface
+    return if (dark) MdPalette(
+        panel = ink.copy(alpha = 0.055f),
+        quote = cs.primary.copy(alpha = 0.08f),
+        rule = ink.copy(alpha = 0.12f),
+        strongRule = ink.copy(alpha = 0.24f),
+        codeFill = ink.copy(alpha = 0.11f),
+        body = ink.copy(alpha = 0.84f),
+    ) else MdPalette(
+        panel = ink.copy(alpha = 0.04f),
+        quote = cs.primary.copy(alpha = 0.06f),
+        rule = ink.copy(alpha = 0.10f),
+        strongRule = ink.copy(alpha = 0.20f),
+        codeFill = ink.copy(alpha = 0.06f),
+        body = ink,
+    )
 }
 
 /**
@@ -545,6 +600,7 @@ internal fun mdHeadingScale(level: Int, document: Boolean): Float =
 @Composable
 private fun MarkdownHeading(block: MdBlock.Heading, text: AnnotatedString, body: TextStyle, document: Boolean) {
     val cs = MaterialTheme.colorScheme
+    val palette = mdPalette()
     val size = body.fontSize * mdHeadingScale(block.level, document)
     // H5/H6 in a document are small section labels: muted, so they rank below H4 despite the weight.
     val minor = document && block.level >= 5
@@ -566,7 +622,7 @@ private fun MarkdownHeading(block: MdBlock.Heading, text: AnnotatedString, body:
                     .padding(top = Space.sm)
                     .fillMaxWidth()
                     .height(1.dp)
-                    .background(if (block.level == 1) cs.outline.copy(alpha = 0.5f) else cs.outlineVariant),
+                    .background(if (block.level == 1) palette.strongRule else palette.rule),
             )
         }
     }
@@ -587,7 +643,7 @@ private fun MarkdownCheckbox(checked: Boolean, body: TextStyle, modifier: Modifi
                 .size(MdListDimens.CheckboxSize)
                 .semantics { contentDescription = if (checked) "Done" else "To do" }
                 .clip(shape)
-                .then(if (checked) Modifier.background(cs.primary) else Modifier.border(1.5.dp, cs.outline, shape)),
+                .then(if (checked) Modifier.background(cs.primary) else Modifier.border(1.5.dp, cs.onSurfaceVariant.copy(alpha = 0.7f), shape)),
             contentAlignment = Alignment.Center,
         ) {
             if (checked) Icon(Icons.Filled.Check, contentDescription = null, tint = cs.onPrimary, modifier = Modifier.size(11.dp))
@@ -649,6 +705,7 @@ fun MarkdownTable(
     onOpenUrl: ((String) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
+    val palette = mdPalette()
     val cols = table.headers.size
     if (cols == 0) return
     val rowCount = 1 + table.rows.size
@@ -669,10 +726,10 @@ fun MarkdownTable(
                         )
                     }
                 }
-                Box(Modifier.background(cs.surfaceContainerLow))
-                repeat(cols - 1 + rowCount - 1) { Box(Modifier.background(cs.outlineVariant)) }
+                Box(Modifier.background(palette.panel))
+                repeat(cols - 1 + rowCount - 1) { Box(Modifier.background(palette.rule)) }
             },
-            modifier = Modifier.clip(shape).border(1.dp, cs.outlineVariant, shape),
+            modifier = Modifier.clip(shape).border(1.dp, palette.rule, shape),
         ) { measurables, _ ->
             val cellCount = rowCount * cols
             val rule = 1.dp.roundToPx()

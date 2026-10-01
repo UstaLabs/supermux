@@ -79,7 +79,7 @@ class MarkdownPreviewShots {
             for (document in listOf(true, false)) runComposeUiTest {
                 setContent {
                     CompositionLocalProvider(LocalPlatform provides FakePlatform()) { SupermuxTheme(appearance = theme) {
-                        Box(Modifier.size(900.dp, 1500.dp).background(MaterialTheme.colorScheme.surface)) {
+                        Box(Modifier.size(900.dp, 1500.dp).background(MaterialTheme.colorScheme.surfaceContainerLowest)) {
                             Column(
                                 Modifier.fillMaxSize().padding(horizontal = Space.lg, vertical = Space.xl),
                                 horizontalAlignment = Alignment.CenterHorizontally,
