@@ -51,6 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -66,7 +67,10 @@ import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.FilePathRef
+import dev.supermux.ui.chat.LocalMarkdownFiles
 import dev.supermux.ui.chat.MarkdownBody
+import dev.supermux.ui.chat.MarkdownFiles
+import dev.supermux.ui.files.parentOf
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.BlobText
 import dev.supermux.net.FsDiffResult
@@ -365,7 +369,13 @@ fun FilePane(
                         .padding(Space.lg)
                         .testTag("editor_preview"),
                 ) {
-                    MarkdownBody(doc?.content ?: "", linkify = true, onOpenFile = onOpenFile)
+                    // `![](img/a.png)` resolves against the file's own folder, read through the host.
+                    val mdFiles = remember(absPath, rawBytes) {
+                        if (absPath != null && rawBytes != null) MarkdownFiles(parentOf(absPath), rawBytes) else null
+                    }
+                    CompositionLocalProvider(LocalMarkdownFiles provides mdFiles) {
+                        MarkdownBody(doc?.content ?: "", linkify = true, onOpenFile = onOpenFile)
+                    }
                 }
             }
 

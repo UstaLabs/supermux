@@ -64,6 +64,8 @@ import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -446,7 +448,7 @@ fun MarkdownBody(
                     )
                 }
                 is MdBlock.Table -> MarkdownTable(block, onOpenFile, linkify, onOpenUrl)
-                is MdBlock.Image -> MarkdownImage(block, loadImage = loadImage, onOpenUrl = onOpenUrl)
+                is MdBlock.Image -> MarkdownImage(block, loadImage = loadImage, onOpenUrl = onOpenUrl, onOpenFile = onOpenFile)
             }
         }
     }
@@ -459,10 +461,33 @@ fun columnTextAlign(align: ColumnAlign): TextAlign = when (align) {
     ColumnAlign.RIGHT -> TextAlign.Right
 }
 
+/** Layout bounds for a markdown table's columns. */
+object MdTableDimens {
+    /** A column is as wide as its widest cell, up to this; longer cells wrap inside it. */
+    val MaxColumnWidth = 280.dp
+}
+
 /**
- * GFM table as a bordered, horizontally-scrollable grid. Laid out column-major: each column is a
- * `Column(width = IntrinsicSize.Max)` so every cell shares the widest cell's width, and single-line
- * (no-wrap) cells mean wide tables scroll instead of squishing.
+ * Column widths for a table whose cells (row-major, [cols] per row) want [natural] px each on one
+ * line: every column takes its widest cell, capped at [cap] so long text wraps instead of
+ * stretching the table. Pure; unit-tested.
+ */
+internal fun mdTableColumnWidths(natural: IntArray, cols: Int, cap: Int): IntArray =
+    IntArray(cols) { c ->
+        var w = 0
+        var i = c
+        while (i < natural.size) { w = maxOf(w, natural[i]); i += cols }
+        minOf(w, cap)
+    }
+
+/**
+ * GFM table as a bordered grid. Each column is as wide as its widest cell up to
+ * [MdTableDimens.MaxColumnWidth]; past that its cells wrap, and every row is as tall as its tallest
+ * cell. A table wider than the view scrolls sideways.
+ *
+ * One custom layout rather than rows or columns of composables: only a real grid keeps a wrapped
+ * cell's row aligned across every column. The header fill and the rules are children of the same
+ * layout, sized once the grid is known.
  */
 @Composable
 fun MarkdownTable(
@@ -474,36 +499,49 @@ fun MarkdownTable(
     val cs = MaterialTheme.colorScheme
     val cols = table.headers.size
     if (cols == 0) return
-    Row(
-        Modifier
-            .testTag("md_table")
-            .horizontalScroll(rememberScrollState())
-            .height(IntrinsicSize.Min)
-            .clip(RoundedCornerShape(Radii.sm))
-            .border(1.dp, cs.outlineVariant, RoundedCornerShape(Radii.sm)),
-    ) {
-        for (c in 0 until cols) {
-            if (c > 0) Box(Modifier.width(1.dp).fillMaxHeight().background(cs.outlineVariant))
-            Column(Modifier.width(IntrinsicSize.Max)) {
-                MarkdownTableCell(
-                    table.headers.getOrElse(c) { "" },
-                    table.aligns.getOrElse(c) { ColumnAlign.LEFT },
-                    header = true,
-                    onOpenFile = onOpenFile,
-                    linkify = linkify,
-                    onOpenUrl = onOpenUrl,
-                )
-                for (row in table.rows) {
-                    Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
-                    MarkdownTableCell(
-                        row.getOrElse(c) { "" },
-                        table.aligns.getOrElse(c) { ColumnAlign.LEFT },
-                        header = false,
-                        onOpenFile = onOpenFile,
-                        linkify = linkify,
-                        onOpenUrl = onOpenUrl,
-                    )
+    val rowCount = 1 + table.rows.size
+    val shape = RoundedCornerShape(Radii.sm)
+    Box(Modifier.testTag("md_table").horizontalScroll(rememberScrollState())) {
+        Layout(
+            content = {
+                for (r in 0 until rowCount) {
+                    val cells = if (r == 0) table.headers else table.rows[r - 1]
+                    for (c in 0 until cols) {
+                        MarkdownTableCell(
+                            cells.getOrElse(c) { "" },
+                            table.aligns.getOrElse(c) { ColumnAlign.LEFT },
+                            header = r == 0,
+                            onOpenFile = onOpenFile,
+                            linkify = linkify,
+                            onOpenUrl = onOpenUrl,
+                        )
+                    }
                 }
+                Box(Modifier.background(cs.surfaceContainerLow))
+                repeat(cols - 1 + rowCount - 1) { Box(Modifier.background(cs.outlineVariant)) }
+            },
+            modifier = Modifier.clip(shape).border(1.dp, cs.outlineVariant, shape),
+        ) { measurables, _ ->
+            val cellCount = rowCount * cols
+            val rule = 1.dp.roundToPx()
+            val natural = IntArray(cellCount) { measurables[it].maxIntrinsicWidth(Constraints.Infinity) }
+            val widths = mdTableColumnWidths(natural, cols, MdTableDimens.MaxColumnWidth.roundToPx())
+            val cells = List(cellCount) { measurables[it].measure(Constraints.fixedWidth(widths[it % cols])) }
+            val heights = IntArray(rowCount) { r -> (0 until cols).maxOf { cells[r * cols + it].height } }
+            val xs = IntArray(cols)
+            for (c in 1 until cols) xs[c] = xs[c - 1] + widths[c - 1] + rule
+            val ys = IntArray(rowCount)
+            for (r in 1 until rowCount) ys[r] = ys[r - 1] + heights[r - 1] + rule
+            val width = xs[cols - 1] + widths[cols - 1]
+            val height = ys[rowCount - 1] + heights[rowCount - 1]
+            val headerFill = measurables[cellCount].measure(Constraints.fixed(width, heights[0]))
+            val vRules = List(cols - 1) { measurables[cellCount + 1 + it].measure(Constraints.fixed(rule, height)) }
+            val hRules = List(rowCount - 1) { measurables[cellCount + cols + it].measure(Constraints.fixed(width, rule)) }
+            layout(width, height) {
+                headerFill.place(0, 0)
+                cells.forEachIndexed { i, p -> p.place(xs[i % cols], ys[i / cols]) }
+                vRules.forEachIndexed { i, p -> p.place(xs[i + 1] - rule, 0) }
+                hRules.forEachIndexed { i, p -> p.place(0, ys[i + 1] - rule) }
             }
         }
     }
@@ -519,21 +557,13 @@ private fun MarkdownTableCell(
     onOpenUrl: ((String) -> Unit)?,
 ) {
     val cs = MaterialTheme.colorScheme
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .background(if (header) cs.surfaceContainerLow else Color.Transparent)
-            .padding(horizontal = Space.sm + Space.xs, vertical = Space.sm),
-    ) {
+    Box(Modifier.padding(horizontal = Space.sm + Space.xs, vertical = Space.sm)) {
         MdText(
             text = mdAnnotated(text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
             color = cs.onSurface,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
             textAlign = columnTextAlign(align),
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -583,7 +613,10 @@ fun mdImagePaintSize(
  *
  * - `https://` URLs: fetched under the [fetchImageBytesWithPolicy] policy (byte cap, bounded
  *   redirects, no scheme downgrade) then decoded by Coil, and painted inline.
- * - Everything else (http, relative, `data:`): a compact tappable link line — a message-content
+ * - A host file (absolute, `file://`, or relative to [LocalMarkdownFiles]' base folder) when a
+ *   [LocalMarkdownFiles] is provided: read through the host and painted, or played if a video —
+ *   see [LocalMarkdownMedia].
+ * - Everything else (http, `data:`, a path with no host): a compact tappable link line — a message-content
  *   image is a tracking-pixel / IP-leak vector, so nothing but https is ever fetched.
  * - A load/decode failure falls back to a **distinct** failure link line (never a blank hole, never
  *   identical to the deliberate non-https fallback).
@@ -597,9 +630,16 @@ fun MarkdownImage(
     image: MdBlock.Image,
     loadImage: (suspend (String) -> ImageBitmap?)? = null,
     onOpenUrl: ((String) -> Unit)? = null,
+    onOpenFile: (FilePathRef) -> Unit = {},
 ) {
     val platform = LocalPlatform.current
     val open: (String) -> Unit = onOpenUrl ?: { url -> runCatching { platform.openUrl(url) } }
+    val files = LocalMarkdownFiles.current
+    val localPath = files?.let { resolveMarkdownMediaPath(image.url, it.baseDir) }
+    if (files != null && localPath != null) {
+        LocalMarkdownMedia(image, localPath, files, onFailedClick = { onOpenFile(FilePathRef(localPath)) })
+        return
+    }
     if (!isHttpsImageUrl(image.url)) {
         MarkdownImageLinkLine(image, loadFailed = false, onOpenUrl = open)
         return
@@ -794,7 +834,7 @@ internal fun MdImageLoadingBox(tag: String, shape: Dp = Radii.sm) {
  * fetch/decode failure so the user can tell them apart.
  */
 @Composable
-private fun MarkdownImageLinkLine(
+internal fun MarkdownImageLinkLine(
     image: MdBlock.Image,
     loadFailed: Boolean,
     onOpenUrl: (String) -> Unit,

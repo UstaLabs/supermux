@@ -42,7 +42,7 @@ sealed interface MdBlock {
         val aligns: List<ColumnAlign>,
         val rows: List<List<String>>,
     ) : MdBlock
-    /** Standalone image (a paragraph that is solely `![alt](url)`). */
+    /** Standalone image (a paragraph made only of `![alt](url)`s yields one per image). */
     data class Image(val url: String, val alt: String) : MdBlock
 }
 
@@ -68,8 +68,12 @@ private fun collectBlock(node: ASTNode, src: String, out: MutableList<MdBlock>) 
     when (node.type) {
         MarkdownElementTypes.PARAGRAPH -> {
             val meaningful = node.children.filter { it.type != MarkdownTokenTypes.WHITE_SPACE && it.type != MarkdownTokenTypes.EOL }
-            if (meaningful.size == 1 && meaningful[0].type == MarkdownElementTypes.IMAGE) {
-                imageBlock(meaningful[0], src)?.let { out.add(it) }
+            // Only images (one per line, say, or side by side): each paints as its own block.
+            val images = if (meaningful.isNotEmpty() && meaningful.all { it.type == MarkdownElementTypes.IMAGE }) {
+                meaningful.map { imageBlock(it, src) }
+            } else emptyList()
+            if (images.isNotEmpty() && images.all { it != null }) {
+                images.forEach { out.add(it!!) }
             } else {
                 val text = node.getTextInNode(src).toString().trim()
                 if (text.isNotBlank()) out.add(MdBlock.Prose(text))

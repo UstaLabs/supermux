@@ -165,6 +165,11 @@ class MarkdownGfmTest {
         assertEquals("a cat", img.alt)
     }
 
+    @Test fun paragraph_of_only_images_yields_one_block_each() {
+        val blocks = parseMarkdownBlocks("![one](a.png)\n![two](b.mp4)")
+        assertEquals(listOf(MdBlock.Image("a.png", "one"), MdBlock.Image("b.mp4", "two")), blocks)
+    }
+
     @Test fun text_with_image_stays_prose() {
         val blocks = parseMarkdownBlocks("look ![a](b.png) here")
         assertTrue(blocks[0] is MdBlock.Prose, "mixed image+text should be prose, got ${blocks[0]}")
