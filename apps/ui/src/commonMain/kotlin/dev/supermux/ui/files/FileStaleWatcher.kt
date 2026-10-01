@@ -17,7 +17,9 @@ import dev.supermux.ui.editor.WatchedDocuments
  * editor's EditorState) from folder subscriptions: one subscription per
  * distinct parent folder of an open document (shared by every document in it, released when the
  * last one there closes), compared by a [FileChangeTracker]. Our own saves are bracketed through
- * [WatchedDocuments.observeWrites] so they never raise the banner. Draws nothing.
+ * [WatchedDocuments.observeWrites] so they never raise the banner. A changed file with no unsaved
+ * edits reloads in place ([WatchedDocuments.changedOnDisk]); only a dirty one shows the banner.
+ * Draws nothing.
  */
 @Composable
 fun FileStaleWatcher(fileSystem: FileSystemService?, workdir: String, documents: WatchedDocuments) {
@@ -57,7 +59,7 @@ fun FileStaleWatcher(fileSystem: FileSystemService?, workdir: String, documents:
                     } ?: return@collect
                     val changed = tracker.onSnapshot(dir, snap)
                     val rels = changed.mapNotNull { currentRelByAbs.value[it] }
-                    if (rels.isNotEmpty()) documents.markChanged(rels)
+                    if (rels.isNotEmpty()) documents.changedOnDisk(rels)
                 }
             }
         }
