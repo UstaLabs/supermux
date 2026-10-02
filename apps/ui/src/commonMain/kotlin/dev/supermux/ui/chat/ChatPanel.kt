@@ -22,7 +22,12 @@
 // [rememberChatState], which keep desktop's ergonomics.
 package dev.supermux.ui.chat
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -58,6 +63,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Square
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material3.Icon
@@ -68,6 +74,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -80,6 +87,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -759,6 +767,13 @@ fun ChatPanel(
                         // Fade, not a rule: a short scrim of the panel's own background so a
                         // message scrolling up dissolves into the header. Non-interactive.
                         EdgeFade(cs.surfaceContainerLow, Modifier.align(Alignment.TopCenter))
+                        if (!emptySession) {
+                            JumpToBottomButton(
+                                listState = listState,
+                                onJumped = { chrome.show() },
+                                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Space.md),
+                            )
+                        }
                     }
                     WalkthroughUnreadChip(state, onOpenWalkthrough, Modifier.align(Alignment.CenterHorizontally))
                     // A pointer host can still raise a soft keyboard (a tablet with a mouse, DeX
@@ -814,6 +829,63 @@ private fun WalkthroughUnreadChip(
         modifier = modifier.testTag("walkthrough_unread_chip"),
     ) {
         Text("💬 ${state.walkthroughUnread} new walkthrough replies")
+    }
+}
+
+/**
+ * Round "jump to the latest" button floated over the bottom of the transcript. It only appears once
+ * the reader has scrolled well away from the end — more than about a screen, or two whole rows below
+ * the viewport — so the ordinary small drift of reading the last reply never summons it.
+ */
+@Composable
+private fun JumpToBottomButton(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    onJumped: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    val haptic = rememberHaptics()
+    val visible by remember(listState) {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf false
+            if (!listState.canScrollForward) return@derivedStateOf false
+            val viewport = info.viewportEndOffset - info.viewportStartOffset
+            val below = last.offset + last.size - info.viewportEndOffset
+            last.index < info.totalItemsCount - 2 || below > viewport
+        }
+    }
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + scaleIn(initialScale = 0.8f),
+        exit = fadeOut() + scaleOut(targetScale = 0.8f),
+        modifier = modifier,
+    ) {
+        Surface(
+            onClick = {
+                haptic.perform(HapticKind.Confirm)
+                scope.launch {
+                    val lastIndex = listState.layoutInfo.totalItemsCount - 1
+                    if (lastIndex < 0) return@launch
+                    listState.animateScrollToItem(lastIndex)
+                    // The last row may be taller than the viewport: settle on its end, not its top.
+                    listState.scrollBy(100_000f)
+                    onJumped()
+                }
+            },
+            shape = CircleShape,
+            color = cs.surfaceContainerHigh,
+            contentColor = cs.onSurface,
+            modifier = Modifier
+                .size(40.dp)
+                .shadow(4.dp, CircleShape)
+                .testTag("chat_jump_to_bottom"),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Scroll to bottom", modifier = Modifier.size(22.dp))
+            }
+        }
     }
 }
 
