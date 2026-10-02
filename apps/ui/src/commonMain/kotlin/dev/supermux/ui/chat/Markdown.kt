@@ -25,6 +25,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.SelectionState
+import androidx.compose.foundation.text.selection.rememberSelectionState
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
@@ -43,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
@@ -156,6 +169,100 @@ fun mdAnnotated(
             }
         }
     }
+}
+
+/**
+ * Selects a whole link, not one word of it, when the link is right-clicked.
+ *
+ * Out of the box a right-click inside a `SelectionContainer` selects the WORD under the pointer
+ * (unless the pointer is already inside the selection) and then opens the Copy menu — so right-click
+ * → Copy on `https://github.com/foo/bar` copied `github`. [MdText] catches the secondary press
+ * before the container's context-menu detector sees it (child pointer handlers run first) and
+ * selects the link's full range here; the container's "select the word if not already selected"
+ * then finds the pointer inside that selection and leaves it alone.
+ */
+private val LocalLinkSelector = staticCompositionLocalOf<((String, TextRange) -> Unit)?> { null }
+
+/** `SelectionContainer` whose [MdText] children select a whole link on right-click. */
+@Composable
+fun LinkSelectionContainer(
+    modifier: Modifier = Modifier,
+    state: SelectionState = rememberSelectionState(),
+    content: @Composable () -> Unit,
+) {
+    val selector = remember(state) { { text: String, range: TextRange -> state.selectLinkIn(text, range) } }
+    SelectionContainer(state = state, modifier = modifier) {
+        CompositionLocalProvider(LocalLinkSelector provides selector, content = content)
+    }
+}
+
+/**
+ * `SelectionState.select` takes an offset into every selectable's text laid end to end, in layout
+ * order, so the link's range is shifted by the length of every selectable before the one holding it.
+ * The ordered list itself is internal to Compose; `selectAll()` publishes it through [selectedTexts]
+ * synchronously, and the narrowing `select` lands in the same frame, so nothing flashes.
+ * A duplicate block picks the first match; if that is the wrong one the click falls back to the
+ * stock select-the-word behavior.
+ */
+private fun SelectionState.selectLinkIn(text: String, range: TextRange) {
+    selectAll()
+    val texts = selectedTexts
+    val index = texts.indexOfFirst { it.text == text }
+    if (index < 0) return clear()
+    val base = (0 until index).sumOf { texts[it].length }
+    select(TextRange(base + range.start, base + range.end))
+}
+
+/** The link under [position], if any, as a range of [text]. */
+internal fun linkRangeAt(text: AnnotatedString, layout: TextLayoutResult, position: Offset): TextRange? {
+    if (text.isEmpty()) return null
+    val offset = layout.getOffsetForPosition(position).coerceAtMost(text.length - 1)
+    // getOffsetForPosition clamps to the nearest character, so a click in the blank space after a
+    // line would otherwise pick up a link that merely ends the line.
+    if (!layout.getBoundingBox(offset).contains(position)) return null
+    val link = text.getLinkAnnotations(offset, offset + 1).firstOrNull() ?: return null
+    return TextRange(link.start, link.end)
+}
+
+/** A markdown `Text` whose links select as a whole on right-click inside a [LinkSelectionContainer]. */
+@Composable
+internal fun MdText(
+    text: AnnotatedString,
+    modifier: Modifier = Modifier,
+    color: Color = Color.Unspecified,
+    fontWeight: FontWeight? = null,
+    textAlign: TextAlign? = null,
+    overflow: TextOverflow = TextOverflow.Clip,
+    softWrap: Boolean = true,
+    maxLines: Int = Int.MAX_VALUE,
+    style: TextStyle,
+) {
+    val selector = LocalLinkSelector.current
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val linkModifier = if (selector == null) Modifier else Modifier.pointerInput(text, selector) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                if (event.type != PointerEventType.Press || !event.buttons.isSecondaryPressed) continue
+                val position = event.changes.firstOrNull()?.position ?: continue
+                val range = layout?.let { linkRangeAt(text, it, position) } ?: continue
+                selector(text.text, range)
+            }
+        }
+    }
+    Text(
+        text = text,
+        // Last in the chain so pointer positions are in the text's own coordinates.
+        modifier = modifier.then(linkModifier),
+        color = color,
+        fontWeight = fontWeight,
+        textAlign = textAlign,
+        overflow = overflow,
+        softWrap = softWrap,
+        maxLines = maxLines,
+        onTextLayout = { layout = it },
+        style = style,
+    )
 }
 
 private val urlRegex = Regex("""https?://[^\s<>"'\])]+""")
@@ -275,7 +382,7 @@ fun MarkdownBody(
             when (block) {
                 is MdBlock.Prose -> {
                     if (block.text.isNotBlank()) {
-                        Text(
+                        MdText(
                             text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
                             color = cs.onSurface,
                             style = typography.bodyLarge,
@@ -286,7 +393,7 @@ fun MarkdownBody(
                 is MdBlock.Code ->
                     if (block.lang.equals("mermaid", ignoreCase = true)) MermaidBlock(block.code)
                     else FencedCodeBlock(block.code)
-                is MdBlock.Heading -> Text(
+                is MdBlock.Heading -> MdText(
                     text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
                     color = cs.onSurface,
                     style = when (block.level) {
@@ -308,7 +415,7 @@ fun MarkdownBody(
                             .clip(RoundedCornerShape(1.dp))
                             .background(cs.primary.copy(alpha = 0.5f)),
                     )
-                    Text(
+                    MdText(
                         text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
                         color = cs.onSurfaceVariant,
                         style = typography.bodyLarge,
@@ -325,7 +432,7 @@ fun MarkdownBody(
                         null -> "•"
                     }
                     Text(marker, color = cs.onSurfaceVariant, style = typography.bodyLarge)
-                    Text(
+                    MdText(
                         text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
                         color = cs.onSurface,
                         style = typography.bodyLarge,
@@ -337,7 +444,7 @@ fun MarkdownBody(
                     horizontalArrangement = Arrangement.spacedBy(Space.sm),
                 ) {
                     Text("${block.n}.", color = cs.onSurfaceVariant, style = typography.bodyLarge)
-                    Text(
+                    MdText(
                         text = mdAnnotated(block.text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
                         color = cs.onSurface,
                         style = typography.bodyLarge,
@@ -424,7 +531,7 @@ private fun MarkdownTableCell(
             .background(if (header) cs.surfaceContainerLow else Color.Transparent)
             .padding(horizontal = Space.sm + Space.xs, vertical = Space.sm),
     ) {
-        Text(
+        MdText(
             text = mdAnnotated(text, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl),
             color = cs.onSurface,
             style = MaterialTheme.typography.bodyMedium,

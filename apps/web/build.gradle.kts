@@ -219,6 +219,20 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // remains a bloat catch, NOT a target to grow into — one more feature the size of this one would
 // put the ceiling in reach.
 //
+// AND IT DID. RE-MEASURED 2026-09-28 for v0.12.0-alpha.3, after the native editor cutover
+// (CodeMirror and its web views out, `:editor-*` in), `gzip -9` of webpack's own output:
+//
+//     skiko.wasm                3.18 MiB   unchanged
+//     supermux-apps-web.wasm    4.44 MiB   was 3.00: the native editor's Kotlin, all of it here
+//     supermux-terminal.wasm    0.27 MiB   unchanged
+//     app.js                    0.12 MiB   unchanged (pako included)
+//     ------------------------------------
+//     total                     8.02 MiB   (8210 KiB; stageForBroker counted 8204 KiB)
+//
+// 12 KiB over 8 MiB, every lane that stages the web client red. The ceiling moved to 8.5 MiB,
+// ~0.48 MiB of headroom. The next thing to win back is the app wasm, not this number again:
+// the cutover added ~1.4 MiB gzipped to it.
+//
 // NEITHER ARE THE FONTS, and that is now worth a number rather than a clause. `assets.listFiles()`
 // below is top level only, so everything under `assets/composeResources/` is outside this ceiling
 // by construction:
@@ -236,12 +250,7 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // headroom under the 8 MiB ceiling is still the 1.43 MiB measured on 2026-09-23 plus whatever the
 // Kotlin of that change costs in the app wasm — re-read the `stageForBroker:` line of the next
 // staged build for the exact total.
-//
-// RAISED TO 9 MiB 2026-09-29 (merge of dev into mux/supermux-core-exploratio): the shell measured
-// 8274 KB gzip — skiko 3251 KiB, supermux-apps-web.wasm 4579 KiB (was 3.00 MiB on 09-23: mermaid,
-// the native editor, the subagent/request-card UI), supermux-terminal 276 KiB, app.js 125 KiB,
-// loaders 12 KiB. Still a bloat catch: re-measure before growing into it.
-val maxGzipBytes = 9L * 1024 * 1024
+val maxGzipBytes = 8L * 1024 * 1024 + 512 * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
