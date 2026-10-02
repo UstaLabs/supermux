@@ -227,4 +227,31 @@ class MarkdownGfmTest {
         assertEquals(SpanStyleKind.PLAIN, spans[0].kind)
         assertTrue(spans[0].text.contains("https://example.com"))
     }
+
+    // ---- Document structure: rules and nested lists ---------------------------
+    @Test fun thematic_break_is_a_rule_block() {
+        val blocks = parseMarkdownBlocks("above\n\n---\n\nbelow")
+        assertEquals(listOf(MdBlock.Prose("above"), MdBlock.Rule, MdBlock.Prose("below")), blocks)
+    }
+
+    @Test fun nested_list_items_carry_their_depth() {
+        val blocks = parseMarkdownBlocks("- top\n  - child\n    - grandchild\n- next")
+        assertEquals(
+            listOf(
+                MdBlock.Bullet("top", depth = 0),
+                MdBlock.Bullet("child", depth = 1),
+                MdBlock.Bullet("grandchild", depth = 2),
+                MdBlock.Bullet("next", depth = 0),
+            ),
+            blocks,
+        )
+    }
+
+    @Test fun numbered_list_nested_under_a_bullet_is_indented() {
+        val blocks = parseMarkdownBlocks("- steps\n  1. first\n  2. second")
+        assertEquals(
+            listOf(MdBlock.Bullet("steps"), MdBlock.Numbered(1, "first", depth = 1), MdBlock.Numbered(2, "second", depth = 1)),
+            blocks,
+        )
+    }
 }

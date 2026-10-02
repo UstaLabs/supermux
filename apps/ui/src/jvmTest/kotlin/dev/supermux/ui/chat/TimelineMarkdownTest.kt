@@ -11,6 +11,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
@@ -85,8 +86,8 @@ class TimelineMarkdownTest {
         """.trimIndent()
         setPlatformContent { MarkdownBody(text = md) }
 
-        onNodeWithText("☑").assertIsDisplayed() // checked task
-        onNodeWithText("☐").assertIsDisplayed() // unchecked task
+        onNodeWithContentDescription("Done").assertIsDisplayed() // checked task
+        onNodeWithContentDescription("To do").assertIsDisplayed() // unchecked task
         onNodeWithText("•").assertIsDisplayed() // plain bullet keeps the dot
     }
 
