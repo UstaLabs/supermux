@@ -19,10 +19,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
-import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.net.TerminalClient
 
 /**
@@ -114,7 +112,7 @@ fun TerminalPane(
     onExit: (() -> Unit)? = null,
 ) {
     // Background stays full-bleed behind the insets; only the content is padded.
-    Box(modifier.fillMaxSize().background(Color(LocalPanes.current.terminal))) {
+    Box(modifier.fillMaxSize().background(terminalPalette().background)) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 surface.Content(Modifier.fillMaxSize(), active, onExit)

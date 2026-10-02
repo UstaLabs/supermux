@@ -22,6 +22,7 @@ import dev.supermux.state.SettingsStore
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.ThemeDefaults
 import dev.supermux.ui.sanitizeSetLevel
+import dev.supermux.ui.terminal.TerminalAppearance
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.TEXT_SCALE_MAX
 import dev.supermux.ui.theme.TEXT_SCALE_MIN
@@ -100,6 +101,15 @@ class UiPrefs(private val settings: SettingsStore) {
 
     suspend fun putTerminalFontSize(sp: Int) =
         settings.putString(SettingsKeys.TERMINAL_FONT_SIZE, sp.coerceIn(TERMINAL_FONT_MIN, TERMINAL_FONT_MAX).toString())
+
+    /** Whether the terminal follows the app's light/dark mode or is pinned. Unknown/absent → FOLLOW_APP. */
+    val terminalAppearance: Flow<TerminalAppearance> =
+        settings.string(SettingsKeys.TERMINAL_APPEARANCE).map { raw ->
+            TerminalAppearance.entries.firstOrNull { it.name == raw } ?: TerminalAppearance.FOLLOW_APP
+        }
+
+    suspend fun putTerminalAppearance(mode: TerminalAppearance) =
+        settings.putString(SettingsKeys.TERMINAL_APPEARANCE, mode.name)
 
     /** Changes pane: nested folder tree (true) vs flat path list (false). */
     val editorDiffTreeView: Flow<Boolean> =
