@@ -65,6 +65,17 @@ class AppearanceSettingsScreenTest {
         assertEquals("DARK", store.map.value[SettingsKeys.APPEARANCE])
     }
 
+    @Test fun choosing_a_terminal_mode_persists_it() = runComposeUiTest {
+        val store = FakeSettingsStore()
+        setPlatformContent(uiPrefs = UiPrefs(store)) { AppearanceSettingsScreen() }
+        waitForIdle()
+        onNodeWithTag("terminal_appearance_follow_app").assertIsSelected()
+        onNodeWithTag("terminal_appearance_light").performClick()
+        waitForIdle()
+        assertEquals("LIGHT", store.map.value[SettingsKeys.TERMINAL_APPEARANCE])
+        onNodeWithTag("terminal_appearance_light").assertIsSelected()
+    }
+
     @Test fun the_host_default_applies_until_someone_chooses() = runComposeUiTest {
         // Desktop opens DARK with nothing stored; the row it shows selected must follow that, and
         // choosing SYSTEM must still be a real write rather than a no-op against the default.

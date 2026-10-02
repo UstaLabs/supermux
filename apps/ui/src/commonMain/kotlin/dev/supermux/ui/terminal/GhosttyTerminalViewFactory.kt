@@ -73,7 +73,6 @@ import dev.supermux.ui.prefs.TERMINAL_FONT_MIN
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.rememberHaptics
-import dev.supermux.ui.theme.LocalPanes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
@@ -195,16 +194,11 @@ class GhosttyTerminalViewFactory(
  */
 val SharedTerminal: TerminalViewFactory = GhosttyTerminalViewFactory()
 
-/** The app palette, as the renderer's theme. */
+/** The terminal palette (the app's mode, or the one the Terminal setting pins), as the renderer's theme. */
 @Composable
 fun defaultTerminalTheme(): TerminalTheme {
-    val panes = LocalPanes.current
-    return remember(panes.terminal, panes.terminalForeground) {
-        TerminalTheme(
-            background = Color(panes.terminal),
-            foreground = Color(panes.terminalForeground),
-        )
-    }
+    val palette = terminalPalette()
+    return remember(palette) { palette.toTheme() }
 }
 
 /**
