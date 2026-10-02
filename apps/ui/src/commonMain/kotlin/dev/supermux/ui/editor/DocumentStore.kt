@@ -84,6 +84,8 @@ class DocumentStore(
 
     var loadingPath by mutableStateOf<String?>(null)
     var loadError by mutableStateOf<String?>(null)
+    /** [loadError] is the host refusing a binary file (415): the pane offers to open it elsewhere. */
+    var loadErrorBinary by mutableStateOf(false)
     /** Paths whose save is in flight: one write per document at a time, other documents unaffected. */
     private var savingPaths by mutableStateOf(setOf<String>())
 
@@ -237,6 +239,7 @@ class DocumentStore(
                     // open — a superseded load's failure must not stomp the newer load in progress.
                     if (loadingPath == path) {
                         loadError = err.message ?: "Could not open file"
+                        loadErrorBinary = (err as? dev.supermux.net.FsException)?.status == 415
                         loadingPath = null
                     }
                 }
@@ -346,6 +349,40 @@ class DocumentStore(
     }
 
     fun isStale(path: String): Boolean = normPath(path) in changedPaths
+
+    /**
+     * A file changed on disk behind its open document. Clean (nothing unsaved, no save of ours in
+     * flight) → re-read it and take the new text silently, keeping the caret ([NativeDocument.
+     * replaceFromDisk] applies the minimal change, outside his undo history). Dirty → the banner,
+     * so his edits are never thrown away.
+     */
+    override fun changedOnDisk(paths: List<String>) {
+        val banner = ArrayList<String>()
+        for (p in paths) {
+            val doc = docs[p]
+            if (doc == null || doc.isDirty || p in savingPaths) banner += p
+            else scope.launch { refreshFromDisk(doc) }
+        }
+        if (banner.isNotEmpty()) markChanged(banner)
+    }
+
+    private suspend fun refreshFromDisk(doc: Document) {
+        val raw = fsRead(doc.path).getOrNull()
+        if (docs[doc.path] !== doc) return // closed (or closed and reopened) during the read
+        // Gone / unreadable, or he started typing while it was read: fall back to the banner.
+        if (raw == null || doc.isDirty) {
+            markChanged(listOf(doc.path))
+            return
+        }
+        val loaded = LineEndings.load(raw)
+        doc.crlf = loaded.crlf
+        if (loaded.text != doc.content) {
+            val native = doc.native
+            if (native != null) native.replaceFromDisk(loaded.text) else doc.content = loaded.text
+        }
+        doc.savedContent = loaded.text
+        changedPaths = changedPaths - normPath(doc.path)
+    }
 
     private fun normPath(p: String): String = p.removePrefix("/")
 

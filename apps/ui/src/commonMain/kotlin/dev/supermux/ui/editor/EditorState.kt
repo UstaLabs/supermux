@@ -168,6 +168,8 @@ class EditorState(
     /** Record disk-change notifications (workdir-relative paths, leading slash optional). */
     override fun markChanged(paths: List<String>) = documents.markChanged(paths)
 
+    override fun changedOnDisk(paths: List<String>) = documents.changedOnDisk(paths)
+
     /** The open files (every tab's document lives in [documents]). */
     override val openPaths: Collection<String> get() = documents.openPaths
 

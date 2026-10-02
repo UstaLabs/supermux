@@ -51,6 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -66,8 +67,13 @@ import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.FilePathRef
+import dev.supermux.ui.chat.LocalMarkdownFiles
 import dev.supermux.ui.chat.MarkdownBody
+import dev.supermux.ui.chat.markdownPreviewColumn
+import dev.supermux.ui.chat.MarkdownFiles
+import dev.supermux.ui.files.parentOf
 import dev.supermux.net.AddCommentBody
+import dev.supermux.net.BlobText
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.ReviewComment
@@ -95,7 +101,8 @@ import dev.supermux.ui.files.FileSearch
 import dev.supermux.ui.files.GoToEntry
 import dev.supermux.ui.files.goToFileShortcut
 import androidx.compose.ui.focus.FocusRequester
-import dev.supermux.ui.files.childOf
+import dev.supermux.ui.files.editorAbsolutePath
+import dev.supermux.ui.files.editorPathFor
 import dev.supermux.ui.files.relativeToWorkdir
 
 // ── Explorer ──────────────────────────────────────────────────────────────────────────────────
@@ -104,9 +111,8 @@ import dev.supermux.ui.files.relativeToWorkdir
  * The file tree and its "Go to file…" fuzzy search ([FileSearch]; ⌘P / Ctrl+P), as a pane.
  *
  * The tree is the live host tree ([FileTreeView]) over [fileSystem]; its paths are ABSOLUTE. What
- * leaves the pane is workdir-relative: [onOpenFile] gets a path relative to [workdir], and a file
- * outside the workdir (reachable by browsing up via the breadcrumbs) goes to [onOutsideWorkdir]
- * instead — the document/editor code cannot open it yet.
+ * leaves the pane is an editor key ([editorPathFor]): relative to [workdir] for a file inside it,
+ * absolute for one outside it (reachable by browsing up via the breadcrumbs).
  *
  * [view] is held by the caller (per view id, outliving the pane), so a drag/split/re-tab keeps the
  * open folders, selection and scroll.
@@ -123,23 +129,17 @@ fun ExplorerPane(
     fileSystem: FileSystemService?,
     view: TreeViewState,
     workdir: String,
-    onOpenFile: (relativePath: String) -> Unit,
+    onOpenFile: (editorPath: String) -> Unit,
     modifier: Modifier = Modifier,
     activeRelativePath: String? = null,
-    onOutsideWorkdir: (absolutePath: String) -> Unit = {},
     onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit = { _, _ -> },
 ) {
     val cs = MaterialTheme.colorScheme
     val searchFocus = remember { FocusRequester() }
 
     val openAbsolute: (String) -> Unit = { abs ->
-        val rel = relativeToWorkdir(workdir, abs)?.takeIf { it != "." }
-        if (rel != null) {
-            view.noteOpened(rel)
-            onOpenFile(rel)
-        } else {
-            onOutsideWorkdir(abs)
-        }
+        relativeToWorkdir(workdir, abs)?.takeIf { it != "." }?.let(view::noteOpened)
+        onOpenFile(editorPathFor(workdir, abs))
     }
 
     val onGoTo: (GoToEntry) -> Unit = { e ->
@@ -152,9 +152,7 @@ fun ExplorerPane(
         }
     }
 
-    val activePath = activeRelativePath?.takeIf { it.isNotEmpty() && it != "." }?.let { rel ->
-        rel.split('/').filter { it.isNotEmpty() }.fold(workdir) { acc, seg -> childOf(acc, seg) }
-    }
+    val activePath = activeRelativePath?.takeIf { it.isNotEmpty() && it != "." }?.let { editorAbsolutePath(workdir, it) }
     val prefs = LocalUiPrefs.current
     val scope = rememberCoroutineScope()
     val hardwareKeyboard = LocalHardwareKeyboard.current
@@ -253,12 +251,27 @@ fun FilePane(
     previewMode: Boolean = false,
     /** Where a file link inside the preview lands. */
     onOpenFile: (FilePathRef) -> Unit = {},
-    /** Where an LSP definition or reference in another file opens (workdir-relative path, 1-based line). */
+    /** Where an LSP definition or reference in another file opens (an editor key, 1-based line). */
     onNavigate: (path: String, line: Int) -> Unit = { _, _ -> },
+    /**
+     * A file's bytes by ABSOLUTE path (`/fs/raw`). With it an image or a video previews instead of
+     * opening as text, and a binary file the text reader refuses offers to open elsewhere.
+     */
+    rawBytes: (suspend (String) -> Result<ByteArray>)? = null,
+    /** Keeps an image preview current when the file changes on disk. */
+    fileSystem: FileSystemService? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val c = LocalPanes.current
     val scope = rememberCoroutineScope()
+
+    // Absolute: an editor key outside the workdir is one already; a relative one needs the workdir.
+    val absPath = if (dev.supermux.ui.isAbsoluteEditorPath(path) || workdir.isNotEmpty()) editorAbsolutePath(workdir, path) else null
+    val previewKind = filePreviewKind(path)
+    if (rawBytes != null && absPath != null && previewKind != null) {
+        BinaryFilePreview(absPath, previewKind, rawBytes, fileSystem, modifier)
+        return
+    }
 
     // Ask the store for the document. Already open (another pane, an earlier visit) → an immediate
     // hit and no read; otherwise the store's in-flight guard means two panes racing on one cold
@@ -354,10 +367,23 @@ fun FilePane(
                         .fillMaxSize()
                         .background(Color(c.code))
                         .verticalScroll(rememberScrollState())
-                        .padding(Space.lg)
+                        .padding(horizontal = Space.lg, vertical = Space.xl)
                         .testTag("editor_preview"),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    MarkdownBody(doc?.content ?: "", linkify = true, onOpenFile = onOpenFile)
+                    // `![](img/a.png)` resolves against the file's own folder, read through the host.
+                    val mdFiles = remember(absPath, rawBytes) {
+                        if (absPath != null && rawBytes != null) MarkdownFiles(parentOf(absPath), rawBytes) else null
+                    }
+                    CompositionLocalProvider(LocalMarkdownFiles provides mdFiles) {
+                        MarkdownBody(
+                            doc?.content ?: "",
+                            modifier = Modifier.markdownPreviewColumn(),
+                            linkify = true,
+                            onOpenFile = onOpenFile,
+                            document = true,
+                        )
+                    }
                 }
             }
 
@@ -368,7 +394,9 @@ fun FilePane(
                         .testTag(if (err != null) "editor_load_error" else "editor_file_loading"),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (err != null) {
+                    if (err != null && documents.loadErrorBinary && rawBytes != null && absPath != null) {
+                        BinaryFileCard(absPath, rawBytes)
+                    } else if (err != null) {
                         Text(err, color = cs.onSurfaceVariant, fontSize = 13.sp)
                     } else {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -421,6 +449,8 @@ fun DiffPane(
     writeDiffFile: (suspend (repo: String, path: String, text: String) -> Boolean)? = null,
     /** The workspace's open documents: a revert of an open file goes through its tab's document. */
     diffDocuments: DocumentStore? = null,
+    /** A lazy file's base text by blob (repo, sha, force). */
+    baseText: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -488,6 +518,7 @@ fun DiffPane(
                     onWalkthroughClosed()
                 },
                 modifier = Modifier.weight(1f),
+                baseText = baseText,
             )
         } else {
           DiffView(
@@ -521,6 +552,7 @@ fun DiffPane(
             writeFile = writeDiffFile,
             postComment = onReviewAddComment,
             documents = diffDocuments,
+            baseText = baseText,
         )
         }
     }

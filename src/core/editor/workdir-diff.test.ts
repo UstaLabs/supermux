@@ -67,9 +67,9 @@ describe("computeWorkdirDiff base specs", () => {
 })
 
 describe("listRepoRefs", () => {
-  test("returns branches and recent commits for the repo", () => {
+  test("returns branches and recent commits for the repo", async () => {
     git(dir, "branch", "dev")
-    const refs = listRepoRefs(dir)
+    const refs = await listRepoRefs(dir)
     expect(refs[0]!.branches).toEqual(expect.arrayContaining(["main", "dev"]))
     expect(refs[0]!.commits[0]!.subject).toBe("c1")
     expect(refs[0]!.commits[0]!.sha).toMatch(/^[0-9a-f]{7,}$/)

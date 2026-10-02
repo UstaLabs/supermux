@@ -105,13 +105,17 @@ fun diffStats(diff: String): Pair<Int, Int> {
     return added to deleted
 }
 
+/** Row counts for a file: a lazy file carries them in its list entry (its `diff` is ""). */
+internal fun fileStats(file: DiffFile): Pair<Int, Int> =
+    if (file.lazy) (file.added ?: 0) to (file.removed ?: 0) else diffStats(file.diff)
+
 fun folderDiffStats(folder: DiffTreeNode.Folder): Pair<Int, Int> {
     var add = 0
     var del = 0
     fun walk(node: DiffTreeNode) {
         when (node) {
             is DiffTreeNode.File -> if (!node.file.binary) {
-                val stats = diffStats(node.file.diff)
+                val stats = fileStats(node.file)
                 add += stats.first
                 del += stats.second
             }

@@ -34,7 +34,7 @@ class SidebarDividerTest {
                 LocalWindowWidthClass provides WindowWidthClass.Expanded,
             ) {
                 SupermuxTheme(appearance = AppearanceMode.DARK) {
-                    Box(Modifier.fillMaxSize()) { SidebarDivider(onDragDelta = {}) }
+                    Box(Modifier.fillMaxSize()) { SidebarDivider(onDrag = {}) }
                 }
             }
         }

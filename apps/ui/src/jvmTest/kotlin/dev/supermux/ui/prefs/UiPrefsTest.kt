@@ -3,6 +3,7 @@ package dev.supermux.ui.prefs
 import dev.supermux.state.SettingsKeys
 import dev.supermux.state.SettingsStore
 import dev.supermux.ui.ChatDetailLevel
+import dev.supermux.ui.terminal.TerminalAppearance
 import dev.supermux.ui.theme.AppearanceMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -310,5 +311,16 @@ class UiPrefsTest {
         p.putSelectedSession("")
         assertEquals(null, store.map.value[SettingsKeys.SHELL_SELECTED_SESSION])
         assertEquals(null, p.selectedSession.first())
+    }
+
+    @Test
+    fun terminal_appearance_defaults_to_following_the_app_and_round_trips() = runTest {
+        val (store, p) = prefs()
+        assertEquals(TerminalAppearance.FOLLOW_APP, p.terminalAppearance.first())
+        p.putTerminalAppearance(TerminalAppearance.LIGHT)
+        assertEquals("LIGHT", store.map.value[SettingsKeys.TERMINAL_APPEARANCE])
+        assertEquals(TerminalAppearance.LIGHT, p.terminalAppearance.first())
+        store.putString(SettingsKeys.TERMINAL_APPEARANCE, "sepia")
+        assertEquals(TerminalAppearance.FOLLOW_APP, p.terminalAppearance.first())
     }
 }

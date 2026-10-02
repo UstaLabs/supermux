@@ -114,6 +114,10 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.resolveBashParts
 import dev.supermux.ui.resolveEditParts
+import dev.supermux.ui.toolDiffDoc
+import dev.supermux.ui.editor.rememberAppEditorTheme
+import dev.supermux.editor.compose.EditorTheme
+import dev.supermux.editor.compose.packagedEditorFontFamily
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Media
 import dev.supermux.ui.theme.MonoFontFamily
@@ -504,6 +508,10 @@ private fun ToolTerminalPane(
         ToolStatus.ERROR -> cs.error
         ToolStatus.DONE -> cs.primary.copy(alpha = 0.85f)
     }
+    // A terminal stays dark in a light app: the editor's dark palette, whatever the app's theme.
+    val font = packagedEditorFontFamily()
+    val terminal = remember(font) { EditorTheme.dark(font) }
+    val bash = LocalPlatform.current.editorSyntax.registry.aliasFor("bash")
     Column(
         Modifier
             .fillMaxWidth()
@@ -545,32 +553,43 @@ private fun ToolTerminalPane(
             Text(statusLabel, color = statusColor, fontSize = 10.sp, fontFamily = MonoFontFamily)
         }
         Column(
-            Modifier
-                .heightIn(max = 220.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = Space.sm + 2.dp, vertical = Space.sm),
+            Modifier.padding(horizontal = Space.sm + 2.dp, vertical = Space.sm),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             if (!command.isNullOrBlank()) {
                 Row {
-                    Text("$ ", color = Color(0xFF4ADE80).copy(alpha = 0.9f), fontFamily = MonoFontFamily, fontSize = 12.sp)
-                    Text(command, color = Color(0xFFF4F4F5), fontFamily = MonoFontFamily, fontSize = 12.sp)
+                    Text("$ ", color = Color(0xFF4ADE80).copy(alpha = 0.9f), fontFamily = MonoFontFamily, fontSize = 12.sp, lineHeight = 18.sp)
+                    ToolCodeEditor(
+                        text = command,
+                        language = bash,
+                        label = "Command",
+                        theme = terminal,
+                        toggleColor = Color(0xFF71717A),
+                        maxLines = TERMINAL_COMMAND_LINES,
+                        tag = "tool_terminal_command",
+                        modifier = Modifier.weight(1f),
+                    )
                 }
             }
             if (!output.isNullOrBlank()) {
-                Text(
-                    text = output + if (truncated) " …" else "",
-                    color = if (status == ToolStatus.ERROR) Color(0xFFFCA5A5) else Color(0xFFD4D4D8),
-                    fontFamily = MonoFontFamily,
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp,
+                ToolCodeEditor(
+                    text = output,
+                    language = null,
+                    label = "Output",
+                    theme = if (status == ToolStatus.ERROR) terminal.copy(foreground = Color(0xFFFCA5A5)) else terminal,
+                    toggleColor = Color(0xFF71717A),
+                    tag = "tool_terminal_output",
                 )
+                if (truncated) Text("… truncated", color = Color(0xFF71717A), fontSize = 11.sp)
             } else if (status == ToolStatus.RUNNING && command.isNullOrBlank()) {
                 Text("Running…", color = Color(0xFF71717A), fontSize = 11.sp)
             }
         }
     }
 }
+
+/** A Bash command shows this many lines before "Show all" (a heredoc can be long). */
+private const val TERMINAL_COMMAND_LINES = 8
 
 @Composable
 private fun ToolDiffPane(
@@ -583,7 +602,6 @@ private fun ToolDiffPane(
     truncated: Boolean,
 ) {
     val cs = MaterialTheme.colorScheme
-    val rendered = diff ?: content?.lineSequence()?.joinToString("\n") { "+$it" }.orEmpty()
     val modeLabel = when (mode?.lowercase()) {
         "add", "added" -> "added"
         "delete", "deleted" -> "deleted"
@@ -600,24 +618,27 @@ private fun ToolDiffPane(
         ToolStatus.ERROR -> cs.error
         ToolStatus.DONE -> cs.primary.copy(alpha = 0.85f)
     }
+    val language = LocalPlatform.current.editorSyntax.languageFor(path)
+    // A written file is its content (no all-green "+" column); an edit is its diff as a document.
+    val diffDoc = remember(diff, content) { if (content == null) diff?.let(::toolDiffDoc) else null }
     Column(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(Radii.sm))
-            .background(Color(0xFF0C0C0E))
+            .background(cs.surfaceContainerLowest)
             .border(0.5.dp, cs.outline.copy(alpha = 0.35f), RoundedCornerShape(Radii.sm))
             .testTag("tool_diff"),
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .background(Color(0xFF16161A))
+                .background(cs.surfaceContainer)
                 .padding(horizontal = Space.sm + 2.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = path,
-                color = Color(0xFFF4F4F5),
+                color = cs.onSurface,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
@@ -627,7 +648,7 @@ private fun ToolDiffPane(
             if (!description.isNullOrBlank()) {
                 Text(
                     text = description,
-                    color = Color(0xFFA1A1AA),
+                    color = cs.onSurfaceVariant,
                     fontSize = 10.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -635,16 +656,31 @@ private fun ToolDiffPane(
                 )
             }
             Spacer(Modifier.width(Space.xs))
-            Text(modeLabel, color = Color(0xFF71717A), fontSize = 10.sp)
+            Text(modeLabel, color = cs.onSurfaceVariant.copy(alpha = 0.7f), fontSize = 10.sp)
             Spacer(Modifier.width(Space.xs))
             Text(statusLabel, color = statusColor, fontSize = 10.sp)
         }
-        if (rendered.isNotBlank()) {
-            InlineDiff(rendered + if (truncated) "\n… truncated" else "")
+        val text = content ?: diffDoc?.text
+        if (!text.isNullOrBlank()) {
+            Column(Modifier.padding(vertical = Space.xs)) {
+                ToolCodeEditor(
+                    text = text,
+                    language = language,
+                    label = path.substringAfterLast('/'),
+                    theme = rememberAppEditorTheme(),
+                    toggleColor = cs.primary,
+                    lineKinds = diffDoc?.kinds,
+                    tag = "tool_diff_editor",
+                    modifier = Modifier.padding(end = Space.sm),
+                )
+                if (truncated) {
+                    Text("… truncated", color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(horizontal = Space.sm))
+                }
+            }
         } else {
             Text(
                 text = if (status == ToolStatus.RUNNING) "Preparing edit…" else "No diff content",
-                color = Color(0xFF71717A),
+                color = cs.onSurfaceVariant,
                 fontSize = 11.sp,
                 modifier = Modifier.padding(Space.sm),
             )
@@ -1017,7 +1053,26 @@ internal class LightboxTransform {
     /** The viewport in px, from the backdrop's own layout — the clamp needs it. */
     var viewport by mutableStateOf(androidx.compose.ui.geometry.Size.Zero)
 
+    /**
+     * The content's unscaled size in px when it is smaller than [viewport] and centred in it (an
+     * inline diagram narrower than the chat column), so a zoom can spill into the spare room while
+     * the pan still stops at the content's edges. Null means the content fills the viewport.
+     */
+    var content by mutableStateOf<androidx.compose.ui.geometry.Size?>(null)
+
     fun zoomBy(factor: Float) = scaleTo(scale * factor)
+
+    /**
+     * Zoom keeping the content under [focus] (viewport px, from its top-left) where it is — a pinch
+     * centroid or the cursor — rather than about the centre, so what you aim at stays put.
+     */
+    fun zoomBy(factor: Float, focus: Offset) {
+        val next = (scale * factor).coerceIn(MIN, MAX)
+        val ratio = next / scale
+        val fromCentre = focus - Offset(viewport.width / 2f, viewport.height / 2f)
+        scale = next
+        offset = clamp(fromCentre - (fromCentre - offset) * ratio)
+    }
 
     fun scaleTo(value: Float) {
         scale = value.coerceIn(MIN, MAX)
@@ -1033,10 +1088,17 @@ internal class LightboxTransform {
         scaleTo(if (scale > MIN) MIN else DOUBLE_TAP)
     }
 
+    /** As [toggleZoom], but zooming in on the tapped point. */
+    fun toggleZoom(focus: Offset) {
+        if (scale > MIN) scaleTo(MIN) else zoomBy(DOUBLE_TAP / scale, focus)
+    }
+
     private fun clamp(candidate: Offset): Offset {
-        val maxX = (viewport.width * (scale - 1f) / 2f).coerceAtLeast(0f)
-        val maxY = (viewport.height * (scale - 1f) / 2f).coerceAtLeast(0f)
-        return Offset(candidate.x.coerceIn(-maxX, maxX), candidate.y.coerceIn(-maxY, maxY))
+        val c = content ?: viewport
+        val maxX = ((c.width * scale - viewport.width) / 2f).coerceAtLeast(0f)
+        val maxY = ((c.height * scale - viewport.height) / 2f).coerceAtLeast(0f)
+        // `+ 0f` turns a clamped -0.0 into 0.0: Offset compares packed bits, so -0.0 != Offset.Zero.
+        return Offset(candidate.x.coerceIn(-maxX, maxX) + 0f, candidate.y.coerceIn(-maxY, maxY) + 0f)
     }
 
     companion object {

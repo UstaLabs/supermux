@@ -41,4 +41,19 @@ class WorkdirPathTest {
 
     @Test fun workdir_root_itself() =
         assertEquals("", toWorkdirRelativePath(workdir, workdir, home))
+
+    @Test fun editor_path_is_relative_inside_the_workdir() {
+        assertEquals("src/main.ts", toEditorPath("src/main.ts", workdir, home))
+        assertEquals("src/main.ts", toEditorPath("$workdir/src/main.ts:12", workdir, home))
+        assertEquals("a.ts", toEditorPath("src/../a.ts", workdir, home))
+        assertNull(toEditorPath(workdir, workdir, home))
+    }
+
+    @Test fun editor_path_is_absolute_outside_the_workdir() {
+        assertEquals("/etc/passwd", toEditorPath("/etc/passwd", workdir, home))
+        assertEquals("/home/user/.bashrc", toEditorPath("~/.bashrc:3", workdir, home))
+        assertEquals("/home/user/projects/other/x.kt", toEditorPath("../other/x.kt", workdir, home))
+        assertEquals("/tmp/b", toEditorPath("/tmp/a/../b", workdir, home))
+        assertEquals(true, isAbsoluteEditorPath(toEditorPath("/etc/hosts", workdir, home)!!))
+    }
 }

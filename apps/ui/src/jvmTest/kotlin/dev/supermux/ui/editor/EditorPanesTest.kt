@@ -93,11 +93,10 @@ class EditorPanesTest {
     }
 
     @Test
-    fun the_explorer_opens_workdir_relative_and_reports_files_outside_it() = runComposeUiTest {
+    fun the_explorer_opens_workdir_relative_and_files_outside_it_by_absolute_path() = runComposeUiTest {
         val fs = fakeFs()
         val view = TreeViewState("/w")
         val opened = mutableListOf<String>()
-        val outside = mutableListOf<String>()
         setContent(
             host {
                 ExplorerPane(
@@ -105,7 +104,6 @@ class EditorPanesTest {
                     view = view,
                     workdir = "/w",
                     onOpenFile = { opened += it },
-                    onOutsideWorkdir = { outside += it },
                 )
             },
         )
@@ -124,8 +122,7 @@ class EditorPanesTest {
         onNodeWithTag("tree_workspace_chip").assertIsDisplayed()
         onNodeWithTag("tree_row:etc.txt").performClick()
         waitForIdle()
-        assertEquals(listOf("/etc.txt"), outside)
-        assertEquals(listOf("a.kt"), opened)
+        assertEquals(listOf("a.kt", "/etc.txt"), opened)
 
         onNodeWithTag("tree_workspace_chip").performClick()
         waitForIdle()

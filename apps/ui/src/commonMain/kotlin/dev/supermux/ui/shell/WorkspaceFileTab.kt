@@ -57,6 +57,8 @@ fun WorkspaceFileTab(
     onTogglePreview: () -> Unit,
     onClose: (String) -> Unit,
     onMoveToNewWindow: () -> Unit = {},
+    /** More right-click rows after "Move to New Window" (the strip's bulk closes). */
+    extraMenu: () -> List<RowContextMenuEntry> = { emptyList() },
 ) {
     val cs = MaterialTheme.colorScheme
     val bg = if (state.selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent
@@ -66,7 +68,7 @@ fun WorkspaceFileTab(
     // a host with no `ContextMenuArea`. Inert under touch — the file tab's save / preview / close
     // are all visible affordances, and tear-out needs a second OS window anyway.
     RowContextMenu(
-        items = { listOf(RowContextMenuEntry("Move to New Window", onMoveToNewWindow)) },
+        items = { listOf(RowContextMenuEntry("Move to New Window", onMoveToNewWindow)) + extraMenu() },
     ) {
     Row(
         Modifier

@@ -69,7 +69,6 @@ import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.isTertiaryButtonPress
 import dev.supermux.ui.platform.LocalPlatform
-import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -199,7 +198,6 @@ fun TerminalTabs(
     surfaceFor: @Composable (tabId: String, connect: () -> TerminalClient) -> TerminalSurface =
         { _, c -> LocalPlatform.current.terminalView().rememberTerminalSurface(c) },
 ) {
-    val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
     val touch = LocalInputMode.current == InputMode.Touch
     val scope = rememberCoroutineScope()
@@ -352,7 +350,7 @@ fun TerminalTabs(
         }
     }
 
-    Column(modifier.fillMaxSize().background(Color(c.terminal))) {
+    Column(modifier.fillMaxSize().background(terminalPalette().background)) {
         // ── Tab strip ──
         Row(
             Modifier

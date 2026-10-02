@@ -133,6 +133,7 @@ fun MermaidDiagram(
     onNodeInteraction: ((SceneNodeInteraction) -> Unit)? = null,
     respectSourceViewportSizing: Boolean = true,
     onRenderResult: ((GMResult<MermaidScene, MermaidError>) -> Unit)? = null,
+    pinchToZoom: Boolean = true,
 ) {
     MermaidDiagram(
         source = source,
@@ -147,6 +148,7 @@ fun MermaidDiagram(
         respectSourceViewportSizing = respectSourceViewportSizing,
         onRenderResult = onRenderResult,
         onError = null,
+        pinchToZoom = pinchToZoom,
     )
 }
 
@@ -164,6 +166,9 @@ fun MermaidDiagram(
     respectSourceViewportSizing: Boolean = true,
     onError: ((MermaidRenderErrorInfo) -> Unit)?,
     onRenderResult: ((GMResult<MermaidScene, MermaidError>) -> Unit)? = null,
+    // false when the host zooms the diagram itself (supermux's chat does, via a graphicsLayer): the
+    // canvas's own two-finger zoom would otherwise swallow the pinch before the host sees it.
+    pinchToZoom: Boolean = true,
 ) {
     val platformAssetProvider = rememberPlatformMermaidAssetProvider()
     val effectiveAssetProvider = remember(assetProvider, platformAssetProvider) {
@@ -212,6 +217,7 @@ fun MermaidDiagram(
             },
             onNodeInteraction = onNodeInteraction,
             respectSourceViewportSizing = respectSourceViewportSizing,
+            pinchToZoom = pinchToZoom,
             onRenderException = { error ->
                 reportMermaidRenderError(error, source, currentErrorHandler)
             },
@@ -367,6 +373,7 @@ private fun MermaidSceneCanvasInternal(
     onAssetResolved: ((SceneAsset, MermaidResolvedAsset) -> Unit)?,
     onNodeInteraction: ((SceneNodeInteraction) -> Unit)?,
     respectSourceViewportSizing: Boolean,
+    pinchToZoom: Boolean = true,
     onRenderException: ((MermaidError.Unexpected) -> Unit)? = null,
 ) {
     val textMeasurer = rememberTextMeasurer(cacheSize = 256)
@@ -458,7 +465,7 @@ private fun MermaidSceneCanvasInternal(
         })
             .clipToBounds()
             .semantics { this.contentDescription = contentDescription }
-            .pointerInput(scene, touchSlop) {
+            .pointerInput(scene, touchSlop, pinchToZoom) {
                 awaitEachGesture {
                     var tapStart: Offset? = null
                     var tapPosition: Offset? = null
@@ -480,6 +487,8 @@ private fun MermaidSceneCanvasInternal(
                         if (pressed.size >= 2) {
                             multiTouch = true
                             tapStart = null
+                        }
+                        if (pressed.size >= 2 && pinchToZoom) {
                             val viewportPadding = scene.viewportPadding.coerceAtLeast(0f)
                             val paddedSceneWidth = scene.width + viewportPadding * 2f
                             val paddedSceneHeight = scene.height + viewportPadding * 2f

@@ -117,7 +117,7 @@ import dev.supermux.ui.editor.EditorPanelState
 import dev.supermux.ui.editor.PendingEditorOpen
 import dev.supermux.session.inferHomeDir
 import dev.supermux.ui.FilePathRef
-import dev.supermux.ui.toWorkdirRelativePath
+import dev.supermux.ui.toEditorPath
 import dev.supermux.ui.terminal.TerminalTabs
 import dev.supermux.ui.session.SessionAvatar
 import dev.supermux.ui.theme.HapticKind
@@ -187,6 +187,8 @@ fun ChatScreen(
     // Editor diff + inline code-review (bound to session.id in SessionKeepAlive).
     fsDiff: suspend (String) -> dev.supermux.net.FsDiffResult? = { null },
     fsRefs: suspend () -> dev.supermux.net.FsRefsResult? = { null },
+    /** A lazy Changes file's base text by blob (repo, sha, force). */
+    changesBlob: (suspend (repo: String, sha: String, force: Boolean) -> dev.supermux.net.BlobText)? = null,
     reviewAddComment: suspend (dev.supermux.net.AddCommentBody) -> dev.supermux.net.ReviewComment? = { null },
     reviewResolve: suspend (String) -> Boolean = { false },
     reviewSubmit: suspend () -> dev.supermux.net.ReviewSubmitResult? = { null },
@@ -240,12 +242,13 @@ fun ChatScreen(
     val tapScope = rememberCoroutineScope()
     val onOpenFile: (FilePathRef) -> Unit = remember(session.id, fileSystem) {
         { ref ->
-            val rel = toWorkdirRelativePath(ref.path, session.workdir, inferHomeDir(session.workdir))
+            // Workdir-relative inside the project, absolute outside it (the host reads either).
+            val rel = toEditorPath(ref.path, session.workdir, inferHomeDir(session.workdir))
             if (rel == null) {
-                Toast.makeText(context, "File is outside this session's project", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "That's the project folder itself", Toast.LENGTH_SHORT).show()
             } else {
                 tapScope.launch {
-                    val abs = dev.supermux.ui.files.absoluteInWorkdir(session.workdir, rel)
+                    val abs = dev.supermux.ui.files.editorAbsolutePath(session.workdir, rel)
                     if (dev.supermux.ui.files.tappedFileMissing(fileSystem, abs)) {
                         Toast.makeText(context, dev.supermux.ui.files.fileNotFoundNotice(ref.path), Toast.LENGTH_SHORT).show()
                     } else {
@@ -705,6 +708,7 @@ fun ChatScreen(
                         fsSearch = fsSearch,
                         fsDiff = fsDiff,
                         fsRefs = fsRefs,
+                        changesBlob = changesBlob,
                         reviewAddComment = reviewAddComment,
                         reviewResolve = reviewResolve,
                         reviewSubmit = reviewSubmit,

@@ -17,14 +17,16 @@ import dev.supermux.ui.editor.WatchedDocuments
  * editor's EditorState) from folder subscriptions: one subscription per
  * distinct parent folder of an open document (shared by every document in it, released when the
  * last one there closes), compared by a [FileChangeTracker]. Our own saves are bracketed through
- * [WatchedDocuments.observeWrites] so they never raise the banner. Draws nothing.
+ * [WatchedDocuments.observeWrites] so they never raise the banner. A changed file with no unsaved
+ * edits reloads in place ([WatchedDocuments.changedOnDisk]); only a dirty one shows the banner.
+ * Draws nothing.
  */
 @Composable
 fun FileStaleWatcher(fileSystem: FileSystemService?, workdir: String, documents: WatchedDocuments) {
     if (fileSystem == null) return
     val tracker = remember(fileSystem, workdir, documents) { FileChangeTracker() }
-    // abs → the workdir-relative path the document store knows it by.
-    val relByAbs = documents.openPaths.associateBy { absoluteInWorkdir(workdir, it) }
+    // abs → the key the document store knows it by (workdir-relative, or absolute outside the workdir).
+    val relByAbs = documents.openPaths.associateBy { editorAbsolutePath(workdir, it) }
     val currentRelByAbs = rememberUpdatedState(relByAbs)
     // Runs after composition and before the collectors below start, so a folder's first snapshot
     // always finds its files tracked.
@@ -34,8 +36,8 @@ fun FileStaleWatcher(fileSystem: FileSystemService?, workdir: String, documents:
     }
     DisposableEffect(tracker) {
         val stop = documents.observeWrites(object : WatchedDocuments.WriteObserver {
-            override fun writeStarted(path: String) = tracker.beginWrite(absoluteInWorkdir(workdir, path))
-            override fun writeFinished(path: String, ok: Boolean) = tracker.endWrite(absoluteInWorkdir(workdir, path))
+            override fun writeStarted(path: String) = tracker.beginWrite(editorAbsolutePath(workdir, path))
+            override fun writeFinished(path: String, ok: Boolean) = tracker.endWrite(editorAbsolutePath(workdir, path))
         })
         onDispose { stop() }
     }
@@ -57,7 +59,7 @@ fun FileStaleWatcher(fileSystem: FileSystemService?, workdir: String, documents:
                     } ?: return@collect
                     val changed = tracker.onSnapshot(dir, snap)
                     val rels = changed.mapNotNull { currentRelByAbs.value[it] }
-                    if (rels.isNotEmpty()) documents.markChanged(rels)
+                    if (rels.isNotEmpty()) documents.changedOnDisk(rels)
                 }
             }
         }

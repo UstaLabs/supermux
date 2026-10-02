@@ -43,6 +43,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -50,6 +51,7 @@ import androidx.compose.ui.zIndex
 import dev.supermux.ui.panes.ColResizeIcon
 import dev.supermux.ui.panes.SplitSeamCenterOffset
 import dev.supermux.ui.panes.SplitSeamHairline
+import dev.supermux.ui.panes.seamDrag
 import dev.supermux.ui.panes.SplitSeamHitWidth
 
 /**
@@ -59,8 +61,10 @@ import dev.supermux.ui.panes.SplitSeamHitWidth
  * shell [androidx.compose.foundation.layout.Row], offset so its center sits on `sidebarWidth`
  * (subtract [SidebarDividerCenterOffset]).
  *
- * Drag reports a width delta in dp via [onDragDelta]. [onStartDrag]/[onEndDrag] bracket a drag
- * so the caller can suppress springy width animation while resizing.
+ * Drag reports the pointer's TOTAL travel since the press, in dp, via [onDrag] — the caller
+ * sets `widthAtStart + travel` (clamped), so an overshoot past a limit is not lost (see
+ * [dev.supermux.ui.panes.seamDrag]). [onStartDrag]/[onEndDrag] bracket a drag so the caller
+ * can record the start width and suppress springy width animation while resizing.
  *
  * Hovering or dragging the strip highlights the hairline in `primary` so the seam reads as active.
  * Sidebar collapse/expand is not here — title-bar toggle + collapsed rail chevron. A layout that
@@ -68,11 +72,12 @@ import dev.supermux.ui.panes.SplitSeamHitWidth
  */
 @Composable
 fun SidebarDivider(
-    onDragDelta: (Dp) -> Unit,
+    onDrag: (travel: Dp) -> Unit,
     onStartDrag: () -> Unit = {},
     onEndDrag: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val density = LocalDensity.current
     val cs = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -112,22 +117,18 @@ fun SidebarDivider(
                 .matchParentSize()
                 .hoverable(interaction)
                 .pointerHoverIcon(ColResizeIcon)
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = {
-                            dragging = true
-                            onStartDrag()
-                        },
-                        onDragEnd = {
-                            dragging = false
-                            onEndDrag()
-                        },
-                        onDragCancel = {
-                            dragging = false
-                            onEndDrag()
-                        },
-                    ) { _, drag -> onDragDelta(drag.x.toDp()) }
-                }
+                .seamDrag(
+                    horizontal = true,
+                    onStart = {
+                        dragging = true
+                        onStartDrag()
+                    },
+                    onMove = { px -> onDrag(with(density) { px.toDp() }) },
+                    onEnd = {
+                        dragging = false
+                        onEndDrag()
+                    },
+                )
                 .testTag("sidebar_divider"),
         )
     }

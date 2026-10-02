@@ -35,6 +35,8 @@ object SettingsKeys {
     const val EDITOR_FONT_SIZE = "editor:fontSize"
     /** Terminal font size in sp, clamped 8..32. Default 13. Cmd/Ctrl +/−/0 and a pinch change it. */
     const val TERMINAL_FONT_SIZE = "terminal:fontSize"
+    /** `TerminalAppearance.name` ("FOLLOW_APP"/"DARK"/"LIGHT"). Unset = FOLLOW_APP. */
+    const val TERMINAL_APPEARANCE = "terminal:appearance"
     /** "true"/"false" — desktop Changes pane: nested tree (true) vs flat list. Default true. */
     const val EDITOR_DIFF_TREE_VIEW = "editor:diffTreeView"
     /** "true"/"false" — the Changes pane's per-file diff side by side (true) vs inline. Default false (M5). */

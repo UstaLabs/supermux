@@ -60,6 +60,7 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.prefs.TEXT_SCALE_DEFAULT
+import dev.supermux.ui.terminal.TerminalAppearance
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.TEXT_SCALE_MAX
 import dev.supermux.ui.theme.TEXT_SCALE_MIN
@@ -68,7 +69,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
- * Theme mode, Material You and app text size.
+ * Theme mode, the terminal's own light/dark choice, Material You and app text size.
  *
  * @param defaultAppearance what "never chosen" means on THIS host — the same fallback its root
  *   theme applies (Android follows the system, desktop opens dark). Only used until the user picks
@@ -131,6 +132,7 @@ private fun AppearanceSettingsBody(
     val scope = rememberCoroutineScope()
     val appearance by prefs.appearance(defaultAppearance).collectAsState(defaultAppearance)
     val dynamicColor by prefs.dynamicColor.collectAsState(false)
+    val terminalAppearance by prefs.terminalAppearance.collectAsState(TerminalAppearance.FOLLOW_APP)
     val storedTextScale by prefs.textScale.collectAsState(TEXT_SCALE_DEFAULT)
     // The slider is DRAGGED, so it cannot be driven by the persisted value: writing on every frame
     // of the gesture is a disk write per frame, and the thumb would lag behind the finger by a
@@ -171,6 +173,33 @@ private fun AppearanceSettingsBody(
                                     AppearanceMode.SYSTEM -> "System"
                                     AppearanceMode.LIGHT -> "Light"
                                     AppearanceMode.DARK -> "Dark"
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Terminal", style = MaterialTheme.typography.titleMedium, color = cs.onBackground)
+                Text(
+                    "Programs that choose their own colours (vim themes, htop) keep them either way.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = cs.onSurfaceVariant,
+                )
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    val modes = TerminalAppearance.entries
+                    modes.forEachIndexed { i, mode ->
+                        SegmentedButton(
+                            selected = terminalAppearance == mode,
+                            onClick = { scope.launch { prefs.putTerminalAppearance(mode) } },
+                            shape = SegmentedButtonDefaults.itemShape(i, modes.size),
+                            modifier = Modifier.testTag("terminal_appearance_${mode.name.lowercase()}"),
+                        ) {
+                            Text(
+                                when (mode) {
+                                    TerminalAppearance.FOLLOW_APP -> "Match app"
+                                    TerminalAppearance.DARK -> "Dark"
+                                    TerminalAppearance.LIGHT -> "Light"
                                 },
                             )
                         }

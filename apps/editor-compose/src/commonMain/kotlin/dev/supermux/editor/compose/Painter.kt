@@ -79,10 +79,17 @@ internal class SurfaceFrame(
 internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme, measureWidget: WidgetMeasurer?): SurfaceFrame {
     val g = geometry
     val doc = state.doc
-    // The IME's composing text: underlined, on top of the state's own decorations.
+    // The IME's composing text and the Mod-hovered word: underlined, on top of the state's own decorations.
+    val extra = ArrayList<Ranged<Decoration>>(2)
     val composing = composition
-    g.extraMarks = if (composing == null || composing.isEmpty() || composing.last >= doc.length) null
-    else RangeSet.of(listOf(Ranged(composing.first, composing.last + 1, Decoration.Mark(setOf(EditorTheme.COMPOSITION_CLASS)))))
+    if (composing != null && !composing.isEmpty() && composing.last < doc.length) {
+        extra += Ranged(composing.first, composing.last + 1, Decoration.Mark(setOf(EditorTheme.COMPOSITION_CLASS)))
+    }
+    val link = modLink
+    if (link != null && !link.isEmpty() && link.last < doc.length) {
+        extra += Ranged(link.first, link.last + 1, Decoration.Mark(setOf(EditorTheme.MOD_LINK_CLASS)))
+    }
+    g.extraMarks = if (extra.isEmpty()) null else RangeSet.of(extra)
     val size = viewportSize
     val height = size.height
     val overscan = EditorDefaults.OVERSCAN_LINES

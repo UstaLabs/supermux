@@ -43,6 +43,7 @@ import dev.supermux.net.FinishReadiness
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.ForgeSearchResponse
+import dev.supermux.net.BlobText
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
@@ -1234,6 +1235,9 @@ class FleetStore(
         withSession(sessionId) { app, s -> app.fsSearch(s, q) }.orEmpty()
     suspend fun fsDiff(sessionId: String, base: String? = null): FsDiffResult? =
         withSession(sessionId) { app, s -> app.fsDiff(s, base) }
+
+    suspend fun changesBlob(sessionId: String, repo: String, sha: String, force: Boolean): BlobText =
+        withSession(sessionId) { app, s -> app.changesBlob(s, repo, sha, force) } ?: BlobText.Failed("Host offline")
     suspend fun fsRefs(sessionId: String): FsRefsResult? = withSession(sessionId) { app, s -> app.fsRefs(s) }
     suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment? =
         withSession(sessionId) { app, s -> app.reviewAddComment(s, body) }
@@ -1331,6 +1335,9 @@ class FleetStore(
         appForWorkspace(workspaceId)?.workspaceFsWrite(workspaceId, path, content) == true
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =
         appForWorkspace(workspaceId)?.workspaceFsDiff(workspaceId, base)
+
+    suspend fun workspaceChangesBlob(workspaceId: String, repo: String, sha: String, force: Boolean): BlobText =
+        appForWorkspace(workspaceId)?.workspaceChangesBlob(workspaceId, repo, sha, force) ?: BlobText.Failed("Host offline")
     suspend fun workspaceFsRefs(workspaceId: String): FsRefsResult? =
         appForWorkspace(workspaceId)?.workspaceFsRefs(workspaceId)
 

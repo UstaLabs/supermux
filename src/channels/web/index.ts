@@ -14,6 +14,7 @@ import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
+import { listChanges, readBaseBlob, discoverReposCached } from "../../core/editor/changes"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
 import { LspConnection } from "../../core/lsp/bridge"
@@ -1682,6 +1683,32 @@ export class WebChannel implements Channel {
     }
   }
 
+  /** GET …/changes/blob for a resolved workdir (spec §2.2). */
+  private async changesBlob(workdir: string, url: URL, req: Request): Promise<Response> {
+    const repo = url.searchParams.get("repo") ?? ""
+    const sha = url.searchParams.get("sha") ?? ""
+    if (!/^[0-9a-f]{40}$/.test(sha)) return this.json({ error: "BAD_SHA" }, 400)
+    const etag = `"${sha}"`
+    const cacheHeaders = { etag, "cache-control": "private, max-age=31536000, immutable" }
+    if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers: cacheHeaders })
+    let found = (await discoverReposCached(workdir)).find((r) => r.relPath === repo)
+    if (!found) found = (await discoverReposCached(workdir, { fresh: true })).find((r) => r.relPath === repo)
+    if (!found) return this.json({ error: "repo not found" }, 404)
+    const r = await readBaseBlob(found.absPath, sha, { force: url.searchParams.get("force") === "1" })
+    if (r.ok) {
+      return new Response(r.text, {
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          ...cacheHeaders,
+        },
+      })
+    }
+    if (r.code === "TOO_LARGE") return this.json({ error: "TOO_LARGE", size: r.size }, 413)
+    if (r.code === "BINARY") return this.json({ error: "BINARY" }, 415)
+    if (r.code === "BAD_SHA") return this.json({ error: "BAD_SHA" }, 400)
+    return this.json({ error: "MISSING" }, 404)
+  }
+
   private json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
   }
@@ -2652,6 +2679,7 @@ export class WebChannel implements Channel {
         return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
       }
     }
+    // Deprecated: shipped clients only. Current clients use /changes + /changes/blob.
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/fs\/diff$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
@@ -2660,19 +2688,40 @@ export class WebChannel implements Channel {
       const createdAt = this.opts.getSessionCreatedAt?.(id)
       const baseSpec = url.searchParams.get("base") ?? undefined
       const repos = await computeWorkdirDiff(workdir, baseCommits, createdAt, baseSpec)
-      const comments = (this.opts.reviewList?.(id) ?? []).map((c) => {
+      const comments = await Promise.all((this.opts.reviewList?.(id) ?? []).map(async (c) => {
         const sess = this.opts.reviewSession?.(id)
         const repoAbs = c.repo ? join(sess?.workdir ?? workdir, c.repo) : (sess?.workdir ?? workdir)
-        const { currentLine, outdated } = reanchor(repoAbs, c)
+        const { currentLine, outdated } = await reanchor(repoAbs, c)
         return { ...c, currentLine, outdated }
-      })
+      }))
       return this.json({ repos, comments })
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/fs\/refs$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json({ repos: listRepoRefs(workdir) })
+      return this.json({ repos: await listRepoRefs(workdir) })
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/changes$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      const baseCommits = this.opts.getSessionBaseCommits?.(id) ?? {}
+      const createdAt = this.opts.getSessionCreatedAt?.(id)
+      const { repos } = await listChanges(workdir, baseCommits, createdAt, url.searchParams.get("base") ?? undefined)
+      const comments = await Promise.all((this.opts.reviewList?.(id) ?? []).map(async (c) => {
+        const sess = this.opts.reviewSession?.(id)
+        const repoAbs = c.repo ? join(sess?.workdir ?? workdir, c.repo) : (sess?.workdir ?? workdir)
+        const { currentLine, outdated } = await reanchor(repoAbs, c)
+        return { ...c, currentLine, outdated }
+      }))
+      return this.json({ repos, comments })
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/changes\/blob$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      return this.changesBlob(workdir, url, req)
     }
 
     // ── Editor filesystem routes, workspace-scoped ──────────────────────────
@@ -2738,6 +2787,7 @@ export class WebChannel implements Channel {
         return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
       }
     }
+    // Deprecated: shipped clients only. Current clients use /changes + /changes/blob.
     if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/diff$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
@@ -2758,7 +2808,21 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      return this.json({ repos: listRepoRefs(workdir) })
+      return this.json({ repos: await listRepoRefs(workdir) })
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/changes$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      const base = this.opts.getWorkspaceDiffBase?.(id)
+      const { repos } = await listChanges(workdir, base?.baseCommits ?? {}, base?.createdAt, url.searchParams.get("base") ?? undefined)
+      return this.json({ repos, comments: [] })
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/changes\/blob$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      return this.changesBlob(workdir, url, req)
     }
 
     // ── Host file system (spec 2026-09-27 §4.4) ─────────────────────────────
@@ -2769,13 +2833,28 @@ export class WebChannel implements Channel {
     // proxied port — subdomain host or /p/<slug>/ — are routed to the proxy before
     // `routeRequest`, so a public proxy link can never reach here. fs-routes.test.ts
     // pins both.
-    if (path === "/fs/list" || path === "/fs/stat" || path === "/fs/read" || path === "/fs/write" || path === "/fs/search" || path === "/fs/ops") {
+    if (path === "/fs/list" || path === "/fs/stat" || path === "/fs/read" || path === "/fs/raw" || path === "/fs/write" || path === "/fs/search" || path === "/fs/ops") {
       const p = url.searchParams.get("path") ?? ""
       try {
         if (method === "GET" && path === "/fs/list") return this.json(await this.fss.list(p))
         if (method === "GET" && path === "/fs/stat") return this.json(await this.fss.stat(p))
         if (method === "GET" && path === "/fs/read") {
           return new Response(await this.fss.read(p), { headers: { "content-type": "text/plain; charset=utf-8" } })
+        }
+        if (method === "GET" && path === "/fs/raw") {
+          const f = await this.fss.raw(p)
+          // Bytes for an in-app preview, never a page: `attachment` + a sandbox CSP + nosniff keep
+          // an HTML or SVG file from running script on this origin if it is ever navigated to.
+          return new Response(Bun.file(f.path), {
+            headers: {
+              "content-type": Bun.file(f.path).type || "application/octet-stream",
+              "content-length": String(f.size),
+              "content-disposition": "attachment",
+              "content-security-policy": "sandbox",
+              "x-content-type-options": "nosniff",
+              "cache-control": "private, no-store",
+            },
+          })
         }
         if (method === "PUT" && path === "/fs/write") {
           // The editor can't open files over 1 MB anyway; don't buffer a huge body twice.
@@ -3038,12 +3117,12 @@ export class WebChannel implements Channel {
       if (!wt) return this.json({ walkthrough: null })
       const sess = this.opts.reviewSession?.(id)
       const workdir = sess?.workdir
-      const steps = wt.steps.map((s) => {
+      const steps = await Promise.all(wt.steps.map(async (s) => {
         if (!s.path || !workdir || s.anchorLine == null) {
           return { ...s, currentLine: null as number | null, outdated: false }
         }
         const repoAbs = s.repo ? join(workdir, s.repo) : workdir
-        const { currentLine, outdated } = reanchor(repoAbs, {
+        const { currentLine, outdated } = await reanchor(repoAbs, {
           path: s.path,
           anchorLine: s.anchorLine,
           anchorContext: s.anchorContext ?? "",
@@ -3054,7 +3133,7 @@ export class WebChannel implements Channel {
           outdated,
           anchorStatus: outdated ? "outdated" : s.anchorStatus,
         }
-      })
+      }))
       return this.json({ walkthrough: toWalkthroughDto({ ...wt, steps }) })
     }
     if (method === "PATCH" && path.match(/^\/sessions\/[^/]+\/review\/comments\/[^/]+$/)) {
