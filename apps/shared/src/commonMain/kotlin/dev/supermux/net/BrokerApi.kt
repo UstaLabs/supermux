@@ -76,8 +76,9 @@ data class HostIdentity(
 
 /**
  * The broker's git requirement (spec "Git is required for hosting agents"). [install] says what
- * the one-click action does on that computer: "xcode-select" (macOS), "winget" (Windows), or
- * "manual" (no button; follow [hint]).
+ * the one-click action does on that computer: "xcode-select" (macOS), "winget" (Windows),
+ * "browser" (Windows without winget: the Git download page opens there), or "manual" (Linux: no
+ * button; follow [hint]).
  */
 @Serializable
 data class GitRequirement(
@@ -91,6 +92,7 @@ data class GitRequirement(
     companion object {
         const val INSTALL_XCODE_SELECT = "xcode-select"
         const val INSTALL_WINGET = "winget"
+        const val INSTALL_BROWSER = "browser"
         const val INSTALL_MANUAL = "manual"
     }
 }
@@ -104,12 +106,14 @@ data class HostRequirements(val git: GitRequirement = GitRequirement()) {
 
 /**
  * POST /system/install-git: `{ok:true}` when the installer started on that computer (or git is
- * already there), 400 `{error:"manual", hint}` where there is no one-click install.
+ * already there), `{ok:true, inProgress:true}` while one is already up (the broker debounces),
+ * 400 `{error:"manual", hint}` where there is no one-click install.
  */
 @Serializable
 data class InstallGitResult(
     val ok: Boolean = false,
     val alreadyInstalled: Boolean = false,
+    val inProgress: Boolean = false,
     val error: String? = null,
     val hint: String? = null,
 )
