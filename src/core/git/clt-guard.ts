@@ -3,11 +3,11 @@
 // lite-status, forge, editor diff, plugins…) and every agent session run git by name, so on such a
 // Mac the user gets that dialog over and over.
 //
-// The fix is central and happens once at startup, before anything spawns: put a tiny `git` that
-// just fails (with a one-line reason) ahead of the stub on PATH. Every child — agent sessions,
+// The fix is central and happens once at startup, before anything spawns (driven by
+// `requirement.ts`'s GitRequirementMonitor): put a tiny `git` that just fails (with a one-line
+// reason) ahead of the stub on PATH. Every child — agent sessions,
 // tmux, helpers — inherits it. A real git earlier on PATH (Homebrew, a CLT install) is left alone.
 import { accessSync, chmodSync, constants, mkdirSync, writeFileSync } from "fs"
-import { spawnSync } from "child_process"
 import { delimiter, join } from "path"
 
 export const APPLE_GIT_STUB = "/usr/bin/git"
@@ -52,15 +52,6 @@ export function whichOnPath(bin: string, path: string): string | null {
   return null
 }
 
-function xcodeSelectExit(): number {
-  try {
-    const r = spawnSync("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 })
-    return r.status ?? 1
-  } catch {
-    return 1
-  }
-}
-
 /**
  * Pure apart from [deps]: on darwin, when the first `git` on PATH is Apple's stub and the developer
  * tools are missing, write the failing shim and prepend its dir to `deps.env.PATH`.
@@ -84,22 +75,4 @@ export function applyCltGuard(deps: CltGuardDeps): CltGuardResult {
     reason: "the Xcode Command Line Tools are not installed (/usr/bin/git is Apple's stub)",
     shimDir: dir,
   }
-}
-
-/** Set by [installCltGuard]; read by `GET /host`. */
-export let gitUnavailable = false
-export let gitUnavailableReason: string | undefined
-
-/** The real thing, for `src/main.ts`: process-wide, once. */
-export function installCltGuard(stateDir: string): CltGuardResult {
-  const r = applyCltGuard({
-    platform: process.platform,
-    which: whichOnPath,
-    runXcodeSelect: xcodeSelectExit,
-    stateDir,
-    env: process.env,
-  })
-  gitUnavailable = r.gitUnavailable
-  gitUnavailableReason = r.reason
-  return r
 }
