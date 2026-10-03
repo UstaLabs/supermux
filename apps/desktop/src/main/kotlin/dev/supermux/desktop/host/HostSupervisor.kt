@@ -92,12 +92,24 @@ class HostSupervisor(
     internal enum class Mode { CHILD, SERVICE, READ_ONLY, ORPHAN }
 
     private val _gitAvailable = MutableStateFlow<Boolean?>(null)
-    /** What the local broker's `/host` last said about git; false on a Mac without the Command Line Tools. */
+    /** What the local broker's `/host` last said about git (legacy boolean; see [gitRequirement]). */
     val gitAvailable: StateFlow<Boolean?> = _gitAvailable.asStateFlow()
 
-    /** Every probe of the saved port; a broker's answer also refreshes [gitAvailable]. */
+    private val _gitRequirement = MutableStateFlow<dev.supermux.net.GitRequirement?>(null)
+    /**
+     * The local broker's `requirements.git`, refreshed by every probe (the watchers poll), so the
+     * wizard and Settings ▸ Hosting follow the broker's own 10 s re-check. Null: no answer yet.
+     */
+    val gitRequirement: StateFlow<dev.supermux.net.GitRequirement?> = _gitRequirement.asStateFlow()
+
+    /** Every probe of the saved port; a broker's answer also refreshes [gitAvailable] / [gitRequirement]. */
     internal val probe: suspend (port: Int) -> HostProbeResult = { port ->
-        probe(port).also { r -> if (r is HostProbeResult.Supermux) _gitAvailable.value = r.gitAvailable }
+        probe(port).also { r ->
+            if (r is HostProbeResult.Supermux) {
+                _gitAvailable.value = r.gitAvailable
+                _gitRequirement.value = r.gitRequirement
+            }
+        }
     }
 
     private val _status = MutableStateFlow<HostingStatus>(HostingStatus.Starting)
@@ -272,6 +284,7 @@ class HostSupervisor(
             _hostId.value = null
             _build.value = null
             _gitAvailable.value = null
+            _gitRequirement.value = null
             _status.value = HostingStatus.NotHosting
         }
     }
@@ -732,7 +745,7 @@ class HostSupervisor(
                 val same = runCatching { Path.of(d).toRealPath() == ours.toRealPath() }.getOrDefault(d == ours.toString())
                 append(if (same) ", our state dir" else ", another state dir")
             }
-            if (gitAvailable == false) append(", no git")
+            if (gitRequirement?.ok == false) append(", no git")
         }
         HostProbeResult.Busy -> "busy (answers, not ready)"
         HostProbeResult.ForeignProcess -> "something else holds the port"

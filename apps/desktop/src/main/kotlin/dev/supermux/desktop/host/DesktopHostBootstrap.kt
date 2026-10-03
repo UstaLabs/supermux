@@ -212,6 +212,24 @@ object DesktopHostBootstrap {
     }.getOrNull()
 
     /** POST /pair/mint-claim (Bearer) → {claimSecret}. */
+    /**
+     * `POST /system/install-git` on the local broker with "This computer"'s [token]. The broker
+     * starts the OS installer itself; a manual host answers `error="manual"` + `hint`. Null when
+     * the broker is unreachable or the body is not one.
+     */
+    suspend fun installGit(localUrl: String, token: String): dev.supermux.net.InstallGitResult? = withContext(Dispatchers.IO) {
+        runCatching {
+            val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
+            val req = HttpRequest.newBuilder(URI.create("$localUrl/system/install-git"))
+                .timeout(Duration.ofSeconds(10))
+                .header("authorization", "Bearer $token")
+                .POST(HttpRequest.BodyPublishers.noBody()).build()
+            val resp = client.send(req, BodyHandlers.ofString())
+            val decoded = json.decodeFromString(dev.supermux.net.InstallGitResult.serializer(), resp.body())
+            if (resp.statusCode() in 200..299) decoded else decoded.copy(ok = false)
+        }.getOrNull()
+    }
+
     private fun mintClaimSecret(client: HttpClient, localUrl: String, token: String): String? = runCatching {
         val req = HttpRequest.newBuilder(URI.create("$localUrl/pair/mint-claim"))
             .timeout(Duration.ofSeconds(5))

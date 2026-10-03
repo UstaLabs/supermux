@@ -309,6 +309,8 @@ fun SupermuxApp(
     val hostViews by fleet.hostViews.collectAsState()
     val sessionHost by fleet.sessionHost.collectAsState()
     val activeHostId by fleet.activeHost.collectAsState()
+    // Hosts whose broker refuses agent sessions until git is installed (`host_requirements`).
+    val hostRequirements by fleet.hostRequirements.collectAsState()
     val lastBySession = remember(messages) { messages.mapValues { it.value.lastOrNull() } }
 
     // Shared across the sidebar and the layout host so a tab can drop onto a workspace row.
@@ -819,6 +821,9 @@ fun SupermuxApp(
                                 // home layer it IS the whole surface and paints both.
                                 standalone = standalone,
                                 topBarShown = !standalone,
+                                banner = gitBannerFor(hostRequirements, hostViews) { recordId ->
+                                    fleet.installGit(recordId)?.ok == true
+                                },
                                 footer = run {
                                     {
                                         SessionListFooter(
@@ -1809,3 +1814,29 @@ internal fun rememberHostWorkspaceSession(
     },
     newId = { randomViewId() },
 )
+
+/**
+ * The session list's "needs git" banners: one per host whose broker refuses agent sessions until
+ * git is installed, naming the host when more than one is paired. Null when every host is fine.
+ */
+internal fun gitBannerFor(
+    requirements: Map<String, dev.supermux.net.HostRequirements>,
+    hosts: List<dev.supermux.host.HostView>,
+    install: suspend (recordId: String) -> Boolean,
+): (@Composable () -> Unit)? {
+    val missing = requirements.filterValues { it.gitMissing }
+    if (missing.isEmpty()) return null
+    val names = hosts.associate { it.recordId to it.displayName }
+    val named = hosts.size > 1
+    return {
+        Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(dev.supermux.ui.theme.Space.xs)) {
+            for ((recordId, req) in missing) {
+                dev.supermux.ui.host.GitRequirementBanner(
+                    requirement = req.git,
+                    onInstall = { install(recordId) },
+                    hostName = if (named) names[recordId] else null,
+                )
+            }
+        }
+    }
+}

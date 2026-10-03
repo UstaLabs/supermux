@@ -83,6 +83,19 @@ class HostProbeTest {
         assertEquals(HostProbeResult.Supermux("h9", null, null, null, null, gitAvailable = false), r)
         assertEquals(null, (HostProber.parse("""{"hostId":"h9"}""") as HostProbeResult.Supermux).gitAvailable)
     }
+    @Test fun parseReadsTheRequirement() {
+        val r = HostProber.parse(
+            """{"hostId":"h9","protocolVersion":1,"gitAvailable":false,
+               "requirements":{"git":{"ok":false,"install":"winget","hint":"Install Git for Windows with winget"}}}""",
+        ) as HostProbeResult.Supermux
+        assertEquals(dev.supermux.net.GitRequirement(false, "winget", "Install Git for Windows with winget"), r.gitRequirement)
+    }
+    @Test fun anOlderBrokersGitAvailableFalseMapsToTheXcodeSelectInstall() {
+        val r = HostProber.parse("""{"hostId":"h9","protocolVersion":1,"gitAvailable":false}""") as HostProbeResult.Supermux
+        assertEquals(false, r.gitRequirement?.ok)
+        assertEquals("xcode-select", r.gitRequirement?.install)
+        assertEquals(null, (HostProber.parse("""{"hostId":"h9"}""") as HostProbeResult.Supermux).gitRequirement)
+    }
     @Test fun probeClosedPortIsFree() {
         val port = java.net.ServerSocket(0).use { it.localPort }
         assertEquals(HostProbeResult.PortFree, HostProber.probe(port))

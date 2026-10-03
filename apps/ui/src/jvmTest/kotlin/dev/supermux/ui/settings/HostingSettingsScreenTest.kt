@@ -12,6 +12,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.ui.chat.setPlatformContent
+import dev.supermux.net.GitRequirement
+import dev.supermux.ui.host.GitBannerCopy
+import dev.supermux.ui.host.GitBannerTags
 import dev.supermux.ui.platform.FakePlatform
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -29,7 +32,7 @@ class HostingSettingsScreenTest {
         override fun showLog() { calls += "log" }
         override fun pairDevice() { calls += "pair" }
         override fun manageIt() { calls += "manage" }
-        override fun installGit() { calls += "installGit" }
+        override suspend fun installGit(): Boolean { calls += "installGit"; return true }
     }
 
     private fun running(
@@ -37,7 +40,7 @@ class HostingSettingsScreenTest {
         logTail: List<String> = emptyList(),
         relayUrl: String? = "https://h-abc.relay.supermux.dev",
         backgroundError: String? = null,
-        gitMissing: Boolean = false,
+        gitRequirement: GitRequirement? = null,
     ) = HostingUiState(
         hosting = true,
         statusDot = "🟢",
@@ -52,7 +55,7 @@ class HostingSettingsScreenTest {
         failed = logTail.isNotEmpty(),
         restartEnabled = !readOnly,
         backgroundError = backgroundError,
-        gitMissing = gitMissing,
+        gitRequirement = gitRequirement,
     )
 
     private val off = HostingUiState(
@@ -174,18 +177,21 @@ class HostingSettingsScreenTest {
         onNodeWithText("end-to-end", substring = true, ignoreCase = true).assertDoesNotExist()
     }
 
-    @Test fun git_missing_shows_the_row_and_install_runs_the_action() = runComposeUiTest {
+    @Test fun git_missing_shows_the_broker_banner_and_install_runs_the_action() = runComposeUiTest {
         val r = Recorder()
-        setPlatformContent { HostingSettingsScreen(running(gitMissing = true), r) }
-        onNodeWithTag("hosting_git_missing").assertExists()
-        onNodeWithText(HostingCopy.GIT_MISSING).assertExists()
-        onNodeWithTag("hosting_install_git").assertTextEquals(HostingCopy.INSTALL_GIT).performClick()
+        val req = GitRequirement(ok = false, install = "xcode-select", hint = "Install Apple's Command Line Tools")
+        setPlatformContent { HostingSettingsScreen(running(gitRequirement = req), r) }
+        onNodeWithTag(GitBannerTags.BANNER).assertExists()
+        onNodeWithText(GitBannerCopy.TITLE).assertExists()
+        onNodeWithTag(GitBannerTags.HINT).assertTextEquals("Install Apple's Command Line Tools")
+        onNodeWithTag(GitBannerTags.INSTALL).assertTextEquals(GitBannerCopy.INSTALL).performClick()
+        waitForIdle()
         assertEquals(listOf("installGit"), r.calls)
     }
 
-    @Test fun git_present_shows_no_row() = runComposeUiTest {
-        setPlatformContent { HostingSettingsScreen(running(), Recorder()) }
-        onNodeWithTag("hosting_git_missing").assertDoesNotExist()
-        onNodeWithTag("hosting_install_git").assertDoesNotExist()
+    @Test fun git_present_shows_no_banner() = runComposeUiTest {
+        setPlatformContent { HostingSettingsScreen(running(gitRequirement = GitRequirement(ok = true)), Recorder()) }
+        onNodeWithTag(GitBannerTags.BANNER).assertDoesNotExist()
+        onNodeWithTag(GitBannerTags.INSTALL).assertDoesNotExist()
     }
 }

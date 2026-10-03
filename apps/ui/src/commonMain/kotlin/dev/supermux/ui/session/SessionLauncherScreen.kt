@@ -394,6 +394,8 @@ fun SessionLauncherScreen(
     // The host's cached model catalog: agents, models and reasoning come from it with no request.
     // Null (an older broker, or no answer yet) → the per-call fetches below, as before.
     val agentModels by actions.agentModels.collectAsState(null)
+    // The target host refuses agent sessions while it has no git: say so above the composer.
+    val hostRequirements by actions.hostRequirements.collectAsState(null)
 
     LaunchedEffect(selectedHost, launcherRestoring, agentModels) {
         if (launcherRestoring) return@LaunchedEffect
@@ -883,6 +885,10 @@ fun SessionLauncherScreen(
                     if (hosts.size > 1 && pointer && workspaceWorkdir == null) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { hostPill() }
                     }
+                    dev.supermux.ui.host.GitRequirementBanner(
+                        requirement = hostRequirements?.git,
+                        onInstall = { actions.installGit() },
+                    )
 
                     // ── Hero: (mark) + "Let's build" + project heading-dropdown + worktree pill ──
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {

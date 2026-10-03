@@ -86,6 +86,38 @@ class HostWizardTest {
         onNodeWithTag("host_wizard_done").assertIsDisplayed()
     }
 
+    @Test fun shows_the_git_banner_under_the_qr_when_the_local_broker_reports_git_missing() = runComposeUiTest {
+        val qr = qrBitmap("x", sizePx = 120)
+        setContent {
+            HostWizardContent(
+                state = HostWizardUiState.Ready(payloadJson = "x", qr = qr, relayEnabled = false),
+                keepAlive = true,
+                onKeepAliveChange = {},
+                onFinish = {},
+                onConnectInstead = {},
+                gitRequirement = dev.supermux.net.GitRequirement(ok = false, install = "xcode-select", hint = "Install Apple's Command Line Tools"),
+            )
+        }
+        onNodeWithTag(dev.supermux.ui.host.GitBannerTags.BANNER).assertExists()
+        onNodeWithText(dev.supermux.ui.host.GitBannerCopy.TITLE).assertExists()
+        onNodeWithTag(dev.supermux.ui.host.GitBannerTags.INSTALL).assertExists()
+    }
+
+    @Test fun no_git_banner_when_git_is_there() = runComposeUiTest {
+        val qr = qrBitmap("x", sizePx = 120)
+        setContent {
+            HostWizardContent(
+                state = HostWizardUiState.Ready(payloadJson = "x", qr = qr, relayEnabled = false),
+                keepAlive = true,
+                onKeepAliveChange = {},
+                onFinish = {},
+                onConnectInstead = {},
+                gitRequirement = dev.supermux.net.GitRequirement(ok = true),
+            )
+        }
+        onNodeWithTag(dev.supermux.ui.host.GitBannerTags.BANNER).assertDoesNotExist()
+    }
+
     @Test fun renders_relayOnDisclosure_whenRelayEnabled() = runComposeUiTest {
         val qr = qrBitmap("x", sizePx = 120)
         setContent {

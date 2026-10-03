@@ -180,6 +180,9 @@ fun HostWizardContent(
     onFinish: () -> Unit,
     onConnectInstead: () -> Unit,
     onRetry: () -> Unit = {},
+    /** The local broker's `requirements.git`: under the QR, "This computer needs git…" while missing. */
+    gitRequirement: dev.supermux.net.GitRequirement? = null,
+    onInstallGit: suspend () -> Boolean = { false },
 ) {
     val cs = MaterialTheme.colorScheme
     Scaffold(containerColor = cs.surfaceContainerHigh) { padding ->
@@ -240,6 +243,11 @@ fun HostWizardContent(
                             .padding(12.dp)
                             .testTag("host_wizard_qr"),
                     )
+                    // Pairing works without git, but agents won't: say so before the user leaves.
+                    dev.supermux.ui.host.GitRequirementBanner(
+                        requirement = gitRequirement,
+                        onInstall = onInstallGit,
+                    )
 
                     // CHECKED-by-default keep-alive box (spec §6 / D6).
                     Row(
@@ -298,6 +306,8 @@ fun HostWizard(
     model: HostWizardModel,
     onDone: () -> Unit,
     onConnectInstead: () -> Unit,
+    gitRequirement: dev.supermux.net.GitRequirement? = null,
+    onInstallGit: suspend () -> Boolean = { false },
 ) {
     val state by model.state.collectAsState()
     var keepAlive by remember { mutableStateOf(true) } // CHECKED by default (spec §6 / D6)
@@ -309,5 +319,7 @@ fun HostWizard(
         onFinish = { model.finish(keepAlive); onDone() },
         onConnectInstead = onConnectInstead,
         onRetry = { model.prepare() },
+        gitRequirement = gitRequirement,
+        onInstallGit = onInstallGit,
     )
 }

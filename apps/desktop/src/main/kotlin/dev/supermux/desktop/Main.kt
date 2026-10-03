@@ -863,8 +863,13 @@ fun main() {
                         // The app-wide supervisor (started at launch, above). NOT stopped on dispose —
                         // the broker keeps hosting after the wizard closes.
                         val model = remember { DesktopHostBootstrap.buildModel(scope, hostStore, supervisor) }
+                        val gitRequirement by supervisor.gitRequirement.collectAsState()
                         HostWizard(
                             model = model,
+                            gitRequirement = gitRequirement,
+                            onInstallGit = {
+                                dev.supermux.desktop.settings.installGitOnThisComputer(supervisor, hostStore)
+                            },
                             onDone = {
                                 // The model auto-paired "This computer" into the fleet store; reflect it.
                                 paired = hostStore.list().isNotEmpty()

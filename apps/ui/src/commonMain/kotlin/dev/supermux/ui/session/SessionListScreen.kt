@@ -240,6 +240,8 @@ fun SessionListScreen(
     standalone: Boolean = false,
     topBarShown: Boolean = false,
     footer: (@Composable () -> Unit)? = null,
+    /** Host notices under the new-session card (e.g. "This computer needs git to run agents"). */
+    banner: (@Composable () -> Unit)? = null,
     tabDragState: PaneDragController? = null,
     /**
      * Optional scroll state. The phone disposes this screen while a chat is open, so its host
@@ -1218,6 +1220,9 @@ fun SessionListScreen(
             }
         }
         NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
+        banner?.let { b ->
+            Column(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.xs)) { b() }
+        }
         SessionsSectionHeader(
             title = if (useWorkspaces) "Workspaces" else "Sessions",
             groupByProject = groupByProject,

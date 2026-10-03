@@ -1,6 +1,8 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.net.GitRequirement
 import dev.supermux.net.HostIdentity
+import dev.supermux.net.HostRequirements
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.IOException
@@ -23,9 +25,27 @@ sealed interface HostProbeResult {
         val mode: String?,
         val managedBy: String?,
         val stateDir: String?,
-        /** false: the broker found no usable git (a Mac without the Command Line Tools). */
+        /** false: the broker found no usable git. Legacy; [requirements] carries the full answer. */
         val gitAvailable: Boolean? = null,
-    ) : HostProbeResult
+        /** What the broker still needs to run agents; null from a broker older than requirements. */
+        val requirements: HostRequirements? = null,
+    ) : HostProbeResult {
+        /**
+         * The broker's git requirement. An older broker that only said `gitAvailable: false` was a
+         * Mac without the Command Line Tools (the only case it reported), so that maps to the
+         * xcode-select install.
+         */
+        val gitRequirement: GitRequirement?
+            get() = requirements?.git ?: when (gitAvailable) {
+                false -> GitRequirement(ok = false, install = GitRequirement.INSTALL_XCODE_SELECT, hint = LEGACY_MAC_GIT_HINT)
+                true -> GitRequirement(ok = true)
+                null -> null
+            }
+
+        companion object {
+            const val LEGACY_MAC_GIT_HINT = "Install Apple's Command Line Tools (xcode-select --install)"
+        }
+    }
     /** Something answers but is not ready (HTTP 5xx, or accepts TCP but times out): may be a broker still starting. */
     object Busy : HostProbeResult
     object ForeignProcess : HostProbeResult   // the port is held by something that is not a supermux broker
@@ -125,7 +145,7 @@ object HostProber {
         val id = runCatching { json.decodeFromString(HostIdentity.serializer(), body) }.getOrNull()
             ?: return HostProbeResult.ForeignProcess
         if (id.hostId.isBlank()) return HostProbeResult.ForeignProcess
-        return HostProbeResult.Supermux(id.hostId, id.build, id.mode, id.managedBy, id.stateDir, id.gitAvailable)
+        return HostProbeResult.Supermux(id.hostId, id.build, id.mode, id.managedBy, id.stateDir, id.gitAvailable, id.requirements)
     }
 
     private fun tcpConnectable(host: String, port: Int): Boolean =

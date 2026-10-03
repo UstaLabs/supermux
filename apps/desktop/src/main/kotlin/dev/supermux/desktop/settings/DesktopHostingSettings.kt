@@ -57,6 +57,7 @@ import dev.supermux.desktop.host.openFile
 import dev.supermux.desktop.host.systemNetIfs
 import dev.supermux.desktop.host.tailLines
 import dev.supermux.host.PairedHostStore
+import dev.supermux.net.GitRequirement
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.settings.HostingActions
 import dev.supermux.ui.settings.HostingSettingsScreen
@@ -110,13 +111,13 @@ private object NoHostingActions : HostingActions {
     override fun showLog() = Unit
     override fun pairDevice() = Unit
     override fun manageIt() = Unit
-    override fun installGit() = Unit
+    override suspend fun installGit(): Boolean = false
 }
 
 /**
  * Pure: Settings ▸ Hosting's state from the supervisor's. [localUrl] is the display address (already
- * swapped to the LAN IP); [canPair] whether there is a store to pair into. The git row shows only
- * while running against a broker that said `gitAvailable: false`.
+ * swapped to the LAN IP); [canPair] whether there is a store to pair into. The "needs git" banner
+ * renders the running broker's own `requirements.git` (there is no app-side git check).
  */
 internal fun desktopHostingUiState(
     status: HostingStatus,
@@ -128,7 +129,7 @@ internal fun desktopHostingUiState(
     logTail: List<String>,
     canPair: Boolean,
     backgroundError: String?,
-    gitAvailable: Boolean?,
+    gitRequirement: GitRequirement?,
 ): HostingUiState {
     val readOnly = DesktopHostBootstrap.isReadOnly(status)
     val running = status is HostingStatus.Running
@@ -148,21 +149,25 @@ internal fun desktopHostingUiState(
         restartEnabled = running && !readOnly,
         canPair = running && canPair,
         backgroundError = backgroundError,
-        gitMissing = running && gitAvailable == false,
+        gitRequirement = gitRequirement.takeIf { running },
     )
 }
 
-/** Apple's "install the Command Line Tools" prompt. Off the UI thread; best-effort. */
-private fun installCommandLineTools(log: (String) -> Unit) {
-    hostingScope.launch(Dispatchers.IO) {
-        runCatching {
-            val p = ProcessBuilder("xcode-select", "--install").redirectErrorStream(true).start()
-            val out = p.inputStream.bufferedReader().readText().trim()
-            val code = p.waitFor()
-            // Exit 1 with "already installed"/"already in progress" is not a failure worth more than a line.
-            log("xcode-select --install exited $code${if (out.isNotEmpty()) ": ${out.take(200)}" else ""}")
-        }.onFailure { log("xcode-select --install failed: ${it.message ?: it}") }
+/**
+ * Install git on this computer THROUGH ITS BROKER (`POST /system/install-git`), with "This
+ * computer"'s token: the broker runs `xcode-select --install` / winget itself, exactly as it would
+ * for a phone. True when the installer started.
+ */
+internal suspend fun installGitOnThisComputer(sup: HostSupervisor, hostStore: PairedHostStore?): Boolean {
+    val token = hostStore?.let { DesktopHostBootstrap.thisComputerRecord(it.list(), sup.hostId.value) }
+        ?.token?.takeIf { it.isNotBlank() }
+    if (token == null) {
+        sup.log("install git: no token for this computer")
+        return false
     }
+    val r = DesktopHostBootstrap.installGit(sup.localBaseUrl, token)
+    sup.log("install git: ${r?.let { if (it.ok) "started" else it.error ?: "failed" } ?: "unreachable"}")
+    return r?.ok == true
 }
 
 /** Settings ▸ Hosting on desktop. Where the app does not host (no supervisor) it shows the "off" copy. */
@@ -181,7 +186,7 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
     val hostId by sup.hostId.collectAsState()
     val build by sup.build.collectAsState()
     val backgroundError by sup.backgroundError.collectAsState()
-    val gitAvailable by sup.gitAvailable.collectAsState()
+    val gitRequirement by sup.gitRequirement.collectAsState()
     val wizard by HostingTurnOn.model.collectAsState()
 
     val lanIp by produceState<String?>(null) { value = withContext(Dispatchers.IO) { lanIpv4(systemNetIfs()) } }
@@ -213,7 +218,7 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
         logTail = logTail,
         canPair = hostStore != null,
         backgroundError = backgroundError,
-        gitAvailable = gitAvailable,
+        gitRequirement = gitRequirement,
     )
     val actions = remember(sup, hostStore) {
         object : HostingActions {
@@ -237,7 +242,7 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
                 val id = sup.hostId.value
                 hostingScope.launch { if (id != null) sup.forgetLeftAlone(id) else sup.ensure() }
             }
-            override fun installGit() { installCommandLineTools(sup.log) }
+            override suspend fun installGit(): Boolean = installGitOnThisComputer(sup, hostStore)
         }
     }
 
@@ -246,7 +251,7 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
     if (showPair && hostStore != null) {
         PairQrDialog(sup, hostStore, lanIp, onClose = { showPair = false })
     }
-    wizard?.let { m -> TurnOnWizardDialog(sup, m) }
+    wizard?.let { m -> TurnOnWizardDialog(sup, m, gitRequirement) { installGitOnThisComputer(sup, hostStore) } }
 }
 
 private fun openTurnOnWizard(sup: HostSupervisor, hostStore: PairedHostStore, refreshFleet: () -> Unit) {
@@ -265,7 +270,12 @@ private fun openTurnOnWizard(sup: HostSupervisor, hostStore: PairedHostStore, re
  * hosting back off. Done pairs "This computer" and applies the keep-alive box.
  */
 @Composable
-private fun TurnOnWizardDialog(sup: HostSupervisor, model: HostWizardModel) {
+private fun TurnOnWizardDialog(
+    sup: HostSupervisor,
+    model: HostWizardModel,
+    gitRequirement: GitRequirement?,
+    onInstallGit: suspend () -> Boolean,
+) {
     val state by model.state.collectAsState()
     var keepAlive by remember(model) { mutableStateOf(true) }
     fun cancel() {
@@ -287,6 +297,8 @@ private fun TurnOnWizardDialog(sup: HostSupervisor, model: HostWizardModel) {
                 },
                 onConnectInstead = ::cancel,
                 onRetry = { model.prepare() },
+                gitRequirement = gitRequirement,
+                onInstallGit = onInstallGit,
             )
             IconButton(
                 onClick = ::cancel,

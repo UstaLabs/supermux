@@ -1246,6 +1246,22 @@ class HostSupervisorTest {
         assertNull(h.sup.gitAvailable.value)
     }
 
+    @Test fun gitRequirementFollowsTheBrokerAndClearsWhenHostingStops() = runTest {
+        val h = Harness(this)
+        assertNull(h.sup.gitRequirement.value)
+        val missing = dev.supermux.net.GitRequirement(ok = false, install = "manual", hint = "Install git")
+        h.probeFn = {
+            if (h.liveChild != null) {
+                h.desktop().copy(requirements = dev.supermux.net.HostRequirements(missing))
+            } else HostProbeResult.PortFree
+        }
+        h.sup.ensure()
+        assertEquals(missing, h.sup.gitRequirement.value)
+        h.probeFn = { HostProbeResult.PortFree }
+        h.sup.setHosting(false)
+        assertNull(h.sup.gitRequirement.value)
+    }
+
     // ── the supervisor's log on success paths ──
 
     private fun Harness.logs() = events.filter { it.startsWith("log:") }.map { it.removePrefix("log:") }
