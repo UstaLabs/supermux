@@ -317,10 +317,13 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
   }
 
   lc(["bootout", target])
+  // Enable BEFORE bootstrap: launchd refuses to bootstrap a label in its disabled-overrides
+  // database, and the desktop app's takeover deliberately disables the label it replaced. A
+  // later `supermux setup` must win over that, not fail silently.
+  lc(["enable", target])
   if (!lc(["bootstrap", domain, plistFile])) {
     println("launchctl bootstrap reported an error; attempting to start it anyway.")
   }
-  lc(["enable", target])
   lc(["kickstart", "-k", target])
 
   // 4. Give it a moment, then confirm it's loaded + running.
