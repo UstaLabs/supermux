@@ -67,6 +67,7 @@ import dev.supermux.desktop.host.TrayModel
 import java.awt.desktop.QuitResponse
 import java.util.concurrent.atomic.AtomicReference
 import dev.supermux.desktop.host.hostingFacts
+import dev.supermux.desktop.host.syncThisComputerRecord
 import dev.supermux.desktop.host.TrayIcons
 import dev.supermux.desktop.host.openFile
 import kotlinx.coroutines.flow.flowOf
@@ -423,6 +424,11 @@ fun main() {
         val supervisor = remember { DesktopHostBootstrap.supervisor() }
         val hostsNatively = remember { DesktopHostBootstrap.isNativeHostPlatform() }
         LaunchedEffect(Unit) { if (hostsNatively) supervisor.ensure() }
+        // "This computer"'s paired record follows the supervisor's port (a moved port or a takeover
+        // onto another one), and a record a previous run left on an old port is fixed at launch.
+        LaunchedEffect(Unit) {
+            if (hostsNatively) syncThisComputerRecord(supervisor, hostStore) { pairedFleet?.refreshFromStore() }
+        }
         val hostingStatus by supervisor.status.collectAsState()
         val hostingPrefs by supervisor.prefs.collectAsState()
         val backgroundError by supervisor.backgroundError.collectAsState()

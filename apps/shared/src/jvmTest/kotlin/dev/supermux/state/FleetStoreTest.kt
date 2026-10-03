@@ -143,6 +143,17 @@ class FleetStoreTest {
         f.close()
     }
 
+    @Test fun refreshFromStoreRedialsARecordWhoseDirectUrlChanged() = runTest(UnconfinedTestDispatcher()) {
+        val s = store(PairedHost(recordId = "me", hostId = "hb", displayName = "Mac", token = "t", directUrl = "http://127.0.0.1:9898"))
+        val f = fleet(s, this)
+        assertEquals("http://127.0.0.1:9898", f.appForRecord("me")?.baseUrl)
+        s.addOrUpdate(displayName = "Mac", token = "t", directUrl = "http://127.0.0.1:8787", hostId = "hb")
+        f.refreshFromStore()
+        assertEquals("http://127.0.0.1:8787", f.appForRecord("me")?.baseUrl)
+        assertEquals(listOf("me"), f.hostViews.value.map { it.recordId })
+        f.close()
+    }
+
     /**
      * The browser host authenticates with an HttpOnly cookie, so its record carries NO bearer
      * token — `ambientAuth` says the transport already carries the credential. `sync` must dial it
