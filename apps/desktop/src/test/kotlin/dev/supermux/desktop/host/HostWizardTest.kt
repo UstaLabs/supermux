@@ -9,6 +9,7 @@ import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.host.PairingPayload
 import dev.supermux.ui.widgets.qrBitmap
 import kotlin.test.Test
+import kotlinx.coroutines.flow.first
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -144,5 +145,25 @@ class HostWizardTest {
             )
         }
         onNodeWithTag("host_wizard_progress").assertIsDisplayed()
+    }
+
+    @Test fun the_model_exposes_its_minted_local_token_after_prepare() {
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined)
+        val model = HostWizardModel(
+            scope = scope,
+            hostName = "Mac",
+            provideHostId = { validHostId },
+            provideLocalUrl = { "http://127.0.0.1:9898" },
+            mintClaim = { HostClaim(localToken = "fresh-token", claimSecret = "secret") },
+            onPairThisComputer = { _, _, _ -> },
+            onInstallKeepAlive = {},
+            qrOf = { qrBitmap("x", sizePx = 64) },
+        )
+        assertNull(model.localToken)
+        model.prepare()
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withTimeout(5_000) { model.state.first { it !is HostWizardUiState.Preparing } }
+        }
+        assertEquals("fresh-token", model.localToken)
     }
 }

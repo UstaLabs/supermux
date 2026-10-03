@@ -47,4 +47,30 @@ class DesktopHostingSettingsTest {
         assertFalse(s.canPair)
         assertFalse(s.restartEnabled)
     }
+
+    // ── Install… goes to the local broker ──
+
+    private val posted = mutableListOf<Pair<String, String>>()
+    private val post: suspend (String, String) -> dev.supermux.net.InstallGitResult? = { url, token ->
+        posted += url to token
+        dev.supermux.net.InstallGitResult(ok = true)
+    }
+
+    @Test fun install_uses_the_stored_this_computer_token() = kotlinx.coroutines.test.runTest {
+        val hosts = listOf(dev.supermux.host.PairedHost(recordId = "r1", hostId = "h1", displayName = "Mac", directUrl = "http://127.0.0.1:9898", token = "stored"))
+        assertTrue(installGitOnLocalBroker("http://127.0.0.1:9898", "h1", hosts, wizardToken = "minted", log = {}, post = post))
+        assertEquals(listOf("http://127.0.0.1:9898" to "stored"), posted)
+    }
+
+    @Test fun a_fresh_unpaired_install_uses_the_wizards_minted_token() = kotlinx.coroutines.test.runTest {
+        assertTrue(installGitOnLocalBroker("http://127.0.0.1:9898", "h1", emptyList(), wizardToken = "minted", log = {}, post = post))
+        assertEquals(listOf("http://127.0.0.1:9898" to "minted"), posted)
+    }
+
+    @Test fun no_token_at_all_does_not_post() = kotlinx.coroutines.test.runTest {
+        val log = mutableListOf<String>()
+        assertFalse(installGitOnLocalBroker("http://127.0.0.1:9898", null, emptyList(), wizardToken = null, log = { log += it }, post = post))
+        assertTrue(posted.isEmpty())
+        assertEquals(listOf("install git: no token for this computer"), log)
+    }
 }

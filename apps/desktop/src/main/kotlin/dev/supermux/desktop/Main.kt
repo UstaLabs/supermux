@@ -868,7 +868,8 @@ fun main() {
                             model = model,
                             gitRequirement = gitRequirement,
                             onInstallGit = {
-                                dev.supermux.desktop.settings.installGitOnThisComputer(supervisor, hostStore)
+                                // Before Done "This computer" may not be stored yet: the wizard's own token works.
+                                dev.supermux.desktop.settings.installGitOnThisComputer(supervisor, hostStore, model.localToken)
                             },
                             onDone = {
                                 // The model auto-paired "This computer" into the fleet store; reflect it.

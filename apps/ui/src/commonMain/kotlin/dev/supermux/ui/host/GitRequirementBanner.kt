@@ -33,22 +33,36 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.GitRequirement
 import dev.supermux.ui.theme.Space
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-/** The banner's copy, as constants so the tests assert the exact strings. */
+/** The banner's copy, as constants/functions so the tests assert the exact strings. */
 object GitBannerCopy {
     const val TITLE = "This computer needs git to run agents"
     const val INSTALL = "Install…"
     const val STARTING = "Starting…"
-    const val STARTED = "The installer is open on that computer. This clears once git is found."
     const val FAILED = "Couldn't start the installer."
+
+    /** "<host> needs git…" when a host is named; "This computer…" for the local / only host. */
+    fun title(hostName: String?): String = hostName?.let { "$it needs git to run agents" } ?: TITLE
+
+    /** What happened on [hostName] (null: "this computer") after a successful Install…, per kind. */
+    fun started(install: String, hostName: String?): String {
+        val host = hostName ?: "this computer"
+        return when (install) {
+            GitRequirement.INSTALL_XCODE_SELECT -> "Apple's installer is open on $host. Follow it, then this clears by itself."
+            GitRequirement.INSTALL_WINGET -> "Installing git on $host… this clears by itself when done."
+            GitRequirement.INSTALL_BROWSER -> "The Git download page is open on $host."
+            else -> "The installer started on $host."
+        }
+    }
 }
 
 /** Test tags, shared by every place the banner is shown. */
 object GitBannerTags {
     const val BANNER = "git_required_banner"
+    const val TITLE = "git_required_title"
     const val HINT = "git_required_hint"
-    const val HOST = "git_required_host"
     const val INSTALL = "git_required_install"
     const val STATUS = "git_required_status"
 }
@@ -59,7 +73,8 @@ object GitBannerTags {
  * @param requirement the host's `requirements.git`.
  * @param onInstall `POST /system/install-git` on that host; true when the installer started. Only
  *   offered when the host has a one-click install (`install != "manual"`).
- * @param hostName shown under the title when more than one host could be meant (multi-host lists).
+ * @param hostName names the host in the title and status ("<host> needs git…") where more than one
+ *   host could be meant; null for the local host or a single-host view ("This computer…").
  */
 @Composable
 fun GitRequirementBanner(
@@ -91,15 +106,12 @@ fun GitRequirementBanner(
         )
         Spacer(Modifier.width(Space.sm))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(GitBannerCopy.TITLE, style = MaterialTheme.typography.bodyMedium, color = cs.onErrorContainer)
-            hostName?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = cs.onErrorContainer,
-                    modifier = Modifier.testTag(GitBannerTags.HOST),
-                )
-            }
+            Text(
+                GitBannerCopy.title(hostName),
+                style = MaterialTheme.typography.bodyMedium,
+                color = cs.onErrorContainer,
+                modifier = Modifier.testTag(GitBannerTags.TITLE),
+            )
             if (requirement.hint.isNotBlank()) {
                 Text(
                     requirement.hint,
@@ -123,8 +135,15 @@ fun GitRequirementBanner(
                 onClick = {
                     busy = true
                     scope.launch {
-                        val ok = runCatching { onInstall() }.getOrDefault(false)
-                        status = if (ok) GitBannerCopy.STARTED else GitBannerCopy.FAILED
+                        val ok = try {
+                            onInstall()
+                        } catch (c: CancellationException) {
+                            busy = false
+                            throw c
+                        } catch (_: Throwable) {
+                            false
+                        }
+                        status = if (ok) GitBannerCopy.started(requirement.install, hostName) else GitBannerCopy.FAILED
                         busy = false
                     }
                 },

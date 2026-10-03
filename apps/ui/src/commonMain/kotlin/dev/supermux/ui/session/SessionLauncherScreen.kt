@@ -885,9 +885,13 @@ fun SessionLauncherScreen(
                     if (hosts.size > 1 && pointer && workspaceWorkdir == null) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { hostPill() }
                     }
+                    // [hostRequirements] / [installGit] follow the fleet's ACTIVE host, which is
+                    // [selectedHost]: the pill selects through `setActiveHost`, and the spawn goes
+                    // to that same host. Named only when there is more than one to mean.
                     dev.supermux.ui.host.GitRequirementBanner(
                         requirement = hostRequirements?.git,
                         onInstall = { actions.installGit() },
+                        hostName = if (hosts.size > 1) hosts.firstOrNull { it.recordId == selectedHost }?.displayName else null,
                     )
 
                     // ── Hero: (mark) + "Let's build" + project heading-dropdown + worktree pill ──

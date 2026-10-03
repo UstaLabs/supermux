@@ -37,7 +37,8 @@ class GitRequirementBannerTest {
         onNodeWithTag(GitBannerTags.INSTALL).assertTextEquals(GitBannerCopy.INSTALL).performClick()
         waitForIdle()
         assertEquals(1, calls)
-        onNodeWithTag(GitBannerTags.STATUS).assertTextEquals(GitBannerCopy.STARTED)
+        onNodeWithTag(GitBannerTags.STATUS)
+            .assertTextEquals("Apple's installer is open on this computer. Follow it, then this clears by itself.")
     }
 
     @Test fun a_manual_host_has_the_hint_and_no_button() = runComposeUiTest {
@@ -58,8 +59,20 @@ class GitRequirementBannerTest {
         onNodeWithTag(GitBannerTags.STATUS).assertTextEquals(GitBannerCopy.FAILED)
     }
 
-    @Test fun the_host_name_shows_when_given() = runComposeUiTest {
+    @Test fun a_named_host_titles_the_banner() = runComposeUiTest {
         setContent { MaterialTheme { GitRequirementBanner(linux, onInstall = { true }, hostName = "Raspberry Pi") } }
-        onNodeWithTag(GitBannerTags.HOST).assertTextEquals("Raspberry Pi")
+        onNodeWithTag(GitBannerTags.TITLE).assertTextEquals("Raspberry Pi needs git to run agents")
+    }
+
+    @Test fun windows_without_winget_has_a_button_and_says_the_download_page_opened() = runComposeUiTest {
+        val browser = GitRequirement(ok = false, install = "browser", hint = "Download Git for Windows from https://git-scm.com/download/win")
+        setContent { MaterialTheme { GitRequirementBanner(browser, onInstall = { true }, hostName = "Work PC") } }
+        onNodeWithTag(GitBannerTags.INSTALL).performClick()
+        waitForIdle()
+        onNodeWithTag(GitBannerTags.STATUS).assertTextEquals("The Git download page is open on Work PC.")
+    }
+
+    @Test fun winget_status_copy() {
+        assertEquals("Installing git on Work PC… this clears by itself when done.", GitBannerCopy.started("winget", "Work PC"))
     }
 }

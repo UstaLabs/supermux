@@ -211,7 +211,6 @@ object DesktopHostBootstrap {
             .firstNotNullOfOrNull { extractCookieToken(it) }
     }.getOrNull()
 
-    /** POST /pair/mint-claim (Bearer) → {claimSecret}. */
     /**
      * `POST /system/install-git` on the local broker with "This computer"'s [token]. The broker
      * starts the OS installer itself; a manual host answers `error="manual"` + `hint`. Null when
@@ -230,6 +229,7 @@ object DesktopHostBootstrap {
         }.getOrNull()
     }
 
+    /** POST /pair/mint-claim (Bearer) → {claimSecret}. */
     private fun mintClaimSecret(client: HttpClient, localUrl: String, token: String): String? = runCatching {
         val req = HttpRequest.newBuilder(URI.create("$localUrl/pair/mint-claim"))
             .timeout(Duration.ofSeconds(5))

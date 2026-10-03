@@ -121,6 +121,13 @@ class HostWizardModel(
     val state: StateFlow<HostWizardUiState> = _state.asStateFlow()
 
     private var claim: HostClaim? = null
+
+    /**
+     * The local broker's device token this wizard minted (or reused), once [prepare] got that far.
+     * Before Done nothing may be stored as "This computer" yet, so the wizard's own actions on the
+     * local broker (Install git…) authenticate with this.
+     */
+    val localToken: String? get() = claim?.localToken?.takeIf { it.isNotBlank() }
     private var hostId: String? = null
     private var directUrl: String? = null
 

@@ -158,15 +158,38 @@ internal fun desktopHostingUiState(
  * computer"'s token: the broker runs `xcode-select --install` / winget itself, exactly as it would
  * for a phone. True when the installer started.
  */
-internal suspend fun installGitOnThisComputer(sup: HostSupervisor, hostStore: PairedHostStore?): Boolean {
-    val token = hostStore?.let { DesktopHostBootstrap.thisComputerRecord(it.list(), sup.hostId.value) }
-        ?.token?.takeIf { it.isNotBlank() }
+internal suspend fun installGitOnThisComputer(
+    sup: HostSupervisor,
+    hostStore: PairedHostStore?,
+    wizardToken: String? = null,
+): Boolean = installGitOnLocalBroker(
+    localUrl = sup.localBaseUrl,
+    hostId = sup.hostId.value,
+    hosts = hostStore?.list().orEmpty(),
+    wizardToken = wizardToken,
+    log = sup.log,
+)
+
+/**
+ * Pure apart from [post]: the stored "This computer" token, else [wizardToken] — a fresh install
+ * that has not reached Done has no stored record yet, only the token its wizard just minted.
+ */
+internal suspend fun installGitOnLocalBroker(
+    localUrl: String,
+    hostId: String?,
+    hosts: List<dev.supermux.host.PairedHost>,
+    wizardToken: String?,
+    log: (String) -> Unit,
+    post: suspend (url: String, token: String) -> dev.supermux.net.InstallGitResult? = DesktopHostBootstrap::installGit,
+): Boolean {
+    val token = DesktopHostBootstrap.thisComputerRecord(hosts, hostId)?.token?.takeIf { it.isNotBlank() }
+        ?: wizardToken?.takeIf { it.isNotBlank() }
     if (token == null) {
-        sup.log("install git: no token for this computer")
+        log("install git: no token for this computer")
         return false
     }
-    val r = DesktopHostBootstrap.installGit(sup.localBaseUrl, token)
-    sup.log("install git: ${r?.let { if (it.ok) "started" else it.error ?: "failed" } ?: "unreachable"}")
+    val r = post(localUrl, token)
+    log("install git: ${r?.let { if (it.ok) (if (it.inProgress) "already running" else "started") else it.error ?: "failed" } ?: "unreachable"}")
     return r?.ok == true
 }
 
@@ -251,7 +274,7 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
     if (showPair && hostStore != null) {
         PairQrDialog(sup, hostStore, lanIp, onClose = { showPair = false })
     }
-    wizard?.let { m -> TurnOnWizardDialog(sup, m, gitRequirement) { installGitOnThisComputer(sup, hostStore) } }
+    wizard?.let { m -> TurnOnWizardDialog(sup, m, gitRequirement) { installGitOnThisComputer(sup, hostStore, m.localToken) } }
 }
 
 private fun openTurnOnWizard(sup: HostSupervisor, hostStore: PairedHostStore, refreshFleet: () -> Unit) {
