@@ -205,6 +205,15 @@ export class SessionManager {
     return this.ports.hostRequirements?.().git.ok === false
   }
 
+  /**
+   * A message to [session] cannot reach an agent because git is missing: its agent is not live
+   * (suspended, or deferred at boot) and could not be started or resumed now. Drafts are exempt
+   * (their first message is the spawn, refused on its own path); a live agent keeps working.
+   */
+  heldForGit(session: { id: string; user_status?: string | null }): boolean {
+    return this.agentsBlocked() && session.user_status !== "draft" && !this.isDeliverable(session.id)
+  }
+
   /** Git appeared after a boot that skipped resuming: resume now (once). */
   async resumeDeferredBoot(): Promise<void> {
     if (!this.bootResumeDeferred || this.agentsBlocked()) return

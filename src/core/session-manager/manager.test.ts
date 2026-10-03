@@ -154,6 +154,18 @@ describe("SessionManager while git is missing", () => {
     expect(g.worktreeCalls()).toBe(0)
   })
 
+  test("heldForGit: a non-live, non-draft session is held; a live agent and a draft are not", () => {
+    const g = gated()
+    g.registry.register({ id: "c1", name: "cur", workdir: "/tmp", pid: 0, agent: "cursor" })
+    expect(g.m.heldForGit({ id: "c1" })).toBe(true) // no adapter: suspended / deferred at boot
+    expect(g.m.heldForGit({ id: "c1", user_status: "draft" })).toBe(false)
+    g.m.registerCursorRuntime("c1", { fake: true } as unknown as CursorAdapter)
+    expect(g.m.heldForGit({ id: "c1" })).toBe(false) // already live: keeps working
+    g.state.reqs = { git: { ok: true, install: "manual", hint: "Install git" } }
+    g.registry.register({ id: "c2", name: "cur2", workdir: "/tmp", pid: 0, agent: "cursor" })
+    expect(g.m.heldForGit({ id: "c2" })).toBe(false) // git present: the normal paths apply
+  })
+
   test("boot resume is deferred, and runs once git appears", async () => {
     const g = gated()
     let boots = 0

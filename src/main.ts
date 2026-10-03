@@ -2909,11 +2909,13 @@ ch.on("inbound", async (msg: InboundMessage) => {
     return
   }
 
-  // Lazy resume: if the session is suspended, re-spawn it before delivering the message
-  if (session.status === "suspended" && sessionManager.agentsBlocked()) {
+  // No git on this computer: an agent that is not already live cannot be started or resumed, so
+  // say why instead of "adapter disconnected / try /kill".
+  if (sessionManager.heldForGit(session)) {
     await ch.send({ op: "reply", chat_id: msg.chat_id, text: GIT_REQUIRED_MESSAGE, disable_notification: false })
     return
   }
+  // Lazy resume: if the session is suspended, re-spawn it before delivering the message
   if (session.status === "suspended") {
     await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${session.name}"...`, disable_notification: true })
     const resumed = await resumeSuspendedSession(session)
@@ -3069,8 +3071,11 @@ if (webChannel) {
     // resolveName(); the rest of the web path (hasSession/adapterSend) also
     // uses getById.
     const targetSession = msg.target_session_id ? registry.get(msg.target_session_id) : undefined
-    if (targetSession?.status === "suspended" && sessionManager.agentsBlocked()) {
-      await notifySession(targetSession.id, GIT_REQUIRED_MESSAGE)
+    // No git on this computer: a session whose agent is not already live cannot be started or
+    // resumed. Surface it the way other web inbound failures do (agent_error toast + an error
+    // entry in the transcript), so the user sees it in the chat they typed into.
+    if (targetSession && sessionManager.heldForGit(targetSession)) {
+      void notifyAgentError(targetSession.id, targetSession.name, "Git required", GIT_REQUIRED_MESSAGE)
       return
     }
     if (targetSession?.status === "suspended") {
