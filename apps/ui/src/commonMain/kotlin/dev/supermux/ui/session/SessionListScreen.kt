@@ -100,6 +100,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.PA_GROUP_KEY
 import dev.supermux.session.SectionKey
+import dev.supermux.session.SessionGroup
 import dev.supermux.session.buildTaskSections
 import dev.supermux.session.combinedTaskSessions
 import dev.supermux.session.groupSessions
@@ -673,6 +674,18 @@ fun SessionListScreen(
         }
     }
 
+    // Same rule as each row's own dot: sessionListShowsUnread. Shared by the project headers'
+    // unread counts and the offscreen unread pills.
+    fun sessionUnread(sid: String) = sessionListShowsUnread(
+        active = sid == activeId,
+        working = agentState[sid]?.working == true,
+        lastMessageTs = lastBySession[sid]?.ts,
+        lastReadAt = lastRead[sid],
+    )
+    // The open workspace is being read, even when its row has scrolled away.
+    fun workspaceUnread(w: WorkspaceDto) =
+        !(openWorkspaceByWorkspaceId && w.id == activeId) && w.chatSessionIds().any(::sessionUnread)
+
     fun LazyListScope.workspaceBody() {
         if (groups.isEmpty() && archivedWorkspaces.isEmpty() && mode == SessionListMode.Workspaces) {
             item(key = "empty_hint") {
@@ -764,7 +777,7 @@ fun SessionListScreen(
                 GroupHeaderRow {
                     PathGroupHeader(
                         g.label,
-                        ordered.size,
+                        unreadCount = ordered.count(::workspaceUnread),
                         collapsed = isCollapsed,
                         onToggle = {
                             openSwipeRowId = null
@@ -953,11 +966,6 @@ fun SessionListScreen(
         sessionGroups.forEach { g ->
             val isCollapsed = collapsedPaths.contains(g.workdir)
             val isPaGroup = g.workdir == PA_GROUP_KEY
-            val activeCount = if (isPaGroup) {
-                g.sessions.size
-            } else {
-                g.sections.filter { it.key != SectionKey.SETTLED }.sumOf { it.sessions.size }
-            }
             val openRows = if (isPaGroup) {
                 g.sessions
             } else {
@@ -972,7 +980,7 @@ fun SessionListScreen(
                 GroupHeaderRow {
                     PathGroupHeader(
                         label = g.label,
-                        count = activeCount,
+                        unreadCount = g.allSessions().count { sessionUnread(it.id) },
                         collapsed = isCollapsed,
                         onToggle = {
                             openSwipeRowId = null
@@ -1153,40 +1161,69 @@ fun SessionListScreen(
 
     // ── Offscreen unread pills ────────────────────────────────────────────────────────────────
     // Row keys of every unread row this list can emit (session rows use several key prefixes, one
-    // per section; workspace rows two). Same rule as each row's own dot: sessionListShowsUnread.
-    fun sessionUnread(sid: String) = sessionListShowsUnread(
-        active = sid == activeId,
-        working = agentState[sid]?.working == true,
-        lastMessageTs = lastBySession[sid]?.ts,
-        lastReadAt = lastRead[sid],
-    )
+    // per section; workspace rows two). A COLLAPSED project emits no rows, so its header stands in
+    // for them — the pill still counts it, and a tap expands it (see scrollToUnread).
     // Row key → dismissal token (key + newest unread message ts): a pill dismissed on this state
     // comes back once the row gets another message.
     val unreadRowTokens: Map<String, String> = remember(
         useWorkspaces, visibleWorkspaces, visibleSessions, lastBySession, lastRead, agentState, activeId,
+        groups, sessionGroups, collapsedPaths,
     ) {
         fun token(key: String, sids: List<String>) =
             "$key@" + sids.filter(::sessionUnread).maxOf { lastBySession[it]?.ts.orEmpty() }
         if (useWorkspaces) {
-            // The open workspace is being read, even when its row has scrolled away.
-            visibleWorkspaces
-                .filter { w -> !(openWorkspaceByWorkspaceId && w.id == activeId) }
-                .filter { w -> w.chatSessionIds().any(::sessionUnread) }
-                .flatMap { w ->
-                    listOf("ws:${w.id}", "flat:pa:${w.id}").map { it to token(it, w.chatSessionIds()) }
-                }
+            val rows = visibleWorkspaces.filter(::workspaceUnread).flatMap { w ->
+                listOf("ws:${w.id}", "flat:pa:${w.id}").map { it to token(it, w.chatSessionIds()) }
+            }
+            val headers = groups.filter { it.key in collapsedPaths }.mapNotNull { g ->
+                val sids = g.workspaces.filter(::workspaceUnread).flatMap { it.chatSessionIds() }
+                if (sids.isEmpty()) null else "h:${g.key}".let { it to token(it, sids) }
+            }
+            rows + headers
         } else {
-            visibleSessions.filter { sessionUnread(it.id) }.flatMap { s ->
+            val rows = visibleSessions.filter { sessionUnread(it.id) }.flatMap { s ->
                 UNREAD_SESSION_KEY_PREFIXES.map { p -> (p + s.id).let { it to token(it, listOf(s.id)) } }
             }
+            val headers = sessionGroups.filter { it.workdir in collapsedPaths }.mapNotNull { g ->
+                val sids = g.allSessions().map { it.id }.filter(::sessionUnread)
+                if (sids.isEmpty()) null else "group:header:${g.workdir}".let { it to token(it, sids) }
+            }
+            rows + headers
         }.toMap()
     }
     // Run the list's own DSL through a key recorder: item index of every unread row, including rows
     // far offscreen that the LazyColumn never laid out. Cheap (keys only, no row composes).
-    val unreadRows = LazyKeyRecorder().apply { body() }.keys
+    val listKeys = LazyKeyRecorder().apply { body() }.keys
+    val unreadRows = listKeys
         .withIndex().mapNotNull { (i, k) -> (k as? String)?.let(unreadRowTokens::get)?.let { UnreadRow(i, it) } }
+    // A collapsed project's header the pill asked to reveal: expanded first, then (once its rows
+    // are in the list) scrolled to its first unread row.
+    var revealHeaderKey by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(revealHeaderKey, unreadRows) {
+        val header = revealHeaderKey ?: return@LaunchedEffect
+        if (collapsedGroupOfHeader(header) in collapsedPaths) return@LaunchedEffect
+        val headerIndex = listKeys.indexOf(header)
+        if (headerIndex < 0) {
+            revealHeaderKey = null
+            return@LaunchedEffect
+        }
+        val nextHeader = listKeys.withIndex()
+            .firstOrNull { (i, k) -> i > headerIndex && (k as? String)?.let(::collapsedGroupOfHeader) != null }
+            ?.index ?: listKeys.size
+        val target = unreadRows.firstOrNull { it.index in (headerIndex + 1) until nextHeader }?.index
+        listState.animateScrollToCenter(target ?: headerIndex)
+        // Cleared only now: changing the key restarts this effect and would cancel the scroll.
+        revealHeaderKey = null
+    }
     // Scrolling reveals a row; it doesn't read it — only opening the chat advances last_read_at.
     fun scrollToUnread(index: Int) {
+        val group = (listKeys.getOrNull(index) as? String)?.let(::collapsedGroupOfHeader)
+        if (group != null && group in collapsedPaths) {
+            openSwipeRowId = null
+            setCollapsedPaths(collapsedPaths - group)
+            revealHeaderKey = listKeys[index] as String
+            return
+        }
         listScope.launch { listState.animateScrollToCenter(index) }
     }
 
@@ -1712,5 +1749,13 @@ private fun FooterIcon(image: ImageVector, label: String, tag: String, onClick: 
  * Every key prefix a session row carries across the flat/grouped sections (PA pin, task, settled,
  * draft). Offline-host rows (`off:`) are left out: their chat can't be opened to read it anyway.
  */
+/** Every session a project group can show, across its task sections. */
+private fun SessionGroup.allSessions(): List<SessionInfo> =
+    (sessions + sections.flatMap { it.sessions }).distinctBy { it.id }
+
+/** The collapse key of a project-group header's lazy key (both list modes), or null. */
+private fun collapsedGroupOfHeader(key: String): String? =
+    key.removePrefix("h:").takeIf { it != key } ?: key.removePrefix("group:header:").takeIf { it != key }
+
 private val UNREAD_SESSION_KEY_PREFIXES =
     listOf("flat:pa:", "flat:", "task:", "group:pa:", "group:settled:", "f:draft:")
