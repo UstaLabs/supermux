@@ -87,7 +87,13 @@ val macBuildHost = hostOs.let { it.contains("mac") || it.contains("darwin") }
 // A trackpad pinch reaches Java on macOS only through com.apple.eawt.event (MacTrackpadMagnify.kt),
 // a package java.desktop keeps unexported. macOS-only: elsewhere the package does not exist and the
 // JVM would warn about the flag.
-val macJvmArgs = if (macBuildHost) listOf("--add-exports=java.desktop/com.apple.eawt.event=ALL-UNNAMED") else emptyList()
+// apple.awt.enableTemplateImages: the tray icon is a macOS template image (JDK-8252015); main() sets
+// it too, this makes sure it is there before any AWT class loads.
+val macJvmArgs = if (macBuildHost) {
+    listOf("--add-exports=java.desktop/com.apple.eawt.event=ALL-UNNAMED", "-Dapple.awt.enableTemplateImages=true")
+} else {
+    emptyList()
+}
 
 // The app runs on — and ships with — a pinned JetBrains Runtime (plain JBR, no JCEF since the M5
 // native-editor cutover). A JBR is what makes MacWindowChrome's custom title bar and its drag

@@ -67,6 +67,7 @@ import dev.supermux.desktop.host.TrayModel
 import java.awt.desktop.QuitResponse
 import java.util.concurrent.atomic.AtomicReference
 import dev.supermux.desktop.host.hostingFacts
+import dev.supermux.desktop.host.TrayIcons
 import dev.supermux.desktop.host.openFile
 import kotlinx.coroutines.flow.flowOf
 import java.awt.Desktop
@@ -340,6 +341,9 @@ fun main() {
     // never OpenGL — so it is a no-op on Linux by construction. Still marked
     // experimental by JetBrains.
     System.setProperty("compose.interop.blending", "true")
+    // macOS menu bar: the tray icon is a template image the OS tints for a light or dark bar. Read
+    // once, when AWT's tray first loads, so it is set before anything touches AWT (also a jvmArg).
+    if (isMacOs()) System.setProperty(TrayIcons.TEMPLATE_PROPERTY, "true")
 
     val store = DesktopTokenStore()
     // Reclaim aged clipboard-paste PNGs under <config>/paste-cache/ (app-owned; never /tmp).
@@ -668,8 +672,10 @@ fun main() {
         }
 
         if (isTraySupported) {
+            // macOS: a black + alpha template drawn 1:1 at 22 and 44 px (see TrayIcons); elsewhere colour.
+            val trayIcon = if (isMacOs()) remember { TrayIcons.painter(mac = true) } else painterResource(TrayIcons.COLOUR)
             Tray(
-                icon = painterResource("supermux-tray.png"),
+                icon = trayIcon,
                 state = trayState,
                 tooltip = trayModel.header,
                 onAction = {
