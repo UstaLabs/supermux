@@ -4,7 +4,7 @@ import { existsSync, unlinkSync } from "fs"
 import { WebChannel, __resetAuthFailures } from "../src/channels/web"
 import { DeviceStore } from "../src/channels/web/device-store"
 import {
-  GIT_HINT_LINUX, GIT_REQUIRED_MESSAGE, GitRequiredError, installGit,
+  GIT_HINT_LINUX, GIT_REQUIRED_MESSAGE, GitInstaller, GitRequiredError,
   type GitRequirement, type HostRequirements, type InstallGitResponse,
 } from "../src/core/git/requirement"
 
@@ -159,11 +159,20 @@ test("POST /system/install-git returns the installer's answer: ok, or 400 manual
   expect(res.status).toBe(200)
   expect(await res.json()).toEqual({ ok: true })
 
-  installAnswer = installGit({ platform: "linux", requirement: MISSING, hasWinget: () => false, spawn: () => {} })
+  installAnswer = new GitInstaller({
+    platform: "linux", requirement: () => MISSING, hasWinget: () => false, spawn: () => ({ onExit: () => {} }),
+  }).install()
   res = await fetch(`${base}/system/install-git`, { method: "POST", headers: authed(), body: "{}" })
   expect(res.status).toBe(400)
   expect(await res.json()).toEqual({ error: "manual", hint: GIT_HINT_LINUX })
   expect(installCalls).toBe(2)
+})
+
+test("a second click while the installer is up answers ok + inProgress", async () => {
+  installAnswer = { status: 200, body: { ok: true, inProgress: true } }
+  const res = await fetch(`${base}/system/install-git`, { method: "POST", headers: authed(), body: "{}" })
+  expect(res.status).toBe(200)
+  expect(await res.json()).toEqual({ ok: true, inProgress: true })
 })
 
 // ── the host_requirements frame ────────────────────────────────────────────────────────────

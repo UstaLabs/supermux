@@ -1,31 +1,42 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
-import { join } from "path"
+import { delimiter, join, win32 as winPath } from "path"
 import { APPLE_GIT_STUB, noCltDir } from "./clt-guard"
 import {
-  GIT_HINT_DARWIN, GIT_HINT_LINUX, GIT_HINT_WINDOWS_MANUAL, GIT_REQUIRED_MESSAGE, GitRequiredError,
-  GitRequirementMonitor, WINGET_INSTALL_GIT, XCODE_SELECT_INSTALL, checkGit, gitInstallFor, gitRequiredBody,
-  installGit, spawnDetached, type GitRequirementDeps,
+  GIT_HINT_DARWIN, GIT_HINT_LINUX, GIT_HINT_WINDOWS_BROWSER, GIT_REQUIRED_MESSAGE, GitInstaller, GitRequiredError,
+  GitRequirementMonitor, INSTALL_COOLDOWN_MS, OPEN_GIT_DOWNLOAD_PAGE, WINGET_INSTALL_GIT, WINGET_MAX_MS,
+  XCODE_SELECT_INSTALL, checkGit, checkGitSync, expandWindowsVars, gitInstallFor, gitRequiredBody,
+  parseRegQueryPath, spawnDetached, type GitRequirement, type GitRequirementDeps, type RegistryScope,
 } from "./requirement"
 
 let stateDir: string
 beforeEach(() => { stateDir = mkdtempSync(join(tmpdir(), "git-req-")) })
 afterEach(() => { rmSync(stateDir, { recursive: true, force: true }) })
 
-const BASE_PATH = "/usr/local/bin:/usr/bin:/bin"
+const BASE_PATH = ["/usr/local/bin", "/usr/bin", "/bin"].join(delimiter)
 
-/** A fake PATH lookup: [bins] maps a binary to the path it resolves to (absent = not found). */
+/**
+ * A fake PATH lookup: [bins] maps a binary to where it resolves (absent = not found), and
+ * [dirBins] maps a single directory to the git found there (the Windows off-PATH probes).
+ */
 function fakeDeps(platform: NodeJS.Platform, bins: Record<string, string>, over: Partial<GitRequirementDeps> = {}) {
   const timers: Array<{ fn: () => void; ms: number; cleared: boolean; unrefd: boolean }> = []
   const seenPaths: string[] = []
-  const xcode = { exit: 2 }
+  const dirBins: Record<string, string> = {}
+  const registry: Partial<Record<RegistryScope, string>> = {}
+  const xcode = { exit: 2, asyncCalls: 0, syncCalls: 0 }
+  const pathChanges: string[] = []
   const d = {
     platform,
-    which: (bin: string, path: string): string | null => { seenPaths.push(path); return bins[bin] ?? null },
-    runXcodeSelect: (): number => xcode.exit,
-    get xcodeExit() { return xcode.exit },
-    set xcodeExit(v: number) { xcode.exit = v },
+    which: (bin: string, path: string): string | null => {
+      seenPaths.push(path)
+      if (bin === "git" && dirBins[path]) return dirBins[path]!
+      return bins[bin] ?? null
+    },
+    runXcodeSelectSync: (): number => { xcode.syncCalls++; return xcode.exit },
+    runXcodeSelect: async (): Promise<number> => { xcode.asyncCalls++; return xcode.exit },
+    readRegistryPath: async (scope: RegistryScope) => registry[scope] ?? null,
     stateDir,
     env: { PATH: BASE_PATH } as Record<string, string | undefined>,
     setInterval: (fn: () => void, ms: number) => {
@@ -34,138 +45,215 @@ function fakeDeps(platform: NodeJS.Platform, bins: Record<string, string>, over:
       return { unref: () => { t.unrefd = true }, t }
     },
     clearInterval: (h: unknown) => { (h as { t: { cleared: boolean } }).t.cleared = true },
-    timers,
-    seenPaths,
-    bins,
+    onPathChanged: (p: string) => { pathChanges.push(p) },
     ...over,
   }
-  return d
+  return { d, timers, seenPaths, bins, dirBins, registry, xcode, pathChanges }
 }
 
 // ── checkGit per OS ────────────────────────────────────────────────────────────────────────
 
-test("darwin: a real git first on PATH is usable", () => {
-  expect(checkGit(fakeDeps("darwin", { git: "/opt/homebrew/bin/git" }))).toBe(true)
+test("darwin: a real git first on PATH is usable", async () => {
+  const f = fakeDeps("darwin", { git: "/opt/homebrew/bin/git" })
+  expect(checkGitSync(f.d)).toBe(true)
+  expect((await checkGit(f.d)).found).toBe(true)
 })
 
-test("darwin: Apple's stub with no developer tools is missing", () => {
-  expect(checkGit(fakeDeps("darwin", { git: APPLE_GIT_STUB }))).toBe(false)
+test("darwin: Apple's stub with no developer tools is missing; with them it is usable", async () => {
+  const f = fakeDeps("darwin", { git: APPLE_GIT_STUB })
+  expect(checkGitSync(f.d)).toBe(false)
+  expect((await checkGit(f.d)).found).toBe(false)
+  f.xcode.exit = 0
+  expect((await checkGit(f.d)).found).toBe(true)
+  expect(f.xcode.asyncCalls).toBe(2) // the re-check uses the async xcode-select
 })
 
-test("darwin: Apple's stub with the developer tools installed is usable", () => {
-  const d = fakeDeps("darwin", { git: APPLE_GIT_STUB })
-  d.xcodeExit = 0
-  expect(checkGit(d)).toBe(true)
+test("darwin: no git on PATH at all is missing", async () => {
+  const f = fakeDeps("darwin", {})
+  expect(checkGitSync(f.d)).toBe(false)
+  expect((await checkGit(f.d)).found).toBe(false)
 })
 
-test("linux: git on PATH is usable; none is missing", () => {
-  expect(checkGit(fakeDeps("linux", { git: "/usr/bin/git" }))).toBe(true)
-  expect(checkGit(fakeDeps("linux", {}))).toBe(false)
+test("linux: git on PATH is usable; none is missing", async () => {
+  expect((await checkGit(fakeDeps("linux", { git: "/usr/bin/git" }).d)).found).toBe(true)
+  expect((await checkGit(fakeDeps("linux", {}).d)).found).toBe(false)
 })
 
-test("win32: git on PATH is usable; none is missing", () => {
-  expect(checkGit(fakeDeps("win32", { git: "C:\\Program Files\\Git\\cmd\\git.exe" }))).toBe(true)
-  expect(checkGit(fakeDeps("win32", {}))).toBe(false)
+test("win32: git on PATH is usable", async () => {
+  expect((await checkGit(fakeDeps("win32", { git: "C:\\Program Files\\Git\\cmd\\git.exe" }).d))).toEqual({ found: true })
+})
+
+test("win32: git only in the fresh user registry Path is found, with its dir to add", async () => {
+  const f = fakeDeps("win32", {})
+  f.d.env.USERPROFILE = "C:\\Users\\a"
+  f.registry.user = "%USERPROFILE%\\bin;%USERPROFILE%\\AppData\\Local\\Programs\\Git\\cmd"
+  const dir = "C:\\Users\\a\\AppData\\Local\\Programs\\Git\\cmd"
+  f.dirBins[dir] = `${dir}\\git.exe`
+  expect(await checkGit(f.d)).toEqual({ found: true, addDir: dir })
+})
+
+test("win32: git only in the machine registry Path is found", async () => {
+  const f = fakeDeps("win32", {})
+  f.registry.machine = "C:\\Windows\\system32;D:\\Tools\\Git\\cmd"
+  f.dirBins["D:\\Tools\\Git\\cmd"] = "D:\\Tools\\Git\\cmd\\git.exe"
+  expect(await checkGit(f.d)).toEqual({ found: true, addDir: "D:\\Tools\\Git\\cmd" })
+})
+
+test("win32: Git for Windows' default dirs are probed even when the registry has nothing", async () => {
+  const f = fakeDeps("win32", {})
+  f.d.env.LOCALAPPDATA = "C:\\Users\\a\\AppData\\Local"
+  f.d.env.ProgramFiles = "C:\\Program Files"
+  const pf = winPath.join("C:\\Program Files", "Git", "cmd")
+  f.dirBins[pf] = `${pf}\\git.exe`
+  expect(await checkGit(f.d)).toEqual({ found: true, addDir: pf })
+  // The per-user dir was asked first.
+  expect(f.seenPaths).toContain(winPath.join("C:\\Users\\a\\AppData\\Local", "Programs", "Git", "cmd"))
+})
+
+test("win32: nowhere means missing; a failing registry read is just 'nothing there'", async () => {
+  const f = fakeDeps("win32", {}, { readRegistryPath: async () => { throw new Error("reg failed") } })
+  expect(await checkGit(f.d)).toEqual({ found: false })
 })
 
 test("our own shim dir is never looked at", () => {
-  const d = fakeDeps("linux", {})
-  d.env.PATH = `${noCltDir(stateDir)}:${BASE_PATH}`
-  checkGit(d)
-  expect(d.seenPaths.every((p) => !p.includes(noCltDir(stateDir)))).toBe(true)
+  const f = fakeDeps("linux", {})
+  f.d.env.PATH = `${noCltDir(stateDir)}${delimiter}${BASE_PATH}`
+  checkGitSync(f.d)
+  expect(f.seenPaths.every((p) => !p.includes(noCltDir(stateDir)))).toBe(true)
+})
+
+test("reg query output parsing and %VAR% expansion", () => {
+  const out = "\r\nHKEY_CURRENT_USER\\Environment\r\n    Path    REG_EXPAND_SZ    %USERPROFILE%\\bin;C:\\x\r\n\r\n"
+  expect(parseRegQueryPath(out)).toBe("%USERPROFILE%\\bin;C:\\x")
+  expect(parseRegQueryPath("ERROR: The system was unable to find the specified registry key")).toBeNull()
+  expect(expandWindowsVars("%userprofile%\\bin;%NOPE%", { USERPROFILE: "C:\\Users\\a" })).toBe("C:\\Users\\a\\bin;%NOPE%")
 })
 
 // ── install action per OS ──────────────────────────────────────────────────────────────────
 
-test("the install action: xcode-select on macOS, winget or manual on Windows, manual on Linux", () => {
+test("the install action: xcode-select on macOS, winget or the browser on Windows, manual on Linux", () => {
   expect(gitInstallFor("darwin", () => null, "")).toEqual({ install: "xcode-select", hint: GIT_HINT_DARWIN })
   expect(gitInstallFor("win32", (b) => (b === "winget" ? "C:\\winget.exe" : null), "").install).toBe("winget")
-  expect(gitInstallFor("win32", () => null, "")).toEqual({ install: "manual", hint: GIT_HINT_WINDOWS_MANUAL })
+  expect(gitInstallFor("win32", () => null, "")).toEqual({ install: "browser", hint: GIT_HINT_WINDOWS_BROWSER })
   expect(gitInstallFor("linux", () => null, "")).toEqual({ install: "manual", hint: GIT_HINT_LINUX })
 })
 
 // ── the monitor ────────────────────────────────────────────────────────────────────────────
 
 test("start with git present: ok, no timer, PATH untouched", () => {
-  const d = fakeDeps("linux", { git: "/usr/bin/git" })
-  const m = new GitRequirementMonitor(d)
-  expect(m.start().ok).toBe(true)
-  expect(d.timers).toHaveLength(0)
-  expect(d.env.PATH).toBe(BASE_PATH)
+  const f = fakeDeps("linux", { git: "/usr/bin/git" })
+  expect(new GitRequirementMonitor(f.d).start().ok).toBe(true)
+  expect(f.timers).toHaveLength(0)
+  expect(f.d.env.PATH).toBe(BASE_PATH)
 })
 
 test("linux without git: missing, manual hint, an unref'd 10 s re-check, PATH kept as is", () => {
-  const d = fakeDeps("linux", {})
-  const m = new GitRequirementMonitor(d)
-  expect(m.start()).toEqual({ ok: false, install: "manual", hint: GIT_HINT_LINUX })
-  expect(d.timers).toHaveLength(1)
-  expect(d.timers[0]!.ms).toBe(10_000)
-  expect(d.timers[0]!.unrefd).toBe(true)
-  expect(d.env.PATH).toBe(BASE_PATH)
+  const f = fakeDeps("linux", {})
+  expect(new GitRequirementMonitor(f.d).start()).toEqual({ ok: false, install: "manual", hint: GIT_HINT_LINUX })
+  expect(f.timers).toHaveLength(1)
+  expect(f.timers[0]!.ms).toBe(10_000)
+  expect(f.timers[0]!.unrefd).toBe(true)
+  expect(f.d.env.PATH).toBe(BASE_PATH)
 })
 
-test("darwin without the developer tools: the shim goes first on PATH", () => {
-  const d = fakeDeps("darwin", { git: APPLE_GIT_STUB })
-  const m = new GitRequirementMonitor(d)
-  expect(m.start()).toEqual({ ok: false, install: "xcode-select", hint: GIT_HINT_DARWIN })
-  expect(d.env.PATH).toBe(`${noCltDir(stateDir)}:${BASE_PATH}`)
+test("darwin without the developer tools: the shim goes first on PATH (boot check is synchronous)", () => {
+  const f = fakeDeps("darwin", { git: APPLE_GIT_STUB })
+  expect(new GitRequirementMonitor(f.d).start()).toEqual({ ok: false, install: "xcode-select", hint: GIT_HINT_DARWIN })
+  expect(f.d.env.PATH).toBe(`${noCltDir(stateDir)}${delimiter}${BASE_PATH}`)
   expect(existsSync(join(noCltDir(stateDir), "git"))).toBe(true)
+  expect(f.xcode.syncCalls).toBeGreaterThan(0)
+  expect(f.xcode.asyncCalls).toBe(0)
 })
 
-test("re-check finds git: the shim leaves PATH, the state flips, listeners hear it, the timer stops", () => {
-  const d = fakeDeps("darwin", { git: APPLE_GIT_STUB })
-  const m = new GitRequirementMonitor(d)
+test("darwin with no git on PATH at all: missing like checkGit, and no shim (no stub, no dialog)", () => {
+  const f = fakeDeps("darwin", {})
+  expect(new GitRequirementMonitor(f.d).start().ok).toBe(false)
+  expect(f.d.env.PATH).toBe(BASE_PATH)
+  expect(existsSync(join(noCltDir(stateDir), "git"))).toBe(false)
+  expect(f.timers).toHaveLength(1)
+})
+
+test("re-check finds git: the shim leaves PATH, the state flips, listeners and tmux hear it, the timer stops", async () => {
+  const f = fakeDeps("darwin", { git: APPLE_GIT_STUB })
+  const m = new GitRequirementMonitor(f.d)
   m.start()
   const heard: unknown[] = []
   m.onChange((r) => heard.push(r))
 
-  d.timers[0]!.fn() // still missing
-  expect(m.ok).toBe(false)
+  expect(await m.recheck()).toBe(false) // still missing
   expect(heard).toHaveLength(0)
 
-  d.xcodeExit = 0 // the user finished Apple's installer
-  d.timers[0]!.fn()
+  f.xcode.exit = 0 // the user finished Apple's installer
+  expect(await m.recheck()).toBe(true)
   expect(m.ok).toBe(true)
-  expect(d.env.PATH).toBe(BASE_PATH)
+  expect(f.d.env.PATH).toBe(BASE_PATH)
+  expect(f.pathChanges).toEqual([BASE_PATH])
   expect(heard).toEqual([{ git: { ok: true, install: "xcode-select", hint: GIT_HINT_DARWIN } }])
-  expect(d.timers[0]!.cleared).toBe(true)
+  expect(f.timers[0]!.cleared).toBe(true)
 })
 
-test("linux re-check finds a freshly installed git", () => {
-  const d = fakeDeps("linux", {})
-  const m = new GitRequirementMonitor(d)
+test("the timer tick runs the async re-check", async () => {
+  const f = fakeDeps("linux", {})
+  const m = new GitRequirementMonitor(f.d)
   m.start()
-  let calls = 0
-  m.onChange(() => calls++)
-  d.bins.git = "/usr/bin/git"
-  expect(m.recheck()).toBe(true)
-  expect(m.requirements().git.ok).toBe(true)
-  expect(calls).toBe(1)
-  expect(m.recheck()).toBe(false) // already ok: nothing more
-  expect(calls).toBe(1)
+  f.bins.git = "/usr/bin/git"
+  f.timers[0]!.fn()
+  await m.recheck() // joins (or follows) the tick's re-check
+  expect(m.ok).toBe(true)
 })
 
-test("windows: winget appearing while missing updates the action and notifies", () => {
-  const d = fakeDeps("win32", {})
-  const m = new GitRequirementMonitor(d)
-  expect(m.start().install).toBe("manual")
+test("overlapping re-checks share one check (in-flight guard)", async () => {
+  let release!: (n: number) => void
+  let calls = 0
+  const f = fakeDeps("darwin", { git: APPLE_GIT_STUB }, {
+    runXcodeSelect: () => { calls++; return new Promise<number>((r) => { release = r }) },
+  })
+  const m = new GitRequirementMonitor(f.d)
+  m.start()
+  const a = m.recheck()
+  const b = m.recheck()
+  expect(a).toBe(b)
+  release(0)
+  expect(await a).toBe(true)
+  expect(calls).toBe(1)
+  // A later call is a fresh one (and a no-op now that git is there).
+  expect(await m.recheck()).toBe(false)
+})
+
+test("windows: an install that only updated the registry unblocks without a restart (dir added to PATH)", async () => {
+  const f = fakeDeps("win32", {})
+  f.d.env.LOCALAPPDATA = "C:\\Users\\a\\AppData\\Local"
+  const m = new GitRequirementMonitor(f.d)
+  expect(m.start().ok).toBe(false)
+  const dir = winPath.join("C:\\Users\\a\\AppData\\Local", "Programs", "Git", "cmd")
+  f.registry.user = dir
+  f.dirBins[dir] = `${dir}\\git.exe`
+  expect(await m.recheck()).toBe(true)
+  expect(f.d.env.PATH).toBe(`${dir}${delimiter}${BASE_PATH}`)
+  expect(m.ok).toBe(true)
+})
+
+test("windows: winget appearing while missing updates the action and notifies", async () => {
+  const f = fakeDeps("win32", {})
+  const m = new GitRequirementMonitor(f.d)
+  expect(m.start().install).toBe("browser")
   const heard: string[] = []
   m.onChange((r) => heard.push(r.git.install))
-  d.bins.winget = "C:\\winget.exe"
-  m.recheck()
+  f.bins.winget = "C:\\winget.exe"
+  await m.recheck()
   expect(m.git).toMatchObject({ ok: false, install: "winget" })
   expect(heard).toEqual(["winget"])
 })
 
-test("a throwing listener does not stop the others", () => {
-  const d = fakeDeps("linux", {})
-  const m = new GitRequirementMonitor(d)
+test("a throwing listener does not stop the others", async () => {
+  const f = fakeDeps("linux", {})
+  const m = new GitRequirementMonitor(f.d)
   m.start()
   let reached = false
   m.onChange(() => { throw new Error("boom") })
   m.onChange(() => { reached = true })
-  d.bins.git = "/usr/bin/git"
-  m.recheck()
+  f.bins.git = "/usr/bin/git"
+  await m.recheck()
   expect(reached).toBe(true)
 })
 
@@ -181,45 +269,79 @@ test("the refusal carries the message and the requirement object", () => {
 
 // ── install-git per OS (injected spawner: no installer ever runs) ──────────────────────────
 
-const missing = (install: "xcode-select" | "winget" | "manual") => ({ ok: false, install, hint: "h" })
-
-test("install-git on macOS runs xcode-select --install", () => {
+function installer(platform: NodeJS.Platform, opts: { winget?: boolean; ok?: boolean } = {}) {
   const spawned: string[][] = []
-  const r = installGit({ platform: "darwin", requirement: missing("xcode-select"), hasWinget: () => false, spawn: (c) => spawned.push(c) })
-  expect(r).toEqual({ status: 200, body: { ok: true } })
-  expect(spawned).toEqual([XCODE_SELECT_INSTALL])
+  const exits: Array<() => void> = []
+  const clock = { now: 1_000_000 }
+  const req: GitRequirement = { ok: opts.ok ?? false, install: "manual", hint: "h" }
+  const inst = new GitInstaller({
+    platform,
+    requirement: () => req,
+    hasWinget: () => opts.winget ?? false,
+    spawn: (cmd) => { spawned.push(cmd); return { onExit: (cb) => { exits.push(cb) } } },
+    now: () => clock.now,
+  })
+  return { inst, spawned, exits, clock }
+}
+
+test("install-git on macOS runs xcode-select --install, then cools down for 60 s", () => {
+  const t = installer("darwin")
+  expect(t.inst.install()).toEqual({ status: 200, body: { ok: true } })
+  expect(t.spawned).toEqual([XCODE_SELECT_INSTALL])
+  t.clock.now += INSTALL_COOLDOWN_MS - 1
+  expect(t.inst.install()).toEqual({ status: 200, body: { ok: true, inProgress: true } })
+  expect(t.spawned).toHaveLength(1)
+  t.clock.now += 1
+  expect(t.inst.install().body).toEqual({ ok: true })
+  expect(t.spawned).toHaveLength(2)
 })
 
-test("install-git on Windows with winget runs the user-scope winget install", () => {
-  const spawned: string[][] = []
-  const r = installGit({ platform: "win32", requirement: missing("winget"), hasWinget: () => true, spawn: (c) => spawned.push(c) })
-  expect(r.status).toBe(200)
-  expect(spawned).toEqual([WINGET_INSTALL_GIT])
+test("install-git on Windows with winget runs the user-scope install and refuses while it runs", () => {
+  const t = installer("win32", { winget: true })
+  expect(t.inst.install().body).toEqual({ ok: true })
+  expect(t.spawned).toEqual([WINGET_INSTALL_GIT])
   expect(WINGET_INSTALL_GIT.join(" ")).toBe(
     "winget install --id Git.Git -e --scope user --accept-source-agreements --accept-package-agreements",
   )
+  t.clock.now += 5 * 60_000
+  expect(t.inst.install().body).toEqual({ ok: true, inProgress: true })
+  t.exits[0]!() // winget finished
+  expect(t.inst.install().body).toEqual({ ok: true })
+  expect(t.spawned).toHaveLength(2)
 })
 
-test("install-git on Windows without winget, and on Linux, is manual (400 + hint), nothing spawned", () => {
-  const spawned: string[][] = []
-  const spawn = (c: string[]) => { spawned.push(c) }
-  expect(installGit({ platform: "win32", requirement: missing("manual"), hasWinget: () => false, spawn }))
-    .toEqual({ status: 400, body: { error: "manual", hint: GIT_HINT_WINDOWS_MANUAL } })
-  expect(installGit({ platform: "linux", requirement: missing("manual"), hasWinget: () => false, spawn }))
-    .toEqual({ status: 400, body: { error: "manual", hint: GIT_HINT_LINUX } })
-  expect(spawned).toHaveLength(0)
+test("a winget run that never exits stops blocking after 15 min", () => {
+  const t = installer("win32", { winget: true })
+  t.inst.install()
+  t.clock.now += WINGET_MAX_MS
+  expect(t.inst.install().body).toEqual({ ok: true })
+  expect(t.spawned).toHaveLength(2)
+})
+
+test("install-git on Windows without winget opens the download page (fixed argv), with the cooldown", () => {
+  const t = installer("win32")
+  expect(t.inst.install()).toEqual({ status: 200, body: { ok: true } })
+  expect(t.spawned).toEqual([OPEN_GIT_DOWNLOAD_PAGE])
+  expect(OPEN_GIT_DOWNLOAD_PAGE).toEqual(["explorer.exe", "https://git-scm.com/download/win"])
+  expect(t.inst.install().body).toEqual({ ok: true, inProgress: true })
+})
+
+test("install-git on Linux is manual (400 + hint), nothing spawned", () => {
+  const t = installer("linux")
+  expect(t.inst.install()).toEqual({ status: 400, body: { error: "manual", hint: GIT_HINT_LINUX } })
+  expect(t.spawned).toHaveLength(0)
 })
 
 test("install-git with git already present does nothing", () => {
-  const spawned: string[][] = []
-  const r = installGit({ platform: "darwin", requirement: { ok: true, install: "xcode-select", hint: "" }, hasWinget: () => false, spawn: (c) => spawned.push(c) })
-  expect(r).toEqual({ status: 200, body: { ok: true, alreadyInstalled: true } })
-  expect(spawned).toHaveLength(0)
+  const t = installer("darwin", { ok: true })
+  expect(t.inst.install()).toEqual({ status: 200, body: { ok: true, alreadyInstalled: true } })
+  expect(t.spawned).toHaveLength(0)
 })
 
-test("the real spawner survives a missing binary (async ENOENT is handled, not thrown)", async () => {
+test("the real spawner survives a missing binary (async ENOENT is handled, not thrown) and reports the exit", async () => {
   const logged: string[] = []
-  spawnDetached(["supermux-definitely-not-a-binary-xyz"], (e) => logged.push(e))
-  await new Promise((r) => setTimeout(r, 100))
+  const run = spawnDetached(["supermux-definitely-not-a-binary-xyz"], (e) => logged.push(e))
+  const exited = new Promise<void>((r) => run.onExit(r))
+  await exited
   expect(logged).toContain("install_git_spawn_failed")
 })

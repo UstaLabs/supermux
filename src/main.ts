@@ -109,7 +109,8 @@ import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
 import { withAgentBinDirs } from "./core/agents/bin-dirs"
 import {
-  GitRequiredError, GitRequirementMonitor, GIT_REQUIRED_MESSAGE, bunWhich, installGit as installGitFor, spawnDetached,
+  GitInstaller, GitRequiredError, GitRequirementMonitor, GIT_REQUIRED_MESSAGE, bunWhich, readRegistryPath,
+  setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
 } from "./core/git/requirement"
 import { spawnSync as spawnSyncForGit } from "child_process"
 import { homedir, hostname } from "os"
@@ -217,16 +218,32 @@ process.env.PATH = withAgentBinDirs(process.env.PATH, homedir())
 const gitRequirement = new GitRequirementMonitor({
   platform: process.platform,
   which: bunWhich,
-  runXcodeSelect: () => {
+  // Synchronous only for the boot check (before listen); every re-check is async.
+  runXcodeSelectSync: () => {
     try {
       return spawnSyncForGit("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 }).status ?? 1
     } catch {
       return 1
     }
   },
+  runXcodeSelect: xcodeSelectExit,
+  // Windows: an installer updates the registry Path, never ours — read it fresh on each re-check.
+  readRegistryPath,
   stateDir: STATE_DIR,
   env: process.env,
   log: (event, data) => log.info(event, data),
+  // New tmux windows (claude sessions) inherit tmux's global env, not ours: drop the shim there too.
+  onPathChanged: (path) => setTmuxGlobalPath(path),
+})
+/** POST /system/install-git, debounced (60 s cooldown; a running winget blocks a second one). */
+const gitInstaller = new GitInstaller({
+  platform: process.platform,
+  requirement: () => gitRequirement.git,
+  hasWinget: () => bunWhich("winget", process.env.PATH ?? "") !== null,
+  spawn: (cmd) => {
+    log.info("install_git_started", { cmd: cmd[0] })
+    return spawnDetached(cmd, (event, data) => log.warn(event, data))
+  },
 })
 {
   const git = gitRequirement.start()
@@ -1471,15 +1488,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       requirements: gitRequirement.requirements(),
     }),
     getHostRequirements: () => gitRequirement.requirements(),
-    installGit: () => installGitFor({
-      platform: process.platform,
-      requirement: gitRequirement.git,
-      hasWinget: () => bunWhich("winget", process.env.PATH ?? "") !== null,
-      spawn: (cmd) => {
-        log.info("install_git_started", { cmd: cmd[0] })
-        spawnDetached(cmd, (event, data) => log.warn(event, data))
-      },
-    }),
+    installGit: () => gitInstaller.install(),
     claimStore,
     // CSRF trusts this as a second allowed Origin for cookie browsers on the
     // hosted relay. Prefer the live online URL, but fall back to the
