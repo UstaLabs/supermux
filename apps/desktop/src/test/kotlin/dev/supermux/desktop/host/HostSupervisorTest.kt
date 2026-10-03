@@ -1233,4 +1233,16 @@ class HostSupervisorTest {
         )
         Files.writeString(dir.resolve("pending.json"), Takeover.encodeJournal(p))
     }
+
+    @Test fun gitAvailableFollowsTheHealthyProbeAndClearsWhenHostingStops() = runTest {
+        val h = Harness(this)
+        assertNull(h.sup.gitAvailable.value)
+        h.probeFn = { if (h.liveChild != null) h.desktop().copy(gitAvailable = false) else HostProbeResult.PortFree }
+        h.sup.ensure()
+        assertIs<HostingStatus.Running>(h.sup.status.value)
+        assertEquals(false, h.sup.gitAvailable.value)
+        h.probeFn = { HostProbeResult.PortFree }
+        h.sup.setHosting(false)
+        assertNull(h.sup.gitAvailable.value)
+    }
 }

@@ -48,6 +48,7 @@ import dev.supermux.desktop.host.HostSupervisor
 import dev.supermux.desktop.host.HostWizardContent
 import dev.supermux.desktop.host.HostWizardModel
 import dev.supermux.desktop.host.HostWizardUiState
+import dev.supermux.desktop.host.HostingPrefs
 import dev.supermux.desktop.host.HostingStatus
 import dev.supermux.desktop.host.displayLocalUrl
 import dev.supermux.desktop.host.hostingStatusLine
@@ -109,6 +110,59 @@ private object NoHostingActions : HostingActions {
     override fun showLog() = Unit
     override fun pairDevice() = Unit
     override fun manageIt() = Unit
+    override fun installGit() = Unit
+}
+
+/**
+ * Pure: Settings ▸ Hosting's state from the supervisor's. [localUrl] is the display address (already
+ * swapped to the LAN IP); [canPair] whether there is a store to pair into. The git row shows only
+ * while running against a broker that said `gitAvailable: false`.
+ */
+internal fun desktopHostingUiState(
+    status: HostingStatus,
+    prefs: HostingPrefs,
+    sessions: Int,
+    build: String?,
+    localUrl: String?,
+    relayUrl: String?,
+    logTail: List<String>,
+    canPair: Boolean,
+    backgroundError: String?,
+    gitAvailable: Boolean?,
+): HostingUiState {
+    val readOnly = DesktopHostBootstrap.isReadOnly(status)
+    val running = status is HostingStatus.Running
+    val line = hostingStatusLine(status, prefs, sessions, BrokerVersion.versionOf(build))
+    return HostingUiState(
+        hosting = prefs.hosting,
+        statusDot = line.dot,
+        statusText = line.text,
+        readOnly = readOnly,
+        localUrl = if (running) localUrl else null,
+        relayUrl = relayUrl?.takeIf { prefs.relay || readOnly },
+        relay = prefs.relay,
+        background = prefs.background,
+        sessions = sessions,
+        logTail = logTail,
+        failed = status is HostingStatus.CantStart,
+        restartEnabled = running && !readOnly,
+        canPair = running && canPair,
+        backgroundError = backgroundError,
+        gitMissing = running && gitAvailable == false,
+    )
+}
+
+/** Apple's "install the Command Line Tools" prompt. Off the UI thread; best-effort. */
+private fun installCommandLineTools(log: (String) -> Unit) {
+    hostingScope.launch(Dispatchers.IO) {
+        runCatching {
+            val p = ProcessBuilder("xcode-select", "--install").redirectErrorStream(true).start()
+            val out = p.inputStream.bufferedReader().readText().trim()
+            val code = p.waitFor()
+            // Exit 1 with "already installed"/"already in progress" is not a failure worth more than a line.
+            log("xcode-select --install exited $code${if (out.isNotEmpty()) ": ${out.take(200)}" else ""}")
+        }.onFailure { log("xcode-select --install failed: ${it.message ?: it}") }
+    }
 }
 
 /** Settings ▸ Hosting on desktop. Where the app does not host (no supervisor) it shows the "off" copy. */
@@ -127,6 +181,7 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
     val hostId by sup.hostId.collectAsState()
     val build by sup.build.collectAsState()
     val backgroundError by sup.backgroundError.collectAsState()
+    val gitAvailable by sup.gitAvailable.collectAsState()
     val wizard by HostingTurnOn.model.collectAsState()
 
     val lanIp by produceState<String?>(null) { value = withContext(Dispatchers.IO) { lanIpv4(systemNetIfs()) } }
@@ -148,25 +203,17 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
         logTail = if (status is HostingStatus.CantStart) withContext(Dispatchers.IO) { tailLines(sup.logFile) } else emptyList()
     }
 
-    val s = status
-    val readOnly = DesktopHostBootstrap.isReadOnly(s)
-    val running = s is HostingStatus.Running
-    val line = hostingStatusLine(s, prefs, sessions, BrokerVersion.versionOf(build))
-    val state = HostingUiState(
-        hosting = prefs.hosting,
-        statusDot = line.dot,
-        statusText = line.text,
-        readOnly = readOnly,
-        localUrl = if (running) displayLocalUrl(sup.localBaseUrl, lanIp) else null,
-        relayUrl = relayUrl?.takeIf { prefs.relay || readOnly },
-        relay = prefs.relay,
-        background = prefs.background,
+    val state = desktopHostingUiState(
+        status = status,
+        prefs = prefs,
         sessions = sessions,
+        build = build,
+        localUrl = displayLocalUrl(sup.localBaseUrl, lanIp),
+        relayUrl = relayUrl,
         logTail = logTail,
-        failed = s is HostingStatus.CantStart,
-        restartEnabled = running && !readOnly,
-        canPair = running && hostStore != null,
+        canPair = hostStore != null,
         backgroundError = backgroundError,
+        gitAvailable = gitAvailable,
     )
     val actions = remember(sup, hostStore) {
         object : HostingActions {
@@ -190,6 +237,7 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
                 val id = sup.hostId.value
                 hostingScope.launch { if (id != null) sup.forgetLeftAlone(id) else sup.ensure() }
             }
+            override fun installGit() { installCommandLineTools(sup.log) }
         }
     }
 

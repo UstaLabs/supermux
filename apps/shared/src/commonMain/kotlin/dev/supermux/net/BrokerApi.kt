@@ -68,6 +68,8 @@ data class HostIdentity(
     val managedBy: String? = null,
     /** Local-only: the broker's state dir. */
     val stateDir: String? = null,
+    /** Local-only: false on a Mac without the Xcode Command Line Tools (git is disabled there). */
+    val gitAvailable: Boolean? = null,
 )
 
 /** POST /pair/claim body — a one-time claimSecret + this device's chosen display name. */

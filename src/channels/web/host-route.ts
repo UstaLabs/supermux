@@ -14,6 +14,8 @@ export interface HostInfo {
   /** `MUX_MANAGED_BY` (e.g. "desktop"), absent when nothing manages this broker. */
   managedBy?: string
   stateDir?: string
+  /** false on a Mac without the Xcode Command Line Tools (see `core/git/clt-guard`). */
+  gitAvailable?: boolean
 }
 
 export interface HostBody {
@@ -26,6 +28,7 @@ export interface HostBody {
   mode?: HostMode
   managedBy?: string
   stateDir?: string
+  gitAvailable?: boolean
 }
 
 /**
@@ -41,6 +44,7 @@ export function buildHostBody(info: HostInfo, authed: boolean, directLoopback = 
     if (info.mode !== undefined) base.mode = info.mode
     if (info.managedBy !== undefined) base.managedBy = info.managedBy
     if (info.stateDir !== undefined) base.stateDir = info.stateDir
+    if (info.gitAvailable !== undefined) base.gitAvailable = info.gitAvailable
   }
   return base
 }

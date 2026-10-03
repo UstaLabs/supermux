@@ -29,6 +29,7 @@ class HostingSettingsScreenTest {
         override fun showLog() { calls += "log" }
         override fun pairDevice() { calls += "pair" }
         override fun manageIt() { calls += "manage" }
+        override fun installGit() { calls += "installGit" }
     }
 
     private fun running(
@@ -36,6 +37,7 @@ class HostingSettingsScreenTest {
         logTail: List<String> = emptyList(),
         relayUrl: String? = "https://h-abc.relay.supermux.dev",
         backgroundError: String? = null,
+        gitMissing: Boolean = false,
     ) = HostingUiState(
         hosting = true,
         statusDot = "🟢",
@@ -50,6 +52,7 @@ class HostingSettingsScreenTest {
         failed = logTail.isNotEmpty(),
         restartEnabled = !readOnly,
         backgroundError = backgroundError,
+        gitMissing = gitMissing,
     )
 
     private val off = HostingUiState(
@@ -169,5 +172,20 @@ class HostingSettingsScreenTest {
     @Test fun there_is_no_end_to_end_caveat() = runComposeUiTest {
         setPlatformContent { HostingSettingsScreen(running(), Recorder()) }
         onNodeWithText("end-to-end", substring = true, ignoreCase = true).assertDoesNotExist()
+    }
+
+    @Test fun git_missing_shows_the_row_and_install_runs_the_action() = runComposeUiTest {
+        val r = Recorder()
+        setPlatformContent { HostingSettingsScreen(running(gitMissing = true), r) }
+        onNodeWithTag("hosting_git_missing").assertExists()
+        onNodeWithText(HostingCopy.GIT_MISSING).assertExists()
+        onNodeWithTag("hosting_install_git").assertTextEquals(HostingCopy.INSTALL_GIT).performClick()
+        assertEquals(listOf("installGit"), r.calls)
+    }
+
+    @Test fun git_present_shows_no_row() = runComposeUiTest {
+        setPlatformContent { HostingSettingsScreen(running(), Recorder()) }
+        onNodeWithTag("hosting_git_missing").assertDoesNotExist()
+        onNodeWithTag("hosting_install_git").assertDoesNotExist()
     }
 }

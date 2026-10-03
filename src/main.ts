@@ -108,6 +108,7 @@ import { detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents
 import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
 import { withAgentBinDirs } from "./core/agents/bin-dirs"
+import { installCltGuard, gitUnavailable } from "./core/git/clt-guard"
 import { homedir, hostname } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
@@ -204,6 +205,14 @@ if (IS_TEST_BROKER) {
 // process never sourced. Put those dirs on PATH up front so both detection
 // (hasBinary) and spawning can see an agent the user installs at runtime.
 process.env.PATH = withAgentBinDirs(process.env.PATH, homedir())
+
+// A Mac without the Xcode Command Line Tools: /usr/bin/git is Apple's stub, which opens an install
+// dialog on EVERY run. Before anything spawns git, put a failing `git` ahead of it on PATH so the
+// broker and every session it starts get a plain error instead. No-op elsewhere.
+{
+  const clt = installCltGuard(STATE_DIR)
+  if (clt.gitUnavailable) log.warn("preflight", { warning: `git disabled: ${clt.reason}`, shimDir: clt.shimDir })
+}
 
 // Fail fast before any filesystem side-effects (state dirs, pid file, db).
 // The workspace-terminal probe is a packaging question (is the verified zmx
@@ -1432,6 +1441,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       mode: detectInstallMode(),
       managedBy: process.env.MUX_MANAGED_BY || undefined,
       stateDir: STATE_DIR,
+      // false on a Mac without the developer tools: the desktop app says "Git isn't installed".
+      gitAvailable: !gitUnavailable,
     }),
     claimStore,
     // CSRF trusts this as a second allowed Origin for cookie browsers on the

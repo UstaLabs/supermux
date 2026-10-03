@@ -30,3 +30,11 @@ test("remote callers never see the local-only fields, even when authed", () => {
   expect(body).not.toHaveProperty("build")
   expect(body).not.toHaveProperty("mode")
 })
+
+test("gitAvailable reaches direct loopback callers only", () => {
+  const noGit = { ...info, gitAvailable: false }
+  expect(buildHostBody(noGit, false, true).gitAvailable).toBe(false)
+  expect(buildHostBody(noGit, true, false)).not.toHaveProperty("gitAvailable")
+  expect(buildHostBody(noGit, false, false)).not.toHaveProperty("gitAvailable")
+  expect(buildHostBody(info, false, true)).not.toHaveProperty("gitAvailable")
+})

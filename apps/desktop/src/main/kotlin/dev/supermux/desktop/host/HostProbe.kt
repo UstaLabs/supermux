@@ -23,6 +23,8 @@ sealed interface HostProbeResult {
         val mode: String?,
         val managedBy: String?,
         val stateDir: String?,
+        /** false: the broker found no usable git (a Mac without the Command Line Tools). */
+        val gitAvailable: Boolean? = null,
     ) : HostProbeResult
     /** Something answers but is not ready (HTTP 5xx, or accepts TCP but times out): may be a broker still starting. */
     object Busy : HostProbeResult
@@ -123,7 +125,7 @@ object HostProber {
         val id = runCatching { json.decodeFromString(HostIdentity.serializer(), body) }.getOrNull()
             ?: return HostProbeResult.ForeignProcess
         if (id.hostId.isBlank()) return HostProbeResult.ForeignProcess
-        return HostProbeResult.Supermux(id.hostId, id.build, id.mode, id.managedBy, id.stateDir)
+        return HostProbeResult.Supermux(id.hostId, id.build, id.mode, id.managedBy, id.stateDir, id.gitAvailable)
     }
 
     private fun tcpConnectable(host: String, port: Int): Boolean =

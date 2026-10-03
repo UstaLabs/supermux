@@ -78,6 +78,11 @@ class HostProbeTest {
     @Test fun probeSupermuxJson() = withServer(200, """{"hostId":"h9","protocolVersion":1}""") {
         assertEquals(HostProbeResult.Supermux("h9", null, null, null, null), HostProber.probe(it))
     }
+    @Test fun parseReadsGitAvailable() {
+        val r = HostProber.parse("""{"hostId":"h9","protocolVersion":1,"gitAvailable":false}""")
+        assertEquals(HostProbeResult.Supermux("h9", null, null, null, null, gitAvailable = false), r)
+        assertEquals(null, (HostProber.parse("""{"hostId":"h9"}""") as HostProbeResult.Supermux).gitAvailable)
+    }
     @Test fun probeClosedPortIsFree() {
         val port = java.net.ServerSocket(0).use { it.localPort }
         assertEquals(HostProbeResult.PortFree, HostProber.probe(port))

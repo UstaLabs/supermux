@@ -21,7 +21,7 @@ beforeEach(async () => {
     onSendFromWeb: () => {},
     getHostInfo: () => ({
       hostId: "h1", name: "n", platform: "darwin", version: "1.5.0", protocolVersion: 1,
-      build: "1.5.0 (abc)", mode: "binary", managedBy: "desktop", stateDir: "/s",
+      build: "1.5.0 (abc)", mode: "binary", managedBy: "desktop", stateDir: "/s", gitAvailable: false,
     }),
   } as any)
   await ch.start()
@@ -39,12 +39,14 @@ test("a direct loopback request sees managedBy and stateDir", async () => {
   expect(body.build).toBe("1.5.0 (abc)")
   expect(body.mode).toBe("binary")
   expect(body.platform).toBe("darwin")
+  expect(body.gitAvailable).toBe(false)
 })
 
 test("a loopback request that went through the relay (X-Forwarded-For) does not", async () => {
   const body = await (await fetch(`http://127.0.0.1:${PORT}/host`, {
     headers: { "x-forwarded-for": "203.0.113.9" },
   })).json() as any
+  expect(body.gitAvailable).toBeUndefined()
   expect(body.managedBy).toBeUndefined()
   expect(body.stateDir).toBeUndefined()
 })

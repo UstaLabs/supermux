@@ -63,6 +63,7 @@ import dev.supermux.ui.widgets.SettingsSectionHeader
  * @property restartEnabled false while it is starting/restarting, or when it is not ours to restart.
  * @property canPair a pairing code can be minted (the broker is running).
  * @property backgroundError why "Keep running in the background" could not be applied, if it couldn't.
+ * @property gitMissing the local broker reports no usable git (a Mac without the Command Line Tools).
  */
 data class HostingUiState(
     val hosting: Boolean,
@@ -79,6 +80,7 @@ data class HostingUiState(
     val restartEnabled: Boolean = true,
     val canPair: Boolean = true,
     val backgroundError: String? = null,
+    val gitMissing: Boolean = false,
 )
 
 /** What the page can ask the host platform to do. Every call returns at once; work runs elsewhere. */
@@ -91,6 +93,8 @@ interface HostingActions {
     fun showLog()
     fun pairDevice()
     fun manageIt()
+    /** Start installing git (desktop macOS: `xcode-select --install`). */
+    fun installGit()
 }
 
 /** The copy the page shows, as constants so the tests assert the exact strings. */
@@ -103,6 +107,9 @@ object HostingCopy {
     const val BACKGROUND_HELP = "Your agents stay reachable after you quit, sign out or restart."
     const val BACKGROUND_READ_ONLY = "Managed by its own service"
     const val MANAGE = "Let the app manage it"
+    const val GIT_MISSING =
+        "Git isn't installed on this Mac. Agents can't use git until you install Apple's Command Line Tools."
+    const val INSTALL_GIT = "Install…"
 
     /** The confirm shown before turning hosting off. */
     fun stopConfirm(sessions: Int): String {
@@ -225,6 +232,30 @@ private fun HostingSettingsBody(
                         .padding(Space.md)
                         .testTag("hosting_log_tail"),
                 )
+            }
+
+            if (state.gitMissing) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(Space.sm))
+                        .background(cs.surfaceContainerHigh)
+                        .padding(Space.md)
+                        .testTag("hosting_git_missing"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        HostingCopy.GIT_MISSING,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = cs.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(Space.md))
+                    OutlinedButton(
+                        onClick = actions::installGit,
+                        modifier = Modifier.testTag("hosting_install_git"),
+                    ) { Text(HostingCopy.INSTALL_GIT) }
+                }
             }
 
             // ── Address ──

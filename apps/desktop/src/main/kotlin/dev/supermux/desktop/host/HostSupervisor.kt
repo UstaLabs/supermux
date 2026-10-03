@@ -39,7 +39,7 @@ class HostSupervisor(
     internal val stateDir: Path = BrokerPaths.defaultStateDir(),
     private val loadPrefs: () -> HostingPrefs,
     private val savePrefs: (HostingPrefs) -> Unit,
-    internal val probe: suspend (port: Int) -> HostProbeResult = { port -> withContext(Dispatchers.IO) { HostProber.probe(port) } },
+    probe: suspend (port: Int) -> HostProbeResult = { port -> withContext(Dispatchers.IO) { HostProber.probe(port) } },
     internal val osEnv: OsEnv = SystemOsEnv,
     /** Copies the bundled broker/tmux/frpc/zmx out of the app image (blocking; run on [io]). */
     internal val materialize: () -> HostBinaries.SidecarBinaries = { HostBinaries.resolve(stateDir) },
@@ -90,6 +90,15 @@ class HostSupervisor(
     )
 
     internal enum class Mode { CHILD, SERVICE, READ_ONLY, ORPHAN }
+
+    private val _gitAvailable = MutableStateFlow<Boolean?>(null)
+    /** What the local broker's `/host` last said about git; false on a Mac without the Command Line Tools. */
+    val gitAvailable: StateFlow<Boolean?> = _gitAvailable.asStateFlow()
+
+    /** Every probe of the saved port; a broker's answer also refreshes [gitAvailable]. */
+    internal val probe: suspend (port: Int) -> HostProbeResult = { port ->
+        probe(port).also { r -> if (r is HostProbeResult.Supermux) _gitAvailable.value = r.gitAvailable }
+    }
 
     private val _status = MutableStateFlow<HostingStatus>(HostingStatus.Starting)
     val status: StateFlow<HostingStatus> = _status.asStateFlow()
@@ -252,6 +261,7 @@ class HostSupervisor(
             }
             _hostId.value = null
             _build.value = null
+            _gitAvailable.value = null
             _status.value = HostingStatus.NotHosting
         }
     }
