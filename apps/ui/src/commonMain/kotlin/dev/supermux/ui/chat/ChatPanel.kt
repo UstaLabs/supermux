@@ -29,6 +29,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -87,7 +88,6 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -874,12 +874,15 @@ private fun JumpToBottomButton(
                     onJumped()
                 }
             },
+            // A crisp disc with a hairline rim and a low shadow: a heavy default-black shadow on a
+            // near-background fill read as a muddy grey smudge in light mode.
             shape = CircleShape,
-            color = cs.surfaceContainerHigh,
-            contentColor = cs.onSurface,
+            color = cs.surface,
+            contentColor = cs.onSurfaceVariant,
+            border = BorderStroke(1.dp, cs.outlineVariant),
+            shadowElevation = 2.dp,
             modifier = Modifier
-                .size(40.dp)
-                .shadow(4.dp, CircleShape)
+                .size(36.dp)
                 .testTag("chat_jump_to_bottom"),
         ) {
             Box(contentAlignment = Alignment.Center) {
