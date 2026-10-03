@@ -36,7 +36,9 @@ internal suspend fun HostSupervisor.launchLocked(
     val replacingOurs = ourServiceInstalled()
     if (!replacingOurs) secondBrokerReason(prefs.port)?.let { return it }
     val spec = BrokerService.Spec(broker, brokerEnvFor(prefs, bins, carried), logFile)
-    val failure = when (val result = withContext(io) { BrokerService.install(spec, osEnv) }) {
+    val installed = withContext(io) { BrokerService.install(spec, osEnv) }
+    log("service install${if (replacingOurs) " (replacing ours)" else ""}: ${installed.describe()}")
+    val failure = when (val result = installed) {
         is BrokerService.Result.Installed -> when {
             // Linux XDG autostart: nothing runs until the next login, so run it now ourselves.
             // Still background mode for the prefs and UI; the child outlives the app.
@@ -64,12 +66,15 @@ internal suspend fun HostSupervisor.launchLocked(
     mode = null
     _backgroundError.value = "Couldn't keep supermux running in the background: $failure"
     log(_backgroundError.value!!)
+    log("falling back to running the broker as the app's child")
     val childWhy = launchChildLocked(prefs, bins, carried, healthTimeoutMs) ?: return null
     if (!replacingOurs) return childWhy
     // We replaced our own running service, removed it, and the child was refused too. Never end with
     // nothing running and our definition gone: put the service back (the old job is gone by now).
     log("the child fallback failed too ($childWhy); reinstalling the background service")
-    return when (val again = withContext(io) { BrokerService.install(spec, osEnv) }) {
+    val again = withContext(io) { BrokerService.install(spec, osEnv) }
+    log("service reinstall: ${again.describe()}")
+    return when (again) {
         is BrokerService.Result.Installed -> {
             mode = HostSupervisor.Mode.SERVICE
             childDetached = false
@@ -110,8 +115,9 @@ internal suspend fun HostSupervisor.binaries(): HostBinaries.SidecarBinaries {
  */
 internal suspend fun HostSupervisor.removeServiceLocked(port: Int): String? {
     val r = withContext(io) { BrokerService.remove(osEnv) }
+    log("service remove: ${r.describe()}")
     if (r is BrokerService.Result.Failed) return "Couldn't stop the background service: ${r.message}"
-    awaitPortFree(port)
+    if (!awaitPortFree(port)) log("port $port still answers ${timing.portFreeMs / 1000} s after removing the service")
     return null
 }
 
@@ -140,6 +146,7 @@ internal suspend fun HostSupervisor.launchChildLocked(
         ?: repo?.let { listOf(bunPath(), it.resolve("src/main.ts").toString()) }
         ?: return "the supermux broker isn't bundled with this app"
     val env = childEnv(prefs, bins, carried)
+    log("starting the broker as a child${if (detached) " (detached)" else ""} on port ${prefs.port}${if (repo != null) " from the dev checkout" else ""}")
     // Spawn and record atomically: a cancel here must never leave an untracked broker running.
     val c = withContext(NonCancellable) {
         runCatching { Files.createDirectories(stateDir) }
@@ -155,6 +162,7 @@ internal suspend fun HostSupervisor.launchChildLocked(
             c
         }
     } ?: return HostSupervisor.QUITTING
+    log("child started (pid ${c.pid ?: "?"})")
     val why = awaitHealthy(prefs.port, c, healthTimeoutMs)
     if (why != null) stopChildLocked()
     return why
@@ -180,6 +188,7 @@ internal suspend fun HostSupervisor.awaitHealthy(port: Int, c: ChildHandle?, tim
         if (r is HostProbeResult.Supermux && r.managedBy == "desktop") {
             _hostId.value = r.hostId
             lastHealthyBuild = r.build
+            log("healthy on port $port: ${r.hostId}, build ${r.build ?: "?"}")
             return null
         }
         if (now() >= deadline) return "supermux didn't answer on port $port." + logTail()
@@ -203,6 +212,7 @@ internal suspend fun HostSupervisor.stopChildLocked() = withContext(NonCancellab
 internal fun HostSupervisor.adoptOrphanLocked(): Boolean {
     val rec = pidFile.read() ?: return false
     val c = runCatching { adoptFromPidFile(rec, processes) }.getOrNull()?.takeIf { it.isAlive } ?: return false
+    log("re-parented our broker child from a previous run (pid ${c.pid ?: "?"})")
     child = c
     childDetached = false
     return true
@@ -254,4 +264,12 @@ internal fun HostSupervisor.logTail(lines: Int = 20): String {
         }
     }.getOrDefault(emptyList())
     return if (tail.isEmpty()) "" else "\n" + tail.joinToString("\n")
+}
+
+/** One short line for the log. Never includes the service's environment. */
+internal fun BrokerService.Result.describe(): String = when (this) {
+    is BrokerService.Result.Installed -> "installed ${path.fileName}${if (enabled) "" else " (not enabled)"}"
+    is BrokerService.Result.Removed -> "removed${path?.let { " ${it.fileName}" } ?: " (nothing installed)"}"
+    BrokerService.Result.Unsupported -> "unsupported"
+    is BrokerService.Result.Failed -> "failed: ${message.take(200)}"
 }

@@ -84,7 +84,9 @@ private suspend fun HostSupervisor.restartAfterExit(gen: Long, c: ChildHandle): 
             startWatch()
             return false
         }
+        log("the broker exited (code ${c.exitCode ?: "?"})")
         if (retries.exit(now())) {
+            log("it keeps stopping; giving up")
             fail("supermux keeps stopping." + logTail())
             return false
         }
@@ -95,7 +97,9 @@ private suspend fun HostSupervisor.restartAfterExit(gen: Long, c: ChildHandle): 
             if (gen != watchGen) return false
             retries.attempt().also { publish(HostingStatus.Restarting(it)) }
         }
-        delay(timing.backoffMs[minOf(attempt, timing.backoffMs.size) - 1])
+        val wait = timing.backoffMs[minOf(attempt, timing.backoffMs.size) - 1]
+        log("restarting the broker: attempt $attempt in ${wait} ms")
+        delay(wait)
         val started = lock.withLock {
             if (gen != watchGen) return false
             val p = currentPrefs
@@ -103,6 +107,7 @@ private suspend fun HostSupervisor.restartAfterExit(gen: Long, c: ChildHandle): 
             val why = launchChildLocked(p, bins, carriedStore.load(), detached = detached)
             if (why == null) {
                 retries.healthy(now())
+                log("restarted (attempt $attempt)")
                 publish(HostingStatus.Running(p.port, readOnly = false))
                 true
             } else {
@@ -133,7 +138,10 @@ internal suspend fun HostSupervisor.watchService(gen: Long) {
                 kicked = false
                 publishHostId(r.hostId)
                 publishBuild(r.build)
-                if (currentStatus !is HostingStatus.Running) publish(HostingStatus.Running(port, readOnly = false))
+                if (currentStatus !is HostingStatus.Running) {
+                    log("the broker service answers again on port $port")
+                    publish(HostingStatus.Running(port, readOnly = false))
+                }
                 return@withLock
             }
             val t = now()
@@ -147,6 +155,7 @@ internal suspend fun HostSupervisor.watchService(gen: Long) {
                 withContext(io) { BrokerService.restart(osEnv) }
             } else {
                 watchGen++
+                log("the broker service is still down after the restart; giving up")
                 fail("supermux stopped and didn't come back after a restart." + logTail())
                 return
             }
@@ -172,6 +181,7 @@ internal suspend fun HostSupervisor.watchReadOnly(gen: Long) {
             val t = now()
             val since = downSince ?: t.also { downSince = it }
             if (t - since >= timing.readOnlyDownMs) {
+                log("the broker set up outside the app has been down for ${timing.readOnlyDownMs / 1000} s")
                 watchGen++
                 fail("The broker set up outside the app stopped.")
                 return
@@ -194,6 +204,7 @@ internal suspend fun HostSupervisor.watchOrphan(gen: Long) {
         if (free < timing.freeProbes) continue
         lock.withLock {
             if (gen != watchGen) return
+            log("the broker we couldn't re-parent has gone (port ${p.port} is free)")
             if (ourServiceInstalled()) {
                 mode = HostSupervisor.Mode.SERVICE
                 startWatch()

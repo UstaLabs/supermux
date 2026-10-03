@@ -120,6 +120,10 @@ class HostSupervisor(
 
     internal val lock = Mutex()
     @Volatile internal var mode: Mode? = null
+        set(v) {
+            if (field != v) log("mode: ${field?.name?.lowercase() ?: "none"} -> ${v?.name?.lowercase() ?: "none"}")
+            field = v
+        }
     @Volatile internal var child: ChildHandle? = null
     /** The child stands in for the Linux XDG autostart (starts only at login): it outlives the app. */
     @Volatile internal var childDetached = false
@@ -181,6 +185,7 @@ class HostSupervisor(
             throw e
         }
         val yes = reply ?: return@guarded // abandoned (a newer ensure, hosting off, quit)
+        log("answer: ${if (yes) "yes" else "no"}")
         lock.withLock {
             // The world may have moved on while the user was deciding.
             if (!_prefs.value.hosting || pending?.token != p.token) return@withLock
@@ -200,6 +205,7 @@ class HostSupervisor(
     }
 
     suspend fun setBackground(on: Boolean) = guarded("setBackground") {
+        log("background ${if (on) "on" else "off"} (asked)")
         lock.withLock {
             val p = _prefs.value.copy(background = on)
             savePrefsNow(p)
@@ -238,6 +244,7 @@ class HostSupervisor(
     }
 
     suspend fun setHosting(on: Boolean) = guarded("setHosting") {
+        log("hosting ${if (on) "on" else "off"} (asked)")
         if (on) {
             lock.withLock { savePrefsNow(_prefs.value.copy(hosting = true)) }
             ensure()
@@ -251,7 +258,10 @@ class HostSupervisor(
             stopWatch()
             mode = null
             if (was != Mode.READ_ONLY) {
-                if (ourServiceInstalled()) withContext(io) { BrokerService.remove(osEnv) }
+                if (ourServiceInstalled()) {
+                    val r = withContext(io) { BrokerService.remove(osEnv) }
+                    log("service remove: ${r.describe()}")
+                }
                 stopChildLocked()
                 // A broker of ours we could neither re-parent nor stop is still hosting.
                 if (probe(p.port).isOurs()) {
@@ -267,6 +277,7 @@ class HostSupervisor(
     }
 
     suspend fun setRelay(on: Boolean) = guarded("setRelay") {
+        log("relay ${if (on) "on" else "off"} (asked)")
         lock.withLock {
             val p = _prefs.value.copy(relay = on)
             savePrefsNow(p)
@@ -276,6 +287,7 @@ class HostSupervisor(
 
     /** Tray/Settings "Restart" (and "Try again" when nothing is running). */
     suspend fun restart() = guarded("restart") {
+        log("restart (asked)")
         val needsEnsure = lock.withLock {
             val p = _prefs.value
             if (!p.hosting) return@withLock false
@@ -316,6 +328,7 @@ class HostSupervisor(
             abandonQuestion()
             val c = child
             if (mode == Mode.CHILD && c != null && !childDetached) {
+                log("quit: stopping our broker child (pid ${c.pid ?: "?"})")
                 c.destroy()
                 runCatching { c.onExit().get(timing.stopGraceMs, TimeUnit.MILLISECONDS) }
                 if (c.isAlive) c.destroyForcibly()
@@ -344,10 +357,12 @@ class HostSupervisor(
         _status.value = HostingStatus.Starting
 
         var found = probe(prefs.port)
+        log("probe :${prefs.port}: ${found.describe()}")
         // Finish or undo a takeover a crash interrupted (journal in <stateDir>/takeover-backup).
         val healthy = found.isOurs()
         val recovered = withContext(io) { Takeover.recoverPending(stateDir, osEnv, ourServiceHealthy = healthy) }
         if (recovered) {
+            log("an interrupted takeover was ${if (healthy) "finished" else "rolled back"}")
             runCatching { if (healthy) carriedStore.promotePending() else carriedStore.deletePending() }
             found = probe(prefs.port)
         }
@@ -360,11 +375,13 @@ class HostSupervisor(
         fun waiting(p: HostPlan) = p == HostPlan.Wait || (rolledBack && p == HostPlan.Start)
         if (waiting(plan)) {
             val deadline = now() + timing.waitMaxMs
+            log("port ${prefs.port} is busy; waiting up to ${timing.waitMaxMs / 1000} s")
             while (waiting(plan) && now() < deadline) {
                 delay(timing.waitProbeMs)
                 found = probe(prefs.port)
                 plan = decideHost(found, prefs, bundled, appState)
             }
+            log("after waiting: ${found.describe()}")
         }
         if (rolledBack && plan == HostPlan.Start) return cantStart(RESTORED_SILENT) // never start ours next to it
         if (plan == HostPlan.Wait) plan = HostPlan.MovePort
@@ -372,6 +389,7 @@ class HostSupervisor(
             log("already restarted for an update on this launch; keeping the running build")
             plan = HostPlan.UseOwn
         }
+        log("plan: $plan (bundled ${bundled ?: "unknown"})")
         if (plan == HostPlan.Start || plan == HostPlan.MovePort) {
             if (child?.isAlive == true || adoptOrphanLocked()) {
                 // It's ours, just not answering: restart it where it is rather than start a second one.
@@ -389,7 +407,9 @@ class HostSupervisor(
                 afterLaunch(prefs, launchLocked(prefs, bins, carriedStore.load(), allowChildFallback = true))
             }
             HostPlan.MovePort -> {
+                val from = prefs.port
                 prefs = prefs.copy(port = freePort())
+                log("port $from is taken by something else; moving to ${prefs.port}")
                 savePrefsNow(prefs)
                 val bins = binaries()
                 afterLaunch(prefs, launchLocked(prefs, bins, carriedStore.load(), allowChildFallback = true))
@@ -398,7 +418,10 @@ class HostSupervisor(
                 _build.value = (found as HostProbeResult.Supermux).build
                 useOwnLocked(prefs, found.hostId)
             }
-            HostPlan.UpdateOwn -> updateOwnLocked(prefs)
+            HostPlan.UpdateOwn -> {
+                log("update: ${(found as? HostProbeResult.Supermux)?.build ?: "unknown"} -> ${bundled ?: "unknown"}")
+                updateOwnLocked(prefs)
+            }
             HostPlan.ReadOnly -> {
                 _build.value = (found as HostProbeResult.Supermux).build
                 readOnlyLocked(prefs, found.hostId)
@@ -411,6 +434,7 @@ class HostSupervisor(
     }
 
     private fun ask(q: Question): Pending {
+        log("asking: ${q::class.simpleName?.lowercase()} for ${q.hostId ?: "a pre-/host broker"} on port ${q.port}")
         val p = Pending(q, ++questionGen)
         pending = p
         _status.value = when (q) {
@@ -530,6 +554,7 @@ class HostSupervisor(
     }
 
     private fun leaveAloneLocked(q: Question) {
+        log("leaving ${q.hostId ?: "it"} alone (read-only)")
         var p = _prefs.value
         q.hostId?.let { p = p.copy(leftAloneHostIds = p.leftAloneHostIds + it) }
         savePrefsNow(p)
@@ -542,6 +567,7 @@ class HostSupervisor(
         stopWatch()
         _status.value = HostingStatus.Starting
         val olds = withContext(io) { Takeover.findOldServices(osEnv) }
+        log("takeover: found ${olds.size} old service(s)${if (olds.isEmpty()) "" else ": " + olds.joinToString { it.name }}")
         if (olds.isEmpty()) {
             cantStart("supermux is already running on port ${q.port} but wasn't started by a service. Quit it, then try again.")
             return
@@ -550,6 +576,7 @@ class HostSupervisor(
             is Takeover.PrepareResult.Failed -> { cantStart("Couldn't take over: ${r.reason}"); return }
             is Takeover.PrepareResult.Ok -> r.prepared
         }
+        log("takeover: old service(s) backed up and stopped; carrying ${prepared.carriedEnv.size} setting(s)")
         val prefsBefore = _prefs.value
         val why = try {
             carriedStore.savePending(prepared.carriedEnv)
@@ -563,13 +590,16 @@ class HostSupervisor(
             e.message ?: e.toString()
         }
         if (why == null) {
+            log("takeover: our broker is healthy; committing")
             withContext(io) { Takeover.commit(prepared, osEnv) }
             runCatching { carriedStore.promotePending() }.onFailure { log("couldn't save the carried-over settings: ${it.message}") }
             afterLaunch(_prefs.value, null)
             return
         }
+        log("takeover: our broker didn't start; rolling back")
         stopChildLocked()
         val restored = withContext(io) { Takeover.rollback(prepared, osEnv) }
+        log("takeover: rollback ${if (restored) "restored the old service" else "couldn't restore the old service"}")
         runCatching { carriedStore.deletePending() }
         savePrefsNow(_prefs.value.copy(relay = prefsBefore.relay))
         cantStart("Couldn't take over: $why" + if (restored) "" else " The old service couldn't be restored either.")
@@ -689,6 +719,24 @@ class HostSupervisor(
             mode = null
             _status.value = HostingStatus.CantStart(INTERRUPTED)
         }
+    }
+
+    private fun HostProbeResult.describe(): String = when (this) {
+        is HostProbeResult.Supermux -> buildString {
+            append("supermux ").append(hostId)
+            append(", build ").append(build ?: "?")
+            append(", mode ").append(mode ?: "?")
+            append(", managed by ").append(managedBy ?: "nothing")
+            val ours = this@HostSupervisor.stateDir
+            stateDir?.let { d ->
+                val same = runCatching { Path.of(d).toRealPath() == ours.toRealPath() }.getOrDefault(d == ours.toString())
+                append(if (same) ", our state dir" else ", another state dir")
+            }
+            if (gitAvailable == false) append(", no git")
+        }
+        HostProbeResult.Busy -> "busy (answers, not ready)"
+        HostProbeResult.ForeignProcess -> "something else holds the port"
+        HostProbeResult.PortFree -> "free"
     }
 
     private fun savePrefsNow(p: HostingPrefs) {

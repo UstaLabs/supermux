@@ -1245,4 +1245,63 @@ class HostSupervisorTest {
         h.sup.setHosting(false)
         assertNull(h.sup.gitAvailable.value)
     }
+
+    // ── the supervisor's log on success paths ──
+
+    private fun Harness.logs() = events.filter { it.startsWith("log:") }.map { it.removePrefix("log:") }
+
+    @Test fun aNormalChildStartLogsProbePlanModeAndHealth() = runTest {
+        val h = Harness(this)
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        val l = h.logs()
+        assertTrue(l.any { it == "probe :9898: free" }, l.toString())
+        assertTrue(l.any { it.startsWith("plan: Start") }, l.toString())
+        assertTrue(l.any { it.startsWith("starting the broker as a child on port 9898") }, l.toString())
+        assertTrue(l.any { it == "mode: none -> child" }, l.toString())
+        assertTrue(l.any { it.startsWith("healthy on port 9898: h-own") }, l.toString())
+        assertTrue(l.all { it.length <= 200 }, l.toString())
+    }
+
+    @Test fun aPortMoveIsLogged() = runTest {
+        val h = Harness(this)
+        h.probeFn = { port -> if (port == 9898) HostProbeResult.ForeignProcess else h.healthyIfChild()(port) }
+        h.sup.ensure()
+        val l = h.logs()
+        assertTrue(l.any { it == "probe :9898: something else holds the port" }, l.toString())
+        assertTrue(l.any { it == "port 9898 is taken by something else; moving to 45678" }, l.toString())
+    }
+
+    @Test fun aCrashRestartIsLogged() = runTest {
+        val h = Harness(this)
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        h.children[0].exit(1)
+        advanceTimeBy(20_000)
+        val l = h.logs()
+        assertTrue(l.any { it == "the broker exited (code 1)" }, l.toString())
+        assertTrue(l.any { it.startsWith("restarting the broker: attempt 1") }, l.toString())
+        assertTrue(l.any { it == "restarted (attempt 1)" }, l.toString())
+    }
+
+    @Test fun anUpdateLogsFromAndToBuilds() = runTest {
+        val h = Harness(this)
+        var old = true
+        h.probeFn = { if (old) h.desktop(build = "1.4.0 (old)") else h.healthyIfChild()(it) }
+        h.onStart = { old = false }
+        h.sup.ensure()
+        val l = h.logs()
+        assertTrue(l.any { it == "update: 1.4.0 (old) -> $BUNDLED" }, l.toString())
+    }
+
+    @Test fun theServiceInstallIsLoggedWithoutItsEnvironment() = runTest {
+        val h = Harness(this, prefs = HostingPrefs(background = true))
+        h.baseEnv = h.baseEnv + ("ANTHROPIC_API_KEY" to "sk-secret-value")
+        h.probeFn = { if (h.bootstrapped()) h.desktop() else HostProbeResult.PortFree }
+        h.sup.ensure()
+        val l = h.logs()
+        assertTrue(l.any { it.startsWith("service install: installed dev.supermux.host.plist") }, l.toString())
+        assertTrue(l.any { it == "mode: none -> service" }, l.toString())
+        assertTrue(l.none { "sk-secret-value" in it || "ANTHROPIC_API_KEY" in it }, l.toString())
+    }
 }
