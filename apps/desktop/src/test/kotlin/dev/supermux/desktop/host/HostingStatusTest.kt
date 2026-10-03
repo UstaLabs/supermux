@@ -20,10 +20,29 @@ class HostingStatusTest {
         TrayModel.of(HostingStatus.Running(port = 9898, readOnly = false), bg, sessions = 1, remoteName = null).header,
     )
 
-    @Test fun movedPortHeader() {
-        val m = TrayModel.of(HostingStatus.Running(port = 9912, readOnly = false), bg, 0, null)
-        assertEquals("supermux is running on port 9912 (9898 is in use)", m.header)
-        assertEquals(Dot.YELLOW, m.dot)
+    @Test fun movedPortHeaderKeepsTheSessionCount() {
+        val m = TrayModel.of(HostingStatus.Running(port = 60094, readOnly = false), bg, 3, null)
+        assertEquals("supermux is running · 3 sessions · port 60094", m.header)
+        assertEquals(Dot.GREEN, m.dot)
+        assertTrue(m.restartEnabled)
+        assertEquals(
+            "supermux is running · 1 session · port 9912",
+            TrayModel.of(HostingStatus.Running(port = 9912, readOnly = false), bg, 1, null).header,
+        )
+    }
+
+    @Test fun movedPortNeverClaimsTheDefaultIsInUse() {
+        val h = TrayModel.of(HostingStatus.Running(port = 9912, readOnly = false), bg, 0, null).header
+        assertFalse("in use" in h)
+        assertEquals("supermux is running · 0 sessions · port 9912", h)
+    }
+
+    @Test fun trayAndSettingsSayTheSameCount() {
+        val s = HostingStatus.Running(port = 60094, readOnly = false)
+        val tray = TrayModel.of(s, bg, 4, null).header
+        val settings = hostingStatusLine(s, bg, 4, null).text
+        assertTrue(sessionCountText(4) in tray)
+        assertTrue(sessionCountText(4) in settings)
     }
 
     @Test fun readOnlyDisablesKeepRunning() {

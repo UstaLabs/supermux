@@ -23,7 +23,7 @@ fun hostingStatusLine(s: HostingStatus, prefs: HostingPrefs, sessions: Int, vers
         s is HostingStatus.Running && s.readOnly -> "Running · set up outside the app"
         s is HostingStatus.Running -> buildString {
             append("Running · ")
-            append(if (sessions == 1) "1 session" else "$sessions sessions")
+            append(sessionCountText(sessions))
             version?.let { append(" · v").append(it) }
         }
         else -> tray.header

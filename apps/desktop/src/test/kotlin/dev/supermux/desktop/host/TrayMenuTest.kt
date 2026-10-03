@@ -81,6 +81,18 @@ class TrayMenuTest {
         assertEquals("🟡 Can't reach ustalabs-linux · retrying", trayHeaderLine(m))
     }
 
+    @Test fun movedPortHeaderCarriesTheLocalCount() {
+        // The VM case: the broker moved to 60094; the tray must still say how many sessions run here.
+        val f = fleetFacts(
+            localHostId = "h-here",
+            hosts = listOf(here, there),
+            sessions = listOf(session("a"), session("b")),
+            sessionHost = mapOf("a" to "r-here", "b" to "r-here"),
+        )
+        val m = TrayModel.of(HostingStatus.Running(60094, readOnly = false), HostingPrefs(port = 60094), f.localSessions, f.remoteName)
+        assertEquals("🟢 supermux is running · 2 sessions · port 60094", trayHeaderLine(m))
+    }
+
     // ── QuitAction ──
 
     private val running = HostingStatus.Running(9898, readOnly = false)

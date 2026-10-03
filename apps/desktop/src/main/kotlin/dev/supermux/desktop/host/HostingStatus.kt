@@ -13,6 +13,13 @@ sealed interface HostingStatus {
 
 enum class Dot { GREEN, YELLOW, RED, GREY }
 
+/**
+ * "1 session" / "N sessions": the count of sessions on this computer's broker, worded once for the
+ * tray header and Settings ▸ Hosting. Both are fed the same number, `FleetFacts.localSessions`
+ * (Main.kt collects [hostingFacts] once and hands it to the tray and to `LocalHostingSessions`).
+ */
+fun sessionCountText(sessions: Int): String = if (sessions == 1) "1 session" else "$sessions sessions"
+
 data class TrayModel(
     val dot: Dot,
     val header: String,
@@ -35,7 +42,7 @@ data class TrayModel(
             remoteName: String?,
             remoteReachable: Boolean = true,
         ): TrayModel {
-            val n = if (sessions == 1) "1 session" else "$sessions sessions"
+            val n = sessionCountText(sessions)
             return when (s) {
                 HostingStatus.NotHosting -> when {
                     remoteName != null && !remoteReachable ->
@@ -53,8 +60,10 @@ data class TrayModel(
                     TrayModel(Dot.YELLOW, "supermux is waiting for you", false, null, false, false, false)
                 is HostingStatus.Running -> when {
                     s.readOnly -> TrayModel(Dot.GREEN, "supermux is running · $n · managed outside the app", false, "Restart", false, true, false)
+                    // Moved off the default port (spec state 5). Not a problem worth a yellow dot, and
+                    // the default may well be free again by now: just say which port.
                     s.port != HostingPrefs.DEFAULT_PORT ->
-                        TrayModel(Dot.YELLOW, "supermux is running on port ${s.port} (${HostingPrefs.DEFAULT_PORT} is in use)", false, "Restart", true, true, true)
+                        TrayModel(Dot.GREEN, "supermux is running · $n · port ${s.port}", false, "Restart", true, true, true)
                     else -> TrayModel(Dot.GREEN, "supermux is running · $n", false, "Restart", true, true, true)
                 }
             }
