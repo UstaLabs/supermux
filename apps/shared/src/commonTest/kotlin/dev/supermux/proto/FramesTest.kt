@@ -104,6 +104,18 @@ class FramesTest {
         assertEquals("Fix Session Renaming 🎉", f.newName)
     }
 
+    @Test fun parses_host_requirements() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"host_requirements","requirements":{"git":{"ok":false,"install":"winget","hint":"Install Git for Windows with winget"}}}""",
+        )
+        assertTrue(f is ServerFrame.HostRequirementsChanged)
+        val git = (f as ServerFrame.HostRequirementsChanged).requirements.git
+        assertEquals(false, git.ok)
+        assertEquals("winget", git.install)
+        assertTrue(git.installable)
+        assertTrue(f.requirements.gitMissing)
+    }
+
     @Test fun parses_sessions_reordered() {
         val f = json.decodeFromString<ServerFrame>(
             """{"type":"sessions_reordered","orderedIds":["b","a","c"]}""",

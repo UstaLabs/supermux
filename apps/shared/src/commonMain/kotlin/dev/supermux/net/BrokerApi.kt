@@ -68,8 +68,50 @@ data class HostIdentity(
     val managedBy: String? = null,
     /** Local-only: the broker's state dir. */
     val stateDir: String? = null,
-    /** Local-only: false on a Mac without the Xcode Command Line Tools (git is disabled there). */
+    /** Local-only, legacy: false when the broker found no usable git. Prefer [requirements]. */
     val gitAvailable: Boolean? = null,
+    /** Authed and local callers: what this computer still needs to run agents. Null from an older broker. */
+    val requirements: HostRequirements? = null,
+)
+
+/**
+ * The broker's git requirement (spec "Git is required for hosting agents"). [install] says what
+ * the one-click action does on that computer: "xcode-select" (macOS), "winget" (Windows), or
+ * "manual" (no button; follow [hint]).
+ */
+@Serializable
+data class GitRequirement(
+    val ok: Boolean = true,
+    val install: String = INSTALL_MANUAL,
+    val hint: String = "",
+) {
+    /** Is there a one-click install on that computer? */
+    val installable: Boolean get() = install != INSTALL_MANUAL
+
+    companion object {
+        const val INSTALL_XCODE_SELECT = "xcode-select"
+        const val INSTALL_WINGET = "winget"
+        const val INSTALL_MANUAL = "manual"
+    }
+}
+
+/** What a host still needs to run agents: `GET /host`'s `requirements` and the `host_requirements` frame. */
+@Serializable
+data class HostRequirements(val git: GitRequirement = GitRequirement()) {
+    /** The host refuses agent sessions until git is installed. */
+    val gitMissing: Boolean get() = !git.ok
+}
+
+/**
+ * POST /system/install-git: `{ok:true}` when the installer started on that computer (or git is
+ * already there), 400 `{error:"manual", hint}` where there is no one-click install.
+ */
+@Serializable
+data class InstallGitResult(
+    val ok: Boolean = false,
+    val alreadyInstalled: Boolean = false,
+    val error: String? = null,
+    val hint: String? = null,
 )
 
 /** POST /pair/claim body — a one-time claimSecret + this device's chosen display name. */
@@ -2067,6 +2109,23 @@ class BrokerApi(
         )
     }
 
+
+    /**
+     * POST /system/install-git — start the OS's own git installer ON THE HOST (macOS:
+     * `xcode-select --install`; Windows: winget). The body is decoded for every status, so a
+     * manual host answers `error="manual"` + `hint` instead of throwing; an empty or undecodable
+     * non-2xx body becomes a synthetic `error`.
+     */
+    suspend fun installGit(): InstallGitResult {
+        val resp = http.post("$httpBase/system/install-git") { authHeader() }
+        val text = resp.bodyAsText()
+        val decoded = runCatching { json.decodeFromString<InstallGitResult>(text) }.getOrNull()
+            ?: InstallGitResult(error = text.ifBlank { "HTTP ${resp.status.value}" })
+        if (!resp.status.isSuccess() && decoded.error.isNullOrBlank()) {
+            return decoded.copy(ok = false, error = "HTTP ${resp.status.value}")
+        }
+        return decoded
+    }
 
     /** GET /api/update/status → in-app updater state (cached; no network re-poll). */
     suspend fun updateStatus(): UpdateStatus =

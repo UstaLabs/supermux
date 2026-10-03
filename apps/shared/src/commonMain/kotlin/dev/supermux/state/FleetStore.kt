@@ -13,6 +13,8 @@ import dev.supermux.host.isLegacyHostDisplayName
 import dev.supermux.host.mergeSessions
 import dev.supermux.host.previousHostClearSessionId
 import dev.supermux.net.AgentModelsResponse
+import dev.supermux.net.HostRequirements
+import dev.supermux.net.InstallGitResult
 import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
@@ -431,6 +433,43 @@ class FleetStore(
         }
             .distinctUntilChanged()
             .stateIn(fleetScope, SharingStarted.Eagerly, emptySet())
+
+    /**
+     * The ACTIVE host's requirements ([HostStore.hostRequirements]) for the launcher's "needs git"
+     * banner. Keyed on the live [HostStore] like [activeAgentModels]; null until that host spoke.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeHostRequirements: StateFlow<HostRequirements?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.hostRequirements ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /**
+     * Every connected host's requirements by record id ([HostStore.hostRequirements]); a host that
+     * has not sent them (or an older broker) is absent. Drives the session list's banner.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Suppress("UNCHECKED_CAST")
+    val hostRequirements: StateFlow<Map<String, HostRequirements>> =
+        hostApps.flatMapLatest { apps ->
+            if (apps.isEmpty()) {
+                flowOf(emptyMap())
+            } else {
+                val ids = synchronized(lock) {
+                    apps.map { app -> conns.entries.firstOrNull { it.value.app === app }?.key }
+                }
+                combine(apps.mapIndexed { i, app -> app.hostRequirements.map { r -> ids[i]?.let { id -> r?.let { id to it } } } as Flow<Any?> }) { row ->
+                    (row.toList() as List<Pair<String, HostRequirements>?>).filterNotNull().toMap()
+                }
+            }
+        }
+            .distinctUntilChanged()
+            .stateIn(fleetScope, SharingStarted.Eagerly, emptyMap())
+
+    /** `POST /system/install-git` on [recordId]'s host (the active host when null). Null: not connected or failed. */
+    suspend fun installGit(recordId: String? = null): InstallGitResult? =
+        (if (recordId == null) activeApp() else appForRecord(recordId))?.installGit()
 
     // Agent replies merged across every host, for AppShell's NotificationController. Same
     // replay-0 + bounded-DROP_OLDEST shape as HostStore.agentReplies.

@@ -31,6 +31,8 @@ import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
+import dev.supermux.net.HostRequirements
+import dev.supermux.net.InstallGitResult
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.ForgeSearchResponse
@@ -341,6 +343,14 @@ class HostStore(
     val usageSnapshot: StateFlow<UsageResponse?> = _usage
 
     /**
+     * What this host still needs to run agents (git), from the `host_requirements` frame the
+     * broker sends after every snapshot and on every change. Null until it speaks (or forever on
+     * an older broker) — render nothing for null.
+     */
+    private val _hostRequirements = MutableStateFlow<HostRequirements?>(null)
+    val hostRequirements: StateFlow<HostRequirements?> = _hostRequirements.asStateFlow()
+
+    /**
      * Has this broker finished first-run setup? `null` until the first snapshot arrives — a host
      * that gates a setup wizard on this must not decide while it is null (it would flash the wizard
      * or the shell before the broker has spoken). Live: every snapshot republishes it, and
@@ -447,9 +457,17 @@ class HostStore(
             is ServerFrame.ReviewCommentFrame -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
             is ServerFrame.UsageUpdated -> _usage.value = frame.usage
+            is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements
             else -> {}
         }
     }
+
+    /**
+     * Start installing git ON THIS HOST (`POST /system/install-git`): Apple's installer on a Mac,
+     * winget on Windows. Null on a transport failure; a manual host answers `error="manual"`.
+     * The banner clears itself when the broker's re-check finds git and pushes the frame.
+     */
+    suspend fun installGit(): InstallGitResult? = runApi("installGit") { api.installGit() }
 
         // ── Viewing presence ───────────────────────────────────────────────────────────
 
