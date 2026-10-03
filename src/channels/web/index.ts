@@ -33,6 +33,7 @@ import type { SlashCommand } from "../../core/slash-commands/types"
 import type { UpdateChecker } from "../../core/update/checker"
 import { detectUpdateMode } from "../../core/update/mode"
 import { resolveAndApply, restartService } from "../../core/update/apply"
+import { GitRequiredError, gitRequiredBody, type HostRequirements, type InstallGitResponse } from "../../core/git/requirement"
 import { BUILD_COMMIT, BUILD_VERSION } from "../../shared/build-info"
 import { workspaceScope, parseScope } from "../../core/workspace/scope"
 import {
@@ -394,6 +395,10 @@ export interface WebChannelOpts {
   getSessionCreatedAt?: (name: string) => string | undefined
   listArchivedSessions?: () => ArchivedSessionSnapshot[]
   resumeFromArchive?: (id: string) => Promise<{ ok: boolean; name?: string; error?: string }>
+  /** What this computer still needs to run agents (git). Absent = no requirements checked. */
+  getHostRequirements?: () => HostRequirements
+  /** POST /system/install-git: start the OS's own git installer (never throws). */
+  installGit?: () => InstallGitResponse
   getDisplayPort?: (id: string) => number | undefined
   getScrcpy?: (id: string) => import("../../core/display/scrcpy/backend").ScrcpyInstance | undefined
   listDisplays?: () => import("../../core/display/types").DisplayStreamInfo[]
@@ -703,6 +708,16 @@ export class WebChannel implements Channel {
     // and the client reads it when it connects. The agent keeps running; it is
     // not bound to a present client.
     return { ok: true, value: { message_id: ctx.entry.id, clients: this.wsConnections.size } }
+  }
+
+  /**
+   * 409 + the requirement object when this computer has no usable git, else null. Agent sessions
+   * (new, resumed, PAs) are refused; drafts, terminals, pairing, settings and files are not.
+   */
+  private gitRefusal(): Response | null {
+    const requirements = this.opts.getHostRequirements?.()
+    if (!requirements || requirements.git.ok) return null
+    return this.json(gitRequiredBody(requirements), 409)
   }
 
   broadcastToAll(frame: object): void {
@@ -1356,6 +1371,9 @@ export class WebChannel implements Channel {
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
       ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
+      // Right after the snapshot, so every (re)connect learns whether this computer can run agents.
+      const requirements = this.opts.getHostRequirements?.()
+      if (requirements) ws.send(JSON.stringify({ type: "host_requirements", requirements }))
       return
     }
     if (frame.type === "ping") {
@@ -2286,6 +2304,19 @@ export class WebChannel implements Channel {
       return this.json({ ok: true })
     }
 
+    // ── System: one-click git install (spec "Git is required for hosting agents") ──
+    // macOS: Apple's `xcode-select --install` opens on THIS computer; Windows: winget. Linux and
+    // Windows without winget answer 400 {error:"manual", hint}. Same auth + CSRF as restart.
+    if (method === "POST" && path === "/system/install-git") {
+      if (!this.opts.installGit) return this.json({ error: "not configured" }, 503)
+      try {
+        const r = this.opts.installGit()
+        return this.json(r.body, r.status)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 500)
+      }
+    }
+
     // ── Settings: nightly curator ───────────────────────────────────────────
     if (method === "GET" && path === "/settings/curator") {
       const cur = this.opts.getCuratorSettings?.()
@@ -3151,6 +3182,9 @@ export class WebChannel implements Channel {
           })
           return this.json(draft)
         }
+        // Drafts have no agent process; everything else needs git on this computer.
+        const refused = this.gitRefusal()
+        if (refused) return refused
         const inheritFrom = typeof body.inheritFrom === "string" && body.inheritFrom.trim()
           ? body.inheritFrom.trim()
           : undefined
@@ -3195,6 +3229,7 @@ export class WebChannel implements Channel {
         })
         return this.json(result)
       } catch (err: any) {
+        if (err instanceof GitRequiredError) return this.json(gitRequiredBody(err.requirements), 409)
         log.warn("session_create_failed", {
           workdir: normalizedWorkdir,
           agent: body.agent as string | undefined,
@@ -3689,6 +3724,8 @@ export class WebChannel implements Channel {
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/resume$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.resumeFromArchive) return this.json({ error: "not configured" }, 503)
+      const refused = this.gitRefusal()
+      if (refused) return refused
       try {
         const result = await this.opts.resumeFromArchive(id)
         if (!result.ok) return this.json({ error: result.error }, 400)
@@ -3704,6 +3741,8 @@ export class WebChannel implements Channel {
       const name = body.name as string | undefined
       if (!name || !name.trim()) return this.json({ error: "name required" }, 400)
       if (!this.opts.spawnPA) return this.json({ error: "not configured" }, 503)
+      const refused = this.gitRefusal()
+      if (refused) return refused
       const agent = body.agent as AgentKind | undefined
       if (agent != null && !isAgentKind(agent)) {
         return this.json({ error: `unknown agent: ${String(agent)}` }, 400)
@@ -3728,6 +3767,7 @@ export class WebChannel implements Channel {
         })
         return this.json(result)
       } catch (err: any) {
+        if (err instanceof GitRequiredError) return this.json(gitRequiredBody(err.requirements), 409)
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
     }

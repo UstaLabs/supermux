@@ -1,4 +1,5 @@
 import type { InstallMode } from "../../core/update/mode"
+import type { HostRequirements } from "../../core/git/requirement"
 
 export type HostMode = InstallMode
 
@@ -14,8 +15,10 @@ export interface HostInfo {
   /** `MUX_MANAGED_BY` (e.g. "desktop"), absent when nothing manages this broker. */
   managedBy?: string
   stateDir?: string
-  /** false on a Mac without the Xcode Command Line Tools (see `core/git/clt-guard`). */
+  /** false when the broker found no usable git (see `core/git/requirement`). Kept for older desktops. */
   gitAvailable?: boolean
+  /** What this computer still needs to run agents (`core/git/requirement`). */
+  requirements?: HostRequirements
 }
 
 export interface HostBody {
@@ -29,6 +32,7 @@ export interface HostBody {
   managedBy?: string
   stateDir?: string
   gitAvailable?: boolean
+  requirements?: HostRequirements
 }
 
 /**
@@ -38,7 +42,12 @@ export interface HostBody {
  */
 export function buildHostBody(info: HostInfo, authed: boolean, directLoopback = false): HostBody {
   const base: HostBody = { hostId: info.hostId, name: info.name, protocolVersion: info.protocolVersion }
-  if (authed || directLoopback) { base.platform = info.platform; base.version = info.version }
+  if (authed || directLoopback) {
+    base.platform = info.platform
+    base.version = info.version
+    // Every client (phone, PWA, desktop) shows "This computer needs git" from this.
+    if (info.requirements !== undefined) base.requirements = info.requirements
+  }
   if (directLoopback) {
     if (info.build !== undefined) base.build = info.build
     if (info.mode !== undefined) base.mode = info.mode

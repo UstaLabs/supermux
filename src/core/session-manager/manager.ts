@@ -38,6 +38,7 @@ import { INBOX_DIR } from "../../shared/paths"
 import type { RegisterReply, OpResult } from "./socket-server"
 import type { RegisterFrame, OutboundFrame, OrchestrationFrame } from "../../shared/socket-frames"
 import type { Channel, OutboundAction } from "../../channels/channel"
+import { GIT_REQUIRED_MESSAGE, type HostRequirements } from "../git/requirement"
 import type { FileStore } from "../files/store"
 import type { Db } from "../storage/db"
 import type { MessageStore } from "./messages"
@@ -69,6 +70,9 @@ const SOUL_SETUP_AUTO_SEND_DELAY_MS = 3_000
  * capture undefined.
  */
 export type SessionManagerPorts = {
+  /** The broker's git requirement (`core/git/requirement`). While git is missing, agent
+   *  sessions are not resumed — they stay listed. Absent (tests) = always allowed. */
+  hostRequirements?: () => HostRequirements
   /** `let webChannel` in main.ts is assigned after construction — deref lazily, never capture. */
   getWebChannel: () => { broadcastToAll(frame: object): void } | undefined
   /** `let agentRpc` in main.ts is assigned after construction — deref lazily, never capture. */
@@ -191,6 +195,22 @@ export class SessionManager {
   constructor(registry: Registry, ports: SessionManagerPorts) {
     this.registry = registry
     this.ports = ports
+  }
+
+  /** Boot resume skipped because git was missing; [resumeDeferredBoot] runs it once git appears. */
+  private bootResumeDeferred = false
+
+  /** True while this computer has no usable git: agent sessions must not start or resume. */
+  agentsBlocked(): boolean {
+    return this.ports.hostRequirements?.().git.ok === false
+  }
+
+  /** Git appeared after a boot that skipped resuming: resume now (once). */
+  async resumeDeferredBoot(): Promise<void> {
+    if (!this.bootResumeDeferred || this.agentsBlocked()) return
+    this.bootResumeDeferred = false
+    log.info("resume_at_boot_after_git", {})
+    await this.resumeAtBoot()
   }
 
   adapterFor(sessionId: string): AgentAdapter | undefined {
@@ -1120,6 +1140,10 @@ export class SessionManager {
   /** Suspended → live (lazy, triggered by the next inbound message). */
   async resumeSuspended(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<boolean> {
     const { sessionBackend, tmuxSession } = this.ports.resume
+    if (this.agentsBlocked()) {
+      log.warn("resume_suspended_git_missing", { name: session.name, id: session.id })
+      return false
+    }
     let resumedRuntimePid: number | null = null
     try {
       log.info("resume_suspended_begin", {
@@ -1179,6 +1203,7 @@ export class SessionManager {
     if (!session || session.status !== "archived") {
       return { ok: false, error: "Session not found or not archived" }
     }
+    if (this.agentsBlocked()) return { ok: false, error: GIT_REQUIRED_MESSAGE }
 
     let name = session.name
     const takenRuntimeNames = session.agent === AgentKind.Claude
@@ -1254,6 +1279,13 @@ export class SessionManager {
    *  (Claude sessions are reconciled by the supervisor: surviving panes
    *  reattach via the shim; dead ones suspend.) Failures log and continue. */
   async resumeAtBoot(): Promise<void> {
+    // No git: leave every session listed (suspended rows stay suspended) and come back for them
+    // when the requirement monitor finds git.
+    if (this.agentsBlocked()) {
+      this.bootResumeDeferred = true
+      log.warn("resume_at_boot_deferred", { reason: "git missing" })
+      return
+    }
     for (const s of this.registry.list()) {
       if (s.agent === "codex") {
         if (!s.agent_session_id || !s.agent_home) {

@@ -108,7 +108,10 @@ import { detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents
 import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
 import { withAgentBinDirs } from "./core/agents/bin-dirs"
-import { installCltGuard, gitUnavailable } from "./core/git/clt-guard"
+import {
+  GitRequiredError, GitRequirementMonitor, GIT_REQUIRED_MESSAGE, bunWhich, installGit as installGitFor, spawnDetached,
+} from "./core/git/requirement"
+import { spawnSync as spawnSyncForGit } from "child_process"
 import { homedir, hostname } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
@@ -206,12 +209,33 @@ if (IS_TEST_BROKER) {
 // (hasBinary) and spawning can see an agent the user installs at runtime.
 process.env.PATH = withAgentBinDirs(process.env.PATH, homedir())
 
-// A Mac without the Xcode Command Line Tools: /usr/bin/git is Apple's stub, which opens an install
-// dialog on EVERY run. Before anything spawns git, put a failing `git` ahead of it on PATH so the
-// broker and every session it starts get a plain error instead. No-op elsewhere.
+// Git is required to host agents. On a Mac without the Xcode Command Line Tools /usr/bin/git is
+// Apple's stub, which opens an install dialog on EVERY run: before anything spawns git, a failing
+// `git` goes ahead of it on PATH so the broker and every session it starts get a plain error. On
+// every OS a missing git refuses agent sessions and is re-checked every 10 s; once found, the shim
+// leaves PATH and everything unblocks (no restart).
+const gitRequirement = new GitRequirementMonitor({
+  platform: process.platform,
+  which: bunWhich,
+  runXcodeSelect: () => {
+    try {
+      return spawnSyncForGit("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 }).status ?? 1
+    } catch {
+      return 1
+    }
+  },
+  stateDir: STATE_DIR,
+  env: process.env,
+  log: (event, data) => log.info(event, data),
+})
 {
-  const clt = installCltGuard(STATE_DIR)
-  if (clt.gitUnavailable) log.warn("preflight", { warning: `git disabled: ${clt.reason}`, shimDir: clt.shimDir })
+  const git = gitRequirement.start()
+  if (!git.ok) log.warn("preflight", { warning: "git is missing: agent sessions are refused until it is installed", install: git.install })
+}
+
+/** Throws [GitRequiredError] while this computer has no usable git. Every agent spawn calls it. */
+function assertAgentsAllowed(): void {
+  if (!gitRequirement.ok) throw new GitRequiredError(gitRequirement.requirements())
 }
 
 // Fail fast before any filesystem side-effects (state dirs, pid file, db).
@@ -688,6 +712,7 @@ const channels: Record<string, Channel> = {
 // socket server, …) is deref'd lazily inside a closure — and webChannel/agentRpc
 // are `let`-assigned much later, so their thunks must never capture the value.
 const sessionManager = new SessionManager(registry, {
+  hostRequirements: () => gitRequirement.requirements(),
   getWebChannel: () => webChannel,
   getAgentRpc: () => agentRpc,
   // Component-internal: the claude shim leg of SessionManager.deliver. Every
@@ -1441,8 +1466,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       mode: detectInstallMode(),
       managedBy: process.env.MUX_MANAGED_BY || undefined,
       stateDir: STATE_DIR,
-      // false on a Mac without the developer tools: the desktop app says "Git isn't installed".
-      gitAvailable: !gitUnavailable,
+      // Kept for desktops that predate `requirements`.
+      gitAvailable: gitRequirement.ok,
+      requirements: gitRequirement.requirements(),
+    }),
+    getHostRequirements: () => gitRequirement.requirements(),
+    installGit: () => installGitFor({
+      platform: process.platform,
+      requirement: gitRequirement.git,
+      hasWinget: () => bunWhich("winget", process.env.PATH ?? "") !== null,
+      spawn: (cmd) => {
+        log.info("install_git_started", { cmd: cmd[0] })
+        spawnDetached(cmd, (event, data) => log.warn(event, data))
+      },
     }),
     claimStore,
     // CSRF trusts this as a second allowed Origin for cookie browsers on the
@@ -1814,6 +1850,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return { id: s.id, name: s.name, workdir: s.workdir, agent: s.agent }
     },
     spawnPA: async (args) => {
+      assertAgentsAllowed()
       const r = await spawnPA({
         registry,
         name: args.name,
@@ -2574,6 +2611,9 @@ async function spawnSession(args: {
   internal?: boolean
   rpcMcpConfig?: string
 }) {
+  // No git, no agents: refused here so every door (web, shim spawn_session, /spawn, drafts'
+  // first message, agent-rpc workers) gets the same error.
+  assertAgentsAllowed()
   const agent = args.agent ?? AgentKind.Claude
   const inheritSrc = args.inheritFromSessionId
     ? registry.sessions.getById(args.inheritFromSessionId)
@@ -2770,6 +2810,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       proxyPublicUrl: exposedProxyLinksBaseUrl(),
       resumeFromArchive: (id: string) => resumeFromArchive(id),
       spawnPA: async (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => {
+        assertAgentsAllowed()
         const workdir = join(home(), ".mux", "workspace", args.name)
         mkdirSync(workdir, { recursive: true })
         if (args.focus != null) {
@@ -2860,6 +2901,10 @@ ch.on("inbound", async (msg: InboundMessage) => {
   }
 
   // Lazy resume: if the session is suspended, re-spawn it before delivering the message
+  if (session.status === "suspended" && sessionManager.agentsBlocked()) {
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text: GIT_REQUIRED_MESSAGE, disable_notification: false })
+    return
+  }
   if (session.status === "suspended") {
     await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${session.name}"...`, disable_notification: true })
     const resumed = await resumeSuspendedSession(session)
@@ -3015,6 +3060,10 @@ if (webChannel) {
     // resolveName(); the rest of the web path (hasSession/adapterSend) also
     // uses getById.
     const targetSession = msg.target_session_id ? registry.get(msg.target_session_id) : undefined
+    if (targetSession?.status === "suspended" && sessionManager.agentsBlocked()) {
+      await notifySession(targetSession.id, GIT_REQUIRED_MESSAGE)
+      return
+    }
     if (targetSession?.status === "suspended") {
       await notifySession(targetSession.id, `Resuming session "${targetSession.name}"...`)
       const resumed = await resumeSuspendedSession(targetSession)
@@ -3089,7 +3138,7 @@ if (webChannel) {
         })
         // The draft row was restored just above, so the session exists again and
         // the notice has a home.
-        await notifySession(draftSnapshot.id, `Failed to start session "${draftSnapshot.name}".`)
+        await notifySession(draftSnapshot.id, sessionManager.agentsBlocked() ? GIT_REQUIRED_MESSAGE : `Failed to start session "${draftSnapshot.name}".`)
         return
       }
       inbound = { ...msg, target_session_id: started.id }
@@ -3139,6 +3188,7 @@ const supervisor = createSupervisor({
   // (adapters built then dropped) is structurally closed.
   sessionManager,
   reapInternalWorkers: () => agentRpc.reapIdle(RPC_WORKER_IDLE_MS),
+  agentsBlocked: () => !gitRequirement.ok,
 })
 // Existing installs (any prior sessions, active/suspended/archived) are implicitly
 // onboarded and skip the wizard. Only a pristine instance
@@ -3181,6 +3231,14 @@ if (!IS_TEST_BROKER) {
 }
 
 await sessionManager.resumeAtBoot()
+// Git appearing (or its install action changing) reaches every client, and a boot that skipped
+// resuming agent sessions for lack of git resumes them now.
+gitRequirement.onChange((requirements) => {
+  webChannel?.broadcastToAll({ type: "host_requirements", requirements })
+  if (requirements.git.ok) {
+    void sessionManager.resumeDeferredBoot().catch((err) => log.warn("resume_deferred_boot_failed", { err: String(err) }))
+  }
+})
 // Housekeeping at boot is intentionally NON-DESTRUCTIVE: collapse every cursor
 // home's runtime to a symlink at the shared copy (safe, idempotent) and only
 // LOG any orphan-looking homes. Actual deletion lives solely in the explicit

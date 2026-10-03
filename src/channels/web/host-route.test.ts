@@ -38,3 +38,11 @@ test("gitAvailable reaches direct loopback callers only", () => {
   expect(buildHostBody(noGit, false, false)).not.toHaveProperty("gitAvailable")
   expect(buildHostBody(info, false, true)).not.toHaveProperty("gitAvailable")
 })
+
+test("requirements reach authed and direct loopback callers, never public ones", () => {
+  const requirements = { git: { ok: false, install: "manual" as const, hint: "Install git" } }
+  const withReq = { ...info, requirements }
+  expect(buildHostBody(withReq, true, false).requirements).toEqual(requirements)
+  expect(buildHostBody(withReq, false, true).requirements).toEqual(requirements)
+  expect(buildHostBody(withReq, false, false)).not.toHaveProperty("requirements")
+})

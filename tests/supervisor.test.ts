@@ -128,6 +128,29 @@ test("ensurePersonalAssistants respawns dead non-Claude PA", async () => {
   expect(pa?.pid).toBe(123)
 })
 
+test("ensurePersonalAssistants leaves a dead PA listed while git is missing, and respawns it after", async () => {
+  const registry = new Registry(db)
+  const paId = registry.registerPA({
+    name: "codex-pa-nogit",
+    agent: AgentKind.Codex,
+    workdir: "/tmp/codex-pa-nogit-test",
+    pid: 999998, // dead PID
+    is_default: true,
+  }).id
+  let blocked = true
+  const supervisor = createSupervisor({
+    registry,
+    bindSocket: async () => {},
+    sessionManager: { registerSpawnedAdapter: () => {} },
+    agentsBlocked: () => blocked,
+  })
+  await supervisor.ensurePersonalAssistants()
+  expect(registry.get(paId)?.pid).toBe(999998)
+  blocked = false
+  await supervisor.ensurePersonalAssistants()
+  expect(registry.get(paId)?.pid).toBe(123)
+})
+
 test("bootstrapPA forwards model and reasoningLevel to registry", async () => {
   const registry = new Registry(db)
   setSessionBackendForTests({
