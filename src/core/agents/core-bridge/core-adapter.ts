@@ -10,6 +10,8 @@ import { createNormalizedBridge } from "./normalized-bridge"
 import { createNormalizedActivity } from "./normalized-activity"
 import { permissionsFor } from "../permission-modes"
 import { detachCodexRuntimeAdapter } from "../codex/core-host"
+import type { SubagentMessageDelivery } from "../../../../packages/supermux-core/src/types.js"
+import type { ActivityEvent } from "../claude/activity-event"
 import type {
   Completion,
   ContentBlock,
@@ -253,22 +255,104 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
    * the child now; relay runtimes (Claude, Cursor) queue a parent turn that forwards it, whose
    * completion is tracked like any other send. Throws the library's `unsupported_operation`.
    */
-  async messageSubagent(subagentId: string, text: string): Promise<{ via: "direct" | "relay" }> {
+  async messageSubagent(subagentId: string, text: string): Promise<{ via: "direct" | "relay"; delivery: Promise<SubagentMessageDelivery> }> {
     const session = this.requireSession()
     const epoch = this.inputEpoch
     if (this.continueAfterConfirmedInterrupt) {
       session.pending.continue()
       this.continueAfterConfirmedInterrupt = false
     }
-    const result = await session.messageSubagent(subagentId, [{ type: "text", text }], { whenBusy: "queue" })
-    if (result.via === "relay") {
-      void result.receipt.completed
-        .then((completion) => {
-          if (!this.stopped && epoch === this.inputEpoch) this.handleCompletion(completion)
-        })
-        .catch(() => {})
+    // A relayed message shows in the subagent's thread once the parent actually forwarded it
+    // (its resumed prompt, or the forwarding tool's success) — never when the agent refused it.
+    const relay = { subagentId, text: text.trim(), logged: false }
+    this.pendingRelays.push(relay)
+    let result: Awaited<ReturnType<Session["messageSubagent"]>>
+    try {
+      result = await session.messageSubagent(subagentId, [{ type: "text", text }], { whenBusy: "queue" })
+    } catch (err) {
+      this.dropRelay(relay)
+      throw err
     }
-    return { via: result.via }
+    if (result.via === "direct") {
+      this.dropRelay(relay)
+      this.emitMessageRow(subagentId, "to", text, "user")
+      return { via: "direct", delivery: result.delivery }
+    }
+    void result.receipt.completed
+      .then((completion) => {
+        if (!this.stopped && epoch === this.inputEpoch) this.handleCompletion(completion)
+      })
+      .catch(() => {})
+    const delivery = result.delivery.then((outcome) => {
+      if (outcome.status === "delivered" && !relay.logged) {
+        relay.logged = true
+        this.emitMessageRow(subagentId, "to", text, "user")
+        // Keep it a little: the resume that carries this text may still be on its way.
+        setTimeout(() => this.dropRelay(relay), 60_000).unref?.()
+      } else this.dropRelay(relay)
+      return outcome
+    })
+    return { via: "relay", delivery }
+  }
+
+  private readonly pendingRelays: { subagentId: string; text: string; logged: boolean }[] = []
+
+  private dropRelay(relay: { subagentId: string; text: string; logged: boolean }): void {
+    const index = this.pendingRelays.indexOf(relay)
+    if (index >= 0) this.pendingRelays.splice(index, 1)
+  }
+
+  /** One `subagent_message` row of a subagent's conversation. */
+  private emitMessageRow(subagentId: string, direction: "to" | "from", text: string, sender?: "user" | "parent"): void {
+    const body = text.trim()
+    if (!body) return
+    const first = body.split("\n").find((line) => line.trim()) ?? body
+    const row: ActivityEvent = {
+      ts: new Date().toISOString(),
+      kind: "subagent_message",
+      title: first.length > 120 ? `${first.slice(0, 119)}…` : first,
+      text: body,
+      direction,
+      ...(sender ? { sender } : {}),
+      subagentId,
+    }
+    this.emit("activity", { kind: "activity", events: [row] })
+  }
+
+  /** Subagents whose current run already produced a reply row (else its result is the reply). */
+  private readonly repliedThisRun = new Set<string>()
+
+  /** The subagent's conversation as it happens: prompts in, its own messages out. */
+  private threadRows(env: { kind: string; subagentId?: string; replay?: boolean; [key: string]: unknown }): void {
+    if (env.replay === true || !env.subagentId) return
+    const id = env.subagentId
+    if (env.kind === "assistant-message") {
+      if (String(env.text ?? "").trim()) this.repliedThisRun.add(id)
+      this.emitMessageRow(id, "from", String(env.text ?? ""))
+      return
+    }
+    if (env.kind !== "subagent") return
+    const phase = env.phase
+    if (phase === "completed" || phase === "failed" || phase === "cancelled") {
+      // Agents that stream no child text (Claude foreground, OpenCode, Cursor without the
+      // extension) answer only in the result: that IS the reply of this run.
+      if (!this.repliedThisRun.has(id) && typeof env.result === "string" && env.result.trim()) this.emitMessageRow(id, "from", env.result)
+      this.repliedThisRun.delete(id)
+      return
+    }
+    if (phase !== "started" && phase !== "resumed") return
+    this.repliedThisRun.delete(id)
+    if (typeof env.prompt !== "string" || !env.prompt.trim()) return
+    if (phase === "started") {
+      this.emitMessageRow(id, "to", env.prompt, "parent")
+      return
+    }
+    // A resume that carries the user's relayed text is the user's message, not the parent's
+    // (logged once: here, or already when the parent's forwarding tool reported success).
+    const relay = this.pendingRelays.find((r) => r.subagentId === id && r.text === env.prompt!.toString().trim())
+    if (relay?.logged) { this.dropRelay(relay); return }
+    if (relay) relay.logged = true
+    this.emitMessageRow(id, "to", env.prompt, relay ? "user" : "parent")
   }
 
   async stopSubagent(subagentId: string): Promise<void> {
@@ -577,7 +661,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.session = undefined
         this.unsubscribe?.()
         this.unsubscribe = undefined
+        return
       }
+      // What the library remembers about this session's subagents (resume): truthful flags/names.
+      const subagents = this.session.subagents?.() ?? []
+      if (subagents.length) this.emit("subagent-snapshot", { kind: "subagent-snapshot", subagents })
     } catch (err) {
       this.unsubscribe?.()
       this.unsubscribe = undefined
@@ -685,6 +773,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       const env = event.event
       const cards = this.activity.handle({ ...env, event: env }, Date.now())
       if (cards.length) this.emit("activity", { kind: "activity", events: cards })
+      this.threadRows(env as unknown as { kind: string; subagentId?: string; replay?: boolean })
       if (env.subagentId && env.kind === "tool-call" && env.phase === "started" && env.replay !== true) {
         // The subagent's own "what it is doing now", for agents that report no progress line.
         const card = cards.find((c) => c.kind === "tool")

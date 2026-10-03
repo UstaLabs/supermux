@@ -88,6 +88,8 @@ test("relay: messageSubagent queues a SendMessage instruction and the subagent r
   expect(relayed).toContain("<relay>\nNow also Read notes.txt and report its first line.\n</relay>")
   await until(() => events.some(e => e.kind === "subagent" && e.phase === "resumed"))
   await until(() => events.filter(e => e.kind === "subagent" && e.phase === "completed").length === 2)
+  // Claude's SendMessage result said it resumed the agent: delivered (not just "relay sent").
+  expect(await result.delivery).toEqual({ status: "delivered" })
 })
 
 test("relay prompt is text-only and exact", () => {

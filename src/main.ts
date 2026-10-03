@@ -116,7 +116,7 @@ import { homedir, hostname } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
-import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, TaskEvent } from "./core/agents/types"
+import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
@@ -443,7 +443,13 @@ messageLog.on("append", (sessionId: string, entry: any) => {
 const activityStore = new ActivityStore()
 const agentStateStore = new AgentStateStore()
 const bgTaskStore = new BackgroundTaskStore()
-const subagentStore = new SubagentStore()
+// Survives broker restarts: subagent cards (views + each subagent's conversation) come back.
+const subagentStore = new SubagentStore({ file: join(STATE_DIR, "subagents.json") })
+subagentStore.load()
+// The conversation rows go back into the activity timeline so the cards render them again.
+for (const sessionId of subagentStore.sessionIds()) {
+  for (const row of subagentStore.messages(sessionId)) activityStore.append(sessionId, { ...row })
+}
 /** "Waiting · N background": open background tasks plus background subagents still running. */
 function bgOpenCount(sessionId: string): number {
   return bgTaskStore.openCount(sessionId) + subagentStore.backgroundRunning(sessionId)
@@ -1095,21 +1101,30 @@ async function messageSubagent(id: string, subagentId: string, text: string): Pr
   const adapter = sessionManager.adapterFor(s.id)
   if (!adapter?.messageSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot message subagents` }
   const known = subagentStore.find(s.id, subagentId)
+  // The agent itself said it cannot take a message now: say why, never pretend.
+  if (known?.canMessage === false) return { ok: false, status: 409, error: known.cannotMessageReason ?? "this subagent cannot take a message now" }
   if (known?.messaging === "none") return { ok: false, status: 409, error: "this subagent does not accept messages" }
   let via: "direct" | "relay"
+  let delivery: Promise<{ status: string }> | undefined
   try {
-    ;({ via } = await adapter.messageSubagent(subagentId, text))
+    ;({ via, delivery } = await adapter.messageSubagent(subagentId, text))
   } catch (err) {
     return subagentActionError(err)
   }
   const label = known?.description || known?.name || subagentId.slice(0, 8)
   const messageId = `msg-${Date.now()}`
-  try {
-    messageLog.append(s.id, {
-      id: `in:web:${messageId}`, ts: new Date().toISOString(), direction: "inbound", channel: "web", chat_id: "web",
-      message_id: messageId, text: `↪ to ${label}: ${text}`, subagent_id: subagentId,
-    })
-  } catch (err: any) { log.error("subagent_message_append_failed", { session: s.name, err: err?.message ?? String(err) }) }
+  const logLine = () => {
+    try {
+      messageLog.append(s.id, {
+        id: `in:web:${messageId}`, ts: new Date().toISOString(), direction: "inbound", channel: "web", chat_id: "web",
+        message_id: messageId, text: `↪ to ${label}: ${text}`, subagent_id: subagentId,
+      })
+    } catch (err: any) { log.error("subagent_message_append_failed", { session: s.name, err: err?.message ?? String(err) }) }
+  }
+  // A relay is only "sent" once the parent forwarded it; a refusal (Claude: "was stopped by the
+  // user") is never logged as a sent message — the card's Message turns off with that reason.
+  if (via === "direct" || !delivery) logLine()
+  else void delivery.then((outcome) => { if (outcome.status === "delivered") logLine() }).catch(() => {})
   return { ok: true, via }
 }
 
@@ -1118,6 +1133,8 @@ async function stopSubagent(id: string, subagentId: string): Promise<SubagentAct
   if (!s) return { ok: false, status: 404, error: "session not found" }
   const adapter = sessionManager.adapterFor(s.id)
   if (!adapter?.stopSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot stop subagents` }
+  const known = subagentStore.find(s.id, subagentId)
+  if (known?.canStop === false) return { ok: false, status: 409, error: known.cannotStopReason ?? "this subagent cannot be stopped now" }
   try {
     await adapter.stopSubagent(subagentId)
     return { ok: true }
@@ -1158,8 +1175,15 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   adapter.on("activity", (ev: any) => {
     try {
-      for (const a of ev?.events ?? []) activityStore.append(sessionId, a)
+      for (const a of ev?.events ?? []) {
+        // A subagent's conversation is kept (and persisted) with its card as well.
+        if (a?.kind === "subagent_message" && typeof a.subagentId === "string") activityStore.append(sessionId, subagentStore.recordMessage(sessionId, a))
+        else activityStore.append(sessionId, a)
+      }
     } catch (err) { log.warn("adapter_activity_append_failed", { err: String(err) }) }
+  })
+  adapter.on("subagent-snapshot", (ev: SubagentSnapshotEvent) => {
+    try { for (const snap of ev.subagents) subagentStore.applySnapshot(sessionId, snap) } catch (err) { log.warn("adapter_subagent_snapshot_failed", { err: String(err) }) }
   })
   adapter.on("subagent", (ev: SubagentEvent) => {
     try { subagentStore.applyBody(sessionId, ev.body) } catch (err) { log.warn("adapter_subagent_failed", { err: String(err) }) }

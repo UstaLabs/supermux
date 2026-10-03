@@ -10,6 +10,8 @@ import { connectAcpProcess, type AcpKeeperLimits } from './process.js'
 import { createAcpNormalizer, DRIVER_WARNING_METHOD, SUBAGENT_SESSION_METHOD, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
 import { freeLoopbackPort, newOpenCodeServerInfo, openCodeAskToAcp, openCodeServerClient, readOpenCodeServerInfo, type OpenCodePendingAsk, type OpenCodeServerClient, type OpenCodeServerInfo } from './opencode-server.js'
 import type { KeeperFrameEvent } from '../keeper/client.js'
+import { REASON, SUBAGENT_STATE_METHOD } from '../subagent-actions.js'
+import type { SubagentSnapshot } from '../types.js'
 
 export type AcpActivityHint = { id?: string; phase: 'started' | 'completed' }
 export type AcpActivityClassifier = (update: AgentUpdate) => AcpActivityHint | undefined
@@ -772,7 +774,9 @@ export function acp(options: AcpOptions): AgentDriver {
       const info = normalizer.subagent(subagentId)
       const canonical = info?.id ?? subagentId
       const child = childSessionOf(subagentId)
-      if (childPrompts.has(child)) throw new CoreError('session_busy', 'A message to this subagent is still running')
+      if (childPrompts.has(child)) throw new CoreError('subagent_unavailable', REASON.busy)
+      // Loading a RUNNING Grok child mid-run breaks its tool session (truth table 2026-10-03).
+      if (options.vendor === 'grok' && info?.open) throw new CoreError('subagent_unavailable', REASON.grokRunning)
       if (!loadedChildren.has(child)) {
         // Grok/OpenCode serve a child session only after session/load; its replay is history.
         loadingChildren.add(child)
@@ -795,10 +799,12 @@ export function acp(options: AcpOptions): AgentDriver {
     }
     async function stopSubagent(subagentId: string) {
       if (closed) throw new CoreError('runtime_closed', 'ACP runtime closed')
+      if (options.vendor === 'cursor') throw new CoreError('subagent_unavailable', REASON.cursorNoStop)
       if (options.vendor !== 'grok' && options.vendor !== 'opencode') throw new UnsupportedOperation('subagent stop', options.id)
       const child = childSessionOf(subagentId)
       normalizer.markStopRequested(subagentId)
-      childPrompts.get(child)?.abort()
+      const direct = childPrompts.get(child)
+      direct?.abort()
       // OpenCode's ACP layer ignores session/cancel for task children it did not create (the same
       // gap as their permission asks), so a stuck child — e.g. a hung webfetch — kept its parent's
       // Task waiting forever. Its own HTTP server aborts any session.
@@ -806,12 +812,29 @@ export function acp(options: AcpOptions): AgentDriver {
         await openCodeServer.abort(child, sideChannelAbort.signal)
         return
       }
+      if (options.vendor === 'grok' && !direct) {
+        // A background child runs inside Grok, not as a session we prompted: session/cancel on it is
+        // a silent no-op. Grok's own control (its TUI's kill) is `x.ai/subagent/cancel`.
+        const reply = await ioWait(connection.extMethod('_x.ai/subagent/cancel', { sessionId: agentSessionId, subagentId: child })) as { result?: { cancelled?: boolean; outcome?: { kind?: string; status?: string } } } | undefined
+        const outcome = reply?.result?.outcome?.kind
+        if (reply?.result?.cancelled === true || outcome === 'cancelled') return
+        if (outcome === 'not_found') throw new CoreError('subagent_not_found', `Grok does not know subagent ${subagentId}`)
+        if (outcome === 'already_finished') {
+          if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: SUBAGENT_STATE_METHOD, params: { subagentId } } })
+          throw new CoreError('subagent_unavailable', REASON.finished)
+        }
+        throw new CoreError('subagent_unavailable', `Grok did not cancel it (${outcome ?? 'no answer'})`)
+      }
       await ioWait(connection.cancel({ sessionId: child }))
     }
+    /** Resume: subagents remembered from before (their child sessions still exist natively). */
+    let restoredSubagents: SubagentSnapshot[] | undefined
     function makeRuntime(capabilities: Capabilities): AgentRuntime {
       return {
         agentSessionId,
         capabilities,
+        nativeProtocol: 'acp',
+        ...(restoredSubagents ? { restoredSubagents } : {}),
         normalize: normalizer,
         flush: () => normalizer.flush(),
         setPermissions,
@@ -827,6 +850,7 @@ export function acp(options: AcpOptions): AgentDriver {
     }
     try {
       const reattach = io.welcome.agentRunning === true && typeof io.welcome.meta.agentSessionId === 'string'
+      if (session?.subagents?.length) restoredSubagents = normalizer.restore(session.subagents, { stillRunning: reattach })
       let canResume = false
       let canLoad = false
       if (reattach) {

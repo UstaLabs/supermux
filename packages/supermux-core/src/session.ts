@@ -9,10 +9,23 @@ import type {
   HistoryOptions, HistoryPage, SessionConfiguration, CloseOptions,
   PendingRequest, PermissionOptionKind, PermissionRequest, PermissionResponse, RequestAnswer,
   QuestionRequest, QuestionResponse, PermissionsSpec, PermissionsApplied,
-  ContentBlock, SubagentMessageOptions,
+  ContentBlock, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot,
 } from "./types.js"
 import { validatePermissionsSpec } from "./permissions.js"
-import type { EventEnvelope, NormalizedBody, ToolCategory, TurnCompleteReason } from "./events/normalized.js"
+import type { EventEnvelope, NativeProtocol, NormalizedBody, ToolCategory, TurnCompleteReason } from "./events/normalized.js"
+
+type SubagentBody = Extract<NormalizedBody, { kind: "subagent" }>
+type PendingDelivery = { subagentId: string; messageId: string; resolve: (delivery: SubagentMessageDelivery) => void }
+
+export type SessionOptions = {
+  /** The registry restored on resume (see SubagentSnapshot). */
+  subagents?: SubagentSnapshot[]
+  /** Save the registry; called after lifecycle/flag changes, serialized, failures ignored. */
+  persistSubagents?: (subagents: SubagentSnapshot[]) => Promise<void>
+}
+
+/** Subagents remembered per session (running ones are always kept). */
+const SUBAGENTS_KEPT = 64
 
 type ActivitySlot = {
   done: Promise<void>
@@ -50,6 +63,10 @@ export class Session {
     onAbort: () => void
   }>()
   private readonly nonBlockingQuestions = new Set<string>()
+  private readonly subagentRegistry = new Map<string, SubagentSnapshot>()
+  private readonly pendingDeliveries: PendingDelivery[] = []
+  private subagentsDirty = false
+  private subagentsSaving?: Promise<void>
 
   constructor(
     private readonly record: SessionRecord,
@@ -61,7 +78,16 @@ export class Session {
     private readonly onClosed: () => void,
     private readonly createFork: (options: ForkOptions) => Promise<Session>,
     private readonly persistRecord: (record: SessionRecord) => Promise<void>,
-  ) { this.id = record.id }
+    private readonly options: SessionOptions = {},
+  ) {
+    this.id = record.id
+    for (const sub of options.subagents ?? []) if (sub && typeof sub.subagentId === "string") this.subagentRegistry.set(sub.subagentId, { ...sub })
+  }
+
+  /** What Core knows about this session's subagents: latest lifecycle, name and allowed actions. */
+  subagents(): SubagentSnapshot[] {
+    return [...this.subagentRegistry.values()].map(sub => ({ ...sub }))
+  }
 
   snapshot(): SessionRecord & { state: SessionState; pending: number; paused: boolean; pendingRequests: number } {
     return {
@@ -324,7 +350,7 @@ export class Session {
     subagentId: string,
     content: ContentBlock[],
     options: SubagentMessageOptions = {},
-  ): Promise<{ via: "direct" } | { via: "relay"; receipt: Receipt }> {
+  ): Promise<{ via: "direct"; delivery: Promise<SubagentMessageDelivery> } | { via: "relay"; receipt: Receipt; delivery: Promise<SubagentMessageDelivery> }> {
     this.assertReady()
     if (!this.runtime.messageSubagent) throw new UnsupportedOperation("subagent messaging", this.record.agent)
     if (typeof subagentId !== "string" || !subagentId) throw new CoreError("invalid_input", "subagentId is required")
@@ -332,10 +358,36 @@ export class Session {
     const whenBusy = options.whenBusy ?? "queue"
     if (whenBusy !== "queue" && whenBusy !== "reject") throw new CoreError("invalid_input", "whenBusy must be queue or reject")
     if (this.interrupting || this.state === "interrupting") throw new CoreError("session_busy", "Interrupt has not been confirmed")
+    const known = this.subagentRegistry.get(subagentId)
+    if (known?.canMessage === false) {
+      throw new CoreError("subagent_unavailable", known.cannotMessageReason ?? "This subagent cannot take a message now")
+    }
     const result = await this.runtime.messageSubagent(subagentId, structuredClone(content))
-    if (result.via === "direct") return { via: "direct" }
-    const receipt = await this.send({ content: result.relay, whenBusy })
-    return { via: "relay", receipt }
+    if (result.via === "direct") return { via: "direct", delivery: Promise.resolve({ status: "delivered" }) }
+    let resolve!: (delivery: SubagentMessageDelivery) => void
+    const delivery = new Promise<SubagentMessageDelivery>(done => { resolve = done })
+    // Registered before the relay is queued: the parent may answer within the same tick.
+    const pending: PendingDelivery = { subagentId, messageId: "", resolve }
+    this.pendingDeliveries.push(pending)
+    let receipt: Receipt
+    try { receipt = await this.send({ content: result.relay, whenBusy }) } catch (error) {
+      this.pendingDeliveries.splice(this.pendingDeliveries.indexOf(pending), 1)
+      throw error
+    }
+    pending.messageId = receipt.messageId
+    const settle = (value: SubagentMessageDelivery) => {
+      const index = this.pendingDeliveries.indexOf(pending)
+      if (index < 0) return
+      this.pendingDeliveries.splice(index, 1)
+      resolve(value)
+    }
+    void receipt.completed.then(completion => {
+      // The relay turn is over and the parent never reported forwarding it.
+      settle(completion.status === "completed"
+        ? { status: "unconfirmed", reason: "The main agent did not forward the message" }
+        : { status: "unconfirmed", reason: completion.status === "cancelled" ? "The relay was cancelled" : "The relay turn failed" })
+    })
+    return { via: "relay", receipt, delivery }
   }
 
   /** Stop one subagent without interrupting the main turn. */
@@ -343,6 +395,10 @@ export class Session {
     this.assertReady()
     if (!this.runtime.stopSubagent) throw new UnsupportedOperation("subagent stop", this.record.agent)
     if (typeof subagentId !== "string" || !subagentId) throw new CoreError("invalid_input", "subagentId is required")
+    const known = this.subagentRegistry.get(subagentId)
+    if (known?.canStop === false) {
+      throw new CoreError("subagent_unavailable", known.cannotStopReason ?? "This subagent cannot be stopped now")
+    }
     await this.runtime.stopSubagent(subagentId)
   }
 
@@ -573,7 +629,7 @@ export class Session {
     const method = update ? (update.protocol === "acp" ? recSessionUpdate(update.value) : recMethod(update.value)) : undefined
     const native = update
       ? {
-          protocol: nativeProtocol(update),
+          protocol: nativeProtocol(update, this.runtime.nativeProtocol),
           ...(method ? { method } : {}),
           payload: update.value,
         }
@@ -590,7 +646,83 @@ export class Session {
     }
     if (this.currentTurnId) envelope.turnId = this.currentTurnId
     if (body.kind === "user-question" && body.blocking === false) this.nonBlockingQuestions.add(body.requestId)
+    if (body.kind === "subagent" && !replay) this.foldSubagent(body)
     this.emit({ type: "session.event", sessionId: this.id, event: envelope })
+  }
+
+  private foldSubagent(body: SubagentBody): void {
+    const prior = this.subagentRegistry.get(body.subagentId)
+    const next: SubagentSnapshot = prior ? { ...prior } : { subagentId: body.subagentId, status: "running", updatedAt: Date.now() }
+    if (body.phase === "started" || body.phase === "resumed") {
+      next.status = "running"
+      delete next.endedBy
+      if (body.parentCallId) {
+        next.parentCallId = body.parentCallId
+        if (!next.spawnCallId) next.spawnCallId = body.parentCallId
+      }
+    } else if (body.phase === "completed" || body.phase === "failed" || body.phase === "cancelled") {
+      next.status = body.phase
+      if (body.endedBy) next.endedBy = body.endedBy
+    }
+    for (const key of ["nativeId", "name", "description", "model", "messaging", "actionsSource"] as const) {
+      const value = body[key]
+      if (typeof value === "string" && value) (next as Record<string, unknown>)[key] = value
+    }
+    if (typeof body.background === "boolean") next.background = body.background
+    if (typeof body.canMessage === "boolean") {
+      next.canMessage = body.canMessage
+      if (body.canMessage) delete next.cannotMessageReason
+      else if (body.cannotMessageReason) next.cannotMessageReason = body.cannotMessageReason
+    }
+    if (typeof body.canStop === "boolean") {
+      next.canStop = body.canStop
+      if (body.canStop) delete next.cannotStopReason
+      else if (body.cannotStopReason) next.cannotStopReason = body.cannotStopReason
+    }
+    if (body.delivery) {
+      const index = this.pendingDeliveries.findIndex(p => p.subagentId === body.subagentId)
+      if (index >= 0) {
+        const [pending] = this.pendingDeliveries.splice(index, 1)
+        pending!.resolve({ ...body.delivery })
+      }
+    } else if (body.phase === "resumed") {
+      // A relay that resumed the subagent was delivered (Cursor Task resume, Claude SendMessage).
+      const index = this.pendingDeliveries.findIndex(p => p.subagentId === body.subagentId && (!p.messageId || p.messageId === this.active?.receipt.messageId))
+      if (index >= 0) {
+        const [pending] = this.pendingDeliveries.splice(index, 1)
+        pending!.resolve({ status: "delivered" })
+      }
+    }
+    const { updatedAt: _a, ...before } = prior ?? ({} as SubagentSnapshot)
+    const { updatedAt: _b, ...after } = next
+    if (prior && JSON.stringify(before) === JSON.stringify(after)) return
+    next.updatedAt = Date.now()
+    this.subagentRegistry.delete(body.subagentId)
+    this.subagentRegistry.set(body.subagentId, next)
+    this.trimSubagents()
+    this.saveSubagents()
+  }
+
+  private trimSubagents(): void {
+    if (this.subagentRegistry.size <= SUBAGENTS_KEPT) return
+    for (const [id, sub] of this.subagentRegistry) {
+      if (this.subagentRegistry.size <= SUBAGENTS_KEPT) break
+      if (sub.status !== "running") this.subagentRegistry.delete(id)
+    }
+  }
+
+  /** Serialized, coalescing save: the last state always lands; a failure only costs persistence. */
+  private saveSubagents(): void {
+    if (!this.options.persistSubagents) return
+    this.subagentsDirty = true
+    if (this.subagentsSaving) return
+    const run = async () => {
+      while (this.subagentsDirty) {
+        this.subagentsDirty = false
+        try { await this.options.persistSubagents!(this.subagents()) } catch { /* persistence is best effort */ }
+      }
+    }
+    this.subagentsSaving = run().finally(() => { this.subagentsSaving = undefined })
   }
 
   /**
@@ -761,9 +893,12 @@ function recSessionUpdate(value: unknown): string | undefined {
   return typeof kind === "string" ? kind : undefined
 }
 
-function nativeProtocol(update: AgentUpdate): "acp" | "codex-app-server" {
+/** Label native updates by the runtime that produced them (driver-synthesized `supermux/…` frames are Core's own). */
+function nativeProtocol(update: AgentUpdate, runtime: NativeProtocol | undefined): NativeProtocol {
   if (update.protocol === "acp") return "acp"
   const method = recMethod(update.value)
+  if (method?.startsWith("supermux/")) return "core"
+  if (runtime) return runtime
   if (method?.startsWith("_x.ai/") || method?.startsWith("session/")) return "acp"
   return "codex-app-server"
 }

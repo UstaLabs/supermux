@@ -119,12 +119,21 @@ describe("codex normalizer", () => {
   test("subAgentActivity and collabAgentToolCall drive subagent bodies, not tasks", () => {
     const n = createCodexNormalizer()
     expect(n(native("item/started", { item: { type: "subAgentActivity", id: "s", kind: "started", agentThreadId: "t", agentPath: "p" } }))).toEqual([
-      { kind: "subagent", subagentId: "t", phase: "started", parentCallId: "s", name: "p", messaging: "none" },
+      {
+        kind: "subagent", subagentId: "t", phase: "started", parentCallId: "s", name: "p", messaging: "none",
+        // v2 children refuse direct input; no child turn is known yet, so nothing to interrupt.
+        canMessage: false, cannotMessageReason: "Codex doesn't accept messages for this subagent",
+        canStop: false, cannotStopReason: "It isn't running", actionsSource: "native",
+      },
     ])
     // A collab call with no receivers and no states says nothing about a subagent.
     expect(n(native("item/completed", { item: { type: "collabAgentToolCall", id: "c", tool: "spawnAgent", status: "failed", senderThreadId: "a", receiverThreadIds: [], agentsStates: {} } }))).toEqual([])
     expect(n(native("item/completed", { item: { type: "subAgentActivity", id: "s2", kind: "completed", agentThreadId: "t", agentPath: "p" } }))).toEqual([
-      { kind: "subagent", subagentId: "t", phase: "completed" },
+      {
+        kind: "subagent", subagentId: "t", phase: "completed", endedBy: "self",
+        canMessage: false, cannotMessageReason: "Codex doesn't accept messages for this subagent",
+        canStop: false, cannotStopReason: "It has already finished", actionsSource: "native",
+      },
     ])
   })
 

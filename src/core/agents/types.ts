@@ -2,6 +2,7 @@ import type { EventEmitter } from "events"
 import type { AgentKind as SharedAgentKind } from "../../shared/agents"
 import type { ActivityEvent } from "./claude/activity-event"
 import type { NormalizedBody } from "../../../packages/supermux-core/src/events/normalized.js"
+import type { SubagentMessageDelivery, SubagentSnapshot } from "../../../packages/supermux-core/src/types.js"
 
 export { AgentKind } from "../../shared/agents"
 
@@ -83,6 +84,9 @@ export type RequestAnswerInput =
 /** A normalized subagent lifecycle body (started/progress/terminal/resumed), envelope stripped. */
 export type SubagentEvent = { kind: "subagent"; body: Extract<NormalizedBody, { kind: "subagent" }> }
 
+/** The library's subagent registry after a session (re)opened (names, ids, truthful flags). */
+export type SubagentSnapshotEvent = { kind: "subagent-snapshot"; subagents: SubagentSnapshot[] }
+
 /** A subagent's own tool call started: the one-line activity to show when the agent sends none. */
 export type SubagentActivityEvent = { kind: "subagent-activity"; subagentId: string; activity: string }
 
@@ -107,6 +111,7 @@ export type AgentEvent =
   | RequestClosedEvent
   | SubagentEvent
   | SubagentActivityEvent
+  | SubagentSnapshotEvent
   | TaskEvent
 
 export type InboundMeta = {
@@ -141,7 +146,7 @@ export interface AgentAdapter extends EventEmitter {
    * as a parent turn asking the parent model to forward it. Throws `unsupported_operation` when
    * the runtime cannot reach subagents.
    */
-  messageSubagent?(subagentId: string, text: string): Promise<{ via: "direct" | "relay" }>
+  messageSubagent?(subagentId: string, text: string): Promise<{ via: "direct" | "relay"; delivery?: Promise<SubagentMessageDelivery> }>
   /** Stop one subagent without interrupting the parent's turn. */
   stopSubagent?(subagentId: string): Promise<void>
 }

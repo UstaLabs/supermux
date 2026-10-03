@@ -1,6 +1,7 @@
 /** Claude headless stream-json mapper. */
-import type { AgentUpdate } from "../types.js"
-import type { NormalizedBody, PlanEntryStatus, SubagentStats, TaskKind } from "../events/normalized.js"
+import type { AgentUpdate, SubagentSnapshot } from "../types.js"
+import type { NormalizedBody, PlanEntryStatus, SubagentEndedBy, SubagentStats, TaskKind } from "../events/normalized.js"
+import { REASON, SUBAGENT_STATE_METHOD, actionFields, actionsKey, endedReason, shortReason, type SubagentActions } from "../subagent-actions.js"
 
 function rec(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return
@@ -62,6 +63,12 @@ export type ClaudeNormalizer = ((update: AgentUpdate) => NormalizedBody[]) & {
   subagentForTool: (toolUseId: string) => string | undefined
   /** Look a subagent up by its id, task_id or spawning tool_use id. */
   subagent: (id: string) => { id: string; taskId: string; open: boolean } | undefined
+  /** The client asked Claude to stop it (stop_task): its `cancelled` end is `endedBy: "client"`. */
+  markClientStop: (id: string) => void
+  /** Undo markClientStop when stop_task itself failed. */
+  clearClientStop: (id: string) => void
+  /** Seed subagents remembered from before a resume; returns their state as this process sees it. */
+  restore: (snapshots: SubagentSnapshot[], options: { stillRunning: boolean }) => SubagentSnapshot[]
 }
 
 type Tool = { name: string; input?: Record<string, unknown> }
@@ -83,6 +90,19 @@ type Subagent = {
   pendingStatus?: string
   tools: Map<string, Tool>
   blocks: Map<string, number>
+  /** Last terminal phase (when not open). */
+  ended?: "completed" | "failed" | "cancelled"
+  endedBy?: SubagentEndedBy
+  /** The client sent stop_task for this run. */
+  clientStop?: boolean
+  /** The parent model called TaskStop on this run. */
+  parentStop?: boolean
+  /** Claude refused a SendMessage to it (its own words, shortened). */
+  refusal?: string
+  /** Resumed by SendMessage with no record of its spawn call: the next unknown child frame is its. */
+  awaitingSpawn?: boolean
+  /** Flags last put on a body (to emit a progress when they change). */
+  emitted?: string
 }
 
 type BackgroundTask = { taskId: string; kind: TaskKind; label?: string; parentCallId?: string; subagentId?: string; done: boolean }
@@ -178,13 +198,59 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
       body.messaging = "relay"
     }
     if (sub.taskId && sub.taskId !== sub.id) body.nativeId = sub.taskId
-    return { ...body, ...extra }
+    if (!sub.open && sub.endedBy && (phase === "completed" || phase === "failed" || phase === "cancelled")) body.endedBy = sub.endedBy
+    const actions = actionsOf(sub)
+    sub.emitted = actionsKey(actions)
+    return { ...body, ...actionFields(actions), ...extra }
+  }
+
+  /**
+   * Claude's own rule (Claude Code bundle, verified live 2026-10-03): SendMessage reaches a running
+   * agent (queued for its next tool round) and resumes a completed one or one its parent stopped
+   * with TaskStop, but refuses one the USER stopped (stop_task) — and keeps refusing after a
+   * restart. Stop (stop_task) only means something while it runs.
+   */
+  function actionsOf(sub: Subagent): SubagentActions {
+    if (sub.open) return { canMessage: true, canStop: true, actionsSource: "derived" }
+    const stop = endedReason(sub.ended)
+    if (sub.refusal) return { canMessage: false, cannotMessageReason: sub.refusal, canStop: false, cannotStopReason: stop, actionsSource: "derived" }
+    if (sub.ended === "cancelled" && sub.endedBy === "client") {
+      return { canMessage: false, cannotMessageReason: REASON.claudeClientStopped, canStop: false, cannotStopReason: stop, actionsSource: "derived" }
+    }
+    return { canMessage: true, canStop: false, cannotStopReason: stop, actionsSource: "derived" }
+  }
+
+  /** Close a run: who ended it follows Claude's own signals (our stop_task, its TaskStop call). */
+  function close(sub: Subagent, phase: "completed" | "failed" | "cancelled"): void {
+    sub.open = false
+    sub.ended = phase
+    sub.endedBy = phase !== "cancelled" ? "self" : sub.clientStop ? "client" : sub.parentStop ? "parent" : undefined
+    sub.clientStop = false
+    sub.parentStop = false
+  }
+
+  function reopenRun(sub: Subagent): void {
+    sub.open = true
+    sub.ended = undefined
+    sub.endedBy = undefined
+    sub.refusal = undefined
+    sub.clientStop = false
+    sub.parentStop = false
   }
 
   function subagentFor(parentToolUseId: string): { sub: Subagent; created: NormalizedBody[] } {
     const known = aliases.get(parentToolUseId)
     const existing = known ? subagents.get(known) : undefined
     if (existing) return { sub: existing, created: [] }
+    // A resumed agent's frames still name its ORIGINAL spawn call, which this process may never
+    // have seen (restart without a remembered spawn): it belongs to the one run waiting for it.
+    const waiting = [...subagents.values()].filter(sub => sub.open && sub.awaitingSpawn)
+    if (waiting.length === 1) {
+      const sub = waiting[0]!
+      sub.awaitingSpawn = false
+      bounded(aliases, parentToolUseId, sub.id)
+      return { sub, created: [] }
+    }
     // A child frame arrived before task_started: the tool_use id stands in, and stays the id.
     const sub: Subagent = { id: parentToolUseId, toolUseId: parentToolUseId, open: true, tools: new Map(), blocks: new Map() }
     bounded(subagents, sub.id, sub)
@@ -264,6 +330,11 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
         const input = rec(row.input) ?? (row.input as Record<string, unknown> | undefined)
         bounded(toolMap, callId, { name, input })
         if (subagentId) bounded(childTools, callId, subagentId)
+        if (!sub && name === "TaskStop") {
+          // The parent model stopping its own subagent: that run ends `endedBy: "parent"`.
+          const target = subagentByTask(str(input?.task_id) ?? str(input?.shell_id))
+          if (target?.open) target.parentStop = true
+        }
         out.push(attribute({ kind: "tool-call", callId, tool: name, phase: "started", input: row.input }, subagentId))
         for (const extra of extrasForTool(name, callId, input, undefined)) out.push(attribute(extra, subagentId))
       }
@@ -271,7 +342,7 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
     return out
   }
 
-  function mapUserContent(message: Record<string, unknown>, sub?: Subagent): NormalizedBody[] {
+  function mapUserContent(message: Record<string, unknown>, sub?: Subagent, frame?: Record<string, unknown>): NormalizedBody[] {
     const content = Array.isArray(message.content) ? message.content : []
     const out: NormalizedBody[] = sub ? [] : [...take("reasoning"), ...take("assistant")]
     const toolMap = sub ? sub.tools : tools
@@ -289,8 +360,37 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
       for (const extra of extrasForTool(name, callId, input, row.content ?? row.output)) out.push(attribute(extra, subagentId))
       toolMap.delete(callId)
       if (!sub) out.push(...foregroundFallback(callId, name, failed, output))
+      if (!sub && name === "SendMessage") out.push(...sendMessageOutcome(input, content.length === 1 ? frame?.tool_use_result : undefined, output, failed))
     }
     return out
+  }
+
+  /**
+   * The parent's SendMessage result is Claude's own verdict on a relayed message:
+   * `{success:true, message:"Message queued…"|"Resuming agent…"}` or `{success:false, message:
+   * "Agent … was stopped by the user and was not resumed…"}`. A refusal turns Message off with
+   * Claude's reason, so the UI stops offering what cannot work.
+   */
+  function sendMessageOutcome(input: Record<string, unknown> | undefined, structured: unknown, output: unknown, failed: boolean): NormalizedBody[] {
+    const target = subagentByTask(str(input?.to) ?? str(input?.recipient))
+    if (!target) return []
+    let result = rec(structured)
+    if (!result && typeof output === "string") {
+      try { result = rec(JSON.parse(output)) } catch { /* plain text */ }
+    }
+    const success = result ? result.success !== false : !failed
+    if (success) {
+      target.refusal = undefined
+      return [subagentBody(target, "progress", { delivery: { status: "delivered" } })]
+    }
+    const message = str(result?.message) ?? (typeof output === "string" ? output : "Claude refused the message")
+    const userStopped = /stopped by the user/i.test(message)
+    if (userStopped && !target.open) {
+      target.endedBy = "client"
+      target.ended ??= "cancelled"
+    }
+    target.refusal = userStopped ? REASON.claudeClientStopped : shortReason(message)
+    return [subagentBody(target, "progress", { delivery: { status: "refused", reason: target.refusal } })]
   }
 
   /** A foreground Agent call's tool_result closes its subagent if task_notification never did. */
@@ -299,7 +399,7 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
     const id = aliases.get(callId)
     const sub = id ? subagents.get(id) : undefined
     if (!sub || !sub.open || sub.background || sub.toolUseId !== callId) return []
-    sub.open = false
+    close(sub, failed ? "failed" : "completed")
     const text = typeof output === "string" ? output : undefined
     return [subagentBody(sub, failed ? "failed" : "completed", text ? { result: text } : {})]
   }
@@ -382,7 +482,7 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
         })]
       }
       // task_started for a finished task_id: SendMessage resumed it.
-      existing.open = true
+      reopenRun(existing)
       existing.pendingStatus = undefined
       existing.activity = undefined
       existing.prompt = prompt
@@ -390,6 +490,22 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
       const body = subagentBody(existing, "resumed")
       if (resumeCall) (body as Extract<NormalizedBody, { kind: "subagent" }>).parentCallId = resumeCall
       if (!prompt) delete (body as { prompt?: string }).prompt
+      return [body]
+    }
+    // Unknown task started by the parent's SendMessage: an agent from before a restart resuming.
+    const viaSendMessage = toolUseId !== undefined && tools.get(toolUseId)?.name === "SendMessage"
+    if (viaSendMessage) {
+      const sub: Subagent = {
+        id: taskId, taskId, open: true, tools: new Map(), blocks: new Map(), awaitingSpawn: true,
+        ...(name ? { name } : {}),
+        ...(description ? { description } : {}),
+        ...(prompt ? { prompt } : {}),
+        ...(background !== undefined ? { background } : {}),
+      }
+      bounded(subagents, sub.id, sub)
+      bounded(aliases, taskId, sub.id)
+      const body = subagentBody(sub, "resumed") as Extract<NormalizedBody, { kind: "subagent" }>
+      body.parentCallId = toolUseId
       return [body]
     }
     const sub: Subagent = {
@@ -468,8 +584,8 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
     const sub = subagentByTask(taskId)
     if (sub) {
       if (!sub.open) return []
-      sub.open = false
       const phase = terminalOf(status) ?? terminalOf(sub.pendingStatus) ?? "completed"
+      close(sub, phase)
       sub.pendingStatus = undefined
       const stats = statsOf(frame.usage)
       if (stats) sub.stats = stats
@@ -519,6 +635,11 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
 
   function mapFrame(frame: Record<string, unknown>): NormalizedBody[] {
     const type = frame.type
+    if (frame.method === SUBAGENT_STATE_METHOD) {
+      const sub = subagentByTask(str(rec(frame.params)?.subagentId))
+      if (!sub || sub.emitted === actionsKey(actionsOf(sub))) return []
+      return [subagentBody(sub, "progress")]
+    }
     const parent = str(frame.parent_tool_use_id)
     if (parent && (type === "assistant" || type === "user" || type === "stream_event")) {
       // Subagent frames: never touch main-thread message state or flush the parent's text.
@@ -567,7 +688,7 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
     if (type === "user") {
       const message = rec(frame.message)
       if (!message) return []
-      return mapUserContent(message)
+      return mapUserContent(message, undefined, frame)
     }
     if (type === "rate_limit_event") {
       return [{ kind: "usage", rateLimits: frame.rate_limit_info ?? frame }]
@@ -619,6 +740,46 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
     const canonical = aliases.get(id)
     const sub = canonical ? subagents.get(canonical) : undefined
     return sub ? { id: sub.id, taskId: sub.taskId ?? sub.id, open: sub.open } : undefined
+  }
+  normalize.markClientStop = (id: string) => { const sub = subagentByTask(id); if (sub?.open) sub.clientStop = true }
+  normalize.clearClientStop = (id: string) => { const sub = subagentByTask(id); if (sub) sub.clientStop = false }
+  normalize.restore = (snapshots, { stillRunning }) => {
+    const out: SubagentSnapshot[] = []
+    for (const snap of snapshots) {
+      if (!snap?.subagentId || subagents.has(snap.subagentId)) continue
+      const running = snap.status === "running" && stillRunning
+      const ended = snap.status === "running" ? "cancelled" : snap.status
+      const sub: Subagent = {
+        id: snap.subagentId,
+        taskId: snap.nativeId ?? snap.subagentId,
+        open: running,
+        tools: new Map(),
+        blocks: new Map(),
+        ...(snap.spawnCallId ? { toolUseId: snap.spawnCallId } : {}),
+        ...(snap.name ? { name: snap.name } : {}),
+        ...(snap.description ? { description: snap.description } : {}),
+        ...(snap.background !== undefined ? { background: snap.background } : {}),
+        ...(running ? {} : { ended, ...(snap.endedBy ? { endedBy: snap.endedBy } : {}) }),
+        // A refusal Claude gave before the restart still stands (it persists natively too).
+        ...(!running && snap.canMessage === false && snap.cannotMessageReason && snap.endedBy !== "client" ? { refusal: snap.cannotMessageReason } : {}),
+      }
+      bounded(subagents, sub.id, sub)
+      for (const alias of [snap.subagentId, snap.nativeId, snap.spawnCallId, snap.parentCallId]) if (alias) bounded(aliases, alias, sub.id)
+      const actions = actionsOf(sub)
+      sub.emitted = actionsKey(actions)
+      const { cannotMessageReason: _m, cannotStopReason: _s, ...base } = snap
+      out.push({
+        ...base,
+        status: running ? "running" : ended,
+        ...(sub.endedBy ? { endedBy: sub.endedBy } : {}),
+        canMessage: actions.canMessage,
+        canStop: actions.canStop,
+        actionsSource: actions.actionsSource,
+        ...(!actions.canMessage && actions.cannotMessageReason ? { cannotMessageReason: actions.cannotMessageReason } : {}),
+        ...(!actions.canStop && actions.cannotStopReason ? { cannotStopReason: actions.cannotStopReason } : {}),
+      })
+    }
+    return out
   }
   return normalize
 }

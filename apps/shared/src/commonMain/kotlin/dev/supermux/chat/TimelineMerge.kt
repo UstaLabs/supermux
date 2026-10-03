@@ -96,7 +96,7 @@ fun mergeTimeline(
             TimelineItem.Tool(e, status, output, resultBody)
         }
         "tool_result" -> null // folded into the matching tool row above
-        "reasoning", "plan", "task" -> TimelineItem.Activity(e)
+        "reasoning", "plan", "task", "subagent_message" -> TimelineItem.Activity(e)
         // "thinking" (and any other non-tool kind) is intentionally dropped.
         else -> null
     }

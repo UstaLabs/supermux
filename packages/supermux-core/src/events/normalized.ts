@@ -1,5 +1,6 @@
 export type NativeProtocol =
   | "codex-app-server"
+  | "claude-stream-json"
   | "acp"
   | "core"
 
@@ -43,6 +44,20 @@ export type SubagentPhase = "started" | "progress" | "completed" | "failed" | "c
  * (Claude SendMessage, Cursor Task resume). `none`: not addressable.
  */
 export type SubagentMessaging = "direct" | "relay" | "none"
+
+/** Who ended a subagent run: it finished on its own, its parent model closed/killed it, or the client stopped it. */
+export type SubagentEndedBy = "self" | "parent" | "client"
+
+/**
+ * Where a subagent's `canMessage` / `canStop` come from. `native`: the agent itself reports the
+ * capability (Codex thread/read `canAcceptDirectInput` + active turn). `derived`: computed from
+ * that agent's own lifecycle signals by the agent's own rules (Claude stop_task vs TaskStop,
+ * Grok subagent_finished, …). Never a generic state machine.
+ */
+export type SubagentActionsSource = "native" | "derived"
+
+/** The outcome of a relayed message (the parent model's SendMessage / Task resume tool result). */
+export type SubagentDelivery = { status: "delivered" | "refused"; reason?: string }
 
 export type SubagentStats = { toolCalls?: number; tokens?: number; durationMs?: number; turns?: number }
 
@@ -197,6 +212,21 @@ export type NormalizedBodyBase =
       messaging?: SubagentMessaging
       /** Child thread/session id when it differs from subagentId. */
       nativeId?: string
+      /** Terminal phases: who ended this run. */
+      endedBy?: SubagentEndedBy
+      /**
+       * What a client can do right now. Every `subagent` body a driver emits carries the current
+       * values; a `progress` body is emitted whenever they change without a lifecycle change.
+       */
+      canMessage?: boolean
+      canStop?: boolean
+      actionsSource?: SubagentActionsSource
+      /** Short, user-facing: why Message is not offered ("Stopped by you — Claude can't resume it"). */
+      cannotMessageReason?: string
+      /** Short, user-facing: why Stop is not offered ("Cursor can't stop subagents"). */
+      cannotStopReason?: string
+      /** Set on the body that reports a relayed message's outcome (Claude SendMessage tool result). */
+      delivery?: SubagentDelivery
     }
 
 /**

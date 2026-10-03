@@ -297,8 +297,11 @@ export class Core {
       }
     }
     try {
+      // A resumed session gets back the subagents it had, so they stay addressable.
+      const subagents = resumeId ? await this.store.getSubagents(input.id) : []
       runtime = await driver.open({
         sessionId: input.id, cwd: input.cwd, profile, resumeId, forkFrom, signal: this.lifetime.signal,
+        ...(subagents.length ? { subagents: structuredClone(subagents) } : {}),
         ...(nonemptyConfiguration(input.configuration) ? { configuration: structuredClone(input.configuration) } : {}),
         ...(input.permissions ? { permissions: structuredClone(input.permissions) } : originalRecord?.permissions ? { permissions: structuredClone(originalRecord.permissions) } : {}),
         onUpdate: update => {
@@ -366,7 +369,10 @@ export class Core {
           ...(record.configuration ? { configuration: structuredClone(record.configuration) } : {}),
           ...(record.permissions ? { permissions: structuredClone(record.permissions) } : {}),
         }, undefined, { agentSessionId: record.agentSessionId, ...(options.at ? { at: options.at } : {}) }))
-      }), recordToSave => this.store.put(recordToSave))
+      }), recordToSave => this.store.put(recordToSave), {
+        subagents: structuredClone(runtime.restoredSubagents ?? subagents),
+        persistSubagents: list => this.store.putSubagents(record.id, list),
+      })
       this.live.set(record.id, session)
       attachSession(session)
       for (const notice of outstandingActivity.values()) session.reportActivity(notice)

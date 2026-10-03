@@ -154,6 +154,12 @@ data class ActivityEvent(
      * under that subagent's card, not in the parent's timeline. Parent rows never carry it.
      */
     val subagentId: String? = null,
+    /** `subagent_message` rows: full text (<= 8000 chars; [title] is its first line). */
+    val text: String? = null,
+    /** `subagent_message` rows: "from" (the subagent said it) | "to" (sent to it). */
+    val direction: String? = null,
+    /** `subagent_message` rows with direction "to": "user" | "parent". */
+    val sender: String? = null,
 )
 
 /** A subagent's own counters, as far as the agent reports them (or the broker derives them). */
@@ -197,10 +203,26 @@ data class Subagent(
     val startedAt: Long = 0,
     val endedAt: Long? = null,
     val lastActivityAt: Long = 0,
+    /** Who ended it (terminal statuses only): self | parent | client. */
+    val endedBy: String? = null,
+    /** Wire `canMessage`; null from an older broker (see [canMessage]). */
+    @SerialName("canMessage") val canMessageFlag: Boolean? = null,
+    /** Wire `canStop`; null from an older broker (see [canStop]). */
+    @SerialName("canStop") val canStopFlag: Boolean? = null,
+    /** native | derived — where the action flags come from. */
+    val actionsSource: String? = null,
+    val cannotMessageReason: String? = null,
+    val cannotStopReason: String? = null,
+    /** Monotonic count of the subagent's own reply messages; unread tracking is client-side. */
+    val replies: Int? = null,
 ) {
     val running: Boolean get() = status == "running"
-    /** The broker accepts a message for it (`messaging` direct or relay). */
-    val canMessage: Boolean get() = messaging == "direct" || messaging == "relay"
+    /** Truthful: the broker's flag, else (older broker) `messaging` direct or relay. */
+    val canMessage: Boolean get() = canMessageFlag ?: (messaging == "direct" || messaging == "relay")
+    /** Truthful: the broker's flag, else (older broker) whether it is still running. */
+    val canStop: Boolean get() = canStopFlag ?: running
+    /** Replies not yet seen, given the reply count when its card was last opened. */
+    fun unreadReplies(seen: Int): Int = ((replies ?: 0) - seen).coerceAtLeast(0)
     /** Short human label: description, else name, else the id's first 8 chars. */
     val label: String get() = description?.takeIf { it.isNotBlank() } ?: name?.takeIf { it.isNotBlank() } ?: id.take(8)
 }

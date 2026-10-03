@@ -66,10 +66,20 @@ function grokUpdateKind(value: unknown): { kind: string; id?: string } | undefin
   return { kind, id }
 }
 
+/** runningPromptId of the turn Grok starts by itself when a background subagent finishes. */
+const GROK_WAKE_PREFIX = 'subagent-completed-'
+
 function parseGrokActivity(update: AgentUpdate): { kind: string; id?: string } | undefined {
   if (update.protocol === 'acp') return grokUpdateKind(update.value)
   if (update.protocol !== 'native' || !update.value || typeof update.value !== 'object' || Array.isArray(update.value)) return
   const frame = update.value as { method?: unknown; params?: unknown }
+  if (frame.method === '_x.ai/queue/changed') {
+    // A background subagent finishing wakes the parent with a prompt of Grok's own
+    // ("subagent-completed-<id>"): a real turn with no user message and no owner.
+    const params = frame.params as { runningPromptId?: unknown } | undefined
+    const id = params?.runningPromptId
+    return typeof id === 'string' && id.startsWith(GROK_WAKE_PREFIX) ? { kind: 'wake', id } : undefined
+  }
   if (frame.method !== '_x.ai/session_notification' && frame.method !== '_x.ai/session/update') return
   const params = frame.params
   const nested = params && typeof params === 'object' && !Array.isArray(params) && 'update' in params
@@ -82,7 +92,7 @@ function parseGrokActivity(update: AgentUpdate): { kind: string; id?: string } |
  * Pair those as one sequential generation per connection. Do not guess generic `rec.id`.
  * Repeated completed prompt_ids are ignored so a stale UUID cannot end the next turn.
  */
-function createGrokClassifyActivity(): (update: AgentUpdate) => AcpActivityHint | undefined {
+export function createGrokClassifyActivity(): (update: AgentUpdate) => AcpActivityHint | undefined {
   let seq = 0
   let openId: string | undefined
   let openExplicit = false
@@ -96,6 +106,13 @@ function createGrokClassifyActivity(): (update: AgentUpdate) => AcpActivityHint 
   return (update: AgentUpdate): AcpActivityHint | undefined => {
     const parsed = parseGrokActivity(update)
     if (!parsed) return
+    if (parsed.kind === 'wake') {
+      // Its own turn_completed (prompt_id = the same id) ends it.
+      if (openId === parsed.id) return
+      openId = parsed.id
+      openExplicit = true
+      return { phase: 'started', id: parsed.id }
+    }
     if (parsed.kind === 'user_message_chunk') {
       if (parsed.id) {
         if (openId === parsed.id) return { phase: 'started', id: parsed.id }
@@ -284,6 +301,8 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
       const wrapper: AgentRuntime = {
         get agentSessionId() { return inner?.agentSessionId ?? acceptedSessionId ?? pending?.agentSessionId ?? '' },
         get capabilities() { return liveCapabilities },
+        nativeProtocol: 'acp',
+        get restoredSubagents() { return inner?.restoredSubagents },
         normalize: grokNormalizer,
         flush: () => grokNormalizer.flush(),
         async prompt(content, signal) {

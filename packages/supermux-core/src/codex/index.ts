@@ -6,6 +6,7 @@ import { transport } from './transport.js'
 import { multiAgentV1Args } from './catalog.js'
 import { createCodexNormalizer } from './normalize.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
+import { REASON, SUBAGENT_STATE_METHOD, shortReason } from '../subagent-actions.js'
 
 export type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type CodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -549,8 +550,30 @@ export function codex(options: CodexOptions): AgentDriver {
       return ids.filter(id => {
         if (id === agentSessionId || children.has(id)) return false
         rememberChild(id)
+        readChild(id)
         return true
       })
+    }
+    /** Children whose native facts were read (once each). */
+    const readChildren = new Set<string>()
+    /**
+     * Ask Codex about a new child once: its nickname (the name the parent and the user call it)
+     * and whether the app server accepts direct input for it. Re-emits the child's state.
+     */
+    function readChild(id: string) {
+      if (readChildren.has(id)) return
+      readChildren.add(id)
+      void Promise.resolve().then(() => rpc.request('thread/read', { threadId: id, includeTurns: false })).then((read: any) => {
+        const thread = read?.thread
+        if (!thread || closed) return
+        const nickname = typeof thread.agentNickname === 'string' && thread.agentNickname ? thread.agentNickname
+          : typeof thread.source?.subAgent?.thread_spawn?.agent_nickname === 'string' ? thread.source.subAgent.thread_spawn.agent_nickname : undefined
+        normalizer.setNative(id, { ...(nickname ? { nickname } : {}), canAcceptDirectInput: typeof thread.canAcceptDirectInput === 'boolean' ? thread.canAcceptDirectInput : null })
+        refreshChild(id)
+      }, () => { readChildren.delete(id) })
+    }
+    function refreshChild(id: string) {
+      if (!closed) context.onUpdate({ protocol: 'native', value: { method: SUBAGENT_STATE_METHOD, params: { subagentId: id } } })
     }
     function rememberChild(id: string) {
       children.add(id)
@@ -576,6 +599,8 @@ export function codex(options: CodexOptions): AgentDriver {
         childTurns.set(threadId, params.turn.id)
         unloadedChildren.delete(threadId)
       }
+      // close_agent unloads the child thread: the next message must thread/resume it first.
+      if (method === 'thread/status/changed' && params.status?.type === 'notLoaded') unloadedChildren.add(threadId)
       if (method === 'turn/completed') {
         const turnId = childTurns.get(threadId)
         if (turnId && (!params.turn?.id || params.turn.id === turnId)) {
@@ -734,8 +759,10 @@ export function codex(options: CodexOptions): AgentDriver {
       }
       options.onRuntimeRequest({ sessionId: context.sessionId, agentSessionId: threadId }, request)
     }
+    let reattached = false
     try {
       const reattach = rpc.welcome.agentRunning === true && typeof rpc.welcome.meta.agentSessionId === 'string'
+      reattached = reattach
       if (reattach) {
         const threadId = rpc.welcome.meta.agentSessionId as string
         if (context.resumeId && context.resumeId !== threadId) throw new Error('Codex thread identity mismatch')
@@ -792,8 +819,30 @@ export function codex(options: CodexOptions): AgentDriver {
         try { await rpc.request('turn/interrupt', { threadId: agentSessionId, turnId }) } catch (error) { if (!current.finished) throw error }
       }
     }
+    // Children remembered from before a resume: known again, and (fresh process) not loaded.
+    let restoredSubagents: ReturnType<typeof normalizer.restore> | undefined
+    if (context.subagents?.length) {
+      restoredSubagents = normalizer.restore(context.subagents, { stillRunning: reattached })
+      for (const sub of restoredSubagents) {
+        if (!children.has(sub.subagentId)) rememberChild(sub.subagentId)
+        if (!reattached) unloadedChildren.add(sub.subagentId)
+        if (sub.name) readChildren.add(sub.subagentId)
+      }
+    }
+    const isThreadNotFound = (error: unknown) => /thread not found|not loaded/i.test(error instanceof Error ? error.message : String(error))
+    /** Codex refused input for the child (multi_agent v2: -32600): Message goes off, with its words. */
+    function refusal(subagentId: string, error: unknown): CoreError | undefined {
+      const code = (error as { code?: unknown })?.code
+      if (code !== -32600) return
+      normalizer.setNative(subagentId, { canAcceptDirectInput: false })
+      refreshChild(subagentId)
+      const message = error instanceof Error ? error.message : String(error)
+      return new CoreError('subagent_unavailable', message ? shortReason(message) : REASON.codexNoInput, { cause: error })
+    }
     return {
       agentSessionId: agentSessionId!, capabilities: { resume: true, steer: true, fork: true, detach: true, configure: true, history: true, permissions: true }, close, interrupt,
+      nativeProtocol: 'codex-app-server' as const,
+      ...(restoredSubagents ? { restoredSubagents } : {}),
       async setPermissions(spec) {
         if (fatal || closed) throw fatal ?? new Error('Codex runtime closed')
         const next = validatePermissionsSpec(spec)
@@ -833,7 +882,7 @@ export function codex(options: CodexOptions): AgentDriver {
         return { protocol: 'native' as const, items, ...(next < turns.length ? { cursor: String(next) } : {}) }
       },
       async messageSubagent(subagentId, content) {
-        if (fatal || closed) throw fatal ?? new Error('Codex runtime closed')
+        if (fatal || closed) throw fatal ?? new CoreError('runtime_closed', 'Codex runtime closed')
         const converted = input(content)
         if (!children.has(subagentId)) {
           // Not seen by this process (e.g. after a restart): accept only this thread's own child.
@@ -841,10 +890,12 @@ export function codex(options: CodexOptions): AgentDriver {
           if (read?.thread?.parentThreadId !== agentSessionId) throw new CoreError('subagent_not_found', `Unknown Codex subagent ${subagentId}`)
           rememberChild(subagentId)
           unloadedChildren.add(subagentId)
+          if (!normalizer.isChild(subagentId)) normalizer.adopt(subagentId)
+          readChild(subagentId)
         }
         if (normalizer.messaging(subagentId) === 'none') {
           // multi_agent_v2 children refuse direct app-server input (-32600).
-          throw new UnsupportedOperation('direct input to a multi-agent v2 subagent', options.id)
+          throw new CoreError('subagent_unavailable', REASON.codexNoInput)
         }
         const running = childTurns.get(subagentId)
         if (running) {
@@ -852,23 +903,38 @@ export function codex(options: CodexOptions): AgentDriver {
             await rpc.request('turn/steer', { threadId: subagentId, expectedTurnId: running, input: converted })
             return { via: 'direct' as const }
           } catch (error) {
+            const refused = refusal(subagentId, error)
+            if (refused) throw refused
             // The child turn may have ended in between; a new turn delivers it instead.
             if (childTurns.get(subagentId) === running) throw error
           }
         }
+        const resume = () => rpc.request('thread/resume', { threadId: subagentId, cwd: context.cwd, approvalPolicy: livePermissions.approvalPolicy, sandbox: livePermissions.sandbox })
         if (unloadedChildren.has(subagentId)) {
-          await rpc.request('thread/resume', { threadId: subagentId, cwd: context.cwd, approvalPolicy: livePermissions.approvalPolicy, sandbox: livePermissions.sandbox })
+          await resume()
           unloadedChildren.delete(subagentId)
         }
         // Only the policy: the child keeps its own model and effort.
-        await rpc.request('turn/start', { threadId: subagentId, input: converted, approvalPolicy: livePermissions.approvalPolicy, sandboxPolicy: sandboxPolicyObject(livePermissions.sandbox) })
+        const start = () => rpc.request('turn/start', { threadId: subagentId, input: converted, approvalPolicy: livePermissions.approvalPolicy, sandboxPolicy: sandboxPolicyObject(livePermissions.sandbox) })
+        try {
+          await start()
+        } catch (error) {
+          const refused = refusal(subagentId, error)
+          if (refused) throw refused
+          // A thread its parent closed (close_agent) is unloaded: load it back, then deliver.
+          if (!isThreadNotFound(error)) throw error
+          await resume()
+          unloadedChildren.delete(subagentId)
+          await start()
+        }
         return { via: 'direct' as const }
       },
       async stopSubagent(subagentId) {
-        if (fatal || closed) throw fatal ?? new Error('Codex runtime closed')
+        if (fatal || closed) throw fatal ?? new CoreError('runtime_closed', 'Codex runtime closed')
         if (!children.has(subagentId)) throw new CoreError('subagent_not_found', `Unknown Codex subagent ${subagentId}`)
         const running = childTurns.get(subagentId)
-        if (!running) return
+        if (!running) throw new CoreError('subagent_unavailable', REASON.notRunning)
+        normalizer.markClientStop(subagentId)
         await rpc.request('turn/interrupt', { threadId: subagentId, turnId: running })
       },
       async steer(content) {

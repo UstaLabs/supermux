@@ -126,4 +126,38 @@ class TimelineMergeSubagentTest {
         assertEquals("Use_tool", tools.single().event.tool)
         assertEquals(ToolStatus.ERROR, tools.single().status)
     }
+
+    @Test fun subagentMessageRowsStayInsideTheCardInSeqOrder() {
+        val sub = Subagent(id = "a1", parentCallId = "spawn")
+        fun m(ts: String, seq: Int, dir: String) =
+            ActivityEvent(ts = ts, kind = "subagent_message", title = "t$seq", text = "body $seq", direction = dir, subagentId = "a1", seq = seq)
+        val activity = listOf(
+            tool("2026-09-28T10:00:01.000Z", "spawn", tool = "Agent"),
+            m("2026-09-28T10:00:02.000Z", 1, "to"),
+            tool("2026-09-28T10:00:03.000Z", "c1", sub = "a1"),
+            result("2026-09-28T10:00:04.000Z", "c1", sub = "a1"),
+            m("2026-09-28T10:00:05.000Z", 3, "from"),
+        )
+        val items = mergeTimeline(listOf(msg), activity, subagents = listOf(sub))
+        assertEquals(2, items.size)
+        assertTrue(items.none { it is TimelineItem.Activity })
+        val card = items.filterIsInstance<TimelineItem.SubagentCard>().single()
+        assertEquals(
+            listOf("subagent_message:1", "tool:c1", "subagent_message:3"),
+            card.children.map {
+                when (it) {
+                    is TimelineItem.Activity -> "${it.event.kind}:${it.event.seq}"
+                    is TimelineItem.Tool -> "tool:${it.event.callId}"
+                    else -> "?"
+                }
+            },
+        )
+    }
+
+    @Test fun subagentMessageForUnknownSubagentNeverLandsAtTopLevel() {
+        val row = ActivityEvent(ts = "2026-09-28T10:00:05.000Z", kind = "subagent_message", text = "x", direction = "from", subagentId = "ghost", seq = 1)
+        val items = mergeTimeline(emptyList(), listOf(row))
+        val card = items.single() as TimelineItem.SubagentCard
+        assertEquals(1, card.children.size)
+    }
 }

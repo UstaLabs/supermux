@@ -1,0 +1,13 @@
+{
+  "type": "activity_append",
+  "session": "550e8400-e29b-41d4-a716-446655440000",
+  "event": {
+    "ts": "2026-09-28T10:00:05.000Z",
+    "kind": "subagent_message",
+    "title": "Found it: the migration adds a NOT NULL column",
+    "text": "Found it: the migration adds a NOT NULL column\nwithout a default, so existing rows fail.",
+    "direction": "from",
+    "subagentId": "01a10304-7c2e-7d41-9b0a-5e3f2c1d8a90",
+    "seq": 12
+  }
+}

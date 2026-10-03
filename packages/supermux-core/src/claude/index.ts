@@ -456,8 +456,10 @@ export function claude(options: ClaudeOptions): AgentDriver {
     const setupAbort = () => { fail(new Error('Claude setup aborted')); void close({ mode: 'shutdown' }) /* abort: stop the native process */ }
     context.signal.addEventListener('abort', setupAbort, { once: true })
     const timer = setTimeout(() => { fail(new Error('Claude setup timed out')); void close({ mode: 'shutdown' }) /* setup timeout: stop the native process */ }, setupTimeoutMs)
+    let reattached = false
     try {
       const reattach = rpc.welcome.agentRunning === true && typeof rpc.welcome.meta.agentSessionId === 'string'
+      reattached = reattach
       if (reattach) {
         const sid = rpc.welcome.meta.agentSessionId as string
         if (context.resumeId && context.resumeId !== sid) throw new Error('Claude session identity mismatch')
@@ -497,8 +499,12 @@ export function claude(options: ClaudeOptions): AgentDriver {
       if (active === a) await rpc.request({ subtype: 'interrupt' })
       if (active === a && !fatal) a.interrupted = true
     }
+    // A re-attached process still runs what it ran; a fresh one cannot.
+    const restoredSubagents = context.subagents?.length ? normalizer.restore(context.subagents, { stillRunning: reattached }) : undefined
     return {
       agentSessionId: agentSessionId!, capabilities: { resume: true, steer: false, fork: false, detach: true, permissions: true }, close, interrupt,
+      nativeProtocol: 'claude-stream-json' as const,
+      ...(restoredSubagents ? { restoredSubagents } : {}),
       async setPermissions(spec) {
         if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')
         const next = validatePermissionsSpec(spec)
@@ -513,13 +519,17 @@ export function claude(options: ClaudeOptions): AgentDriver {
       normalize: normalizer,
       flush: () => normalizer.flush(),
       async messageSubagent(subagentId, content) {
-        if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')
-        return { via: 'relay' as const, relay: claudeRelayPrompt(subagentId, content) }
+        if (fatal || closed) throw fatal ?? new CoreError('runtime_closed', 'Claude runtime closed')
+        return { via: 'relay' as const, relay: claudeRelayPrompt(normalizer.subagent(subagentId)?.taskId ?? subagentId, content) }
       },
       async stopSubagent(subagentId) {
-        if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')
+        if (fatal || closed) throw fatal ?? new CoreError('runtime_closed', 'Claude runtime closed')
         const known = normalizer.subagent(subagentId)
-        await rpc.request({ subtype: 'stop_task', task_id: known?.taskId ?? subagentId })
+        if (!known) throw new CoreError('subagent_not_found', `Unknown Claude subagent ${subagentId}`)
+        // stop_task and the parent's own TaskStop produce identical frames; only we know this one is ours.
+        normalizer.markClientStop(known.id)
+        try { await rpc.request({ subtype: 'stop_task', task_id: known.taskId }) }
+        catch (error) { normalizer.clearClientStop(known.id); throw error }
       },
       async prompt(content, signal) {
         if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')

@@ -35,6 +35,47 @@
         "model": "gpt-5.6-luna",
         "startedAt": 1717200000000,
         "lastActivityAt": 1717200003000
+      },
+      {
+        "id": "t2",
+        "name": "Anscombe",
+        "description": "Check the failing migration",
+        "prompt": "Find why the users migration fails and report back.",
+        "background": false,
+        "status": "running",
+        "activity": "Reading db/migrate.sql",
+        "stats": {
+          "toolCalls": 4,
+          "tokens": 8210,
+          "durationMs": 21500
+        },
+        "result": "Stopped before finishing.",
+        "model": "gpt-5.6-luna",
+        "messaging": "direct",
+        "canMessage": false,
+        "canStop": true,
+        "actionsSource": "derived",
+        "replies": 3,
+        "parentCallId": "collab-9f21",
+        "nativeId": "01a10304-7c2e-7d41-9b0a-5e3f2c1d8a90",
+        "startedAt": 1790589601000,
+        "lastActivityAt": 1790589622500,
+        "cannotMessageReason": "Stopped by you \u2014 Claude can't resume it"
+      }
+    ]
+  },
+  "activity": {
+    "editor": [
+      {
+        "ts": "2026-09-28T10:00:01.000Z",
+        "kind": "subagent_message",
+        "title": "Check the failing migration",
+        "text": "Check the failing migration",
+        "direction": "to",
+        "sender": "parent",
+        "subagentId": "t2",
+        "seq": 1,
+        "truncated": true
       }
     ]
   }

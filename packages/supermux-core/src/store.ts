@@ -3,7 +3,7 @@ import { isAbsolute, join, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 import { uptime } from "node:os"
 import { CoreError } from "./errors.js"
-import type { SessionConfiguration, SessionRecord } from "./types.js"
+import type { SessionConfiguration, SessionRecord, SubagentSnapshot } from "./types.js"
 
 export class SessionStore {
   readonly directory: string
@@ -35,6 +35,7 @@ export class SessionStore {
     try {
       await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }))
       await mkdir(join(this.directory, "sessions"), { recursive: true, mode: 0o700 })
+      await mkdir(join(this.directory, "subagents"), { recursive: true, mode: 0o700 })
     } catch (error) {
       await this.close()
       throw error
@@ -92,6 +93,36 @@ export class SessionStore {
   async remove(id: string): Promise<void> {
     this.assertOpen()
     await rm(this.path(id), { force: true })
+    await rm(this.subagentsPath(id), { force: true })
+  }
+
+  /** Sidecar of a session's subagent registry (kept apart so the record format is unchanged). */
+  private subagentsPath(id: string): string {
+    this.path(id)
+    return join(this.directory, "subagents", `${id}.json`)
+  }
+
+  /** The session's remembered subagents; [] when none were saved or the file is unreadable. */
+  async getSubagents(id: string): Promise<SubagentSnapshot[]> {
+    this.assertOpen()
+    let text: string
+    try { text = await readFile(this.subagentsPath(id), "utf8") } catch { return [] }
+    try {
+      const value = JSON.parse(text)
+      return Array.isArray(value) ? value.filter(validSubagent) : []
+    } catch { return [] }
+  }
+
+  async putSubagents(id: string, subagents: SubagentSnapshot[]): Promise<void> {
+    this.assertOpen()
+    const path = this.subagentsPath(id)
+    await mkdir(join(this.directory, "subagents"), { recursive: true, mode: 0o700 })
+    const temp = `${path}.${randomUUID()}.tmp`
+    try {
+      const file = await open(temp, "wx", 0o600)
+      try { await file.writeFile(JSON.stringify(subagents)) } finally { await file.close() }
+      await rename(temp, path)
+    } finally { await rm(temp, { force: true }) }
   }
 
   async close(): Promise<void> {
@@ -152,6 +183,13 @@ function validRecord(value: unknown): value is SessionRecord {
       && typeof (r.lineage as Record<string, unknown>).parentSessionId === "string"
       && ((r.lineage as Record<string, unknown>).nativeTurnId === undefined || typeof (r.lineage as Record<string, unknown>).nativeTurnId === "string")))
     && validConfiguration(r.configuration)
+}
+
+function validSubagent(value: unknown): value is SubagentSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const r = value as Record<string, unknown>
+  return typeof r.subagentId === "string" && !!r.subagentId
+    && (r.status === "running" || r.status === "completed" || r.status === "failed" || r.status === "cancelled")
 }
 
 function validConfiguration(value: unknown): value is SessionConfiguration | undefined {

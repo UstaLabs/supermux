@@ -1,6 +1,8 @@
 /** ACP SessionUpdate mapper. Schema pin: @agentclientprotocol/sdk 1.4.0 types.gen.d.ts. */
 import type { AgentUpdate } from "../types.js"
-import type { NormalizedBody, PlanEntryPriority, PlanEntryStatus, SubagentMessaging, SubagentPhase, SubagentStats, ToolCallPhase, ToolCategory } from "../events/normalized.js"
+import type { NormalizedBody, PlanEntryPriority, PlanEntryStatus, SubagentEndedBy, SubagentMessaging, SubagentPhase, SubagentStats, ToolCallPhase, ToolCategory } from "../events/normalized.js"
+import type { SubagentSnapshot } from "../types.js"
+import { REASON, SUBAGENT_STATE_METHOD, actionFields, actionsKey, endedReason, type SubagentActions } from "../subagent-actions.js"
 
 function rec(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return
@@ -101,6 +103,8 @@ export type AcpNormalizer = ((update: AgentUpdate) => NormalizedBody[]) & {
   openSubagents: () => AcpSubagentInfo[]
   /** Mark a subagent as stopped by the client, so its failed/aborted end reads as `cancelled`. */
   markStopRequested: (id: string) => void
+  /** Seed subagents remembered from before a resume; returns their state as this process sees it. */
+  restore: (snapshots: SubagentSnapshot[], options: { stillRunning: boolean }) => SubagentSnapshot[]
 }
 
 /** Driver-synthesized native frame for a turn the client started directly on a child session. */
@@ -134,6 +138,16 @@ type Sub = {
   taskCallId?: string
   /** The client asked to stop it: a failed/aborted end is reported as `cancelled`. */
   stopRequested?: boolean
+  /** The parent model killed it (Grok kill_command_or_subagent). */
+  parentKill?: boolean
+  /** The current run is a turn the CLIENT started on the child session (direct message). */
+  direct?: boolean
+  /** A client message is being answered inside a run the agent itself started (OpenCode folds it in). */
+  overlay?: boolean
+  ended?: "completed" | "failed" | "cancelled"
+  endedBy?: SubagentEndedBy
+  /** Flags last put on a body. */
+  emitted?: string
 }
 
 type SpawnCall = { callId: string; description?: string; prompt?: string; subagentType?: string; background?: boolean; resumeFrom?: string }
@@ -229,14 +243,53 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   }
 
   function subBody(sub: Sub, phase: SubagentPhase, extra: Partial<Extract<NormalizedBody, { kind: "subagent" }>> = {}): NormalizedBody {
+    const actions = actionsOf(sub)
+    sub.emitted = actionsKey(actions)
+    const terminal = phase === "completed" || phase === "failed" || phase === "cancelled"
     return {
       kind: "subagent",
       subagentId: sub.id,
       phase,
       ...(phase === "started" || phase === "resumed" ? { messaging: sub.messaging, ...(sub.parentCallId ? { parentCallId: sub.parentCallId } : {}) } : {}),
       ...(sub.nativeId && sub.nativeId !== sub.id ? { nativeId: sub.nativeId } : {}),
+      ...(terminal && sub.endedBy ? { endedBy: sub.endedBy } : {}),
+      ...actionFields(actions),
       ...extra,
     }
+  }
+
+  /**
+   * Each vendor's own rules (truth table 2026-10-03):
+   * - Grok: a finished child is reached by session/load + session/prompt; a RUNNING child must not
+   *   be loaded (loading it mid-run breaks its tool session), so Message waits for the finish.
+   *   Stop: `_x.ai/subagent/cancel` (Grok's own cancel) while it runs.
+   * - OpenCode: direct load + prompt works running, finished or stopped (a running child folds the
+   *   message into its run) once its child session is known; Stop = HTTP abort while it runs.
+   * - Cursor: no client channel at all; a message is relayed through the parent's Task resume
+   *   (derived, always possible); `subagent_spawned.capabilities` offers no cancel → no Stop.
+   */
+  function actionsOf(sub: Sub): SubagentActions {
+    const stopReason = endedReason(sub.ended)
+    if (vendor === "cursor") return { canMessage: sub.messaging === "relay", canStop: false, cannotStopReason: REASON.cursorNoStop, actionsSource: "derived" }
+    if (vendor === "grok") {
+      if (sub.open) return { canMessage: false, cannotMessageReason: sub.direct ? REASON.busy : REASON.grokRunning, canStop: true, actionsSource: "derived" }
+      return { canMessage: true, canStop: false, cannotStopReason: stopReason, actionsSource: "derived" }
+    }
+    if (vendor === "opencode") {
+      if (sub.open && !sub.nativeId) return { canMessage: false, cannotMessageReason: REASON.opencodeNoSession, canStop: false, cannotStopReason: REASON.opencodeNoSession, actionsSource: "derived" }
+      if (sub.open) return sub.direct || sub.overlay
+        ? { canMessage: false, cannotMessageReason: REASON.busy, canStop: true, actionsSource: "derived" }
+        : { canMessage: true, canStop: true, actionsSource: "derived" }
+      return { canMessage: true, canStop: false, cannotStopReason: stopReason, actionsSource: "derived" }
+    }
+    return { canMessage: false, canStop: false, actionsSource: "derived" }
+  }
+
+  /** A progress body when this subagent's flags changed outside a lifecycle body. */
+  function refresh(sub: Sub | undefined, out: NormalizedBody[]): NormalizedBody[] {
+    if (!sub || sub.emitted === actionsKey(actionsOf(sub))) return out
+    if (out.some(body => body.kind === "subagent" && body.subagentId === sub.id)) return out
+    return [...out, subBody(sub, "progress")]
   }
 
   function newSub(id: string, messaging: SubagentMessaging, parentCallId?: string, nativeId?: string): Sub {
@@ -257,9 +310,14 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
     return vendor === "cursor" ? "relay" : vendor === "grok" || vendor === "opencode" ? "direct" : "none"
   }
 
-  function reopen(sub: Sub, extra: Partial<Extract<NormalizedBody, { kind: "subagent" }>> = {}): NormalizedBody[] {
+  function reopen(sub: Sub, extra: Partial<Extract<NormalizedBody, { kind: "subagent" }>> = {}, direct = false): NormalizedBody[] {
     if (sub.open) return []
     sub.open = true
+    sub.direct = direct
+    sub.ended = undefined
+    sub.endedBy = undefined
+    sub.stopRequested = false
+    sub.parentKill = false
     sub.pending = undefined
     sub.activity = undefined
     sub.stats = {}
@@ -273,6 +331,13 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
     const scope = scopeFor(sub.id)
     const out = [...takeThoughts(scope), ...takeAssistant(scope)]
     sub.open = false
+    sub.direct = false
+    sub.ended = phase
+    // An answer to the client's message can outlive the run it was folded into; it is not a run.
+    sub.overlay = false
+    sub.endedBy = phase !== "cancelled" ? "self" : sub.stopRequested ? "client" : sub.parentKill ? "parent" : undefined
+    sub.stopRequested = false
+    sub.parentKill = false
     sub.pending = undefined
     const text = result ?? (phase === "completed" ? scope.lastText : undefined)
     const stats = Object.keys(sub.stats).length ? { ...sub.stats } : undefined
@@ -494,6 +559,12 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
       if (spawnCalls.length > 64) spawnCalls.shift()
       return []
     }
+    if (vendor === "grok" && name === "kill_command_or_subagent" && input) {
+      // The parent model killing its own subagent: that run ends `endedBy: "parent"`.
+      const target = lookup(str(input.task_id) ?? str(input.taskId))
+      if (target?.open) target.parentKill = true
+      return []
+    }
     if (vendor === "cursor") return cursorTaskCall(kind, callId, value, input)
     if (vendor === "opencode" && name === "task") return opencodeTask(kind, callId, value, input)
     return []
@@ -671,12 +742,22 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
       const sub = lookup(id)
       if (!sub) {
         const created = newSub(id, defaultMessaging())
+        created.direct = true
         return [subBody(created, "started")]
       }
-      return reopen(sub)
+      if (sub.open) {
+        // Folded into the run already going: busy until our message is answered, run not ours.
+        sub.overlay = true
+        return refresh(sub, [])
+      }
+      return reopen(sub, {}, true)
     }
     const sub = lookup(id)
     if (!sub) return []
+    if (sub.overlay || !sub.direct) {
+      sub.overlay = false
+      return refresh(sub, [])
+    }
     const terminal = terminalOf(phase) ?? "completed"
     return finish(sub, terminal, terminal === "failed" ? str(params.error) : undefined)
   }
@@ -691,7 +772,12 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
       const line = typeof rec(params)?.line === "string" ? String(rec(params)!.line) : ""
       const m = /^ERROR\b.*\bservice=session\.processor\b.*?\berror=(.*?)(?:\s+stack=|$)/.exec(line)
       if (!m) return []
-      return [{ kind: "error", message: m[1]!.trim(), errorType: "provider", recoverable: false }]
+      // A failure in a SUBAGENT's child session (e.g. "Aborted process" when it is stopped) is the
+      // subagent's, never the main thread's.
+      const session = /\bsession\.id=(\S+)/.exec(line)?.[1]
+      const main = options.mainSessionId?.() || firstSession
+      const owner = session && main && session !== main ? lookup(session) : undefined
+      return [attribute({ kind: "error", message: m[1]!.trim(), errorType: "provider", recoverable: false } as NormalizedBody, owner?.id)]
     }
     if (vendor === "grok" && (method === "_x.ai/session_notification" || method === "_x.ai/session/update")) {
       const nested = rec(params)
@@ -702,6 +788,7 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
       return mapAcp(update, mainScope)
     }
     if (method === "cursor/task") return cursorTask(rec(params) ?? {})
+    if (method === SUBAGENT_STATE_METHOD) return refresh(lookup(str(rec(params)?.subagentId)), [])
     if (method === SUBAGENT_TURN_METHOD) return subagentTurn(rec(params) ?? {})
     if (method === SUBAGENT_SESSION_METHOD) {
       const sub = lookup(str(rec(params)?.subagentId))
@@ -775,7 +862,27 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   }
   normalize.subagentForTool = (toolCallId: string) => childTools.get(toolCallId)
   normalize.subagentForSession = (sessionId: string) => (isMain(sessionId) ? undefined : lookup(sessionId)?.id)
-  normalize.markStopRequested = (id: string) => { const sub = subs.get(id); if (sub) sub.stopRequested = true }
+  normalize.markStopRequested = (id: string) => { const sub = lookup(id); if (sub) sub.stopRequested = true }
+  normalize.restore = (snapshots, { stillRunning }) => {
+    const out: SubagentSnapshot[] = []
+    for (const snap of snapshots) {
+      if (!snap?.subagentId || subs.has(snap.subagentId)) continue
+      const running = snap.status === "running" && stillRunning
+      const ended = snap.status === "running" ? "cancelled" : snap.status
+      const sub = newSub(snap.subagentId, snap.messaging ?? defaultMessaging(), snap.parentCallId, snap.nativeId)
+      sub.open = running
+      if (!running) {
+        sub.ended = ended
+        if (snap.endedBy) sub.endedBy = snap.endedBy
+      }
+      if (vendor === "cursor" && snap.parentCallId) sub.taskCallId = snap.parentCallId
+      const actions = actionsOf(sub)
+      sub.emitted = actionsKey(actions)
+      const { cannotMessageReason: _m, cannotStopReason: _s, ...base } = snap
+      out.push({ ...base, status: running ? "running" : ended, ...actionFields(actions) } as SubagentSnapshot)
+    }
+    return out
+  }
   normalize.openSubagents = () => [...subs.values()].filter(sub => sub.open).map(sub => ({ id: sub.id, ...(sub.nativeId ? { nativeId: sub.nativeId } : {}), open: true }))
   normalize.subagent = (id: string) => {
     const sub = lookup(id)

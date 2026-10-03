@@ -130,9 +130,16 @@ test("claude: messageSubagent relays through a parent turn", async () => {
   await adapter.send("spawn")
   await until(() => events.some((e) => e.kind === "subagent" && e.body.phase === "completed"))
   await until(() => events.some((e) => e.kind === "turn-complete"))
-  expect(await adapter.messageSubagent("a47ce4c320c9a4f07", "Now also Read notes.txt and report its first line.")).toEqual({ via: "relay" })
+  expect((await adapter.messageSubagent("a47ce4c320c9a4f07", "Now also Read notes.txt and report its first line.")).via).toBe("relay")
   await until(() => events.some((e) => e.kind === "subagent" && e.body.phase === "resumed"))
   await until(() => events.filter((e) => e.kind === "subagent" && e.body.phase === "completed").length === 2)
+  // The subagent's thread: its first prompt (from the parent), the user's relayed message (once
+  // Claude confirmed it), and its replies — all as subagent_message rows.
+  const thread = rows(events).filter((r) => r.kind === "subagent_message" && r.subagentId === "a47ce4c320c9a4f07")
+  expect(thread[0]).toMatchObject({ direction: "to", sender: "parent" })
+  expect(thread.filter((r) => r.direction === "to" && r.sender === "user").map((r) => r.text)).toEqual(["Now also Read notes.txt and report its first line."])
+  expect(thread.map((r) => r.direction)).toEqual(["to", "from", "to", "from"])
+  expect(thread[1]!.text).toContain("PELICAN")
 })
 
 test("codex: direct messaging reaches the child; stop interrupts only the child", async () => {
@@ -140,9 +147,9 @@ test("codex: direct messaging reaches the child; stop interrupts only the child"
   const child = "01a0e789-3982-7f20-9a82-6a928de9c924"
   void adapter.send("spawn and wait")
   await until(() => events.some((e) => e.kind === "subagent" && e.body.subagentId === child && e.body.phase === "started"))
-  expect(await adapter.messageSubagent(child, "Also include the word PINEAPPLE in your final reply.")).toEqual({ via: "direct" })
+  expect((await adapter.messageSubagent(child, "Also include the word PINEAPPLE in your final reply.")).via).toBe("direct")
   // The capture holds two steers; the replay moves on once both arrived.
-  expect(await adapter.messageSubagent(child, "Additionally say MANGO in your final reply.")).toEqual({ via: "direct" })
+  expect((await adapter.messageSubagent(child, "Additionally say MANGO in your final reply.")).via).toBe("direct")
   await until(() => events.some((e) => e.kind === "subagent" && e.body.subagentId === child && e.body.phase === "completed"))
   // Child text never posted as the parent's reply.
   const replies = events.filter((e) => e.kind === "assistant-message").map((e) => (e as { text: string }).text)
@@ -155,6 +162,12 @@ test("codex: direct messaging reaches the child; stop interrupts only the child"
     "FINISHED PINEAPPLE MANGO",
   ])
   await expect(adapter.stopSubagent("not-a-child")).rejects.toThrow()
+  const thread = rows(events).filter((r) => r.kind === "subagent_message" && r.subagentId === child)
+  expect(thread[0]).toMatchObject({ direction: "to", sender: "parent" })
+  expect(thread.filter((r) => r.direction === "to" && r.sender === "user").map((r) => r.text)).toEqual([
+    "Also include the word PINEAPPLE in your final reply.", "Additionally say MANGO in your final reply.",
+  ])
+  expect(thread.filter((r) => r.direction === "from").map((r) => r.text).join(" ")).toContain("FINISHED")
 })
 
 test("codex v2: messaging a v2 child is unsupported_operation", async () => {
@@ -162,5 +175,5 @@ test("codex v2: messaging a v2 child is unsupported_operation", async () => {
   await adapter.send("spawn")
   const child = "01a0e78a-c94a-7a30-9978-67e993ec02d1"
   await until(() => events.some((e) => e.kind === "subagent" && e.body.subagentId === child && e.body.phase === "completed"))
-  await expect(adapter.messageSubagent(child, "hi")).rejects.toMatchObject({ code: "unsupported_operation" })
+  await expect(adapter.messageSubagent(child, "hi")).rejects.toMatchObject({ code: "subagent_unavailable" })
 })

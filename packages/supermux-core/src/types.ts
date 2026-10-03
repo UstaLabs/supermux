@@ -2,7 +2,10 @@ import type {
   AuthMethod, ContentBlock, RequestPermissionRequest, RequestPermissionResponse,
   SessionNotification,
 } from "@agentclientprotocol/sdk"
-import type { EventEnvelope, NormalizedBody } from "./events/normalized.js"
+import type {
+  EventEnvelope, NativeProtocol, NormalizedBody, SubagentActionsSource, SubagentDelivery, SubagentEndedBy,
+  SubagentMessaging,
+} from "./events/normalized.js"
 
 export type PermissionOptionKind = "allow_once" | "allow_always" | "reject_once" | "reject_always"
 
@@ -181,6 +184,35 @@ export type ActivityNotice = {
   phase: ActivityPhase
 }
 
+/**
+ * What Core remembers about one subagent across a resume (the driver's own registry is in-memory).
+ * Folded from the `subagent` bodies the session emitted; persisted next to the session record;
+ * handed back to the driver as `DriverContext.subagents` when the session is resumed so a
+ * subagent stays addressable (Grok/OpenCode child sessions, Claude task ids and spawn calls).
+ */
+export type SubagentSnapshot = {
+  subagentId: string
+  status: "running" | "completed" | "failed" | "cancelled"
+  endedBy?: SubagentEndedBy
+  /** First spawning tool call (Claude: child frames of a resumed task still carry it). */
+  spawnCallId?: string
+  /** Latest spawning/resuming call. */
+  parentCallId?: string
+  nativeId?: string
+  name?: string
+  description?: string
+  background?: boolean
+  model?: string
+  messaging?: SubagentMessaging
+  canMessage?: boolean
+  canStop?: boolean
+  actionsSource?: SubagentActionsSource
+  cannotMessageReason?: string
+  cannotStopReason?: string
+  /** Epoch ms. */
+  updatedAt: number
+}
+
 export type DriverContext = {
   sessionId: string
   cwd: string
@@ -196,6 +228,8 @@ export type DriverContext = {
   requestAnswers: AnswersHandler
   /** Optional. Drivers that omit this retain owned-prompt lifecycle only. */
   onActivity?(notice: ActivityNotice): void
+  /** Resume only: the subagents this session had (see SubagentSnapshot). */
+  subagents?: SubagentSnapshot[]
 }
 
 export type CloseMode = "shutdown" | "detach"
@@ -224,6 +258,14 @@ export function requireAgentsCloseMode(options: { agents?: unknown } | undefined
  */
 export type SubagentMessageResult = { via: "direct" } | { via: "relay"; relay: ContentBlock[] }
 
+/**
+ * What became of a message to a subagent. Direct messages are `delivered` once the runtime
+ * accepted them. A relayed one settles when the parent's forwarding tool reports back:
+ * `delivered`, `refused` (with the agent's own reason, e.g. Claude's "was stopped by the user"),
+ * or `unconfirmed` when the relay turn ended without the parent ever calling the tool.
+ */
+export type SubagentMessageDelivery = SubagentDelivery | { status: "unconfirmed"; reason?: string }
+
 export type SubagentMessageOptions = {
   /** Only for relayed messages (they are ordinary main-thread input). Default "queue". */
   whenBusy?: "queue" | "reject"
@@ -232,6 +274,13 @@ export type SubagentMessageOptions = {
 export type AgentRuntime = {
   readonly agentSessionId: string
   readonly capabilities: Capabilities
+  /** How this runtime's `native` updates are labelled on normalized events. */
+  readonly nativeProtocol?: NativeProtocol
+  /**
+   * Resume only: the driver's view of `DriverContext.subagents` after restoring them (a fresh
+   * process cannot still be running what the old one ran). Core seeds its registry from this.
+   */
+  readonly restoredSubagents?: SubagentSnapshot[]
   prompt(content: ContentBlock[], signal: AbortSignal): Promise<{ stopReason: string }>
   interrupt(): Promise<void>
   close(options: CloseOptions): Promise<void>

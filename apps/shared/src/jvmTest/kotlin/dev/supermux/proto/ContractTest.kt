@@ -23,7 +23,7 @@ class ContractTest {
             "walkthrough_updated", "review_comment",
             "request_open", "request_closed", "error",
             "worktree_sizes", "worktrees_removed", "agent_models_changed",
-            "subagent_update", "subagents_cleared", "activity_append_subagent",
+            "subagent_update", "subagents_cleared", "activity_append_subagent", "activity_append_subagent_message",
             "request_open_subagent", "message_append_subagent",
             "fs_dir", "fs_gone", "fs_err",
         )
@@ -52,7 +52,7 @@ class ContractTest {
                 is ServerFrame.SessionRead -> {}
                 is ServerFrame.ActivityAppend -> {}
                 is ServerFrame.BgTasks -> {}
-                is ServerFrame.SubagentUpdate -> assertEquals("toolu_01FY1DZSocZ1MNN2Rp2jmdfj", frame.subagent.parentCallId)
+                is ServerFrame.SubagentUpdate -> assertEquals("collab-9f21", frame.subagent.parentCallId)
                 is ServerFrame.SubagentsCleared -> {}
                 is ServerFrame.CommandsChanged -> {}
                 is ServerFrame.FsChanged -> {}
@@ -96,10 +96,43 @@ class ContractTest {
         val line = json.decodeFromString<ServerFrame>(load("message_append_subagent")) as ServerFrame.MessageAppend
         assertEquals("af3c70a348a6a6b7a", line.entry.subagent_id)
         val snap = json.decodeFromString<ServerFrame>(load("snapshot")) as ServerFrame.Snapshot
-        assertEquals("t1", snap.subagents["editor"]!!.single().id)
+        assertEquals("t1", snap.subagents["editor"]!!.first().id)
         val update = json.decodeFromString<ServerFrame>(load("subagent_update")) as ServerFrame.SubagentUpdate
-        assertEquals(2, update.subagent.stats.toolCalls)
-        assertEquals("completed", update.subagent.status)
+        assertEquals(4, update.subagent.stats.toolCalls)
+        assertEquals("cancelled", update.subagent.status)
+    }
+
+    @Test fun subagent_actions_and_messages_survive_the_wire() {
+        val u = (json.decodeFromString<ServerFrame>(load("subagent_update")) as ServerFrame.SubagentUpdate).subagent
+        assertEquals("Anscombe", u.name)
+        assertEquals("cancelled", u.status)
+        assertEquals("parent", u.endedBy)
+        assertEquals(true, u.canMessage)
+        assertEquals(false, u.canStop)
+        assertEquals("native", u.actionsSource)
+        assertEquals("It isn't running", u.cannotStopReason)
+        assertEquals(3, u.replies)
+        assertEquals(3, u.unreadReplies(0))
+        assertEquals(0, u.unreadReplies(5))
+        val row = (json.decodeFromString<ServerFrame>(load("activity_append_subagent_message")) as ServerFrame.ActivityAppend).event
+        assertEquals("subagent_message", row.kind)
+        assertEquals("from", row.direction)
+        assertEquals(12, row.seq)
+        assertEquals("01a10304-7c2e-7d41-9b0a-5e3f2c1d8a90", row.subagentId)
+        assertTrue(row.text!!.contains("\n"))
+        val snap = json.decodeFromString<ServerFrame>(load("snapshot")) as ServerFrame.Snapshot
+        val t2 = snap.subagents["editor"]!!.single { it.id == "t2" }
+        assertEquals(false, t2.canMessage)
+        assertEquals("Stopped by you \u2014 Claude can't resume it", t2.cannotMessageReason)
+        assertEquals(true, t2.canStop)
+        val to = snap.activity["editor"]!!.single()
+        assertEquals("to", to.direction)
+        assertEquals("parent", to.sender)
+        assertEquals(true, to.truncated)
+        // older-broker fixture entry (no flags) falls back to messaging / running
+        val t1 = snap.subagents["editor"]!!.single { it.id == "t1" }
+        assertTrue(t1.canMessage)
+        assertTrue(t1.canStop)
     }
 
     @Test fun client_prompt_frames_round_trip() {

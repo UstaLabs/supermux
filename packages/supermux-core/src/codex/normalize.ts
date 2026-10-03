@@ -1,6 +1,7 @@
 /** Codex app-server mapper. Schema pin: `codex app-server generate-ts` dump used 2026-09-21. */
-import type { AgentUpdate } from "../types.js"
-import type { NormalizedBody, PlanEntryStatus, SubagentMessaging, SubagentStats, ToolCallPhase } from "../events/normalized.js"
+import type { AgentUpdate, SubagentSnapshot } from "../types.js"
+import type { NormalizedBody, PlanEntryStatus, SubagentEndedBy, SubagentMessaging, SubagentStats, ToolCallPhase } from "../events/normalized.js"
+import { REASON, SUBAGENT_STATE_METHOD, actionFields, actionsKey, endedReason, type SubagentActions } from "../subagent-actions.js"
 
 type Frame = { method?: string; params?: Record<string, unknown>; id?: unknown }
 
@@ -142,6 +143,14 @@ export type CodexNormalizer = ((update: AgentUpdate) => NormalizedBody[]) & {
   messaging: (threadId: string) => SubagentMessaging | undefined
   /** Register a child known from elsewhere (keeper re-attach) without a `started` event. */
   adopt: (threadId: string) => void
+  /** Native facts from `thread/read` on the child (nickname, canAcceptDirectInput). */
+  setNative: (threadId: string, info: { nickname?: string; canAcceptDirectInput?: boolean | null }) => void
+  /** The client interrupted the child's turn: that run ends `endedBy: "client"`. */
+  markClientStop: (threadId: string) => void
+  /** Whether the child has a turn running right now (Codex's own stop condition). */
+  running: (threadId: string) => boolean
+  /** Seed children remembered from before a resume; returns their state as this process sees it. */
+  restore: (snapshots: SubagentSnapshot[], options: { stillRunning: boolean }) => SubagentSnapshot[]
 }
 
 type Child = {
@@ -152,6 +161,18 @@ type Child = {
   result?: string
   stats: SubagentStats
   turnId?: string
+  /** `thread/read` agentNickname: the subagent's real name ("Anscombe"). */
+  nickname?: string
+  /** `thread/read` canAcceptDirectInput (null/undefined: Codex did not say). */
+  canAcceptDirectInput?: boolean | null
+  ended?: "completed" | "failed" | "cancelled"
+  endedBy?: SubagentEndedBy
+  /** The client interrupted this run. */
+  clientStop?: boolean
+  /** The parent model called close_agent / interrupt_agent on it. */
+  parentClose?: boolean
+  emitted?: string
+  emittedName?: string
 }
 
 const MAX_CHILDREN = 256
@@ -188,7 +209,43 @@ export function createCodexNormalizer(): CodexNormalizer {
   }
 
   function childBody(child: Child, phase: Extract<NormalizedBody, { kind: "subagent" }>["phase"], extra: Partial<Extract<NormalizedBody, { kind: "subagent" }>> = {}): NormalizedBody {
-    return { kind: "subagent", subagentId: child.id, phase, ...extra }
+    const actions = actionsOf(child)
+    child.emitted = actionsKey(actions)
+    if (child.nickname) child.emittedName = child.nickname
+    const terminal = phase === "completed" || phase === "failed" || phase === "cancelled"
+    return {
+      kind: "subagent", subagentId: child.id, phase,
+      ...(child.nickname ? { name: child.nickname } : {}),
+      ...(terminal && child.endedBy ? { endedBy: child.endedBy } : {}),
+      ...actionFields(actions),
+      ...extra,
+    }
+  }
+
+  /**
+   * Codex's own answers: the child thread says whether it accepts direct input
+   * (`canAcceptDirectInput`; multi_agent v2 children do not), and Stop is `turn/interrupt` on the
+   * child's running turn — nothing to interrupt otherwise. A child its parent closed (notLoaded)
+   * is still messageable: the driver resumes the thread first.
+   */
+  function actionsOf(child: Child): SubagentActions {
+    const native = typeof child.canAcceptDirectInput === "boolean"
+    const accepts = native ? child.canAcceptDirectInput === true : child.messaging !== "none"
+    const running = child.turnId !== undefined
+    return {
+      canMessage: accepts,
+      ...(accepts ? {} : { cannotMessageReason: REASON.codexNoInput }),
+      canStop: running,
+      ...(running ? {} : { cannotStopReason: child.open ? REASON.notRunning : endedReason(child.ended) }),
+      actionsSource: native || child.messaging === "none" ? "native" : "derived",
+    }
+  }
+
+  /** A progress body when this child's flags or name changed outside a lifecycle body. */
+  function refresh(child: Child | undefined, out: NormalizedBody[]): NormalizedBody[] {
+    if (!child || out.some(body => body.kind === "subagent" && body.subagentId === child.id)) return out
+    if (child.emitted === actionsKey(actionsOf(child)) && child.emittedName === child.nickname) return out
+    return [...out, childBody(child, "progress")]
   }
 
   function spawn(threadId: string, extra: Partial<Extract<NormalizedBody, { kind: "subagent" }>>, messaging: SubagentMessaging): NormalizedBody[] {
@@ -206,6 +263,10 @@ export function createCodexNormalizer(): CodexNormalizer {
   function finish(child: Child, phase: "completed" | "failed" | "cancelled", result?: string): NormalizedBody[] {
     if (!child.open) return []
     child.open = false
+    child.ended = phase
+    child.endedBy = phase !== "cancelled" ? "self" : child.parentClose ? "parent" : child.clientStop ? "client" : undefined
+    child.clientStop = false
+    child.parentClose = false
     const text = result ?? child.result
     const stats = Object.keys(child.stats).length ? { ...child.stats } : undefined
     return [childBody(child, phase, { ...(text ? { result: text } : {}), ...(stats ? { stats } : {}) })]
@@ -238,9 +299,16 @@ export function createCodexNormalizer(): CodexNormalizer {
       return []
     }
     // collabAgentToolCall
-    if (started) return []
     const tool = str(item.tool)
     const receivers = Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds.filter((x): x is string => typeof x === "string" && !!x) : []
+    if (started && (tool === "closeAgent" || tool === "interruptAgent")) {
+      // The parent is ending these children: their interrupted turn is the parent's doing.
+      for (const threadId of receivers) {
+        const child = children.get(threadId)
+        if (child?.open) child.parentClose = true
+      }
+    }
+    if (started) return []
     const states = rec(item.agentsStates) ?? {}
     const out: NormalizedBody[] = []
     if (tool === "spawnAgent") {
@@ -466,6 +534,8 @@ export function createCodexNormalizer(): CodexNormalizer {
       if (child.open) return []
       // A new child turn after its run ended: a direct message (or a parent follow-up) resumed it.
       child.open = true
+      child.ended = undefined
+      child.endedBy = undefined
       child.activity = undefined
       child.result = undefined
       // Per-run counters restart; tokens stay the thread total Codex reports.
@@ -659,7 +729,12 @@ export function createCodexNormalizer(): CodexNormalizer {
     if (update.protocol !== "native") return []
     const frame = rec(update.value)
     if (!frame) return []
-    return mapNotification(frame as Frame)
+    const params = rec(frame.params)
+    if (frame.method === SUBAGENT_STATE_METHOD) return refresh(children.get(str(params?.subagentId) ?? ""), [])
+    const out = mapNotification(frame as Frame)
+    // A child turn starting/ending moves Stop even when no lifecycle body says so.
+    const threadId = str(params?.threadId)
+    return threadId ? refresh(children.get(threadId), out) : out
   }) as CodexNormalizer
 
   normalize.flush = () => {
@@ -687,5 +762,34 @@ export function createCodexNormalizer(): CodexNormalizer {
     children.set(threadId, { id: threadId, open: false, messaging: "direct", stats: {} })
   }
   normalize.messaging = (threadId: string) => children.get(threadId)?.messaging
+  normalize.setNative = (threadId, info) => {
+    const child = children.get(threadId)
+    if (!child) return
+    if (info.nickname) child.nickname = info.nickname
+    if (typeof info.canAcceptDirectInput === "boolean") child.canAcceptDirectInput = info.canAcceptDirectInput
+  }
+  normalize.markClientStop = (threadId: string) => { const child = children.get(threadId); if (child?.open) child.clientStop = true }
+  normalize.running = (threadId: string) => children.get(threadId)?.turnId !== undefined
+  normalize.restore = (snapshots, { stillRunning }) => {
+    const out: SubagentSnapshot[] = []
+    for (const snap of snapshots) {
+      if (!snap?.subagentId || children.has(snap.subagentId)) continue
+      const running = snap.status === "running" && stillRunning
+      const ended = snap.status === "running" ? "cancelled" : snap.status
+      const child: Child = {
+        id: snap.subagentId, open: running, messaging: snap.messaging ?? "direct", stats: {},
+        ...(snap.name ? { nickname: snap.name } : {}),
+        ...(snap.actionsSource === "native" && typeof snap.canMessage === "boolean" ? { canAcceptDirectInput: snap.canMessage } : {}),
+        ...(running ? {} : { ended, ...(snap.endedBy ? { endedBy: snap.endedBy } : {}) }),
+      }
+      children.set(child.id, child)
+      const actions = actionsOf(child)
+      child.emitted = actionsKey(actions)
+      child.emittedName = child.nickname
+      const { cannotMessageReason: _m, cannotStopReason: _s, ...base } = snap
+      out.push({ ...base, status: running ? "running" : ended, ...actionFields(actions) } as SubagentSnapshot)
+    }
+    return out
+  }
   return normalize
 }

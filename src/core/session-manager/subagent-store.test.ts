@@ -123,3 +123,73 @@ test("find returns the view by id", () => {
   expect(store.find("s1", "a")?.messaging).toBe("none")
   expect(store.find("s1", "zz")).toBeUndefined()
 })
+
+test("truthful actions: flags, reasons and endedBy fold from the bodies; a resume clears endedBy", () => {
+  const store = new SubagentStore()
+  store.applyBody("s1", { kind: "subagent", subagentId: "c1", phase: "started", messaging: "direct", canMessage: true, canStop: true, actionsSource: "native" }, 1)
+  store.applyBody("s1", { kind: "subagent", subagentId: "c1", phase: "progress", name: "Anscombe" }, 2)
+  store.applyBody("s1", {
+    kind: "subagent", subagentId: "c1", phase: "cancelled", endedBy: "parent",
+    canMessage: true, canStop: false, cannotStopReason: "It has already stopped", actionsSource: "native",
+  }, 3)
+  expect(store.find("s1", "c1")).toMatchObject({
+    name: "Anscombe", status: "cancelled", endedBy: "parent", canMessage: true, canStop: false,
+    cannotStopReason: "It has already stopped", actionsSource: "native",
+  })
+  store.applyBody("s1", { kind: "subagent", subagentId: "c1", phase: "resumed", canMessage: true, canStop: true }, 4)
+  const resumed = store.find("s1", "c1")!
+  expect(resumed.endedBy).toBeUndefined()
+  expect(resumed.cannotStopReason).toBeUndefined()
+  expect(resumed.canStop).toBe(true)
+})
+
+test("a refusal turns Message off with the agent's reason", () => {
+  const store = new SubagentStore()
+  store.applyBody("s1", { kind: "subagent", subagentId: "a", phase: "cancelled", endedBy: "client", canMessage: true, canStop: false }, 1)
+  store.applyBody("s1", { kind: "subagent", subagentId: "a", phase: "progress", canMessage: false, cannotMessageReason: "Stopped by you — Claude can't resume it", delivery: { status: "refused" } }, 2)
+  expect(store.find("s1", "a")).toMatchObject({ canMessage: false, cannotMessageReason: "Stopped by you — Claude can't resume it" })
+})
+
+test("the subagent's own replies are counted and its conversation kept (bounded, clipped)", () => {
+  const store = new SubagentStore()
+  store.applyBody("s1", { kind: "subagent", subagentId: "a", phase: "started", prompt: "do it" }, 1)
+  store.recordMessage("s1", { ts: "t1", kind: "subagent_message", title: "do it", text: "do it", direction: "to", sender: "parent", subagentId: "a" })
+  store.recordMessage("s1", { ts: "t2", kind: "subagent_message", title: "one", text: "one", direction: "from", subagentId: "a" })
+  store.recordMessage("s1", { ts: "t3", kind: "subagent_message", title: "two", text: "x".repeat(20_000), direction: "from", subagentId: "a" })
+  expect(store.find("s1", "a")!.replies).toBe(2)
+  const thread = store.messages("s1")
+  expect(thread.map((m) => m.direction)).toEqual(["to", "from", "from"])
+  expect(thread[2]!.text!.length).toBe(RESULT_MAX)
+  expect(thread[2]!.truncated).toBe(true)
+})
+
+test("persists views and conversations across a broker restart", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const dir = await mkdtemp(join(tmpdir(), "subagent-store-"))
+  try {
+    const file = join(dir, "subagents.json")
+    const store = new SubagentStore({ file, saveDelayMs: 0 })
+    store.applyBody("s1", { kind: "subagent", subagentId: "a", phase: "started", name: "Anscombe", canMessage: true, canStop: true }, 1)
+    store.recordMessage("s1", { ts: "t2", kind: "subagent_message", title: "hi", text: "hi", direction: "from", subagentId: "a" })
+    store.applyBody("s1", { kind: "subagent", subagentId: "a", phase: "completed", endedBy: "self", canMessage: true, canStop: false }, 3)
+    await store.flush()
+    const reloaded = new SubagentStore({ file })
+    reloaded.load()
+    expect(reloaded.find("s1", "a")).toMatchObject({ name: "Anscombe", status: "completed", endedBy: "self", replies: 1, canStop: false })
+    expect(reloaded.messages("s1")).toHaveLength(1)
+    reloaded.clear("s1")
+    await reloaded.flush()
+    const empty = new SubagentStore({ file })
+    empty.load()
+    expect(empty.get("s1")).toEqual([])
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test("a resumed library registry corrects what the broker remembered", () => {
+  const store = new SubagentStore()
+  store.applyBody("s1", { kind: "subagent", subagentId: "a", phase: "started", canMessage: true, canStop: true }, 1)
+  store.applySnapshot("s1", { subagentId: "a", status: "cancelled", canMessage: true, canStop: false, cannotStopReason: "It has already stopped", actionsSource: "derived", name: "Sartre", updatedAt: 5 }, 5)
+  expect(store.find("s1", "a")).toMatchObject({ status: "cancelled", canStop: false, name: "Sartre", endedAt: 5 })
+})

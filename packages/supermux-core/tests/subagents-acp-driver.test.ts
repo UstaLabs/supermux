@@ -100,7 +100,7 @@ test("cursor: messageSubagent relays through a Task resume prompt on the main se
   expect(prompts[1].params.prompt[0].text).toContain(`resume="${a}"`)
   expect(prompts[1].params.prompt[0].text).toContain("<relay>\nWhat was the second line of alpha.txt?\n</relay>")
   await until(() => events.some(e => e.kind === "subagent" && e.subagentId === a && e.phase === "resumed"))
-  await expect(session.stopSubagent(a)).rejects.toMatchObject({ code: "unsupported_operation" })
+  await expect(session.stopSubagent(a)).rejects.toMatchObject({ code: "subagent_unavailable", message: "Cursor can't stop subagents" })
 })
 
 test("cursor relay prompt is text-only", () => {
@@ -117,7 +117,7 @@ test("grok: child permission is attributed; direct message loads the child once 
   const turnsBefore = events.filter(e => e.kind === "turn-start").length
   const toolCallsBefore = events.filter(e => e.kind === "tool-call").length
 
-  expect(await session.messageSubagent(child, text("Direct client message: what was the content of the file you read?"))).toEqual({ via: "direct" })
+  expect((await session.messageSubagent(child, text("Direct client message: what was the content of the file you read?"))).via).toBe("direct")
   await until(() => events.filter(e => e.kind === "subagent" && e.subagentId === child && e.phase === "completed").length === 2)
   const sub = events.filter(e => e.kind === "subagent" && e.subagentId === child).map(e => (e as { phase: string }).phase).filter(p => p !== "progress")
   expect(sub).toEqual(["started", "completed", "resumed", "completed"])
@@ -138,10 +138,32 @@ test("opencode: the task's child session is the direct target", async () => {
   const receipt = await session.send({ content: text("spawn two"), whenBusy: "queue" })
   expect((await receipt.completed).status).toBe("completed")
   expect(events.find(e => e.kind === "subagent" && e.subagentId === first && e.phase === "completed")).toMatchObject({ nativeId: "ses_f186da878ffeN5toowCa9sxjjj" })
-  expect(await session.messageSubagent(first, text("Direct client message #2"))).toEqual({ via: "direct" })
+  expect((await session.messageSubagent(first, text("Direct client message #2"))).via).toBe("direct")
   await until(() => events.filter(e => e.kind === "subagent" && e.subagentId === first && e.phase === "completed").length === 2)
   expect(events.some(e => e.kind === "assistant-delta" && e.subagentId === first)).toBe(true)
   const sent = await lines()
   expect(sent.filter(l => l.method === "session/load").map(l => l.params.sessionId)).toEqual(["ses_f186da878ffeN5toowCa9sxjjj"])
   expect(sent.find(l => l.method === "initialize").params.clientCapabilities).toEqual({})
+})
+
+test("grok BUG 2/3: a running background child is stopped with Grok's own x.ai/subagent/cancel and is not messageable meanwhile", async () => {
+  // Wire captured live from grok 1.0.46 (probe 2026-10-03): spawn_subagent background, then cancel.
+  const { session, events, lines } = await setup("grok", "grok-cancel.ndjson")
+  const parent = "01a10368-6b79-73a2-8de2-c3b711ede1ce"
+  const child = "01a10368-7812-7ec0-9cdf-b6c26fa9b719"
+  const receipt = await session.send({ content: text("spawn a background sleeper"), whenBusy: "queue" })
+  await until(() => session.requests.list().length > 0 || events.some(e => e.kind === "subagent" && e.subagentId === child))
+  for (const request of session.requests.list()) await session.requests.respond(request.requestId, { optionId: "allow-once" }).catch(() => {})
+  expect((await receipt.completed).status).toBe("completed")
+  await until(() => events.some(e => e.kind === "subagent" && e.subagentId === child))
+  expect(events.find(e => e.kind === "subagent" && e.subagentId === child)).toMatchObject({
+    phase: "started", canMessage: false, cannotMessageReason: "Grok can message it once it finishes", canStop: true,
+  })
+  await expect(session.messageSubagent(child, text("hi"))).rejects.toMatchObject({ code: "subagent_unavailable" })
+  await session.stopSubagent(child)
+  const cancel = (await lines()).filter(l => l.method === "_x.ai/subagent/cancel")
+  expect(cancel.map(l => l.params)).toEqual([{ sessionId: parent, subagentId: child }])
+  expect((await lines()).some(l => l.method === "session/cancel" && l.params.sessionId === child)).toBe(false)
+  await until(() => events.some(e => e.kind === "subagent" && e.subagentId === child && e.phase === "cancelled"))
+  expect(events.find(e => e.kind === "subagent" && e.subagentId === child && e.phase === "cancelled")).toMatchObject({ endedBy: "client", canMessage: true, canStop: false })
 })
