@@ -301,10 +301,15 @@ compose.desktop {
                 // Without a usage string macOS never shows the mic prompt: TCC silently denies the app
                 // and javax.sound hands back a line of ALL-ZERO samples (not an error) — the broker
                 // then gets silence and the STT model invents a sentence from nothing.
+                // NSAppSleepDisabled: no App Nap. A hidden app (window closed to the menu bar) would
+                // otherwise be throttled, and the lid helper's lease touch (every 15 s) and the
+                // supervisor's watch loop must keep their timing.
                 infoPlist {
                     extraKeysRawXml = """
                         <key>NSMicrophoneUsageDescription</key>
                         <string>Supermux uses the microphone for voice dictation.</string>
+                        <key>NSAppSleepDisabled</key>
+                        <true/>
                     """.trimIndent()
                 }
                 // Signing is OPT-IN so unsigned local/CI dry-run builds keep working untouched:
