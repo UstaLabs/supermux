@@ -3,6 +3,7 @@ package dev.supermux.desktop.host
 import dev.supermux.net.GitRequirement
 import dev.supermux.net.HostIdentity
 import dev.supermux.net.HostRequirements
+import dev.supermux.net.KeepAwakeState
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.IOException
@@ -29,6 +30,8 @@ sealed interface HostProbeResult {
         val gitAvailable: Boolean? = null,
         /** What the broker still needs to run agents; null from a broker older than requirements. */
         val requirements: HostRequirements? = null,
+        /** "Keep this computer awake" as the broker holds it; null from a broker older than keep-awake. */
+        val keepAwake: KeepAwakeState? = null,
     ) : HostProbeResult {
         /**
          * The broker's git requirement. An older broker that only said `gitAvailable: false` was a
@@ -145,7 +148,7 @@ object HostProber {
         val id = runCatching { json.decodeFromString(HostIdentity.serializer(), body) }.getOrNull()
             ?: return HostProbeResult.ForeignProcess
         if (id.hostId.isBlank()) return HostProbeResult.ForeignProcess
-        return HostProbeResult.Supermux(id.hostId, id.build, id.mode, id.managedBy, id.stateDir, id.gitAvailable, id.requirements)
+        return HostProbeResult.Supermux(id.hostId, id.build, id.mode, id.managedBy, id.stateDir, id.gitAvailable, id.requirements, id.keepAwake)
     }
 
     private fun tcpConnectable(host: String, port: Int): Boolean =

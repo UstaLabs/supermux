@@ -15,6 +15,7 @@ import java.nio.file.StandardCopyOption
  *  - [relay]: remote access through the relay (MUX_RELAY_DOMAIN)
  *  - [port]: the saved host port — 9898 until a conflict forces a move; never moves back
  *  - [leftAloneHostIds]: brokers set up outside the app the user chose to leave alone
+ *  - [lidClosed]: "Even with the lid closed" (MacBooks; the app holds the lid helper's lease)
  */
 @Serializable
 data class HostingPrefs(
@@ -23,6 +24,7 @@ data class HostingPrefs(
     val relay: Boolean = true,
     val port: Int = DEFAULT_PORT,
     val leftAloneHostIds: Set<String> = emptySet(),
+    val lidClosed: Boolean = false,
 ) {
     companion object { const val DEFAULT_PORT = 9898 }
 }

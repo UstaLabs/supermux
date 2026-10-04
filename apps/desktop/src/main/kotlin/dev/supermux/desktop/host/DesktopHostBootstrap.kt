@@ -74,6 +74,15 @@ object DesktopHostBootstrap {
         }.onFailure { System.err.println("supermux host: seeding hosting prefs failed: ${it.message}") }
     }
 
+    /**
+     * The app-wide keep-awake controls (tray + Settings ▸ Hosting). Built on first use; it hooks
+     * itself into the supervisor's quit, so every quit path releases the lid lease and the
+     * app-held inhibitor.
+     */
+    fun keepAwake(): KeepAwakeControls = sharedKeepAwake.value
+
+    private val sharedKeepAwake: Lazy<KeepAwakeControls> = lazy { KeepAwakeControls(sharedSupervisor.value) }
+
     /** One supervisor per process: two would each think they own the broker. */
     private val sharedSupervisor: Lazy<HostSupervisor> = lazy {
         val stateDir = BrokerPaths.defaultStateDir()

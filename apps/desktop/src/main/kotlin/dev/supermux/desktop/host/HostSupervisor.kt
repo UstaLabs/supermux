@@ -102,14 +102,38 @@ class HostSupervisor(
      */
     val gitRequirement: StateFlow<dev.supermux.net.GitRequirement?> = _gitRequirement.asStateFlow()
 
-    /** Every probe of the saved port; a broker's answer also refreshes [gitAvailable] / [gitRequirement]. */
+    private val _keepAwake = MutableStateFlow<dev.supermux.net.KeepAwakeState?>(null)
+    /**
+     * The local broker's "Keep this computer awake" (`/host`'s `keepAwake`), refreshed by every
+     * probe (the watchers poll every few seconds) and by the answer to a change ([publishKeepAwake]).
+     * Null: no answer yet, or a broker older than keep-awake.
+     */
+    val keepAwake: StateFlow<dev.supermux.net.KeepAwakeState?> = _keepAwake.asStateFlow()
+
+    /** The state the broker answered a `PUT /settings/keep-awake` with. */
+    fun publishKeepAwake(state: dev.supermux.net.KeepAwakeState) {
+        _keepAwake.value = state
+    }
+
+    /** Every probe of the saved port; a broker's answer also refreshes [gitAvailable] / [gitRequirement] / [keepAwake]. */
     internal val probe: suspend (port: Int) -> HostProbeResult = { port ->
         probe(port).also { r ->
             if (r is HostProbeResult.Supermux) {
                 _gitAvailable.value = r.gitAvailable
                 _gitRequirement.value = r.gitRequirement
+                _keepAwake.value = r.keepAwake
             }
         }
+    }
+
+    /**
+     * Run on every [quit], before the broker is stopped: the lid helper's lease and the app-held
+     * sleep inhibitor are released on ANY quit. Hooks must be idempotent and must not throw.
+     */
+    private val quitHooks = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+
+    fun onQuit(hook: () -> Unit) {
+        quitHooks += hook
     }
 
     private val _status = MutableStateFlow<HostingStatus>(HostingStatus.Starting)
@@ -285,6 +309,7 @@ class HostSupervisor(
             _build.value = null
             _gitAvailable.value = null
             _gitRequirement.value = null
+            _keepAwake.value = null
             _status.value = HostingStatus.NotHosting
         }
     }
@@ -321,6 +346,11 @@ class HostSupervisor(
         if (needsEnsure) ensure()
     }
 
+    /** "Even with the lid closed": only the saved choice; [KeepAwakeControls] holds the lease. */
+    suspend fun setLidClosed(on: Boolean) = guarded("setLidClosed") {
+        lock.withLock { savePrefsNow(_prefs.value.copy(lidClosed = on)) }
+    }
+
     /** The user no longer wants [hostId] left alone: forget it and re-run the launch decision. */
     suspend fun forgetLeftAlone(hostId: String) = guarded("forgetLeftAlone") {
         lock.withLock {
@@ -335,6 +365,9 @@ class HostSupervisor(
      * read-only modes make no OS calls. Blocking, never throws, never waits for [lock].
      */
     fun quit() = synchronized(quitMonitor) {
+        for (hook in quitHooks) {
+            try { hook() } catch (e: Exception) { log("quit hook: ${e.message ?: e}") }
+        }
         try {
             quitting = true
             stopWatch()
