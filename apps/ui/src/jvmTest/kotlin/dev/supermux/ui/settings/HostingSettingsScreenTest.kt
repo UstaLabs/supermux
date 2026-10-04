@@ -10,6 +10,10 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.net.GitRequirement
@@ -33,6 +37,10 @@ class HostingSettingsScreenTest {
         override fun pairDevice() { calls += "pair" }
         override fun manageIt() { calls += "manage" }
         override suspend fun installGit(): Boolean { calls += "installGit"; return true }
+        override fun setKeepAwake(on: Boolean) { calls += "keepAwake:$on" }
+        override fun setKeepAwakeOnBattery(on: Boolean) { calls += "onBattery:$on" }
+        override fun setLidClosed(on: Boolean) { calls += "lid:$on" }
+        override fun uninstallLidHelper() { calls += "uninstallLid" }
     }
 
     private fun running(
@@ -193,5 +201,91 @@ class HostingSettingsScreenTest {
         setPlatformContent { HostingSettingsScreen(running(gitRequirement = GitRequirement(ok = true)), Recorder()) }
         onNodeWithTag(GitBannerTags.BANNER).assertDoesNotExist()
         onNodeWithTag(GitBannerTags.INSTALL).assertDoesNotExist()
+    }
+
+    // ── keep this computer awake ──
+
+    private fun powered(power: HostingPowerUi) = running().copy(power = power)
+    private val awake = KeepAwakeUi(enabled = true, onBattery = true, showOnBattery = true)
+
+    @Test fun keep_awake_with_battery_and_lid_rows_drive_their_actions() = runComposeUiTest {
+        val rec = Recorder()
+        setPlatformContent {
+            HostingSettingsScreen(powered(HostingPowerUi(keepAwake = awake, lidClosed = LidClosedUi(on = false, installed = false))), rec)
+        }
+        onNodeWithText(HostingCopy.KEEP_AWAKE).assertExists()
+        onNodeWithText("Stops this computer from sleeping while supermux runs. The screen can still turn off.").assertExists()
+        onNodeWithTag("hosting_keep_awake").assertIsOn()
+        onNodeWithTag("hosting_keep_awake_battery").assertIsOn()
+        onNodeWithText("Even with the lid closed").assertExists()
+        onNodeWithText("Your Mac stays awake with the lid closed. Don't put it in a bag while this is on.").assertExists()
+        onNodeWithTag("hosting_lid_note").assertTextEquals("macOS will ask for your password once.")
+        onNodeWithTag("hosting_lid_uninstall").assertDoesNotExist()
+
+        onNodeWithTag("hosting_keep_awake").performScrollTo().performClick()
+        onNodeWithTag("hosting_keep_awake_battery").performScrollTo().performClick()
+        onNodeWithTag("hosting_lid_closed").performScrollTo().performClick()
+        assertEquals(listOf("keepAwake:false", "onBattery:false", "lid:true"), rec.calls)
+    }
+
+    @Test fun no_battery_no_battery_row_and_no_lid() = runComposeUiTest {
+        setPlatformContent { HostingSettingsScreen(powered(HostingPowerUi(keepAwake = awake.copy(showOnBattery = false))), Recorder()) }
+        onNodeWithTag("hosting_keep_awake").assertExists()
+        onNodeWithTag("hosting_keep_awake_battery").assertDoesNotExist()
+        onNodeWithTag("hosting_lid_closed").assertDoesNotExist()
+    }
+
+    @Test fun not_held_shows_the_warning_and_paused_shows_a_note() = runComposeUiTest {
+        var ui by mutableStateOf(awake.copy(warning = "Access denied\nAdd a polkit rule"))
+        setPlatformContent { HostingSettingsScreen(powered(HostingPowerUi(keepAwake = ui)), Recorder()) }
+        onNodeWithTag("hosting_keep_awake_warning").assertTextEquals("Access denied\nAdd a polkit rule")
+        onNodeWithTag("hosting_keep_awake_note").assertDoesNotExist()
+        ui = awake.copy(note = HostingCopy.PAUSED_ON_BATTERY)
+        waitForIdle()
+        onNodeWithTag("hosting_keep_awake_warning").assertDoesNotExist()
+        onNodeWithTag("hosting_keep_awake_note").assertTextEquals("Paused while on battery")
+    }
+
+    @Test fun unsupported_disables_the_switch_with_the_reason() = runComposeUiTest {
+        setPlatformContent {
+            HostingSettingsScreen(powered(HostingPowerUi(keepAwake = awake.copy(switchEnabled = false, note = "No sleep inhibitor"))), Recorder())
+        }
+        onNodeWithTag("hosting_keep_awake").assertIsNotEnabled()
+        onNodeWithTag("hosting_keep_awake_note").assertTextEquals("No sleep inhibitor")
+    }
+
+    @Test fun an_installed_lid_helper_offers_uninstall() = runComposeUiTest {
+        val rec = Recorder()
+        setPlatformContent { HostingSettingsScreen(powered(HostingPowerUi(lidClosed = LidClosedUi(on = true, installed = true))), rec) }
+        onNodeWithTag("hosting_lid_closed").assertIsOn()
+        onNodeWithTag("hosting_lid_note").assertDoesNotExist()
+        onNodeWithTag("hosting_lid_uninstall").assertTextEquals("Uninstall lid helper").performScrollTo().performClick()
+        assertEquals(listOf("uninstallLid"), rec.calls)
+    }
+
+    @Test fun a_lid_prompt_in_progress_greys_the_switch() = runComposeUiTest {
+        setPlatformContent {
+            HostingSettingsScreen(powered(HostingPowerUi(lidClosed = LidClosedUi(on = false, installed = false, busy = true, error = null))), Recorder())
+        }
+        onNodeWithTag("hosting_lid_closed").assertIsNotEnabled()
+        onNodeWithTag("hosting_lid_note").assertTextEquals("Waiting for your password…")
+    }
+
+    @Test fun reboot_copy_always_and_the_auto_login_hint_with_filevault_off() = runComposeUiTest {
+        var power by mutableStateOf(HostingPowerUi())
+        setPlatformContent { HostingSettingsScreen(powered(power), Recorder()) }
+        onNodeWithTag("hosting_reboot_note").assertTextEquals("After a restart, supermux starts when you log in.")
+        onNodeWithTag("hosting_auto_login_hint").assertDoesNotExist()
+        power = HostingPowerUi(autoLoginHint = true)
+        waitForIdle()
+        onNodeWithTag("hosting_auto_login_hint").assertTextEquals(
+            "To start without anyone at the keyboard, turn on Automatic Login in System Settings ▸ Users & Groups.",
+        )
+    }
+
+    @Test fun no_power_section_where_the_host_platform_does_not_build_one() = runComposeUiTest {
+        setPlatformContent { HostingSettingsScreen(running(), Recorder()) }
+        onNodeWithTag("hosting_power").assertDoesNotExist()
+        onNodeWithTag("hosting_reboot_note").assertDoesNotExist()
     }
 }

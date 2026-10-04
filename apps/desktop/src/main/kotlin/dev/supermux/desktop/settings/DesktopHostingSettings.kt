@@ -50,6 +50,7 @@ import dev.supermux.desktop.host.HostWizardModel
 import dev.supermux.desktop.host.HostWizardUiState
 import dev.supermux.desktop.host.HostingPrefs
 import dev.supermux.desktop.host.HostingStatus
+import dev.supermux.desktop.host.KeepAwakeControls
 import dev.supermux.desktop.host.displayLocalUrl
 import dev.supermux.desktop.host.hostingStatusLine
 import dev.supermux.desktop.host.lanIpv4
@@ -58,8 +59,13 @@ import dev.supermux.desktop.host.systemNetIfs
 import dev.supermux.desktop.host.tailLines
 import dev.supermux.host.PairedHostStore
 import dev.supermux.net.GitRequirement
+import dev.supermux.net.KeepAwakeState
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.settings.HostingActions
+import dev.supermux.ui.settings.HostingCopy
+import dev.supermux.ui.settings.HostingPowerUi
+import dev.supermux.ui.settings.KeepAwakeUi
+import dev.supermux.ui.settings.LidClosedUi
 import dev.supermux.ui.settings.HostingSettingsScreen
 import dev.supermux.ui.settings.HostingUiState
 import dev.supermux.ui.theme.Space
@@ -79,6 +85,9 @@ val LocalPairedHostStore = staticCompositionLocalOf<PairedHostStore?> { null }
 
 /** The live fleet, refreshed when the turn-on wizard writes "This computer" into the store. */
 val LocalHostingFleet = staticCompositionLocalOf<FleetStore?> { null }
+
+/** The app-wide keep-awake controls (provided in `Main.kt`); null in tests and where the app does not host. */
+val LocalKeepAwakeControls = staticCompositionLocalOf<KeepAwakeControls?> { null }
 
 /** Live sessions on this computer's broker (the tray's `FleetFacts.localSessions`). */
 val LocalHostingSessions = compositionLocalOf { 0 }
@@ -130,6 +139,7 @@ internal fun desktopHostingUiState(
     canPair: Boolean,
     backgroundError: String?,
     gitRequirement: GitRequirement?,
+    power: HostingPowerUi? = null,
 ): HostingUiState {
     val readOnly = DesktopHostBootstrap.isReadOnly(status)
     val running = status is HostingStatus.Running
@@ -150,8 +160,59 @@ internal fun desktopHostingUiState(
         canPair = running && canPair,
         backgroundError = backgroundError,
         gitRequirement = gitRequirement.takeIf { running },
+        power = power?.let { p -> if (running) p else p.copy(keepAwake = null) },
     )
 }
+
+/**
+ * Pure: the "Keep this computer awake" row from the broker's [state]. Null hides it (the broker
+ * hasn't said). [appHeld]: on Linux the app holds the inhibitor itself because the broker's was
+ * denied; [hasBattery] shows "Also on battery".
+ */
+internal fun keepAwakeUi(state: KeepAwakeState?, hasBattery: Boolean?, appHeld: Boolean, writeError: String? = null): KeepAwakeUi? {
+    if (state == null) return null
+    val reason = listOfNotNull(state.reason, state.hint).joinToString("\n").takeIf { it.isNotBlank() }
+    var warning: String? = null
+    var note: String? = null
+    when {
+        !state.supported -> note = reason
+        !state.enabled -> Unit
+        appHeld -> note = HostingCopy.APP_HELD
+        state.reasonCode == KeepAwakeState.REASON_ON_BATTERY -> note = HostingCopy.PAUSED_ON_BATTERY
+        !state.active && reason != null -> warning = reason
+    }
+    return KeepAwakeUi(
+        enabled = state.enabled,
+        onBattery = state.onBattery,
+        switchEnabled = state.supported,
+        showOnBattery = hasBattery == true,
+        warning = warning,
+        note = note,
+        error = writeError,
+    )
+}
+
+/** Pure: "Even with the lid closed" exists only on a Mac with a battery. */
+internal fun lidClosedUi(isMac: Boolean, hasBattery: Boolean?, on: Boolean, installed: Boolean, busy: Boolean, error: String?): LidClosedUi? =
+    if (isMac && hasBattery == true) LidClosedUi(on = on, installed = installed, busy = busy, error = error) else null
+
+/** Pure: the whole power section. The reboot copy is always there on desktop. */
+internal fun desktopPowerUi(
+    keepAwake: KeepAwakeState?,
+    hasBattery: Boolean?,
+    appHeld: Boolean,
+    writeError: String?,
+    isMac: Boolean,
+    lidOn: Boolean,
+    lidInstalled: Boolean,
+    lidBusy: Boolean,
+    lidError: String?,
+    fileVaultOff: Boolean?,
+): HostingPowerUi = HostingPowerUi(
+    keepAwake = keepAwakeUi(keepAwake, hasBattery, appHeld, writeError),
+    lidClosed = lidClosedUi(isMac, hasBattery, lidOn, lidInstalled, lidBusy, lidError),
+    autoLoginHint = isMac && fileVaultOff == true,
+)
 
 /**
  * Install git on this computer THROUGH ITS BROKER (`POST /system/install-git`), with "This
@@ -211,6 +272,19 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
     val backgroundError by sup.backgroundError.collectAsState()
     val gitRequirement by sup.gitRequirement.collectAsState()
     val wizard by HostingTurnOn.model.collectAsState()
+    val power = LocalKeepAwakeControls.current
+    val powerUi = power?.let { c ->
+        val keepAwake by c.keepAwake.collectAsState()
+        val hasBattery by c.hasBattery.collectAsState()
+        val appHeld by c.appHeld.collectAsState()
+        val writeError by c.writeError.collectAsState()
+        val lidOn by c.lidClosed.collectAsState()
+        val lidInstalled by c.lidHelperInstalled.collectAsState()
+        val lidBusy by c.lidBusy.collectAsState()
+        val lidError by c.lidError.collectAsState()
+        val fileVaultOff by c.fileVaultOff.collectAsState()
+        desktopPowerUi(keepAwake, hasBattery, appHeld, writeError, c.isMac, lidOn, lidInstalled, lidBusy, lidError, fileVaultOff)
+    }
 
     val lanIp by produceState<String?>(null) { value = withContext(Dispatchers.IO) { lanIpv4(systemNetIfs()) } }
     var relayUrl by remember { mutableStateOf<String?>(null) }
@@ -242,8 +316,9 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
         canPair = hostStore != null,
         backgroundError = backgroundError,
         gitRequirement = gitRequirement,
+        power = powerUi,
     )
-    val actions = remember(sup, hostStore) {
+    val actions = remember(sup, hostStore, power) {
         object : HostingActions {
             override fun setHosting(on: Boolean) {
                 when {
@@ -266,6 +341,10 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
                 hostingScope.launch { if (id != null) sup.forgetLeftAlone(id) else sup.ensure() }
             }
             override suspend fun installGit(): Boolean = installGitOnThisComputer(sup, hostStore)
+            override fun setKeepAwake(on: Boolean) { power?.let { hostingScope.launch { it.setEnabled(on) } } }
+            override fun setKeepAwakeOnBattery(on: Boolean) { power?.let { hostingScope.launch { it.setOnBattery(on) } } }
+            override fun setLidClosed(on: Boolean) { power?.let { hostingScope.launch { it.setLidClosed(on) } } }
+            override fun uninstallLidHelper() { power?.let { hostingScope.launch { it.uninstallLidHelper() } } }
         }
     }
 
