@@ -466,16 +466,32 @@ fun ChatPanel(
     val subagentActions = remember(actions) {
         SubagentActions(message = actions.messageSubagent, stop = actions.stopSubagent)
     }
-    val subagentUi = SubagentUi(
-        isExpanded = { it in openSubagents },
-        onToggle = { id -> openSubagents = if (id in openSubagents) openSubagents - id else openSubagents + id },
-        actions = subagentActions,
-    )
+    // Unread replies are client-side: the reply count the user has "seen" per subagent. A subagent
+    // first seen counts as read (a reload does not light every card up); an OPEN card keeps up with
+    // its replies; a collapsed one falls behind, and the gap is its "N new replies" badge.
+    var seenReplies by remember(session.id) { mutableStateOf(mapOf<String, Int>()) }
+    LaunchedEffect(subagents, openSubagents) {
+        var next = seenReplies
+        for (s in subagents) {
+            val r = s.replies ?: 0
+            if (s.id !in next || (s.id in openSubagents && next[s.id] != r)) next = next + (s.id to r)
+        }
+        if (next !== seenReplies) seenReplies = next
+    }
     val openSubagentCard: (String) -> Unit = { id ->
         openSubagents = openSubagents + id
         val index = timelineItems.indexOfFirst { it is TimelineItem.SubagentCard && it.subagent.id == id }
         if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
     }
+    val subagentNames = remember(subagents) { subagents.associate { it.id to it.displayName } }
+    val subagentUi = SubagentUi(
+        isExpanded = { it in openSubagents },
+        onToggle = { id -> openSubagents = if (id in openSubagents) openSubagents - id else openSubagents + id },
+        actions = subagentActions,
+        unread = { s -> s.unreadReplies(seenReplies[s.id] ?: (s.replies ?: 0)) },
+        open = openSubagentCard,
+        nameOf = { subagentNames[it] },
+    )
 
     run {
         // One rule on every host (was desktop's): instant jump on the first content for a session, then follow new items

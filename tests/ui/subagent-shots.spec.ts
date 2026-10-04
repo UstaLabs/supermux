@@ -22,7 +22,9 @@ import { byTag, openSeededSession, tap, typeInto } from "./compose-dom"
 
 const LABEL = process.env.SUBAGENT_SHOTS_LABEL || "after"
 const OUT = process.env.SUBAGENT_SHOTS_DIR || `/tmp/claude-1000/subagent-shots/${LABEL}`
-const AFTER = LABEL === "after"
+const AFTER = LABEL.startsWith("after")
+/** "t3" runs only the thread / truthful-actions states (09–14); anything else runs them all. */
+const PART = process.env.SUBAGENT_SHOTS_PART || "all"
 
 type Variant = { width: number; height: number; theme: "dark" | "light" }
 const VARIANTS: Variant[] = [
@@ -64,6 +66,72 @@ async function revealChrome(page: Page): Promise<void> {
     await page.mouse.click(8, vp.height * 0.3)
     await settle(page, 900)
   }
+}
+
+/**
+ * Shoot the FOOT of an expanded card — where its reply box / reasons / Stop live. The cards under
+ * test are the last items of the transcript, so wheel the transcript to its end and take the
+ * viewport: the foot sits right above the composer dock. (The a11y mirror gives layout-only
+ * containers no box, so the foot cannot be located and clipped directly.)
+ */
+async function shotFoot(page: Page, v: Variant, name: string, _cardTag: string, _bottomTag: string): Promise<void> {
+  const vp = page.viewportSize()!
+  for (let i = 0; i < 4; i++) {
+    await page.mouse.move(vp.width - 40, vp.height * 0.35)
+    await page.mouse.wheel(0, 3000)
+    await settle(page, 500)
+  }
+  // No revealChrome() here: its wheel-up would scroll the foot back under the dock. A wheel DOWN
+  // never tucks the dock on a pointer host, and the strip is part of the shot anyway.
+  const file = `${OUT}/${v.width}-${v.theme}-${name}.png`
+  await page.screenshot({ path: file })
+  console.log(`shot ${file}`)
+}
+
+/** Wheel so [tag]'s bottom edge sits just above the composer dock. */
+async function scrollToBottomOf(page: Page, tag: string): Promise<void> {
+  const box = await page.locator(`[id="${tag}"]`).first().boundingBox().catch(() => null)
+  if (!box) return
+  const vp = page.viewportSize()!
+  const target = vp.height - 260
+  if (box.y + box.height > target) {
+    await page.mouse.move(vp.width - 40, vp.height * 0.35)
+    await page.mouse.wheel(0, box.y + box.height - target)
+    await settle(page, 900)
+  }
+}
+
+/** Expand a card and wait until its body is there (re-tapping once if the mirror was mid-rebuild). */
+async function openCard(page: Page, id: string): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    if (await exists(page, `subagent-card-body:${id}`)) return
+    await tap(byTag(page, `subagent-card-header:${id}`))
+    await page.locator(`[id="subagent-card-body:${id}"]`).first().waitFor({ state: "attached", timeout: 3_000 }).catch(() => {})
+  }
+  await settle(page, 600)
+}
+
+/** Collapse a card (if open) and wait for the body to go. */
+async function closeCard(page: Page, id: string): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    if (!(await exists(page, `subagent-card-body:${id}`))) return
+    await tap(byTag(page, `subagent-card-header:${id}`))
+    await page.locator(`[id="subagent-card-body:${id}"]`).first().waitFor({ state: "detached", timeout: 3_000 }).catch(() => {})
+  }
+}
+
+/** Wheel the transcript to its end (LazyColumn only composes what is near the viewport). */
+async function toEnd(page: Page): Promise<void> {
+  const vp = page.viewportSize()!
+  for (let i = 0; i < 4; i++) {
+    await page.mouse.move(vp.width - 40, vp.height * 0.35)
+    await page.mouse.wheel(0, 3000)
+    await settle(page, 400)
+  }
+}
+
+async function textOf(page: Page, tag: string): Promise<string> {
+  return (await page.locator(`[id="${tag}"]`).first().innerText().catch(() => "")) ?? ""
 }
 
 async function shot(page: Page, v: Variant, name: string, tag?: string, pad = 16): Promise<void> {
@@ -180,6 +248,10 @@ async function runVariant(browser: Browser, storage: Awaited<ReturnType<BrowserC
     await openSeededSession(page, sessionId)
     const now = Date.now()
     const fx = fixtures(`${v.width}${v.theme[0]}`, now)
+    if (PART === "t3") {
+      await threadStates(page, v, frame, now)
+      return
+    }
 
     await frame({ type: "subagents_cleared" })
     await frame({ type: "bg_tasks", tasks: [] })
@@ -246,16 +318,19 @@ async function runVariant(browser: Browser, storage: Awaited<ReturnType<BrowserC
 
     // The strip → card jump (after only): tap the auth agent's strip row, its card expands.
     if (AFTER) {
-      await tap(byTag(page, `subagent-strip-row:${fx.ids.a}`))
-      await settle(page, 1200)
+      for (let i = 0; i < 3 && !(await exists(page, `subagent-card-body:${fx.ids.a}`)); i++) {
+        await revealChrome(page)
+        await tap(byTag(page, `subagent-strip-row:${fx.ids.a}`))
+        await page.locator(`[id="subagent-card-body:${fx.ids.a}"]`).first().waitFor({ state: "attached", timeout: 4_000 }).catch(() => {})
+      }
+      await settle(page, 800)
       if (!(await exists(page, `subagent-card-body:${fx.ids.a}`))) throw new Error("strip tap did not expand the card")
       await shot(page, v, "06b-strip-jump", `subagent-card:${fx.ids.a}`)
 
       // 07 — message field open, relay hint; then a real send (the broker 404s an injected id,
       // which must come back as an inline error).
       await scrollToTop(page, `subagent-card:${fx.ids.a}`)
-      await tap(byTag(page, `subagent-message:${fx.ids.a}`))
-      await settle(page)
+      // T3: the reply box is simply there while the agent can take a message.
       await typeInto(page, `subagent-message-field:${fx.ids.a}`, "Also check the logout path")
       await settle(page)
       await shot(page, v, "07-message-open", `subagent-card:${fx.ids.a}`)
@@ -300,9 +375,154 @@ async function runVariant(browser: Browser, storage: Awaited<ReturnType<BrowserC
     await frame({ type: "subagents_cleared" })
     await frame({ type: "bg_tasks", tasks: [] })
     await frame({ type: "agent_state", phase: "idle", state: "idle", working: false })
+    await threadStates(page, v, frame, Date.now())
   } finally {
     await context.close()
   }
+}
+
+type Frame = (f: Record<string, unknown>) => Promise<void>
+
+/**
+ * T3 — the card as a thread, truthful actions, the main-chat marker:
+ *   09 a conversation with 3 exchanges        12 stopped by you (Claude): reason, no Message
+ *   10 collapsed card with "2 new replies"    13 Cursor running: Message, no Stop + reason
+ *   11 closed by the main agent: reason        14 the "↪ to <name>" marker, and tapping it
+ */
+async function threadStates(page: Page, v: Variant, frame: Frame, now: number): Promise<void> {
+  const sfx = `${v.width}${v.theme[0]}`
+  const act = (event: Record<string, unknown>) => frame({ type: "activity_append", event })
+  const upd = (subagent: Record<string, unknown>) => frame({ type: "subagent_update", subagent })
+  const A = `01a10304-${sfx}`
+  // The thread spans the last ~100 s, so in a full run (after states 01–08) its cards sort last.
+  const t = (sec: number) => iso(now - 100_000 + sec * 1000)
+  const msg = (sec: number, direction: "to" | "from", text: string, sender?: "user" | "parent") =>
+    act({ ts: t(sec), kind: "subagent_message", title: text.split("\n")[0], text, direction, ...(sender ? { sender } : {}), subagentId: A })
+  const tool = (sec: number, n: number, name: string, detail: string) => [
+    act({ ts: t(sec), kind: "tool", tool: name, title: `${name}: ${detail}`, detail, phase: "started", callId: `t3-${sfx}-${n}`, subagentId: A }),
+    act({ ts: t(sec + 1), kind: "tool_result", title: "done", phase: "completed", callId: `t3-${sfx}-${n}`, detail: "ok", subagentId: A }),
+  ]
+  const userLine = (sec: number, id: string, text: string) => frame({
+    type: "message_append",
+    entry: { id: `in:web:${id}-${sfx}`, ts: t(sec), direction: "inbound", channel: "web", text: `↪ to Anscombe: ${text}`, subagent_id: A },
+  })
+  const base = {
+    id: A, name: "Anscombe", description: "Check the failing migration", background: false,
+    prompt: "Find why the users migration fails on a fresh database and report back with the exact cause.",
+    messaging: "direct", actionsSource: "native", model: "gpt-5.6-luna", parentCallId: `collab-${sfx}`,
+    startedAt: now - 100_000, lastActivityAt: now, stats: { toolCalls: 4, tokens: 8210 },
+  }
+
+  await frame({ type: "subagents_cleared" })
+  await frame({ type: "message_append", entry: { id: `t3-in-${sfx}`, ts: t(-3), direction: "inbound", text: "The users migration fails on a fresh DB. Can you get someone on it?" } })
+  await frame({ type: "message_append", entry: { id: `t3-out-${sfx}`, ts: t(-2), direction: "outbound", text: "I've asked Anscombe to dig into it. You can talk to it directly from its card." } })
+  await act({ ts: t(-1), kind: "tool", tool: "spawn_agent", title: "spawn_agent", description: "Check the failing migration", phase: "started", callId: `collab-${sfx}` })
+  await msg(0, "to", "Find why the users migration fails on a fresh database and report back with the exact cause. Start with db/migrate.sql and the schema snapshot; do not change any files.", "parent")
+  for (const p of tool(2, 1, "Read", "db/migrate.sql")) await p
+  for (const p of tool(5, 2, "Grep", "NOT NULL")) await p
+  await msg(9, "from", "Found it: the migration adds `users.plan` as **NOT NULL without a default**, so every existing row violates it.")
+  await userLine(20, "u1", "Is it only the users table?")
+  await msg(20, "to", "Is it only the users table?", "user")
+  for (const p of tool(22, 3, "Grep", "ADD COLUMN .* NOT NULL")) await p
+  await msg(26, "from", "Only `users`. `orgs.plan` was added the same way but with `DEFAULT 'free'`, which is why it never failed.")
+  await userLine(40, "u2", "What would the fix be?")
+  await msg(40, "to", "What would the fix be?", "user")
+  await msg(44, "from", "Add the default in the migration:\n\n```sql\nALTER TABLE users ADD COLUMN plan text NOT NULL DEFAULT 'free';\n```\n\nThen backfill nothing — the default covers existing rows.")
+  await userLine(60, "u3", "Great, write that up for the PR description.")
+  await msg(60, "to", "Great, write that up for the PR description.", "user")
+  for (const p of tool(62, 4, "Read", "db/schema.sql")) await p
+  await msg(70, "from", "**Fix users migration on fresh databases**\n\n`users.plan` was added as NOT NULL without a default, so the migration failed on any database with existing rows. It now defaults to `'free'`, matching `orgs.plan`.")
+  await upd({ ...base, status: "running", activity: "Waiting for your next message", canMessage: true, canStop: true, replies: 4 })
+  await settle(page, 1500)
+  await toEnd(page)
+  await shot(page, v, "09-before-open")
+  const card = `subagent-card:${A}`
+  const header = `subagent-card-header:${A}`
+  if (await exists(page, header)) {
+    await openCard(page, A)
+    await settle(page, 600)
+    await scrollToTop(page, card)
+    await shot(page, v, "09-thread", card)
+    await page.screenshot({ path: `${OUT}/${v.width}-${v.theme}-09-thread-full.png` })
+    await shotFoot(page, v, "09-thread-foot", card, `subagent-actions:${A}`)
+    // 10 — collapse, two more replies arrive → "2 new replies".
+    await closeCard(page, A)
+    await settle(page)
+  }
+  await msg(80, "from", "I also checked the down migration — it drops the column cleanly, nothing to change there.")
+  await msg(85, "from", "Done. Anything else?")
+  await upd({ ...base, status: "running", activity: "Waiting for your next message", canMessage: true, canStop: true, replies: 6 })
+  await settle(page, 1000)
+  await revealChrome(page)
+  await shot(page, v, "10-new-replies", AFTER ? card : undefined)
+  // The header merges its children for accessibility, so the badge is read as the header's text.
+  if (AFTER && !(await page.locator(`[id="${header}"]`).first().innerText()).includes("2 new replies")) throw new Error("no new-replies badge")
+  await shot(page, v, "10-new-replies-full")
+
+  // 11 — closed by the main agent: no Message, the reason instead.
+  await upd({ ...base, status: "cancelled", endedBy: "parent", endedAt: now - 5_000, canMessage: false, canStop: false,
+    cannotMessageReason: "Closed by the main agent — it can't take messages any more", cannotStopReason: "It isn't running", replies: 6 })
+  await settle(page, 900)
+  if (await exists(page, header)) {
+    await openCard(page, A)
+    if (AFTER && await exists(page, `subagent-message-field:${A}`)) throw new Error("closed agent still offers Message")
+    if (AFTER && !(await textOf(page, card)).includes("Closed by the main agent")) throw new Error("closed agent shows no reason")
+    await shotFoot(page, v, "11-closed-by-parent", card, `subagent-actions:${A}`)
+    await closeCard(page, A)
+    await settle(page)
+  } else {
+    await shot(page, v, "11-closed-by-parent")
+  }
+
+  // 12 — Claude, stopped by you: can't resume, so no Message.
+  const C = `claude-${sfx}`
+  await act({ ts: t(90), kind: "tool", tool: "Agent", title: "Agent: Benchmark the WS snapshot", description: "Benchmark the WS snapshot", phase: "started", callId: `p-${C}` })
+  await act({ ts: t(91), kind: "subagent_message", title: "Measure", text: "Measure the WS snapshot size and encode time for 50 sessions and report the numbers.", direction: "to", sender: "parent", subagentId: C })
+  await upd({ id: C, name: "general-purpose", description: "Benchmark the WS snapshot", status: "cancelled", endedBy: "client",
+    messaging: "relay", canMessage: false, canStop: false, actionsSource: "derived", parentCallId: `p-${C}`,
+    cannotMessageReason: "Stopped by you — Claude can't resume it", startedAt: now - 210_000, endedAt: now - 150_000, stats: { toolCalls: 2 } })
+  // 13 — Cursor, running: Message yes, Stop no (with why).
+  const K = `cursor-${sfx}`
+  await act({ ts: t(95), kind: "tool", tool: "Task", title: "Task: Audit dependency licences", description: "Audit dependency licences", phase: "started", callId: `p-${K}` })
+  await act({ ts: t(96), kind: "subagent_message", title: "List", text: "List every dependency whose licence is not MIT/Apache/BSD.", direction: "to", sender: "parent", subagentId: K })
+  await act({ ts: t(97), kind: "tool", tool: "Read", title: "Read: package.json", detail: "package.json", phase: "started", callId: `k-${sfx}-1`, subagentId: K })
+  await upd({ id: K, name: "Licence auditor", description: "Audit dependency licences", status: "running", activity: "Read package.json",
+    messaging: "relay", canMessage: true, canStop: false, actionsSource: "derived", parentCallId: `p-${K}`,
+    cannotStopReason: "Cursor can't stop subagents", startedAt: now - 30_000, stats: { toolCalls: 1 } })
+  await settle(page, 1200)
+  for (const [id, name, foot] of [[C, "12-stopped-by-you", `subagent-cannot-message:${C}`], [K, "13-cursor-running", `subagent-cannot-stop:${K}`]] as const) {
+    const h = `subagent-card-header:${id}`
+    if (await exists(page, h)) {
+      await openCard(page, id)
+      const reason = id === C ? "Claude can't resume it" : "Cursor can't stop subagents"
+      if (AFTER && !(await textOf(page, `subagent-card:${id}`)).includes(reason)) throw new Error(`${name}: reason line missing`)
+      if (AFTER && id === K && (await exists(page, `subagent-stop:${K}`) || !(await exists(page, `subagent-message-field:${K}`)))) throw new Error("cursor: wrong actions")
+      await shotFoot(page, v, name, `subagent-card:${id}`, `subagent-actions:${id}`)
+      await closeCard(page, id)
+      await settle(page)
+    } else {
+      await shot(page, v, name)
+    }
+  }
+
+  // 14 — the "↪ to Anscombe" marker in the main chat, and tapping it.
+  const marker = `subagent-marker:in:web:u2-${sfx}`
+  if (await exists(page, marker)) {
+    await scrollToTop(page, marker)
+    await revealChrome(page)
+    await shot(page, v, "14-marker", marker, 60)
+    await page.screenshot({ path: `${OUT}/${v.width}-${v.theme}-14-marker-full.png` })
+    await tap(byTag(page, marker))
+    await settle(page, 1200)
+    if (!(await exists(page, `subagent-card-body:${A}`))) throw new Error("marker tap did not open the card")
+    await page.screenshot({ path: `${OUT}/${v.width}-${v.theme}-14b-marker-jump-full.png` })
+  } else {
+    await page.mouse.move(v.width - 40, v.height * 0.4)
+    await page.mouse.wheel(0, -600)
+    await settle(page)
+    await shot(page, v, "14-marker")
+  }
+  await frame({ type: "subagents_cleared" })
 }
 
 export async function main(): Promise<void> {

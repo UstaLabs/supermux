@@ -761,7 +761,16 @@ fun TimelineItemRow(
                     horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
                 ) {
                     if (!text.isNullOrBlank()) {
-                        if (isUser) {
+                        val toSubagent = item.entry.subagent_id
+                        if (isUser && toSubagent != null) {
+                            // A message to a subagent: a compact marker that opens its card.
+                            SubagentMarker(
+                                entryId = item.entry.id,
+                                text = text,
+                                name = subagentUi?.nameOf?.invoke(toSubagent),
+                                onOpen = subagentUi?.let { ui -> { ui.open(toSubagent) } },
+                            )
+                        } else if (isUser) {
                             UserMessage(text)
                         } else if (text.startsWith("📖 Walkthrough ready")) {
                             WalkthroughReadyCard(text, onOpenWalkthrough)
@@ -810,6 +819,7 @@ fun TimelineItemRow(
                 loadBytes = loadBytes,
                 onOpenFile = onOpenFile,
                 highDetail = highDetail,
+                unread = subagentUi?.unread?.invoke(item.subagent) ?: 0,
             )
         }
     }

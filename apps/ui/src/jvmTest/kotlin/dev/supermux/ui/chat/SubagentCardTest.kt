@@ -98,7 +98,7 @@ class SubagentCardTest {
         onNodeWithTag("subagent-card-header:sa1").performClick()
         onNodeWithTag("subagent-card-body:sa1").assertExists()
         onNodeWithText("Map how sessions are created.").assertExists()
-        onNodeWithText("2 steps").assertExists()
+        onNodeWithText("Task from the main agent").assertExists()
         onNodeWithText("Result").assertExists()
     }
 
@@ -107,7 +107,7 @@ class SubagentCardTest {
         var sent: Pair<String, String>? = null
         val actions = SubagentActions(message = { id, text -> sent = id to text; SubagentActionResult(ok = true, via = "relay") })
         setContent { Card(TimelineItem.SubagentCard(sub()), actions, startOpen = true) }
-        onNodeWithTag("subagent-message:sa1").performClick()
+        // The reply box is simply there while it can take a message — no extra "Message" step.
         onNodeWithTag("subagent-relay-hint:sa1").assertExists()
         onNodeWithTag("subagent-message-field:sa1").performTextInput("check logout too")
         onNodeWithTag("subagent-message-send:sa1").performClick()
@@ -130,7 +130,7 @@ class SubagentCardTest {
     @Test
     fun no_message_affordance_when_messaging_is_none_and_no_stop_when_done() = runComposeUiTest {
         setContent { Card(TimelineItem.SubagentCard(sub("completed", messaging = "none")), startOpen = true) }
-        onNodeWithTag("subagent-message:sa1").assertDoesNotExist()
+        onNodeWithTag("subagent-message-field:sa1").assertDoesNotExist()
         onNodeWithTag("subagent-stop:sa1").assertDoesNotExist()
     }
 

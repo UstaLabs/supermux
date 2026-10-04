@@ -12,10 +12,18 @@
  * A per-subagent screen is a later step; everything here keys off [Subagent.id] and takes its
  * actions as lambdas, so a detail screen can reuse the same pieces.
  *
+ * T3: expanded, the card is a THREAD — its task, the user's messages, its replies and its tool rows
+ * in time order ([threadOf]) — with a reply box at the foot. Actions are truthful: the reply box only
+ * while [Subagent.canMessage], Stop only while [Subagent.canStop], and otherwise the agent's own
+ * one-line reason where the control would be (never a disabled dead button). Everything is called
+ * by [displayName] — the real name when there is one.
+ *
  * Test tags: `subagent-card:<id>`, `subagent-card-header:<id>`, `subagent-card-body:<id>`,
- * `subagent-activity:<id>`, `subagent-message:<id>`, `subagent-message-field:<id>`,
- * `subagent-message-send:<id>`, `subagent-stop:<id>`, `subagent-error:<id>`, `subagent-strip`,
- * `subagent-strip-row:<id>`, `subagent-strip-more`.
+ * `subagent-activity:<id>`, `subagent-unread:<id>`, `subagent-ended:<id>`, `subagent-task:<id>`,
+ * `subagent-thread-mine:<id>:<i>`, `subagent-thread-reply:<id>:<i>`, `subagent-message-field:<id>`,
+ * `subagent-message-send:<id>`, `subagent-relay-hint:<id>`, `subagent-cannot-message:<id>`,
+ * `subagent-cannot-stop:<id>`, `subagent-stop:<id>`, `subagent-error:<id>`, `subagent-note:<id>`,
+ * `subagent-marker:<entryId>`, `subagent-strip`, `subagent-strip-row:<id>`, `subagent-strip-more`.
  */
 package dev.supermux.ui.chat
 
@@ -92,6 +100,7 @@ import dev.supermux.ui.theme.Stroke
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
+import androidx.compose.material.icons.outlined.Info
 
 // ── pure helpers (unit-tested) ────────────────────────────────────────────────────────────────
 
@@ -168,12 +177,118 @@ internal fun runningItems(subagents: List<Subagent>, bgTasks: List<ServerFrame.B
     val tasks = bgTasks.filter { t ->
         t.status == "running" && t.id !in ids && (t.callId == null || t.callId !in calls)
     }
-    return running.map { RunningItem("s:${it.id}", it.label, it.activity?.takeIf { a -> a.isNotBlank() }, it.startedAt, it.id) } +
+    return running.map { RunningItem("s:${it.id}", it.displayName, it.activity?.takeIf { a -> a.isNotBlank() }, it.startedAt, it.id) } +
         tasks.map { RunningItem("t:${it.id}", it.label.ifBlank { it.kind }, if (it.kind == "shell") "background shell" else it.kind, it.startedAt, null) }
 }
 
 /** What a session-list row counts: running subagents (the broker's recent-finished stay out). */
 fun runningSubagentCount(subagents: List<Subagent>?): Int = subagents?.count { it.running } ?: 0
+
+// ── names, endings, the thread (pure; unit-tested) ────────────────────────────────────────────
+
+/**
+ * Agent TYPES that agents report in `name` (Claude `subagent_type`): not a name a person would
+ * call it by. A real name (Codex nickname "Anscombe", a Cursor agent name) is a capitalised word
+ * or phrase without dashes.
+ */
+private val AGENT_TYPES = setOf("Explore", "Plan", "Task", "Agent")
+
+internal fun isAgentType(name: String): Boolean =
+    name in AGENT_TYPES || name.any { it == '-' || it == '_' || it == '/' } || name.first().isLowerCase()
+
+/** Its real name, when it has one ("Anscombe"); null for a bare type ("general-purpose"). */
+internal val Subagent.realName: String?
+    get() = name?.trim()?.takeIf { it.isNotEmpty() && !isAgentType(it) }
+
+/** The agent type as a tag ("Explore", "general-purpose"), when [name] is a type. */
+internal val Subagent.typeTag: String?
+    get() = name?.trim()?.takeIf { it.isNotEmpty() && isAgentType(it) }
+
+/** What the user calls it everywhere — card, strip, marker: name, else description, else id. */
+internal val Subagent.displayName: String
+    get() = realName ?: description?.takeIf { it.isNotBlank() } ?: id.take(8)
+
+/** How it ended, in words (null while running): who ended it matters more than the phase. */
+internal fun endedLabel(s: Subagent): String? = when {
+    s.running -> null
+    s.status == "failed" -> "failed"
+    s.endedBy == "parent" -> "closed by the main agent"
+    s.endedBy == "client" -> "stopped by you"
+    s.status == "cancelled" -> "stopped"
+    else -> "done"
+}
+
+/** One block of the expanded card, in time order. */
+internal sealed interface ThreadEntry {
+    /** What the main agent asked it to do. */
+    data class Task(val text: String) : ThreadEntry
+    /** A message the user sent it. */
+    data class Mine(val text: String, val ts: String) : ThreadEntry
+    /** Something it said back. */
+    data class Reply(val text: String, val ts: String) : ThreadEntry
+    /** Consecutive tool rows between two messages. */
+    data class Steps(val tools: List<TimelineItem.Tool>) : ThreadEntry
+    /** Its final result, only when the thread does not already end with it. */
+    data class Result(val text: String, val clipped: Boolean) : ThreadEntry
+    /** Why it failed. */
+    data class Failure(val text: String) : ThreadEntry
+}
+
+private fun TimelineItem.Activity.messageText(): String = (event.text ?: event.title).orEmpty()
+
+private fun norm(s: String) = s.trim().replace(Regex("\\s+"), " ")
+
+/**
+ * The card's thread: its task, the user's messages, its replies and its tool rows interleaved in
+ * time order (the children already are). Falls back to [Subagent.prompt] for the task on a broker
+ * that sends no task row, and adds the result only when no reply already says it.
+ */
+internal fun threadOf(s: Subagent, children: List<TimelineItem>, spawnOutput: String? = null): List<ThreadEntry> {
+    val out = ArrayList<ThreadEntry>()
+    var steps = ArrayList<TimelineItem.Tool>()
+    fun flush() { if (steps.isNotEmpty()) { out += ThreadEntry.Steps(steps); steps = ArrayList() } }
+    for (c in children) {
+        when {
+            c is TimelineItem.Tool -> steps += c
+            c is TimelineItem.Activity && c.event.kind == "subagent_message" -> {
+                val text = c.messageText()
+                if (text.isBlank()) continue
+                flush()
+                out += when {
+                    c.event.direction == "from" -> ThreadEntry.Reply(text, c.event.ts)
+                    c.event.sender == "user" -> ThreadEntry.Mine(text, c.event.ts)
+                    else -> ThreadEntry.Task(text)
+                }
+            }
+            // Reasoning/plan rows of a subagent stay out of its thread: the thread is the dialogue.
+            else -> Unit
+        }
+    }
+    flush()
+    if (out.none { it is ThreadEntry.Task }) {
+        s.prompt?.takeIf { it.isNotBlank() }?.let { out.add(0, ThreadEntry.Task(it)) }
+    }
+    val result = s.result?.takeIf { it.isNotBlank() } ?: spawnOutput?.takeIf { it.isNotBlank() && !s.running }
+    if (result != null) {
+        if (s.status == "failed") {
+            out += ThreadEntry.Failure(result)
+        } else {
+            val said = out.filterIsInstance<ThreadEntry.Reply>().map { norm(it.text) }
+            val r = norm(result)
+            if (said.none { it == r || it.contains(r) || (r.length > 40 && r.contains(it) && it.length > r.length / 2) }) {
+                out += ThreadEntry.Result(result, s.resultClipped == true)
+            }
+        }
+    }
+    return out
+}
+
+/** "↪ to Anscombe: Is it only users?" → "Is it only users?" (the broker's transcript wording). */
+internal fun markerBody(text: String): String {
+    if (!text.startsWith("↪ to ")) return text
+    val cut = text.indexOf(": ")
+    return if (cut > 0) text.substring(cut + 2) else text
+}
 
 // ── shared bits ───────────────────────────────────────────────────────────────────────────────
 
@@ -209,6 +324,12 @@ class SubagentUi(
     val isExpanded: (String) -> Boolean,
     val onToggle: (String) -> Unit,
     val actions: SubagentActions,
+    /** Replies since the user last had this card open (client-side, per session view). */
+    val unread: (Subagent) -> Int = { 0 },
+    /** Open the card and scroll to it — the strip and the main-chat markers both jump here. */
+    val open: (String) -> Unit = {},
+    /** The display name for a subagent id (markers), when the view knows it. */
+    val nameOf: (String) -> String? = { null },
 )
 
 // ── the card ──────────────────────────────────────────────────────────────────────────────────
@@ -225,6 +346,8 @@ fun SubagentCard(
     loadBytes: suspend (String) -> ByteArray? = { null },
     onOpenFile: (dev.supermux.ui.FilePathRef) -> Unit = {},
     highDetail: Boolean = false,
+    /** Replies the user has not seen yet; the "N new replies" badge while collapsed. */
+    unread: Int = 0,
 ) {
     val cs = MaterialTheme.colorScheme
     val s = effectiveSubagent(item)
@@ -260,7 +383,7 @@ fun SubagentCard(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(verticalAlignment = Alignment.Top) {
                     Text(
-                        s.label,
+                        s.displayName,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = cs.onSurface,
@@ -277,11 +400,23 @@ fun SubagentCard(
                         modifier = Modifier.padding(start = 2.dp).size(IconSize.md + 2.dp),
                     )
                 }
-                // Who + how: the agent type as a mono tag, "background", then the counters.
+                // With a real name as the title, the description is the line under it.
+                s.description?.takeIf { s.realName != null && it.isNotBlank() }?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = cs.onSurface.copy(alpha = 0.8f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // New replies, then who + how: the agent type as a mono tag, "background", counters.
                 val stats = subagentStatsLine(s)
-                val type = s.name?.takeIf { it.isNotBlank() && it != s.label }
-                if (type != null || s.background == true || stats != null) {
+                val type = s.typeTag
+                val badge = unread.takeIf { it > 0 && !expanded }
+                if (badge != null || type != null || s.background == true || stats != null) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        badge?.let { UnreadBadge(it, s.id) }
                         type?.let { Tag(it) }
                         if (s.background == true) Tag("background")
                         if (stats != null) {
@@ -321,6 +456,55 @@ private fun AgentBadge(status: String) {
     }
 }
 
+/** "2 new replies" — accent pill, cleared when the card is opened. */
+@Composable
+private fun UnreadBadge(n: Int, id: String) {
+    val cs = MaterialTheme.colorScheme
+    Text(
+        if (n == 1) "1 new reply" else "$n new replies",
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = cs.onPrimary,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(Radii.pill))
+            .background(cs.primary)
+            .padding(horizontal = 7.dp, vertical = 1.dp)
+            .testTag("subagent-unread:$id"),
+    )
+}
+
+/**
+ * The main chat's trace of a message the user sent a subagent ("↪ to Anscombe: …"): a compact,
+ * right-aligned line naming who it went to, that opens and scrolls to that agent's card — the
+ * conversation itself lives in the card's thread.
+ */
+@Composable
+fun SubagentMarker(entryId: String, text: String, name: String?, onOpen: (() -> Unit)?) {
+    val cs = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(Radii.md)
+    val body = markerBody(text)
+    val who = name ?: text.removePrefix("↪ to ").substringBefore(": ").takeIf { text.startsWith("↪ to ") } ?: "a subagent"
+    Row(Modifier.fillMaxWidth().padding(start = Space.xl), horizontalArrangement = Arrangement.End) {
+        Row(
+            Modifier
+                .clip(shape)
+                .border(Stroke.hairline, cs.outlineVariant, shape)
+                .then(if (onOpen != null) Modifier.clickable(onClick = onOpen).pointerHoverIcon(PointerIcon.Hand) else Modifier)
+                .testTag("subagent-marker:$entryId")
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(Icons.Filled.SmartToy, contentDescription = null, tint = cs.primary, modifier = Modifier.padding(top = 2.dp).size(IconSize.sm))
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text("To $who", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = cs.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(body, style = MaterialTheme.typography.bodySmall, color = cs.onSurface, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
 /** A tiny mono tag: agent type ("Explore"), "background". */
 @Composable
 private fun Tag(text: String) {
@@ -347,10 +531,13 @@ private fun StatusBlock(s: Subagent, now: Long) {
     val elapsed = subagentElapsedMs(s, now)?.let(::compactElapsed)
     val (text, color) = when (s.status) {
         "running" -> (elapsed ?: "running") to cs.primary
-        "completed" -> (if (elapsed != null) "done · $elapsed" else "done") to cs.onSurfaceVariant
         "failed" -> (if (elapsed != null) "failed · $elapsed" else "failed") to cs.error
-        "cancelled" -> "stopped" to cs.onSurfaceVariant
-        else -> s.status to cs.onSurfaceVariant
+        else -> {
+            // Who ended it reads first ("closed by the main agent", "stopped by you"); a plain
+            // finish keeps its time.
+            val ended = endedLabel(s) ?: s.status
+            (if (ended == "done" && elapsed != null) "done · $elapsed" else ended) to cs.onSurfaceVariant
+        }
     }
     Row(
         Modifier.padding(top = 2.dp),
@@ -359,10 +546,15 @@ private fun StatusBlock(s: Subagent, now: Long) {
     ) {
         if (s.running) {
             CircularProgressIndicator(Modifier.size(11.dp), color = cs.primary, strokeWidth = 1.5.dp)
-        } else if (s.status == "completed") {
+        } else if (endedLabel(s) == "done") {
             Box(Modifier.size(6.dp).clip(CircleShape).background(sem.success))
         }
-        Text(text, fontFamily = MonoFontFamily, fontSize = 11.sp, color = color, maxLines = 1)
+        // The clock is mono (it ticks); a sentence of who-ended-it is not.
+        if (s.running || text.first().isDigit() || text.startsWith("done") || text.startsWith("failed")) {
+            Text(text, fontFamily = MonoFontFamily, fontSize = 11.sp, color = color, maxLines = 1)
+        } else {
+            Text(text, style = MaterialTheme.typography.labelMedium, color = color, maxLines = 1, modifier = Modifier.testTag("subagent-ended:${s.id}"))
+        }
     }
 }
 
@@ -392,37 +584,35 @@ private fun ExpandedBody(
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    var promptOpen by remember(s.id) { mutableStateOf(false) }
-    var resultOpen by remember(s.id) { mutableStateOf(false) }
-    var showAllChildren by remember(s.id) { mutableStateOf(false) }
-    var messageOpen by remember(s.id) { mutableStateOf(false) }
     var draft by remember(s.id) { mutableStateOf("") }
     var busy by remember(s.id) { mutableStateOf(false) }
-    var error by remember(s.id) { mutableStateOf<String?>(null) }
+    var messageError by remember(s.id) { mutableStateOf<String?>(null) }
+    var stopError by remember(s.id) { mutableStateOf<String?>(null) }
     var note by remember(s.id) { mutableStateOf<String?>(null) }
+    val thread = remember(s, item.children, item.spawn) { threadOf(s, item.children, item.spawn?.output) }
 
     fun send() {
         val text = draft.trim()
         if (text.isEmpty() || busy) return
-        busy = true; error = null; note = null
+        busy = true; messageError = null; stopError = null; note = null
         scope.launch {
             val r = actions.message(s.id, text)
             busy = false
             if (r.ok) {
-                draft = ""; messageOpen = false
-                note = if (r.via == "relay" || s.messaging == "relay") "Sent via the main agent" else "Sent"
+                draft = ""
+                note = if (r.via == "relay" || s.messaging == "relay") "Sent via the main agent" else null
             } else {
-                error = r.error?.takeIf { it.isNotBlank() } ?: "Couldn't send the message"
+                messageError = r.error?.takeIf { it.isNotBlank() } ?: "Couldn't send the message"
             }
         }
     }
     fun stop() {
         if (busy) return
-        busy = true; error = null; note = null
+        busy = true; messageError = null; stopError = null; note = null
         scope.launch {
             val r = actions.stop(s.id)
             busy = false
-            if (!r.ok) error = r.error?.takeIf { it.isNotBlank() } ?: "Couldn't stop this agent"
+            if (!r.ok) stopError = r.error?.takeIf { it.isNotBlank() } ?: "Couldn't stop this agent"
         }
     }
 
@@ -432,102 +622,57 @@ private fun ExpandedBody(
             .testTag("subagent-card-body:${s.id}")
             // Aligned with the title (badge 24 + gap 10), so the card reads as one column.
             .padding(start = Space.md + 34.dp, end = Space.md, bottom = Space.md),
-        verticalArrangement = Arrangement.spacedBy(Space.sm),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // Prompt: what it was asked, clipped until asked for.
-        s.prompt?.takeIf { it.isNotBlank() }?.let { prompt ->
-            Section("Prompt") {
-                Text(
-                    prompt,
+        thread.forEachIndexed { i, entry ->
+            when (entry) {
+                is ThreadEntry.Task -> TaskBlock(entry.text, s.id)
+                is ThreadEntry.Mine -> MineBubble(entry.text, Modifier.testTag("subagent-thread-mine:${s.id}:$i"))
+                is ThreadEntry.Reply -> ReplyBlock(s.displayName, entry.text, onOpenFile, Modifier.testTag("subagent-thread-reply:${s.id}:$i"))
+                is ThreadEntry.Steps -> StepsBlock(entry.tools, highDetail, key = "${s.id}:$i")
+                is ThreadEntry.Result -> ResultBlock(entry, onOpenFile)
+                is ThreadEntry.Failure -> Text(
+                    entry.text,
                     style = MaterialTheme.typography.bodySmall,
-                    color = cs.onSurface.copy(alpha = 0.85f),
-                    maxLines = if (promptOpen) Int.MAX_VALUE else 3,
-                    overflow = TextOverflow.Ellipsis,
+                    fontFamily = MonoFontFamily,
+                    color = cs.error,
+                    modifier = Modifier.testTag("subagent-failure:${s.id}"),
                 )
-                if (prompt.length > 180 || prompt.count { it == '\n' } >= 3) {
-                    Toggle(if (promptOpen) "Show less" else "Show more") { promptOpen = !promptOpen }
-                }
             }
         }
-        // Its own rows, nested under a rule, the same renderer as the top level.
-        val children = item.children
-        if (children.isNotEmpty()) {
-            Section(if (children.size == 1) "1 step" else "${children.size} steps") {
-                val hidden = if (showAllChildren) 0 else (children.size - VISIBLE_CHILDREN).coerceAtLeast(0)
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .drawBehind {
-                            drawLine(
-                                color = cs.outlineVariant,
-                                start = Offset(0f, 4.dp.toPx()),
-                                end = Offset(0f, size.height - 4.dp.toPx()),
-                                strokeWidth = 1.dp.toPx(),
-                            )
-                        }
-                        .padding(start = Space.md),
-                ) {
-                    if (hidden > 0) Toggle("Show $hidden earlier") { showAllChildren = true }
-                    // Tool rows straight through ToolCard: the stream's per-row padding is for
-                    // top-level rhythm and made a nested list twice as tall as it needs to be.
-                    children.drop(hidden).forEach { child ->
-                        when (child) {
-                            is TimelineItem.Tool -> ToolCard(child.event, child.status, child.output, child.resultBody, highDetail)
-                            else -> TimelineItemRow(child, loadBytes = loadBytes, onOpenFile = onOpenFile, highDetail = highDetail)
-                        }
-                    }
-                }
-            }
+        if (thread.isEmpty() && s.running) {
+            Text("Getting started…", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
         }
-        // The answer it handed back (or why it failed).
-        val result = s.result?.takeIf { it.isNotBlank() } ?: item.spawn?.output?.takeIf { it.isNotBlank() && !s.running }
-        if (result != null) {
-            Section(if (s.status == "failed") "Error" else "Result") {
-                if (s.status == "failed") {
-                    Text(result, style = MaterialTheme.typography.bodySmall, fontFamily = MonoFontFamily, color = cs.error)
-                } else {
-                    val long = result.length > 600 || result.count { it == '\n' } > 8
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .then(if (long && !resultOpen) Modifier.heightIn(max = 180.dp).clip(RoundedCornerShape(0.dp)) else Modifier),
-                    ) {
-                        MarkdownBody(result, Modifier.fillMaxWidth(), onOpenFile = onOpenFile)
-                    }
-                    if (long) Toggle(if (resultOpen) "Show less" else "Show more") { resultOpen = !resultOpen }
-                    if (s.resultClipped == true && (resultOpen || !long)) {
-                        Text(
-                            "The broker kept the first 8k characters of this result.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = cs.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-        }
-        // Message field.
-        if (messageOpen) {
+
+        // ── what the user can do, truthfully ──
+        // The flags are read from `s` on every recomposition: a refusal that turns canMessage off
+        // replaces the field with the agent's reason the moment the update lands.
+        Column(Modifier.fillMaxWidth().testTag("subagent-actions:${s.id}"), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+        if (s.canMessage) {
             MessageField(
                 id = s.id,
+                name = s.displayName,
                 value = draft,
                 enabled = !busy,
                 relay = s.messaging == "relay",
                 onChange = { draft = it },
                 onSend = ::send,
-                onClose = { messageOpen = false; draft = "" },
             )
+            messageError?.let { ErrorLine(it, s.id) }
         }
-        error?.let {
-            Text(it, style = MaterialTheme.typography.labelMedium, color = cs.error, modifier = Modifier.testTag("subagent-error:${s.id}"))
-        }
-        note?.let {
+        note?.takeIf { s.canMessage }?.let {
             Text(it, style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant, modifier = Modifier.testTag("subagent-note:${s.id}"))
         }
-        // Actions: quiet, right-aligned, the request cards' buttons.
-        val canMessage = s.canMessage && !messageOpen
-        if (canMessage || s.running) {
-            ActionRow {
-                if (s.running) {
+        val reasons = listOfNotNull(
+            s.cannotMessageReason?.takeIf { !s.canMessage && it.isNotBlank() }?.let { it to "subagent-cannot-message:${s.id}" },
+            s.cannotStopReason?.takeIf { !s.canStop && s.running && it.isNotBlank() }?.let { it to "subagent-cannot-stop:${s.id}" },
+        )
+        if (reasons.isNotEmpty() || s.canStop) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    reasons.forEach { (text, tag) -> ReasonLine(text, Modifier.testTag(tag)) }
+                }
+                if (s.canStop) {
                     CardButton(
                         label = "Stop",
                         style = CardButtonStyle.Danger,
@@ -537,27 +682,136 @@ private fun ExpandedBody(
                         onClick = ::stop,
                     )
                 }
-                if (canMessage) {
-                    CardButton(
-                        label = "Message",
-                        style = CardButtonStyle.Secondary,
-                        enabled = !busy,
-                        testTag = "subagent-message:${s.id}",
-                        onClick = { messageOpen = true; error = null; note = null },
-                    )
-                }
             }
+        }
+        stopError?.takeIf { s.canStop }?.let { ErrorLine(it, s.id) }
         }
     }
 }
 
-/** A small caps-less caption over a block of the expanded card. */
 @Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
+private fun ErrorLine(text: String, id: String) {
+    Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("subagent-error:$id"))
+}
+
+/** Why an action is not on offer — one quiet line where the control would have been. */
+@Composable
+private fun ReasonLine(text: String, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = cs.onSurfaceVariant)
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Icon(Icons.Outlined.Info, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(IconSize.sm))
+        Text(text, style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+    }
+}
+
+/** Its brief from the main agent: a quiet quote, clipped until asked for. */
+@Composable
+private fun TaskBlock(text: String, id: String) {
+    val cs = MaterialTheme.colorScheme
+    var open by remember(id, text) { mutableStateOf(false) }
+    val long = text.length > 220 || text.count { it == '\n' } >= 4
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radii.sm))
+            .background(cs.onSurface.copy(alpha = 0.04f))
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .testTag("subagent-task:$id"),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text("Task from the main agent", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = cs.onSurfaceVariant)
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            color = cs.onSurface.copy(alpha = 0.85f),
+            maxLines = if (open || !long) Int.MAX_VALUE else 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (long) Toggle(if (open) "Show less" else "Show more") { open = !open }
+    }
+}
+
+/** The user's own message: right-aligned, accent-tinted, like the main chat's user lines. */
+@Composable
+private fun MineBubble(text: String, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Column(modifier.fillMaxWidth().padding(start = Space.xl), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text("You", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = cs.onSurface,
+            modifier = Modifier
+                .clip(RoundedCornerShape(Radii.md))
+                .background(cs.primary.copy(alpha = 0.12f))
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        )
+    }
+}
+
+/**
+ * A card's replies read one step smaller than the main chat's prose: they are nested inside a card,
+ * and at the chat's reading size a three-exchange thread filled a phone screen per reply.
+ */
+@Composable
+private fun ThreadProse(content: @Composable () -> Unit) {
+    val t = MaterialTheme.typography
+    MaterialTheme(colorScheme = MaterialTheme.colorScheme, shapes = MaterialTheme.shapes, typography = t.copy(bodyLarge = t.bodyMedium)) {
         content()
+    }
+}
+
+/** What it said: its name, then the reply as markdown. */
+@Composable
+private fun ReplyBlock(name: String, text: String, onOpenFile: (dev.supermux.ui.FilePathRef) -> Unit, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(name, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = cs.primary)
+        ThreadProse { MarkdownBody(text, Modifier.fillMaxWidth(), onOpenFile = onOpenFile) }
+    }
+}
+
+/** Steps shown before a long run folds into "Show N more steps". */
+private const val VISIBLE_STEPS = 4
+
+/** A run of tool rows between two messages, compact, under a rule. */
+@Composable
+private fun StepsBlock(tools: List<TimelineItem.Tool>, highDetail: Boolean, key: String) {
+    val cs = MaterialTheme.colorScheme
+    var all by remember(key) { mutableStateOf(false) }
+    val hidden = if (all) 0 else (tools.size - VISIBLE_STEPS).coerceAtLeast(0)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                drawLine(
+                    color = cs.outlineVariant,
+                    start = Offset(0f, 2.dp.toPx()),
+                    end = Offset(0f, size.height - 2.dp.toPx()),
+                    strokeWidth = 1.dp.toPx(),
+                )
+            }
+            .padding(start = Space.md),
+    ) {
+        if (hidden > 0) Toggle(if (hidden == 1) "Show 1 earlier step" else "Show $hidden earlier steps") { all = true }
+        tools.drop(hidden).forEach { ToolCard(it.event, it.status, it.output, it.resultBody, highDetail) }
+    }
+}
+
+@Composable
+private fun ResultBlock(entry: ThreadEntry.Result, onOpenFile: (dev.supermux.ui.FilePathRef) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    var open by remember(entry.text) { mutableStateOf(false) }
+    val long = entry.text.length > 600 || entry.text.count { it == '\n' } > 8
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text("Result", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = cs.onSurfaceVariant)
+        Box(Modifier.fillMaxWidth().then(if (long && !open) Modifier.heightIn(max = 180.dp).clip(RoundedCornerShape(0.dp)) else Modifier)) {
+            ThreadProse { MarkdownBody(entry.text, Modifier.fillMaxWidth(), onOpenFile = onOpenFile) }
+        }
+        if (long) Toggle(if (open) "Show less" else "Show more") { open = !open }
+        if (entry.clipped && (open || !long)) {
+            Text("The broker kept the first 8k characters of this result.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        }
     }
 }
 
@@ -577,23 +831,22 @@ private fun Toggle(text: String, onClick: () -> Unit) {
 }
 
 /**
- * The inline composer for one subagent: a row surface like the request cards' "Other" field, a
- * compact Send, and — for a relayed message — the honest caveat that the main agent carries it.
+ * The reply box at the foot of the thread: a row surface like the request cards' "Other" field and a
+ * compact Send. Always there while the agent can take a message — no extra "Message" step — and
+ * never there when it can't. For a relayed message, the honest caveat that the main agent carries it.
  */
 @Composable
 private fun MessageField(
     id: String,
+    name: String,
     value: String,
     enabled: Boolean,
     relay: Boolean,
     onChange: (String) -> Unit,
     onSend: () -> Unit,
-    onClose: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     var focused by remember { mutableStateOf(false) }
-    val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     val shape = RoundedCornerShape(Radii.sm)
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
@@ -616,20 +869,18 @@ private fun MessageField(
                 keyboardActions = KeyboardActions(onSend = { onSend() }),
                 modifier = Modifier
                     .weight(1f)
-                    .focusRequester(focus)
                     .onFocusChanged { focused = it.isFocused }
                     .padding(vertical = 10.dp)
                     .testTag("subagent-message-field:$id"),
                 decorationBox = { inner ->
                     Box(contentAlignment = Alignment.CenterStart) {
                         if (value.isEmpty()) {
-                            Text("Message this agent…", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, maxLines = 1)
+                            Text("Message $name…", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         inner()
                     }
                 },
             )
-            IconBtn(Icons.Filled.Close, "Cancel", "subagent-message-cancel:$id", cs.onSurfaceVariant, enabled = true, onClick = onClose)
             IconBtn(Icons.AutoMirrored.Filled.Send, "Send", "subagent-message-send:$id", cs.primary, enabled = enabled && value.isNotBlank(), onClick = onSend)
         }
         if (relay) {
