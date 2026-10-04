@@ -1124,3 +1124,29 @@ test("refreshAfterWake does nothing when the relay was never started or is stopp
   expect(leaseCalls).toBe(1)
   expect(provider.status()).toEqual({ state: "disabled" })
 })
+
+test("nonce and lease requests carry a timeout signal, and a hung lease request fails into the retry path", async () => {
+  const timers = fakeTimers()
+  const logger = fakeLogger()
+  let nonceSignal: AbortSignal | undefined
+  let leaseSignal: AbortSignal | undefined
+  const provider = new FrpRelayProvider(providerOpts({
+    fetchTimeoutMs: 20,
+    getNonce: async (signal) => { nonceSignal = signal; return "n1" },
+    // A request that never answers on its own: only the signal ends it.
+    fetchImpl: (_url, init) => new Promise<Response>((_resolve, reject) => {
+      leaseSignal = init?.signal
+      init?.signal?.addEventListener("abort", () => reject(init.signal!.reason))
+    }),
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    log: logger.log,
+  }))
+  await provider.start()
+  expect(nonceSignal).toBeInstanceOf(AbortSignal)
+  expect(leaseSignal).toBeInstanceOf(AbortSignal)
+  expect(leaseSignal!.aborted).toBe(true)
+  expect(provider.status()).toEqual({ state: "error", detail: "lease_request_failed" })
+  expect(timers.active(5_000)).toHaveLength(1)
+  await provider.stop()
+})

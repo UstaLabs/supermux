@@ -28,8 +28,11 @@ export interface FrpProviderOpts {
   relayBase: string       // https://relay.supermux.dev (lease endpoint host)
   relayDomain: string     // relay.supermux.dev (subdomain suffix)
   localPort: number       // 9898
-  fetchImpl?: (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<Response>
-  getNonce: () => Promise<string>
+  fetchImpl?: (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<Response>
+  /** Fetch the control plane's nonce; [signal] aborts it after [fetchTimeoutMs]. */
+  getNonce: (signal?: AbortSignal) => Promise<string>
+  /** Cap on the nonce and lease requests, so a fetch hung on a dead socket (e.g. across a sleep) can't block renewals. */
+  fetchTimeoutMs?: number
   spawn: (argv: string[]) => FrpChild
   activationGated?: boolean // defaults true; Windows sets false and replaces kill-before-spawn
   writeConfig: (toml: string) => string  // writes frpc.toml, returns path
@@ -55,6 +58,7 @@ type ScheduledTimer = { handle: ReturnType<typeof setTimeout>; native: boolean }
 const AUDIT_INTERVAL_MS = 300_000
 const RETRY_DELAYS_MS = [5_000, 10_000, 20_000, 30_000, 60_000, 120_000, 300_000] as const
 const MAX_TIMER_DELAY_MS = 2_147_483_647
+export const RELAY_FETCH_TIMEOUT_MS = 15_000
 
 class LeaseHttpError extends Error {
   constructor(readonly status: number) {
@@ -226,7 +230,8 @@ export class FrpRelayProvider implements RelayProvider {
     this.emit("info", "relay_lease_acquire_started", { trigger })
     const f = this.o.fetchImpl ?? fetch
     try {
-      const nonce = await this.o.getNonce()
+      const timeoutMs = this.o.fetchTimeoutMs ?? RELAY_FETCH_TIMEOUT_MS
+      const nonce = await this.o.getNonce(AbortSignal.timeout(timeoutMs))
       if (!this.ownsAttempt(attempt)) return
       failureCode = "lease_request_failed"
       const signature = this.o.identity.sign(Buffer.from(nonce)).toString("base64url")
@@ -239,6 +244,8 @@ export class FrpRelayProvider implements RelayProvider {
           nonce,
           signature,
         }),
+        // Covers the body read below too.
+        signal: AbortSignal.timeout(timeoutMs),
       })
       if (!this.ownsAttempt(attempt)) return
       if (!res.ok) throw new LeaseHttpError(res.status)

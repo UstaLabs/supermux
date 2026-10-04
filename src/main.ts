@@ -1439,8 +1439,8 @@ const relayProvider = process.env.MUX_RELAY_DOMAIN
       relayBase: process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`,
       relayDomain: process.env.MUX_RELAY_DOMAIN,
       localPort: MUX_WEB_PORT ?? 9898,
-      getNonce: async () => {
-        const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`)
+      getNonce: async (signal) => {
+        const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`, { signal })
         return ((await r.json()) as { nonce: string }).nonce
       },
       activationGated: process.platform !== "win32",
