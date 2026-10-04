@@ -80,9 +80,10 @@ data class HostIdentity(
  * "Keep this computer awake" on a host (spec "Keep the computer awake while hosting"): `GET /host`'s
  * `keepAwake`, `GET|PUT /settings/keep-awake` and the `keep_awake` frame. [enabled] and
  * [onBattery] are the settings ("Also on battery"); [active] says the inhibitor holds right now;
- * [supported] is false where the computer has no way to hold one, with [reason] saying why (also
- * set when it is released on battery or gave up after repeated failures). Only the host computer
- * itself may change it: the broker answers a PUT from anywhere else with 403.
+ * [supported] is false where the computer has no way to hold one. [reason] says why it isn't held
+ * although enabled, and [reasonCode] tells the cases apart: "unsupported", "denied" (the desktop
+ * refused every inhibitor; [hint] names the fix), "gave_up" (it kept exiting) or "on_battery".
+ * Only the host computer itself may change it: the broker answers a PUT from anywhere else with 403.
  */
 @Serializable
 data class KeepAwakeState(
@@ -91,7 +92,16 @@ data class KeepAwakeState(
     val active: Boolean = false,
     val supported: Boolean = true,
     val reason: String? = null,
-)
+    val reasonCode: String? = null,
+    val hint: String? = null,
+) {
+    companion object {
+        const val REASON_DENIED = "denied"
+        const val REASON_UNSUPPORTED = "unsupported"
+        const val REASON_GAVE_UP = "gave_up"
+        const val REASON_ON_BATTERY = "on_battery"
+    }
+}
 
 /** PUT /settings/keep-awake body: only the fields that change (explicitNulls=false omits the rest). */
 @Serializable

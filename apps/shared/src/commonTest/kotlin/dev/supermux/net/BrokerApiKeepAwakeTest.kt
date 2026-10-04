@@ -37,6 +37,16 @@ class BrokerApiKeepAwakeTest {
         assertEquals(KeepAwakeState(enabled = true, onBattery = false, active = false, supported = true, reason = "Released while on battery"), host.keepAwake)
     }
 
+    @Test fun keep_awake_carries_the_reason_code_and_hint() = runTest {
+        val host = api(
+            """{"hostId":"h1","name":"n","protocolVersion":1,
+               "keepAwake":{"enabled":true,"onBattery":true,"active":false,"supported":true,
+                 "reason":"This computer's desktop didn't allow supermux to keep it awake.","reasonCode":"denied","hint":"Add a polkit rule"}}""",
+        ).getHost()
+        assertEquals(KeepAwakeState.REASON_DENIED, host.keepAwake!!.reasonCode)
+        assertEquals("Add a polkit rule", host.keepAwake!!.hint)
+    }
+
     @Test fun an_older_broker_has_no_keep_awake() = runTest {
         assertNull(api("""{"hostId":"h1","name":"n","protocolVersion":1}""").getHost().keepAwake)
     }

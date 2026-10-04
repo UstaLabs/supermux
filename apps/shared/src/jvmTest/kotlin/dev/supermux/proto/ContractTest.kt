@@ -87,6 +87,12 @@ class ContractTest {
         kotlin.test.assertEquals("""{"type":"fs_unsub","path":"/a"}""", un)
     }
 
+    @Test fun keep_awake_fixture_carries_the_denied_reason() {
+        val f = json.decodeFromString<ServerFrame>(load("keep_awake")) as ServerFrame.KeepAwakeChanged
+        kotlin.test.assertEquals(dev.supermux.net.KeepAwakeState.REASON_DENIED, f.keepAwake.reasonCode)
+        kotlin.test.assertEquals(false, f.keepAwake.active)
+    }
+
     @Test fun fs_dir_carries_real() {
         val f = json.decodeFromString<ServerFrame>(load("fs_dir")) as ServerFrame.FsDir
         kotlin.test.assertEquals("/home/u/p/src", f.real)
