@@ -8,7 +8,7 @@ import { CoreError, UnsupportedOperation } from '../errors.js'
 import { acpPermissionDecision, appliedFor, validatePermissionsSpec } from '../permissions.js'
 import { connectAcpProcess, type AcpKeeperLimits } from './process.js'
 import { createAcpNormalizer, DRIVER_WARNING_METHOD, SUBAGENT_SESSION_METHOD, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
-import { freeLoopbackPort, newOpenCodeServerInfo, openCodeAskToAcp, openCodeServerClient, readOpenCodeServerInfo, type OpenCodePendingAsk, type OpenCodeServerClient, type OpenCodeServerInfo } from './opencode-server.js'
+import { freeLoopbackPort, isOpenCodeEndpointMissing, newOpenCodeServerInfo, openCodeAskToAcp, openCodeServerClient, readOpenCodeServerInfo, type OpenCodePendingAsk, type OpenCodeServerClient, type OpenCodeServerInfo } from './opencode-server.js'
 import type { KeeperFrameEvent } from '../keeper/client.js'
 import { REASON, SUBAGENT_STATE_METHOD } from '../subagent-actions.js'
 import type { SubagentSnapshot } from '../types.js'
@@ -63,6 +63,20 @@ export type AcpOptions = {
   /** OpenCode only: how often the side channel polls OpenCode's HTTP server for subagent asks while work is live. Default 500 ms. */
   openCodePollIntervalMs?: number
 }
+
+/** Subagent id the Grok stop probe asks about; no real subagent has it. */
+export const GROK_STOP_PROBE_ID = 'supermux-probe-no-such-subagent'
+
+/** Grok's `_x.ai/subagent/cancel` answer, or undefined when the reply is not in that shape. */
+function grokCancelOutcome(reply: unknown): { cancelled: boolean; kind?: string } | undefined {
+  const result = (reply as { result?: { cancelled?: unknown; outcome?: { kind?: unknown } } } | undefined)?.result
+  if (!result || typeof result !== 'object') return
+  const kind = typeof result.outcome?.kind === 'string' ? result.outcome.kind : undefined
+  if (typeof result.cancelled !== 'boolean' && !kind) return
+  return { cancelled: result.cancelled === true, ...(kind ? { kind } : {}) }
+}
+
+const isMethodNotFound = (error: unknown) => (error as { code?: unknown } | null)?.code === -32601
 
 /**
  * Cursor offers no client→subagent channel (prompt/load on a child session are refused); the
@@ -218,11 +232,27 @@ export function acp(options: AcpOptions): AgentDriver {
     let hasModeConfig = false
     /** Cursor negotiated the ACP subagents extension. */
     let cursorSubagents = false
+    /**
+     * Grok: `_x.ai/subagent/cancel` exists (undocumented; probed at startup with an id no subagent
+     * has: 1.0.46 answers `{result:{cancelled:false, outcome:{kind:'not_found'}}}`, a version
+     * without it -32601). undefined = not known (probe timed out): Stop stays offered.
+     */
+    let grokSubagentCancel: boolean | undefined
+    /** OpenCode: why the HTTP side channel (child permission relay + Stop) is off, once it is. */
+    let sideChannelOff: string | undefined
+    const stopUnavailable = () => {
+      if (options.vendor === 'grok') return grokSubagentCancel === false ? REASON.grokNoStop : undefined
+      if (options.vendor === 'opencode') return sideChannelOff
+      return undefined
+    }
     const normalizer: AcpNormalizer = options.normalizer ?? createAcpNormalizer({
       ...(options.vendor ? { vendor: options.vendor } : {}),
       mainSessionId: () => agentSessionId || undefined,
       cursorSubagents: () => cursorSubagents,
     })
+    normalizer.setStopUnavailable(stopUnavailable)
+    /** Re-check every subagent's flags (a capability went away). */
+    const refreshSubagents = () => { if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: SUBAGENT_STATE_METHOD, params: {} } }) }
     /** Child sessions loaded into this process (a direct prompt needs session/load once). */
     const loadedChildren = new Set<string>()
     /** Child sessions whose session/load replay is in flight: history, not live activity. */
@@ -614,8 +644,13 @@ export function acp(options: AcpOptions): AgentDriver {
       if (sideChannelBusy || closed || !runtimeReady || !session || !agentSessionId) return
       if (!workKnown() && childPrompts.size === 0) return
       const server = openCodeServer
-      if (!server) {
-        if (normalizer.openSubagents().length) warnSideChannel('This OpenCode session cannot relay its subagents\' permission requests (it was started before supermux could reach OpenCode\'s server). A subagent that needs approval will wait; restart the session to fix this.')
+      if (!server || sideChannelOff) {
+        // Said once, when a subagent exists to care about (the session may not be attached earlier).
+        if (normalizer.openSubagents().length) {
+          warnSideChannel(sideChannelOff === REASON.opencodeNoStop
+            ? 'This OpenCode version changed the server API supermux uses for subagents, so subagent permission requests are not relayed and subagents cannot be stopped from here. A subagent that needs approval will wait until the session is interrupted.'
+            : 'This OpenCode session cannot relay its subagents\' permission requests (it was started before supermux could reach OpenCode\'s server). A subagent that needs approval will wait; restart the session to fix this.')
+        }
         return
       }
       sideChannelBusy = true
@@ -639,18 +674,37 @@ export function acp(options: AcpOptions): AgentDriver {
           void answerChildAsk(ask, server, gone.signal).catch(() => { if (sideAsks.get(ask.id) === gone) sideAsks.delete(ask.id) })
         }
         sideChannelFailures = 0
-      } catch {
+      } catch (error) {
         if (closed || sideChannelAbort.signal.aborted) return
+        if (isOpenCodeEndpointMissing(error)) { disableSideChannel(REASON.opencodeNoStop); return }
         if (++sideChannelFailures >= 10 && normalizer.openSubagents().length) {
           warnSideChannel('supermux cannot reach this OpenCode session\'s server, so subagent permission requests are not relayed. A subagent that needs approval will wait until the session is interrupted.')
         }
       } finally { sideChannelBusy = false }
     }
+    /**
+     * OpenCode's HTTP API is not a contract supermux holds: when a route it needs is gone or
+     * changed (see OpenCodeEndpointMissing), stop polling for good, turn Stop off with a reason
+     * and say once that child permission requests are no longer relayed.
+     */
+    function disableSideChannel(reason: string) {
+      if (sideChannelOff) return
+      sideChannelOff = reason
+      // No more HTTP calls; the poll only says why, once (see pollSideChannel).
+      for (const gone of sideAsks.values()) gone.abort()
+      sideAsks.clear()
+      refreshSubagents()
+    }
     function startSideChannel(info: OpenCodeServerInfo | undefined) {
       if (options.vendor !== 'opencode' || !session || sideChannelTimer) return
       openCodeServer = info ? openCodeServerClient(info, session.cwd) : undefined
+      // Without a server OpenCode ignores session/cancel for task children: nothing can stop them.
+      if (!openCodeServer) sideChannelOff = REASON.opencodeNoServer
       sideChannelTimer = setInterval(() => { void pollSideChannel() }, options.openCodePollIntervalMs ?? 500)
       sideChannelTimer.unref?.()
+      // Startup feature detection; a server that is not up yet is the poll's business, not this.
+      const server = openCodeServer
+      if (server) void server.probe(sideChannelAbort.signal).catch(error => { if (isOpenCodeEndpointMissing(error) && !closed) disableSideChannel(REASON.opencodeNoStop) })
     }
     lifetime.signal.addEventListener('abort', () => {
       if (sideChannelTimer) clearInterval(sideChannelTimer)
@@ -808,16 +862,31 @@ export function acp(options: AcpOptions): AgentDriver {
       // OpenCode's ACP layer ignores session/cancel for task children it did not create (the same
       // gap as their permission asks), so a stuck child — e.g. a hung webfetch — kept its parent's
       // Task waiting forever. Its own HTTP server aborts any session.
-      if (options.vendor === 'opencode' && openCodeServer) {
-        await openCodeServer.abort(child, sideChannelAbort.signal)
+      if (options.vendor === 'opencode' && !direct && sideChannelOff) throw new CoreError('subagent_unavailable', sideChannelOff)
+      if (options.vendor === 'opencode' && openCodeServer && !sideChannelOff) {
+        try { await openCodeServer.abort(child, sideChannelAbort.signal) } catch (error) {
+          if (!isOpenCodeEndpointMissing(error)) throw error
+          disableSideChannel(REASON.opencodeNoStop)
+          if (!direct) throw new CoreError('subagent_unavailable', REASON.opencodeNoStop)
+          await ioWait(connection.cancel({ sessionId: child }))
+        }
         return
       }
       if (options.vendor === 'grok' && !direct) {
         // A background child runs inside Grok, not as a session we prompted: session/cancel on it is
         // a silent no-op. Grok's own control (its TUI's kill) is `x.ai/subagent/cancel`.
-        const reply = await ioWait(connection.extMethod('_x.ai/subagent/cancel', { sessionId: agentSessionId, subagentId: child })) as { result?: { cancelled?: boolean; outcome?: { kind?: string; status?: string } } } | undefined
-        const outcome = reply?.result?.outcome?.kind
-        if (reply?.result?.cancelled === true || outcome === 'cancelled') return
+        if (grokSubagentCancel === false) throw new CoreError('subagent_unavailable', REASON.grokNoStop)
+        let reply: unknown
+        try { reply = await ioWait(connection.extMethod('_x.ai/subagent/cancel', { sessionId: agentSessionId, subagentId: child })) } catch (error) {
+          if (!isMethodNotFound(error)) throw error
+          grokSubagentCancel = false
+          try { io.setMeta({ grokSubagentCancel }) } catch { /* */ }
+          refreshSubagents()
+          throw new CoreError('subagent_unavailable', REASON.grokNoStop)
+        }
+        const answer = grokCancelOutcome(reply)
+        const outcome = answer?.kind
+        if (answer?.cancelled === true || outcome === 'cancelled') return
         if (outcome === 'not_found') throw new CoreError('subagent_not_found', `Grok does not know subagent ${subagentId}`)
         if (outcome === 'already_finished') {
           if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: SUBAGENT_STATE_METHOD, params: { subagentId } } })
@@ -826,6 +895,24 @@ export function acp(options: AcpOptions): AgentDriver {
         throw new CoreError('subagent_unavailable', `Grok did not cancel it (${outcome ?? 'no answer'})`)
       }
       await ioWait(connection.cancel({ sessionId: child }))
+    }
+    /** Startup feature detection for Grok's subagent cancel (see grokSubagentCancel). */
+    async function probeGrokSubagentCancel(): Promise<void> {
+      if (options.vendor !== 'grok' || !agentSessionId || closed) return
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const reply = await Promise.race([
+          ioWait(connection.extMethod('_x.ai/subagent/cancel', { sessionId: agentSessionId, subagentId: GROK_STOP_PROBE_ID })),
+          new Promise<typeof GROK_STOP_PROBE_ID>(resolve => { timer = setTimeout(() => resolve(GROK_STOP_PROBE_ID), Math.min(10_000, setupTimeout)) }),
+        ])
+        if (reply === GROK_STOP_PROBE_ID) return
+        if (grokSubagentCancel === undefined) grokSubagentCancel = grokCancelOutcome(reply) !== undefined
+      } catch (error) {
+        if (isMethodNotFound(error)) grokSubagentCancel = false
+      } finally { clearTimeout(timer) }
+      if (closed) return
+      try { if (grokSubagentCancel !== undefined) io.setMeta({ grokSubagentCancel }) } catch { /* */ }
+      if (grokSubagentCancel === false) refreshSubagents()
     }
     /** Resume: subagents remembered from before (their child sessions still exist natively). */
     let restoredSubagents: SubagentSnapshot[] | undefined
@@ -891,8 +978,10 @@ export function acp(options: AcpOptions): AgentDriver {
         advertisedModes = io.welcome.meta.advertisedModes === true
         hasModeConfig = io.welcome.meta.hasModeConfig === true
         cursorSubagents = io.welcome.meta.cursorSubagents === true
+        if (typeof io.welcome.meta.grokSubagentCancel === 'boolean') grokSubagentCancel = io.welcome.meta.grokSubagentCancel
         startSideChannel(readOpenCodeServerInfo(io.welcome.meta.opencodeServer))
         runtimeReady = true
+        if (grokSubagentCancel === undefined) void probeGrokSubagentCancel()
       } else {
       const clientCapabilities = options.vendor === 'cursor' ? { _meta: { subagents: true } } : {}
       const initialized = await setup(connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities, clientInfo: { name: 'supermux-core', version: '0.0.0' } }))
@@ -948,6 +1037,9 @@ export function acp(options: AcpOptions): AgentDriver {
       startSideChannel(serverInfo)
       finishSetup()
       runtimeReady = true
+      // Not awaited: setup must not stall (live frames right after load are activity), and until
+      // the answer Stop stays offered; a missing method flips the flags (refreshSubagents).
+      void probeGrokSubagentCancel()
       return { runtime: makeRuntime({ resume: canResume || canLoad, steer: false, fork: false, detach: true, permissions: true }), close, finishSetup }
       }
       finishSetup()

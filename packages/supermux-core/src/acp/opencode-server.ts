@@ -91,7 +91,26 @@ export function freeLoopbackPort(): Promise<number> {
   })
 }
 
+/**
+ * The server answered, but not as the API this client was written against (verified on 1.16.2):
+ * an unknown route is served by OpenCode's web app (`200 text/html`), and a 404 that is not
+ * OpenCode's own `NotFoundError` JSON (which only means "no such session") is a removed route.
+ * Retrying cannot fix either, so the driver turns the side channel off instead.
+ */
+export class OpenCodeEndpointMissing extends Error {
+  constructor(readonly path: string, detail: string) {
+    super(`OpenCode server ${path}: ${detail}`)
+    this.name = 'OpenCodeEndpointMissing'
+  }
+}
+
+export function isOpenCodeEndpointMissing(error: unknown): error is OpenCodeEndpointMissing {
+  return error instanceof OpenCodeEndpointMissing
+}
+
 export type OpenCodeServerClient = {
+  /** Startup check that the API this client uses is there (`GET /permission`). */
+  probe(signal: AbortSignal): Promise<void>
   pendingAsks(signal: AbortSignal): Promise<OpenCodePendingAsk[]>
   reply(id: string, reply: OpenCodeReply, signal: AbortSignal): Promise<void>
   /** Running task tool calls of `sessionId`'s latest messages → their child session ids. */
@@ -113,10 +132,23 @@ export function openCodeServerClient(info: OpenCodeServerInfo, directory: string
       ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
       signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
     })
-    if (!response.ok) throw new Error(`OpenCode server ${init.method ?? 'GET'} ${path}: HTTP ${response.status}`)
-    return response.json()
+    const route = `${init.method ?? 'GET'} ${path}`
+    const json = /\bjson\b/i.test(response.headers.get('content-type') ?? '')
+    if (!response.ok) {
+      if (response.status === 404) {
+        const body = json ? await response.json().catch(() => undefined) as { name?: unknown } | undefined : undefined
+        if (body?.name !== 'NotFoundError') throw new OpenCodeEndpointMissing(route, 'HTTP 404')
+      }
+      throw new Error(`OpenCode server ${route}: HTTP ${response.status}`)
+    }
+    if (!json) throw new OpenCodeEndpointMissing(route, `not JSON (${response.headers.get('content-type') ?? 'no content-type'})`)
+    try { return await response.json() } catch { throw new OpenCodeEndpointMissing(route, 'malformed JSON') }
   }
   return {
+    async probe(signal) {
+      const list = await call('/permission', signal)
+      if (!Array.isArray(list)) throw new OpenCodeEndpointMissing('GET /permission', 'not a list')
+    },
     async pendingAsks(signal) {
       const list = await call('/permission', signal)
       if (!Array.isArray(list)) return []

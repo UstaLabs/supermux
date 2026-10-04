@@ -148,6 +148,48 @@ bun examples/console.mjs --agent codex --cwd /path/to/project --state /tmp/core-
 
 Type text to send it. Commands: `/steer <text>`, `/interrupt`, `/requests`, `/allow <n> [always]`, `/reject <n> [message]`, `/answer <n> <optionId|free text>`, `/decline <n>`, `/status`, `/deltas`, `/detach`, `/quit`. Run the same command again (same `--state` and `--session`) after `/detach` or after killing the console: for Codex, Claude and Grok the agent kept running behind the keeper and you re-attach to the live turn. Agents use your own logins (`~/.codex`, `~/.claude`, `~/.grok`). Cursor needs `--model auto` on a free plan.
 
+## Subagent truth table (live)
+
+Subagent `canMessage` / `canStop` rest partly on undocumented agent behaviour (Codex's model-catalog rewrite, Grok's `_x.ai/subagent/cancel`, OpenCode's HTTP server, Cursor's `_meta.subagents` opt-in, the Claude relay). `bun run truth:subagents` drives the **real** CLIs through every subagent state — running, finished, stopped by the client, ended by the parent, and again after a resume in a new process — and asserts every cell of `scripts/subagent-truth/matrix.ts` (the table in API.md is rendered from it; a unit test keeps them identical): an action the library offers must work natively, a refused one must be refused with the documented reason, and status / `endedBy` / `actionsSource` must match. It exits 1 on any mismatch.
+
+```sh
+bun run truth:subagents                      # all five: claude, codex, grok, opencode, cursor (in parallel)
+bun run truth:subagents --agent codex,grok   # some
+bun run truth:subagents --model grok=grok-4.7-build-fast --effort codex=medium --command grok=/opt/grok/bin/grok
+bun run truth:subagents --if-changed         # only CLIs whose version changed since their last pass
+```
+
+Each agent runs in a scratch directory under the OS temp dir (own core state, keeper and workdir; Codex gets a session-private `CODEX_HOME` like a supermux session). It uses your own logins and cheap default models (Claude `haiku`, Codex `gpt-5.6-luna` low, Grok `grok-4.7` low, OpenCode `opencode-go/qwen3.8-flash`, Cursor `auto`) and spends a few minutes and a little quota per agent; permission prompts are answered allow-once. `report.md` and `report.json` (CLI versions, per-cell expected / actual / pass) land in the scratch directory, or `--out DIR`; the raw `events-*.ndjson` / `actions-*.ndjson` stay next to them for debugging.
+
+After a passing run each agent's CLI version is recorded in `~/.cache/supermux-core/truth-versions.json` (`$XDG_CACHE_HOME` respected; `--versions-file` to move it). With `--if-changed` an agent whose `--version` output equals its last pass is skipped, so the check is cheap to schedule. Nothing is installed for you; a suggested systemd user timer (daily, only re-checks updated CLIs):
+
+```ini
+# ~/.config/systemd/user/supermux-truth.service
+[Unit]
+Description=supermux-core subagent truth table (changed CLIs only)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/supermux/packages/supermux-core
+ExecStart=/usr/bin/env bun run truth:subagents --if-changed --out %h/.cache/supermux-core/truth-report
+
+# ~/.config/systemd/user/supermux-truth.timer
+[Unit]
+Description=Daily supermux-core subagent truth table
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable with `systemctl --user daemon-reload && systemctl --user enable --now supermux-truth.timer`; a failed run shows in `systemctl --user status supermux-truth.service` (or use cron: `0 6 * * * cd …/packages/supermux-core && bun run truth:subagents --if-changed`).
+
+The library also detects each hack at startup, so one that disappears degrades to an honest flag instead of failing at click time: see "Feature detection" in API.md.
+
 ## Examples
 
 `API.md` and `examples/` ship in the packed package (`files`). Run them from a project that **depends on the installed package**, or from this repository **after** `bun run build`. Do not use `NODE_PATH` for ESM.

@@ -4,7 +4,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { codex } from "../src/codex/index.js"
-import { CATALOG_FILE, multiAgentV1Args, pinCatalogToV1 } from "../src/codex/catalog.js"
+import { CATALOG_FILE, inspectCatalog, multiAgentV1Args, multiAgentV1Launch, pinCatalogToV1 } from "../src/codex/catalog.js"
+import { createCore } from "../src/index.js"
+import type { CoreEvent } from "../src/types.js"
+import { TEST_LIMITS, nextId } from "./helpers.js"
 import type { DriverContext } from "../src/types.js"
 
 setDefaultTimeout(20_000)
@@ -20,9 +23,11 @@ const CATALOG = JSON.stringify({ models: [
 ] })
 
 /** A stand-in `codex`: `debug models` prints the catalog (or fails), `app-server …` records argv and runs the fixture. */
-function fakeCodex(debug: "ok" | "fail" | "no-v2"): string {
+function fakeCodex(debug: "ok" | "fail" | "no-v2" | "no-field"): string {
   const dir = temp("fake-codex-")
-  const catalog = debug === "no-v2" ? JSON.stringify({ models: [{ slug: "m", multi_agent_version: "v1" }] }) : CATALOG
+  const catalog = debug === "no-v2" ? JSON.stringify({ models: [{ slug: "m", multi_agent_version: "v1" }] })
+    : debug === "no-field" ? JSON.stringify({ models: [{ slug: "gpt-6-astra", base_instructions: "x" }, { slug: "gpt-5.6-luna" }] })
+    : CATALOG
   writeFileSync(join(dir, "catalog.json"), catalog)
   const script = join(dir, "codex")
   writeFileSync(script, `#!/bin/sh
@@ -96,4 +101,50 @@ test("driver still opens without the override when the catalog dump fails", asyn
   const home = temp("codex-home-")
   const r = await driver(fakeCodex("fail"), home).open(ctx())
   try { expect(readFileSync(join(home, "argv.txt"), "utf8").split("\n")).toEqual(["app-server", ""]) } finally { await r.close({ mode: "shutdown" }) }
+})
+
+// ── Feature detection: the catalog shape is undocumented; a changed one is left alone, with a warning ──
+
+test("inspectCatalog pins only the known shape and explains every other one", () => {
+  expect(inspectCatalog(CATALOG).kind).toBe("pin")
+  expect(inspectCatalog(JSON.stringify({ models: [{ slug: "a", multi_agent_version: "v1" }, { slug: "b" }] }))).toEqual({ kind: "v1" })
+  const unknown = (raw: string) => { const r = inspectCatalog(raw); expect(r.kind).toBe("unknown"); return (r as { warning: string }).warning }
+  expect(unknown(JSON.stringify({ models: [{ slug: "a" }, { slug: "b", multiAgent: { version: 2 } }] }))).toContain("no `multi_agent_version` field")
+  expect(unknown(JSON.stringify({ models: [{ slug: "a", multi_agent_version: "v3" }] }))).toContain('"v3"')
+  expect(unknown(JSON.stringify({ data: [{ slug: "a", multi_agent_version: "v2" }] }))).toContain("no longer lists `models`")
+  expect(unknown("Error: unknown subcommand")).toContain("did not print JSON")
+  for (const warning of [unknown("{}"), unknown("x")]) expect(warning).toContain("multi_agent v2")
+})
+
+test("multiAgentV1Launch skips the rewrite with a warning when the field is gone or the dump fails, and stays quiet when nothing is needed", async () => {
+  const home = temp("codex-home-")
+  const env = { ...process.env, CODEX_HOME: home }
+  const base = ["app-server"]
+  const gone = await multiAgentV1Launch(fakeCodex("no-field"), base, env, home)
+  expect(gone.args).toBe(base)
+  expect(gone.warning).toContain("no `multi_agent_version` field")
+  const failed = await multiAgentV1Launch(fakeCodex("fail"), base, env, home)
+  expect(failed.args).toBe(base)
+  expect(failed.warning).toContain("`codex debug models` failed")
+  expect(await multiAgentV1Launch(fakeCodex("no-v2"), base, env, home)).toEqual({ args: base })
+  expect(await multiAgentV1Launch(fakeCodex("ok"), [process.execPath], env, home)).toEqual({ args: [process.execPath] })
+  expect(existsSync(join(home, CATALOG_FILE))).toBe(false)
+})
+
+test("driver: a catalog without multi_agent_version starts Codex unchanged and shows the warning on the first turn only", async () => {
+  const home = temp("codex-home-")
+  const core = createCore({ stateDirectory: temp("codex-core-"), agents: [driver(fakeCodex("no-field"), home)], limits: TEST_LIMITS })
+  try {
+    const events: any[] = []
+    core.subscribe((e: CoreEvent) => { if (e.type === "session.event") events.push(e.event) })
+    const session = await core.sessions.create({ id: nextId("codex-catalog-"), agent: "codex", cwd: home })
+    expect(readFileSync(join(home, "argv.txt"), "utf8").split("\n")).toEqual(["app-server", ""])
+    for (const text of ["one", "two"]) {
+      const receipt = await session.send({ content: [{ type: "text", text }], whenBusy: "queue" })
+      expect((await receipt.completed).status).toBe("completed")
+    }
+    const warnings = events.filter(e => e.kind === "warning")
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].message).toContain("no `multi_agent_version` field")
+  } finally { await core.close({ agents: "shutdown" }) }
 })

@@ -164,7 +164,8 @@ describe("cursor subagents (real captures)", () => {
     const id = "call-12a9bd3f-f585-488d-a37d-851c15980e55-0\nfc_1de06a53-13f1-96b0-8433-f783c17490bc_0"
     const sub = subagentEvents(events, id)
     assertLifecycle(sub)
-    expect(sub[0]).toMatchObject({ phase: "started", description: "Read files, report counts", messaging: "relay", parentCallId: id })
+    // No agent id to relay a message to: Message is off (REASON.cursorNoIds), not a relay that cannot land.
+    expect(sub[0]).toMatchObject({ phase: "started", description: "Read files, report counts", messaging: "none", parentCallId: id, canMessage: false, cannotMessageReason: "This Cursor version doesn't report its subagents" })
     expect(sub.filter(e => TERMINAL.has(e.phase))).toEqual([expect.objectContaining({ phase: "completed", stats: { durationMs: 31979 } })])
   })
 })

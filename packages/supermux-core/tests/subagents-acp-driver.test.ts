@@ -4,7 +4,8 @@ import { existsSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { cursor, grok, opencode } from "../src/agents/index.js"
-import { cursorRelayPrompt } from "../src/acp/index.js"
+import { cursorRelayPrompt, GROK_STOP_PROBE_ID } from "../src/acp/index.js"
+import { REASON } from "../src/subagent-actions.js"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, CoreEvent } from "../src/types.js"
 import type { EventEnvelope, NormalizedBody } from "../src/events/normalized.js"
@@ -162,8 +163,57 @@ test("grok BUG 2/3: a running background child is stopped with Grok's own x.ai/s
   await expect(session.messageSubagent(child, text("hi"))).rejects.toMatchObject({ code: "subagent_unavailable" })
   await session.stopSubagent(child)
   const cancel = (await lines()).filter(l => l.method === "_x.ai/subagent/cancel")
-  expect(cancel.map(l => l.params)).toEqual([{ sessionId: parent, subagentId: child }])
+  // The first is the startup feature probe (an id no subagent has).
+  expect(cancel.map(l => l.params)).toEqual([{ sessionId: parent, subagentId: GROK_STOP_PROBE_ID }, { sessionId: parent, subagentId: child }])
   expect((await lines()).some(l => l.method === "session/cancel" && l.params.sessionId === child)).toBe(false)
   await until(() => events.some(e => e.kind === "subagent" && e.subagentId === child && e.phase === "cancelled"))
   expect(events.find(e => e.kind === "subagent" && e.subagentId === child && e.phase === "cancelled")).toMatchObject({ endedBy: "client", canMessage: true, canStop: false })
+})
+
+// ── Startup feature detection: an undocumented control that disappears degrades cleanly ──
+
+async function spawnGrokBackground(env: Record<string, string>) {
+  const ctx = await setup("grok", "grok-cancel.ndjson", env)
+  const child = "01a10368-7812-7ec0-9cdf-b6c26fa9b719"
+  const receipt = await ctx.session.send({ content: text("spawn a background sleeper"), whenBusy: "queue" })
+  await until(() => ctx.session.requests.list().length > 0 || ctx.events.some(e => e.kind === "subagent" && e.subagentId === child))
+  for (const request of ctx.session.requests.list()) await ctx.session.requests.respond(request.requestId, { optionId: "allow-once" }).catch(() => {})
+  expect((await receipt.completed).status).toBe("completed")
+  await until(() => ctx.events.some(e => e.kind === "subagent" && e.subagentId === child))
+  return { ...ctx, child }
+}
+
+test("grok without _x.ai/subagent/cancel (probe answers -32601): a running background child has no Stop, with the reason", async () => {
+  const { session, events, lines, child } = await spawnGrokBackground({ REPLAY_GROK_NO_CANCEL: "1" })
+  expect((await lines()).filter(l => l.method === "_x.ai/subagent/cancel").map(l => l.params.subagentId)).toEqual([GROK_STOP_PROBE_ID])
+  expect(events.find(e => e.kind === "subagent" && e.subagentId === child)).toMatchObject({
+    phase: "started", canMessage: false, cannotMessageReason: REASON.grokRunning, canStop: false, cannotStopReason: REASON.grokNoStop,
+  })
+  await expect(session.stopSubagent(child)).rejects.toMatchObject({ code: "subagent_unavailable", message: REASON.grokNoStop })
+  // Refused by the flags: nothing more is sent to Grok.
+  expect((await lines()).filter(l => l.method === "_x.ai/subagent/cancel")).toHaveLength(1)
+})
+
+test("grok whose cancel disappears after the probe: Stop is refused with the reason and the flags flip off", async () => {
+  const { session, events, child } = await spawnGrokBackground({ REPLAY_GROK_NO_CANCEL: "late" })
+  expect(events.find(e => e.kind === "subagent" && e.subagentId === child)).toMatchObject({ phase: "started", canStop: true })
+  await expect(session.stopSubagent(child)).rejects.toMatchObject({ code: "subagent_unavailable", message: REASON.grokNoStop })
+  await until(() => events.filter(e => e.kind === "subagent" && e.subagentId === child).at(-1)?.canStop === false)
+  expect(events.filter(e => e.kind === "subagent" && e.subagentId === child).at(-1)).toMatchObject({ phase: "progress", canStop: false, cannotStopReason: REASON.grokNoStop })
+})
+
+test("cursor that does not echo subagent support after the _meta opt-in: no live child stream, no Message (no agent id to relay to), no Stop", async () => {
+  const { session, events, lines } = await setup("cursor", "cursor-baseline.ndjson")
+  const receipt = await session.send({ content: text("spawn"), whenBusy: "queue" })
+  expect((await receipt.completed).status).toBe("completed")
+  expect((await lines()).find(l => l.method === "initialize").params.clientCapabilities).toEqual({ _meta: { subagents: true } })
+  const id = "call-12a9bd3f-f585-488d-a37d-851c15980e55-0\nfc_1de06a53-13f1-96b0-8433-f783c17490bc_0"
+  const sub = events.filter(e => e.kind === "subagent" && e.subagentId === id)
+  expect(sub[0]).toMatchObject({ phase: "started", messaging: "none", canMessage: false, cannotMessageReason: REASON.cursorNoIds, canStop: false, cannotStopReason: REASON.cursorNoStop })
+  expect(sub.at(-1)).toMatchObject({ phase: "completed", canMessage: false, canStop: false })
+  expect(events.some(e => e.kind !== "subagent" && e.subagentId === id)).toBe(false)
+  await expect(session.messageSubagent(id, text("hi"))).rejects.toMatchObject({ code: "subagent_unavailable", message: REASON.cursorNoIds })
+  await expect(session.stopSubagent(id)).rejects.toMatchObject({ code: "subagent_unavailable", message: REASON.cursorNoStop })
+  // Nothing was relayed through the parent.
+  expect((await lines()).filter(l => l.method === "session/prompt")).toHaveLength(1)
 })

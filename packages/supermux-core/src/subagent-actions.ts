@@ -17,6 +17,7 @@ export type SubagentActions = {
  * Driver-synthesized native frame: re-emit a subagent's current state (flags changed outside any
  * lifecycle frame, e.g. the client stopped it or a native capability arrived). `{ method, params:
  * { subagentId } }` for every driver; Claude frames also carry `type` so its mapper sees them.
+ * ACP only: without `subagentId` every known subagent is re-checked (a capability went away).
  */
 export const SUBAGENT_STATE_METHOD = "supermux/subagent-state"
 
@@ -31,6 +32,11 @@ export const REASON = {
   busy: "It is still answering your last message",
   codexNoInput: "Codex doesn't accept messages for this subagent",
   opencodeNoSession: "OpenCode hasn't reported its session yet",
+  // Startup feature detection: an undocumented control this agent version does not have.
+  grokNoStop: "This Grok version can't stop subagents",
+  opencodeNoStop: "This OpenCode version can't stop subagents",
+  opencodeNoServer: "supermux can't reach this OpenCode session's server",
+  cursorNoIds: "This Cursor version doesn't report its subagents",
 } as const
 
 /** Why Stop is off for a run that already ended. */

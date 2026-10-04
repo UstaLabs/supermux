@@ -2,6 +2,9 @@
 // serves ACP on stdio AND its HTTP API on `--port` (basic auth with OPENCODE_SERVER_PASSWORD),
 // and it NEVER relays the child session's permission ask over ACP: the task's child waits until
 // someone answers it through POST /permission/:id/reply.
+// FAKE_MISSING=all|abort: like an OpenCode whose API moved, every route (all) or the abort route
+// (abort) is served by the web app (`200 text/html`, what 1.16.2 answers for an unknown route);
+// each HTTP request is then logged as {http: "<METHOD> <path>"}.
 import { createServer } from 'node:http'
 import { appendFileSync } from 'node:fs'
 
@@ -20,6 +23,12 @@ const http = createServer((req, res) => {
   const url = new URL(req.url, 'http://x')
   const send = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
   if (!password || req.headers.authorization !== expected) return send(401, { error: 'unauthorized' })
+  const missing = process.env.FAKE_MISSING
+  if (missing) log({ http: `${req.method} ${url.pathname}` })
+  if (missing === 'all' || (missing === 'abort' && req.method === 'POST' && url.pathname.endsWith('/abort'))) {
+    res.writeHead(200, { 'content-type': 'text/html' })
+    return res.end('<!doctype html><html></html>')
+  }
   if (req.method === 'GET' && url.pathname === '/permission') return send(200, ask ? [ask] : [])
   if (req.method === 'GET' && url.pathname === `/session/${PARENT}/message`) {
     const parts = taskRunning ? [{ type: 'tool', tool: 'task', callID: TASK, state: { status: 'running', metadata: { sessionId: CHILD, parentSessionId: PARENT } } }] : []

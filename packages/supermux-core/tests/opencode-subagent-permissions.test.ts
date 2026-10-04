@@ -6,6 +6,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { opencode } from "../src/agents/index.js"
 import { openCodeAskToAcp, openCodeToolKind } from "../src/acp/opencode-server.js"
+import { REASON } from "../src/subagent-actions.js"
 import { createCore } from "../src/index.js"
 import type { CoreEvent, PermissionsSpec } from "../src/types.js"
 import type { EventEnvelope, NormalizedBody } from "../src/events/normalized.js"
@@ -23,14 +24,14 @@ afterEach(async () => {
 type Event = EventEnvelope & NormalizedBody
 type AcpPolicy = Extract<PermissionsSpec, { kind: "acp" }>
 
-async function setup(permissions: AcpPolicy) {
+async function setup(permissions: AcpPolicy, env: Record<string, string> = {}) {
   const dir = await mkdtemp(join(tmpdir(), "opencode-sidechannel-"))
   dirs.push(dir)
   const trace = join(dir, "trace.ndjson")
   const shim = join(dir, "opencode-shim.sh")
   writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" ${JSON.stringify(agentScript)} "$@"\n`, { mode: 0o755 })
   const driver = opencode({
-    id: "agent", command: shim, inheritEnv: true, mcpServers: [], env: { FAKE_TRACE: trace },
+    id: "agent", command: shim, inheritEnv: true, mcpServers: [], env: { FAKE_TRACE: trace, ...env },
     permissions, setupTimeoutMs: 5000, shutdownTimeoutMs: 200, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
     cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 2000, openCodePollIntervalMs: 40,
     keeper: { stateDirectory: join(dir, "keeper"), limits: { parkedDeadlineMs: 5000, journalMaxBytes: 5_000_000, connectTimeoutMs: 4000 } },
@@ -137,4 +138,41 @@ test("stopping a running subagent aborts its child through OpenCode's HTTP serve
   const terminal = events.filter(e => e.kind === "subagent" && e.subagentId === "call_task").map(e => (e as { phase: string }).phase).at(-1)
   expect(terminal).toBe("cancelled")
   await until(() => session.requests.list().length === 0)
+})
+
+// ── Feature detection: OpenCode's HTTP API is not a contract (see OpenCodeEndpointMissing) ──
+
+test("an OpenCode whose server API moved (unknown routes answer 200 text/html): Stop is off with a reason, one warning, no endless polling", async () => {
+  const { session, events, replies } = await setup(ASK, { FAKE_MISSING: "all" })
+  const receipt = await session.send({ content: text("spawn"), whenBusy: "queue" })
+  await until(() => events.some(e => e.kind === "subagent" && e.subagentId === "call_task"))
+  await until(() => events.some(e => e.kind === "warning"))
+  const sub = events.filter(e => e.kind === "subagent" && e.subagentId === "call_task").at(-1)
+  expect(sub).toMatchObject({ canStop: false, cannotStopReason: REASON.opencodeNoStop })
+  await expect(session.stopSubagent("call_task")).rejects.toMatchObject({ code: "subagent_unavailable", message: REASON.opencodeNoStop })
+  expect(events.filter(e => e.kind === "warning")).toHaveLength(1)
+  expect((events.find(e => e.kind === "warning") as { message: string }).message).toContain("changed the server API")
+  // The startup probe saw the HTML answer; after that the side channel makes no more calls.
+  const calls = (await replies()).filter(r => r.http).length
+  expect(calls).toBeGreaterThan(0)
+  await new Promise(r => setTimeout(r, 300))
+  expect((await replies()).filter(r => r.http).length).toBe(calls)
+  expect((await replies()).some(r => r.aborted || r.reply)).toBe(false)
+  await session.interrupt({ pending: "discard" })
+  await receipt.completed
+})
+
+test("a removed abort route turns Stop off at click time (with a reason, flags re-sent) instead of failing forever", async () => {
+  const { session, events, replies } = await setup(ASK, { FAKE_MISSING: "abort" })
+  const receipt = await session.send({ content: text("spawn"), whenBusy: "queue" })
+  await until(() => events.some(e => e.kind === "subagent" && (e as { nativeId?: string }).nativeId === "ses_child"))
+  expect(events.filter(e => e.kind === "subagent" && e.subagentId === "call_task").at(-1)).toMatchObject({ canStop: true })
+  await expect(session.stopSubagent("call_task")).rejects.toMatchObject({ code: "subagent_unavailable", message: REASON.opencodeNoStop })
+  await until(() => events.filter(e => e.kind === "subagent" && e.subagentId === "call_task").at(-1)?.canStop === false)
+  expect(events.filter(e => e.kind === "subagent" && e.subagentId === "call_task").at(-1)).toMatchObject({ canStop: false, cannotStopReason: REASON.opencodeNoStop })
+  await expect(session.stopSubagent("call_task")).rejects.toMatchObject({ code: "subagent_unavailable" })
+  // One abort attempt only; the poll stopped too.
+  expect((await replies()).filter(r => r.http?.endsWith("/abort"))).toHaveLength(1)
+  await session.interrupt({ pending: "discard" })
+  await receipt.completed
 })

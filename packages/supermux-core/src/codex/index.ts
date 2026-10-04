@@ -3,7 +3,7 @@ import { requireCloseMode } from '../types.js'
 import { appliedFor, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse, ToolKind } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
-import { multiAgentV1Args } from './catalog.js'
+import { multiAgentV1Launch } from './catalog.js'
 import { createCodexNormalizer } from './normalize.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import { REASON, SUBAGENT_STATE_METHOD, shortReason } from '../subagent-actions.js'
@@ -737,7 +737,11 @@ export function codex(options: CodexOptions): AgentDriver {
     // Pin subagents to multi_agent v1 (children accept direct input); see catalog.ts.
     // A process flag, so it covers start, resume and fork alike; a reattached
     // keeper keeps the flags its app-server was started with.
-    const args = await multiAgentV1Args(options.command, options.args, env, context.cwd)
+    // A catalog whose format changed is left alone (feature detection, see catalog.ts); the
+    // warning is shown on the first turn, when the session can display it.
+    const launch = await multiAgentV1Launch(options.command, options.args, env, context.cwd)
+    const args = launch.args
+    let catalogWarning = launch.warning
     const rpc = await transport({ command: options.command, args, env, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper }, dispatchNotify, fail)
     const close = async (closeOptions: CloseOptions) => {
       const mode = requireCloseMode(closeOptions)
@@ -960,6 +964,10 @@ export function codex(options: CodexOptions): AgentDriver {
         signal.throwIfAborted()
         if (owned || liveUnfinished().length) throw new Error('Codex prompt already running')
         const converted = input(content)
+        if (catalogWarning && !closed) {
+          context.onUpdate({ protocol: 'native', value: { method: 'warning', params: { message: catalogWarning } } })
+          catalogWarning = undefined
+        }
         const a: OwnedSlot = { started: deferred<string>(), completion: deferred<{stopReason:string}>(), early: [], finished: false }
         owned = a
         const abort = () => { void interrupt().catch(error => { a.completion.reject(error) }) }

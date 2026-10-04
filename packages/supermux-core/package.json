@@ -47,8 +47,9 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "bun test tests"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json",
+    "test": "bun test tests",
+    "truth:subagents": "bun scripts/subagent-truth.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",

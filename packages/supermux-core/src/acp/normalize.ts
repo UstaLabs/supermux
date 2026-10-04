@@ -88,6 +88,12 @@ export type AcpNormalizerOptions = {
   mainSessionId?: () => string | undefined
   /** Cursor only: the agent negotiated the ACP subagents extension (subagent_spawned + child streams). */
   cursorSubagents?: () => boolean
+  /**
+   * Grok/OpenCode: why the agent's own subagent stop control is unavailable (startup feature
+   * detection found it missing or changed), or undefined while it works. A child the client
+   * prompted directly is still stopped with ACP `session/cancel`, so it keeps Stop.
+   */
+  stopUnavailable?: () => string | undefined
 }
 
 export type AcpSubagentInfo = { id: string; nativeId?: string; open: boolean }
@@ -103,6 +109,8 @@ export type AcpNormalizer = ((update: AgentUpdate) => NormalizedBody[]) & {
   openSubagents: () => AcpSubagentInfo[]
   /** Mark a subagent as stopped by the client, so its failed/aborted end reads as `cancelled`. */
   markStopRequested: (id: string) => void
+  /** Replace `stopUnavailable` (the driver that owns the live connection installs its detection). */
+  setStopUnavailable: (check: (() => string | undefined) | undefined) => void
   /** Seed subagents remembered from before a resume; returns their state as this process sees it. */
   restore: (snapshots: SubagentSnapshot[], options: { stillRunning: boolean }) => SubagentSnapshot[]
 }
@@ -187,6 +195,7 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   let firstSession: string | undefined
   const scopes = new Map<string, Scope>()
   const subs = new Map<string, Sub>()
+  let stopUnavailable = options.stopUnavailable
   /** Child session id / nativeId / resume call id → subagent id. */
   const aliases = new Map<string, string>()
   /** Child tool call id → subagent id. */
@@ -270,16 +279,27 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
    */
   function actionsOf(sub: Sub): SubagentActions {
     const stopReason = endedReason(sub.ended)
-    if (vendor === "cursor") return { canMessage: sub.messaging === "relay", canStop: false, cannotStopReason: REASON.cursorNoStop, actionsSource: "derived" }
+    if (vendor === "cursor") {
+      // Without the subagents extension the Task call id is all we know; a relay needs Cursor's agent id.
+      const relay = sub.messaging === "relay"
+      return { canMessage: relay, ...(relay ? {} : { cannotMessageReason: REASON.cursorNoIds }), canStop: false, cannotStopReason: REASON.cursorNoStop, actionsSource: "derived" }
+    }
+    // A child the client prompted itself is stopped over ACP; otherwise the agent's own control.
+    const stopOff = (sub: Sub) => sub.direct ? undefined : stopUnavailable?.()
     if (vendor === "grok") {
-      if (sub.open) return { canMessage: false, cannotMessageReason: sub.direct ? REASON.busy : REASON.grokRunning, canStop: true, actionsSource: "derived" }
+      if (sub.open) {
+        const off = stopOff(sub)
+        return { canMessage: false, cannotMessageReason: sub.direct ? REASON.busy : REASON.grokRunning, canStop: !off, ...(off ? { cannotStopReason: off } : {}), actionsSource: "derived" }
+      }
       return { canMessage: true, canStop: false, cannotStopReason: stopReason, actionsSource: "derived" }
     }
     if (vendor === "opencode") {
-      if (sub.open && !sub.nativeId) return { canMessage: false, cannotMessageReason: REASON.opencodeNoSession, canStop: false, cannotStopReason: REASON.opencodeNoSession, actionsSource: "derived" }
+      const off = sub.open ? stopOff(sub) : undefined
+      if (sub.open && !sub.nativeId) return { canMessage: false, cannotMessageReason: REASON.opencodeNoSession, canStop: false, cannotStopReason: off ?? REASON.opencodeNoSession, actionsSource: "derived" }
+      const stop = off ? { canStop: false, cannotStopReason: off } : { canStop: true }
       if (sub.open) return sub.direct || sub.overlay
-        ? { canMessage: false, cannotMessageReason: REASON.busy, canStop: true, actionsSource: "derived" }
-        : { canMessage: true, canStop: true, actionsSource: "derived" }
+        ? { canMessage: false, cannotMessageReason: REASON.busy, ...stop, actionsSource: "derived" }
+        : { canMessage: true, ...stop, actionsSource: "derived" }
       return { canMessage: true, canStop: false, cannotStopReason: stopReason, actionsSource: "derived" }
     }
     return { canMessage: false, canStop: false, actionsSource: "derived" }
@@ -672,9 +692,10 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
       const spawned = [...subs.values()].find(sub => sub.taskCallId === callId && sub.open)
       if (spawned) return progress(spawned, undefined, undefined, { ...(info.description ? { description: info.description } : {}), ...(info.prompt ? { prompt: info.prompt } : {}) })
       if (options.cursorSubagents?.() === true) return []
-      // No subagents extension: the Task call is all there is of the subagent.
+      // No subagents extension (Cursor did not echo it after the `_meta` opt-in): the Task call is
+      // all there is of the subagent — no child stream, and no agent id to relay a message to.
       if (lookup(callId)) return []
-      const sub = newSub(callId, "relay", callId)
+      const sub = newSub(callId, "none", callId)
       sub.taskCallId = callId
       return [subBody(sub, "started", { ...(info.description ? { description: info.description } : {}), ...(info.prompt ? { prompt: info.prompt } : {}) })]
     }
@@ -788,7 +809,13 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
       return mapAcp(update, mainScope)
     }
     if (method === "cursor/task") return cursorTask(rec(params) ?? {})
-    if (method === SUBAGENT_STATE_METHOD) return refresh(lookup(str(rec(params)?.subagentId)), [])
+    if (method === SUBAGENT_STATE_METHOD) {
+      const id = str(rec(params)?.subagentId)
+      if (id) return refresh(lookup(id), [])
+      let out: NormalizedBody[] = []
+      for (const sub of subs.values()) out = refresh(sub, out)
+      return out
+    }
     if (method === SUBAGENT_TURN_METHOD) return subagentTurn(rec(params) ?? {})
     if (method === SUBAGENT_SESSION_METHOD) {
       const sub = lookup(str(rec(params)?.subagentId))
@@ -863,6 +890,7 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   normalize.subagentForTool = (toolCallId: string) => childTools.get(toolCallId)
   normalize.subagentForSession = (sessionId: string) => (isMain(sessionId) ? undefined : lookup(sessionId)?.id)
   normalize.markStopRequested = (id: string) => { const sub = lookup(id); if (sub) sub.stopRequested = true }
+  normalize.setStopUnavailable = (check: (() => string | undefined) | undefined) => { stopUnavailable = check }
   normalize.restore = (snapshots, { stillRunning }) => {
     const out: SubagentSnapshot[] = []
     for (const snap of snapshots) {

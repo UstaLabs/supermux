@@ -12,6 +12,10 @@
 //                             triggers either (a probe's own experiments on a child session).
 //         REPLAY_LOOSE=m1,m2  a live request of these methods that the capture does not have next
 //                             stands in for whatever captured trigger comes next.
+//         REPLAY_GROK_NO_CANCEL=1  answer `_x.ai/subagent/cancel` with -32601 (a Grok without it);
+//                             `late`: only real cancels get -32601, the startup probe still works.
+// supermux's startup probe of Grok's `_x.ai/subagent/cancel` (subagentId `supermux-probe-…`) is
+// answered the way grok 1.0.46 answers an unknown id, without consuming the capture.
 import { createInterface } from 'node:readline'
 import { appendFileSync, readFileSync } from 'node:fs'
 
@@ -62,6 +66,15 @@ function fallback(live) {
 function handle(live) {
   const k = liveKey(live)
   if (!k) return
+  const probe = k === '_x.ai/subagent/cancel' && String(live.params?.subagentId ?? '').startsWith('supermux-probe')
+  if (k === '_x.ai/subagent/cancel' && (process.env.REPLAY_GROK_NO_CANCEL === '1' || (process.env.REPLAY_GROK_NO_CANCEL === 'late' && !probe))) {
+    send({ jsonrpc: '2.0', id: live.id, error: { code: -32601, message: 'Method not found' } })
+    return
+  }
+  if (probe) {
+    send({ jsonrpc: '2.0', id: live.id, result: { result: { subagentId: live.params.subagentId, cancelled: false, outcome: { kind: 'not_found' } } } })
+    return
+  }
   let at = -1
   let next = -1
   for (let i = cursor; i < rows.length; i++) {
