@@ -24,6 +24,13 @@ import {
   sanitizeLspServerPatch,
 } from "./editor-config"
 import { getServerById } from "../lsp/registry"
+import {
+  type KeepAwakeEnv,
+  type KeepAwakeSettings,
+  SETTINGS_KEY_KEEP_AWAKE,
+  resolveKeepAwakeSettings,
+  sanitizeKeepAwakePatch,
+} from "./keep-awake-config"
 
 type SettingsRow = { key: string; value: string }
 
@@ -80,6 +87,18 @@ export class SettingsStore {
   setAppConfig(patch: Partial<AppConfig>): void {
     const current = sanitizeAppConfigPatch(this.cache.get(SETTINGS_KEY_APP))
     this.set(SETTINGS_KEY_APP, { ...current, ...sanitizeAppConfigPatch(patch) })
+  }
+
+  /** "Keep this computer awake": saved choice → `MUX_KEEP_AWAKE` → default (desktop-managed = on). */
+  getKeepAwake(env: KeepAwakeEnv): KeepAwakeSettings {
+    return resolveKeepAwakeSettings(this.cache.get(SETTINGS_KEY_KEEP_AWAKE), env)
+  }
+
+  /** Persist a sparse merge: only the fields the user set become saved choices. */
+  setKeepAwake(patch: Partial<KeepAwakeSettings>, env: KeepAwakeEnv): KeepAwakeSettings {
+    const current = sanitizeKeepAwakePatch(this.cache.get(SETTINGS_KEY_KEEP_AWAKE))
+    this.set(SETTINGS_KEY_KEEP_AWAKE, { ...current, ...sanitizeKeepAwakePatch(patch) })
+    return this.getKeepAwake(env)
   }
 
   getEditorConfig(): EditorConfig {
