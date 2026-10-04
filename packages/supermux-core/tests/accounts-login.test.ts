@@ -59,6 +59,8 @@ async function empty(path: string): Promise<boolean> {
 }
 
 const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+/** A killed child can stay visible for a moment until it is reaped (loaded machines). */
+const gone = async (pid: number) => { for (let i = 0; i < 40 && alive(pid); i++) await Bun.sleep(50); return !alive(pid) }
 
 test("parsers strip ANSI/OSC 8 and find URLs and device codes", () => {
   const url = "https://claude.ai/oauth/authorize?code=true&x=1"
@@ -176,7 +178,7 @@ test("cancel kills the process group and removes the temp dir", async () => {
   handle.cancel()
   await expect(handle.done).rejects.toMatchObject({ code: "login_cancelled" })
   expect(handle.state().phase).toBe("cancelled")
-  expect(alive(run.pid)).toBe(false)
+  expect(await gone(run.pid)).toBe(true)
   expect(await empty(pending)).toBe(true)
 })
 
@@ -186,7 +188,7 @@ test("timeout fails the login and cleans up", async () => {
   await expect(handle.done).rejects.toMatchObject({ code: "login_timeout" })
   expect(handle.state()).toMatchObject({ phase: "failed", errorCode: "login_timeout" })
   const [run] = await invocations()
-  expect(alive(run.pid)).toBe(false)
+  expect(await gone(run.pid)).toBe(true)
   expect(await empty(pending)).toBe(true)
 })
 
