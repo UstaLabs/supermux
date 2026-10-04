@@ -263,6 +263,8 @@ fun SessionListScreen(
     val showRowHostBadge = multiHost && hostFilter == null
     val hostByRecord = remember(hosts) { hosts.associateBy { it.recordId } }
     val offlineIds = remember(hosts) { hosts.filter { !it.online }.map { it.recordId }.toSet() }
+    // The only host can't be reached: the multi-host offline groups don't apply, so say it here.
+    val unreachableSingleHost = if (multiHost) null else hosts.singleOrNull()?.takeIf { !it.online }
 
     val names = remember(sessions, sessionNames) {
         if (sessionNames.isNotEmpty()) sessionNames else sessions.associate { it.id to it.name }
@@ -1223,6 +1225,8 @@ fun SessionListScreen(
         banner?.let { b ->
             Column(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.xs)) { b() }
         }
+        // Single host (no offline groups then): its can't-reach state, with the same first hint.
+        unreachableSingleHost?.let { h -> SingleHostOfflineNotice(h) }
         SessionsSectionHeader(
             title = if (useWorkspaces) "Workspaces" else "Sessions",
             groupByProject = groupByProject,
@@ -1548,6 +1552,38 @@ private fun OfflineHostHeader(host: HostView) {
             fontSize = 11.sp,
             maxLines = 2,
             modifier = Modifier.padding(start = 14.dp).testTag("offline_host_hint_${host.recordId}"),
+        )
+    }
+}
+
+/** The single paired host can't be reached: "Can't reach <name>", then the awake hint. */
+@Composable
+private fun SingleHostOfflineNotice(host: HostView) {
+    val cs = MaterialTheme.colorScheme
+    val lastSeen = formatLastSeen(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Space.md, vertical = Space.xs)
+            .clip(RoundedCornerShape(Space.sm))
+            .background(cs.surfaceContainerHighest)
+            .padding(horizontal = Space.md, vertical = Space.sm)
+            .testTag("offline_single_host"),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            "Can't reach ${host.displayLabel}" + if (lastSeen.isNotEmpty()) " · seen $lastSeen" else "",
+            color = cs.onSurface,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            OfflineHostCopy.AWAKE_HINT,
+            color = cs.onSurfaceVariant,
+            fontSize = 12.sp,
+            modifier = Modifier.testTag("offline_single_host_hint"),
         )
     }
 }

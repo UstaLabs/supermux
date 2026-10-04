@@ -6,6 +6,9 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import dev.supermux.host.HostView
 import dev.supermux.proto.SessionInfo
 import kotlin.test.Test
@@ -61,6 +64,44 @@ class SessionListScreenHostGatingTest {
             .assertTextEquals("Is the computer awake and logged in?")
         // A reachable host gets no hint.
         onNodeWithTag("offline_host_hint_h1", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun a_single_unreachable_host_says_so_with_the_awake_hint() = runComposeUiTest {
+        var hosts by mutableStateOf(listOf(twoHosts[1]))
+        setContent {
+            SessionListScreen(
+                mode = SessionListMode.Fleet,
+                sessions = listOf(session("s2")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                hosts = hosts,
+                sessionHost = mapOf("s2" to "h2"),
+            )
+        }
+        onNodeWithTag("offline_single_host").assertIsDisplayed()
+        onNodeWithText("Can't reach Raspberry Pi", substring = true).assertExists()
+        onNodeWithTag("offline_single_host_hint", useUnmergedTree = true)
+            .assertTextEquals("Is the computer awake and logged in?")
+        // Reachable again: the notice goes away.
+        hosts = listOf(twoHosts[1].copy(online = true))
+        waitForIdle()
+        onNodeWithTag("offline_single_host").assertDoesNotExist()
+    }
+
+    @Test fun with_several_hosts_the_offline_group_carries_the_hint_not_the_single_notice() = runComposeUiTest {
+        setContent {
+            SessionListScreen(
+                mode = SessionListMode.Fleet,
+                sessions = listOf(session("s1")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                hosts = twoHosts,
+                sessionHost = mapOf("s1" to "h1"),
+            )
+        }
+        onNodeWithTag("offline_single_host").assertDoesNotExist()
     }
 
     @Test fun badgesHidden_withASingleHost() = runComposeUiTest {
