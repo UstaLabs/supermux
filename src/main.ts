@@ -145,6 +145,8 @@ import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
 import { curatorPromptPath, frpcPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
+import { KeepAwake, batteryProbe, spawnInhibitor } from "./core/power/keep-awake"
+import { WakeDetector, runWakeActions } from "./core/power/wake"
 import { SearchStore } from "./core/search/store"
 import { ForgeStore } from "./core/forge/store"
 import { ForgeService } from "./core/forge/service"
@@ -360,6 +362,21 @@ try {
 const reviewStore = new ReviewStore(db)
 const walkthroughStore = new WalkthroughStore(db)
 const settings = new SettingsStore(db)
+
+// "Keep this computer awake" while hosting (spec 2026-09-30-desktop-hosting-lifecycle-design): a
+// parent-bound inhibitor child, held while the setting is on (released on battery when "Also on
+// battery" is off). Default on for a desktop-managed broker; MUX_KEEP_AWAKE=1|0 overrides that.
+const keepAwakeLog = makeLogger("core/power/keep-awake")
+const keepAwake = new KeepAwake({
+  platform: process.platform,
+  spawn: spawnInhibitor,
+  which: (bin) => bunWhich(bin, process.env.PATH ?? ""),
+  onBattery: batteryProbe(process.platform),
+  log: (event, data) => keepAwakeLog.info(event, data),
+}, settings.getKeepAwake(process.env))
+keepAwake.start()
+// Wall-clock gap detection: after a sleep the relay, clients and idle timers are refreshed (below).
+const wakeDetector = new WakeDetector({ log: (event, data) => log.info(event, data) })
 const credentialHelperPath = join(STATE_DIR, "bin", "mux-credential")
 try { installCredentialLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, "..")) }
 catch (err) { log.error("forge_credential_launcher_failed", { err: String(err) }) }
@@ -1486,9 +1503,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       // Kept for desktops that predate `requirements`.
       gitAvailable: gitRequirement.ok,
       requirements: gitRequirement.requirements(),
+      keepAwake: keepAwake.state(),
     }),
     getHostRequirements: () => gitRequirement.requirements(),
     installGit: () => gitInstaller.install(),
+    getKeepAwake: () => keepAwake.state(),
+    setKeepAwake: (patch) => keepAwake.update(settings.setKeepAwake(patch, process.env)),
     claimStore,
     // CSRF trusts this as a second allowed Origin for cookie browsers on the
     // hosted relay. Prefer the live online URL, but fall back to the
@@ -3201,7 +3221,9 @@ const supervisor = createSupervisor({
   // non-claude PAs derive from the component — the half-filled-bag bug
   // (adapters built then dropped) is structurally closed.
   sessionManager,
-  reapInternalWorkers: () => agentRpc.reapIdle(RPC_WORKER_IDLE_MS),
+  // check() first: if the computer just woke, the wake shifts the idle baselines before the reap
+  // judges them (this 30 s timer can fire before the wake detector's own tick).
+  reapInternalWorkers: () => { wakeDetector.check(); return agentRpc.reapIdle(RPC_WORKER_IDLE_MS) },
   agentsBlocked: () => !gitRequirement.ok,
 })
 // Existing installs (any prior sessions, active/suspended/archived) are implicitly
@@ -3253,6 +3275,28 @@ gitRequirement.onChange((requirements) => {
     void sessionManager.resumeDeferredBoot().catch((err) => log.warn("resume_deferred_boot_failed", { err: String(err) }))
   }
 })
+// Keep-awake changes (toggled, released on battery, gave up) reach every client.
+keepAwake.onChange((state) => {
+  webChannel?.broadcastToAll({ type: "keep_awake", keepAwake: state })
+})
+// After a sleep (spec "Wake reconnect, sleep ≠ idle"): sleep is not idleness, the relay reconnects
+// now instead of after frpc's own timeouts, every client resubscribes for a fresh snapshot, and the
+// git requirement and the power source are re-checked.
+wakeDetector.onWake((sleptMs) => {
+  runWakeActions({
+    shiftIdle: (ms) => agentRpc.shiftIdle(ms),
+    refreshRelay: () => relayProvider.refreshAfterWake?.() ?? Promise.resolve(),
+    recheckGit: () => gitRequirement.recheck(),
+    refreshKeepAwake: () => keepAwake.refresh(),
+    broadcast: (frames) => { for (const f of frames) webChannel?.broadcastToAll(f) },
+    resyncClients: () => webChannel?.resyncClients("resync after wake") ?? 0,
+    log: (event, data) => log.info(event, data),
+  }, sleptMs, () => [
+    { type: "host_requirements", requirements: gitRequirement.requirements() },
+    { type: "keep_awake", keepAwake: keepAwake.state() },
+  ])
+})
+wakeDetector.start()
 // Housekeeping at boot is intentionally NON-DESTRUCTIVE: collapse every cursor
 // home's runtime to a symlink at the shared copy (safe, idempotent) and only
 // LOG any orphan-looking homes. Actual deletion lives solely in the explicit
@@ -3403,6 +3447,10 @@ async function gracefulShutdown(signal: string) {
   try {
     updateChecker?.stop()
   } catch (err: any) { log.warn("update_checker_stop_failed", { err: err?.message }) }
+  try {
+    wakeDetector.stop()
+    keepAwake.stop()
+  } catch (err: any) { log.warn("keep_awake_stop_failed", { err: err?.message ?? String(err) }) }
   try {
     await relayProvider.stop()
   } catch (err: any) { log.warn("relay_provider_stop_failed", { err: err?.message ?? String(err) }) }

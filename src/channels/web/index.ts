@@ -21,6 +21,10 @@ import { encodeTouch, encodeKey, encodeText, TouchAction } from "../../core/disp
 import { redactAppConfig } from "../../core/settings/app-config"
 import { pairJsonResponse } from "./pair-json"
 import { buildHostBody } from "./host-route"
+import { TickGap } from "../../core/power/wake"
+import type { KeepAwakeState } from "../../core/power/keep-awake"
+import type { KeepAwakeSettings } from "../../core/settings/keep-awake-config"
+import { parseKeepAwakeBody } from "../../core/settings/keep-awake-config"
 import { normalizeExistingWorkdir, uniqueKnownWorkdirs } from "../../core/session-manager/workdir-paths"
 import { worktreesRoot } from "../../core/worktree/manager"
 import { hooksFileUsesHookSecret } from "../../core/agents/claude/hooks-settings"
@@ -103,6 +107,10 @@ const rateLimitBucket = new WeakMap<Request, string>()
 // frpc (relay) and nginx forward from loopback but always add X-Forwarded-For, so relay traffic
 // never counts as local.
 const directLoopback = new WeakMap<Request, boolean>()
+/** The /ws heartbeat; a socket with no pong for 60 s is closed. */
+const HEARTBEAT_MS = 30_000
+/** Close code that asks a client to reconnect and resubscribe (a fresh snapshot), e.g. after a wake. */
+export const WS_CLOSE_RESYNC = 4000
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"])
 
 function clientIp(req: Request): string {
@@ -399,6 +407,10 @@ export interface WebChannelOpts {
   getHostRequirements?: () => HostRequirements
   /** POST /system/install-git: start the OS's own git installer (never throws). */
   installGit?: () => InstallGitResponse
+  /** "Keep this computer awake": the setting plus whether the inhibitor holds right now. */
+  getKeepAwake?: () => KeepAwakeState
+  /** Persist a new choice and apply it. Only reachable from a direct loopback caller. */
+  setKeepAwake?: (patch: Partial<KeepAwakeSettings>) => KeepAwakeState
   getDisplayPort?: (id: string) => number | undefined
   getScrcpy?: (id: string) => import("../../core/display/scrcpy/backend").ScrcpyInstance | undefined
   listDisplays?: () => import("../../core/display/types").DisplayStreamInfo[]
@@ -586,7 +598,7 @@ export class WebChannel implements Channel {
       this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
     }
     this.server = Bun.serve<WSData>(this.buildServeOptions())
-    this.heartbeatTimer = setInterval(() => this.pingAll(), 30_000)
+    this.heartbeatTimer = setInterval(() => this.pingAll(), HEARTBEAT_MS)
     log.info("web channel listening", { port: this.boundPort })
   }
 
@@ -723,6 +735,22 @@ export class WebChannel implements Channel {
   broadcastToAll(frame: object): void {
     const json = JSON.stringify(frame)
     for (const c of this.wsConnections) c.ws.send(json)
+  }
+
+  /**
+   * After a wake: every main `/ws` client reconnects and resubscribes, so it gets a fresh
+   * snapshot (plus host_requirements and keep_awake) through the normal path — with ITS current
+   * subscribe options, which a snapshot pushed from here could not know. Terminal and display
+   * sockets are left alone. Returns how many sockets were asked to resync.
+   */
+  resyncClients(reason = "resync"): number {
+    let n = 0
+    for (const c of [...this.wsConnections]) {
+      const d = c.ws.data
+      if (d.terminal || d.display || d.scrcpy) continue
+      try { c.ws.close(WS_CLOSE_RESYNC, reason); n++ } catch { /* already closing */ }
+    }
+    return n
   }
 
   /**
@@ -1297,8 +1325,19 @@ export class WebChannel implements Channel {
     ;(ws.data as any)._scrcpyClosed = true
   }
 
-  private pingAll(): void {
-    const now = Date.now()
+  /** Sleep is not silence: the heartbeat's own wall-clock gap check (see `pingAll`). */
+  private readonly heartbeatGap = new TickGap(HEARTBEAT_MS)
+
+  /** Exposed for tests: one heartbeat at [now]. */
+  pingAll(now = Date.now()): void {
+    // After a sleep, no client could have answered: move every pong baseline forward by the slept
+    // time instead of closing every socket on the first tick after the wake.
+    const slept = this.heartbeatGap.gap(now)
+    if (slept > 0) {
+      for (const c of this.wsConnections) {
+        c.ws.data.lastPongAt = (c.ws.data.lastPongAt ?? c.ws.data.openedAt) + slept
+      }
+    }
     for (const c of [...this.wsConnections]) {
       const lastPong = c.ws.data.lastPongAt ?? c.ws.data.openedAt
       if (now - lastPong > 60_000) {
@@ -1374,6 +1413,8 @@ export class WebChannel implements Channel {
       // Right after the snapshot, so every (re)connect learns whether this computer can run agents.
       const requirements = this.opts.getHostRequirements?.()
       if (requirements) ws.send(JSON.stringify({ type: "host_requirements", requirements }))
+      const keepAwake = this.opts.getKeepAwake?.()
+      if (keepAwake) ws.send(JSON.stringify({ type: "keep_awake", keepAwake }))
       return
     }
     if (frame.type === "ping") {
@@ -2333,6 +2374,22 @@ export class WebChannel implements Channel {
       if (!this.opts.runCuratorNow) return this.json({ error: "curator unavailable" }, 503)
       void this.opts.runCuratorNow() // fire-and-forget; run.ts guards re-entrancy
       return this.json({ ok: true })
+    }
+
+    // ── Settings: keep this computer awake (spec "Keep the computer awake while hosting") ──
+    // Any authed caller may read it; only the host computer itself may change it — the decision
+    // is "controls on the host computer only", enforced here, not just by hiding the toggle.
+    if (method === "GET" && path === "/settings/keep-awake") {
+      const state = this.opts.getKeepAwake?.()
+      if (!state) return this.json({ error: "keep-awake unavailable" }, 503)
+      return this.json(state)
+    }
+    if (method === "PUT" && path === "/settings/keep-awake") {
+      if (directLoopback.get(req) !== true) return this.json({ error: "only on this computer" }, 403)
+      if (!this.opts.setKeepAwake) return this.json({ error: "keep-awake unavailable" }, 503)
+      const parsed = parseKeepAwakeBody(await req.json().catch(() => undefined))
+      if ("error" in parsed) return this.json(parsed, 400)
+      return this.json(this.opts.setKeepAwake(parsed))
     }
 
     // ── Forge: git connections + repo management ───────────────────────────

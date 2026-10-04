@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { SLEEP_GAP_MS, TickGap, WAKE_TICK_MS, WakeDetector } from "./wake"
+import { SLEEP_GAP_MS, TickGap, WAKE_TICK_MS, WakeDetector, runWakeActions } from "./wake"
 
 function harness() {
   let t = 1_000_000
@@ -84,5 +84,41 @@ describe("TickGap", () => {
     expect(g.gap(15_000 + 45_000)).toBe(0) // exactly interval + 30 s
     expect(g.gap(60_000 + 15_000 + 600_000)).toBe(600_000)
     expect(g.gap(60_000 + 15_000 + 600_000 + 15_000)).toBe(0)
+  })
+})
+
+describe("runWakeActions", () => {
+  test("shifts idle, refreshes relay/git/keep-awake, broadcasts, then resyncs clients", async () => {
+    const calls: string[] = []
+    const logs: Array<[string, Record<string, unknown>]> = []
+    runWakeActions({
+      shiftIdle: (ms) => { calls.push(`shift:${ms}`) },
+      refreshRelay: async () => { calls.push("relay") },
+      recheckGit: async () => { calls.push("git") },
+      refreshKeepAwake: async () => { calls.push("keep_awake") },
+      broadcast: (frames) => { calls.push(`broadcast:${frames.map((f: any) => f.type).join(",")}`) },
+      resyncClients: () => { calls.push("resync"); return 2 },
+      log: (e, d) => logs.push([e, d]),
+    }, 60_000, () => [{ type: "host_requirements" }, { type: "keep_awake" }])
+    expect(calls).toEqual(["shift:60000", "relay", "git", "keep_awake", "broadcast:host_requirements,keep_awake", "resync"])
+    expect(logs).toContainEqual(["wake_clients_resynced", { sleptMs: 60_000, clients: 2 }])
+  })
+
+  test("a failing action (sync throw or rejection) is logged and the rest still run", async () => {
+    const calls: string[] = []
+    const logs: string[] = []
+    runWakeActions({
+      shiftIdle: () => { throw new Error("x") },
+      refreshRelay: async () => { throw new Error("y") },
+      recheckGit: async () => { calls.push("git") },
+      refreshKeepAwake: async () => { calls.push("keep_awake") },
+      broadcast: () => { calls.push("broadcast") },
+      resyncClients: () => { calls.push("resync"); return 0 },
+      log: (e, d) => logs.push(`${e}:${d.action ?? ""}`),
+    }, 1, () => [])
+    await Promise.resolve(); await Promise.resolve()
+    expect(calls).toEqual(["git", "keep_awake", "broadcast", "resync"])
+    expect(logs).toContain("wake_action_failed:shift_idle")
+    expect(logs).toContain("wake_action_failed:relay")
   })
 })

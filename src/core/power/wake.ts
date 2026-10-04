@@ -95,3 +95,38 @@ export class WakeDetector {
     return sleptMs
   }
 }
+
+export interface WakeActions {
+  /** Sleep is not idleness: move idle baselines forward. */
+  shiftIdle(sleptMs: number): void
+  /** Reconnect the relay now (new lease, fresh frpc). */
+  refreshRelay(): Promise<void>
+  /** The power source and git may have changed while asleep. */
+  recheckGit(): Promise<unknown>
+  refreshKeepAwake(): Promise<void>
+  /** Frames for clients that stay connected. */
+  broadcast(frames: object[]): void
+  /** Ask every main client to resubscribe (a fresh snapshot). Returns how many. */
+  resyncClients(): number
+  log(event: string, data: Record<string, unknown>): void
+}
+
+/** What the broker does after a wake. Never throws; async parts only log their failures. */
+export function runWakeActions(a: WakeActions, sleptMs: number, frames: () => object[]): void {
+  const guard = (name: string, fn: () => unknown) => {
+    try {
+      const r = fn()
+      if (r && typeof (r as Promise<unknown>).catch === "function") {
+        ;(r as Promise<unknown>).catch((err) => a.log("wake_action_failed", { action: name, err: String(err) }))
+      }
+    } catch (err) {
+      a.log("wake_action_failed", { action: name, err: String(err) })
+    }
+  }
+  guard("shift_idle", () => a.shiftIdle(sleptMs))
+  guard("relay", () => a.refreshRelay())
+  guard("git", () => a.recheckGit())
+  guard("keep_awake", () => a.refreshKeepAwake())
+  guard("broadcast", () => a.broadcast(frames()))
+  guard("resync", () => a.log("wake_clients_resynced", { sleptMs, clients: a.resyncClients() }))
+}

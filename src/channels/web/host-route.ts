@@ -1,5 +1,6 @@
 import type { InstallMode } from "../../core/update/mode"
 import type { HostRequirements } from "../../core/git/requirement"
+import type { KeepAwakeState } from "../../core/power/keep-awake"
 
 export type HostMode = InstallMode
 
@@ -19,6 +20,8 @@ export interface HostInfo {
   gitAvailable?: boolean
   /** What this computer still needs to run agents (`core/git/requirement`). */
   requirements?: HostRequirements
+  /** "Keep this computer awake" (`core/power/keep-awake`): the setting and whether it holds. */
+  keepAwake?: KeepAwakeState
 }
 
 export interface HostBody {
@@ -33,6 +36,7 @@ export interface HostBody {
   stateDir?: string
   gitAvailable?: boolean
   requirements?: HostRequirements
+  keepAwake?: KeepAwakeState
 }
 
 /**
@@ -47,6 +51,7 @@ export function buildHostBody(info: HostInfo, authed: boolean, directLoopback = 
     base.version = info.version
     // Every client (phone, PWA, desktop) shows "This computer needs git" from this.
     if (info.requirements !== undefined) base.requirements = info.requirements
+    if (info.keepAwake !== undefined) base.keepAwake = info.keepAwake
   }
   if (directLoopback) {
     if (info.build !== undefined) base.build = info.build

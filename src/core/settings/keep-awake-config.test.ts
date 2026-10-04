@@ -45,7 +45,7 @@ describe("SettingsStore keep-awake persistence", () => {
     const store = new SettingsStore(d)
     expect(store.getKeepAwake(env)).toEqual({ enabled: true, onBattery: true })
     expect(store.setKeepAwake({ onBattery: false }, env)).toEqual({ enabled: true, onBattery: false })
-    expect(store.get(SETTINGS_KEY_KEEP_AWAKE)).toEqual({ onBattery: false })
+    expect(store.get<unknown>(SETTINGS_KEY_KEEP_AWAKE)).toEqual({ onBattery: false })
     // `enabled` is still the default, so a later env change shows through …
     const reloaded = new SettingsStore(d)
     expect(reloaded.getKeepAwake({ MUX_KEEP_AWAKE: "0" })).toEqual({ enabled: false, onBattery: false })
