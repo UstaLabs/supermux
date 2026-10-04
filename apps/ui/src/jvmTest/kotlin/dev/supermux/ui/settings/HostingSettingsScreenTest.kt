@@ -211,14 +211,17 @@ class HostingSettingsScreenTest {
     @Test fun keep_awake_with_battery_and_lid_rows_drive_their_actions() = runComposeUiTest {
         val rec = Recorder()
         setPlatformContent {
-            HostingSettingsScreen(powered(HostingPowerUi(keepAwake = awake, lidClosed = LidClosedUi(on = false, installed = false))), rec)
+            HostingSettingsScreen(
+                powered(HostingPowerUi(keepAwake = awake, lidClosed = LidClosedUi(on = false, installed = false, note = HostingCopy.LID_INSTALL))),
+                rec,
+            )
         }
         onNodeWithText(HostingCopy.KEEP_AWAKE).assertExists()
         onNodeWithText("Stops this computer from sleeping while supermux runs. The screen can still turn off.").assertExists()
         onNodeWithTag("hosting_keep_awake").assertIsOn()
         onNodeWithTag("hosting_keep_awake_battery").assertIsOn()
         onNodeWithText("Even with the lid closed").assertExists()
-        onNodeWithText("Your Mac stays awake with the lid closed. Don't put it in a bag while this is on.").assertExists()
+        onNodeWithText("Your Mac stays awake with the lid closed. It can get hot: don't put it in a bag while this is on.").assertExists()
         onNodeWithTag("hosting_lid_note").assertTextEquals("macOS will ask for your password once.")
         onNodeWithTag("hosting_lid_uninstall").assertDoesNotExist()
 
@@ -269,6 +272,17 @@ class HostingSettingsScreenTest {
         }
         onNodeWithTag("hosting_lid_closed").assertIsNotEnabled()
         onNodeWithTag("hosting_lid_note").assertTextEquals("Waiting for your password…")
+    }
+
+    @Test fun a_lid_switch_that_cant_be_used_is_disabled_with_its_note() = runComposeUiTest {
+        setPlatformContent {
+            HostingSettingsScreen(
+                powered(HostingPowerUi(lidClosed = LidClosedUi(on = false, installed = false, enabled = false, note = HostingCopy.LID_HOME_UNSUPPORTED))),
+                Recorder(),
+            )
+        }
+        onNodeWithTag("hosting_lid_closed").assertIsNotEnabled().assertIsOff()
+        onNodeWithTag("hosting_lid_note").assertTextEquals("Not available for this account's home folder.")
     }
 
     @Test fun reboot_copy_always_and_the_auto_login_hint_with_filevault_off() = runComposeUiTest {

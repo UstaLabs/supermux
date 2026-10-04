@@ -10,6 +10,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -41,6 +44,7 @@ class KeepAwakeControls(
     private val supervisor: HostSupervisor,
     private val os: OsEnv = supervisor.osEnv,
     private val user: String = System.getProperty("user.name") ?: "",
+    private val home: String? = System.getProperty("user.home"),
     val facts: PowerFactsCache = PowerFactsCache(os),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val io: CoroutineDispatcher = Dispatchers.IO,
@@ -49,9 +53,12 @@ class KeepAwakeControls(
         scope,
         log = supervisor.log,
     ),
-    private val lidInstalledCheck: () -> Boolean = { LidSleepHelper.isInstalled(user) },
-    private val lidInstall: () -> LidSleepHelper.Outcome = { LidSleepHelper.install(user, os, supervisor.log) },
+    private val lidInstallState: () -> LidSleepHelper.InstallState = { LidSleepHelper.installState(user) },
+    private val lidInstall: () -> LidSleepHelper.Outcome = { LidSleepHelper.install(user, os, log = supervisor.log) },
     private val lidUninstall: () -> LidSleepHelper.Outcome = { LidSleepHelper.uninstall(os, supervisor.log) },
+    /** Right now on battery power? Null when it can't tell. Polled only while it matters. */
+    private val onBatteryNow: () -> Boolean? = { PowerFacts.detectOnBattery(os) },
+    private val batteryPollMs: Long = 30_000,
     private val inhibitor: AppSleepInhibitor? =
         if (os.os == OsEnv.Os.LINUX) AppSleepInhibitor(which = { HostBinaries.whichOnPath(it)?.toString() }, log = supervisor.log) else null,
     private val put: suspend (url: String, token: String, patch: KeepAwakePatch) -> KeepAwakeState? = ::putKeepAwake,
@@ -67,19 +74,13 @@ class KeepAwakeControls(
     /** Linux: the app holds the sleep inhibitor itself (the broker's was denied). */
     val appHeld: StateFlow<Boolean> = _appHeld.asStateFlow()
 
-    private val _lidInstalled = MutableStateFlow(false)
-    val lidHelperInstalled: StateFlow<Boolean> = _lidInstalled.asStateFlow()
+    private val _lid = MutableStateFlow(
+        LidStatus(pref = supervisor.prefs.value.lidClosed, homeSupported = LidSleepHelper.homeSupported(user, home)),
+    )
+    /** "Even with the lid closed": the saved choice, the helper, and whether the lease is held. */
+    val lid: StateFlow<LidStatus> = _lid.asStateFlow()
 
-    private val _lidClosed = MutableStateFlow(supervisor.prefs.value.lidClosed)
-    /** "Even with the lid closed" as the user last chose it (the saved pref, updated at once). */
-    val lidClosed: StateFlow<Boolean> = _lidClosed.asStateFlow()
-
-    private val _lidBusy = MutableStateFlow(false)
-    /** An install or uninstall prompt is open. */
-    val lidBusy: StateFlow<Boolean> = _lidBusy.asStateFlow()
-
-    private val _lidError = MutableStateFlow<String?>(null)
-    val lidError: StateFlow<String?> = _lidError.asStateFlow()
+    private val _localOnBattery = MutableStateFlow<Boolean?>(null)
 
     private val _writeError = MutableStateFlow<String?>(null)
     /** Why the last keep-awake change didn't reach the broker. */
@@ -94,16 +95,32 @@ class KeepAwakeControls(
         supervisor.onQuit(::quit)
     }
 
-    /** Start the probes, resume the lid lease, and follow the broker for the Linux fallback. Once. */
+    /** Start the probes, follow the lid inputs, and follow the broker for the Linux fallback. Once. */
     fun start() {
         if (!started.compareAndSet(false, true)) return
         facts.load(scope)
-        scope.launch {
-            val installed = isMac && withContext(io) { runCatching(lidInstalledCheck).getOrDefault(false) }
-            _lidInstalled.value = installed
-            if (_lidClosed.value && installed && !quitting) {
-                supervisor.log("lid closed: resuming the lease")
-                lease.start()
+        if (isMac) {
+            scope.launch {
+                val st = withContext(io) { runCatching(lidInstallState).getOrDefault(LidSleepHelper.InstallState.NOT_INSTALLED) }
+                _lid.update { it.copy(state = st) }
+            }
+            // The lease follows the choice, the helper, and the battery rule.
+            scope.launch {
+                combine(_lid, supervisor.keepAwake, _localOnBattery) { l, ka, bat -> l to pausedOnBattery(ka, bat) }
+                    .collect { (l, paused) ->
+                        if (l.pausedOnBattery != paused) _lid.update { it.copy(pausedOnBattery = paused) }
+                        reconcileLease()
+                    }
+            }
+            // "Also on battery" off: watch the power source while the lid choice is on.
+            scope.launch {
+                while (true) {
+                    val l = _lid.value
+                    _localOnBattery.value = if (l.pref && supervisor.keepAwake.value?.onBattery == false) {
+                        withContext(io) { runCatching(onBatteryNow).getOrNull() }
+                    } else null
+                    delay(batteryPollMs)
+                }
             }
         }
         if (inhibitor != null) {
@@ -115,6 +132,18 @@ class KeepAwakeControls(
                     _appHeld.value = inhibitor.held
                 }
             }
+        }
+    }
+
+    @Synchronized
+    private fun reconcileLease() {
+        val hold = _lid.value.holding && !quitting
+        if (hold && !lease.held) {
+            supervisor.log("lid closed: holding the lease")
+            lease.start()
+        } else if (!hold && lease.held) {
+            supervisor.log("lid closed: releasing the lease")
+            lease.stop()
         }
     }
 
@@ -143,66 +172,79 @@ class KeepAwakeControls(
     }
 
     /**
-     * "Even with the lid closed". Ticking installs the helper first when it isn't (one admin
-     * prompt); a cancelled or failed install leaves the box unticked with the reason in [lidError].
+     * "Even with the lid closed". Ticking installs (or reinstalls, when it watches another user)
+     * the helper first (one admin prompt); a cancelled or failed install leaves it off with the
+     * reason in [LidStatus.error].
      */
     suspend fun setLidClosed(on: Boolean) {
-        if (!isMac || _lidBusy.value) return
-        _lidError.value = null
+        val now = _lid.value
+        if (!isMac || now.busy || quitting) return
+        if (on && !now.homeSupported) return
+        _lid.update { it.copy(error = null) }
         if (!on) {
-            _lidClosed.value = false
-            lease.stop()
+            _lid.update { it.copy(pref = false) }
+            reconcileLease()
             supervisor.setLidClosed(false)
             return
         }
-        if (!_lidInstalled.value) {
-            _lidBusy.value = true
+        if (now.state != LidSleepHelper.InstallState.INSTALLED) {
+            _lid.update { it.copy(busy = true) }
             val r = try {
                 withContext(io) { runCatching(lidInstall).getOrElse { LidSleepHelper.Outcome.Failed(it.message ?: it.toString()) } }
             } finally {
-                _lidBusy.value = false
+                _lid.update { it.copy(busy = false) }
             }
             if (r is LidSleepHelper.Outcome.Failed) {
-                _lidError.value = r.reason
+                _lid.update { it.copy(error = r.reason) }
                 return
             }
-            _lidInstalled.value = withContext(io) { runCatching(lidInstalledCheck).getOrDefault(true) }
+            val st = withContext(io) { runCatching(lidInstallState).getOrDefault(LidSleepHelper.InstallState.INSTALLED) }
+            _lid.update { it.copy(state = st) }
         }
         if (quitting) return
-        _lidClosed.value = true
+        _lid.update { it.copy(pref = true) }
+        reconcileLease()
         supervisor.setLidClosed(true)
-        lease.start()
     }
 
     /** "Uninstall lid helper": admin prompt; boots it out, removes it, gives sleep back. */
     suspend fun uninstallLidHelper() {
-        if (!isMac || _lidBusy.value) return
-        _lidError.value = null
-        _lidBusy.value = true
+        if (!isMac || _lid.value.busy) return
+        _lid.update { it.copy(error = null, busy = true) }
         val r = try {
             withContext(io) { runCatching(lidUninstall).getOrElse { LidSleepHelper.Outcome.Failed(it.message ?: it.toString()) } }
         } finally {
-            _lidBusy.value = false
+            _lid.update { it.copy(busy = false) }
         }
         if (r is LidSleepHelper.Outcome.Failed) {
-            _lidError.value = r.reason
+            _lid.update { it.copy(error = r.reason) }
             return
         }
-        lease.stop()
-        _lidClosed.value = false
+        val st = withContext(io) { runCatching(lidInstallState).getOrDefault(LidSleepHelper.InstallState.NOT_INSTALLED) }
+        _lid.update { it.copy(pref = false, state = st) }
+        reconcileLease()
         supervisor.setLidClosed(false)
-        _lidInstalled.value = withContext(io) { runCatching(lidInstalledCheck).getOrDefault(false) }
     }
 
-    /** Every quit: delete the lease (lid sleep returns within 45 s) and drop the app-held inhibitor. */
+    /**
+     * Every quit: latch the lease shut first (no start can slip in after this), delete it (lid
+     * sleep returns within 45 s), and drop the app-held inhibitor without waiting.
+     */
     fun quit() {
         quitting = true
-        runCatching { lease.stop() }
+        runCatching { lease.close() }
         runCatching { inhibitor?.release(final = true) }
         _appHeld.value = false
     }
 
     companion object {
+        /**
+         * The lid rule for battery: with "Also on battery" OFF, lid sleep comes back while on
+         * battery (the broker says `on_battery`, or the local check does). With it ON, it holds.
+         */
+        fun pausedOnBattery(ka: KeepAwakeState?, localOnBattery: Boolean?): Boolean =
+            ka != null && !ka.onBattery && (ka.reasonCode == KeepAwakeState.REASON_ON_BATTERY || localOnBattery == true)
+
         const val WRITE_FAILED = "Couldn't change this on the local supermux. Try again."
 
         /** Linux fallback: the broker's own inhibitor was refused while the setting is on. */
@@ -227,6 +269,27 @@ class KeepAwakeControls(
             }.getOrNull()
         }
     }
+}
+
+/**
+ * "Even with the lid closed" as the app sees it.
+ * @property pref the saved choice.
+ * @property state whether the helper is installed, and for whom.
+ * @property homeSupported this account's home is `/Users/<user>` (the daemon watches that path).
+ */
+data class LidStatus(
+    val pref: Boolean = false,
+    val state: LidSleepHelper.InstallState = LidSleepHelper.InstallState.NOT_INSTALLED,
+    val busy: Boolean = false,
+    val error: String? = null,
+    val homeSupported: Boolean = true,
+    val pausedOnBattery: Boolean = false,
+) {
+    /** What the toggle shows: ON only when something actually holds (never on with no helper). */
+    val on: Boolean get() = pref && homeSupported && state == LidSleepHelper.InstallState.INSTALLED
+
+    /** The app touches the lease. */
+    val holding: Boolean get() = on && !pausedOnBattery
 }
 
 /**

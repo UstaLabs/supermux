@@ -26,46 +26,76 @@ class AppSleepInhibitor(
     private val log: (String) -> Unit = {},
 ) {
     @Volatile private var process: Process? = null
+    /** The candidate being settled right now, so a quit can kill it without waiting. */
+    @Volatile private var pending: Process? = null
     @Volatile private var released = false
+    private val holdLock = Any()
 
     val held: Boolean get() = process?.isAlive == true
 
     /** Hold the inhibitor (blocking up to [settleMs] per candidate). True when one holds. */
-    @Synchronized
-    fun hold(): Boolean {
+    fun hold(): Boolean = synchronized(holdLock) {
         if (released) return false
         if (process?.isAlive == true) return true
         process = null
         for ((name, argv) in candidates(which, appPid)) {
+            if (released) return false
             val p = try {
                 spawn(argv)
             } catch (e: Exception) {
                 log("app keep-awake: $name didn't start: ${e.message ?: e}")
                 continue
             }
-            val exited = runCatching { p.waitFor(settleMs, TimeUnit.MILLISECONDS) }.getOrDefault(true)
+            pending = p
+            val exited = try {
+                p.waitFor(settleMs, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                true
+            } finally {
+                pending = null
+            }
+            if (released) {
+                kill(p)
+                return false
+            }
             if (!exited && p.isAlive) {
                 log("app keep-awake: holding with $name (pid ${p.pid()})")
                 process = p
+                // A quit that raced us between the check above and here: give it back.
+                if (released) {
+                    process = null
+                    kill(p)
+                    return false
+                }
                 return true
             }
             log("app keep-awake: $name refused (exit ${runCatching { p.exitValue() }.getOrNull() ?: "?"})")
         }
-        return false
+        false
     }
 
-    /** Release the inhibitor. Idempotent. [final]: the app is quitting; never hold again. */
-    @Synchronized
+    /**
+     * Release the inhibitor. Idempotent. [final]: the app is quitting — never hold again, and kill
+     * a candidate that is still settling right away instead of waiting for [hold] to finish.
+     */
     fun release(final: Boolean = false) {
-        if (final) released = true
+        if (final) {
+            released = true
+            pending?.let(::kill)
+        }
         val p = process ?: return
         process = null
+        kill(p)
+        log("app keep-awake: released")
+    }
+
+    private fun kill(p: Process) {
         runCatching {
             p.descendants().forEach { it.destroy() }
             p.destroy()
             if (!p.waitFor(2, TimeUnit.SECONDS)) p.destroyForcibly()
         }
-        log("app keep-awake: released")
     }
 
     companion object {

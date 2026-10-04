@@ -107,6 +107,29 @@ class KeepAwakeControlsTest {
         assertFalse(inh.hold(), "never again after the quit")
     }
 
+    @Test fun a_final_release_does_not_wait_for_a_settling_candidate() {
+        if (!java.io.File("/bin/sh").canExecute()) return
+        val inh = AppSleepInhibitor(
+            which = { if (it == "systemd-inhibit") "/x/systemd-inhibit" else null },
+            spawn = { ProcessBuilder("/bin/sh", "-c", "sleep 30").start() },
+            settleMs = 20_000,
+        )
+        val holder = Thread { inh.hold() }.apply { start() }
+        Thread.sleep(300) // hold() is now settling the candidate
+        val t0 = System.currentTimeMillis()
+        inh.release(final = true)
+        assertTrue(System.currentTimeMillis() - t0 < 3_000, "release must not wait out the settle")
+        holder.join(5_000)
+        assertFalse(holder.isAlive)
+        assertFalse(inh.held)
+    }
+
+    @Test fun mac_on_battery_parser() {
+        assertEquals(true, PowerFacts.macOnBattery("Now drawing from 'Battery Power'\n"))
+        assertEquals(false, PowerFacts.macOnBattery("Now drawing from 'AC Power'\n"))
+        assertNull(PowerFacts.macOnBattery(""))
+    }
+
     // ── power facts ──
 
     @Test fun battery_and_filevault_parsers() {
@@ -155,12 +178,19 @@ class KeepAwakeLidFlowTest {
         override fun delete() { events += "delete" }
     }
 
-    private class Rig(val ts: kotlinx.coroutines.test.TestScope, prefs: HostingPrefs = HostingPrefs(), var installed: Boolean = false) {
+    private class Rig(
+        val ts: kotlinx.coroutines.test.TestScope,
+        prefs: HostingPrefs = HostingPrefs(),
+        var state: LidSleepHelper.InstallState = LidSleepHelper.InstallState.NOT_INSTALLED,
+        home: String = "/Users/ahmet",
+    ) {
         var saved = prefs
         val ops = Ops()
         var installs = 0
         var uninstalls = 0
         var installResult: LidSleepHelper.Outcome = LidSleepHelper.Outcome.Ok
+        var uninstallResult: LidSleepHelper.Outcome = LidSleepHelper.Outcome.Ok
+        var onBattery: Boolean? = false
         val puts = mutableListOf<KeepAwakePatch>()
         val dispatcher = kotlinx.coroutines.test.UnconfinedTestDispatcher(ts.testScheduler)
         val sup = HostSupervisor(
@@ -174,39 +204,52 @@ class KeepAwakeLidFlowTest {
             scope = ts.backgroundScope,
             log = {},
         )
+        val lease = LidLease(ops, ts.backgroundScope)
         val controls = KeepAwakeControls(
             supervisor = sup,
             os = FakeOs(OsEnv.Os.MAC),
             user = "ahmet",
+            home = home,
             facts = PowerFactsCache(FakeOs(OsEnv.Os.MAC), dispatcher, battery = { true }, fileVault = { true }),
             scope = ts.backgroundScope,
             io = dispatcher,
-            lease = LidLease(ops, ts.backgroundScope),
-            lidInstalledCheck = { installed },
-            lidInstall = { installs++; installResult.also { if (it == LidSleepHelper.Outcome.Ok) installed = true } },
-            lidUninstall = { uninstalls++; installed = false; LidSleepHelper.Outcome.Ok },
+            lease = lease,
+            lidInstallState = { state },
+            lidInstall = {
+                installs++
+                installResult.also { if (it == LidSleepHelper.Outcome.Ok) state = LidSleepHelper.InstallState.INSTALLED }
+            },
+            lidUninstall = {
+                uninstalls++
+                uninstallResult.also { if (it == LidSleepHelper.Outcome.Ok) state = LidSleepHelper.InstallState.NOT_INSTALLED }
+            },
+            onBatteryNow = { onBattery },
             inhibitor = null,
             put = { _, _, patch -> puts += patch; KeepAwakeState(enabled = patch.enabled ?: true, active = patch.enabled ?: true) },
         )
     }
 
+    private fun kotlinx.coroutines.test.TestScope.settle() = testScheduler.runCurrent()
+
     @Test fun ticking_installs_once_then_holds_the_lease_and_saves_the_choice() = runTest {
         val r = Rig(this)
         r.controls.start()
-        runCurrentSafe()
+        settle()
         r.controls.setLidClosed(true)
-        runCurrentSafe()
+        settle()
         assertEquals(1, r.installs)
-        assertTrue(r.controls.lidHelperInstalled.value)
-        assertTrue(r.controls.lidClosed.value)
+        assertEquals(LidSleepHelper.InstallState.INSTALLED, r.controls.lid.value.state)
+        assertTrue(r.controls.lid.value.on)
         assertTrue(r.saved.lidClosed)
         assertEquals("touch", r.ops.events.first())
         // Untick: delete the lease, save off. Tick again: no second install.
         r.controls.setLidClosed(false)
+        settle()
         assertEquals("delete", r.ops.events.last())
         assertFalse(r.saved.lidClosed)
+        assertFalse(r.controls.lid.value.on)
         r.controls.setLidClosed(true)
-        runCurrentSafe()
+        settle()
         assertEquals(1, r.installs)
         r.sup.quit()
     }
@@ -215,64 +258,154 @@ class KeepAwakeLidFlowTest {
         val r = Rig(this)
         r.installResult = LidSleepHelper.Outcome.Failed(LidSleepHelper.CANCELLED)
         r.controls.start()
-        runCurrentSafe()
+        settle()
         r.controls.setLidClosed(true)
-        runCurrentSafe()
-        assertFalse(r.controls.lidClosed.value)
+        settle()
+        assertFalse(r.controls.lid.value.on)
         assertFalse(r.saved.lidClosed)
-        assertEquals(LidSleepHelper.CANCELLED, r.controls.lidError.value)
+        assertEquals(LidSleepHelper.CANCELLED, r.controls.lid.value.error)
         assertTrue(r.ops.events.none { it == "touch" })
     }
 
-    @Test fun any_quit_deletes_the_lease() = runTest {
-        val r = Rig(this, installed = true)
+    @Test fun any_quit_deletes_the_lease_and_latches_it_shut() = runTest {
+        val r = Rig(this, state = LidSleepHelper.InstallState.INSTALLED)
         r.controls.start()
-        runCurrentSafe()
+        settle()
         r.controls.setLidClosed(true)
-        runCurrentSafe()
+        settle()
         assertTrue(r.ops.events.contains("touch"))
         r.sup.quit()
         assertEquals("delete", r.ops.events.last())
+        // Nothing can start it again after the quit: not a tick, not a lid input change.
+        r.controls.setLidClosed(true)
+        r.lease.start()
         testScheduler.advanceTimeBy(60_000)
-        runCurrentSafe()
+        settle()
         assertEquals("delete", r.ops.events.last(), "never touched again after the quit")
     }
 
     @Test fun a_saved_choice_resumes_the_lease_at_launch_when_installed() = runTest {
-        val r = Rig(this, prefs = HostingPrefs(lidClosed = true), installed = true)
+        val r = Rig(this, prefs = HostingPrefs(lidClosed = true), state = LidSleepHelper.InstallState.INSTALLED)
         r.controls.start()
-        runCurrentSafe()
+        settle()
         assertEquals(listOf("touch"), r.ops.events)
+        assertTrue(r.controls.lid.value.on)
         r.sup.quit()
     }
 
-    @Test fun a_saved_choice_without_the_helper_does_not_touch() = runTest {
-        val r = Rig(this, prefs = HostingPrefs(lidClosed = true), installed = false)
+    @Test fun a_saved_choice_without_the_helper_shows_off_and_does_not_touch() = runTest {
+        val r = Rig(this, prefs = HostingPrefs(lidClosed = true), state = LidSleepHelper.InstallState.NOT_INSTALLED)
         r.controls.start()
-        runCurrentSafe()
+        settle()
         assertTrue(r.ops.events.isEmpty())
+        assertTrue(r.controls.lid.value.pref)
+        assertFalse(r.controls.lid.value.on)
+    }
+
+    @Test fun another_users_helper_shows_off_and_ticking_reinstalls() = runTest {
+        val r = Rig(this, prefs = HostingPrefs(lidClosed = true), state = LidSleepHelper.InstallState.OTHER_USER)
+        r.controls.start()
+        settle()
+        assertFalse(r.controls.lid.value.on)
+        assertTrue(r.ops.events.isEmpty())
+        r.controls.setLidClosed(true)
+        settle()
+        assertEquals(1, r.installs)
+        assertTrue(r.controls.lid.value.on)
+        r.sup.quit()
+    }
+
+    @Test fun a_home_outside_users_cannot_tick() = runTest {
+        val r = Rig(this, home = "/Volumes/Data/ahmet")
+        r.controls.start()
+        settle()
+        assertFalse(r.controls.lid.value.homeSupported)
+        r.controls.setLidClosed(true)
+        settle()
+        assertEquals(0, r.installs)
+        assertFalse(r.controls.lid.value.on)
+    }
+
+    @Test fun with_also_on_battery_off_the_lease_pauses_on_battery() = runTest {
+        val r = Rig(this, state = LidSleepHelper.InstallState.INSTALLED)
+        r.controls.start()
+        settle()
+        r.controls.setLidClosed(true)
+        settle()
+        assertEquals(listOf("touch"), r.ops.events)
+        // The broker says "Also on battery" is off and it paused: lid sleep comes back.
+        r.sup.publishKeepAwake(KeepAwakeState(enabled = true, onBattery = false, active = false, reasonCode = "on_battery"))
+        settle()
+        assertEquals("delete", r.ops.events.last())
+        assertTrue(r.controls.lid.value.pausedOnBattery)
+        assertTrue(r.controls.lid.value.on, "still chosen; just paused")
+        // Back on AC: it holds again.
+        r.sup.publishKeepAwake(KeepAwakeState(enabled = true, onBattery = false, active = true))
+        settle()
+        assertEquals("touch", r.ops.events.last())
+        r.sup.quit()
+    }
+
+    @Test fun the_local_battery_check_pauses_too_when_keep_awake_is_off() = runTest {
+        val r = Rig(this, prefs = HostingPrefs(lidClosed = true), state = LidSleepHelper.InstallState.INSTALLED)
+        r.sup.publishKeepAwake(KeepAwakeState(enabled = false, onBattery = false))
+        r.onBattery = true
+        r.controls.start()
+        settle()
+        testScheduler.advanceTimeBy(31_000)
+        settle()
+        assertTrue(r.controls.lid.value.pausedOnBattery)
+        assertEquals("delete", r.ops.events.lastOrNull() ?: "delete")
+        assertFalse(r.lease.held)
+        r.sup.quit()
+    }
+
+    @Test fun with_also_on_battery_on_it_holds_on_battery() = runTest {
+        val r = Rig(this, prefs = HostingPrefs(lidClosed = true), state = LidSleepHelper.InstallState.INSTALLED)
+        r.sup.publishKeepAwake(KeepAwakeState(enabled = true, onBattery = true, active = true))
+        r.onBattery = true
+        r.controls.start()
+        settle()
+        testScheduler.advanceTimeBy(31_000)
+        settle()
+        assertFalse(r.controls.lid.value.pausedOnBattery)
+        assertTrue(r.lease.held)
+        r.sup.quit()
     }
 
     @Test fun uninstall_stops_the_lease_and_clears_the_choice() = runTest {
-        val r = Rig(this, installed = true)
+        val r = Rig(this, state = LidSleepHelper.InstallState.INSTALLED)
         r.controls.start()
-        runCurrentSafe()
+        settle()
         r.controls.setLidClosed(true)
-        runCurrentSafe()
+        settle()
         r.controls.uninstallLidHelper()
+        settle()
         assertEquals(1, r.uninstalls)
-        assertFalse(r.controls.lidHelperInstalled.value)
-        assertFalse(r.controls.lidClosed.value)
+        assertEquals(LidSleepHelper.InstallState.NOT_INSTALLED, r.controls.lid.value.state)
+        assertFalse(r.controls.lid.value.on)
         assertFalse(r.saved.lidClosed)
         assertEquals("delete", r.ops.events.last())
+    }
+
+    @Test fun a_cancelled_uninstall_keeps_everything() = runTest {
+        val r = Rig(this, state = LidSleepHelper.InstallState.INSTALLED)
+        r.uninstallResult = LidSleepHelper.Outcome.Failed(LidSleepHelper.UNINSTALL_CANCELLED)
+        r.controls.start()
+        settle()
+        r.controls.uninstallLidHelper()
+        settle()
+        assertEquals("Cancelled. The lid helper is still installed.", r.controls.lid.value.error)
+        assertEquals(LidSleepHelper.InstallState.INSTALLED, r.controls.lid.value.state)
     }
 
     @Test fun the_battery_and_filevault_facts_load_once() = runTest {
         val r = Rig(this)
         r.controls.start()
-        runCurrentSafe()
+        settle()
         assertEquals(true, r.controls.hasBattery.value)
         assertEquals(true, r.controls.fileVaultOff.value)
+        r.sup.quit()
     }
 
     @Test fun a_keep_awake_change_publishes_the_brokers_answer() = runTest {
@@ -287,5 +420,12 @@ class KeepAwakeLidFlowTest {
         assertEquals(KeepAwakeControls.WRITE_FAILED, r.controls.writeError.value)
     }
 
-    private fun kotlinx.coroutines.test.TestScope.runCurrentSafe() = testScheduler.runCurrent()
+    @Test fun the_battery_pause_rule() {
+        fun ka(onBattery: Boolean, code: String? = null) = KeepAwakeState(enabled = true, onBattery = onBattery, reasonCode = code)
+        assertTrue(KeepAwakeControls.pausedOnBattery(ka(false, "on_battery"), null))
+        assertTrue(KeepAwakeControls.pausedOnBattery(ka(false), true))
+        assertFalse(KeepAwakeControls.pausedOnBattery(ka(false), false))
+        assertFalse(KeepAwakeControls.pausedOnBattery(ka(true, "on_battery"), true), "Also on battery ON holds")
+        assertFalse(KeepAwakeControls.pausedOnBattery(null, true))
+    }
 }

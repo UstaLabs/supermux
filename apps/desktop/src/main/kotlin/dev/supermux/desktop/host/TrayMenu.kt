@@ -80,6 +80,15 @@ fun openFile(file: Path) {
 object BackgroundQuitNotice {
     /** Desktop settings key: set once the notice has been shown. */
     const val SHOWN_KEY = "desktop:backgroundQuitNoticeShown"
+
+    /**
+     * Its own one-time key for the keep-awake version ([QuitText.BACKGROUND_AWAKE]): someone who
+     * saw the plain notice still learns, once, that the computer stays awake.
+     */
+    const val SHOWN_AWAKE_KEY = "desktop:backgroundQuitAwakeNoticeShown"
+
+    /** The key that records [QuitAction.of]'s notice for this quit. */
+    fun keyFor(keepsAwake: Boolean): String = if (keepsAwake) SHOWN_AWAKE_KEY else SHOWN_KEY
     const val TITLE = "supermux"
 }
 
@@ -155,13 +164,13 @@ data class TrayPower(
             keepAwake: dev.supermux.net.KeepAwakeState?,
             isMac: Boolean,
             hasBattery: Boolean?,
-            lidClosed: Boolean,
-            lidBusy: Boolean,
+            lid: LidStatus,
         ): TrayPower = TrayPower(
             keepAwake = keepAwake?.enabled,
             keepAwakeEnabled = keepAwake?.supported ?: false,
-            lidClosed = if (isMac && hasBattery == true) lidClosed else null,
-            lidEnabled = !lidBusy,
+            // ON only while something holds (LidStatus.on), never just because the choice is saved.
+            lidClosed = if (isMac && hasBattery == true) lid.on else null,
+            lidEnabled = !lid.busy && lid.homeSupported,
         )
     }
 }

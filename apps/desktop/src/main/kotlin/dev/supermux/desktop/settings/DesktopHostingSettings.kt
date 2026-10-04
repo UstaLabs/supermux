@@ -51,6 +51,8 @@ import dev.supermux.desktop.host.HostWizardUiState
 import dev.supermux.desktop.host.HostingPrefs
 import dev.supermux.desktop.host.HostingStatus
 import dev.supermux.desktop.host.KeepAwakeControls
+import dev.supermux.desktop.host.LidSleepHelper
+import dev.supermux.desktop.host.LidStatus
 import dev.supermux.desktop.host.displayLocalUrl
 import dev.supermux.desktop.host.hostingStatusLine
 import dev.supermux.desktop.host.lanIpv4
@@ -192,9 +194,31 @@ internal fun keepAwakeUi(state: KeepAwakeState?, hasBattery: Boolean?, appHeld: 
     )
 }
 
-/** Pure: "Even with the lid closed" exists only on a Mac with a battery. */
-internal fun lidClosedUi(isMac: Boolean, hasBattery: Boolean?, on: Boolean, installed: Boolean, busy: Boolean, error: String?): LidClosedUi? =
-    if (isMac && hasBattery == true) LidClosedUi(on = on, installed = installed, busy = busy, error = error) else null
+/**
+ * Pure: "Even with the lid closed" exists only on a Mac with a battery. The switch shows ON only
+ * while something actually holds; a saved choice without the helper (or with another user's) shows
+ * OFF with a note saying what ticking does.
+ */
+internal fun lidClosedUi(isMac: Boolean, hasBattery: Boolean?, lid: LidStatus): LidClosedUi? {
+    if (!isMac || hasBattery != true) return null
+    val installed = lid.state == LidSleepHelper.InstallState.INSTALLED
+    val note = when {
+        !lid.homeSupported -> HostingCopy.LID_HOME_UNSUPPORTED
+        lid.state == LidSleepHelper.InstallState.OTHER_USER -> HostingCopy.LID_OTHER_USER
+        !installed && lid.pref -> HostingCopy.LID_NOT_INSTALLED
+        !installed -> HostingCopy.LID_INSTALL
+        lid.on && lid.pausedOnBattery -> HostingCopy.LID_PAUSED_ON_BATTERY
+        else -> null
+    }
+    return LidClosedUi(
+        on = lid.on,
+        installed = installed,
+        busy = lid.busy,
+        error = lid.error,
+        enabled = lid.homeSupported,
+        note = note,
+    )
+}
 
 /** Pure: the whole power section. The reboot copy is always there on desktop. */
 internal fun desktopPowerUi(
@@ -203,14 +227,11 @@ internal fun desktopPowerUi(
     appHeld: Boolean,
     writeError: String?,
     isMac: Boolean,
-    lidOn: Boolean,
-    lidInstalled: Boolean,
-    lidBusy: Boolean,
-    lidError: String?,
+    lid: LidStatus,
     fileVaultOff: Boolean?,
 ): HostingPowerUi = HostingPowerUi(
     keepAwake = keepAwakeUi(keepAwake, hasBattery, appHeld, writeError),
-    lidClosed = lidClosedUi(isMac, hasBattery, lidOn, lidInstalled, lidBusy, lidError),
+    lidClosed = lidClosedUi(isMac, hasBattery, lid),
     autoLoginHint = isMac && fileVaultOff == true,
 )
 
@@ -278,12 +299,9 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
         val hasBattery by c.hasBattery.collectAsState()
         val appHeld by c.appHeld.collectAsState()
         val writeError by c.writeError.collectAsState()
-        val lidOn by c.lidClosed.collectAsState()
-        val lidInstalled by c.lidHelperInstalled.collectAsState()
-        val lidBusy by c.lidBusy.collectAsState()
-        val lidError by c.lidError.collectAsState()
+        val lid by c.lid.collectAsState()
         val fileVaultOff by c.fileVaultOff.collectAsState()
-        desktopPowerUi(keepAwake, hasBattery, appHeld, writeError, c.isMac, lidOn, lidInstalled, lidBusy, lidError, fileVaultOff)
+        desktopPowerUi(keepAwake, hasBattery, appHeld, writeError, c.isMac, lid, fileVaultOff)
     }
 
     val lanIp by produceState<String?>(null) { value = withContext(Dispatchers.IO) { lanIpv4(systemNetIfs()) } }

@@ -129,8 +129,11 @@ data class KeepAwakeUi(
 )
 
 /**
- * @property installed the lid helper is installed; when not, ticking asks for the password once.
+ * @property on ON only while something actually holds the lid (never on with no helper).
+ * @property installed the lid helper is installed for this user: the "Uninstall" link shows.
  * @property busy the install/uninstall password prompt is open.
+ * @property enabled false where it can't be used (e.g. this account's home folder); [note] says why.
+ * @property note the neutral line under the switch (e.g. "macOS will ask for your password once.").
  * @property error why the last install/uninstall didn't happen.
  */
 data class LidClosedUi(
@@ -138,6 +141,8 @@ data class LidClosedUi(
     val installed: Boolean,
     val busy: Boolean = false,
     val error: String? = null,
+    val enabled: Boolean = true,
+    val note: String? = null,
 )
 
 /** What the page can ask the host platform to do. Every call returns at once; work runs elsewhere. */
@@ -186,8 +191,13 @@ object HostingCopy {
     const val PAUSED_ON_BATTERY = "Paused while on battery"
     const val APP_HELD = "Kept awake by the supermux app while it's open."
     const val LID_CLOSED = "Even with the lid closed"
-    const val LID_CLOSED_HELP = "Your Mac stays awake with the lid closed. Don't put it in a bag while this is on."
+    const val LID_CLOSED_HELP =
+        "Your Mac stays awake with the lid closed. It can get hot: don't put it in a bag while this is on."
     const val LID_INSTALL = "macOS will ask for your password once."
+    const val LID_NOT_INSTALLED = "The lid helper isn't installed. Tick to install it; macOS will ask for your password once."
+    const val LID_OTHER_USER = "The lid helper is installed for another user. Tick to reinstall it for you."
+    const val LID_HOME_UNSUPPORTED = "Not available for this account's home folder."
+    const val LID_PAUSED_ON_BATTERY = "Paused while on battery"
     const val LID_WAITING = "Waiting for your password…"
     const val LID_UNINSTALL = "Uninstall lid helper"
     const val REBOOT = "After a restart, supermux starts when you log in."
@@ -493,15 +503,11 @@ private fun PowerSection(power: HostingPowerUi, actions: HostingActions) {
                     title = HostingCopy.LID_CLOSED,
                     supporting = HostingCopy.LID_CLOSED_HELP,
                     checked = lid.on,
-                    enabled = !lid.busy,
+                    enabled = lid.enabled && !lid.busy,
                     onCheckedChange = actions::setLidClosed,
                     tag = "hosting_lid_closed",
                 )
-                val line = when {
-                    lid.busy -> HostingCopy.LID_WAITING
-                    !lid.installed -> HostingCopy.LID_INSTALL
-                    else -> null
-                }
+                val line = if (lid.busy) HostingCopy.LID_WAITING else lid.note
                 line?.let {
                     Text(
                         it,

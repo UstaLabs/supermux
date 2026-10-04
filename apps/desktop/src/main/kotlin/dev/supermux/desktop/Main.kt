@@ -444,9 +444,8 @@ fun main() {
         }
         val keepAwakeState by keepAwakeControls.keepAwake.collectAsState()
         val hasBattery by keepAwakeControls.hasBattery.collectAsState()
-        val lidClosed by keepAwakeControls.lidClosed.collectAsState()
-        val lidBusy by keepAwakeControls.lidBusy.collectAsState()
-        val trayPower = TrayPower.of(keepAwakeState, keepAwakeControls.isMac, hasBattery, lidClosed, lidBusy)
+        val lidStatus by keepAwakeControls.lid.collectAsState()
+        val trayPower = TrayPower.of(keepAwakeState, keepAwakeControls.isMac, hasBattery, lidStatus)
         val fleetFacts by remember(pairedFleet) {
             pairedFleet?.hostingFacts(supervisor.hostId) ?: flowOf(FleetFacts.EMPTY)
         }.collectAsState(FleetFacts.EMPTY)
@@ -482,15 +481,17 @@ fun main() {
         fun requestQuit() {
             if (quitting) return
             if (!hostsNatively) return quitNow()
+            val keepsAwake = QuitAction.keepsAwake(hostingPrefs.background, keepAwakeState)
+            val noticeKey = BackgroundQuitNotice.keyFor(keepsAwake)
             // In-memory read: DesktopSettingsStore holds its map in an eager StateFlow.
             val noticeShown = runCatching {
-                runBlocking { desktopDeps.settings.string(BackgroundQuitNotice.SHOWN_KEY).first() } != null
+                runBlocking { desktopDeps.settings.string(noticeKey).first() } != null
             }.getOrDefault(true)
             val action = QuitAction.of(
                 hostingStatus, fleetFacts.localSessions, supervisor.quitStopsBroker,
                 // No tray, no notification: never mark it shown there.
                 noticeShown = noticeShown || !isTraySupported,
-                keepsAwake = QuitAction.keepsAwake(hostingPrefs.background, keepAwakeState),
+                keepsAwake = keepsAwake,
             )
             when (action) {
                 is QuitAction.Confirm -> {
@@ -502,7 +503,7 @@ fun main() {
                     if (notice != null) {
                         DesktopNotifications.notify("", BackgroundQuitNotice.TITLE, notice)
                         hostScope.launch(Dispatchers.IO) {
-                            runCatching { desktopDeps.settings.putString(BackgroundQuitNotice.SHOWN_KEY, "1") }
+                            runCatching { desktopDeps.settings.putString(noticeKey, "1") }
                         }
                     }
                     quitNow(lingerMs = if (notice != null) 1_500 else 0)

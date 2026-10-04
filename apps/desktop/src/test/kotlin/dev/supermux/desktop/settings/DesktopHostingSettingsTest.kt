@@ -2,6 +2,10 @@ package dev.supermux.desktop.settings
 
 import dev.supermux.desktop.host.HostingPrefs
 import dev.supermux.desktop.host.HostingStatus
+import dev.supermux.desktop.host.LidSleepHelper
+import dev.supermux.desktop.host.LidStatus
+import dev.supermux.ui.settings.HostingCopy
+import dev.supermux.ui.settings.LidClosedUi
 import dev.supermux.net.GitRequirement
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -120,15 +124,43 @@ class DesktopHostingSettingsTest {
         assertNull(ui.note)
     }
 
+    private val installed = LidStatus(pref = true, state = LidSleepHelper.InstallState.INSTALLED)
+
     @Test fun lid_closed_is_for_mac_laptops_only() {
-        assertEquals(dev.supermux.ui.settings.LidClosedUi(on = true, installed = false), lidClosedUi(true, true, on = true, installed = false, busy = false, error = null))
-        assertNull(lidClosedUi(isMac = true, hasBattery = false, on = true, installed = true, busy = false, error = null))
-        assertNull(lidClosedUi(isMac = true, hasBattery = null, on = true, installed = true, busy = false, error = null))
-        assertNull(lidClosedUi(isMac = false, hasBattery = true, on = true, installed = true, busy = false, error = null))
+        assertEquals(LidClosedUi(on = true, installed = true), lidClosedUi(true, true, installed))
+        assertNull(lidClosedUi(isMac = true, hasBattery = false, lid = installed))
+        assertNull(lidClosedUi(isMac = true, hasBattery = null, lid = installed))
+        assertNull(lidClosedUi(isMac = false, hasBattery = true, lid = installed))
+    }
+
+    @Test fun the_lid_switch_is_never_on_while_nothing_holds() {
+        val missing = lidClosedUi(true, true, LidStatus(pref = true, state = LidSleepHelper.InstallState.NOT_INSTALLED))!!
+        assertFalse(missing.on)
+        assertFalse(missing.installed)
+        assertEquals(HostingCopy.LID_NOT_INSTALLED, missing.note)
+        val other = lidClosedUi(true, true, LidStatus(pref = true, state = LidSleepHelper.InstallState.OTHER_USER))!!
+        assertFalse(other.on)
+        assertFalse(other.installed)
+        assertEquals("The lid helper is installed for another user. Tick to reinstall it for you.", other.note)
+        // Never chosen, not installed: the password note.
+        assertEquals("macOS will ask for your password once.", lidClosedUi(true, true, LidStatus())!!.note)
+    }
+
+    @Test fun a_home_outside_users_disables_the_lid_switch() {
+        val ui = lidClosedUi(true, true, installed.copy(homeSupported = false))!!
+        assertFalse(ui.enabled)
+        assertFalse(ui.on)
+        assertEquals("Not available for this account's home folder.", ui.note)
+    }
+
+    @Test fun a_battery_pause_is_noted() {
+        val ui = lidClosedUi(true, true, installed.copy(pausedOnBattery = true))!!
+        assertTrue(ui.on)
+        assertEquals("Paused while on battery", ui.note)
     }
 
     @Test fun the_auto_login_hint_needs_a_mac_with_filevault_off() {
-        fun power(isMac: Boolean, fv: Boolean?) = desktopPowerUi(on, true, false, null, isMac, false, false, false, null, fv)
+        fun power(isMac: Boolean, fv: Boolean?) = desktopPowerUi(on, true, false, null, isMac, LidStatus(), fv)
         assertTrue(power(true, true).autoLoginHint)
         assertFalse(power(true, false).autoLoginHint)
         assertFalse(power(true, null).autoLoginHint)
@@ -136,7 +168,7 @@ class DesktopHostingSettingsTest {
     }
 
     @Test fun only_a_running_broker_shows_keep_awake_but_lid_and_reboot_stay() {
-        val p = desktopPowerUi(on, true, false, null, true, false, true, false, null, true)
+        val p = desktopPowerUi(on, true, false, null, true, installed, true)
         val shown = desktopHostingUiState(
             status = running, prefs = prefs, sessions = 0, build = null, localUrl = null, relayUrl = null,
             logTail = emptyList(), canPair = true, backgroundError = null, gitRequirement = null, power = p,

@@ -22,6 +22,17 @@ object PowerFacts {
     /** `pmset -g batt`: a laptop lists `-InternalBattery-0`; a desktop Mac only says "AC Power". */
     fun macHasBattery(pmsetBatt: String): Boolean = pmsetBatt.contains("InternalBattery")
 
+    /** `pmset -g batt` → true on battery power, false on AC, null when it doesn't say. */
+    fun macOnBattery(pmsetBatt: String): Boolean? = when {
+        pmsetBatt.contains("'Battery Power'") -> true
+        pmsetBatt.contains("'AC Power'") || pmsetBatt.contains("'UPS Power'") -> false
+        else -> null
+    }
+
+    /** macOS: on battery right now? Null elsewhere or when it can't tell. Blocking; never throws. */
+    fun detectOnBattery(os: OsEnv): Boolean? =
+        if (os.os != OsEnv.Os.MAC) null else os.runCapture(MAC_BATTERY_ARGV)?.let(::macOnBattery)
+
     /**
      * Linux: a `/sys/class/power_supply/<x>` entry with `type` = Battery whose `scope` is not
      * Device (a wireless mouse or headset reports scope Device).
