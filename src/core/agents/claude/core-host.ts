@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "fs"
 import { basename, join } from "path"
-import { createHost, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
+import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { claude, type ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareClaudeEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
@@ -11,6 +11,7 @@ import { environmentMdPath, promptsDir, replyFallbackPath } from "../../runtime-
 import { SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
+import { claudeAccountArgs } from "../account-env"
 
 const log = makeLogger("agents/claude/core-host")
 const CORE_PLUGIN_NAME = "mux-core"
@@ -21,6 +22,8 @@ export type ClaudeCoreHostOptions = {
   stateDirectory: string
   driverFactory?: ClaudeDriverFactory
   limits?: CoreLimits
+  /** The broker's shared account registry (production); tests may omit it. */
+  accounts?: AccountsOptions
 }
 
 export type ClaudeCoreHost = Host
@@ -117,7 +120,8 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "claude",
-    driver: (registration, ctx) => {
+    ...(options.accounts ? { accounts: options.accounts } : {}),
+    driver: async (registration, ctx) => {
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
       const extraEffort = asEffort(registration.extra?.effort)
       const settings = driverSettingsFor("claude", extraPermissionMode(registration.extra, "claude"))
@@ -125,7 +129,10 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       const opts: ClaudeOptions = {
         id: "claude",
         command: "claude",
-        args: registration.args ? [...registration.args] : [],
+        args: await claudeAccountArgs(registration.args ? [...registration.args] : [], {
+          sessionHome: typeof registration.extra?.sessionHome === "string" ? registration.extra.sessionHome : claudeSessionHome(String(registration.extra?.sessionName ?? registration.id)),
+          account: ctx.account,
+        }),
         env: registration.env,
         inheritEnv: true,
         model: extraModel,

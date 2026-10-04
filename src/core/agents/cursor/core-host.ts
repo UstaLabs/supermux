@@ -1,5 +1,5 @@
 import { join } from "path"
-import { createHost, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
+import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { cursor, type CursorOptions } from "../../../../packages/supermux-core/src/agents/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareCursorEnvironment, sharedCursorDir } from "../../../../packages/supermux-core/src/environment/index.js"
@@ -10,6 +10,8 @@ import { smokeCursorAgent } from "./smoke"
 import { HOME } from "../../session-manager/spawn-helper"
 import { STATE_DIR } from "../../../shared/paths"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
+import { syncCursorSessionCredential } from "../account-env"
+import { isSystemAccount } from "../../accounts/broker-accounts"
 
 export type CursorDriverFactory = (options: CursorOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -25,6 +27,8 @@ export type CursorCoreHostOptions = {
   /** Test seam: production always links the shared cursor-agent runtime. Seeding it copies
    *  ~0.9 GB from the user's install, which no test should pay for. */
   sharedRuntime?: { source: string } | null
+  /** The broker's shared account registry (production); tests may omit it. */
+  accounts?: AccountsOptions
 }
 
 export type CursorCoreHost = Host
@@ -117,8 +121,11 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "cursor",
+    ...(options.accounts ? { accounts: options.accounts } : {}),
     driver: (registration, ctx) => {
       const extra = asPrepareExtra(registration)
+      // Every open (also a Core-internal account switch): no credential copy on an account.
+      syncCursorSessionCredential({ sessionHome: extra.sessionHome, userConfigDir: userConfigDir(), account: ctx.account, systemApiKey: process.env.CURSOR_API_KEY })
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
       const pluginArgs = cursorSpawnArgs({ sessionName: extra.sessionName }).args
       const opts = cursorOpts(stateDirectory, registration.env, pluginArgs, extraModel ?? ctx.configuration?.model, extra.permissionMode ?? extraPermissionMode(registration.extra, "cursor"))
@@ -133,10 +140,12 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
         mcpServers: [muxShimServer("cursor", extra.sessionId, extra.sessionName)],
         skillsPaths: [],
         instructions: cursorInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
+        // On an account the adapter injects the credential; the session gets no auth.json copy.
         credentials: {
-          apiKey: process.env.CURSOR_API_KEY ?? null,
+          apiKey: isSystemAccount(registration.account) ? process.env.CURSOR_API_KEY ?? null : null,
           userCursorDir: join(HOME, ".cursor"),
           userConfigDir: userConfigDir(),
+          ...(isSystemAccount(registration.account) ? {} : { account: true }),
         },
         sharedRuntime: options.sharedRuntime !== undefined
           ? options.sharedRuntime

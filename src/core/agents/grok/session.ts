@@ -117,6 +117,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   const sessionHome = join(STATE_DIR, "agents", "grok", name)
   const permissionMode = resolvePermissionMode(AgentKind.Grok, args.permissionMode)
   const handle = host.register({
+    ...(args.account ? { account: args.account } : {}),
     id,
     env: {},
     extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, permissionMode }),
@@ -173,6 +174,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
         permissionMode,
+        account: args.account,
       } as never)
     }
 

@@ -1,5 +1,5 @@
 import { join } from "path"
-import { createHost, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
+import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { codex, type CodexOptions } from "../../../../packages/supermux-core/src/codex/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareCodexEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
@@ -8,6 +8,8 @@ import { codexPrepareSessionHome } from "../../plugins"
 import { muxShimServer } from "../mux-shim-server"
 import { HOME } from "../../session-manager/spawn-helper"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
+import { syncCodexSessionCredential } from "../account-env"
+import { isSystemAccount } from "../../accounts/broker-accounts"
 
 export type CodexDriverFactory = (options: CodexOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -16,6 +18,8 @@ export type CodexCoreHostOptions = {
   driverFactory?: CodexDriverFactory
   /** Test seam: production always uses the broker policy below. */
   limits?: CoreLimits
+  /** The broker's shared account registry (production); tests may omit it. */
+  accounts?: AccountsOptions
 }
 
 export type CodexCoreHost = Host
@@ -89,7 +93,13 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "codex",
+    ...(options.accounts ? { accounts: options.accounts } : {}),
     driver: (registration, ctx) => {
+      // Every open (also a Core-internal account switch): no credential copy on an account.
+      const sessionHome = registration.extra?.sessionHome
+      if (typeof sessionHome === "string" && sessionHome) {
+        syncCodexSessionCredential({ sessionHome, canonicalHome: join(HOME, ".codex"), account: ctx.account, systemApiKey: process.env.OPENAI_API_KEY })
+      }
       const settings = driverSettingsFor("codex", extraPermissionMode(registration.extra, "codex"))
       if (settings.initial.kind !== "codex") throw new Error("codex driver settings mismatch")
       const opts: CodexOptions = {
@@ -123,7 +133,10 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
         mcpServers: [muxShimServer("codex", extra.sessionId, extra.sessionName)],
         skillsPaths: [],
         instructions: codexInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
-        credentials: { apiKey: process.env.OPENAI_API_KEY ?? null, canonicalHome: join(HOME, ".codex") },
+        // On an account the adapter injects the credential; the session gets no copy.
+        credentials: isSystemAccount(registration.account)
+          ? { apiKey: process.env.OPENAI_API_KEY ?? null, canonicalHome: join(HOME, ".codex") }
+          : { apiKey: null, canonicalHome: join(HOME, ".codex"), account: true },
         nativeMemory: false,
       })
       await codexPrepareSessionHome(extra.sessionHome)

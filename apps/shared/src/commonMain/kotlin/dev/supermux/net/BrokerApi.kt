@@ -31,6 +31,7 @@ import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -213,6 +214,8 @@ data class SpawnRequest(
     val reasoningLevel: String? = null,
     /** Catalog permission-mode id for the chosen agent (absent = broker default). */
     val permissionMode: String? = null,
+    /** Account id for the chosen agent (GET /accounts); absent = its system account. */
+    val account: String? = null,
     /** draft | in_progress — draft creates without spawning an agent process. */
     val userStatus: String? = null,
     /**
@@ -1086,6 +1089,78 @@ data class AgentLoginState(
     val error: String? = null,
 )
 
+// ─── Accounts (GET/POST /accounts, /accounts/login…, POST /sessions/<id>/account) ──
+/** One rate-limit window the broker saw for an account (`usedPercent` 0–100). */
+@Serializable
+data class AccountUsageWindowDto(
+    val name: String = "",
+    val usedPercent: Double = 0.0,
+    /** ISO-8601; absent when the agent reported no reset time. */
+    val resetsAt: String? = null,
+)
+
+/** Who an account is signed in as (whatever the agent's login exposes). */
+@Serializable
+data class AccountIdentityDto(
+    val email: String? = null,
+    val org: String? = null,
+    val accountId: String? = null,
+)
+
+/**
+ * One login an agent can run on (mirrors the broker `AccountView`, no secrets). Every agent has a
+ * built-in `<agent>:system` account ([system] = true): the CLI's own login, today's behaviour.
+ * `method`: system | api_key | token | subscription. [label] is what to show.
+ */
+@Serializable
+data class AccountDto(
+    val id: String = "",
+    val agent: String = "",
+    val method: String = "",
+    val label: String = "",
+    val customLabel: String? = null,
+    val identity: AccountIdentityDto? = null,
+    val isolated: Boolean = false,
+    val system: Boolean = false,
+    val createdAt: String = "",
+    val usage: List<AccountUsageWindowDto> = emptyList(),
+)
+
+@Serializable
+data class AccountsListResponse(val accounts: List<AccountDto> = emptyList())
+
+/**
+ * A guided account login (POST /accounts/login, GET /accounts/login/<loginId>, and the
+ * `account_login_state` WS frame). `phase`: starting | awaiting_user | verifying | done | failed |
+ * cancelled. Show [url] (+ [code] for device logins); [needsCode] = paste the page's code back
+ * (POST .../code). [account] is the new account once `done`.
+ */
+@Serializable
+data class AccountLoginStateDto(
+    val loginId: String = "",
+    val agent: String = "",
+    val phase: String = "",
+    val url: String? = null,
+    val code: String? = null,
+    val needsCode: Boolean = false,
+    val error: String? = null,
+    val errorCode: String? = null,
+    val account: AccountDto? = null,
+)
+
+/** GET/PUT /settings/accounts. [autoSwitch]: move a session to another account on a usage limit (default off). */
+@Serializable
+data class AccountsSettingsDto(val autoSwitch: Boolean = false)
+
+/** POST /sessions/<id>/account → the session's account after the switch. */
+@Serializable
+data class SessionAccountResult(
+    val ok: Boolean = false,
+    val session: String = "",
+    val account: String = "",
+    val accountLabel: String = "",
+)
+
 // ─── opencode providers (GET/POST /opencode/*) ────────────────────────────────
 /** One auth method on an opencode provider. `index` is the method's position,
  *  passed back as the `method` arg to oauth start/finish. `type`: "oauth" | "api". */
@@ -1275,6 +1350,20 @@ private data class ForgeCreateLocalBody(val name: String)
 // Agent login / opencode / config-patch / forge-write request bodies.
 @Serializable
 private data class AgentCodeBody(val code: String)
+
+@Serializable
+private data class AddAccountBody(val agent: String, val method: String, val secret: String, val label: String? = null)
+
+@Serializable
+private data class AccountLoginBody(
+    val agent: String,
+    @SerialName("as") val loginAs: String? = null,
+    val email: String? = null,
+    val label: String? = null,
+)
+
+@Serializable
+private data class SessionAccountBody(val account: String)
 
 @Serializable
 private data class OpenCodeKeyBody(val providerId: String, val key: String)
@@ -2071,6 +2160,55 @@ class BrokerApi(
             authHeader()
         }
     }
+
+    // ── Accounts ───────────────────────────────────────────────────────────────
+
+    /** GET /accounts[?agent=] → every agent's accounts (system ones first), without secrets. */
+    suspend fun accounts(agent: String? = null): List<AccountDto> =
+        getJson<AccountsListResponse>(
+            if (agent == null) "$httpBase/accounts" else "$httpBase/accounts?agent=${urlEncode(agent)}",
+        ).accounts
+
+    /** POST /accounts — add an API key (`api_key`) or setup token (`token`) account. */
+    suspend fun addAccount(agent: String, method: String, secret: String, label: String? = null): AccountDto =
+        postReturningJson("$httpBase/accounts", AddAccountBody(agent, method, secret, label))
+
+    /** DELETE /accounts/<id>[?deleteHome=1] — [deleteHome] also removes a subscription's login home. */
+    suspend fun removeAccount(id: String, deleteHome: Boolean = false) {
+        val q = if (deleteHome) "?deleteHome=1" else ""
+        ensureMutationSuccess(http.delete("$httpBase/accounts/${urlEncode(id)}$q") { authHeader() })
+    }
+
+    /** POST /accounts/login — start a guided login (`loginAs`: subscription | token; Codex defaults to token). */
+    suspend fun startAccountLogin(agent: String, loginAs: String? = null, email: String? = null, label: String? = null): AccountLoginStateDto =
+        postReturningJson("$httpBase/accounts/login", AccountLoginBody(agent, loginAs, email, label))
+
+    /** GET /accounts/login/<loginId> → poll a guided login. */
+    suspend fun accountLoginState(loginId: String): AccountLoginStateDto =
+        getJson("$httpBase/accounts/login/${urlEncode(loginId)}")
+
+    /** POST /accounts/login/<loginId>/code — the code from the sign-in page (Claude). */
+    suspend fun sendAccountLoginCode(loginId: String, code: String) =
+        postJson("$httpBase/accounts/login/${urlEncode(loginId)}/code", AgentCodeBody(code))
+
+    /** POST /accounts/login/<loginId>/cancel. */
+    suspend fun cancelAccountLogin(loginId: String) =
+        postJson("$httpBase/accounts/login/${urlEncode(loginId)}/cancel", EmptyBody())
+
+    /** POST /sessions/<id>/account — switch a running session to another account of its agent. */
+    suspend fun setSessionAccount(sessionId: String, account: String): SessionAccountResult =
+        postReturningJson("$httpBase/sessions/${urlEncode(sessionId)}/account", SessionAccountBody(account))
+
+    /** GET /settings/accounts. */
+    suspend fun accountsSettings(): AccountsSettingsDto = getJson("$httpBase/settings/accounts")
+
+    /** PUT /settings/accounts {autoSwitch}. */
+    suspend fun setAccountsAutoSwitch(enabled: Boolean): AccountsSettingsDto =
+        decode(http.put("$httpBase/settings/accounts") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AccountsSettingsDto(enabled)))
+        })
 
     // ── opencode providers (key + oauth) ───────────────────────────────────────
 

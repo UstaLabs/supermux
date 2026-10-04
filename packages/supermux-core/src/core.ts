@@ -50,7 +50,7 @@ export class Core {
   private readonly maxPending: number
   private readonly outstandingActivity: number
   private readonly registry: AccountRegistry
-  private readonly autoSwitch: boolean
+  private readonly autoSwitch: () => boolean
   /** Latest rate-limit windows per account id (from `usage` events), persisted. */
   private readonly usage: UsageStore
   /** Sessions that hit a limit and switch accounts once their current turn ends. */
@@ -81,8 +81,11 @@ export class Core {
     this.store = new SessionStore(options.stateDirectory)
     this.events = new Events(options.onObserverError)
     const accounts = options.accounts ?? {}
-    if (accounts.autoSwitch !== undefined && typeof accounts.autoSwitch !== "boolean") throw new TypeError("accounts.autoSwitch must be a boolean")
-    this.autoSwitch = accounts.autoSwitch === true
+    const autoSwitch = accounts.autoSwitch
+    if (autoSwitch !== undefined && typeof autoSwitch !== "boolean" && typeof autoSwitch !== "function") throw new TypeError("accounts.autoSwitch must be a boolean or a function")
+    this.autoSwitch = typeof autoSwitch === "function"
+      ? () => { try { return autoSwitch() === true } catch { return false } }
+      : () => autoSwitch === true
     if (accounts.continueAfterSwitch !== undefined && typeof accounts.continueAfterSwitch !== "boolean") throw new TypeError("accounts.continueAfterSwitch must be a boolean")
     if (accounts.continuePrompt !== undefined && (typeof accounts.continuePrompt !== "string" || !accounts.continuePrompt.trim())) throw new TypeError("accounts.continuePrompt must be a nonempty string")
     this.continuePrompt = accounts.continueAfterSwitch === false ? undefined : accounts.continuePrompt ?? DEFAULT_CONTINUE_PROMPT
@@ -91,8 +94,14 @@ export class Core {
     if (login?.timeoutMs !== undefined) requirePositiveSafeInteger(login.timeoutMs, "accounts.login.timeoutMs")
     if (login?.runner !== undefined && typeof login.runner !== "function") throw new TypeError("accounts.login.runner must be a function")
     if (accounts.fetch !== undefined && typeof accounts.fetch !== "function") throw new TypeError("accounts.fetch must be a function")
-    this.registry = new AccountRegistry(options.stateDirectory, [...this.drivers.keys()], accounts)
-    this.usage = new UsageStore(join(this.registry.directory, "usage.json"))
+    if (accounts.registry !== undefined) {
+      if (!(accounts.registry instanceof AccountRegistry)) throw new TypeError("accounts.registry must be an AccountRegistry")
+      const missing = [...this.drivers.keys()].filter(agent => !accounts.registry!.covers(agent))
+      if (missing.length) throw new CoreError("invalid_options", `accounts.registry does not know agent(s) ${missing.join(", ")}`)
+    }
+    if (accounts.usage !== undefined && !(accounts.usage instanceof UsageStore)) throw new TypeError("accounts.usage must be a UsageStore")
+    this.registry = accounts.registry ?? new AccountRegistry(options.stateDirectory, [...this.drivers.keys()], accounts)
+    this.usage = accounts.usage ?? new UsageStore(join(this.registry.directory, "usage.json"))
     this.events.subscribe(event => this.observeAccounts(event))
   }
 
@@ -148,6 +157,14 @@ export class Core {
       await this.ready()
       return this.store.get(id)
     }),
+    /**
+     * The open Session for `id` right now, without any lifecycle work (undefined when none is open
+     * or it is closed). After `account.switched` / `account.refreshed` this is the reopened one.
+     */
+    live: (id: string): Session | undefined => {
+      const session = this.live.get(id)
+      return session && session.snapshot().state !== "closed" ? session : undefined
+    },
     list: (filter: { agent?: string } = {}): Promise<SessionRecord[]> => this.operation(async () => {
       await this.ready()
       return (await this.store.list()).filter(record => !filter.agent || record.agent === filter.agent)
@@ -417,7 +434,7 @@ export class Core {
       const accountId = record.account ?? systemAccountId(record.agent)
       this.usage.set(accountId, windows)
       if (limited(windows) && this.inTurn.has(event.sessionId)) this.turnLimited.add(event.sessionId)
-      if (this.autoSwitch && limited(windows)) {
+      if (limited(windows) && this.autoSwitch()) {
         this.switchQueue.add(event.sessionId)
         void this.limitSwitch(event.sessionId)
       }

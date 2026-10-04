@@ -3,6 +3,8 @@ import { CoreError, asError } from "../errors.js"
 import { requireAgentsCloseMode, requireCloseMode, type CloseMode, type CoreLimits, type DriverContext, type SessionConfiguration } from "../types.js"
 import type { AgentDriver } from "../types.js"
 import type { Session } from "../session.js"
+import type { AccountsOptions } from "../accounts/types.js"
+import { systemAccountId } from "../accounts/registry.js"
 
 export type HostRegistration = {
   id: string
@@ -10,6 +12,14 @@ export type HostRegistration = {
   command?: string
   args?: string[]
   extra?: Record<string, unknown>
+  /**
+   * Account id (see core.accounts). On a new session: the account it is created on (absent or the
+   * agent's system account: today's behaviour, no account in the record). On an existing session:
+   * a different account switches it (the start is a real reopen, so a parked keeper process is not
+   * re-attached with its old environment); absent keeps the record's account. `prepare` always
+   * receives the effective account here (the record's when absent).
+   */
+  account?: string
 }
 
 export type HostStartOptions = {
@@ -38,6 +48,8 @@ export type HostOptions = {
    * writes). May return an env patch that replaces the registration's env for
    * this and later opens. */
   prepare?: (registration: HostRegistration) => Promise<void | { env?: Record<string, string>; args?: string[] }>
+  /** Passed to the Core (e.g. one shared `registry` + `usage` for every agent's host). */
+  accounts?: AccountsOptions
 }
 
 export type Host = {
@@ -60,6 +72,7 @@ function cloneRegistration(registration: HostRegistration): HostRegistration {
     command: registration.command,
     args: registration.args ? [...registration.args] : undefined,
     extra: registration.extra ? { ...registration.extra } : undefined,
+    ...(registration.account !== undefined ? { account: registration.account } : {}),
   }
 }
 
@@ -125,6 +138,17 @@ class HostImpl implements Host {
       stateDirectory: options.stateDirectory,
       agents: [this.createHostDriver()],
       limits: options.limits,
+      ...(options.accounts !== undefined ? { accounts: options.accounts } : {}),
+    })
+    // A Core-internal reopen (limit switch, token refresh) replaces the live Session: keep the
+    // ready handle pointing at the new one.
+    this.core.subscribe((event) => {
+      if (event.type !== "account.switched" && event.type !== "account.refreshed") return
+      const handle = this.handles.get(event.sessionId)
+      const slot = this.slots.get(event.sessionId)
+      if (!handle || slot?.state !== "ready" || slot.handle !== handle || this.closing) return
+      const session = this.core.sessions.live(event.sessionId)
+      if (session) handle.session = session
     })
   }
 
@@ -266,7 +290,12 @@ class HostImpl implements Host {
     const token = await this.reserveAdmission(handle)
     try {
       if (this.prepare) {
-        const patch = await this.prepare(cloneRegistration(handle.registration))
+        const prepared = cloneRegistration(handle.registration)
+        if (prepared.account === undefined) {
+          const record = await this.core.sessions.get(handle.id)
+          if (record?.account !== undefined) prepared.account = record.account
+        }
+        const patch = await this.prepare(prepared)
         if (patch && patch.env) handle.registration.env = { ...patch.env }
         if (patch && patch.args) handle.registration.args = [...patch.args]
       }
@@ -283,9 +312,18 @@ class HostImpl implements Host {
 
   private async openSession(handle: HostHandleImpl, options: HostStartOptions): Promise<Session> {
     const configuration = options.configuration
+    const account = handle.registration.account
     const existing = await this.core.sessions.get(handle.id)
+    const resumeOptions = (switchTo: string | undefined) => {
+      const out: { configuration?: SessionConfiguration; account?: string } = {}
+      if (configuration !== undefined) out.configuration = configuration
+      if (switchTo !== undefined) out.account = switchTo
+      return Object.keys(out).length ? out : undefined
+    }
+    const system = systemAccountId(this.agent)
     if (existing) {
-      return this.core.sessions.resume(handle.id, configuration !== undefined ? { configuration } : undefined)
+      const current = existing.account ?? system
+      return this.core.sessions.resume(handle.id, resumeOptions(account !== undefined && account !== current ? account : undefined))
     }
     if (options.nativeSessionId) {
       await this.core.sessions.adopt({
@@ -295,13 +333,14 @@ class HostImpl implements Host {
         cwd: options.cwd,
         configuration,
       })
-      return this.core.sessions.resume(handle.id, configuration !== undefined ? { configuration } : undefined)
+      return this.core.sessions.resume(handle.id, resumeOptions(account !== undefined && account !== system ? account : undefined))
     }
     return this.core.sessions.create({
       id: handle.id,
       agent: this.agent,
       cwd: options.cwd,
       configuration,
+      ...(account !== undefined && account !== system ? { account } : {}),
     })
   }
 

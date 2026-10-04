@@ -1,5 +1,5 @@
 import { join } from "path"
-import { createHost, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
+import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { opencode, type OpenCodeOptions } from "../../../../packages/supermux-core/src/agents/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareOpenCodeEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
@@ -16,6 +16,8 @@ export type OpenCodeCoreHostOptions = {
   driverFactory?: OpenCodeDriverFactory
   /** Test seam: production always uses the broker policy below. */
   limits?: CoreLimits
+  /** The broker's shared account registry (production); tests may omit it. */
+  accounts?: AccountsOptions
 }
 
 export type OpenCodeCoreHost = Host
@@ -91,6 +93,7 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "opencode",
+    ...(options.accounts ? { accounts: options.accounts } : {}),
     driver: (registration, ctx) => {
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
       const settings = driverSettingsFor("opencode", extraPermissionMode(registration.extra, "opencode"))

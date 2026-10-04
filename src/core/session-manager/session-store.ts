@@ -29,6 +29,7 @@ export type RegisterInput = {
   draft_payload?: import("./types").DraftPayload
   core?: boolean
   permissionMode?: string
+  account?: string
 }
 
 export class SessionStore {
@@ -96,6 +97,7 @@ export class SessionStore {
       self_renamed: false,
       prompts: false,
       permissionMode: input.permissionMode,
+      account: input.account,
       core: input.core ?? false,
       user_status,
       sort_order,
@@ -104,8 +106,8 @@ export class SessionStore {
       connected: false,
     }
     this.db.run(
-      `INSERT INTO sessions (id, name, status, agent, workdir, model, reasoning_level, mute, can_orchestrate, role, is_default, internal, tmux_target, tmux_window_id, agent_session_id, agent_home, created_at, base_commit, base_commits, repo_root, base_branch, session_branch, user_status, sort_order, draft_payload, core, permission_mode)
-       VALUES (?, ?, 'active', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO sessions (id, name, status, agent, workdir, model, reasoning_level, mute, can_orchestrate, role, is_default, internal, tmux_target, tmux_window_id, agent_session_id, agent_home, created_at, base_commit, base_commits, repo_root, base_branch, session_branch, user_status, sort_order, draft_payload, core, permission_mode, account)
+       VALUES (?, ?, 'active', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, input.name, input.agent, input.workdir, input.model ?? null, input.reasoningLevel ?? null,
        input.can_orchestrate ? 1 : 0, role, is_default ? 1 : 0, input.internal ? 1 : 0, input.tmux_target ?? null,
        input.tmux_window_id ?? null, input.agent_session_id ?? null, input.agent_home ?? null, now,
@@ -115,7 +117,8 @@ export class SessionStore {
        user_status, sort_order,
        input.draft_payload ? JSON.stringify(input.draft_payload) : null,
        input.core ? 1 : 0,
-       input.permissionMode ?? null]
+       input.permissionMode ?? null,
+       input.account ?? null]
     )
     this.cache.set(id, session)
     return session
@@ -248,6 +251,14 @@ export class SessionStore {
     if (!session) return
     this.db.run("UPDATE sessions SET permission_mode = ? WHERE id = ?", [mode, id])
     session.permissionMode = mode ?? undefined
+  }
+
+  /** The session's account id; null = back on the agent's system account. */
+  setAccount(id: string, account: string | null): void {
+    const session = this.cache.get(id)
+    if (!session) return
+    this.db.run("UPDATE sessions SET account = ? WHERE id = ?", [account, id])
+    session.account = account ?? undefined
   }
 
   setAgentSessionId(id: string, agentSessionId: string): void {

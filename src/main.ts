@@ -43,11 +43,23 @@ import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
 import { SessionManager } from "./core/session-manager/manager"
-import { closeGrokCoreHost } from "./core/agents/grok/core-host-provider"
-import { closeCodexCoreHost } from "./core/agents/codex/core-host-provider"
-import { closeOpenCodeCoreHost } from "./core/agents/opencode/core-host-provider"
-import { closeCursorCoreHost } from "./core/agents/cursor/core-host-provider"
-import { closeClaudeCoreHost } from "./core/agents/claude/core-host-provider"
+import { closeGrokCoreHost, getGrokCoreHost } from "./core/agents/grok/core-host-provider"
+import { closeCodexCoreHost, getCodexCoreHost } from "./core/agents/codex/core-host-provider"
+import { closeOpenCodeCoreHost, getOpenCodeCoreHost } from "./core/agents/opencode/core-host-provider"
+import { closeCursorCoreHost, getCursorCoreHost } from "./core/agents/cursor/core-host-provider"
+import { closeClaudeCoreHost, getClaudeCoreHost } from "./core/agents/claude/core-host-provider"
+import {
+  AccountsApiError,
+  BrokerAccounts,
+  SETTINGS_KEY_ACCOUNTS,
+  isSystemAccount,
+  migrateSettingsCredentials,
+  parseAccountsSettings,
+  setAccountsAutoSwitchSource,
+  sharedAccounts,
+  toApiError,
+  type AccountAgent,
+} from "./core/accounts/broker-accounts"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
@@ -352,6 +364,40 @@ if (appliedCreds.length) log.info("credentials_hydrated", { vars: appliedCreds }
 // and mislabel the auth mode as "stored_credential".
 const agentHasCredential = (kind: AgentKind): boolean =>
   hasStoredCredential(kind, settings.getAppConfig(appConfigEnv))
+
+// ── Accounts (slice A3a): one registry under STATE_DIR/accounts, shared by every agent's Core host.
+// No account added ⇒ every session runs on its agent's system account (the CLI's own login plus
+// the global credential env above), exactly as before.
+const accountsSettings = () => parseAccountsSettings(settings.get(SETTINGS_KEY_ACCOUNTS))
+setAccountsAutoSwitchSource(() => accountsSettings().autoSwitch)
+const brokerAccounts = new BrokerAccounts({
+  ...sharedAccounts(),
+  coreFor: (agent: AccountAgent) => {
+    if (agent === "claude") return getClaudeCoreHost().core
+    if (agent === "codex") return getCodexCoreHost().core
+    if (agent === "cursor") return getCursorCoreHost().core
+    if (agent === "grok") return getGrokCoreHost().core
+    return getOpenCodeCoreHost().core
+  },
+  broadcast: (frame) => webChannel?.broadcastToAll(frame),
+})
+// The stored agent credentials become selectable token/api_key accounts, once. Sessions that pick
+// no account keep the global env injection (hydrateCredentialEnv), so nothing changes for them.
+void (async () => {
+  if (!accountsSettings().settingsMigrated) {
+    try {
+      const created = await migrateSettingsCredentials(sharedAccounts().registry, appConfig)
+      settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), settingsMigrated: true })
+      if (created.length) log.info("accounts_settings_migrated", { ids: created })
+    } catch (err) { log.warn("accounts_settings_migration_failed", { err: String(err) }) }
+  }
+  await brokerAccounts.refreshLabels()
+})()
+/** `account` + `accountLabel` on every session frame (system account when none is set). */
+function sessionAccountFields(s: { agent?: string; account?: string | null }): { account: string; accountLabel: string } {
+  const account = s.account || `${s.agent ?? "claude"}:system`
+  return { account, accountLabel: brokerAccounts.label(account) }
+}
 /** Every agent kind's install/auth status — GET /agents/status and the /agents/models catalog. */
 const detectAgentStatuses = () => detectAllAgents(
   { hasBinary, fileExists: existsSync, hasCredential: agentHasCredential },
@@ -946,6 +992,33 @@ async function notifySession(sessionId: string, text: string): Promise<void> {
   if (!r.ok) log.warn("broker_notice_undelivered", { session: sessionId, err: r.error, text })
 }
 
+/** Persist a session's account (system ⇒ NULL) and push it to every client. */
+function applySessionAccount(sessionId: string, account: string): void {
+  const s = registry.get(sessionId)
+  if (!s) return
+  registry.sessions.setAccount(s.id, isSystemAccount(account) ? null : account)
+  webChannel?.broadcastToAll({ type: "session_state", session: s.id, ...sessionAccountFields({ agent: s.agent, account }) })
+}
+
+/** Manual account switch of a running session (Core resume { account }: shutdown + reopen). */
+async function setSessionAccount(sessionId: string, account: string): Promise<{ ok: true; session: string; account: string; accountLabel: string }> {
+  const s = registry.get(sessionId)
+  if (!s) throw new AccountsApiError(404, "session not found", "session_not_found")
+  const resolved = (await brokerAccounts.resolveSessionAccount(s.agent, account))!
+  const adapter = runtimes.get(s.id)?.adapter as (AgentAdapter & { setAccount?: (id: string) => Promise<void> }) | undefined
+  if (!adapter || typeof adapter.setAccount !== "function") {
+    throw new AccountsApiError(409, "the session is not running; start it first", "session_not_running")
+  }
+  try {
+    await adapter.setAccount(resolved)
+  } catch (err) {
+    throw toApiError(err)
+  }
+  // The adapter's "account" event already persisted a real switch; same-account is a no-op there.
+  applySessionAccount(s.id, resolved)
+  return { ok: true, session: s.id, ...sessionAccountFields({ agent: s.agent, account: resolved }) }
+}
+
 async function notifyAgentError(sessionId: string, sessionName: string, errorType: string, errorMessage: string): Promise<void> {
   // clear the live status (the turn ended in failure)
   agentStateStore.applyEvent(sessionId, "Stop")
@@ -1196,6 +1269,17 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   adapter.on("turn-complete", () => {
     agentStateStore.applyEvent(sessionId, "Stop")
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
+  })
+  // Accounts: a switch (manual, or Core's limit auto-switch) is persisted, pushed to every client
+  // and said in the chat; an exhausted limit with no other account is said in the chat.
+  adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; account?: string }) => {
+    if (ev.event === "switched" && ev.to) {
+      applySessionAccount(sessionId, ev.to)
+      const why = ev.reason === "limit" ? "usage limit reached" : "switched manually"
+      void notifySession(sessionId, `Switched to ${brokerAccounts.label(ev.to)} — ${why}`)
+    } else if (ev.event === "exhausted") {
+      void notifySession(sessionId, `Usage limit reached on ${brokerAccounts.label(ev.account)} — no other ${adapter.kind} account is available`)
+    }
   })
   adapter.on("error", (ev: any) => {
     const session = registry.get(sessionId)
@@ -1634,6 +1718,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         model: s.model,
         reasoningLevel: s.reasoningLevel,
         permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
+        ...sessionAccountFields(s),
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
@@ -1782,6 +1867,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         model: args.model,
         reasoningLevel: args.reasoningLevel,
         permissionMode: args.permissionMode,
+        account: args.account,
         worktree: args.worktree,
         baseBranch: args.baseBranch,
         inheritFromSessionId: args.inheritFrom,
@@ -1845,6 +1931,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             reasoningLevel: sessionEffort(entry),
 
             permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
+
+            ...sessionAccountFields(entry),
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
             finish_job: entry.finish_job,
@@ -1930,6 +2018,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           reasoningLevel: sessionEffort(s),
 
           permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
+
+          ...sessionAccountFields(s),
           repo_root: s.repo_root || undefined,
           session_branch: s.session_branch || undefined,
           finish_job: s.finish_job,
@@ -1987,6 +2077,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             reasoningLevel: sessionEffort(entry),
 
             permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
+
+            ...sessionAccountFields(entry),
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
             finish_job: entry.finish_job,
@@ -2295,6 +2387,24 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getAgentLogin: (kind) => loginManager.get(kind as any),
     cancelAgentLogin: (kind) => loginManager.cancel(kind as any),
     sendAgentLoginCode: (kind, code) => loginManager.sendCode(kind as any, code),
+    accounts: {
+      list: (agent) => brokerAccounts.list(agent),
+      add: (body) => brokerAccounts.add(body),
+      remove: (id, options) => brokerAccounts.remove(id, options),
+      startLogin: (body) => brokerAccounts.startLogin(body),
+      loginState: (loginId) => brokerAccounts.loginState(loginId),
+      submitCode: (loginId, code) => brokerAccounts.submitLoginCode(loginId, code),
+      cancelLogin: (loginId) => brokerAccounts.cancelLogin(loginId),
+      setSessionAccount: (sessionId, account) => setSessionAccount(sessionId, account),
+      getSettings: () => ({ autoSwitch: accountsSettings().autoSwitch }),
+      setSettings: (patch) => {
+        if (patch.autoSwitch !== undefined && typeof patch.autoSwitch !== "boolean") throw new AccountsApiError(400, "autoSwitch must be a boolean", "invalid_input")
+        if (typeof patch.autoSwitch === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), autoSwitch: patch.autoSwitch })
+        const next = { autoSwitch: accountsSettings().autoSwitch }
+        webChannel?.broadcastToAll({ type: "accounts_settings", ...next })
+        return next
+      },
+    },
     startAgentInstall: (kind) => installManager.start(kind as AgentKind),
     getAgentInstall: (kind) => installManager.get(kind as AgentKind),
     listOpenCodeProviders: () => listOpenCodeProviders(),
@@ -2702,6 +2812,8 @@ async function spawnSession(args: {
   model?: string
   reasoningLevel?: string
   permissionMode?: string
+  /** Account id (validated here). Absent or the system account = today's login. */
+  account?: string
   worktree?: boolean
   baseBranch?: string
   /** When set (e.g. "continue in new conversation"), reuse that session's display-name base and worktree metadata instead of deriving a name from the workdir basename (often a uuid under ~/.mux/worktrees). */
@@ -2710,6 +2822,9 @@ async function spawnSession(args: {
   rpcMcpConfig?: string
 }) {
   const agent = args.agent ?? AgentKind.Claude
+  // Before any worktree/name work: an unknown, foreign or unsupported account fails the request.
+  const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, args.account)
+  const account = isSystemAccount(requestedAccount) ? undefined : requestedAccount
   const inheritSrc = args.inheritFromSessionId
     ? registry.sessions.getById(args.inheritFromSessionId)
     : undefined
@@ -2773,7 +2888,7 @@ async function spawnSession(args: {
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
+    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
   )
   // Claude's row now exists synchronously (born in the spawn path). Wait for
   // the shim to CONNECT — proof the window survived and the agent came up —
@@ -2810,7 +2925,7 @@ async function spawnSession(args: {
   } else if (registered?.core && !registered.internal) {
     webChannel?.broadcastToAll({
       type: "session_added",
-      session: { id: registered.id, name: registered.name, workdir: registered.workdir, mute: false, connected: true, agent: registered.agent, capabilities: sessionCapabilities(registered.agent), user_status: registered.user_status, sort_order: registered.sort_order, draft_payload: registered.draft_payload },
+      session: { id: registered.id, name: registered.name, workdir: registered.workdir, mute: false, connected: true, agent: registered.agent, capabilities: sessionCapabilities(registered.agent), user_status: registered.user_status, sort_order: registered.sort_order, draft_payload: registered.draft_payload, ...sessionAccountFields(registered) },
     })
     await refreshTelegramMenu()
   }
@@ -2965,6 +3080,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
               reasoningLevel: sessionEffort(entry),
 
               permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
+
+              ...sessionAccountFields(entry),
               repo_root: entry.repo_root || undefined,
               session_branch: entry.session_branch || undefined,
               finish_job: entry.finish_job,
@@ -3520,6 +3637,9 @@ async function gracefulShutdown(signal: string) {
   try {
     supervisor.stop()
   } catch (err: any) { log.warn("supervisor_stop_failed", { err: err?.message }) }
+  try {
+    brokerAccounts.close()
+  } catch (err: any) { log.warn("accounts_close_failed", { err: err?.message ?? String(err) }) }
   try {
     await closeGrokCoreHost()
   } catch (err: any) { log.warn("grok_core_host_close_failed", { err: err?.message ?? String(err) }) }

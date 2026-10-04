@@ -1,6 +1,7 @@
 import { join } from "path"
 import { createHostProvider } from "../../../../packages/supermux-core/src/index.js"
 import { STATE_DIR } from "../../../shared/paths"
+import { brokerAccountsOptions } from "../../accounts/broker-accounts"
 import { createClaudeCoreHost, type ClaudeCoreHost } from "./core-host"
 
 export type ClaudeCoreHostFactory = () => ClaudeCoreHost
@@ -8,6 +9,7 @@ export type ClaudeCoreHostFactory = () => ClaudeCoreHost
 const provider = createHostProvider({
   create: () => createClaudeCoreHost({
     stateDirectory: join(STATE_DIR, "core", "claude"),
+    accounts: brokerAccountsOptions(),
   }),
 })
 

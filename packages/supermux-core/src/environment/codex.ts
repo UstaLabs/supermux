@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { codexCredentialFreshness, promoteIfNewer } from "./credentials.js"
+import { codexCredentialFreshness, promoteIfNewer, releaseSessionCredential } from "./credentials.js"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { CodexEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
 import { copyFileReplace, writeFileNoFollow } from "./write.js"
@@ -46,7 +46,14 @@ export async function prepareCodexEnvironment(spec: CodexEnvironmentSpec): Promi
   let credentials: PreparedEnvironment["credentials"]
   const env: Record<string, string> = { CODEX_HOME: spec.home }
 
-  if (spec.credentials.apiKey) {
+  if (spec.credentials.account === true) {
+    credentials = "account"
+    releaseSessionCredential({
+      sessionCopy: join(spec.home, "auth.json"),
+      canonical: join(spec.credentials.canonicalHome, "auth.json"),
+      freshness: codexCredentialFreshness,
+    })
+  } else if (spec.credentials.apiKey) {
     credentials = "api_key"
     env.OPENAI_API_KEY = spec.credentials.apiKey
   } else {

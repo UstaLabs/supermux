@@ -11,7 +11,7 @@ export type EnvironmentSpec = {
 export type PreparedEnvironment = {
   env: Record<string, string>
   files: string[]
-  credentials: "canonical" | "api_key" | "copy" | "none"
+  credentials: "canonical" | "api_key" | "copy" | "none" | "account"
   /** Claude only: CLI args assembled from session-private files (not HOME). */
   args?: string[]
 }
@@ -24,7 +24,9 @@ export type GrokEnvironmentSpec = EnvironmentSpec & {
 }
 
 export type CodexEnvironmentSpec = EnvironmentSpec & {
-  credentials: { apiKey: string | null; canonicalHome: string }
+  /** `account: true`: the session's credential comes from an account (env/args at launch): no copy,
+   * and a copy left by an earlier launch is healed back to `canonicalHome` and removed. */
+  credentials: { apiKey: string | null; canonicalHome: string; account?: boolean }
   nativeMemory: boolean
 }
 
@@ -64,6 +66,9 @@ export type CursorEnvironmentSpec = EnvironmentSpec & {
     apiKey: string | null
     userCursorDir: string
     userConfigDir: string
+    /** The credential comes from an account: no auth.json copy (a leftover one is healed back and
+     * removed); the non-credential CLI config files are still copied. */
+    account?: boolean
   }
   /** Link this home's cursor-agent runtime dir to one shared copy; null = do nothing. */
   sharedRuntime: { source: string } | null

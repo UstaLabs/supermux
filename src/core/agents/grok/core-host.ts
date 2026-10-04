@@ -1,5 +1,5 @@
 import { join } from "path"
-import { createHost, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
+import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { grok, type GrokOptions } from "../../../../packages/supermux-core/src/agents/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareGrokEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
@@ -8,6 +8,7 @@ import { grokConfigEntries } from "../../plugins"
 import { muxShimServer } from "../mux-shim-server"
 import { HOME } from "../../session-manager/spawn-helper"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
+import { grokAccountEnv } from "../account-env"
 
 export type GrokDriverFactory = (options: GrokOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -16,6 +17,8 @@ export type GrokCoreHostOptions = {
   driverFactory?: GrokDriverFactory
   /** Test seam: production always uses the broker policy below. */
   limits?: CoreLimits
+  /** The broker's shared account registry (production); tests may omit it. */
+  accounts?: AccountsOptions
 }
 
 export type GrokCoreHost = Host
@@ -86,10 +89,13 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "grok",
-    driver: (registration, ctx) => {
+    ...(options.accounts ? { accounts: options.accounts } : {}),
+    driver: async (registration, ctx) => {
       const settings = driverSettingsFor("grok", extraPermissionMode(registration.extra, "grok"))
       if (settings.initial.kind !== "acp") throw new Error("grok driver settings mismatch")
-      const opts = grokOpts(stateDirectory, registration.env, settings.initial)
+      const sessionHome = typeof registration.extra?.sessionHome === "string" ? registration.extra.sessionHome : ""
+      const env = sessionHome ? await grokAccountEnv(registration.env, { sessionHome, account: ctx.account }) : registration.env
+      const opts = grokOpts(stateDirectory, env, settings.initial)
       const overrides: SessionConfiguration = ctx.configuration ? { ...ctx.configuration } : {}
       return factory ? factory(opts, overrides) : grok(opts)
     },

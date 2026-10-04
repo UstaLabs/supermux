@@ -125,6 +125,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   const sessionHome = join(STATE_DIR, "agents", "codex", name)
   const permissionMode = resolvePermissionMode(AgentKind.Codex, args.permissionMode)
   const handle = host.register({
+    ...(args.account ? { account: args.account } : {}),
     id,
     env: {},
     command: resolveCodexCommand({}),
@@ -185,6 +186,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
         permissionMode,
+        account: args.account,
       } as never)
     }
 

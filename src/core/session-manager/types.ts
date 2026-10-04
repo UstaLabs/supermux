@@ -51,6 +51,8 @@ export type SessionRecord = {
   prompts: boolean
   /** Catalog id from permission-modes.ts; undefined/null = agent default. */
   permissionMode?: string | null
+  /** Account id (supermux-core accounts); undefined = the agent's system account. */
+  account?: string
   /** 1 = Core-backed worker (no tmux/hooks/tailer). */
   core: boolean
   user_status: UserStatus
@@ -91,6 +93,7 @@ export type SessionRow = {
   self_renamed: number
   prompts: number
   permission_mode: string | null
+  account?: string | null
   core: number
   user_status?: string
   sort_order?: number
@@ -137,6 +140,7 @@ export function rowToRecord(row: SessionRow): SessionRecord {
     self_renamed: row.self_renamed === 1,
     prompts: row.prompts === 1,
     permissionMode: row.permission_mode ?? undefined,
+    account: row.account ?? undefined,
     core: row.core === 1,
     user_status: (row.user_status as UserStatus) ?? "in_progress",
     sort_order: row.sort_order ?? 0,

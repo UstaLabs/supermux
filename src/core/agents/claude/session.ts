@@ -101,6 +101,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     pa: !!args.pa, rpcMcpConfig: args.rpcMcpConfig,
   })
   const handle = host.register({
+    ...(args.account ? { account: args.account } : {}),
     id,
     env: {},
     extra,
@@ -157,6 +158,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         internal: args.internal,
         core: true,
         permissionMode,
+        account: args.account,
       } as never)
     }
     await adapter.start()

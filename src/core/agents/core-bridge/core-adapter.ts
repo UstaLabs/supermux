@@ -228,6 +228,27 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   get effort(): string | undefined { return this._effort }
   get permissionMode(): string | undefined { return this._permissionMode }
 
+  /**
+   * Switch this session to another account of its agent (manual). Core shuts the live process
+   * down and reopens the same native session with the account's credentials — a real restart, so
+   * a keeper-reattached process never keeps its old environment. Refused mid-turn.
+   */
+  async setAccount(account: string): Promise<void> {
+    if (this.restarting) await this.restarting.catch(() => {})
+    const session = this.requireSession()
+    const state = session.snapshot().state
+    if (state === "running" || state === "interrupting") {
+      throw new CoreError("session_busy", `${this.kind} session is busy`)
+    }
+    const generation = this.startEpoch
+    this.restarting = (async () => {
+      const next = await this.core.sessions.resume(this.id, { account })
+      if (this.stopped || generation !== this.startEpoch) return
+      this.session = next
+    })()
+    try { await this.restarting } finally { this.restarting = undefined }
+  }
+
   /** True while the Core session is open or a config restart is in flight: the
    *  native process changing under a restart is not the agent dying. */
   isAlive(): boolean {
@@ -784,6 +805,18 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     }
     if (event.type === "session.failed") {
       this.surfaceFailure(event.error)
+      return
+    }
+    if (event.type === "account.switched" || event.type === "account.refreshed") {
+      // A Core-internal reopen (limit switch, token refresh) replaced the Session object.
+      const live = this.core.sessions.live(this.id)
+      if (live && !this.restarting) this.session = live
+      if (event.type === "account.switched") this.emit("account", { kind: "account", event: "switched", from: event.from, to: event.to, reason: event.reason })
+      else this.emit("account", { kind: "account", event: "refreshed", account: event.account })
+      return
+    }
+    if (event.type === "account.exhausted") {
+      this.emit("account", { kind: "account", event: "exhausted", account: event.account })
       return
     }
     if (event.type === "message.started") {

@@ -22,6 +22,8 @@ export {
   type PromotionResult,
   promoteCredential,
   promoteIfNewer,
+  releaseSessionCredential,
+  refreshSessionCredential,
   jwtExpiryMs,
   readCredentialJson,
   grokCredentialExpiry,

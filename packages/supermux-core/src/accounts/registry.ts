@@ -39,6 +39,9 @@ export class AccountRegistry {
     this.refresher = new RefreshCoordinator(join(this.directory, "locks"), this.vault, fetchImpl)
   }
 
+  /** Whether `agent` has accounts here (its system account and adapter). */
+  covers(agent: string): boolean { return this.agents.includes(agent) }
+
   async list(agent?: string): Promise<Account[]> {
     const stored = [...(await this.load()).values()]
     const all = [...this.agents.map(id => this.system(id)), ...stored.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))]

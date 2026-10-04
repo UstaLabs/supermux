@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs"
 import { join, posix, win32 } from "node:path"
-import { cursorCredentialFreshness, promoteIfNewer } from "./credentials.js"
+import { cursorCredentialFreshness, promoteIfNewer, releaseSessionCredential } from "./credentials.js"
 import { ensureSharedCursorRuntime } from "./cursor-runtime.js"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { CursorEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
@@ -88,7 +88,26 @@ export async function prepareCursorEnvironment(spec: CursorEnvironmentSpec): Pro
   }
 
   let credentials: PreparedEnvironment["credentials"]
-  if (spec.credentials.apiKey) {
+  if (spec.credentials.account === true) {
+    credentials = "account"
+    const sessionConfigBase = spec.platform === "win32" ? j(spec.home, "AppData", "Roaming") : j(spec.home, ".config")
+    releaseSessionCredential({
+      sessionCopy: j(sessionConfigBase, "cursor", "auth.json"),
+      canonical: j(spec.credentials.userConfigDir, "cursor", "auth.json"),
+      freshness: cursorCredentialFreshness,
+    })
+    const destCursorDir = j(spec.home, ".cursor")
+    mkdirSync(destCursorDir, { recursive: true, mode: 0o700 })
+    chmodSync(destCursorDir, 0o700)
+    for (const f of CURSOR_DIR_FILES) {
+      const src = j(spec.credentials.userCursorDir, f)
+      if (existsSync(src)) {
+        const dst = j(destCursorDir, f)
+        copyFileReplace(src, dst)
+        files.push(dst)
+      }
+    }
+  } else if (spec.credentials.apiKey) {
     credentials = "api_key"
     env.CURSOR_API_KEY = spec.credentials.apiKey
   } else {

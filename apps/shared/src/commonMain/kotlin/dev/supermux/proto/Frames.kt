@@ -1,5 +1,6 @@
 package dev.supermux.proto
 
+import dev.supermux.net.AccountDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishResult
 import dev.supermux.net.ReviewComment
@@ -48,6 +49,10 @@ data class SessionInfo(
     /** Launcher draft body when [userStatus] is draft. */
     @SerialName("draft_payload")
     val draftPayload: DraftPayload? = null,
+    /** Account id the session runs on (`<agent>:system` = the CLI's own login); null on an older broker. */
+    val account: String? = null,
+    /** Display label for [account]. */
+    val accountLabel: String? = null,
 )
 
 /** A finish job's outcome/state machine, broadcast on the `finish_job` WS frame and
@@ -510,7 +515,32 @@ sealed interface ServerFrame {
         val model: String? = null,
         val reasoningLevel: String? = null,
         val permissionMode: String? = null,
+        /** The session switched account (manually or on a usage limit). */
+        val account: String? = null,
+        val accountLabel: String? = null,
     ) : ServerFrame
+
+    /** An account was added or removed: the cached GET /accounts is stale (no payload). */
+    @Serializable @SerialName("accounts_changed")
+    data object AccountsChanged : ServerFrame
+
+    /** Progress of a guided account login (POST /accounts/login); same shape as AccountLoginStateDto. */
+    @Serializable @SerialName("account_login_state")
+    data class AccountLoginState(
+        val loginId: String = "",
+        val agent: String = "",
+        val phase: String = "",
+        val url: String? = null,
+        val code: String? = null,
+        val needsCode: Boolean = false,
+        val error: String? = null,
+        val errorCode: String? = null,
+        val account: AccountDto? = null,
+    ) : ServerFrame
+
+    /** The accounts settings changed (PUT /settings/accounts). */
+    @Serializable @SerialName("accounts_settings")
+    data class AccountsSettings(val autoSwitch: Boolean = false) : ServerFrame
 
     @Serializable @SerialName("agent_state")
     data class AgentState(

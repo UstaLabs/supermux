@@ -1,3 +1,6 @@
+import type { AccountRegistry } from "./registry.js"
+import type { UsageStore } from "./usage-store.js"
+
 /**
  * Accounts: several logins per agent, chosen per session. Secrets live only in a Vault;
  * Account metadata and SessionRecord carry ids, never credentials.
@@ -99,12 +102,23 @@ export type AuthAdapter = {
 export type UsageWindow = { name: string; usedPercent: number; resetsAt?: Date }
 
 export type AccountsOptions = {
+  /**
+   * A registry shared by several Cores (e.g. one Core per agent in one process), so accounts have
+   * one source of truth. It must know every agent of this Core. `vault`, `homes` and `fetch` are
+   * then the registry's own and are ignored here. Default: a registry under `<stateDirectory>/accounts`.
+   */
+  registry?: AccountRegistry
+  /** The usage cache shared with `registry` (one file, one writer). Default: `<registry dir>/usage.json`. */
+  usage?: UsageStore
   /** Default: fileVault(<stateDirectory>/accounts/vault). */
   vault?: Vault
   /** History roots. Defaults: claude $CLAUDE_CONFIG_DIR or ~/.claude; codex $CODEX_HOME or ~/.codex. */
   homes?: HomeRoots
-  /** Switch a session to another account of its agent when a rate-limit window reaches 100%. */
-  autoSwitch?: boolean
+  /**
+   * Switch a session to another account of its agent when a rate-limit window reaches 100%.
+   * A function is read each time a limit is seen, so a host can toggle it at runtime.
+   */
+  autoSwitch?: boolean | (() => boolean)
   /** After a limit switch whose last turn hit the limit, send `continuePrompt` once on the new account. Default true. */
   continueAfterSwitch?: boolean
   /** Default: "Continue from where you stopped. Your previous turn hit a usage limit and you are now on another account." */

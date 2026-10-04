@@ -1,6 +1,7 @@
 import { join } from "path"
 import { createHostProvider } from "../../../../packages/supermux-core/src/index.js"
 import { STATE_DIR } from "../../../shared/paths"
+import { brokerAccountsOptions } from "../../accounts/broker-accounts"
 import { createGrokCoreHost, type GrokCoreHost } from "./core-host"
 
 export type GrokCoreHostFactory = () => GrokCoreHost
@@ -8,6 +9,7 @@ export type GrokCoreHostFactory = () => GrokCoreHost
 const provider = createHostProvider({
   create: () => createGrokCoreHost({
     stateDirectory: join(STATE_DIR, "core", "grok"),
+    accounts: brokerAccountsOptions(),
   }),
 })
 

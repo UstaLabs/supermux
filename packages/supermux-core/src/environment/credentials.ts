@@ -128,6 +128,45 @@ export function promoteIfNewer(opts: {
   }
 }
 
+/** Leave a session without its credential copy (the session now gets its credential from an
+ * account): heal the copy back first (`promoteIfNewer`), then delete it. A copy whose promotion
+ * failed is kept (it may hold the only usable token) and `"failed"` is returned. Never throws. */
+export function releaseSessionCredential(opts: {
+  sessionCopy: string
+  canonical: string
+  freshness: FreshnessReader
+}): PromotionResult {
+  const result = promoteIfNewer(opts)
+  if (result === "failed" || result === "no_session_copy") return result
+  try {
+    rmSync(opts.sessionCopy, { force: true })
+  } catch {
+    return "failed"
+  }
+  return result
+}
+
+/** Give a session a fresh copy of the canonical credential (heal first, as on every spawn).
+ * Returns false when there is no canonical file to copy. */
+export function refreshSessionCredential(opts: {
+  sessionCopy: string
+  canonical: string
+  freshness: FreshnessReader
+}): boolean {
+  promoteIfNewer(opts)
+  if (!existsSync(opts.canonical)) return false
+  mkdirSync(dirname(opts.sessionCopy), { recursive: true, mode: 0o700 })
+  const temp = `${opts.sessionCopy}.mux-${process.pid}-${randomUUID()}.tmp`
+  try {
+    copyFileSync(opts.canonical, temp)
+    chmodSync(temp, 0o600)
+    renameSync(temp, opts.sessionCopy)
+  } finally {
+    rmSync(temp, { force: true })
+  }
+  return true
+}
+
 function isFresher(sessionCopy: string, canonical: string, freshness: FreshnessReader): boolean {
   const copyClaim = freshness(sessionCopy)
   const canonicalClaim = freshness(canonical)

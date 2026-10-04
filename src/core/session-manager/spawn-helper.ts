@@ -75,6 +75,8 @@ export type SpawnArgs = {
   reasoningLevel?: string
   /** Catalog permission-mode id. Absent = the agent's catalog default. */
   permissionMode?: string
+  /** Account id (validated by the caller). Absent = the agent's system account (today's login). */
+  account?: string
   /** Resolved CLI value (highest when unset). Passed by the broker caller. */
   effort?: string
   /** Mark the session as broker-internal (e.g. an agent-rpc worker) so it's

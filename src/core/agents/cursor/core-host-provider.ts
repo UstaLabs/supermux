@@ -1,6 +1,7 @@
 import { join } from "path"
 import { createHostProvider } from "../../../../packages/supermux-core/src/index.js"
 import { STATE_DIR } from "../../../shared/paths"
+import { brokerAccountsOptions } from "../../accounts/broker-accounts"
 import { createCursorCoreHost, type CursorCoreHost } from "./core-host"
 
 export type CursorCoreHostFactory = () => CursorCoreHost
@@ -8,6 +9,7 @@ export type CursorCoreHostFactory = () => CursorCoreHost
 const provider = createHostProvider({
   create: () => createCursorCoreHost({
     stateDirectory: join(STATE_DIR, "core", "cursor"),
+    accounts: brokerAccountsOptions(),
   }),
 })
 
