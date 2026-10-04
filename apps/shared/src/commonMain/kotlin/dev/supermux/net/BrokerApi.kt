@@ -72,7 +72,30 @@ data class HostIdentity(
     val gitAvailable: Boolean? = null,
     /** Authed and local callers: what this computer still needs to run agents. Null from an older broker. */
     val requirements: HostRequirements? = null,
+    /** Authed and local callers: "Keep this computer awake". Null from an older broker. */
+    val keepAwake: KeepAwakeState? = null,
 )
+
+/**
+ * "Keep this computer awake" on a host (spec "Keep the computer awake while hosting"): `GET /host`'s
+ * `keepAwake`, `GET|PUT /settings/keep-awake` and the `keep_awake` frame. [enabled] and
+ * [onBattery] are the settings ("Also on battery"); [active] says the inhibitor holds right now;
+ * [supported] is false where the computer has no way to hold one, with [reason] saying why (also
+ * set when it is released on battery or gave up after repeated failures). Only the host computer
+ * itself may change it: the broker answers a PUT from anywhere else with 403.
+ */
+@Serializable
+data class KeepAwakeState(
+    val enabled: Boolean = false,
+    val onBattery: Boolean = true,
+    val active: Boolean = false,
+    val supported: Boolean = true,
+    val reason: String? = null,
+)
+
+/** PUT /settings/keep-awake body: only the fields that change (explicitNulls=false omits the rest). */
+@Serializable
+data class KeepAwakePatch(val enabled: Boolean? = null, val onBattery: Boolean? = null)
 
 /**
  * The broker's git requirement (spec "Git is required for hosting agents"). [install] says what
@@ -2170,6 +2193,22 @@ class BrokerApi(
         return decoded
     }
 
+
+    /** GET /settings/keep-awake → the setting and whether it holds right now. */
+    suspend fun getKeepAwake(): KeepAwakeState =
+        getJson("$httpBase/settings/keep-awake")
+
+    /**
+     * PUT /settings/keep-awake → the new state. Only the host computer itself may call it (a
+     * direct loopback caller, i.e. the desktop app on that computer); from anywhere else the
+     * broker answers 403 `{error:"only on this computer"}`, which throws like every non-2xx.
+     */
+    suspend fun setKeepAwake(enabled: Boolean? = null, onBattery: Boolean? = null): KeepAwakeState =
+        decode(http.put("$httpBase/settings/keep-awake") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(KeepAwakePatch(enabled, onBattery)))
+        })
 
     /** GET /settings/curator → {config:{enabled,hour,minute,agent,model,reasoningLevel}, nextRun} */
     suspend fun getCuratorSettings(): CuratorSettingsResponse =

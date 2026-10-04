@@ -19,7 +19,7 @@ class ContractTest {
             "commands_changed", "finish_job", "session_git", "session_git_remote",
             "sessions_reordered", "session_read",
             "walkthrough_updated", "review_comment",
-            "worktree_sizes", "worktrees_removed", "agent_models_changed", "host_requirements",
+            "worktree_sizes", "worktrees_removed", "agent_models_changed", "host_requirements", "keep_awake",
             "fs_dir", "fs_gone", "fs_err",
         )
         for (n in names) {
@@ -66,6 +66,7 @@ class ContractTest {
                 is ServerFrame.ProjectsChanged -> {}
                 ServerFrame.AgentModelsChanged -> {}
                 is ServerFrame.HostRequirementsChanged -> {}
+                is ServerFrame.KeepAwakeChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
                 is ServerFrame.ReviewCommentFrame -> {}
                 is ServerFrame.WorktreeSizes -> {}

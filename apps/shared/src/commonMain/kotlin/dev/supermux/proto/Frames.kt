@@ -344,6 +344,15 @@ sealed interface ServerFrame {
         val requirements: dev.supermux.net.HostRequirements = dev.supermux.net.HostRequirements(),
     ) : ServerFrame
 
+    /**
+     * "Keep this computer awake" on the host: sent right after every snapshot and whenever it
+     * changes (toggled, released on battery, re-acquired, gave up). Full replacement.
+     */
+    @Serializable @SerialName("keep_awake")
+    data class KeepAwakeChanged(
+        val keepAwake: dev.supermux.net.KeepAwakeState = dev.supermux.net.KeepAwakeState(),
+    ) : ServerFrame
+
     @Serializable @SerialName("session_added")
     data class SessionAdded(val session: SessionInfo) : ServerFrame
 

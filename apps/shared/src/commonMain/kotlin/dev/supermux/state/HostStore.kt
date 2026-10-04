@@ -32,6 +32,7 @@ import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.HostRequirements
+import dev.supermux.net.KeepAwakeState
 import dev.supermux.net.InstallGitResult
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
@@ -351,6 +352,14 @@ class HostStore(
     val hostRequirements: StateFlow<HostRequirements?> = _hostRequirements.asStateFlow()
 
     /**
+     * "Keep this computer awake" on this host, from the `keep_awake` frame (after every snapshot
+     * and on every change) and from [getKeepAwake]/[setKeepAwake]. Null until the broker speaks
+     * (or forever on an older broker).
+     */
+    private val _keepAwake = MutableStateFlow<KeepAwakeState?>(null)
+    val keepAwake: StateFlow<KeepAwakeState?> = _keepAwake.asStateFlow()
+
+    /**
      * Has this broker finished first-run setup? `null` until the first snapshot arrives — a host
      * that gates a setup wizard on this must not decide while it is null (it would flash the wizard
      * or the shell before the broker has spoken). Live: every snapshot republishes it, and
@@ -458,6 +467,7 @@ class HostStore(
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
             is ServerFrame.UsageUpdated -> _usage.value = frame.usage
             is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements
+            is ServerFrame.KeepAwakeChanged -> _keepAwake.value = frame.keepAwake
             else -> {}
         }
     }
@@ -468,6 +478,17 @@ class HostStore(
      * The banner clears itself when the broker's re-check finds git and pushes the frame.
      */
     suspend fun installGit(): InstallGitResult? = runApi("installGit") { api.installGit() }
+
+    /** `GET /settings/keep-awake`; updates [keepAwake]. Null on failure. */
+    suspend fun getKeepAwake(): KeepAwakeState? =
+        runApi("getKeepAwake") { api.getKeepAwake() }?.also { _keepAwake.value = it }
+
+    /**
+     * `PUT /settings/keep-awake` (only the fields given change); updates [keepAwake]. Only works
+     * from the host computer itself — elsewhere the broker refuses it and this returns null.
+     */
+    suspend fun setKeepAwake(enabled: Boolean? = null, onBattery: Boolean? = null): KeepAwakeState? =
+        runApi("setKeepAwake") { api.setKeepAwake(enabled, onBattery) }?.also { _keepAwake.value = it }
 
         // ── Viewing presence ───────────────────────────────────────────────────────────
 

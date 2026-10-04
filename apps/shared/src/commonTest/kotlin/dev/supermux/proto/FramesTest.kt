@@ -116,6 +116,15 @@ class FramesTest {
         assertTrue(f.requirements.gitMissing)
     }
 
+    @Test fun parses_keep_awake() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"keep_awake","keepAwake":{"enabled":true,"onBattery":true,"active":true,"supported":true}}""",
+        )
+        assertTrue(f is ServerFrame.KeepAwakeChanged)
+        val s = (f as ServerFrame.KeepAwakeChanged).keepAwake
+        assertEquals(dev.supermux.net.KeepAwakeState(enabled = true, onBattery = true, active = true, supported = true), s)
+    }
+
     @Test fun parses_sessions_reordered() {
         val f = json.decodeFromString<ServerFrame>(
             """{"type":"sessions_reordered","orderedIds":["b","a","c"]}""",
