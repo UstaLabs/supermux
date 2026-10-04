@@ -10,6 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class LidSleepHelperTest {
@@ -31,34 +32,56 @@ class LidSleepHelperTest {
 
     // ── the daemon script ──
 
-    private val script = LidSleepHelper.daemonScript("ahmet")
+    private val script = LidSleepHelper.daemonScript("ahmet", "/Applications/supermux.app")
 
-    @Test fun the_script_bakes_in_the_user_and_lease() {
+    @Test fun the_script_bakes_in_the_user_lease_and_app() {
         assertTrue(script.startsWith("#!/bin/sh\n"))
         assertTrue("LEASE='/Users/ahmet/.mux/state/lidsleep.lease'" in script)
         assertTrue("OWNER='ahmet'" in script)
+        assertTrue("APP='/Applications/supermux.app'" in script)
+        assertTrue("MARKER='/Library/PrivilegedHelperTools/dev.supermux.lidsleep.held'" in script)
         assertTrue("MAX_AGE=45" in script)
-        assertTrue("/bin/sleep 10" in script)
+        assertTrue("\"\$SLEEP\" 10 &" in script)
+        assertTrue(script.trimEnd().endsWith("main \"\$@\""))
+        assertTrue("APP=''" in LidSleepHelper.daemonScript("ahmet", null))
+        assertFailsWith<IllegalArgumentException> { LidSleepHelper.daemonScript("ahmet", "/Applications/my app.app") }
     }
 
     @Test fun the_script_only_runs_fixed_argv_pmset() {
-        val pmsetCalls = Regex("/usr/bin/pmset [^|\n]*").findAll(script).map { it.value.trim() }.toSet()
-        assertEquals(
-            setOf("/usr/bin/pmset -a disablesleep 0", "/usr/bin/pmset -a disablesleep 1", "/usr/bin/pmset -g"),
-            pmsetCalls,
-        )
-        // Never a variable as a pmset argument, never anything read from the lease executed.
-        val args = Regex("pmset -a disablesleep (\\S+)").findAll(script).map { it.groupValues[1] }.toList()
+        assertTrue("PMSET=/usr/bin/pmset" in script)
+        val calls = Regex("\"\\\$PMSET\" [^\n|]*").findAll(script).map { it.value.trim() }.toSet()
+        assertEquals(setOf("\"\$PMSET\" -g 2>/dev/null", "\"\$PMSET\" -a disablesleep 1", "\"\$PMSET\" -a disablesleep 0; then"), calls)
+        val args = Regex("pmset -a disablesleep (\\S+)").findAll(script).map { it.groupValues[1].trimEnd(',', ';') }.toList()
         assertTrue(args.isNotEmpty() && args.all { it == "0" || it == "1" }, "$args")
         assertFalse("eval" in script)
         assertFalse(Regex("\\. \"?\\\$LEASE").containsMatchIn(script))
         assertFalse(Regex("cat \"?\\\$LEASE").containsMatchIn(script))
     }
 
-    @Test fun the_script_resets_to_zero_before_the_loop() {
-        val reset = script.indexOf("/usr/bin/pmset -a disablesleep 0")
-        val loop = script.indexOf("while :; do")
-        assertTrue(reset in 0 until loop, "reset must come first")
+    @Test fun the_state_is_parsed_exactly() {
+        assertTrue("\"\$PMSET\" -g 2>/dev/null | /usr/bin/awk '\$1==\"SleepDisabled\"{print \$2; exit}'" in script)
+        // Hold skips only on exactly "1"; release skips only on exactly "0".
+        assertTrue("[ \"\$(sleep_disabled)\" = \"1\" ] && return 0" in script)
+        assertTrue("if [ \"\$(sleep_disabled)\" = \"0\" ] || \"\$PMSET\" -a disablesleep 0; then" in script)
+    }
+
+    @Test fun only_what_the_daemon_set_is_released() {
+        val hold = script.substringAfter("hold() {").substringBefore("}")
+        assertTrue(hold.indexOf(": > \"\$MARKER\"") in 0 until hold.indexOf("-a disablesleep 1"), "marker before setting 1")
+        val release = script.substringAfter("release() {").substringBefore("\n}")
+        assertTrue(release.trimStart().startsWith("[ -f \"\$MARKER\" ] || return 0"), "no marker, no reset")
+        assertTrue("/bin/rm -f \"\$MARKER\"" in release)
+        // Start: release() (marker-gated) before the loop, never an unconditional pmset 0.
+        val main = script.substringAfter("main() {")
+        assertTrue(main.indexOf("  release\n") in 0 until main.indexOf("while :; do"))
+        assertFalse(Regex("^\\s*\"\\\$PMSET\" -a disablesleep 0\\s*$", RegexOption.MULTILINE).containsMatchIn(script))
+    }
+
+    @Test fun signals_give_back_what_was_held_and_the_sleep_is_interruptible() {
+        assertTrue("trap on_signal TERM INT HUP" in script)
+        val onSignal = script.substringAfter("on_signal() {").substringBefore("\n}")
+        assertTrue("release" in onSignal && "exit 0" in onSignal)
+        assertTrue("\"\$SLEEP\" 10 &\n    sleeper=\$!\n    wait \"\$sleeper\"" in script)
     }
 
     @Test fun the_script_checks_symlink_owner_and_age() {
@@ -66,22 +89,36 @@ class LidSleepHelperTest {
         val regular = script.indexOf("[ -f \"\$LEASE\" ] || return 1")
         assertTrue(symlink >= 0, "symlink check")
         assertTrue(regular > symlink, "the symlink check runs before -f (which follows links)")
-        assertTrue("/usr/bin/stat -f %Su \"\$LEASE\"" in script)
+        assertTrue("\"\$STAT\" -f %Su \"\$LEASE\"" in script)
         assertTrue("[ \"\$owner\" = \"\$OWNER\" ] || return 1" in script)
-        assertTrue("/usr/bin/stat -f %m \"\$LEASE\"" in script)
+        assertTrue("\"\$STAT\" -f %m \"\$LEASE\"" in script)
         assertTrue("case \"\$mtime\" in ''|*[!0-9]*) return 1 ;; esac" in script)
         assertTrue("[ \"\$age\" -ge 0 ] && [ \"\$age\" -lt \"\$MAX_AGE\" ]" in script)
     }
 
-    @Test fun the_script_reads_the_state_and_only_changes_it_when_needed() {
-        assertTrue("/usr/bin/pmset -g | /usr/bin/grep SleepDisabled" in script)
-        assertTrue("[ \"\$(sleep_disabled)\" = \"1\" ] || /usr/bin/pmset -a disablesleep 1" in script)
-        assertTrue("[ \"\$(sleep_disabled)\" = \"0\" ] || /usr/bin/pmset -a disablesleep 0" in script)
+    @Test fun the_daemon_removes_itself_once_the_app_is_gone_for_a_day() {
+        assertTrue("APP_CHECK_LOOPS=60" in script)
+        assertTrue("APP_GONE_S=86400" in script)
+        assertTrue("APP_MISSING='/Library/PrivilegedHelperTools/dev.supermux.lidsleep.app-missing'" in script)
+        val gone = script.substringAfter("app_gone_too_long() {").substringBefore("\n}")
+        assertTrue("[ -n \"\$APP\" ] || return 1" in gone, "no baked app: never removes itself")
+        assertTrue("if [ -e \"\$APP\" ]; then" in gone)
+        assertTrue("[ \$((now - since)) -gt \"\$APP_GONE_S\" ]" in gone)
+        val remove = script.substringAfter("remove_self() {").substringBefore("\n}").trim().lines().map { it.trim() }
+        assertEquals(
+            listOf(
+                "release",
+                "/bin/rm -f \"\$APP_MISSING\" \"\$SELF_PLIST\" \"\$SELF_SCRIPT\"",
+                "\"\$LAUNCHCTL\" bootout system/dev.supermux.lidsleep",
+                "exit 0",
+            ),
+            remove,
+        )
+        assertTrue("if app_gone_too_long; then remove_self; fi" in script)
     }
 
     @Test fun the_script_is_valid_sh() {
-        val sh = java.io.File("/bin/sh")
-        if (!sh.canExecute()) return
+        if (!java.io.File("/bin/sh").canExecute()) return
         val f = Files.createTempFile("lidsleep", ".sh")
         try {
             Files.writeString(f, script)
@@ -91,6 +128,26 @@ class LidSleepHelperTest {
         } finally {
             Files.deleteIfExists(f)
         }
+    }
+
+    // ── the app bundle and the home folder ──
+
+    @Test fun the_app_bundle_comes_from_a_path_inside_it() {
+        assertEquals("/Applications/supermux.app", LidSleepHelper.appBundlePath(listOf("/Applications/supermux.app/Contents/MacOS/supermux")))
+        assertEquals(
+            "/Users/a/Apps/supermux.app",
+            LidSleepHelper.appBundlePath(listOf(null, "/Users/a/Apps/supermux.app/Contents/app/resources")),
+        )
+        assertNull(LidSleepHelper.appBundlePath(listOf("/usr/bin/java", "/home/u/repo/apps/desktop")))
+        assertNull(LidSleepHelper.appBundlePath(listOf("/Applications/my app.app/Contents/MacOS/x")))
+    }
+
+    @Test fun only_a_users_home_under_users_is_supported() {
+        assertTrue(LidSleepHelper.homeSupported("ahmet", "/Users/ahmet"))
+        assertTrue(LidSleepHelper.homeSupported("ahmet", "/Users/ahmet/"))
+        assertFalse(LidSleepHelper.homeSupported("ahmet", "/Volumes/Data/ahmet"))
+        assertFalse(LidSleepHelper.homeSupported("ahmet", null))
+        assertFalse(LidSleepHelper.homeSupported("a b", "/Users/a b"))
     }
 
     // ── the plist ──
@@ -106,31 +163,42 @@ class LidSleepHelperTest {
 
     // ── the install / uninstall commands ──
 
-    @Test fun the_install_command_copies_with_root_ownership_and_bootstraps() {
-        val cmd = LidSleepHelper.installCommand("/private/var/folders/x_y/T/supermux-lidsleep1.sh", "/private/var/folders/x_y/T/supermux-lidsleep2.plist")
+    @Test fun the_install_command_carries_the_files_inside_it_as_base64() {
+        val plist = LidSleepHelper.plist()
+        val cmd = LidSleepHelper.installCommand(script, plist)
+        val s64 = LidSleepHelper.base64(script)
+        val p64 = LidSleepHelper.base64(plist)
         assertEquals(
-            "/bin/mkdir -p /Library/PrivilegedHelperTools && " +
-                "/usr/bin/install -o root -g wheel -m 0755 '/private/var/folders/x_y/T/supermux-lidsleep1.sh' /Library/PrivilegedHelperTools/dev.supermux.lidsleep.sh && " +
-                "/usr/bin/install -o root -g wheel -m 0644 '/private/var/folders/x_y/T/supermux-lidsleep2.plist' /Library/LaunchDaemons/dev.supermux.lidsleep.plist && " +
+            "{ /bin/mkdir -p /Library/PrivilegedHelperTools && " +
+                "/bin/echo '$s64' | /usr/bin/base64 -D > /Library/PrivilegedHelperTools/.dev.supermux.lidsleep.sh.new && " +
+                "/usr/bin/install -o root -g wheel -m 0755 /Library/PrivilegedHelperTools/.dev.supermux.lidsleep.sh.new /Library/PrivilegedHelperTools/dev.supermux.lidsleep.sh && " +
+                "/bin/echo '$p64' | /usr/bin/base64 -D > /Library/PrivilegedHelperTools/.dev.supermux.lidsleep.plist.new && " +
+                "/usr/bin/install -o root -g wheel -m 0644 /Library/PrivilegedHelperTools/.dev.supermux.lidsleep.plist.new /Library/LaunchDaemons/dev.supermux.lidsleep.plist && " +
                 "if /bin/launchctl print system/dev.supermux.lidsleep >/dev/null 2>&1; " +
                 "then /bin/launchctl kickstart -k system/dev.supermux.lidsleep; " +
-                "else /bin/launchctl bootstrap system /Library/LaunchDaemons/dev.supermux.lidsleep.plist; fi",
+                "else /bin/launchctl bootstrap system /Library/LaunchDaemons/dev.supermux.lidsleep.plist; fi; }; " +
+                "s=\$?; /bin/rm -f /Library/PrivilegedHelperTools/.dev.supermux.lidsleep.sh.new /Library/PrivilegedHelperTools/.dev.supermux.lidsleep.plist.new; exit \$s",
             cmd,
         )
+        assertEquals(script, String(java.util.Base64.getDecoder().decode(s64)))
+        assertTrue(Regex("[A-Za-z0-9+/=]+").matches(s64) && Regex("[A-Za-z0-9+/=]+").matches(p64))
+        // Nothing from a user-writable temp dir, and no double quote for the AppleScript string to escape.
+        assertFalse("/tmp" in cmd || "/var/folders" in cmd || "/private/" in cmd)
+        assertFalse('"' in cmd)
     }
 
-    @Test fun the_install_command_refuses_unsafe_paths() {
-        for (bad in listOf("relative/x.sh", "/tmp/a b.sh", "/tmp/a'b.sh", "/tmp/\$(id).sh", "/tmp/a\"b", "/tmp/../etc/x", "/tmp/a;b")) {
-            assertFailsWith<IllegalArgumentException>(bad) { LidSleepHelper.installCommand(bad, "/tmp/ok.plist") }
-            assertFailsWith<IllegalArgumentException>(bad) { LidSleepHelper.installCommand("/tmp/ok.sh", bad) }
-        }
+    @Test fun the_install_command_is_valid_sh() {
+        if (!java.io.File("/bin/sh").canExecute()) return
+        val p = ProcessBuilder("/bin/sh", "-n", "-c", LidSleepHelper.installCommand(script, LidSleepHelper.plist())).redirectErrorStream(true).start()
+        assertEquals(0, p.waitFor(), p.inputStream.bufferedReader().readText())
     }
 
-    @Test fun uninstall_boots_out_removes_and_gives_sleep_back() {
+    @Test fun uninstall_boots_out_resets_only_what_was_held_and_removes_everything() {
         assertEquals(
             "/bin/launchctl bootout system/dev.supermux.lidsleep 2>/dev/null; " +
-                "/bin/rm -f /Library/LaunchDaemons/dev.supermux.lidsleep.plist /Library/PrivilegedHelperTools/dev.supermux.lidsleep.sh; " +
-                "/usr/bin/pmset -a disablesleep 0",
+                "if [ -f /Library/PrivilegedHelperTools/dev.supermux.lidsleep.held ]; then /usr/bin/pmset -a disablesleep 0; fi; " +
+                "/bin/rm -f /Library/PrivilegedHelperTools/dev.supermux.lidsleep.held /Library/PrivilegedHelperTools/dev.supermux.lidsleep.app-missing " +
+                "/Library/LaunchDaemons/dev.supermux.lidsleep.plist /Library/PrivilegedHelperTools/dev.supermux.lidsleep.sh",
             LidSleepHelper.uninstallCommand(),
         )
     }
@@ -162,29 +230,35 @@ class LidSleepHelperTest {
         assertTrue(ran.isEmpty())
     }
 
-    @Test fun install_runs_one_osascript_and_cleans_its_temp_files() {
+    @Test fun install_runs_one_osascript_with_the_files_inline() {
         val ran = mutableListOf<List<String>>()
         val mac = object : OsEnv by FakeOs(OsEnv.Os.MAC) {
             override fun runResult(argv: List<String>): OsEnv.RunResult { ran += argv; return OsEnv.RunResult(1, "", "User canceled. (-128)") }
         }
-        val r = LidSleepHelper.install("ahmet", mac)
+        val r = LidSleepHelper.install("ahmet", mac, appBundle = "/Applications/supermux.app")
         assertEquals(LidSleepHelper.Outcome.Failed(LidSleepHelper.CANCELLED), r)
         assertEquals(1, ran.size)
         assertEquals("/usr/bin/osascript", ran[0][0])
-        val tmp = Regex("'(/[^']+\\.sh)'").find(ran[0][2])!!.groupValues[1]
-        assertFalse(Files.exists(java.nio.file.Path.of(tmp)), "temp script removed")
+        assertTrue(LidSleepHelper.base64(LidSleepHelper.daemonScript("ahmet", "/Applications/supermux.app")) in ran[0][2])
     }
 
-    @Test fun installed_means_both_files_and_this_users_lease() {
+    @Test fun a_cancelled_uninstall_says_it_is_still_installed() {
+        val mac = object : OsEnv by FakeOs(OsEnv.Os.MAC) {
+            override fun runResult(argv: List<String>) = OsEnv.RunResult(1, "", "User canceled. (-128)")
+        }
+        assertEquals(LidSleepHelper.Outcome.Failed("Cancelled. The lid helper is still installed."), LidSleepHelper.uninstall(mac))
+    }
+
+    @Test fun install_state_says_for_whom() {
         val dir = Files.createTempDirectory("lid")
-        val script = dir.resolve("s.sh")
-        val plist = dir.resolve("p.plist")
-        assertFalse(LidSleepHelper.isInstalled("ahmet", script, plist))
-        Files.writeString(script, LidSleepHelper.daemonScript("ahmet"))
-        assertFalse(LidSleepHelper.isInstalled("ahmet", script, plist))
-        Files.writeString(plist, LidSleepHelper.plist())
-        assertTrue(LidSleepHelper.isInstalled("ahmet", script, plist))
-        assertFalse(LidSleepHelper.isInstalled("someone", script, plist))
+        val sc = dir.resolve("s.sh")
+        val pl = dir.resolve("p.plist")
+        assertEquals(LidSleepHelper.InstallState.NOT_INSTALLED, LidSleepHelper.installState("ahmet", sc, pl))
+        Files.writeString(sc, LidSleepHelper.daemonScript("ahmet"))
+        assertEquals(LidSleepHelper.InstallState.NOT_INSTALLED, LidSleepHelper.installState("ahmet", sc, pl))
+        Files.writeString(pl, LidSleepHelper.plist())
+        assertEquals(LidSleepHelper.InstallState.INSTALLED, LidSleepHelper.installState("ahmet", sc, pl))
+        assertEquals(LidSleepHelper.InstallState.OTHER_USER, LidSleepHelper.installState("someone", sc, pl))
     }
 
     // ── the lease file ──
@@ -265,6 +339,21 @@ class LidSleepHelperTest {
         lease.stop()
         lease.stop()
         assertEquals(listOf("touch", "touch", "delete", "delete"), ops.events)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun after_close_start_does_nothing() = runTest {
+        val ops = RecordingOps()
+        val lease = LidLease(ops, backgroundScope)
+        lease.start()
+        runCurrent()
+        lease.close()
+        lease.start()
+        runCurrent()
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(listOf("touch", "delete"), ops.events)
+        assertFalse(lease.held)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
