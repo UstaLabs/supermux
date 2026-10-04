@@ -22,8 +22,11 @@ export function adapterFor(agent: string): AuthAdapter {
 }
 
 export { claudeAdapter, claudeUsage, readClaudeIdentity, claudeIdentityFile } from "./claude.js"
-export { codexAdapter, codexUsage, readCodexIdentity, codexTokenArgs, parseCodexToken, codexTokenExpiry, CODEX_TOKEN_ENV } from "./codex.js"
+export {
+  codexAdapter, codexUsage, readCodexIdentity, codexTokenArgs, parseCodexToken, codexTokenExpiry, codexTokenFromAuth,
+  refreshCodexToken, CODEX_TOKEN_ENV, CODEX_OAUTH_TOKEN_URL, CODEX_OAUTH_CLIENT_ID,
+} from "./codex.js"
 export type { CodexTokenSecret } from "./codex.js"
-export { cursorAdapter } from "./cursor.js"
-export { grokAdapter } from "./grok.js"
+export { cursorAdapter, readCursorIdentity, cursorRoot } from "./cursor.js"
+export { grokAdapter, readGrokIdentity, grokRoot } from "./grok.js"
 export { opencodeAdapter, opencodeAuthContent } from "./opencode.js"

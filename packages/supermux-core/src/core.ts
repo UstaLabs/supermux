@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises"
-import { isAbsolute } from "node:path"
+import { isAbsolute, join } from "node:path"
 import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from "./activity.js"
 import { assertConfiguration, mergeConfiguration, nonemptyConfiguration, normalizeRequestedConfiguration } from "./configuration.js"
 import { CoreError, UnsupportedOperation, asError } from "./errors.js"
@@ -10,7 +10,10 @@ import { SessionStore } from "./store.js"
 import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
 import { adapterFor } from "./accounts/adapters/index.js"
 import { limited, pickAccount, switchable } from "./accounts/policy.js"
-import type { Account, AddAccountOptions, UsageWindow } from "./accounts/types.js"
+import { UsageStore } from "./accounts/usage-store.js"
+import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
+import { assertVaultId } from "./accounts/vault.js"
+import type { Account, AddAccountOptions, LoginHandle, LoginOptions, UsageWindow } from "./accounts/types.js"
 import type {
   ActivityNotice, AgentDriver, AgentRuntime, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
   SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec,
@@ -48,11 +51,20 @@ export class Core {
   private readonly outstandingActivity: number
   private readonly registry: AccountRegistry
   private readonly autoSwitch: boolean
-  /** Latest rate-limit windows per account id (from `usage` events). */
-  private readonly usage = new Map<string, UsageWindow[]>()
+  /** Latest rate-limit windows per account id (from `usage` events), persisted. */
+  private readonly usage: UsageStore
   /** Sessions that hit a limit and switch accounts once their current turn ends. */
   private readonly switchQueue = new Set<string>()
   private readonly switching = new Set<string>()
+  private readonly continuePrompt: string | undefined
+  /** Sessions in a turn, whose current turn saw a full window, and whose last turn ended on a limit. */
+  private readonly inTurn = new Set<string>()
+  private readonly turnLimited = new Set<string>()
+  private readonly lastTurnLimited = new Set<string>()
+  /** Token-account sessions: timer to reopen before the access token expires, and sessions due for it. */
+  private readonly refreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly refreshDue = new Set<string>()
+  private readonly logins = new Set<LoginHandle>()
 
   constructor(private readonly options: CoreOptions) {
     if (!options.stateDirectory) throw new CoreError("invalid_options", "stateDirectory is required")
@@ -71,7 +83,16 @@ export class Core {
     const accounts = options.accounts ?? {}
     if (accounts.autoSwitch !== undefined && typeof accounts.autoSwitch !== "boolean") throw new TypeError("accounts.autoSwitch must be a boolean")
     this.autoSwitch = accounts.autoSwitch === true
+    if (accounts.continueAfterSwitch !== undefined && typeof accounts.continueAfterSwitch !== "boolean") throw new TypeError("accounts.continueAfterSwitch must be a boolean")
+    if (accounts.continuePrompt !== undefined && (typeof accounts.continuePrompt !== "string" || !accounts.continuePrompt.trim())) throw new TypeError("accounts.continuePrompt must be a nonempty string")
+    this.continuePrompt = accounts.continueAfterSwitch === false ? undefined : accounts.continuePrompt ?? DEFAULT_CONTINUE_PROMPT
+    const login = accounts.login
+    if (login !== undefined && (!login || typeof login !== "object")) throw new TypeError("accounts.login must be an object")
+    if (login?.timeoutMs !== undefined) requirePositiveSafeInteger(login.timeoutMs, "accounts.login.timeoutMs")
+    if (login?.runner !== undefined && typeof login.runner !== "function") throw new TypeError("accounts.login.runner must be a function")
+    if (accounts.fetch !== undefined && typeof accounts.fetch !== "function") throw new TypeError("accounts.fetch must be a function")
     this.registry = new AccountRegistry(options.stateDirectory, [...this.drivers.keys()], accounts)
+    this.usage = new UsageStore(join(this.registry.directory, "usage.json"))
     this.events.subscribe(event => this.observeAccounts(event))
   }
 
@@ -218,11 +239,17 @@ export class Core {
       await this.ready()
       return this.registry.add(options)
     }),
-    /** Removes metadata and secret; a subscription home stays on disk. */
-    remove: (id: string): Promise<void> => this.operation(async () => {
+    /** Removes metadata, secret and usage. A subscription home stays on disk unless `deleteHome` (links are unlinked, never followed). */
+    remove: (id: string, options: { deleteHome?: boolean } = {}): Promise<void> => this.operation(async () => {
       await this.ready()
-      return this.registry.remove(id)
+      await this.registry.remove(id, options)
+      this.usage.delete(id)
     }),
+    /**
+     * Guided login: runs the agent's own login CLI in a throwaway directory and turns the result
+     * into an account (see API.md "Guided login"). Validation errors throw synchronously.
+     */
+    login: (options: LoginOptions): LoginHandle => this.login(options),
     system: (agent: string): Promise<Account> => this.operation(async () => {
       this.driver(agent)
       await this.ready()
@@ -240,7 +267,7 @@ export class Core {
       const candidates = (await this.registry.list(agent)).filter(account => !exclude.includes(account.id))
       return pickAccount(candidates, id => this.usage.get(id))
     }),
-    /** Latest rate-limit windows seen for an account in this process. */
+    /** Latest rate-limit windows seen for an account (persisted across restarts while unexpired). */
     usage: (id: string): UsageWindow[] | undefined => {
       const windows = this.usage.get(id)
       return windows ? structuredClone(windows) : undefined
@@ -258,6 +285,10 @@ export class Core {
 
   private async shutdown(agents: CloseMode): Promise<void> {
     // No new operations can enter after shuttingDown becomes true.
+    for (const timer of this.refreshTimers.values()) clearTimeout(timer)
+    this.refreshTimers.clear()
+    const logins = [...this.logins]
+    for (const login of logins) login.cancel()
     const initialCloses = [...this.live.values()].map(session => session.close({ mode: agents }))
     const first = Promise.allSettled(initialCloses)
     await Promise.allSettled([...this.operations])
@@ -266,12 +297,14 @@ export class Core {
     const errors = results.filter((r): r is PromiseRejectedResult => r.status === "rejected").map(r => r.reason)
     if (errors.length) throw new AggregateError(errors, "One or more agent runtimes failed to close")
     if (this.started) await this.started.catch(() => {})
+    await Promise.allSettled(logins.map(login => login.done))
+    await this.usage.flush()
     await this.store.close()
     this.live.clear()
     this.events.clear()
   }
 
-  private resume(id: string, options: ResumeOptions | undefined, reason: "manual" | "limit"): Promise<Session> {
+  private resume(id: string, options: ResumeOptions | undefined, reason: "manual" | "limit" | "refresh"): Promise<Session> {
     if (this.shuttingDown) return Promise.reject(new CoreError("core_closed", "Core is closing or closed"))
     let patch: SessionConfiguration | undefined
     let requestedAccount: string | undefined
@@ -314,9 +347,9 @@ export class Core {
       }
       const current = this.live.get(id)
       if (current && current.snapshot().state !== "closed") {
-        if (current.snapshot().state === "closing" || current.snapshot().state === "failed" || switchFrom !== undefined) {
+        if (current.snapshot().state === "closing" || current.snapshot().state === "failed" || switchFrom !== undefined || reason === "refresh") {
           // Failed/closing handle must be shut down before resume can reopen the native agent.
-          // An account switch needs a fresh process with the new credentials (same native id).
+          // An account switch (or a token refresh) needs a fresh process with the new credentials (same native id).
           await current.close({ mode: "shutdown" })
         }
         else {
@@ -331,7 +364,8 @@ export class Core {
         ? mergeConfiguration(record.configuration ?? {}, requestedPatch)
         : record.configuration
       const session = await this.openSession({ ...record, configuration, ...(switchFrom !== undefined ? { account: requestedAccount } : {}) }, record.agentSessionId, undefined, original)
-      if (switchFrom !== undefined) this.events.emit({ type: "account.switched", sessionId: id, from: switchFrom, to: requestedAccount!, reason })
+      if (reason === "refresh") this.events.emit({ type: "account.refreshed", sessionId: id, account: requestedAccount! })
+      else if (switchFrom !== undefined) this.events.emit({ type: "account.switched", sessionId: id, from: switchFrom, to: requestedAccount!, reason })
       return session
     })
     this.restoring.set(id, operation)
@@ -353,7 +387,8 @@ export class Core {
   }
 
   private async accountProfile(agent: string, id: string): Promise<AuthProfile> {
-    const materialized = await this.registry.materialize(await this.account(agent, id))
+    // A session opens with a token that outlives the idle-reopen margin, so it is not reopened right away.
+    const materialized = await this.registry.materialize(await this.account(agent, id), { minValidityMs: SESSION_TOKEN_MARGIN_MS })
     return {
       agent, env: { ...materialized.env },
       ...(materialized.unset?.length ? { unsetEnv: [...materialized.unset] } : {}),
@@ -361,22 +396,46 @@ export class Core {
     }
   }
 
-  /** Usage bookkeeping and the limit switch. Never throws (it runs as an observer). */
+  /** Usage bookkeeping, the limit switch, its continuation and token refresh reopens. Never throws (it runs as an observer). */
   private observeAccounts(event: CoreEvent): void {
-    if (event.type === "session.event" && event.event.kind === "usage" && event.event.rateLimits !== undefined) {
+    if (event.type === "message.started") {
+      this.inTurn.add(event.sessionId)
+      this.turnLimited.delete(event.sessionId)
+    } else if (event.type === "message.completed") {
+      this.inTurn.delete(event.sessionId)
+      const result = event.result
+      const hitLimit = this.turnLimited.has(event.sessionId) || result.status === "failed"
+        || (result.status === "completed" && LIMIT_STOP_REASON.test(result.stopReason))
+      this.turnLimited.delete(event.sessionId)
+      if (hitLimit) this.lastTurnLimited.add(event.sessionId)
+      else this.lastTurnLimited.delete(event.sessionId)
+    } else if (event.type === "session.event" && event.event.kind === "usage" && event.event.rateLimits !== undefined) {
       const record = this.live.get(event.sessionId)?.snapshot()
       if (!record || record.authProfile !== undefined) return
       const windows = adapterFor(record.agent).usage?.(event.event.rateLimits) ?? []
       if (!windows.length) return
       const accountId = record.account ?? systemAccountId(record.agent)
       this.usage.set(accountId, windows)
+      if (limited(windows) && this.inTurn.has(event.sessionId)) this.turnLimited.add(event.sessionId)
       if (this.autoSwitch && limited(windows)) {
         this.switchQueue.add(event.sessionId)
         void this.limitSwitch(event.sessionId)
       }
-    } else if (event.type === "session.stateChanged" && this.switchQueue.has(event.sessionId)) {
-      void this.limitSwitch(event.sessionId)
+    } else if (event.type === "session.stateChanged") {
+      if (event.state === "closed" && !this.restoring.has(event.sessionId)) this.forgetTurns(event.sessionId)
+      if (this.switchQueue.has(event.sessionId)) void this.limitSwitch(event.sessionId)
+      if (this.refreshDue.has(event.sessionId)) void this.refreshSession(event.sessionId)
     }
+  }
+
+  private forgetTurns(id: string): void {
+    this.inTurn.delete(id)
+    this.turnLimited.delete(id)
+    this.lastTurnLimited.delete(id)
+    const timer = this.refreshTimers.get(id)
+    if (timer) clearTimeout(timer)
+    this.refreshTimers.delete(id)
+    this.refreshDue.delete(id)
   }
 
   /** Runs a queued limit switch once the session's current turn has ended (never mid-turn). */
@@ -390,6 +449,7 @@ export class Core {
     this.switching.add(id)
     try {
       const record = live.snapshot()
+      const queued = record.pending > 0
       const from = record.account ?? systemAccountId(record.agent)
       const current = await this.registry.get(from)
       if (!current || !switchable(current)) return
@@ -399,10 +459,107 @@ export class Core {
         this.events.emit({ type: "account.exhausted", sessionId: id, agent: record.agent, account: from })
         return
       }
-      await this.resume(id, { account: next.id }, "limit")
+      const session = await this.resume(id, { account: next.id }, "limit")
+      // The turn that hit the limit continues once on the new account, unless the host queued input itself.
+      if (this.continuePrompt !== undefined && !queued && this.lastTurnLimited.delete(id)) {
+        try {
+          await session.send({ content: [{ type: "text", text: this.continuePrompt }], whenBusy: "reject" })
+        } catch (error) {
+          if (!(error instanceof CoreError && error.code === "session_busy")) throw error
+        }
+      }
     } catch (error) {
       try { this.options.onObserverError?.(asError(error)) } catch { /* reporting cannot own control */ }
     } finally { this.switching.delete(id) }
+  }
+
+  /** Token accounts whose vault can refresh: reopen the session when its token nears expiry (see refreshSession). */
+  private async scheduleRefresh(session: Session): Promise<void> {
+    const { id, account: accountId } = session.snapshot()
+    const previous = this.refreshTimers.get(id)
+    if (previous) clearTimeout(previous)
+    this.refreshTimers.delete(id)
+    if (accountId === undefined || this.shuttingDown) return
+    const account = await this.registry.get(accountId)
+    const expiry = account ? await this.registry.refreshableExpiry(account) : undefined
+    if (!expiry || this.live.get(id) !== session || this.shuttingDown) return
+    const due = expiry.getTime() - SESSION_TOKEN_MARGIN_MS
+    const timer = setTimeout(() => {
+      this.refreshTimers.delete(id)
+      if (this.live.get(id) !== session) return
+      if (Date.now() < due) { void this.scheduleRefresh(session).catch(error => this.reportObserverError(error)); return }
+      this.refreshDue.add(id)
+      void this.refreshSession(id)
+    }, Math.min(Math.max(due - Date.now(), 0), MAX_TIMER_MS))
+    timer.unref?.()
+    this.refreshTimers.set(id, timer)
+  }
+
+  /** Reopens an idle token-account session on a fresh token (same account, same native id). Never mid-turn. */
+  private async refreshSession(id: string): Promise<void> {
+    if (!this.refreshDue.has(id) || this.switching.has(id) || this.shuttingDown) return
+    const live = this.live.get(id)
+    const snapshot = live?.snapshot()
+    if (!live || !snapshot || snapshot.state === "closing" || snapshot.state === "closed" || snapshot.state === "failed") { this.refreshDue.delete(id); return }
+    if (snapshot.state !== "idle" || snapshot.pending > 0 || snapshot.account === undefined) return
+    this.refreshDue.delete(id)
+    this.switching.add(id)
+    try {
+      await this.resume(id, { account: snapshot.account }, "refresh")
+    } catch (error) {
+      this.reportObserverError(error)
+    } finally { this.switching.delete(id) }
+  }
+
+  private reportObserverError(error: unknown): void {
+    try { this.options.onObserverError?.(asError(error)) } catch { /* reporting cannot own control */ }
+  }
+
+  private login(options: LoginOptions): LoginHandle {
+    this.assertOpen()
+    if (!options || typeof options !== "object") throw new CoreError("invalid_input", "Login options are required")
+    const input = structuredClone(options)
+    this.driver(input.agent)
+    const kind = adapterFor(input.agent).kind
+    if (kind !== "claude" && kind !== "codex" && kind !== "grok" && kind !== "cursor") throw new CoreError("unsupported_operation", `${input.agent} has no guided login (use accounts.add with an API key)`)
+    const as = input.as ?? "subscription"
+    if (as !== "subscription" && as !== "token") throw new CoreError("invalid_input", "as must be subscription or token")
+    if (as === "token" && kind !== "codex") throw new CoreError("unsupported_operation", "Only Codex logins can become token accounts")
+    if (input.id !== undefined) assertVaultId(input.id)
+    for (const field of ["label", "email"] as const) {
+      if (input[field] !== undefined && (typeof input[field] !== "string" || !input[field])) throw new CoreError("invalid_input", `${field} must be a nonempty string`)
+    }
+    if (input.email !== undefined && kind !== "claude") throw new CoreError("invalid_input", "email is only used by the Claude login")
+    if (input.isolated !== undefined && typeof input.isolated !== "boolean") throw new CoreError("invalid_input", "isolated must be a boolean")
+    const config = this.options.accounts?.login ?? {}
+    const command = config.commands?.[kind] ?? (kind === "cursor" ? findCommand(["cursor-agent", "agent"]) ?? "cursor-agent" : kind)
+    const handle = startLogin({
+      kind: kind as LoginKind,
+      options: { ...input, as },
+      pendingDirectory: join(this.registry.directory, "pending"),
+      command,
+      runner: config.runner ?? defaultLoginRunner,
+      timeoutMs: config.timeoutMs ?? LOGIN_TIMEOUT_MS,
+      precheck: async () => {
+        await this.ready()
+        if (input.id !== undefined && await this.registry.get(input.id)) throw new CoreError("account_exists", `Account ${input.id} already exists`)
+      },
+      promote: async (directory, identity, tokens) => {
+        this.assertOpen()
+        const base = {
+          agent: input.agent, identity,
+          ...(input.id !== undefined ? { id: input.id } : {}),
+          ...(input.label !== undefined ? { label: input.label } : {}),
+          ...(input.isolated ? { isolated: true } : {}),
+        }
+        return as === "token"
+          ? this.registry.add({ ...base, method: "token", secret: tokens! })
+          : this.registry.adoptHome({ ...base, method: "subscription" }, directory)
+      },
+    })
+    this.logins.add(handle)
+    void handle.done.then(() => {}, () => {}).finally(() => this.logins.delete(handle))
+    return handle
   }
 
   private async openSession(
@@ -525,6 +682,7 @@ export class Core {
         persistSubagents: list => this.store.putSubagents(record.id, list),
       })
       this.live.set(record.id, session)
+      if (record.account !== undefined) void this.scheduleRefresh(session).catch(error => this.reportObserverError(error))
       attachSession(session)
       for (const notice of outstandingActivity.values()) session.reportActivity(notice)
       outstandingActivity.clear()
@@ -584,7 +742,7 @@ export class Core {
 
   private ready(): Promise<void> {
     this.assertOpen()
-    return this.started ??= this.store.open()
+    return this.started ??= Promise.all([this.store.open(), this.usage.load()]).then(() => {})
   }
 
   private driver(id: string): AgentDriver {
@@ -659,6 +817,14 @@ async function assertWorkdir(cwd: string): Promise<void> {
     throw new CoreError("invalid_workdir", "cwd must be an existing absolute directory", { cause: error })
   }
 }
+
+const DEFAULT_CONTINUE_PROMPT = "Continue from where you stopped. Your previous turn hit a usage limit and you are now on another account."
+/** A turn whose stop reason names a limit ended because of it. */
+const LIMIT_STOP_REASON = /limit|quota/i
+/** Token sessions open with at least this much validity and are reopened (when idle) this long before expiry. */
+const SESSION_TOKEN_MARGIN_MS = 30 * 60_000
+const LOGIN_TIMEOUT_MS = 10 * 60_000
+const MAX_TIMER_MS = 2 ** 31 - 1
 
 function assertAccountChoice(input: { account?: unknown; authProfile?: unknown }): void {
   if (input.account === undefined) return

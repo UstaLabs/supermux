@@ -15,13 +15,14 @@ afterEach(async () => {
 })
 async function scratch() { const dir = await mkdtemp(join(tmpdir(), "accounts-core-")); dirs.push(dir); return dir }
 
-type Fake = { driver: AgentDriver; contexts: DriverContext[] }
+type Fake = { driver: AgentDriver; contexts: DriverContext[]; prompts: Array<{ account?: string; text: string }> }
 /** A driver whose prompt emits `usage` (the text of the prompt names the rate-limit payload). */
 function fake(id: string): Fake {
   const contexts: DriverContext[] = []
+  const prompts: Fake["prompts"] = []
   let seq = 0
   return {
-    contexts,
+    contexts, prompts,
     driver: {
       id,
       async open(context) {
@@ -31,6 +32,7 @@ function fake(id: string): Fake {
           capabilities: { resume: true, steer: false, fork: true, detach: false },
           async prompt(content) {
             const text = content[0]?.type === "text" ? content[0].text : ""
+            prompts.push({ ...(context.account !== undefined ? { account: context.account } : {}), text })
             if (text.startsWith("usage:")) context.onUpdate({ protocol: "native", value: { rateLimits: JSON.parse(text.slice(6)) } })
             return { stopReason: "end_turn" }
           },
@@ -47,7 +49,7 @@ function fake(id: string): Fake {
   }
 }
 
-async function setup(options: { agents?: Fake[]; autoSwitch?: boolean; profiles?: Record<string, { agent: string; env?: Record<string, string> }> } = {}) {
+async function setup(options: { agents?: Fake[]; autoSwitch?: boolean; continueAfterSwitch?: boolean; continuePrompt?: string; profiles?: Record<string, { agent: string; env?: Record<string, string> }> } = {}) {
   const base = await scratch()
   const stateDirectory = join(base, "state")
   const claudeRoot = join(base, "claude-root")
@@ -56,7 +58,12 @@ async function setup(options: { agents?: Fake[]; autoSwitch?: boolean; profiles?
   const vault = memoryVault()
   const core = createCore({
     stateDirectory, agents: agents.map(a => a.driver), limits: TEST_LIMITS,
-    accounts: { vault, homes: { claudeRoot, codexRoot }, ...(options.autoSwitch !== undefined ? { autoSwitch: options.autoSwitch } : {}) },
+    accounts: {
+      vault, homes: { claudeRoot, codexRoot },
+      ...(options.autoSwitch !== undefined ? { autoSwitch: options.autoSwitch } : {}),
+      ...(options.continueAfterSwitch !== undefined ? { continueAfterSwitch: options.continueAfterSwitch } : {}),
+      ...(options.continuePrompt !== undefined ? { continuePrompt: options.continuePrompt } : {}),
+    },
     ...(options.profiles ? { profiles: options.profiles } : {}),
   })
   cores.push(core)
@@ -300,4 +307,131 @@ test("accounts survive a restart; the default vault is a file vault under the st
   expect((await second.accounts.list()).map(a => a.id)).toEqual(["claude:system", "k"])
   const cwd = await scratch()
   await second.sessions.create({ id: nextId(), agent: "claude", cwd, account: "k" })
+})
+
+const DEFAULT_CONTINUE = "Continue from where you stopped. Your previous turn hit a usage limit and you are now on another account."
+const settle = (ms = 60) => new Promise(resolve => setTimeout(resolve, ms))
+
+test("limit continuation: one continuation prompt on the new account after a limit switch", async () => {
+  const { core, agents, events } = await setup({ autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "a", agent: "claude", method: "token", secret: "t-a" })
+  const id = nextId()
+  const session = await core.sessions.create({ id, agent: "claude", cwd, account: "a" })
+  const full = JSON.stringify({ status: "rejected", rateLimitType: "five_hour", resetsAt: future() })
+  await (await session.send({ content: text(`usage:${full}`), whenBusy: "queue" })).completed
+  await waitFor(events, e => e.type === "account.switched" ? e : undefined)
+  const deadline = Date.now() + 3000
+  while (agents[0]!.prompts.length < 2 && Date.now() < deadline) await settle(10)
+  await settle()
+  expect(agents[0]!.prompts).toEqual([
+    { account: "a", text: `usage:${full}` },
+    { account: "claude:system", text: DEFAULT_CONTINUE },
+  ])
+})
+
+test("limit continuation: custom prompt; off with continueAfterSwitch false; skipped when input is queued", async () => {
+  const full = JSON.stringify({ status: "rejected", rateLimitType: "five_hour", resetsAt: future() })
+  {
+    const { core, agents, events } = await setup({ autoSwitch: true, continuePrompt: "go on" })
+    await core.accounts.add({ id: "a", agent: "claude", method: "token", secret: "t-a" })
+    const s = await core.sessions.create({ id: nextId(), agent: "claude", cwd: await scratch(), account: "a" })
+    await (await s.send({ content: text(`usage:${full}`), whenBusy: "queue" })).completed
+    await waitFor(events, e => e.type === "account.switched" ? e : undefined)
+    const deadline = Date.now() + 3000
+    while (agents[0]!.prompts.length < 2 && Date.now() < deadline) await settle(10)
+    expect(agents[0]!.prompts.at(-1)).toEqual({ account: "claude:system", text: "go on" })
+  }
+  {
+    const { core, agents, events } = await setup({ autoSwitch: true, continueAfterSwitch: false })
+    await core.accounts.add({ id: "a", agent: "claude", method: "token", secret: "t-a" })
+    const s = await core.sessions.create({ id: nextId(), agent: "claude", cwd: await scratch(), account: "a" })
+    await (await s.send({ content: text(`usage:${full}`), whenBusy: "queue" })).completed
+    await waitFor(events, e => e.type === "account.switched" ? e : undefined)
+    await settle(150)
+    expect(agents[0]!.prompts.length).toBe(1)
+  }
+  {
+    const { core, agents, events } = await setup({ autoSwitch: true })
+    await core.accounts.add({ id: "a", agent: "claude", method: "token", secret: "t-a" })
+    const s = await core.sessions.create({ id: nextId(), agent: "claude", cwd: await scratch(), account: "a" })
+    await s.send({ content: text(`usage:${full}`), whenBusy: "queue" })
+    await s.send({ content: text("queued by the host"), whenBusy: "queue" })
+    await waitFor(events, e => e.type === "account.switched" ? e : undefined)
+    await settle(150)
+    expect(agents[0]!.prompts.some(p => p.text === DEFAULT_CONTINUE)).toBe(false)
+  }
+  {
+    // A switch that was not caused by the turn hitting a limit (manual) sends nothing.
+    const { core, agents } = await setup({ autoSwitch: true })
+    await core.accounts.add({ id: "a", agent: "claude", method: "token", secret: "t-a" })
+    const id = nextId()
+    const s = await core.sessions.create({ id, agent: "claude", cwd: await scratch() })
+    await (await s.send({ content: text("hello"), whenBusy: "queue" })).completed
+    await core.sessions.resume(id, { account: "a" })
+    await settle(100)
+    expect(agents[0]!.prompts.map(p => p.text)).toEqual(["hello"])
+  }
+  const dir = await scratch()
+  expect(() => createCore({ stateDirectory: dir, agents: [], limits: TEST_LIMITS, accounts: { continuePrompt: " " } })).toThrow("continuePrompt")
+  expect(() => createCore({ stateDirectory: dir, agents: [], limits: TEST_LIMITS, accounts: { continueAfterSwitch: "no" as never } })).toThrow("continueAfterSwitch")
+})
+
+test("usage persists across restarts (windows with a future reset only); remove drops it", async () => {
+  const base = await scratch()
+  const stateDirectory = join(base, "state")
+  const open = () => createCore({ stateDirectory, agents: [fake("claude").driver], limits: TEST_LIMITS, accounts: { vault: memoryVault({ a: "t-a" }), homes: { claudeRoot: join(base, "root") } } })
+  const first = open()
+  await first.accounts.add({ id: "a", agent: "claude", method: "token", secret: "t-a" })
+  const s = await first.sessions.create({ id: nextId(), agent: "claude", cwd: await scratch(), account: "a" })
+  const rateLimits = { status: "allowed", unifiedWindows: { five_hour: { utilization: 0.5, resetsAt: future() }, seven_day: { utilization: 0.2 } } }
+  await (await s.send({ content: text(`usage:${JSON.stringify(rateLimits)}`), whenBusy: "queue" })).completed
+  await settle(20)
+  await first.close({ agents: "shutdown" })
+  const file = join(stateDirectory, "accounts", "usage.json")
+  const saved = JSON.parse(await readFile(file, "utf8"))
+  expect(Object.keys(saved.accounts)).toEqual(["a"])
+  expect(saved.accounts.a).toEqual([{ name: "five_hour", usedPercent: 50, resetsAt: expect.any(String) }])
+  expect((await stat(file)).mode & 0o777).toBe(0o600)
+
+  // Expired windows are dropped on load.
+  saved.accounts.old = [{ name: "five_hour", usedPercent: 100, resetsAt: new Date(Date.now() - 1000).toISOString() }]
+  await writeFile(file, JSON.stringify(saved))
+  const second = open()
+  cores.push(second)
+  expect((await second.accounts.list()).length).toBe(2)
+  expect(second.accounts.usage("a")).toEqual([{ name: "five_hour", usedPercent: 50, resetsAt: expect.any(Date) }])
+  expect(second.accounts.usage("old")).toBeUndefined()
+  expect((await second.accounts.pick("claude"))?.id).toBe("a")
+  await second.accounts.remove("a")
+  expect(second.accounts.usage("a")).toBeUndefined()
+  await second.close({ agents: "shutdown" })
+  expect(JSON.parse(await readFile(file, "utf8")).accounts).toEqual({})
+})
+
+test("a corrupt usage.json is a cache miss", async () => {
+  const base = await scratch()
+  const stateDirectory = join(base, "state")
+  await mkdir(join(stateDirectory, "accounts"), { recursive: true })
+  await writeFile(join(stateDirectory, "accounts", "usage.json"), "{nope")
+  const core = createCore({ stateDirectory, agents: [fake("claude").driver], limits: TEST_LIMITS, accounts: { vault: memoryVault() } })
+  cores.push(core)
+  expect((await core.accounts.pick("claude"))?.id).toBe("claude:system")
+})
+
+test("remove({ deleteHome }) unlinks shared entries and removes the private files; the history root is untouched", async () => {
+  const { core, claudeRoot } = await setup()
+  await core.accounts.add({ id: "s", agent: "claude", method: "subscription" })
+  const home = await core.accounts.home("s")
+  await writeFile(join(claudeRoot, "projects", "keep.jsonl"), "history")
+  await writeFile(join(home, ".credentials.json"), "{}")
+  await core.accounts.add({ id: "s2", agent: "claude", method: "subscription" })
+  const home2 = await core.accounts.home("s2")
+  await core.accounts.remove("s2")
+  expect((await stat(home2)).isDirectory()).toBe(true)
+  await core.accounts.remove("s", { deleteHome: true })
+  await expect(stat(home)).rejects.toMatchObject({ code: "ENOENT" })
+  expect(await readFile(join(claudeRoot, "projects", "keep.jsonl"), "utf8")).toBe("history")
+  expect((await stat(join(claudeRoot, "settings.json"))).isFile()).toBe(true)
+  await expect(core.accounts.remove("s2", { deleteHome: true })).rejects.toMatchObject({ code: "unknown_account" })
 })

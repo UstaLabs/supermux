@@ -24,4 +24,7 @@ export type { Host, HostHandle, HostOptions, HostRegistration, HostStartOptions 
 export { createHostProvider } from "./host/provider.js"
 export type { HostProvider, HostFactory } from "./host/provider.js"
 export { fileVault, memoryVault } from "./accounts/vault.js"
-export type { Account, AccountMethod, AccountIdentity, AddAccountOptions, AccountsOptions, Vault, UsageWindow } from "./accounts/types.js"
+export type {
+  Account, AccountMethod, AccountIdentity, AddAccountOptions, AccountsOptions, Vault, UsageWindow,
+  LoginState, LoginPhase, LoginOptions, LoginHandle, LoginRunner, LoginSpawn, LoginProcess, LoginConfig, FetchLike,
+} from "./accounts/types.js"

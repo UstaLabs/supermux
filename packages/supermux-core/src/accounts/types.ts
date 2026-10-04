@@ -53,7 +53,22 @@ export type MaterializeContext = {
   home(): Promise<string>
 }
 
-export type HomeRoots = { claudeRoot?: string; codexRoot?: string }
+/** History roots (claude, codex) and the system logins' locations (grok, cursor). */
+export type HomeRoots = {
+  claudeRoot?: string
+  codexRoot?: string
+  /** System Grok home (auth.json). Default: $GROK_HOME or ~/.grok. */
+  grokRoot?: string
+  /** System Cursor config root (cursor/auth.json). Default: $XDG_CONFIG_HOME or ~/.config. */
+  cursorRoot?: string
+}
+
+/** The subset of `fetch` the refresh needs (injectable for tests). */
+export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string }) => Promise<{
+  ok: boolean
+  status: number
+  text(): Promise<string>
+}>
 
 export type AuthAdapter = {
   readonly kind: "claude" | "codex" | "cursor" | "grok" | "opencode" | "generic"
@@ -69,6 +84,14 @@ export type AuthAdapter = {
   secretRotates?(secret: string): boolean
   /** Rate-limit payload of a normalized `usage` body → windows. Unknown shapes → []. */
   usage?(rateLimits: unknown): UsageWindow[]
+  /** Expiry of a vault secret's access token (token accounts). */
+  secretExpiry?(secret: string): Date | undefined
+  /**
+   * Vault-owned refresh: exchanges the secret's refresh token and returns the new secret (rotated
+   * refresh token kept, or the old one when the server omits it). Errors are CoreError
+   * account_expired / account_refresh_failed carrying the server's error code, never a secret.
+   */
+  refreshSecret?(secret: string, fetch: FetchLike): Promise<string>
   /** Validates an add() before anything is stored. */
   validate?(options: AddAccountOptions): void
 }
@@ -82,4 +105,72 @@ export type AccountsOptions = {
   homes?: HomeRoots
   /** Switch a session to another account of its agent when a rate-limit window reaches 100%. */
   autoSwitch?: boolean
+  /** After a limit switch whose last turn hit the limit, send `continuePrompt` once on the new account. Default true. */
+  continueAfterSwitch?: boolean
+  /** Default: "Continue from where you stopped. Your previous turn hit a usage limit and you are now on another account." */
+  continuePrompt?: string
+  /** Token refresh transport. Default: globalThis.fetch. */
+  fetch?: FetchLike
+  /** Guided login (core.accounts.login). */
+  login?: LoginConfig
+}
+
+export type LoginPhase = "starting" | "awaiting_user" | "verifying" | "done" | "failed" | "cancelled"
+
+export type LoginState = {
+  phase: LoginPhase
+  /** Where the user signs in. */
+  url?: string
+  /** Device code to enter at `url` (codex, grok). */
+  code?: string
+  /** The CLI waits for a code pasted back via submitCode (claude). */
+  needsCode?: boolean
+  error?: string
+  /** CoreError code of a failure (account_exists, login_failed, login_timeout, ...). */
+  errorCode?: string
+}
+
+export type LoginOptions = {
+  agent: string
+  id?: string
+  label?: string
+  /** Claude: pre-fills the sign-in page and must match the signed-in email. */
+  email?: string
+  isolated?: boolean
+  /** "subscription" (default): the login becomes an account home. "token" (codex): its tokens move to the vault. */
+  as?: "subscription" | "token"
+}
+
+export interface LoginHandle {
+  state(): LoginState
+  /** Called on every state change; returns an unsubscribe function. */
+  on(listener: (state: LoginState) => void): () => void
+  /** Claude: types the code from the sign-in page into the CLI (text, then Enter). */
+  submitCode(text: string): void
+  /** Kills the login process group and removes its temp dir. */
+  cancel(): void
+  /** The new account; rejects with a CoreError (login_failed, login_timeout, login_cancelled, account_exists, ...). */
+  readonly done: Promise<Account>
+}
+
+/** One login process. `pty`: the CLI needs a terminal (the default runner wraps it in `script`). */
+export type LoginSpawn = { command: string; args: string[]; env: Record<string, string>; cwd: string; pty: boolean }
+
+export interface LoginProcess {
+  onOutput(listener: (chunk: string) => void): void
+  onExit(listener: (code: number | null) => void): void
+  write(data: string): void
+  /** Terminates the whole process group. */
+  kill(): void
+}
+
+export type LoginRunner = (spawn: LoginSpawn) => LoginProcess
+
+export type LoginConfig = {
+  /** Default: spawns a detached process group (Claude through `script` for a PTY). */
+  runner?: LoginRunner
+  /** CLI per agent kind. Defaults: claude, codex, grok, cursor-agent (or agent). */
+  commands?: Partial<Record<"claude" | "codex" | "grok" | "cursor", string>>
+  /** Whole login, including the user's part. Default 600000 (10 min). */
+  timeoutMs?: number
 }

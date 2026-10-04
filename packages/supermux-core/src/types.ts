@@ -149,6 +149,8 @@ export type CoreEvent =
   | { type: "message.started"; sessionId: string; messageId: string }
   | { type: "message.completed"; sessionId: string; messageId: string; result: Completion }
   | { type: "account.switched"; sessionId: string; from: string; to: string; reason: "manual" | "limit" }
+  /** An idle token-account session was reopened (same account, same native id) to pick up a refreshed access token. */
+  | { type: "account.refreshed"; sessionId: string; account: string }
   /** A rate limit was hit and no other account of the agent is available. */
   | { type: "account.exhausted"; sessionId: string; agent: string; account: string }
 
