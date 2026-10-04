@@ -256,7 +256,7 @@ describe("KeepAwake", () => {
     await flush()
     await h.clock.advance(3_600_000)
     expect(h.children).toHaveLength(3)
-    const final = { enabled: true, onBattery: true, active: false, supported: true, reason: REASON_DENIED, reasonCode: "denied", hint: HINT_DENIED }
+    const final: KeepAwakeState = { enabled: true, onBattery: true, active: false, supported: true, reason: REASON_DENIED, reasonCode: "denied", hint: HINT_DENIED }
     expect(h.ka.state()).toEqual(final)
     expect(h.states.at(-1)).toEqual(final)
     expect(HINT_DENIED).toContain("org.freedesktop.login1.inhibit-block-sleep")
