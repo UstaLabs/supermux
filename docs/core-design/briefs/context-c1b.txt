@@ -1,0 +1,91 @@
+BRIEF: session context, slice C1b: change context in flight (`session.updateContext`)
+
+Worktree: /home/ahmet/.mux/worktrees/b4d27b57-c621-4a5a-90fe-c19ffa36328d-0ba396a5/a2dac5b8-a140-4d86-b85d-3d3a46d25663
+branch mux/supermux-core-exploratio. Package: packages/supermux-core.
+
+READ FIRST
+- docs/core-design/session-context.md: the "Changing context in flight" section and its table.
+- docs/core-design/context-c0-report.md and scripts/context-probe.ts: the PROVEN live mechanisms,
+  with their exact request shapes (Claude control requests reload_plugins / reload_skills /
+  mcp_set_servers; Codex skills/extraRoots/set, config/value/write + config/mcpServer/reload; Grok
+  [skills] paths). Use them; don't invent new ones.
+- The C1 code: src/context/{types,index,plugins,agents}.ts, core.ts changes (commit b4b0f9b5),
+  tests/context*.test.ts, scripts/context-live.ts. The account-switch relaunch path in core.ts (A1)
+  is the "reload" mechanism; reuse it.
+- ~/.mux/domains/claudemux.digest.md.
+
+API
+  session.updateContext(patch: {
+    instructions?: string | string[]          // replaces the session's own instructions
+    skills?: { add?: string[]; remove?: string[] }
+    plugins?: { add?: string[]; remove?: string[] }
+    mcpServers?: { add?: ExternalMcpServer[]; remove?: string[] }  // remove by name
+  }, options?: { reload?: "allow" | "never"; holdOnCacheImpact?: boolean })
+  → Promise<{ applied: Array<{ kind, item, how: "live" | "reload" | "append" | "unsupported", reason? }>,
+              effective: "now" | "next_turn" }>
+  plus an event { type: "context.updated", sessionId, applied } on the session stream.
+Also core.sessions.updateContext(id, patch, options) for a session that isn't open (it only updates
+the record; the next launch applies it).
+
+Semantics
+- Validate like C1 (invalid_context). The patch applies to the session's OWN context; the core
+  default is untouched. Persist the new context to the record before any change goes out to the
+  agent, so a crash never leaves the record older than what is live.
+- Decide per item from the driver's declared capabilities: live when proven, otherwise reload (if
+  allowed), otherwise unsupported. Under the session's contextPolicy "error", if anything would be
+  unsupported, apply NOTHING and throw context_unsupported. Under "warn", apply what can be applied
+  and report the rest.
+- If any item needs a reload: never cancel a running turn. Wait until idle (the same rule as
+  auto-switch), then relaunch on the same conversation with the full new context; queued input runs
+  after. reload: "never" → those items are unsupported. Live items go out immediately, even
+  mid-turn when the mechanism allows it; otherwise at the next idle point. Report `effective`
+  truthfully.
+- Instructions: Claude → reload. OpenCode → reload. Codex → cannot replace. With option
+  `codexInstructions: "append"`, send via turn/start.additionalContext on later turns (C0 proved
+  it; it lands in history, so make it opt-in). Without that option it is unsupported. Grok →
+  unsupported.
+- Live mechanisms (C0):
+  - Claude: skills → write the wrapper/symlink into <ctx>/plugins, then reload_skills; plugins →
+    symlink into <ctx>/plugins, then reload_plugins (pass hold_on_cache_impact when
+    holdOnCacheImpact); MCP → mcp_set_servers with the FULL new server set. Removal: verify live
+    that removing a symlink + reload_plugins really unloads it, and that mcp_set_servers without a
+    server stops it. Prove each one or mark it reload.
+  - Codex: skills → skills/extraRoots/set with the full new list; plugins → the mapped parts (their
+    skills via extraRoots, their stdio MCP servers via the MCP path); MCP → this must stay per
+    PROCESS: C1 passes servers as app-server `-c` args, and config/value/write would write to
+    CODEX_HOME (which can be shared by an account). Find out whether config/value/write can target
+    a non-persisted layer, or whether the thread `config` override works. If not, MCP add/remove on
+    Codex is reload (new app-server with the new `-c` args + thread/resume). Wait for the server's
+    ready status (mcpServerStatus) before the next turn is sent.
+  - Grok: skills → reload (C1 passes them as --plugin-dir; C0's live route rewrote a config.toml,
+    which C1 deliberately doesn't own). Everything else on Grok is reload.
+  - OpenCode: everything reload.
+  - Cursor: unverified, so reload.
+- The keeper (detached sessions): a reload must really relaunch the agent process; a reattach is
+  not enough. C1 left this documented-not-handled (a resumed keeper session keeps its old args).
+  Make sure updateContext's reload starts a NEW process with the new args, and fix resume(id,
+  { context }) the same way if it's the same code path. Explain what you did.
+
+TESTS
+- Unit: patch validation, error vs warn, record persisted first, live vs reload choice per
+  driver, waiting for idle (never cancel), reload: "never", the Codex append opt-in, and
+  core.sessions.updateContext on a closed session.
+- Live: extend scripts/context-live.ts (or add context-live-update.ts). Per agent (claude, codex,
+  grok, opencode): start with context A, then mid-session add a skill, a plugin and an MCP server,
+  each with a new probe token; the next turn must return all three. Check the applied `how`
+  values against the table. Also remove one item and prove it's gone (the agent can't use it).
+  Claude: check that a live change did NOT restart the process (same pid). Use cheap models, the
+  wording "probe token", scratch under ~/.cache/context-c1b/, never touch the real homes (snapshot
+  before/after), and kill all children.
+- Gates: core typecheck, the full core suite, and the broker typecheck (ignore the known error in
+  the other agent's uncommitted tests/ui/accounts-shots.spec.ts; there must be no new ones).
+
+WORKTREE HYGIENE
+Another agent has UNCOMMITTED work in apps/, tests/ui/ and graphify-out/. Never edit, stage, stash
+or revert those. Only touch packages/supermux-core/** and docs/core-design/**. Commit with explicit
+paths (docs need `git add -f`).
+
+DELIVERABLES
+Code + tests + API.md/README + session-context.md updated to what was built, committed. Append
+dated durable facts to ~/.mux/domains/claudemux.md. Report: the API as built, the live table
+(per agent and item: how + evidence), what removal really does, the keeper fix, and open issues.

@@ -18,6 +18,8 @@ export type ClaudeTransportOptions = {
     stateDirectory: string
     limits: { parkedDeadlineMs: number; journalMaxBytes: number; connectTimeoutMs: number }
   }
+  /** The launch's session-context fingerprint (see KeeperSpec.fingerprint). */
+  fingerprint?: string
 }
 
 export type TransportCloseMode = 'shutdown' | 'detach'
@@ -69,7 +71,7 @@ export async function transport(
   conn = await connectKeeper({
     stateDirectory: options.keeper.stateDirectory,
     sessionId: options.sessionId,
-    spec: { command: options.command, args: options.args, cwd: options.cwd, env: options.env, frameShape: 'claude-control', captureStderr: false },
+    spec: { command: options.command, args: options.args, cwd: options.cwd, env: options.env, ...(options.fingerprint !== undefined ? { fingerprint: options.fingerprint } : {}), frameShape: 'claude-control', captureStderr: false },
     limits: {
       maxFrameBytes: options.maxFrameBytes,
       shutdownTimeoutMs: options.shutdownTimeoutMs,
@@ -132,5 +134,6 @@ export async function transport(
     close,
     welcome,
     setMeta(value: Record<string, unknown>) { conn.setMeta(value) },
+    setFingerprint(fingerprint: string) { return conn.setFingerprint(fingerprint) },
   }
 }

@@ -7,7 +7,9 @@ import { transport } from './transport.js'
 import { multiAgentV1Launch } from './catalog.js'
 import { createCodexNormalizer } from './normalize.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
-import { CODEX_CONTEXT, codexContextLaunch } from '../context/agents.js'
+import { CODEX_CONTEXT, codexContextLaunch, codexExtraRoots, codexPluginIsLive } from '../context/agents.js'
+import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
+import type { ContextChange, RuntimeContextControl } from '../context/types.js'
 import { REASON, SUBAGENT_STATE_METHOD, shortReason } from '../subagent-actions.js'
 
 export type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -747,7 +749,9 @@ export function codex(options: CodexOptions): AgentDriver {
     const launch = await multiAgentV1Launch(options.command, sessionContext?.args.length ? [...baseArgs, ...sessionContext.args] : baseArgs, env, context.cwd)
     const args = launch.args
     let catalogWarning = launch.warning
-    const rpc = await transport({ command: options.command, args, env, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper }, dispatchNotify, fail)
+    const rpc = await transport({ command: options.command, args, env, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper, fingerprint: context.sessionContext?.fingerprint ?? EMPTY_CONTEXT_FINGERPRINT }, dispatchNotify, fail)
+    /** Instructions appended by updateContext (codexInstructions: "append"), sent once with the next turn (kept in keeper meta until then). */
+    let pendingInstructions: string | undefined
     const close = async (closeOptions: CloseOptions) => {
       const mode = requireCloseMode(closeOptions)
       if (!closed) { closed = true; cancelPendingPermissions(); fail(new Error('Codex runtime closed')) }
@@ -793,6 +797,7 @@ export function codex(options: CodexOptions): AgentDriver {
         if (seeded && typeof seeded === 'object') {
           try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'codex' }> } catch { /* keep factory spec */ }
         }
+        if (typeof rpc.welcome.meta.pendingInstructions === 'string') pendingInstructions = rpc.welcome.meta.pendingInstructions
         if (fatal) throw fatal
         ready = true
       } else {
@@ -850,9 +855,29 @@ export function codex(options: CodexOptions): AgentDriver {
       const message = error instanceof Error ? error.message : String(error)
       return new CoreError('subagent_unavailable', message ? shortReason(message) : REASON.codexNoInput, { cause: error })
     }
+    const contextControl: RuntimeContextControl = {
+      live(change: ContextChange) {
+        if (change.kind === 'skills') return true
+        // A plugin maps to extraRoots (live) plus its MCP servers (process args: a relaunch).
+        if (change.kind === 'plugins') return codexPluginIsLive(change.item)
+        return false
+      },
+      async apply(next) {
+        if (fatal || closed) throw fatal ?? new Error('Codex runtime closed')
+        // The full new list replaces the old one (a root left out is no longer scanned).
+        await rpc.request('skills/extraRoots/set', { extraRoots: codexExtraRoots(next) })
+        return []
+      },
+      appendInstructions(text: string) {
+        pendingInstructions = text
+        try { rpc.setMeta({ pendingInstructions: text }) } catch { /* */ }
+      },
+      recordFingerprint: fingerprint => rpc.setFingerprint(fingerprint),
+    }
     return {
       agentSessionId: agentSessionId!, capabilities: { resume: true, steer: true, fork: true, detach: true, configure: true, history: true, permissions: true }, close, interrupt,
       nativeProtocol: 'codex-app-server' as const,
+      context: contextControl,
       ...(restoredSubagents ? { restoredSubagents } : {}),
       async setPermissions(spec) {
         if (fatal || closed) throw fatal ?? new Error('Codex runtime closed')
@@ -980,7 +1005,13 @@ export function codex(options: CodexOptions): AgentDriver {
         const abort = () => { void interrupt().catch(error => { a.completion.reject(error) }) }
         signal.addEventListener('abort', abort, { once: true })
         try {
-          const result = await rpc.request('turn/start', { threadId: agentSessionId, input: converted, ...turnOverrides() })
+          const appended = pendingInstructions
+          // Verified on 0.159.2 (C0): additionalContext is a sticky history entry, so it is sent once.
+          const result = await rpc.request('turn/start', { threadId: agentSessionId, input: converted, ...turnOverrides(), ...(appended !== undefined ? { additionalContext: { 'supermux-instructions': { kind: 'application', value: appended } } } : {}) })
+          if (appended !== undefined && pendingInstructions === appended) {
+            pendingInstructions = undefined
+            try { rpc.setMeta({ pendingInstructions: null }) } catch { /* */ }
+          }
           if (typeof result?.turn?.id !== 'string' || !result.turn.id) throw new Error('Codex turn identity missing')
           const turnId: string = result.turn.id
           if (owned !== a) throw new Error('Codex turn already ended')

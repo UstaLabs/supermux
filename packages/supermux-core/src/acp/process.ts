@@ -23,6 +23,8 @@ export type ConnectAcpProcessOptions = {
   captureStderr: boolean
   onStderr?: (line: string) => void
   onOutgoingLine?: (line: string) => void
+  /** The launch's session-context fingerprint (see KeeperSpec.fingerprint). */
+  fingerprint?: string
 }
 
 export type AcpProcess = {
@@ -33,6 +35,7 @@ export type AcpProcess = {
   onExit(listener: (error: Error) => void): void
   close(opts: { mode: 'shutdown' | 'detach' }): Promise<void>
   setMeta(value: Record<string, unknown>): void
+  setFingerprint(fingerprint: string): Promise<void>
   ackConsumed(): void
   begin(): void
 }
@@ -55,7 +58,7 @@ export async function connectAcpProcess(options: ConnectAcpProcessOptions): Prom
   const conn: KeeperConnection = await connectKeeper({
     stateDirectory: options.keeper.stateDirectory,
     sessionId: options.sessionId,
-    spec: { command: options.command, args: options.args, cwd: options.cwd, env: options.env, frameShape: 'jsonrpc', captureStderr: options.captureStderr },
+    spec: { command: options.command, args: options.args, cwd: options.cwd, env: options.env, ...(options.fingerprint !== undefined ? { fingerprint: options.fingerprint } : {}), frameShape: 'jsonrpc', captureStderr: options.captureStderr },
     limits: {
       maxFrameBytes: options.maxFrameBytes,
       shutdownTimeoutMs: options.shutdownTimeoutMs,
@@ -178,6 +181,7 @@ export async function connectAcpProcess(options: ConnectAcpProcessOptions): Prom
     onExit(listener) { exitListener = listener },
     close,
     setMeta(value) { conn.setMeta(value) },
+    setFingerprint(fingerprint) { return conn.setFingerprint(fingerprint) },
     ackConsumed() {
       const seq = delivered.shift()
       if (seq !== undefined) conn.ack(seq)

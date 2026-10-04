@@ -75,6 +75,14 @@ if (process.env.MODE === 'setup-hang') {
       return
     }
     if (!initialized) fail(20, 'not initialized')
+    if (m.type === 'control_request' && ['reload_plugins', 'reload_skills', 'mcp_set_servers'].includes(m.request?.subtype)) {
+      // Session context in flight (C1b): record what the driver asked for.
+      if (process.env.CONTROL_TRACE) appendFileSync(process.env.CONTROL_TRACE, JSON.stringify(m.request) + '\n')
+      const held = m.request.subtype === 'reload_plugins' && m.request.hold_on_cache_impact === true && process.env.HOLD === '1'
+      const response = m.request.subtype === 'mcp_set_servers' ? {added: Object.keys(m.request.servers ?? {}), removed: [], errors: {}} : {plugins: [], ...(m.request.hold_on_cache_impact ? {held, ...(held ? {cache_impact: {tools: 1}} : {})} : {})}
+      send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response}})
+      return
+    }
     if (m.type === 'control_request' && m.request?.subtype === 'set_permission_mode') {
       send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response: {mode: m.request.mode}}})
       return

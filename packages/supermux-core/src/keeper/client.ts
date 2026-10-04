@@ -26,6 +26,8 @@ export type KeeperConnection = {
   detach(): Promise<void>
   shutdown(): Promise<void>
   onFrame(cb: (event: KeeperFrameEvent) => void): void
+  /** Records what the running agent now carries (after a change applied without a relaunch). */
+  setFingerprint(fingerprint: string): Promise<void>
 }
 
 const sessionLocks = new Map<string, Promise<unknown>>()
@@ -61,6 +63,7 @@ function validateSpec(spec: KeeperSpec): KeeperSpec {
   if (!spec.env || typeof spec.env !== 'object') throw new TypeError('invalid spec.env')
   if (spec.frameShape !== 'jsonrpc' && spec.frameShape !== 'claude-control') throw new TypeError('invalid spec.frameShape')
   if (typeof spec.captureStderr !== 'boolean') throw new TypeError('spec.captureStderr is required')
+  if (spec.fingerprint !== undefined && typeof spec.fingerprint !== 'string') throw new TypeError('invalid spec.fingerprint')
   return spec
 }
 
@@ -105,6 +108,29 @@ async function reapSpawned(pid: number, sockPath: string, statusPath: string, sh
   try { await unlink(statusPath) } catch { /* */ }
 }
 
+async function readFingerprint(path: string): Promise<string | undefined> {
+  try { return (await readFile(path, 'utf8')).trim() } catch { return undefined }
+}
+
+/**
+ * Stops a running keeper whose agent was launched for another fingerprint: SIGTERM makes the
+ * keeper shut its agent down (SIGTERM, then SIGKILL after shutdownTimeoutMs) and exit.
+ */
+async function retireKeeper(status: KeeperStatus, limits: KeeperLimits) {
+  try { process.kill(status.keeperPid, 'SIGTERM') } catch { /* already gone */ }
+  await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
+  if (alive(status.keeperPid)) {
+    try { process.kill(status.keeperPid, 'SIGKILL') } catch { /* */ }
+    await waitPidDead(status.keeperPid, 2000)
+  }
+  if (alive(status.agentPid)) {
+    try { process.kill(status.agentPid, 'SIGTERM') } catch { /* */ }
+    await waitPidDead(status.agentPid, limits.shutdownTimeoutMs)
+    if (alive(status.agentPid)) { try { process.kill(status.agentPid, 'SIGKILL') } catch { /* */ } await waitPidDead(status.agentPid, 2000) }
+  }
+  if (alive(status.keeperPid) || alive(status.agentPid)) throw new Error('keeper with an outdated launch did not stop')
+}
+
 async function waitForSocket(sockPath: string, timeoutMs: number) {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
@@ -139,6 +165,7 @@ async function connectLocked(options: {
   const sockPath = join(dir, 'keeper.sock')
   const statusPath = join(dir, 'status.json')
   const tokenPath = join(dir, 'token')
+  const fingerprintPath = join(dir, 'fingerprint')
 
   let spawnedPid: number | undefined
   let spawnedChild: ReturnType<typeof spawn> | undefined
@@ -147,6 +174,15 @@ async function connectLocked(options: {
     // Socket gone but pid alive: the keeper is finishing (it unlinks the socket before exit).
     const start = Date.now()
     while (alive(status.keeperPid) && Date.now() - start < options.limits.connectTimeoutMs) await sleep(20)
+  }
+  if (status && alive(status.keeperPid) && existsSync(sockPath) && status.agentExited === undefined && options.spec.fingerprint !== undefined) {
+    // A running agent launched for something else (another session context) is never re-attached:
+    // the caller asked for a process with the new launch, so the old one is stopped first.
+    const recorded = await readFingerprint(fingerprintPath)
+    if (recorded !== undefined && recorded !== options.spec.fingerprint) {
+      await retireKeeper(status, options.limits)
+      status = await readStatus(statusPath)
+    }
   }
   if (status && alive(status.keeperPid) && existsSync(sockPath) && status.agentExited === undefined) {
     // reuse a live keeper whose agent is still running
@@ -185,6 +221,8 @@ async function connectLocked(options: {
     spawnedPid = child.pid
     spawnedChild = child
     if (!spawnedPid) throw new Error('keeper spawn produced no pid')
+    if (options.spec.fingerprint !== undefined) await writeFile(fingerprintPath, options.spec.fingerprint + '\n', { mode: 0o600 })
+    else await unlink(fingerprintPath).catch(() => {})
     try {
       await waitForSocket(sockPath, options.limits.connectTimeoutMs)
       // The keeper creates the socket before it writes status.json; wait for the status
@@ -338,6 +376,10 @@ async function connectLocked(options: {
       throw new Error('keeper shutdown timed out')
     },
     onFrame(cb) { frameCbs.push(cb) },
+    async setFingerprint(fingerprint: string) {
+      if (typeof fingerprint !== 'string') throw new TypeError('invalid fingerprint')
+      await writeFile(fingerprintPath, fingerprint + '\n', { mode: 0o600 })
+    },
   }
   spawnedChild?.unref()
   return conn

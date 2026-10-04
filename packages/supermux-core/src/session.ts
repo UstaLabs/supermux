@@ -12,6 +12,7 @@ import type {
   ContentBlock, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot,
 } from "./types.js"
 import { validatePermissionsSpec } from "./permissions.js"
+import type { ContextPatch, RuntimeContextControl, SessionContext, UpdateContextOptions, UpdateContextResult } from "./context/types.js"
 import type { EventEnvelope, NativeProtocol, NormalizedBody, ToolCategory, TurnCompleteReason } from "./events/normalized.js"
 
 type SubagentBody = Extract<NormalizedBody, { kind: "subagent" }>
@@ -22,7 +23,12 @@ export type SessionOptions = {
   subagents?: SubagentSnapshot[]
   /** Save the registry; called after lifecycle/flag changes, serialized, failures ignored. */
   persistSubagents?: (subagents: SubagentSnapshot[]) => Promise<void>
+  /** Core's session.updateContext (see core.ts). */
+  updateContext?: (patch: ContextPatch, options: UpdateContextOptions | undefined) => Promise<UpdateContextResult>
 }
+
+/** Queued input handed from a session to the one that replaces it (a context reload). */
+export type CarriedQueue = { entries: unknown[]; seen: Array<[string, unknown]>; paused: boolean }
 
 /** Subagents remembered per session (running ones are always kept). */
 const SUBAGENTS_KEPT = 64
@@ -67,6 +73,9 @@ export class Session {
   private readonly pendingDeliveries: PendingDelivery[] = []
   private subagentsDirty = false
   private subagentsSaving?: Promise<void>
+  /** Core holds the queue while it applies a context change (no queued input starts meanwhile). */
+  private holds = 0
+  private stateWaiters: Array<() => void> = []
 
   constructor(
     private readonly record: SessionRecord,
@@ -115,7 +124,7 @@ export class Session {
         return prior.entry.receipt
       }
     }
-    if (input.whenBusy === "reject" && (this.active || this.queue.length || this.paused || this.activity.size)) throw new CoreError("session_busy", "Session is busy or its queue is paused")
+    if (input.whenBusy === "reject" && (this.active || this.queue.length || this.paused || this.holds || this.activity.size)) throw new CoreError("session_busy", "Session is busy or its queue is paused")
     if (this.queue.length >= this.maxPending) throw new CoreError("queue_full", "Session input queue is full")
     let resolve!: (result: Completion) => void
     const receipt = { messageId: randomUUID(), completed: new Promise<Completion>(done => { resolve = done }) }
@@ -458,6 +467,83 @@ export class Session {
   }
   async detach(): Promise<void> { throw new UnsupportedOperation("detach", this.record.agent) }
 
+  /**
+   * Changes the session's own context in flight (see API.md "Changing context in flight"). Never
+   * cancels a running turn: a change that needs it waits for the turn to end, with queued input
+   * held until the change is applied. After a reload the session continues in a NEW Session
+   * object (`core.sessions.live(id)`), and this one is closed; queued input moves over.
+   */
+  updateContext(patch: ContextPatch, options?: UpdateContextOptions): Promise<UpdateContextResult> {
+    try {
+      if (this.closing || this.state === "closed" || this.state === "closing") throw new CoreError("session_closed", "Session is closed")
+      if (this.state === "failed") throw new CoreError("session_failed", "Session runtime failed; close and resume it")
+      if (!this.options.updateContext) throw new UnsupportedOperation("updateContext", this.record.agent)
+      return this.options.updateContext(patch, options)
+    } catch (error) { return Promise.reject(error) }
+  }
+
+  /** Core-internal: the runtime's live context control. */
+  contextControl(): RuntimeContextControl | undefined { return this.runtime.context }
+
+  /** Core-internal: the record's context fields after updateContext persisted them. */
+  setContextRecord(context: SessionContext | undefined, createdInstructions: string | undefined): void {
+    if (context) this.record.context = structuredClone(context)
+    else delete this.record.context
+    if (createdInstructions !== undefined) this.record.createdInstructions = createdInstructions
+    else delete this.record.createdInstructions
+  }
+
+  /** Core-internal: hold the queue (no queued input starts) until the returned release is called. */
+  holdQueue(): () => void {
+    this.holds += 1
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.holds -= 1
+      if (!this.holds) this.drain()
+    }
+  }
+
+  /**
+   * Core-internal: resolves once no turn or native work runs (and no configure is in flight);
+   * rejects when the session fails or closes first. Hold the queue first, or queued input may
+   * start in between.
+   */
+  async whenIdle(): Promise<void> {
+    for (;;) {
+      if (this.state === "failed") throw new CoreError("session_failed", "Session runtime failed; close and resume it")
+      if (this.closing || this.state === "closed" || this.state === "closing") throw new CoreError("session_closed", "Session is closed")
+      if (this.configuring) { await this.configuring.catch(() => {}); continue }
+      if (this.forking) { await this.forking.catch(() => {}); continue }
+      if (this.state === "idle" && !this.active && !this.activity.size && !this.interrupting) return
+      if (this.interrupting) { await this.interrupting.catch(() => {}); continue }
+      await new Promise<void>(resolve => this.stateWaiters.push(resolve))
+    }
+  }
+
+  /** Core-internal: removes the queued input (not cancelled) so a replacing session can run it. */
+  takeQueue(): CarriedQueue {
+    const entries = this.queue.splice(0)
+    const seen = [...this.seen.entries()].filter(([, value]) => entries.includes(value.entry))
+    for (const [key] of seen) this.seen.delete(key)
+    return { entries, seen, paused: this.paused }
+  }
+
+  /** Core-internal: runs input carried over from the session this one replaces, in order, first. */
+  adoptQueue(carried: CarriedQueue): void {
+    const entries = carried.entries as Entry[]
+    this.queue.unshift(...entries)
+    for (const [key, value] of carried.seen) this.seen.set(key, value as { fingerprint: string; entry: Entry })
+    if (carried.paused) this.paused = true
+    this.drain()
+  }
+
+  /** Core-internal: fails carried input that no session will run. */
+  static failCarried(carried: CarriedQueue, error: Error): void {
+    for (const entry of carried.entries as Entry[]) entry.finish({ status: "failed", error })
+  }
+
   /** Driver callbacks target this handle, never a mutable global session lookup. */
   update(update: AgentUpdate): void {
     if (this.state === "closed") return
@@ -551,7 +637,7 @@ export class Session {
   }
 
   private drain(): void {
-    if (this.active || this.paused || this.closing || this.configuring || this.state === "failed" || this.activity.size) return
+    if (this.active || this.paused || this.holds || this.closing || this.configuring || this.state === "failed" || this.activity.size) return
     const entry = this.queue.shift()
     if (!entry) return
     this.active = entry
@@ -604,6 +690,7 @@ export class Session {
     if (this.state === state) return
     const previous = this.state
     this.state = state
+    for (const wake of this.stateWaiters.splice(0)) wake()
     this.emit({ type: "session.stateChanged", sessionId: this.id, state })
     if (state === "running" && previous === "idle") {
       this.turnSeq += 1

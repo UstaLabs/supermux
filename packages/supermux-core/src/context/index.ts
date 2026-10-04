@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { isAbsolute } from "node:path"
 import { CoreError } from "../errors.js"
@@ -189,3 +190,26 @@ function canonical(context: SessionContext | undefined) {
 export function isContextEmpty(context: SessionContext | undefined): boolean {
   return !context || (!instructionList(context.instructions).length && !context.skills?.length && !context.plugins?.length && !context.mcpServers?.length)
 }
+
+/**
+ * Digest of what a launch applies (the context minus its drops). Equal digests mean an agent
+ * process launched for one would carry the other; see LaunchContext.fingerprint.
+ */
+export function contextFingerprint(context: ResolvedContext, dropped: ContextDrop[]): string {
+  const gone = new Set(dropped.map(drop => `${drop.kind}\0${drop.item}`))
+  const kept = (kind: ContextItemKind, item: string) => !gone.has(`${kind}\0${item}`)
+  const applied = {
+    instructions: kept("instructions", "instructions") ? context.instructions ?? null : null,
+    skills: context.skills.filter(path => kept("skills", path)),
+    plugins: context.plugins.filter(path => kept("plugins", path)),
+    mcpServers: context.mcpServers.filter(server => kept("mcpServers", server.name)).map(server => ({
+      name: server.name, command: server.command, args: server.args,
+      env: Object.fromEntries(Object.entries(server.env).sort(([a], [b]) => a.localeCompare(b))),
+    })),
+    parts: dropped.filter(drop => drop.item.endsWith(")")).map(drop => `${drop.kind}\0${drop.item}`).sort(),
+  }
+  return createHash("sha256").update(JSON.stringify(applied)).digest("hex").slice(0, 32)
+}
+
+/** The fingerprint of a launch without any session context. */
+export const EMPTY_CONTEXT_FINGERPRINT = "none"

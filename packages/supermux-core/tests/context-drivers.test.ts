@@ -137,7 +137,7 @@ function contextFixture(): Fixture {
     return {
       instructions: "Probe instructions.", skills: [skills], plugins: [plugin],
       mcpServers: [{ name: "ctx", command: "/bin/echo", args: ["a b"], env: { K: "v \"q\"" } }],
-      directory, launch: "create", dropped: [], ...extra,
+      directory, launch: "create", dropped: [], fingerprint: "fixture", ...extra,
     }
   }
   return { root, skills, plugin, launch }
@@ -165,7 +165,8 @@ test("claude: a host's own --append-system-prompt-file is carried in first (Clau
   const host = join(f.root, "host.md"); writeFileSync(host, "Host prompt.")
   const context = f.launch({ skills: [], plugins: [], mcpServers: [] })
   const { argv } = await launch("claude", { sessionContext: context, profile: { agent: "claude", args: ["--append-system-prompt-file", host] } })
-  expect(argv.slice(-2)).toEqual(["--append-system-prompt-file", join(context.directory, "instructions.md")])
+  // The plugin folder is always passed (empty here) so skills and plugins can be added live later.
+  expect(argv.slice(-4)).toEqual(["--append-system-prompt-file", join(context.directory, "instructions.md"), "--plugin-dir", join(context.directory, "plugins")])
   expect(readFileSync(join(context.directory, "instructions.md"), "utf8")).toBe("Host prompt.\n\nProbe instructions.")
 })
 
@@ -271,4 +272,104 @@ test("generic acp: mcpServers only (unverified); collisions with driver servers 
   const driver = acp({ id: "acp", command: "x", args: [], mcpServers: [{ name: "ctx", command: "y", args: [], env: [] }], permissions: TEST_ACP_PERMISSIONS, ...ACP, keeper: keeper(), captureStderr: false })
   expect(driver.context!.capabilities.instructions.support).toBe("unsupported")
   expect(driver.context!.drops!(f.launch())).toEqual([{ kind: "mcpServers", item: "ctx", reason: "The driver already passes an MCP server named ctx" }])
+})
+
+// ------------------------------------------------------------ in flight (C1b): live control on the running process
+
+async function openLive(agent: "claude" | "codex", sessionContext: LaunchContext, env: Record<string, string> = {}) {
+  const dir = scratch()
+  const control = join(dir, "control.jsonl"), trace = join(dir, "trace.jsonl")
+  const driver = AGENTS[agent]!({ CONTROL_TRACE: control, TRACE: trace, ...env })
+  const runtime = await driver.open({
+    sessionId: "ctx-live", cwd: process.cwd(), signal: new AbortController().signal, sessionContext,
+    onUpdate() {}, onExit() {},
+    requestPermission: async () => ({ outcome: { outcome: "cancelled" } }), requestAnswers: async () => ({ outcome: "cancelled" as const }),
+  })
+  const lines = (file: string) => existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) : []
+  return { runtime, control: () => lines(control), trace: () => lines(trace) }
+}
+
+test("claude live: skills/plugins edit the launched folder + reload_plugins; MCP add/remove via mcp_set_servers (dynamic set only)", async () => {
+  const f = contextFixture()
+  const extra = join(f.root, "skills-2"); mkdirSync(join(extra, "gamma"), { recursive: true })
+  const launched = f.launch({ instructions: undefined })
+  const { runtime, control } = await openLive("claude", launched)
+  try {
+    const live = runtime.context!
+    expect(live.live({ kind: "skills", op: "add", item: extra }, launched)).toBe(true)
+    expect(live.live({ kind: "mcpServers", op: "add", item: "dyn" }, launched)).toBe(true)
+    // A launch server (--mcp-config) cannot be removed live.
+    expect(live.live({ kind: "mcpServers", op: "remove", item: "ctx" }, launched)).toBe(false)
+    const next = { ...launched, skills: [f.skills, extra], mcpServers: [...launched.mcpServers, { name: "dyn", command: "/bin/dyn", args: [], env: {} }] }
+    expect(await live.apply(next, [{ kind: "skills", op: "add", item: extra }, { kind: "mcpServers", op: "add", item: "dyn" }], {})).toEqual([])
+    const plugins = join(launched.directory, "plugins")
+    expect(readdirSync(plugins).sort()).toEqual(["01-my-plugin", "supermux-skills-1", "supermux-skills-2"])
+    expect(readlinkSync(join(plugins, "supermux-skills-2", "skills"))).toBe(extra)
+    expect(control()).toEqual([{ subtype: "reload_plugins" }, { subtype: "mcp_set_servers", servers: { dyn: { type: "stdio", command: "/bin/dyn", args: [], env: {} } } }])
+    // Now dyn is dynamic: removable live; removing it sends the set without it.
+    expect(live.live({ kind: "mcpServers", op: "remove", item: "dyn" }, next)).toBe(true)
+    const after = { ...next, skills: [extra], mcpServers: launched.mcpServers }
+    await live.apply(after, [{ kind: "skills", op: "remove", item: f.skills }, { kind: "mcpServers", op: "remove", item: "dyn" }], {})
+    expect(readdirSync(plugins).sort()).toEqual(["01-my-plugin", "supermux-skills-2"])
+    expect(control().slice(2)).toEqual([{ subtype: "reload_plugins" }, { subtype: "mcp_set_servers", servers: {} }])
+  } finally { await runtime.close({ mode: "shutdown" }) }
+})
+
+test("claude live: holdOnCacheImpact passes hold_on_cache_impact; a held reload is refused and the folder restored", async () => {
+  const f = contextFixture()
+  const launched = f.launch({ instructions: undefined, plugins: [], mcpServers: [] })
+  const { runtime, control } = await openLive("claude", launched, { HOLD: "1" })
+  try {
+    const before = readdirSync(join(launched.directory, "plugins")).sort()
+    const change = { kind: "plugins" as const, op: "add" as const, item: f.plugin }
+    const refused = await runtime.context!.apply({ ...launched, plugins: [f.plugin] }, [change], { holdOnCacheImpact: true })
+    expect(refused).toEqual([{ change, reason: expect.stringContaining("held the plugin reload") }])
+    expect(control()).toEqual([{ subtype: "reload_plugins", hold_on_cache_impact: true }])
+    expect(readdirSync(join(launched.directory, "plugins")).sort()).toEqual(before)
+  } finally { await runtime.close({ mode: "shutdown" }) }
+})
+
+test("codex live: skills/extraRoots/set with the full new list; plugins with MCP servers and MCP changes are not live; appended instructions ride the next turn once", async () => {
+  const f = contextFixture()
+  const launched = f.launch({ plugins: [], mcpServers: [] })
+  const { runtime, trace } = await openLive("codex", launched)
+  try {
+    const live = runtime.context!
+    const extra = join(f.root, "skills-2"); mkdirSync(extra)
+    expect(live.live({ kind: "skills", op: "add", item: extra }, launched)).toBe(true)
+    expect(live.live({ kind: "plugins", op: "add", item: f.plugin }, launched)).toBe(false) // it has .mcp.json servers
+    expect(live.live({ kind: "mcpServers", op: "add", item: "x" }, launched)).toBe(false)
+    await live.apply({ ...launched, skills: [extra] }, [{ kind: "skills", op: "remove", item: f.skills }, { kind: "skills", op: "add", item: extra }], {})
+    expect(trace().filter(line => line.method === "skills/extraRoots/set").map(line => line.params)).toEqual([{ extraRoots: [f.skills] }, { extraRoots: [extra] }])
+    live.appendInstructions!("New instructions.")
+    await runtime.prompt([{ type: "text", text: "one" }], new AbortController().signal)
+    await runtime.prompt([{ type: "text", text: "two" }], new AbortController().signal)
+    const turns = trace().filter(line => line.method === "turn/start").map(line => line.params.additionalContext)
+    expect(turns).toEqual([{ "supermux-instructions": { kind: "application", value: "New instructions." } }, undefined])
+  } finally { await runtime.close({ mode: "shutdown" }) }
+})
+
+test("keeper: resume with a changed context on a DETACHED Claude session starts a new process; an unchanged one re-attaches", async () => {
+  const { createCore } = await import("../src/core.js")
+  const f = contextFixture()
+  const state = join(f.root, "core-state"), pidFile = join(f.root, "pid")
+  const driver = AGENTS.claude!({ PID_FILE: pidFile })
+  const open = () => createCore({ stateDirectory: state, agents: [driver], limits: { interruptTimeoutMs: 30, maxPending: 16, outstandingActivity: 256 } })
+  const pid = () => Number(readFileSync(pidFile, "utf8"))
+  const alive = (n: number) => { try { process.kill(n, 0); return true } catch { return false } }
+  let core = open()
+  await core.sessions.create({ agent: "claude", cwd: process.cwd(), id: "kp", context: { skills: [f.skills] } })
+  const first = pid()
+  await core.close({ agents: "detach" })
+  core = open()
+  await core.sessions.resume("kp")
+  expect(pid()).toBe(first)
+  await core.close({ agents: "detach" })
+  core = open()
+  await core.sessions.resume("kp", { context: { skills: [f.skills], plugins: [f.plugin] } })
+  const second = pid()
+  expect(second).not.toBe(first)
+  expect(alive(first)).toBe(false)
+  await core.close({ agents: "shutdown" })
+  expect(alive(second)).toBe(false)
 })

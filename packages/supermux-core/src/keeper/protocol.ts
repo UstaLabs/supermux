@@ -16,6 +16,13 @@ export type KeeperSpec = {
   frameShape: FrameShape
   /** Forward the agent's stderr lines to the attacher as `stderr` messages (journaled as dir 'err'). */
   captureStderr: boolean
+  /**
+   * What the agent process was launched for (e.g. the session context). Set: a running keeper
+   * whose recorded fingerprint differs is shut down and a NEW agent process is started (a
+   * re-attach would keep the old process and its old args). A keeper with no recorded
+   * fingerprint (started before this field existed, or without one) is reused. Absent: always reuse.
+   */
+  fingerprint?: string
 }
 
 export type KeeperStatus = {

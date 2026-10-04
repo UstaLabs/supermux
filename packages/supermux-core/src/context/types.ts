@@ -37,8 +37,8 @@ export type ContextItemCapability = { support: ContextSupport; note: string }
 
 export type ContextCapabilities = Record<ContextItemKind, ContextItemCapability>
 
-/** `core.capabilities(agent)`. */
-export type AgentCapabilities = { context: ContextCapabilities }
+/** `core.capabilities(agent)`. `contextUpdate`: how `session.updateContext` reaches a running session. */
+export type AgentCapabilities = { context: ContextCapabilities; contextUpdate: ContextUpdateSupport }
 
 /** One context item (or part of one) that a launch could not apply. */
 export type ContextDrop = {
@@ -68,6 +68,11 @@ export type LaunchContext = ResolvedContext & {
   launch: "create" | "resume" | "fork"
   /** Items the core already dropped for this launch (policy "warn"): the driver must not apply them. */
   dropped: ContextDrop[]
+  /**
+   * Digest of what this launch applies. The driver hands it to the keeper: a detached agent
+   * process launched for another fingerprint is replaced by a new one, never re-attached.
+   */
+  fingerprint: string
 }
 
 /** A driver's context support (`AgentDriver.context`). Absent: the driver applies no context. */
@@ -77,4 +82,71 @@ export type DriverContextSupport = {
   instructionsFixedAtCreation?: boolean
   /** Parts of a context this driver cannot apply beyond the per-item table (e.g. plugin hooks it cannot map). */
   drops?(context: ResolvedContext): ContextDrop[]
+  /** In-flight changes (`session.updateContext`). Absent: every change needs a reload. */
+  update?: ContextUpdateSupport
+}
+
+// ---------------------------------------------------------------- in flight (C1b)
+
+/** `session.updateContext(patch)`: changes to the session's OWN context (the core default is untouched). */
+export type ContextPatch = {
+  /** Replaces the session's own instructions (`[]` or `""` removes them). */
+  instructions?: string | string[]
+  skills?: { add?: string[]; remove?: string[] }
+  plugins?: { add?: string[]; remove?: string[] }
+  /** `remove` by server name. */
+  mcpServers?: { add?: ContextMcpServer[]; remove?: string[] }
+}
+
+export type UpdateContextOptions = {
+  /** "never": items that need a relaunch are reported `unsupported` instead. Default "allow". */
+  reload?: "allow" | "never"
+  /** Claude: `reload_plugins` refuses (and the core reports `unsupported`) a reload that would change the tool list under a cached prompt. Default false. */
+  holdOnCacheImpact?: boolean
+  /** Codex: new instructions are added through `turn/start.additionalContext` on the next turn (they stay in the history). Without it a Codex instruction change is `unsupported`. */
+  codexInstructions?: "append"
+}
+
+/**
+ * - `live`: the running agent took the change, same process, conversation and prompt cache.
+ * - `reload`: the core relaunched the agent on the same conversation between turns (or, for a
+ *   session that is not open, the next launch applies it).
+ * - `append`: Codex instructions added to the conversation (opt-in, see `codexInstructions`).
+ * - `unsupported`: not applied (and not stored), with `reason`.
+ */
+export type ContextUpdateHow = "live" | "reload" | "append" | "unsupported"
+
+/** One change of a patch. `item`: the path, the MCP server name, or `instructions`. */
+export type ContextChange = { kind: ContextItemKind; op: "add" | "remove" | "replace"; item: string }
+
+export type ContextApplied = ContextChange & { how: ContextUpdateHow; reason?: string }
+
+export type UpdateContextResult = {
+  applied: ContextApplied[]
+  /** `now`: the running process already has every applied change. `next_turn`: the agent sees them from its next turn (waited for the current turn, a reload, an append, or a session that is not open). */
+  effective: "now" | "next_turn"
+}
+
+/** What a driver can do in flight, per kind and operation; the open runtime confirms each change. */
+export type ContextUpdateSupport = {
+  instructions: { how: "reload" | "append" | "unsupported"; note: string }
+  skills: { add: "live" | "reload"; remove: "live" | "reload"; note: string }
+  plugins: { add: "live" | "reload"; remove: "live" | "reload"; note: string }
+  mcpServers: { add: "live" | "reload"; remove: "live" | "reload"; note: string }
+}
+
+/** `AgentRuntime.context`: live changes on the running process (see ContextUpdateSupport). */
+export type RuntimeContextControl = {
+  /** Whether this process can take `change` live, given the full new context `next`. */
+  live(change: ContextChange, next: LaunchContext): boolean
+  /**
+   * Applies the live `changes`; `next` is the full new context (same session folder). Returns
+   * changes that were refused without effect (e.g. Claude held a plugin reload for the prompt
+   * cache), each with its reason. Throws when the process may be in an unknown state.
+   */
+  apply(next: LaunchContext, changes: ContextChange[], options: UpdateContextOptions): Promise<Array<{ change: ContextChange; reason: string }>>
+  /** Codex: adds `text` to the conversation through the next turn's additionalContext. */
+  appendInstructions?(text: string): void
+  /** Records on the keeper what the process now carries, so a later re-attach is not mistaken for an outdated launch. */
+  recordFingerprint?(fingerprint: string): Promise<void>
 }

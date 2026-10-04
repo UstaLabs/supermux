@@ -7,7 +7,7 @@ import type {
   SubagentMessaging,
 } from "./events/normalized.js"
 import type { AccountsOptions } from "./accounts/types.js"
-import type { ContextDrop, ContextPolicy, DriverContextSupport, LaunchContext, SessionContext } from "./context/types.js"
+import type { ContextApplied, ContextDrop, ContextPolicy, DriverContextSupport, LaunchContext, RuntimeContextControl, SessionContext } from "./context/types.js"
 
 export type PermissionOptionKind = "allow_once" | "allow_always" | "reject_once" | "reject_always"
 
@@ -162,6 +162,8 @@ export type CoreEvent =
   | { type: "account.exhausted"; sessionId: string; agent: string; account: string }
   /** The session launched (policy "warn") without these context items. */
   | { type: "context.degraded"; sessionId: string; dropped: ContextDrop[] }
+  /** `updateContext` finished: what each change did (see ContextApplied). */
+  | { type: "context.updated"; sessionId: string; applied: ContextApplied[] }
 
 export type Observer = (event: CoreEvent) => void | Promise<void>
 
@@ -324,6 +326,8 @@ export type AgentRuntime = {
   messageSubagent?(subagentId: string, content: ContentBlock[]): Promise<SubagentMessageResult>
   /** Stop a running subagent without interrupting the main turn. */
   stopSubagent?(subagentId: string): Promise<void>
+  /** Session context changes this process can take without a relaunch (session.updateContext). */
+  context?: RuntimeContextControl
 }
 
 export type AuthContext = {

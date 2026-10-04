@@ -14,6 +14,7 @@ import type { KeeperFrameEvent } from '../keeper/client.js'
 import { REASON, SUBAGENT_STATE_METHOD } from '../subagent-actions.js'
 import type { SubagentSnapshot } from '../types.js'
 import { genericAcpContext, type AcpContextAdapter } from '../context/agents.js'
+import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
 
 export type AcpActivityHint = { id?: string; phase: 'started' | 'completed' }
 export type AcpActivityClassifier = (update: AgentUpdate) => AcpActivityHint | undefined
@@ -212,6 +213,7 @@ export function acp(options: AcpOptions): AgentDriver {
       env: { ...baseEnv, ...sessionContext?.env, ...(plannedServer ? { OPENCODE_SERVER_PASSWORD: plannedServer.password } : {}) },
       cwd: session?.cwd ?? process.cwd(),
       sessionId,
+      ...(session ? { fingerprint: session.sessionContext?.fingerprint ?? EMPTY_CONTEXT_FINGERPRINT } : {}),
       shutdownTimeoutMs: shutdownTimeout,
       maxFrameBytes,
       keeper,

@@ -14,10 +14,14 @@ import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
 import {
-  contextDrops, isContextEmpty, isEmptyContext, mergeContexts, noContextCapabilities, normalizeContext, normalizePolicy,
+  contextDrops, contextFingerprint, isContextEmpty, joinInstructions, isEmptyContext, mergeContexts, noContextCapabilities, normalizeContext, normalizePolicy,
   resolveContext, sameContext, unsupportedError,
 } from "./context/index.js"
-import type { AgentCapabilities, ContextDrop, ContextPolicy, LaunchContext, SessionContext } from "./context/types.js"
+import { applyChanges, changeKey, normalizePatch, normalizeUpdateOptions, patchChanges, planChanges, reloadOnlyUpdates } from "./context/update.js"
+import type {
+  AgentCapabilities, ContextApplied, ContextDrop, ContextPatch, ContextPolicy, LaunchContext, ResolvedContext, SessionContext,
+  UpdateContextOptions, UpdateContextResult,
+} from "./context/types.js"
 import type { Account, AddAccountOptions, LoginHandle, LoginOptions, UsageWindow } from "./accounts/types.js"
 import type {
   ActivityNotice, AgentDriver, AgentRuntime, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
@@ -72,6 +76,8 @@ export class Core {
   private readonly logins = new Set<LoginHandle>()
   private readonly defaultContext: SessionContext | undefined
   private readonly defaultPolicy: ContextPolicy
+  /** updateContext calls per session, run one after another. */
+  private readonly contextUpdates = new Map<string, Promise<unknown>>()
 
   constructor(private readonly options: CoreOptions) {
     if (!options.stateDirectory) throw new CoreError("invalid_options", "stateDirectory is required")
@@ -119,7 +125,8 @@ export class Core {
   /** What `agent`'s driver can apply (today: the session context table). */
   capabilities(agent: string): AgentCapabilities {
     const support = this.driver(agent).context
-    return { context: structuredClone(support?.capabilities ?? noContextCapabilities()) }
+    const context = support?.capabilities ?? noContextCapabilities()
+    return { context: structuredClone(context), contextUpdate: structuredClone(support?.update ?? reloadOnlyUpdates(context)) }
   }
 
   readonly sessions = {
@@ -189,6 +196,12 @@ export class Core {
       return (await this.store.list()).filter(record => !filter.agent || record.agent === filter.agent)
     }),
     resume: (id: string, options?: ResumeOptions): Promise<Session> => this.resume(id, options, "manual"),
+    /**
+     * `session.updateContext` by id. For a session that is not open it only updates the record
+     * (every applicable change is `reload`: the next launch applies it); an open session is
+     * updated like `session.updateContext`.
+     */
+    updateContext: (id: string, patch: ContextPatch, options?: UpdateContextOptions): Promise<UpdateContextResult> => this.updateContext(id, patch, options),
     forget: (id: string): Promise<void> => {
       if (this.lifecycleBusy(id) || this.forgetting.has(id) || this.restoring.has(id) || this.reserved.has(id)) {
         return Promise.reject(new CoreError("session_busy", "Session has an outstanding lifecycle operation"))
@@ -340,7 +353,7 @@ export class Core {
     this.events.clear()
   }
 
-  private resume(id: string, options: ResumeOptions | undefined, reason: "manual" | "limit" | "refresh"): Promise<Session> {
+  private resume(id: string, options: ResumeOptions | undefined, reason: "manual" | "limit" | "refresh" | "context"): Promise<Session> {
     if (this.shuttingDown) return Promise.reject(new CoreError("core_closed", "Core is closing or closed"))
     let patch: SessionConfiguration | undefined
     let requestedAccount: string | undefined
@@ -394,7 +407,7 @@ export class Core {
         const state = current.snapshot().state
         // A context is applied at launch: a changed one relaunches an idle session (never mid-turn).
         if (contextChange && (state === "running" || state === "interrupting")) throw new CoreError("session_busy", "Wait for the turn to end before changing the session context")
-        if (state === "closing" || state === "failed" || switchFrom !== undefined || reason === "refresh" || contextChange) {
+        if (state === "closing" || state === "failed" || switchFrom !== undefined || reason === "refresh" || reason === "context" || contextChange) {
           // Failed/closing handle must be shut down before resume can reopen the native agent.
           // An account switch (or a token refresh) needs a fresh process with the new credentials (same native id).
           await current.close({ mode: "shutdown" })
@@ -417,7 +430,7 @@ export class Core {
         ...(ownContext !== undefined ? { context: ownContext } : {}),
       }, record.agentSessionId, undefined, original)
       if (reason === "refresh") this.events.emit({ type: "account.refreshed", sessionId: id, account: requestedAccount! })
-      else if (switchFrom !== undefined) this.events.emit({ type: "account.switched", sessionId: id, from: switchFrom, to: requestedAccount!, reason })
+      else if (switchFrom !== undefined && reason !== "context") this.events.emit({ type: "account.switched", sessionId: id, from: switchFrom, to: requestedAccount!, reason })
       return session
     })
     this.restoring.set(id, operation)
@@ -743,6 +756,7 @@ export class Core {
       }), recordToSave => this.store.put(recordToSave), {
         subagents: structuredClone(runtime.restoredSubagents ?? subagents),
         persistSubagents: list => this.store.putSubagents(record.id, list),
+        updateContext: (patch, options) => this.updateContext(record.id, patch, options),
       })
       this.live.set(record.id, session)
       if (record.account !== undefined) void this.scheduleRefresh(session).catch(error => this.reportObserverError(error))
@@ -831,10 +845,172 @@ export class Core {
     const instructionsApplied = resolved.instructions !== undefined && !dropped.some(drop => drop.kind === "instructions")
     const createdInstructions = launch === "create" ? (instructionsApplied ? resolved.instructions : undefined) : inherited
     return {
-      sessionContext: { ...resolved, directory, launch, dropped },
+      sessionContext: { ...resolved, directory, launch, dropped, fingerprint: contextFingerprint(resolved, dropped) },
       dropped,
       ...(createdInstructions !== undefined ? { createdInstructions } : {}),
     }
+  }
+
+  private updateContext(id: string, patch: unknown, options: unknown): Promise<UpdateContextResult> {
+    let normalized: ContextPatch, opts: UpdateContextOptions
+    try {
+      assertSessionId(id)
+      normalized = normalizePatch(patch)
+      opts = normalizeUpdateOptions(options)
+    } catch (error) { return Promise.reject(asError(error)) }
+    const previous = this.contextUpdates.get(id) ?? Promise.resolve()
+    const run = this.operation(() => previous.catch(() => {}).then(() => this.applyContextUpdate(id, normalized, opts)))
+    const settled = run.catch(() => {})
+    this.contextUpdates.set(id, settled)
+    void settled.finally(() => { if (this.contextUpdates.get(id) === settled) this.contextUpdates.delete(id) })
+    return run
+  }
+
+  /**
+   * One updateContext: validate, plan per change, refuse everything under policy "error" when
+   * anything is unsupported, persist the new own context, then (open session) wait for the turn
+   * to end with the queue held and apply live, append, or relaunch on the same conversation.
+   */
+  private async applyContextUpdate(id: string, patch: ContextPatch, options: UpdateContextOptions): Promise<UpdateContextResult> {
+    await this.ready()
+    if (this.lifecycleBusy(id) || this.reserved.has(id) || this.forgetting.has(id) || this.restoring.has(id)) {
+      throw new CoreError("session_busy", "Session has an outstanding lifecycle operation")
+    }
+    const record = await this.store.get(id)
+    if (!record) throw new CoreError("session_not_found", `Session ${id} was not found`)
+    const driver = this.driver(record.agent)
+    // A failed or closing session is treated as not open: only the record changes (its next launch applies it).
+    const open = this.sessions.live(id)
+    const live = open && open.snapshot().state !== "failed" && open.snapshot().state !== "closing" ? open : undefined
+    // Busy when the call arrives: the change then reaches the agent after the current turn.
+    const busy = live !== undefined && live.snapshot().state !== "idle"
+    const changes = patchChanges(record.context, this.defaultContext, patch)
+    if (!changes.length) return { applied: [], effective: "now" }
+    // Every added path must exist and every server name stay unique, supported or not.
+    await resolveContext(mergeContexts(this.defaultContext, applyChanges(record.context, patch, changes)))
+    const capabilities = driver.context?.capabilities ?? noContextCapabilities()
+    const runtime = live?.contextControl()
+    const launchFor = async (own: SessionContext, createdInstructions: string | undefined) => {
+      const resolved = await resolveContext(mergeContexts(this.defaultContext, own))
+      const dropped = contextDrops(resolved, driver.context, "resume", createdInstructions)
+      const next: LaunchContext = {
+        ...resolved, directory: this.store.contextDirectory(id), launch: "resume", dropped, fingerprint: contextFingerprint(resolved, dropped),
+      }
+      return { resolved, dropped, next }
+    }
+    const statically = changes.filter(change => capabilities[change.kind].support !== "unsupported")
+    const preliminary = await launchFor(applyChanges(record.context, patch, statically), record.createdInstructions)
+    let applied = planChanges({
+      agent: driver.id, changes, support: driver.context, capabilities, runtime, next: preliminary.next, options, open: live !== undefined,
+      instructionsRemoved: patch.instructions !== undefined && joinInstructions(patch.instructions) === undefined,
+    })
+    const before = contextDrops(await resolveContext(mergeContexts(this.defaultContext, record.context)), driver.context, "resume", record.createdInstructions)
+    const known = new Set(before.map(drop => `${drop.kind}\0${drop.item}`))
+    let outcome!: Awaited<ReturnType<typeof launchFor>>
+    let own!: SessionContext
+    let createdInstructions = record.createdInstructions
+    let parts: ContextApplied[] = []
+    for (let pass = 0; pass < 3; pass++) {
+      own = applyChanges(record.context, patch, applied.filter(entry => entry.how !== "unsupported"))
+      const resolvedOwn = await resolveContext(mergeContexts(this.defaultContext, own))
+      createdInstructions = applied.some(entry => entry.how === "append") ? resolvedOwn.instructions : record.createdInstructions
+      outcome = await launchFor(own, createdInstructions)
+      // Drops the new context brings (e.g. a plugin part this agent cannot map, a server name the driver already uses).
+      const fresh = outcome.dropped.filter(drop => !known.has(`${drop.kind}\0${drop.item}`))
+      const whole = fresh.filter(drop => applied.some(entry => entry.how !== "unsupported" && entry.kind === drop.kind && entry.item === drop.item))
+      parts = fresh.filter(drop => !whole.includes(drop)).map(drop => ({ kind: drop.kind, op: "add" as const, item: drop.item, how: "unsupported" as const, reason: drop.reason }))
+      if (!whole.length) break
+      applied = applied.map(entry => {
+        const drop = whole.find(candidate => candidate.kind === entry.kind && candidate.item === entry.item)
+        return drop ? { ...entry, how: "unsupported" as const, reason: drop.reason } : entry
+      })
+    }
+    applied = [...applied, ...parts]
+    const unsupported = applied.filter(entry => entry.how === "unsupported")
+    if (unsupported.length && (record.contextPolicy ?? this.defaultPolicy) === "error") {
+      throw unsupportedError(driver.id, unsupported.map(entry => ({ kind: entry.kind, item: entry.item, reason: entry.reason ?? "unsupported" })))
+    }
+    const effective = applied.filter(entry => entry.how !== "unsupported")
+    if (!effective.length) {
+      this.events.emit({ type: "context.updated", sessionId: id, applied: structuredClone(applied) })
+      return { applied, effective: "now" }
+    }
+    // The record first: a crash from here on never leaves it older than what is live.
+    const persist = async (context: SessionContext, created: string | undefined) => {
+      // Re-read: other fields (permissions, configuration) may have been saved meanwhile.
+      const { context: _context, createdInstructions: _created, ...rest } = await this.store.get(id) ?? record
+      const saved: SessionRecord = {
+        ...rest,
+        ...(!isContextEmpty(context) ? { context: structuredClone(context) } : {}),
+        ...(created !== undefined ? { createdInstructions: created } : {}),
+      }
+      await this.store.put(saved)
+      const current = this.live.get(id)
+      if (current && current.snapshot().state !== "closed") current.setContextRecord(saved.context, saved.createdInstructions)
+    }
+    await persist(own, createdInstructions)
+    let when: UpdateContextResult["effective"] = "next_turn"
+    if (live) {
+      const session = live
+      const release = session.holdQueue()
+      try {
+        await session.whenIdle()
+        const relaunch = (reason: string, which: (entry: ContextApplied) => boolean) => {
+          applied = applied.map(entry => which(entry) ? { ...entry, how: "reload" as const, reason } : entry)
+        }
+        if (effective.some(entry => entry.how === "reload")) {
+          relaunch("Applied by the relaunch another change in this update needed", entry => entry.how === "live" || entry.how === "append")
+          await this.reloadForContext(id, session)
+        } else {
+          const liveChanges = effective.filter(entry => entry.how === "live").map(({ kind, op, item }) => ({ kind, op, item }))
+          let reloaded = false
+          if (liveChanges.length) {
+            let refused: Array<{ change: { kind: ContextApplied["kind"]; op: ContextApplied["op"]; item: string }; reason: string }> = []
+            try {
+              refused = await runtime!.apply(outcome.next, liveChanges, options)
+            } catch (error) {
+              if (options.reload === "never") throw error
+              relaunch(`The live change failed (${asError(error).message}); the agent was relaunched instead`, entry => entry.how === "live")
+              await this.reloadForContext(id, session)
+              reloaded = true
+            }
+            if (refused.length) {
+              const keys = new Set(refused.map(entry => changeKey(entry.change)))
+              applied = applied.map(entry => {
+                const hit = refused.find(candidate => changeKey(candidate.change) === changeKey(entry))
+                return hit ? { ...entry, how: "unsupported" as const, reason: hit.reason } : entry
+              })
+              own = applyChanges(record.context, patch, applied.filter(entry => entry.how !== "unsupported" && !keys.has(changeKey(entry))))
+              outcome = await launchFor(own, createdInstructions)
+              await persist(own, createdInstructions)
+            }
+          }
+          if (!reloaded) {
+            const appended = effective.some(entry => entry.how === "append")
+            if (appended) runtime!.appendInstructions!(outcome.resolved.instructions!)
+            await runtime?.recordFingerprint?.(outcome.next.fingerprint)
+            // "now": the process took every applied change without waiting for a turn to end.
+            if (!busy && applied.every(entry => entry.how === "live" || entry.how === "unsupported")) when = "now"
+          }
+        }
+      } finally { release() }
+    }
+    this.events.emit({ type: "context.updated", sessionId: id, applied: structuredClone(applied) })
+    return { applied, effective: when }
+  }
+
+  /** Relaunches an idle session on the same conversation with the record's context; queued input moves to the new session. */
+  private async reloadForContext(id: string, session: Session): Promise<Session> {
+    const carried = session.takeQueue()
+    this.switching.add(id)
+    try {
+      const next = await this.resume(id, undefined, "context")
+      next.adoptQueue(carried)
+      return next
+    } catch (error) {
+      Session.failCarried(carried, asError(error))
+      throw error
+    } finally { this.switching.delete(id) }
   }
 
   private ready(): Promise<void> {

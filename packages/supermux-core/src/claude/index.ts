@@ -7,7 +7,12 @@ import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 import { createClaudeNormalizer } from './normalize.js'
 import { CoreError } from '../errors.js'
-import { CLAUDE_CONTEXT, claudeContextArgs } from '../context/agents.js'
+import { CLAUDE_CONTEXT, appliedContext, claudeContextArgs, editPluginFolder } from '../context/agents.js'
+import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
+import type { ContextChange, ResolvedMcpServer, RuntimeContextControl } from '../context/types.js'
+
+/** Keeper meta `context`: what the running process can change live (see the runtime's context control). */
+type ClaudeContextMeta = { folder: boolean; launchServers: string[]; dynamicServers: ResolvedMcpServer[] }
 
 export type ClaudeOptions = {
   id: string
@@ -399,6 +404,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
     const args = context.sessionContext ? [...baseArgs, ...claudeContextArgs(context.sessionContext, baseArgs)] : baseArgs
     const rpc = await transport({
       command: options.command, args,
+      fingerprint: context.sessionContext?.fingerprint ?? EMPTY_CONTEXT_FINGERPRINT,
       env: launchEnv(options.inheritEnv, options.env, context.profile),
       cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes,
       sessionId: context.sessionId,
@@ -462,10 +468,19 @@ export function claude(options: ClaudeOptions): AgentDriver {
     context.signal.addEventListener('abort', setupAbort, { once: true })
     const timer = setTimeout(() => { fail(new Error('Claude setup timed out')); void close({ mode: 'shutdown' }) /* setup timeout: stop the native process */ }, setupTimeoutMs)
     let reattached = false
+    // Session context the process carries: launched with the plugin folder? which MCP servers came
+    // with the launch (--mcp-config) and which were added by mcp_set_servers since.
+    const launched = context.sessionContext ? appliedContext(context.sessionContext) : undefined
+    let contextMeta: ClaudeContextMeta = { folder: launched !== undefined, launchServers: launched?.mcpServers.map(server => server.name) ?? [], dynamicServers: [] }
     try {
       const reattach = rpc.welcome.agentRunning === true && typeof rpc.welcome.meta.agentSessionId === 'string'
       reattached = reattach
       if (reattach) {
+        const seededContext = rpc.welcome.meta.context as ClaudeContextMeta | undefined
+        // A process from before C1b recorded nothing: it may lack the folder, and every server counts as a launch one.
+        contextMeta = seededContext && typeof seededContext === 'object' && Array.isArray(seededContext.launchServers) && Array.isArray(seededContext.dynamicServers)
+          ? structuredClone(seededContext)
+          : { folder: false, launchServers: contextMeta.launchServers, dynamicServers: [] }
         const sid = rpc.welcome.meta.agentSessionId as string
         if (context.resumeId && context.resumeId !== sid) throw new Error('Claude session identity mismatch')
         agentSessionId = sid
@@ -489,7 +504,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
         // Native system/init is not part of open(): CLI 2.1.261 acks initialize
         // without a session id, and emits system/init only on the first user prompt.
         // A created but never-prompted session may have no durable history.
-        rpc.setMeta({ agentSessionId, permissions: livePermissions })
+        rpc.setMeta({ agentSessionId, permissions: livePermissions, context: contextMeta })
         if (fatal) throw fatal
         ready = true
       }
@@ -506,10 +521,57 @@ export function claude(options: ClaudeOptions): AgentDriver {
     }
     // A re-attached process still runs what it ran; a fresh one cannot.
     const restoredSubagents = context.subagents?.length ? normalizer.restore(context.subagents, { stillRunning: reattached }) : undefined
+    const stdio = (server: ResolvedMcpServer) => ({ type: 'stdio', command: server.command, args: server.args, env: server.env })
+    const contextControl: RuntimeContextControl = {
+      live(change: ContextChange) {
+        if (change.kind === 'skills' || change.kind === 'plugins') return contextMeta.folder
+        if (change.kind === 'mcpServers') {
+          if (change.op === 'add') return !contextMeta.launchServers.includes(change.item)
+          return contextMeta.dynamicServers.some(server => server.name === change.item)
+        }
+        return false
+      },
+      async apply(next, changes, applyOptions) {
+        if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')
+        const refused: Array<{ change: ContextChange; reason: string }> = []
+        const folderChanges = changes.filter(change => change.kind === 'skills' || change.kind === 'plugins')
+        if (folderChanges.length) {
+          // reload_skills does not load a NEW plugin (a skills wrapper is one); reload_plugins does, and drops removed ones (verified on 2.1.289).
+          const undo = editPluginFolder(next.directory, folderChanges, ['.claude-plugin'])
+          let reply: any
+          try { reply = await rpc.request({ subtype: 'reload_plugins', ...(applyOptions.holdOnCacheImpact ? { hold_on_cache_impact: true } : {}) }) }
+          catch (error) { undo(); throw error }
+          if (reply?.response?.held === true) {
+            undo()
+            const impact = reply.response.cache_impact !== undefined ? `: ${JSON.stringify(reply.response.cache_impact)}` : ''
+            for (const change of folderChanges) refused.push({ change, reason: `Claude held the plugin reload (holdOnCacheImpact): it would change the tool list under the cached prompt${impact}` })
+          }
+        }
+        const serverChanges = changes.filter(change => change.kind === 'mcpServers')
+        if (serverChanges.length) {
+          const use = appliedContext(next)
+          const dynamic = contextMeta.dynamicServers.filter(server => !serverChanges.some(change => change.op === 'remove' && change.item === server.name))
+          for (const change of serverChanges) {
+            if (change.op !== 'add') continue
+            const server = use.mcpServers.find(candidate => candidate.name === change.item)
+            if (server) dynamic.push(structuredClone(server))
+          }
+          // mcp_set_servers replaces the whole dynamic set (launch servers stay); a server left out is stopped.
+          const reply = await rpc.request({ subtype: 'mcp_set_servers', servers: Object.fromEntries(dynamic.map(server => [server.name, stdio(server)])) })
+          const errors = reply?.response?.errors
+          if (errors && typeof errors === 'object' && Object.keys(errors).length) throw new Error(`mcp_set_servers: ${JSON.stringify(errors)}`)
+          contextMeta = { ...contextMeta, dynamicServers: dynamic }
+          try { rpc.setMeta({ context: contextMeta }) } catch { /* */ }
+        }
+        return refused
+      },
+      recordFingerprint: fingerprint => rpc.setFingerprint(fingerprint),
+    }
     return {
       agentSessionId: agentSessionId!, capabilities: { resume: true, steer: false, fork: false, detach: true, permissions: true }, close, interrupt,
       nativeProtocol: 'claude-stream-json' as const,
       ...(restoredSubagents ? { restoredSubagents } : {}),
+      context: contextControl,
       async setPermissions(spec) {
         if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')
         const next = validatePermissionsSpec(spec)

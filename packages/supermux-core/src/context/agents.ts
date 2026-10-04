@@ -3,14 +3,19 @@
  * core-owned per-session folder) and returns the args / env / requests the driver adds. The
  * channels are the ones C0 proved live (docs/core-design/context-c0-report.md).
  */
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { basename, join } from "node:path"
 import type { McpServer } from "@agentclientprotocol/sdk"
 import { mappedPluginDrops, mappedPluginServers, readPlugin, writeSkillsPlugin } from "./plugins.js"
-import type { ContextCapabilities, ContextDrop, DriverContextSupport, LaunchContext, ResolvedContext, ResolvedMcpServer } from "./types.js"
+import type {
+  ContextCapabilities, ContextChange, ContextDrop, ContextUpdateSupport, DriverContextSupport, LaunchContext, ResolvedContext, ResolvedMcpServer,
+} from "./types.js"
+import { reloadOnlyUpdates } from "./update.js"
 
 const dropped = (context: LaunchContext, kind: ContextDrop["kind"], item: string) =>
   context.dropped.some(drop => drop.kind === kind && drop.item === item)
+/** What a launch context applies: its items minus the ones the core dropped. */
+export const appliedContext = (context: LaunchContext) => applied(context)
 const applied = (context: LaunchContext) => ({
   instructions: dropped(context, "instructions", "instructions") ? undefined : context.instructions,
   skills: context.skills.filter(path => !dropped(context, "skills", path)),
@@ -41,14 +46,78 @@ function pluginFolder(context: LaunchContext, skills: string[], plugins: string[
   return { folder, entries }
 }
 
+/** One entry of a session plugin folder and what it points at. */
+type FolderEntry = { name: string; kind: "plugins" | "skills"; path: string; index: number }
+
+function folderEntries(folder: string): FolderEntry[] {
+  let names: string[]
+  try { names = readdirSync(folder) } catch { return [] }
+  const out: FolderEntry[] = []
+  for (const name of names) {
+    const entry = join(folder, name)
+    try {
+      const plugin = /^(\d+)-/.exec(name)
+      if (plugin && lstatSync(entry).isSymbolicLink()) { out.push({ name, kind: "plugins", path: readlinkSync(entry), index: Number(plugin[1]) }); continue }
+      const skills = /^supermux-skills-(\d+)$/.exec(name)
+      if (skills) out.push({ name, kind: "skills", path: readlinkSync(join(entry, "skills")), index: Number(skills[1]) })
+    } catch { /* not ours */ }
+  }
+  return out
+}
+
+/**
+ * Applies skills/plugins changes to a launched session plugin folder (the same layout as
+ * pluginFolder: `NN-<name>` symlinks and `supermux-skills-N` wrappers; new entries take the next
+ * free number). Returns an undo that restores the folder.
+ */
+export function editPluginFolder(directory: string, changes: ContextChange[], manifests: Array<".claude-plugin" | ".cursor-plugin">): () => void {
+  const folder = join(directory, "plugins")
+  mkdirSync(folder, { recursive: true, mode: 0o700 })
+  const undo: Array<() => void> = []
+  const entries = folderEntries(folder)
+  let pluginIndex = Math.max(0, ...entries.filter(entry => entry.kind === "plugins").map(entry => entry.index))
+  let skillsIndex = Math.max(0, ...entries.filter(entry => entry.kind === "skills").map(entry => entry.index))
+  for (const change of changes) {
+    if (change.kind !== "skills" && change.kind !== "plugins") continue
+    if (change.op === "remove") {
+      for (const entry of entries.filter(candidate => candidate.kind === change.kind && candidate.path === change.item)) {
+        const path = join(folder, entry.name)
+        rmSync(path, { recursive: true, force: true })
+        undo.push(() => {
+          if (entry.kind === "plugins") symlinkSync(entry.path, path)
+          else writeSkillsPlugin(path, entry.name, entry.path, manifests)
+        })
+      }
+    } else if (change.kind === "plugins") {
+      const path = join(folder, `${String(++pluginIndex).padStart(2, "0")}-${basename(change.item)}`)
+      symlinkSync(change.item, path)
+      undo.push(() => rmSync(path, { force: true }))
+    } else {
+      const name = `supermux-skills-${++skillsIndex}`
+      const path = writeSkillsPlugin(join(folder, name), name, change.item, manifests)
+      undo.push(() => rmSync(path, { recursive: true, force: true }))
+    }
+  }
+  return () => { for (const step of undo.reverse()) { try { step() } catch { /* best effort */ } } }
+}
+
 // ---------------------------------------------------------------- Claude
 
 export const CLAUDE_CONTEXT: DriverContextSupport = {
   capabilities: {
-    instructions: { support: "supported", note: "--append-system-prompt-file (a host's own appended prompt is kept: it is copied in first)" },
+    instructions: { support: "supported", note: "--append-system-prompt-file at session creation (a host's own appended prompt is kept: it is copied in first); fixed from then on: --resume keeps the stored prompt and ignores a new one" },
     skills: { support: "supported", note: "a generated plugin per skills folder, in the session's --plugin-dir folder" },
     plugins: { support: "supported", note: "--plugin-dir <folder of plugins> (each plugin symlinked in)" },
     mcpServers: { support: "supported", note: "--mcp-config <session>/mcp.json (no --strict-mcp-config is added)" },
+  },
+  // Verified on 2.1.289 (C1b): a session keeps the appended system prompt it was created with;
+  // `--resume` with another (or no) --append-system-prompt[-file] still answers from the stored one.
+  instructionsFixedAtCreation: true,
+  update: {
+    instructions: { how: "unsupported", note: "Claude fixes the appended system prompt when the session is created: --resume ignores a new --append-system-prompt-file, and apply_flag_settings {appendSystemPrompt} succeeds but changes nothing" },
+    skills: { add: "live", remove: "live", note: "a skills wrapper plugin added to / removed from the session plugin folder, then reload_plugins (reload_skills does not load a new plugin); live only when the process was launched with that folder" },
+    plugins: { add: "live", remove: "live", note: "a symlink added to / removed from the session plugin folder, then reload_plugins; live only when the process was launched with that folder" },
+    mcpServers: { add: "live", remove: "live", note: "mcp_set_servers with the full dynamic set; a server from the launch (--mcp-config) can only go with a relaunch" },
   },
 }
 
@@ -77,9 +146,8 @@ export function claudeContextArgs(context: LaunchContext, hostArgs: string[]): s
     const file = writePrivate(join(context.directory, "instructions.md"), [...host, use.instructions].join("\n\n"))
     args.push("--append-system-prompt-file", file)
   }
-  if (use.skills.length || use.plugins.length) {
-    args.push("--plugin-dir", pluginFolder(context, use.skills, use.plugins, [".claude-plugin"]).folder)
-  }
+  // Always passed (even empty) so skills and plugins added later go in live (reload_plugins).
+  args.push("--plugin-dir", pluginFolder(context, use.skills, use.plugins, [".claude-plugin"]).folder)
   if (use.mcpServers.length) {
     const servers = Object.fromEntries(use.mcpServers.map(server => [server.name, { type: "stdio", command: server.command, args: server.args, env: server.env }]))
     args.push("--mcp-config", writePrivate(join(context.directory, "mcp.json"), JSON.stringify({ mcpServers: servers }, null, 2) + "\n"))
@@ -98,6 +166,23 @@ export const CODEX_CONTEXT: DriverContextSupport = {
   },
   instructionsFixedAtCreation: true,
   drops: context => mappedPluginDrops(context, false),
+  update: {
+    instructions: { how: "append", note: "Codex fixes developerInstructions at thread/start (thread/resume ignores them)" },
+    skills: { add: "live", remove: "live", note: "skills/extraRoots/set with the full new list" },
+    plugins: { add: "live", remove: "live", note: "live when the plugin maps to skills only (extraRoots); a plugin with MCP servers needs a relaunch" },
+    mcpServers: { add: "reload", remove: "reload", note: "MCP servers are app-server -c args (this process only): a running app-server takes no per-process server (thread/resume config is ignored; config/value/write only writes the shared user config.toml), so a change starts a new app-server and resumes the thread" },
+  },
+}
+
+/** The extraRoots a launch context gives Codex (skills folders, then each plugin's skills/). */
+export function codexExtraRoots(context: LaunchContext): string[] {
+  const use = applied(context)
+  return [...use.skills, ...use.plugins.map(readPlugin).flatMap(parts => parts.skills ? [parts.skills] : [])]
+}
+
+/** Whether Codex can take a plugin change live: the plugin maps to skills only (no MCP servers to start or stop). */
+export function codexPluginIsLive(path: string): boolean {
+  try { return readPlugin(path).mcpServers.length === 0 } catch { return false }
 }
 
 function toml(value: string): string { return JSON.stringify(value) }
@@ -127,8 +212,7 @@ export type CodexContextLaunch = {
 
 export function codexContextLaunch(context: LaunchContext): CodexContextLaunch {
   const use = applied(context)
-  const plugins = use.plugins.map(readPlugin)
-  const extraRoots = [...use.skills, ...plugins.flatMap(parts => parts.skills ? [parts.skills] : [])]
+  const extraRoots = codexExtraRoots(context)
   const servers = [...use.mcpServers, ...mappedPluginServers({ ...context, plugins: use.plugins, mcpServers: use.mcpServers })]
   return {
     args: servers.flatMap(codexServerArgs),
@@ -176,7 +260,7 @@ const GENERIC_ACP_CAPABILITIES: ContextCapabilities = {
 
 export function genericAcpContext(factoryServers: McpServer[]): AcpContextAdapter {
   return {
-    support: { capabilities: GENERIC_ACP_CAPABILITIES, drops: context => acpServerDrops(context, factoryServers) },
+    support: { capabilities: GENERIC_ACP_CAPABILITIES, drops: context => acpServerDrops(context, factoryServers), update: reloadOnlyUpdates(GENERIC_ACP_CAPABILITIES, "ACP session/new mcpServers: a change relaunches the agent (new process + session/load)") },
     launch: context => ({ args: [], env: {}, mcpServers: applied(context).mcpServers.map(toAcp) }),
   }
 }
@@ -192,6 +276,12 @@ export function grokContext(factoryServers: McpServer[]): AcpContextAdapter {
       },
       instructionsFixedAtCreation: true,
       drops: context => acpServerDrops(context, factoryServers),
+      update: {
+        instructions: { how: "unsupported", note: "Grok fixes _meta.rules at session/new (session/load ignores new rules)" },
+        skills: { add: "reload", remove: "reload", note: "skills ride per-process --plugin-dir: a change relaunches grok (new process + session/load)" },
+        plugins: { add: "reload", remove: "reload", note: "per-process --plugin-dir: a change relaunches grok (new process + session/load)" },
+        mcpServers: { add: "reload", remove: "reload", note: "ACP mcpServers are passed at session/new|load: a change relaunches grok" },
+      },
     },
     launch(context) {
       const use = applied(context)
@@ -217,6 +307,12 @@ export function cursorContext(factoryServers: McpServer[]): AcpContextAdapter {
         mcpServers: { support: "unverified", note: "ACP session/new mcpServers (the server starts and lists; a tool call was not verified)" },
       },
       drops: context => acpServerDrops(context, factoryServers),
+      update: {
+        instructions: { how: "unsupported", note: "No proven per-session instructions channel for Cursor" },
+        skills: { add: "reload", remove: "reload", note: "unverified for Cursor: a change relaunches the agent" },
+        plugins: { add: "reload", remove: "reload", note: "unverified for Cursor: a change relaunches the agent" },
+        mcpServers: { add: "reload", remove: "reload", note: "unverified for Cursor: a change relaunches the agent" },
+      },
     },
     launch(context) {
       const use = applied(context)
@@ -279,6 +375,12 @@ export function opencodeContext(factoryServers: McpServer[]): AcpContextAdapter 
         mcpServers: { support: "supported", note: "ACP session/new mcpServers" },
       },
       drops: context => [...mappedPluginDrops(context, true), ...acpServerDrops(context, factoryServers)],
+      update: {
+        instructions: { how: "reload", note: "OpenCode reads config instructions at start: a change relaunches it (new process + session/load)" },
+        skills: { add: "reload", remove: "reload", note: "OpenCode reads skills.paths at start: a change relaunches it" },
+        plugins: { add: "reload", remove: "reload", note: "OpenCode reads the mapped plugin parts at start: a change relaunches it" },
+        mcpServers: { add: "reload", remove: "reload", note: "ACP mcpServers are passed at session/new|load: a change relaunches OpenCode" },
+      },
     },
     launch(context, env) {
       const use = applied(context)

@@ -30,7 +30,7 @@ quota during the probe; the script tries four instruction channels and re-runs a
 
 | Agent | Instructions | Skills | Plugins | MCP | Subagents get the MCP servers |
 |---|---|---|---|---|---|
-| Claude | `--append-system-prompt-file` | generated plugin dir → `--plugin-dir` | `--plugin-dir <plugin>`, or `--plugin-dir <folder of plugins>` (each child loads) | `--mcp-config` + `--strict-mcp-config` | yes |
+| Claude | `--append-system-prompt-file` (at creation only: `--resume` keeps the stored prompt, C1b) | generated plugin dir → `--plugin-dir` | `--plugin-dir <plugin>`, or `--plugin-dir <folder of plugins>` (each child loads) | `--mcp-config` + `--strict-mcp-config` | yes |
 | Codex | `thread/start {developerInstructions}` | `skills/extraRoots/set`, or `<CODEX_HOME>/skills` | local marketplace + `codex plugin add` into the session `CODEX_HOME` | session `config.toml`; needs approval policy `on-request` + auto-accept `mcpServer/elicitation/request` (with `never`, MCP tools never run) | yes |
 | Cursor | unproven (candidates: plugin `rules/`, `$HOME/.cursor/rules`, `$HOME/AGENTS.md`, `--add-dir`) | unproven; ACP lists `$HOME/.cursor/skills` | unproven (`--plugin-dir`) | unproven (ACP `mcpServers`) | unproven |
 | Grok | ACP `session/new` `_meta.rules` (**`--rules` does nothing under `agent stdio`**) | `[skills] paths` | `grok agent --plugin-dir <p> stdio` (per process); `grok plugin install` not needed | ACP `mcpServers` | yes |
@@ -78,8 +78,8 @@ word; a Codex resume with changed instructions was `context_unsupported`; policy
   multi-agent v1 catalog (`<CODEX_HOME>/supermux-model-catalog.json`, same content for all, so
   harmless). The context code writes nothing there. The broker refuses Codex subscription accounts
   today (A3a), which hides the conflict.
-- A detached (keeper) session that is re-attached keeps the args it was launched with: a resume with
-  a changed context on a still-running keeper process does not reach the agent until it relaunches.
+- ~~A detached (keeper) session that is re-attached keeps the args it was launched with~~: fixed in
+  C1b (keeper fingerprint, see "Detached (keeper) sessions").
 
 ## API
 
@@ -115,49 +115,88 @@ core.sessions.fork(id, { context?: SessionContext })      // inherits parent's, 
   `core.capabilities(agent).context` exposes the table; the startup detection already in core
   (`ea1f5504`) fills the version-dependent cells.
 
-## Changing context in flight
+## Changing context in flight (C1b, as built 2026-10-05)
+
+Implemented in `packages/supermux-core/src/context/update.ts` + `core.ts` (`updateContext`); reference:
+`API.md` "Changing context in flight". Live check: `bun scripts/context-live-update.ts`.
 
 ```ts
 const r = await session.updateContext({
   skills: { add: ["/p/new-skills"], remove: ["/p/old"] },
   plugins: { add: ["/p/my-plugin"] },
-  mcpServers: { add: [orders, githubMcp], remove: ["old"] },  // external or host servers
-  // a host server's own tools can also change: orders.add(tool) / orders.remove("name")
-  instructions: "…",                    // replaces this session's added instructions
-})
-// r.applied: per item "live" | "reload" | "unsupported"; r.effective: the next turn, or now
+  mcpServers: { add: [githubMcp], remove: ["old"] },  // external servers (host servers: C2)
+  instructions: "…",                                   // replaces this session's own instructions
+}, { reload: "allow", holdOnCacheImpact: false, codexInstructions: undefined })
+// r.applied: [{ kind, op, item, how: "live" | "reload" | "append" | "unsupported", reason? }]
+// r.effective: "now" | "next_turn"; event { type: "context.updated", sessionId, applied }
+core.sessions.updateContext(id, patch, options)   // a session that is not open: record only
 ```
 
-The core picks the cheapest way per agent and item:
+- **live:** the running agent takes the change: same process, same conversation.
+- **reload:** the core relaunches the agent on the same conversation between turns (the A1
+  account-switch path: shutdown + resume with the record's context). It waits for the turn to
+  end and never cancels it; the queue is held meanwhile and queued input moves to the relaunched
+  `Session` and runs after the reload.
+- **append:** Codex only, opt-in: new instructions ride the next `turn/start.additionalContext`.
+- **unsupported:** reported, never faked, and not stored in the record. Under policy "error"
+  anything unsupported refuses the whole update (nothing applied, nothing stored).
 
-- **live:** the running agent picks the change up with no restart, and the conversation and
-  prompt cache are untouched.
-- **reload:** the core relaunches the agent on the same conversation between turns. This is the
-  same mechanism as an account switch (A1), already proven live for Claude and Codex. It waits
-  for the turn to end and never cancels it; queued input runs after the reload.
-- **unsupported:** reported, never faked.
+The record is persisted before anything reaches the agent. Every live mechanism below was proven
+with its own probe token through the core (`context-live-update.ts`, runs under
+`~/.cache/context-c1b/`), or by a raw probe where noted.
 
-How each agent does it is designed around **one session-owned context folder** (under the
-session dir, never the repo) that the core edits, after which it tells the agent to rescan:
+| Agent | Add / remove skill | Add / remove plugin | Add / remove MCP server | Change instructions |
+|---|---|---|---|---|
+| Claude | **live**: a `supermux-skills-N` wrapper in `<ctx>/plugins` + `reload_plugins` (`reload_skills` does NOT load a new wrapper plugin: probe answered NONE) | **live**: symlink in `<ctx>/plugins` + `reload_plugins` (`hold_on_cache_impact` passed through) | **live**: `mcp_set_servers` with the full *dynamic* set; a launch (`--mcp-config`) server can only go by **reload** | **unsupported**: the appended prompt is stored with the session; `--resume` ignores a new `--append-system-prompt[-file]` (probe: NONE / old token) |
+| Codex | **live**: `skills/extraRoots/set` with the full list | **live** for a skills-only plugin; **reload** when it has `.mcp.json` servers | **reload**: new app-server (`-c` args) + `thread/resume` | **append** (opt-in `codexInstructions: "append"`), else **unsupported** |
+| Cursor | reload (unverified) | reload (unverified) | reload (unverified) | unsupported |
+| Grok | reload | reload | reload | **unsupported** (`_meta.rules` fixed at `session/new`) |
+| OpenCode | reload | reload | reload | reload |
 
-| Agent | Add skill | Add plugin | Add/remove MCP server | Tools of an attached host server (`list_changed`) | Change instructions |
-|---|---|---|---|---|---|
-| Claude | **live**: write into the session plugin, `reload_skills` | **live**: symlink into `<session>/plugins`, `reload_plugins` | **live**: `mcp_set_servers` | **live** | reload (`apply_flag_settings {appendSystemPrompt}` returns success, does nothing) |
-| Codex | **live**: `skills/extraRoots/set` | **live**: app-server `plugin/install` | **live**: `config/value/write` + `config/mcpServer/reload`, then wait for the server's ready status before the next turn | reload, as a **new app-server** (notification ignored; `config/mcpServer/reload` keeps an unchanged server) | **cannot replace**: `developerInstructions` are fixed at `thread/start` (resume ignores them, even in a new process); append-only via `turn/start.additionalContext`, which stays in history |
-| Cursor | unproven | unproven | unproven | unproven | unproven |
-| Grok | **live**: rewrite `[skills] paths` | reload (extra `--plugin-dir`) | reload | reload (notification ignored) | **cannot**: `_meta.rules` is fixed at `session/new`; `session/load` ignores new rules |
-| OpenCode | reload | reload | reload | **live** | reload |
+Where reality differed from the C0-based plan:
 
-Reload (new process + `session/load` / `thread/resume`) keeps the conversation on Codex, Grok and
-OpenCode (C0), and on Claude (A1). Notes:
-- Claude's `reload_plugins` has a `hold_on_cache_impact` option that refuses a reload that would
-  change the tool list under a cached prompt. The core passes it through as an
-  `updateContext` option, default off.
-- Instructions are therefore **not uniformly changeable**: `updateContext({ instructions })` is
-  reload on Claude and OpenCode, `append` (Codex `additionalContext`, opt-in since it lands in
-  history) or `unsupported` on Codex, and `unsupported` on Grok. `r.applied` says which.
-- Unused native Codex channels worth a later look: `thread/start.dynamicTools` (host tools
-  without MCP), `turn/start.disabledPluginIds`.
+- **Claude instructions are not reloadable.** Proven with raw `claude -p` stream-json runs
+  (2.1.289): a session created without an appended prompt and resumed with
+  `--append-system-prompt-file` (or `--append-system-prompt`) answers "NONE"; a session created
+  with token A and resumed with a file holding token B (or with no flag at all) still answers A.
+  The prompt is stored with the session. So Claude is now `instructionsFixedAtCreation` (C1's
+  resume with changed instructions is `context_unsupported` for Claude too, like Codex and Grok),
+  and in flight it is `unsupported`. C1's "instructions reapplied after a restart" evidence came
+  from the stored prompt (and the history), not from the flag.
+- **Claude skills use `reload_plugins`.** A new skills folder is a new wrapper plugin, which
+  `reload_skills` does not load (C0's live skill was a new skill *inside* an already loaded
+  plugin). The Claude launch now always passes `--plugin-dir <ctx>/plugins` (empty is fine) when
+  the session has any context, so later adds can be live.
+- **Codex MCP stays per process, so it is reload.** Probed on 0.159.2 (`codex-mcp-probe.ts`):
+  `thread/resume {threadId (loaded), config: {mcp_servers: {…}}}` (nested and dotted keys) is
+  accepted but starts nothing (the model answered NONE, the server never ran);
+  `config/value/write {filePath: <session file>}` is refused with `configLayerReadonly` "Only writes
+  to the user config are allowed". So a live add would have to write the shared `CODEX_HOME`
+  `config.toml`; the core relaunches the app-server instead (`thread/resume` in the new process
+  keeps the conversation; the new server is started with the thread, no extra ready-wait needed:
+  the next turn called it).
+- **Codex plugins are live only without MCP servers** (their skills are extraRoots; their servers
+  are process args).
+- **Removal is real:** Claude `reload_plugins` drops an unlinked plugin from its plugin list and
+  the skill is gone; `mcp_set_servers` without a server answers `removed: [name]` and its process
+  exits. Codex `skills/extraRoots/set` without a root drops its skills from `skills/list`. For the
+  reload agents the relaunched process simply never gets the item. In the live check the removed
+  MCP server got no further call and its process was gone for all four agents.
+
+### Detached (keeper) sessions
+
+A reload must start a NEW agent process. C1 left a gap: a resume of a detached session re-attached
+to the still-running keeper process, which kept its old launch args. Fixed in the keeper client:
+every launch passes `KeeperSpec.fingerprint` (a digest of what the launch applies, `"none"` without
+a context; `LaunchContext.fingerprint`). The client writes it next to the keeper
+(`keepers/<id>/fingerprint`). When it finds a running keeper with a *different* recorded
+fingerprint it SIGTERMs that keeper (which shuts its agent down), waits for both pids to be gone,
+and spawns a new one. After a live change the runtime records the new fingerprint
+(`RuntimeContextControl.recordFingerprint`), so a later re-attach with the same context is still
+a re-attach (and does not end a running detached turn). A keeper without a recorded fingerprint
+(started before C1b) is re-attached as before. `resume(id, { context })` uses the same path, so it
+is fixed too. Tested with the Claude fixture through two core restarts (unchanged context → same
+pid; changed → new pid, old one dead; the test fails without the fix).
 
 ## Plugin folder
 
@@ -276,8 +315,9 @@ The function runs **in the host process**, with the session's context.
   resolution, `context.degraded`, persistence plus resume/fork, and per-agent drivers using
   the per-session channels. The environment helpers become internal (the current exports
   are kept as deprecated). Live check: the C0 script through `core.sessions.create`.
-- **C1b, in flight:** `session.updateContext`, the session context folder, the live mechanisms
-  that C0 proved, and reload otherwise.
+- **C1b, in flight, done (see "Changing context in flight"):** `session.updateContext` /
+  `core.sessions.updateContext`, the live mechanisms proven per agent, reload otherwise, the
+  keeper fingerprint relaunch, Claude instructions fixed at creation.
 - **C2, host MCP servers:** `mcpServer()` / `tool()`, the bridge, the socket, live tool
   add/remove, cancellation, events, and keeper reconnect. Live check: each agent gets two host
   servers plus one external one, calls a tool on each and repeats the secret results; a tool
@@ -295,3 +335,13 @@ The function runs **in the host process**, with the session's context.
 4. ~~Subagents~~: they inherit the session's MCP servers (Claude, Codex, Grok proven; OpenCode
    inferred), so host servers reach subagents for free; `ctx` should say when the caller is a
    subagent if the agent exposes that.
+5. (C1b) The keeper fingerprint covers MCP server `env`: C2 host servers must keep per-launch
+   tokens out of it, or every re-attach after a host restart becomes a relaunch.
+6. (C1b) Codex appended instructions wait in keeper meta for the next turn; if the app-server is
+   relaunched (reload, restart) before that turn, they are lost while the record already counts
+   them as part of the conversation. Send them with the first turn after any relaunch, or refuse
+   an append that cannot be delivered.
+7. (C1b) No explicit `mcpServerStatus` ready-wait after a Codex reload: in every live run the next
+   turn called the new server (Codex starts it with the thread), but a slow server could still race.
+8. (C1b) Changing the core default instructions between host restarts makes every Claude, Codex and
+   Grok session's resume `context_unsupported` under policy "error" (instructions fixed at creation).

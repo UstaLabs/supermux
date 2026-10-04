@@ -56,6 +56,7 @@ Nonempty create/resume-open config requires the opened runtime to advertise `con
 - `get(id)`, `list({ agent? })`.
 - `live(id)` → the open `Session` for `id` right now, or `undefined` (synchronous, no lifecycle work). After `account.switched` / `account.refreshed` it is the reopened Session, so a host holding the old object can pick up the new one.
 - `resume(id, { configuration?, account?, context? }?)` — exact native id. See table. `account` switches accounts (see Accounts). `context` replaces the session's own context (see Session context).
+- `updateContext(id, patch, options?)` → `{ applied, effective }` — see "Changing context in flight". On a session that is not open it only updates the record (the next launch applies it); on an open one it is `session.updateContext`.
 - `forget(id)` — metadata only; session must already be closed. Leftover ownership is `session_busy` until confirmed close.
 - `close(id, { mode: "shutdown" | "detach" })` — `mode` is required (no default). No spawn/resume. Validates id (`invalid_session_id`). Joins in-flight same-id close **before** the shutdown gate (joining an already-running close still works after `core.close({ agents })` starts). A **new** close after shutdown → `core_closed`; `core.close({ agents })` finishes remaining leftovers. Waits already-started create/adopt/**fork**/resume (`opening` / restore; ignores setup rejection), then live `Session.close({ mode })` or leftover cleanup. Does **not** abort a pending custom-driver `open`. Do not `await sessions.close(id, { mode })` from inside that same id’s `driver.open`. Fire-and-forget from `open` is fine. Unknown valid id is idempotent. Failed close keeps leftover; retry `sessions.close(id, { mode })` or `core.close({ agents })`. Different ids are independent. `detach` is supported only by keeper-backed runtimes (Codex today); other drivers reject `unsupported_operation` (`detach`) before any side effect. A detached session’s record stays on disk with its native id so a later resume re-attaches.
 
@@ -120,6 +121,8 @@ Configure/fork require idle + empty queue + no outstanding activity. Configure m
 
 `messageSubagent(subagentId, content, { whenBusy? })` → `{ via: "direct", delivery }` (delivered to the child now: Codex `turn/steer` while its turn runs, else `turn/start`; Grok/OpenCode `session/load` once then `session/prompt` on the child session, which streams back as that subagent and never drives the parent turn) or `{ via: "relay", receipt, delivery }` (Claude/Cursor: a main-thread message asking the parent model to forward it verbatim, queued through `send`). `delivery` settles `{ status: "delivered" }`, `{ status: "refused", reason }` (the agent's own refusal) or `{ status: "unconfirmed", reason }` (the relay turn ended without the parent forwarding it). `stopSubagent(subagentId)`: Claude `stop_task`, Codex `turn/interrupt` on the child's turn, Grok `_x.ai/subagent/cancel` (a background child; `session/cancel` on a child we prompted), OpenCode HTTP abort. Both throw `UnsupportedOperation` (`unsupported_operation`) when the runtime lacks them, `subagent_unavailable` (message = the agent's reason) when the subagent's current `canMessage` / `canStop` is false, `subagent_not_found` for an id the runtime does not know, and `runtime_closed` after the runtime closed.
 
+`updateContext(patch, options?)` changes the session's own context in flight (see "Changing context in flight"); after a reload the session continues in a new `Session` (`core.sessions.live(id)`).
+
 Steer without an active owned prompt → `session_not_running`. Close/fail/interrupt on a closed or failed handle → `session_closed` / `session_failed`.
 
 ## Types (selected)
@@ -134,7 +137,7 @@ Drivers still receive `DriverContext.requestPermission` and `DriverContext.reque
 
 ## Errors
 
-`CoreError` with `code`: `invalid_options`, `invalid_input`, `invalid_session_id`, `invalid_workdir`, `invalid_auth_profile`, `unknown_agent`, `session_exists`, `session_busy`, `session_not_found`, `session_closed`, `session_failed`, `session_not_running`, `queue_full`, `idempotency_conflict`, `request_not_found`, `core_closed`, `resume_identity_changed`, `fork_identity_unchanged`, `activity_overflow`, `unsupported_operation`, `unknown_account`, `account_exists`, `account_expired`, `account_secret_missing`, `account_home_conflict`, `account_refresh_failed`, `account_identity_mismatch`, `login_failed`, `login_timeout`, `login_cancelled`, `invalid_account_id`, `invalid_account_record`, `invalid_context` (malformed context, a path that is not an existing absolute directory, a bad or duplicate MCP server name), `context_unsupported` (policy "error": the agent cannot apply an item; the message lists each one), `already_live`, `host_closing`, `subagent_not_found` (unknown subagent id), `subagent_unavailable` (the agent says the action cannot work now; message is its short reason), `runtime_closed` (a driver runtime was used after it closed), `busy` (Grok wrapper: a prompt is already running).
+`CoreError` with `code`: `invalid_options`, `invalid_input`, `invalid_session_id`, `invalid_workdir`, `invalid_auth_profile`, `unknown_agent`, `session_exists`, `session_busy`, `session_not_found`, `session_closed`, `session_failed`, `session_not_running`, `queue_full`, `idempotency_conflict`, `request_not_found`, `core_closed`, `resume_identity_changed`, `fork_identity_unchanged`, `activity_overflow`, `unsupported_operation`, `unknown_account`, `account_exists`, `account_expired`, `account_secret_missing`, `account_home_conflict`, `account_refresh_failed`, `account_identity_mismatch`, `login_failed`, `login_timeout`, `login_cancelled`, `invalid_account_id`, `invalid_account_record`, `invalid_context` (malformed context or patch, a path that is not an existing absolute directory, a bad or duplicate MCP server name, a patch that removes what the session does not own or adds what it has), `context_unsupported` (policy "error": the agent cannot apply an item; the message lists each one), `already_live`, `host_closing`, `subagent_not_found` (unknown subagent id), `subagent_unavailable` (the agent says the action cannot work now; message is its short reason), `runtime_closed` (a driver runtime was used after it closed), `busy` (Grok wrapper: a prompt is already running).
 
 `UnsupportedOperation` extends `CoreError` (`unsupported_operation`). Driver-thrown values (e.g. Grok `TypeError` on effort) are not rewritten into these codes. Host adds `already_live` and `host_closing`.
 
@@ -206,10 +209,11 @@ core.capabilities(agent).context         // { instructions, skills, plugins, mcp
 - **Merge.** Core default first, then the session's own: instructions and lists are concatenated in that order. Duplicate MCP server names → `invalid_context`. Duplicate paths are applied once. Skills folders and plugins must be existing absolute directories (checked at every launch).
 - **Persistence.** The record keeps the session's **own** context (`record.context`), its `contextPolicy` when set, and `createdInstructions` (the instructions the native conversation was created with). The core default is not stored: it is merged in again at each launch, so a resume after a restart applies the same context. Records without these fields load unchanged.
 - **Honesty.** Before anything launches, the merged context is checked against the driver (`AgentDriver.context`). With `contextPolicy: "error"` (default) any item the agent cannot apply → `context_unsupported` and nothing launches (no process, no record, no folder). With `"warn"` the session launches without those items and the core emits `{ type: "context.degraded", sessionId, dropped: [{ kind, item, reason }] }` right after `session.created` / `session.resumed`. `"unverified"` items count as supported; `core.capabilities(agent)` lists them so a host can decide.
-- **Fixed instructions.** Codex (`developerInstructions`) and Grok (`_meta.rules`) take instructions only when the conversation is created. A resume or fork whose merged instructions differ from `createdInstructions` is unsupported for them (Codex would silently ignore the change).
+- **Fixed instructions.** Claude (the appended system prompt is stored with the session; `--resume` ignores a new `--append-system-prompt[-file]`, verified on 2.1.289 in C1b), Codex (`developerInstructions`) and Grok (`_meta.rules`) take instructions only when the conversation is created. A resume or fork whose merged instructions differ from `createdInstructions` is unsupported for them (the agent would silently ignore the change).
 - **Live sessions.** `resume(id, { context })` with a context that differs from the stored one relaunches an idle session (same native id); during a turn it is `session_busy`. The same context returns the live session.
 - **Files.** Generated files live in `<stateDirectory>/context/<id>/` (0700), rebuilt before each launch and deleted by `sessions.forget(id)`. No context at all (no default, none on the session) → no folder and a launch that is byte-for-byte what it was before (tested per driver).
-- **Drivers** get the merged context as `DriverContext.sessionContext: { instructions?, skills, plugins, mcpServers, directory, launch: "create" | "resume" | "fork", dropped }` and must skip `dropped` items. Custom drivers declare support with `AgentDriver.context: { capabilities, instructionsFixedAtCreation?, drops?(context) }`; a driver without it supports nothing. `createHost` drivers declare nothing yet (C3).
+- **Drivers** get the merged context as `DriverContext.sessionContext: { instructions?, skills, plugins, mcpServers, directory, launch: "create" | "resume" | "fork", dropped, fingerprint }` and must skip `dropped` items. Custom drivers declare support with `AgentDriver.context: { capabilities, instructionsFixedAtCreation?, drops?(context), update? }`; a driver without it supports nothing. `createHost` drivers declare nothing yet (C3).
+- **Detached sessions.** The built-in drivers hand `fingerprint` (a digest of what the launch applies; `"none"` without a context) to the keeper (`KeeperSpec.fingerprint`). A detached agent process whose recorded fingerprint differs is shut down and a new one started, never re-attached: `resume(id, { context })` after a host restart really relaunches. A keeper with no recorded fingerprint (started before C1b) is re-attached as before.
 
 | Agent | Instructions | Skills | Plugins | MCP servers |
 |---|---|---|---|---|
@@ -220,7 +224,48 @@ core.capabilities(agent).context         // { instructions, skills, plugins, mcp
 | Cursor | **unsupported** | unverified: generated plugin, `--plugin-dir` | unverified: `--plugin-dir` | unverified: ACP `mcpServers` |
 | ACP (generic) | unsupported | unsupported | unsupported | unverified: ACP `mcpServers` |
 
-A host's own `OPENCODE_CONFIG` is carried into the session file. A context MCP server whose name a driver's own `mcpServers` already uses is a drop. In a plugin's `.mcp.json`, `${CLAUDE_PLUGIN_ROOT}` is expanded for the mapping agents. Live check: `bun scripts/context-live.ts [claude] [codex] [grok] [opencode]` (scratch in `~/.cache/context-c1/`).
+A host's own `OPENCODE_CONFIG` is carried into the session file. A context MCP server whose name a driver's own `mcpServers` already uses is a drop. In a plugin's `.mcp.json`, `${CLAUDE_PLUGIN_ROOT}` is expanded for the mapping agents. Claude always gets the `--plugin-dir <ctx>/plugins` folder once a session has any context (empty is fine), so skills and plugins can be added live later. Live check: `bun scripts/context-live.ts [claude] [codex] [grok] [opencode]` (scratch in `~/.cache/context-c1/`).
+
+### Changing context in flight
+
+```ts
+type ContextPatch = {
+  instructions?: string | string[]                               // replaces the session's own ([] / "" removes them)
+  skills?: { add?: string[]; remove?: string[] }
+  plugins?: { add?: string[]; remove?: string[] }
+  mcpServers?: { add?: ExternalMcpServer[]; remove?: string[] }  // remove by name
+}
+type UpdateContextOptions = {
+  reload?: "allow" | "never"       // default "allow"; "never": items that need a relaunch are unsupported
+  holdOnCacheImpact?: boolean      // Claude: reload_plugins refuses a reload that would change the tool list under a cached prompt
+  codexInstructions?: "append"     // Codex: add new instructions via turn/start.additionalContext (they stay in the history)
+}
+session.updateContext(patch, options?) → Promise<{
+  applied: Array<{ kind, op: "add" | "remove" | "replace", item, how: "live" | "reload" | "append" | "unsupported", reason? }>
+  effective: "now" | "next_turn"
+}>
+core.sessions.updateContext(id, patch, options?)   // same; a session that is not open only gets its record updated
+core.capabilities(agent).contextUpdate             // { instructions: { how, note }, skills|plugins|mcpServers: { add, remove, note } }
+// event: { type: "context.updated", sessionId, applied }
+```
+
+- **Validation** (`invalid_context`, nothing stored): the patch shape; an added path must exist and be new (also not in the core default); a removed path or server must be in the session's **own** context (the core default cannot be removed per session); nothing added and removed at once; MCP names unique. Same text for `instructions` is no change. An empty patch returns `{ applied: [], effective: "now" }`.
+- **Per item:** `live` when the driver declares it and the running process confirms it (`AgentRuntime.context.live(change)`), `append` for opted-in Codex instructions, otherwise `reload` (if `reload` is not `"never"`), otherwise `unsupported`. Under `contextPolicy` `"error"` (the session's, else the core's) anything unsupported → `context_unsupported` and **nothing** is applied or stored. Under `"warn"` the rest is applied and the unsupported items are reported (and not stored). A plugin part the agent cannot map (Codex hooks) is reported as its own unsupported row, like `context.degraded`.
+- **Order:** the new own context is persisted to the record **before** anything reaches the agent (a crash never leaves the record older than what is live). A change the agent then refuses without effect (Claude `held: true`) becomes `unsupported` and is taken out of the record again.
+- **Never mid-turn:** the core holds the queue (no queued input starts), waits until the session is idle, then applies. A running turn is never cancelled. `live` items are sent at that idle point (`effective: "now"` only when the call arrived while idle and every applied item was live). Any `reload` item relaunches the agent on the same conversation (the account-switch path: shutdown, then resume with the record's context); the other items of that update ride the relaunch and are reported `reload` too. Queued input moves to the relaunched session and runs after it, in order; the old `Session` object is closed, `core.sessions.live(id)` returns the new one. A live change that throws falls back to a reload (with the error in `reason`), or rethrows under `reload: "never"`. The promise settles once everything is applied.
+- **Closed session:** `core.sessions.updateContext(id, …)` updates the record only; applicable items are `reload` (the next launch applies them), `effective: "next_turn"`; `reload: "never"` does not apply.
+- **Concurrency:** updates of one session run one after another; during a resume/close/forget of the id → `session_busy`.
+
+| Agent | Skills add / remove | Plugins add / remove | MCP add / remove | Instructions |
+|---|---|---|---|---|
+| Claude | **live**: a `supermux-skills-N` wrapper added to / removed from `<ctx>/plugins`, then `reload_plugins` (`reload_skills` does not load a new plugin) | **live**: a symlink added to / removed from `<ctx>/plugins`, then `reload_plugins` (`hold_on_cache_impact` with `holdOnCacheImpact`) | **live**: `mcp_set_servers` with the full dynamic set; removing a server that came with the launch (`--mcp-config`) is a **reload** | **unsupported**: fixed at creation |
+| Codex | **live**: `skills/extraRoots/set` with the full new list | **live** when the plugin maps to skills only; with `.mcp.json` servers: **reload** | **reload** (new app-server with the new `-c` args + `thread/resume`) | **append** with `codexInstructions: "append"` (sent once, on the next `turn/start`), else **unsupported** |
+| Grok | reload | reload | reload | **unsupported**: fixed at creation |
+| OpenCode | reload | reload | reload | reload |
+| Cursor | reload (unverified) | reload (unverified) | reload (unverified) | unsupported |
+| ACP (generic) | unsupported | unsupported | reload (unverified) | unsupported |
+
+Live mechanisms are confirmed per process: a Claude process launched without the plugin folder (a session that had no context) reloads instead; a re-attached Claude process recorded which servers it got at launch in keeper meta. Live check: `bun scripts/context-live-update.ts [claude] [codex] [grok] [opencode]` (scratch in `~/.cache/context-c1b/`).
 
 ## Environment
 
