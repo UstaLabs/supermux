@@ -7,6 +7,7 @@ import type {
   SubagentMessaging,
 } from "./events/normalized.js"
 import type { AccountsOptions } from "./accounts/types.js"
+import type { ContextDrop, ContextPolicy, DriverContextSupport, LaunchContext, SessionContext } from "./context/types.js"
 
 export type PermissionOptionKind = "allow_once" | "allow_always" | "reject_once" | "reject_always"
 
@@ -102,7 +103,8 @@ export type AuthProfile = {
   args?: string[]
 }
 
-export type ForkOptions = { id: string; at?: { nativeTurnId: string } }
+/** `context` replaces the parent's own context for the fork; omitted, the fork inherits it. */
+export type ForkOptions = { id: string; at?: { nativeTurnId: string }; context?: SessionContext }
 export type ForkSource = { agentSessionId: string; at?: { nativeTurnId: string } }
 
 export type SessionRecord = {
@@ -118,6 +120,11 @@ export type SessionRecord = {
   lineage?: { parentSessionId: string; nativeTurnId?: string }
   configuration?: SessionConfiguration
   permissions?: PermissionsSpec
+  /** The session's own context (the core default is not stored; it is merged in at each launch). */
+  context?: SessionContext
+  contextPolicy?: ContextPolicy
+  /** Instructions the native conversation was created with (agents that fix them at creation compare against these). */
+  createdInstructions?: string
 }
 
 export type Completion =
@@ -153,6 +160,8 @@ export type CoreEvent =
   | { type: "account.refreshed"; sessionId: string; account: string }
   /** A rate limit was hit and no other account of the agent is available. */
   | { type: "account.exhausted"; sessionId: string; agent: string; account: string }
+  /** The session launched (policy "warn") without these context items. */
+  | { type: "context.degraded"; sessionId: string; dropped: ContextDrop[] }
 
 export type Observer = (event: CoreEvent) => void | Promise<void>
 
@@ -244,6 +253,8 @@ export type DriverContext = {
   onActivity?(notice: ActivityNotice): void
   /** Resume only: the subagents this session had (see SubagentSnapshot). */
   subagents?: SubagentSnapshot[]
+  /** The session's merged context for this launch; absent when there is none (the launch is then unchanged). */
+  sessionContext?: LaunchContext
 }
 
 export type CloseMode = "shutdown" | "detach"
@@ -323,6 +334,8 @@ export type AuthContext = {
 export type AgentDriver = {
   readonly id: string
   open(context: DriverContext): Promise<AgentRuntime>
+  /** Which session context items this driver applies, and how. Absent: none. */
+  readonly context?: DriverContextSupport
   auth?: {
     methods(context: AuthContext): Promise<AuthMethod[]>
     login(context: AuthContext, methodId: string): Promise<void>
@@ -342,14 +355,19 @@ export type CoreOptions = {
   accounts?: AccountsOptions
   onObserverError?: (error: Error) => void
   limits: CoreLimits
+  /** Context every session gets, before its own (see API.md "Session context"). */
+  context?: SessionContext
+  /** Default "error": a context item the agent cannot apply fails the launch. "warn": launch and emit `context.degraded`. */
+  contextPolicy?: ContextPolicy
 }
 
 /** `account` and `authProfile` are mutually exclusive. Neither: the agent's system account. */
-export type CreateOptions = { agent: string; cwd: string; id: string; authProfile?: string; account?: string; configuration?: SessionConfiguration; permissions?: PermissionsSpec }
+export type CreateOptions = { agent: string; cwd: string; id: string; authProfile?: string; account?: string; configuration?: SessionConfiguration; permissions?: PermissionsSpec; context?: SessionContext; contextPolicy?: ContextPolicy }
 
 /** Optional resume overrides. `configuration: undefined` is omitted (no-options resume). `{}` is an explicit no-op patch. */
 /** `account` switches the session to another account of the same agent (a live session is shut down and reopened). */
-export type ResumeOptions = { configuration?: SessionConfiguration; account?: string }
+/** `context` replaces the session's own context for this and later launches (a live idle session is relaunched). */
+export type ResumeOptions = { configuration?: SessionConfiguration; account?: string; context?: SessionContext }
 
 /** Metadata-only registration of an existing native conversation. Native history is checked later by resume. */
 export type AdoptOptions = {

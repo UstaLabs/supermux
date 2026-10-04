@@ -1,6 +1,7 @@
 import { AgentSideConnection, ndJsonStream } from '@agentclientprotocol/sdk';
 import { Readable, Writable } from 'node:stream';
 import { appendFileSync, writeFileSync } from 'node:fs';
+const paramsTrace = (method, params) => { if (process.env.PARAMS_TRACE) appendFileSync(process.env.PARAMS_TRACE, JSON.stringify({ method, params }) + '\n') }
 const mode = process.env.FIXTURE_MODE;
 if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid));
 // Accounts tests: what the driver launched with.
@@ -39,7 +40,8 @@ new AgentSideConnection(client => ({
   return { protocolVersion: mode === 'version' ? 999 : 1, agentCapabilities: { loadSession: true, ...(Object.keys(sessionCapabilities).length ? { sessionCapabilities } : {}) }, authMethods: [{id:'token',name:'Token'}, {id:'terminal',name:'Terminal',type:'terminal'}] };
  },
  async authenticate({methodId}) { record({methodId, token:process.env.TOKEN}); if (process.env.TOKEN !== 'ok') throw new Error('authentication rejected'); return {}; },
- async newSession() {
+ async newSession(params) {
+    paramsTrace('session/new', params)
   record('new');
   const sessionId = 'agent-1'
   if (process.env.AUTONOMOUS_ON_OPEN === '1') {
@@ -51,6 +53,7 @@ new AgentSideConnection(client => ({
  async setSessionMode(params) { record({ setMode: { modeId: params.modeId } }); return {}; },
  async resumeSession(params) { record('resume'); return {}; },
  async loadSession(params) {
+    paramsTrace('session/load', params)
   record('load');
   if(params.sessionId === 'missing') throw new Error('missing session');
   await client.sessionUpdate({sessionId:params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'history'}}});

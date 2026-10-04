@@ -15,6 +15,7 @@ const done=(id,status='completed',tid=thread)=>{if(tid===thread)completed.add(id
 createInterface({input:process.stdin}).on('line',line=>{
  const m=JSON.parse(line); if(process.env.TRACE) appendFileSync(process.env.TRACE,line+'\n')
  const reply=result=>send({id:m.id,result})
+ if(m.method==='skills/extraRoots/set'){reply({});return}
  if(m.method==='skills/list'){reply({data:[{skills:[{name:'demo',description:'stub',enabled:true}]}]});return}
  if(m.method==='config/batchWrite'){
   // The driver persists sandbox_mode/approval_policy for child threads; record it so tests can assert.

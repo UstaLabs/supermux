@@ -1,6 +1,8 @@
 import { AgentSideConnection, ndJsonStream } from '@agentclientprotocol/sdk';
 import { Readable, Writable } from 'node:stream';
 import { appendFileSync, writeFileSync } from 'node:fs';
+const paramsTrace = (method, params) => { if (process.env.PARAMS_TRACE) appendFileSync(process.env.PARAMS_TRACE, JSON.stringify({ method, params }) + '\n') }
+if (process.env.ENV_TRACE) writeFileSync(process.env.ENV_TRACE, JSON.stringify({ argv: process.argv.slice(2), env: process.env }))
 const mode = process.env.FIXTURE_MODE;
 if (process.env.TRACE) appendFileSync(process.env.TRACE, JSON.stringify({ argv: process.argv.slice(2) }) + '\n');
 if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid));
@@ -34,7 +36,8 @@ new AgentSideConnection(client => ({
   return { protocolVersion: mode === 'version' ? 999 : 1, agentCapabilities: { loadSession: true, ...(mode === 'resume' ? { sessionCapabilities: { resume: {} } } : {}) }, authMethods: [{id:'token',name:'Token'}, {id:'terminal',name:'Terminal',type:'terminal'}] };
  },
  async authenticate({methodId}) { record({methodId, token:process.env.TOKEN}); if (process.env.TOKEN !== 'ok') throw new Error('authentication rejected'); return {}; },
- async newSession() {
+ async newSession(params) {
+    paramsTrace('session/new', params)
   record('new');
   const sessionId = 'agent-1'
   if (process.env.AUTONOMOUS_ON_OPEN === '1') {
@@ -50,6 +53,7 @@ new AgentSideConnection(client => ({
  async setSessionConfigOption(params) { record({ setConfig: { configId: params.configId, value: params.value } }); return { configOptions: [] }; },
  async resumeSession(params) { record('resume'); return {}; },
  async loadSession(params) {
+    paramsTrace('session/load', params)
   record('load');
   if(params.sessionId === 'missing') throw new Error('missing session');
   await client.sessionUpdate({sessionId:params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'history'}}});

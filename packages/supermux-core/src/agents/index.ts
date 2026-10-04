@@ -5,6 +5,7 @@ import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from '..
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import type { ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, CloseOptions, DriverContext, SessionConfiguration, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
+import { cursorContext, grokContext, opencodeContext } from '../context/agents.js'
 
 const EFFORTS = new Set(['low', 'medium', 'high'])
 
@@ -165,6 +166,7 @@ function grokAcp(options: GrokOptions & { normalizer?: AcpNormalizer }, override
     cancelRetryTimeoutMs: options.cancelRetryTimeoutMs,
     classifyActivity: createGrokClassifyActivity(),
     vendor: "grok",
+    contextAdapter: grokContext(options.mcpServers),
     permissions: options.permissions,
     ...(options.normalizer ? { normalizer: options.normalizer } : {}),
   })
@@ -195,6 +197,7 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
   return {
     id,
     auth: authDriver.auth,
+    context: grokContext(options.mcpServers).support,
     async open(context) {
       context.signal.throwIfAborted()
       if (context.forkFrom) throw new UnsupportedOperation('fork', id)
@@ -394,7 +397,7 @@ export function opencode(options: OpenCodeOptions): AgentDriver {
   if (options.model !== undefined && (typeof options.model !== 'string' || !options.model)) throw new TypeError('OpenCode model must be a nonempty string')
   const { model, ...rest } = options
   // --print-logs is the only place OpenCode reports provider failures (the ACP turn ends as a normal completion).
-  return acp({ ...rest, vendor: 'opencode', args: ['acp', '--print-logs', '--log-level', 'ERROR'], captureStderr: true, ...(model ? { sessionConfig: { model } } : {}) })
+  return acp({ ...rest, vendor: 'opencode', contextAdapter: opencodeContext(rest.mcpServers), args: ['acp', '--print-logs', '--log-level', 'ERROR'], captureStderr: true, ...(model ? { sessionConfig: { model } } : {}) })
 }
 
 const CURSOR_MODES = new Set(['agent', 'plan', 'ask'])
@@ -429,6 +432,7 @@ export function cursor(options: CursorOptions): AgentDriver {
   return acp({
     ...rest,
     vendor: 'cursor',
+    contextAdapter: cursorContext(rest.mcpServers),
     args: [...commandArgs, 'acp'],
     captureStderr: true,
     ...(sessionConfig ? { sessionConfig } : {}),

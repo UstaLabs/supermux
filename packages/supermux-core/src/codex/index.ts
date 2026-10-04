@@ -7,6 +7,7 @@ import { transport } from './transport.js'
 import { multiAgentV1Launch } from './catalog.js'
 import { createCodexNormalizer } from './normalize.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
+import { CODEX_CONTEXT, codexContextLaunch } from '../context/agents.js'
 import { REASON, SUBAGENT_STATE_METHOD, shortReason } from '../subagent-actions.js'
 
 export type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -128,7 +129,7 @@ export function codex(options: CodexOptions): AgentDriver {
   const sandbox = initialPermissions.sandbox
   const approvalPolicy = initialPermissions.approvalPolicy
   const hostPermissions = true
-  return { id: options.id, async open(context) {
+  return { id: options.id, context: CODEX_CONTEXT, async open(context) {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId, ready = false, closed = false
     let fatal: Error | undefined
@@ -740,7 +741,10 @@ export function codex(options: CodexOptions): AgentDriver {
     // keeper keeps the flags its app-server was started with.
     // A catalog whose format changed is left alone (feature detection, see catalog.ts); the
     // warning is shown on the first turn, when the session can display it.
-    const launch = await multiAgentV1Launch(options.command, launchArgs(options.args, context.profile), env, context.cwd)
+    // Session context (per process: `-c mcp_servers.*` args; per thread: extraRoots, developerInstructions).
+    const sessionContext = context.sessionContext ? codexContextLaunch(context.sessionContext) : undefined
+    const baseArgs = launchArgs(options.args, context.profile)
+    const launch = await multiAgentV1Launch(options.command, sessionContext?.args.length ? [...baseArgs, ...sessionContext.args] : baseArgs, env, context.cwd)
     const args = launch.args
     let catalogWarning = launch.warning
     const rpc = await transport({ command: options.command, args, env, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper }, dispatchNotify, fail)
@@ -795,7 +799,9 @@ export function codex(options: CodexOptions): AgentDriver {
       await Promise.race([rpc.request('initialize', { clientInfo: { name: 'supermux-core', version: '0.0.0' }, capabilities: { experimentalApi: true } }), failure.promise])
       rpc.write({ method: 'initialized', params: {} })
       const model = resolvedModel()
-      const result = await Promise.race([rpc.request(context.forkFrom ? 'thread/fork' : context.resumeId ? 'thread/resume' : 'thread/start', { ...(context.forkFrom ? {threadId: context.forkFrom.agentSessionId, ...(context.forkFrom.at ? {lastTurnId: context.forkFrom.at.nativeTurnId} : {})} : context.resumeId ? { threadId: context.resumeId } : {}), cwd: context.cwd, approvalPolicy: livePermissions.approvalPolicy, sandbox: livePermissions.sandbox, ...(model ? { model } : {}) }), failure.promise])
+      if (sessionContext?.extraRoots) await Promise.race([rpc.request('skills/extraRoots/set', { extraRoots: sessionContext.extraRoots }), failure.promise])
+      const developerInstructions = !context.forkFrom && !context.resumeId ? sessionContext?.developerInstructions : undefined
+      const result = await Promise.race([rpc.request(context.forkFrom ? 'thread/fork' : context.resumeId ? 'thread/resume' : 'thread/start', { ...(context.forkFrom ? {threadId: context.forkFrom.agentSessionId, ...(context.forkFrom.at ? {lastTurnId: context.forkFrom.at.nativeTurnId} : {})} : context.resumeId ? { threadId: context.resumeId } : {}), cwd: context.cwd, approvalPolicy: livePermissions.approvalPolicy, sandbox: livePermissions.sandbox, ...(model ? { model } : {}), ...(developerInstructions !== undefined ? { developerInstructions } : {}) }), failure.promise])
       await persistPolicyToConfig(livePermissions)
       if (typeof result?.thread?.id !== 'string' || !result.thread.id || (context.resumeId && result.thread.id !== context.resumeId)) throw new Error('Codex thread identity mismatch')
       captureNativeInitial(result)

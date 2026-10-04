@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises"
+import { mkdir, rm, stat } from "node:fs/promises"
 import { isAbsolute, join } from "node:path"
 import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from "./activity.js"
 import { assertConfiguration, mergeConfiguration, nonemptyConfiguration, normalizeRequestedConfiguration } from "./configuration.js"
@@ -13,6 +13,11 @@ import { limited, pickAccount, switchable } from "./accounts/policy.js"
 import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
+import {
+  contextDrops, isContextEmpty, isEmptyContext, mergeContexts, noContextCapabilities, normalizeContext, normalizePolicy,
+  resolveContext, sameContext, unsupportedError,
+} from "./context/index.js"
+import type { AgentCapabilities, ContextDrop, ContextPolicy, LaunchContext, SessionContext } from "./context/types.js"
 import type { Account, AddAccountOptions, LoginHandle, LoginOptions, UsageWindow } from "./accounts/types.js"
 import type {
   ActivityNotice, AgentDriver, AgentRuntime, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
@@ -65,6 +70,8 @@ export class Core {
   private readonly refreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly refreshDue = new Set<string>()
   private readonly logins = new Set<LoginHandle>()
+  private readonly defaultContext: SessionContext | undefined
+  private readonly defaultPolicy: ContextPolicy
 
   constructor(private readonly options: CoreOptions) {
     if (!options.stateDirectory) throw new CoreError("invalid_options", "stateDirectory is required")
@@ -78,6 +85,8 @@ export class Core {
     this.maxPending = requirePositiveSafeInteger(limits.maxPending, "maxPending")
     this.outstandingActivity = requirePositiveSafeInteger(limits.outstandingActivity, "outstandingActivity")
     this.profiles = structuredClone(options.profiles ?? {})
+    this.defaultContext = normalizeContext(options.context, "options.context")
+    this.defaultPolicy = normalizePolicy(options.contextPolicy, "options.contextPolicy") ?? "error"
     this.store = new SessionStore(options.stateDirectory)
     this.events = new Events(options.onObserverError)
     const accounts = options.accounts ?? {}
@@ -107,6 +116,12 @@ export class Core {
 
   subscribe(observer: Observer): () => void { return this.events.subscribe(observer) }
 
+  /** What `agent`'s driver can apply (today: the session context table). */
+  capabilities(agent: string): AgentCapabilities {
+    const support = this.driver(agent).context
+    return { context: structuredClone(support?.capabilities ?? noContextCapabilities()) }
+  }
+
   readonly sessions = {
     create: (options: CreateOptions): Promise<Session> => this.operation(() => {
       const input = structuredClone(options)
@@ -114,6 +129,10 @@ export class Core {
       this.driver(input.agent)
       this.profile(input.agent, input.authProfile)
       assertAccountChoice(input)
+      input.context = normalizeContext(options.context)
+      input.contextPolicy = normalizePolicy(options.contextPolicy)
+      if (input.context === undefined) delete input.context
+      if (input.contextPolicy === undefined) delete input.contextPolicy
       if (typeof input.id !== "string") throw new TypeError("id is required")
       const id = input.id
       assertSessionId(id)
@@ -325,7 +344,9 @@ export class Core {
     if (this.shuttingDown) return Promise.reject(new CoreError("core_closed", "Core is closing or closed"))
     let patch: SessionConfiguration | undefined
     let requestedAccount: string | undefined
+    let requestedContext: SessionContext | undefined
     try {
+      if (options && options.context !== undefined) requestedContext = normalizeContext(options.context)
       if (options && options.configuration !== undefined) {
         const snapshot = structuredClone(options)
         assertConfiguration(snapshot.configuration)
@@ -340,7 +361,7 @@ export class Core {
     }
     const requestedPatch = patch
     const explicit = requestedPatch !== undefined
-    const overriding = explicit || requestedAccount !== undefined
+    const overriding = explicit || requestedAccount !== undefined || requestedContext !== undefined
     if (this.lifecycleBusy(id) || this.reserved.has(id) || this.forgetting.has(id)) {
       return Promise.reject(new CoreError("session_busy", "Session has an outstanding lifecycle operation"))
     }
@@ -362,9 +383,18 @@ export class Core {
         const from = saved.account ?? systemAccountId(saved.agent)
         if (from !== requestedAccount) switchFrom = from
       }
+      let contextChange = false
+      if (requestedContext !== undefined) {
+        const saved = await this.store.get(id)
+        if (!saved) throw new CoreError("session_not_found", `Session ${id} was not found`)
+        contextChange = !sameContext(saved.context, requestedContext)
+      }
       const current = this.live.get(id)
       if (current && current.snapshot().state !== "closed") {
-        if (current.snapshot().state === "closing" || current.snapshot().state === "failed" || switchFrom !== undefined || reason === "refresh") {
+        const state = current.snapshot().state
+        // A context is applied at launch: a changed one relaunches an idle session (never mid-turn).
+        if (contextChange && (state === "running" || state === "interrupting")) throw new CoreError("session_busy", "Wait for the turn to end before changing the session context")
+        if (state === "closing" || state === "failed" || switchFrom !== undefined || reason === "refresh" || contextChange) {
           // Failed/closing handle must be shut down before resume can reopen the native agent.
           // An account switch (or a token refresh) needs a fresh process with the new credentials (same native id).
           await current.close({ mode: "shutdown" })
@@ -380,7 +410,12 @@ export class Core {
       const configuration = explicit
         ? mergeConfiguration(record.configuration ?? {}, requestedPatch)
         : record.configuration
-      const session = await this.openSession({ ...record, configuration, ...(switchFrom !== undefined ? { account: requestedAccount } : {}) }, record.agentSessionId, undefined, original)
+      const ownContext = requestedContext !== undefined ? requestedContext : record.context
+      const { context: _previous, ...rest } = record
+      const session = await this.openSession({
+        ...rest, configuration, ...(switchFrom !== undefined ? { account: requestedAccount } : {}),
+        ...(ownContext !== undefined ? { context: ownContext } : {}),
+      }, record.agentSessionId, undefined, original)
       if (reason === "refresh") this.events.emit({ type: "account.refreshed", sessionId: id, account: requestedAccount! })
       else if (switchFrom !== undefined) this.events.emit({ type: "account.switched", sessionId: id, from: switchFrom, to: requestedAccount!, reason })
       return session
@@ -580,7 +615,7 @@ export class Core {
   }
 
   private async openSession(
-    input: CreateOptions & { id: string; createdAt: string; lineage?: SessionRecord["lineage"]; configuration?: SessionConfiguration },
+    input: CreateOptions & { id: string; createdAt: string; lineage?: SessionRecord["lineage"]; configuration?: SessionConfiguration; createdInstructions?: string },
     resumeId?: string,
     forkFrom?: ForkSource,
     originalRecord?: SessionRecord,
@@ -589,6 +624,9 @@ export class Core {
     const driver = this.driver(input.agent)
     if (input.account !== undefined && input.authProfile !== undefined) throw new CoreError("invalid_input", "account and authProfile are mutually exclusive")
     const profile = input.account !== undefined ? await this.accountProfile(input.agent, input.account) : this.profile(input.agent, input.authProfile)
+    // Resolved (and refused under policy "error") before anything launches.
+    const launch = forkFrom ? "fork" : resumeId ? "resume" : "create"
+    const prepared = await this.prepareContext(driver, input, launch)
     let session: Session | undefined
     let failed: Error | undefined
     let runtime: AgentRuntime | undefined
@@ -625,6 +663,7 @@ export class Core {
         sessionId: input.id, cwd: input.cwd, profile, resumeId, forkFrom, signal: this.lifetime.signal,
         ...(input.account !== undefined ? { account: input.account } : {}),
         ...(subagents.length ? { subagents: structuredClone(subagents) } : {}),
+        ...(prepared.sessionContext ? { sessionContext: structuredClone(prepared.sessionContext) } : {}),
         ...(nonemptyConfiguration(input.configuration) ? { configuration: structuredClone(input.configuration) } : {}),
         ...(input.permissions ? { permissions: structuredClone(input.permissions) } : originalRecord?.permissions ? { permissions: structuredClone(originalRecord.permissions) } : {}),
         onUpdate: update => {
@@ -675,6 +714,9 @@ export class Core {
         ...(input.lineage ? { lineage: {...input.lineage} } : {}),
         ...(nonemptyConfiguration(input.configuration) ? { configuration: structuredClone(input.configuration) } : {}),
         ...(input.permissions ? { permissions: structuredClone(input.permissions) } : originalRecord?.permissions ? { permissions: structuredClone(originalRecord.permissions) } : {}),
+        ...(!isContextEmpty(input.context) ? { context: structuredClone(input.context!) } : {}),
+        ...(input.contextPolicy ? { contextPolicy: input.contextPolicy } : {}),
+        ...(prepared.createdInstructions !== undefined ? { createdInstructions: prepared.createdInstructions } : {}),
       }
       persistenceAttempted = true
       await this.store.put(record)
@@ -686,6 +728,7 @@ export class Core {
         if (typeof options.id !== "string") throw new TypeError("id is required")
         const id = options.id
         assertSessionId(id)
+        const forkContext = options.context !== undefined ? normalizeContext(options.context) : record.context
         return this.withReservation(id, () => this.openSession({
           agent: record.agent, cwd: record.cwd, authProfile: record.authProfile,
           ...(record.account !== undefined ? { account: record.account } : {}),
@@ -693,6 +736,9 @@ export class Core {
           lineage: { parentSessionId: record.id, ...(options.at ? {nativeTurnId: options.at.nativeTurnId} : {}) },
           ...(record.configuration ? { configuration: structuredClone(record.configuration) } : {}),
           ...(record.permissions ? { permissions: structuredClone(record.permissions) } : {}),
+          ...(forkContext !== undefined ? { context: forkContext } : {}),
+          ...(record.contextPolicy ? { contextPolicy: record.contextPolicy } : {}),
+          ...(record.createdInstructions !== undefined ? { createdInstructions: record.createdInstructions } : {}),
         }, undefined, { agentSessionId: record.agentSessionId, ...(options.at ? { at: options.at } : {}) }))
       }), recordToSave => this.store.put(recordToSave), {
         subagents: structuredClone(runtime.restoredSubagents ?? subagents),
@@ -705,6 +751,7 @@ export class Core {
       outstandingActivity.clear()
       if (failed) throw failed
       this.events.emit({ type: resumeId ? "session.resumed" : "session.created", sessionId: record.id, record: structuredClone(record) })
+      if (prepared.dropped.length) this.events.emit({ type: "context.degraded", sessionId: record.id, dropped: structuredClone(prepared.dropped) })
       return session
     } catch (error) {
       discarded = true
@@ -734,6 +781,8 @@ export class Core {
         } catch (rollbackError) {
           storageFailure = asError(rollbackError)
         }
+      } else if (!resumeId && !persistenceAttempted && prepared.sessionContext) {
+        await rm(prepared.sessionContext.directory, { recursive: true, force: true }).catch(() => {})
       } else if (persistenceAttempted && !resumeId) {
         try {
           await this.store.remove(input.id)
@@ -754,6 +803,37 @@ export class Core {
       }
       if (this.shuttingDown) throw new CoreError("core_closed", "Core closed while opening a session", { cause: error })
       throw asError(error)
+    }
+  }
+
+  /**
+   * Merges the core default with the session's own context, validates it, and resolves it against
+   * the driver: under policy "error" anything it cannot apply is `context_unsupported` before any
+   * launch. A nonempty context gets a fresh core-owned folder; an empty one gets none (the launch
+   * is then exactly what it was without context).
+   */
+  private async prepareContext(
+    driver: AgentDriver,
+    input: { id: string; context?: SessionContext; contextPolicy?: ContextPolicy; createdInstructions?: string },
+    launch: "create" | "resume" | "fork",
+  ): Promise<{ sessionContext?: LaunchContext; dropped: ContextDrop[]; createdInstructions?: string }> {
+    const resolved = await resolveContext(mergeContexts(this.defaultContext, input.context))
+    const directory = this.store.contextDirectory(input.id)
+    const inherited = launch === "create" ? undefined : input.createdInstructions
+    const dropped = contextDrops(resolved, driver.context, launch, input.createdInstructions)
+    if (dropped.length && (input.contextPolicy ?? this.defaultPolicy) === "error") throw unsupportedError(driver.id, dropped)
+    if (isEmptyContext(resolved)) {
+      await rm(directory, { recursive: true, force: true })
+      return { dropped, ...(inherited !== undefined ? { createdInstructions: inherited } : {}) }
+    }
+    await rm(directory, { recursive: true, force: true })
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    const instructionsApplied = resolved.instructions !== undefined && !dropped.some(drop => drop.kind === "instructions")
+    const createdInstructions = launch === "create" ? (instructionsApplied ? resolved.instructions : undefined) : inherited
+    return {
+      sessionContext: { ...resolved, directory, launch, dropped },
+      dropped,
+      ...(createdInstructions !== undefined ? { createdInstructions } : {}),
     }
   }
 

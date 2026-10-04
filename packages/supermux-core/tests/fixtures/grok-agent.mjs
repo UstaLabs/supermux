@@ -2,6 +2,8 @@
 import { AgentSideConnection, ndJsonStream } from '@agentclientprotocol/sdk'
 import { Readable, Writable } from 'node:stream'
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+const paramsTrace = (method, params) => { if (process.env.PARAMS_TRACE) appendFileSync(process.env.PARAMS_TRACE, JSON.stringify({ method, params }) + '\n') }
+if (process.env.ENV_TRACE) writeFileSync(process.env.ENV_TRACE, JSON.stringify({ argv: process.argv.slice(2), env: process.env }))
 
 if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid))
 const record = (value) => { if (process.env.TRACE) appendFileSync(process.env.TRACE, JSON.stringify(value) + '\n') }
@@ -51,7 +53,8 @@ new AgentSideConnection(client => ({
     }
   },
   async authenticate() { return {} },
-  async newSession() {
+  async newSession(params) {
+    paramsTrace('session/new', params)
     record({ method: 'newSession' })
     if (process.env.FAIL_NEW === '1') throw new Error('new session forbidden')
     const sessionId = process.env.SESSION_ID || 'grok-1'
@@ -65,6 +68,7 @@ new AgentSideConnection(client => ({
     throw new Error('resumeSession not advertised')
   },
   async loadSession(params) {
+    paramsTrace('session/load', params)
     const attempts = bumpResumes()
     record({ method: 'loadSession', sessionId: params.sessionId, resumeAttempts: attempts })
     if (process.env.FAIL_RESUME === '1') throw new Error('resume failed')

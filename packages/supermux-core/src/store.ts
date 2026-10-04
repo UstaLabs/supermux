@@ -3,6 +3,7 @@ import { isAbsolute, join, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 import { uptime } from "node:os"
 import { CoreError } from "./errors.js"
+import { normalizeContext, normalizePolicy } from "./context/index.js"
 import type { SessionConfiguration, SessionRecord, SubagentSnapshot } from "./types.js"
 
 export class SessionStore {
@@ -94,6 +95,13 @@ export class SessionStore {
     this.assertOpen()
     await rm(this.path(id), { force: true })
     await rm(this.subagentsPath(id), { force: true })
+    await rm(this.contextDirectory(id), { recursive: true, force: true })
+  }
+
+  /** The session's generated-context folder (`<state>/context/<id>`); see core openSession. */
+  contextDirectory(id: string): string {
+    this.path(id)
+    return join(this.directory, "context", id)
   }
 
   /** Sidecar of a session's subagent registry (kept apart so the record format is unchanged). */
@@ -184,6 +192,12 @@ function validRecord(value: unknown): value is SessionRecord {
       && typeof (r.lineage as Record<string, unknown>).parentSessionId === "string"
       && ((r.lineage as Record<string, unknown>).nativeTurnId === undefined || typeof (r.lineage as Record<string, unknown>).nativeTurnId === "string")))
     && validConfiguration(r.configuration)
+    && validContext(r.context, r.contextPolicy)
+    && (r.createdInstructions === undefined || typeof r.createdInstructions === "string")
+}
+
+function validContext(context: unknown, policy: unknown): boolean {
+  try { normalizeContext(context); normalizePolicy(policy); return true } catch { return false }
 }
 
 function validSubagent(value: unknown): value is SubagentSnapshot {

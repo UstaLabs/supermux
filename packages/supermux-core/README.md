@@ -124,6 +124,10 @@ Claude/Codex ask only when `permissionPrompts: "host"`. Otherwise they deny. Dup
 
 Grok: `noLeader` and `alwaysApprove` are **required**. A broker that wants unattended Grok must pass `noLeader: false` and `alwaysApprove: true` **explicitly**.
 
+## Session context
+
+`createCore({ context })` and `core.sessions.create({ context, contextPolicy })` give a session extra instructions, skills, plugins and stdio MCP servers. Each agent gets them through a per-session channel (CLI flags, app-server requests, ACP `session/new` fields or a private config file in `<stateDirectory>/context/<id>/`); nothing goes into the workdir or the user's agent homes. Under the default policy `"error"`, an item the agent cannot apply fails the create with `context_unsupported` before anything launches; `"warn"` launches and emits `context.degraded`. `core.capabilities(agent).context` shows the table, `sessions.resume(id, { context })` replaces it, `session.fork({ id, context })` inherits or replaces it. Full reference and the per-agent table: API.md "Session context". Live check: `bun scripts/context-live.ts`.
+
 ## Capabilities (current drivers)
 
 | Driver | resume | steer | fork | configure | history | notes |

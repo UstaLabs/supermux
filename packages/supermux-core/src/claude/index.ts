@@ -7,6 +7,7 @@ import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 import { createClaudeNormalizer } from './normalize.js'
 import { CoreError } from '../errors.js'
+import { CLAUDE_CONTEXT, claudeContextArgs } from '../context/agents.js'
 
 export type ClaudeOptions = {
   id: string
@@ -150,7 +151,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
   const maxFrameBytes = options.maxFrameBytes
   for (const value of [setupTimeoutMs, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError('Claude limits must be positive safe integers')
   const keeper = requireKeeper(options.keeper)
-  return { id: options.id, async open(context) {
+  return { id: options.id, context: CLAUDE_CONTEXT, async open(context) {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId ?? randomUUID(), ready = false, closed = false
     let fatal: Error | undefined
@@ -393,8 +394,11 @@ export function claude(options: ClaudeOptions): AgentDriver {
         a.completion.reject(new Error(message ?? frame.result ?? 'Claude turn failed'))
       } else a.completion.resolve({ stopReason: typeof frame.stop_reason === 'string' && frame.stop_reason ? frame.stop_reason : 'end_turn' })
     }
+    const baseArgs = launchArgs(argv(options, agentSessionId, !!context.resumeId), context.profile)
+    // Session context goes last: it carries a host's own appended prompt (see claudeContextArgs).
+    const args = context.sessionContext ? [...baseArgs, ...claudeContextArgs(context.sessionContext, baseArgs)] : baseArgs
     const rpc = await transport({
-      command: options.command, args: launchArgs(argv(options, agentSessionId, !!context.resumeId), context.profile),
+      command: options.command, args,
       env: launchEnv(options.inheritEnv, options.env, context.profile),
       cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes,
       sessionId: context.sessionId,

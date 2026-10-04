@@ -13,6 +13,7 @@ import { freeLoopbackPort, isOpenCodeEndpointMissing, newOpenCodeServerInfo, ope
 import type { KeeperFrameEvent } from '../keeper/client.js'
 import { REASON, SUBAGENT_STATE_METHOD } from '../subagent-actions.js'
 import type { SubagentSnapshot } from '../types.js'
+import { genericAcpContext, type AcpContextAdapter } from '../context/agents.js'
 
 export type AcpActivityHint = { id?: string; phase: 'started' | 'completed' }
 export type AcpActivityClassifier = (update: AgentUpdate) => AcpActivityHint | undefined
@@ -61,6 +62,8 @@ export type AcpOptions = {
   /** Normalizer to use instead of a private one (the Grok wrapper keeps one across respawns). */
   normalizer?: AcpNormalizer
   permissions: Extract<PermissionsSpec, { kind: "acp" }>
+  /** How this agent applies a session context (the vendor wrappers pass theirs). Absent: MCP servers only, unverified. */
+  contextAdapter?: AcpContextAdapter
   /** OpenCode only: how often the side channel polls OpenCode's HTTP server for subagent asks while work is live. Default 500 ms. */
   openCodePollIntervalMs?: number
 }
@@ -165,6 +168,7 @@ export function acp(options: AcpOptions): AgentDriver {
   if (typeof options.inheritEnv !== 'boolean') throw new TypeError('ACP inheritEnv is required')
   if (!Array.isArray(options.mcpServers)) throw new TypeError('ACP mcpServers is required')
   const keeper = requireKeeper(options.keeper)
+  const contextAdapter = options.contextAdapter ?? genericAcpContext(options.mcpServers)
   const setupTimeout = options.setupTimeoutMs
   const shutdownTimeout = options.shutdownTimeoutMs
   const maxFrameBytes = options.maxFrameBytes
@@ -195,10 +199,17 @@ export function acp(options: AcpOptions): AgentDriver {
     }
     // OpenCode: pin its HTTP server's port and password so the side channel can reach it (see opencode-server.ts).
     const plannedServer: OpenCodeServerInfo | undefined = options.vendor === 'opencode' ? newOpenCodeServerInfo(await freeLoopbackPort()) : undefined
+    const baseEnv = launchEnv(options.inheritEnv, options.env, context.profile)
+    // Session context: extra args go before the final subcommand (`stdio` / `acp`).
+    const sessionContext = session?.sessionContext ? contextAdapter.launch(session.sessionContext, baseEnv) : undefined
+    const driverArgs = sessionContext?.args.length && options.args.length
+      ? [...options.args.slice(0, -1), ...sessionContext.args, options.args[options.args.length - 1]!]
+      : options.args
+    const mcpServers = sessionContext?.mcpServers.length ? [...options.mcpServers, ...sessionContext.mcpServers] : options.mcpServers
     const io = await connectAcpProcess({
       command: options.command,
-      args: plannedServer ? [...launchArgs(options.args, context.profile), '--port', String(plannedServer.port)] : launchArgs(options.args, context.profile),
-      env: { ...launchEnv(options.inheritEnv, options.env, context.profile), ...(plannedServer ? { OPENCODE_SERVER_PASSWORD: plannedServer.password } : {}) },
+      args: plannedServer ? [...launchArgs(driverArgs, context.profile), '--port', String(plannedServer.port)] : launchArgs(driverArgs, context.profile),
+      env: { ...baseEnv, ...sessionContext?.env, ...(plannedServer ? { OPENCODE_SERVER_PASSWORD: plannedServer.password } : {}) },
       cwd: session?.cwd ?? process.cwd(),
       sessionId,
       shutdownTimeoutMs: shutdownTimeout,
@@ -835,7 +846,7 @@ export function acp(options: AcpOptions): AgentDriver {
       if (!loadedChildren.has(child)) {
         // Grok/OpenCode serve a child session only after session/load; its replay is history.
         loadingChildren.add(child)
-        try { await ioWait(connection.loadSession({ sessionId: child, cwd: session!.cwd, mcpServers: options.mcpServers })) }
+        try { await ioWait(connection.loadSession({ sessionId: child, cwd: session!.cwd, mcpServers })) }
         finally { loadingChildren.delete(child) }
         loadedChildren.add(child)
       }
@@ -1003,7 +1014,7 @@ export function acp(options: AcpOptions): AgentDriver {
       canLoad = capabilities?.loadSession === true
       const modes = (capabilities?.sessionCapabilities as { modes?: unknown } | undefined)?.modes
       advertisedModes = modes != null
-      const params = { cwd: session.cwd, mcpServers: options.mcpServers }
+      const params = { cwd: session.cwd, mcpServers }
       if (session.resumeId) {
         agentSessionId = session.resumeId
         if (canResume) configOptions = readConfigOptions(await setup(connection.resumeSession({ ...params, sessionId: agentSessionId })))
@@ -1012,7 +1023,7 @@ export function acp(options: AcpOptions): AgentDriver {
           try { configOptions = readConfigOptions(await setup(connection.loadSession({ ...params, sessionId: agentSessionId }))) } finally { replay = false }
         } else throw new UnsupportedOperation('resume', options.id)
       } else {
-        const created = await setup(connection.newSession(params))
+        const created = await setup(connection.newSession(sessionContext?.newSessionMeta ? { ...params, _meta: sessionContext.newSessionMeta } : params))
         agentSessionId = created.sessionId
         configOptions = readConfigOptions(created)
       }
@@ -1054,6 +1065,7 @@ export function acp(options: AcpOptions): AgentDriver {
   }
   return {
     id: options.id,
+    context: contextAdapter.support,
     async open(context) { const connected = await connect(context, context); return connected.runtime! },
     auth: {
       async methods(context): Promise<AuthMethod[]> {

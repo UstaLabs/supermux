@@ -28,3 +28,7 @@ export type {
   Account, AccountMethod, AccountIdentity, AddAccountOptions, AccountsOptions, Vault, UsageWindow,
   LoginState, LoginPhase, LoginOptions, LoginHandle, LoginRunner, LoginSpawn, LoginProcess, LoginConfig, FetchLike,
 } from "./accounts/types.js"
+export type {
+  SessionContext, ExternalMcpServer, ContextMcpServer, ContextPolicy, ContextItemKind, ContextSupport, ContextItemCapability,
+  ContextCapabilities, AgentCapabilities, ContextDrop, LaunchContext, ResolvedContext, ResolvedMcpServer, DriverContextSupport,
+} from "./context/types.js"
