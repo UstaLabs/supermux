@@ -216,6 +216,13 @@ class ChatActions(
         { _, _ -> dev.supermux.net.SubagentActionResult(ok = false, error = "Not available on this client") },
     val stopSubagent: suspend (subagentId: String) -> dev.supermux.net.SubagentActionResult =
         { dev.supermux.net.SubagentActionResult(ok = false, error = "Not available on this client") },
+    /** The session's host's accounts (every agent), live; null until loaded. Drives the header pill. */
+    val accounts: kotlinx.coroutines.flow.Flow<List<dev.supermux.net.AccountDto>?> = kotlinx.coroutines.flow.flowOf(null),
+    /** Start following [accounts] (the first call fetches GET /accounts). */
+    val ensureAccounts: () -> Unit = {},
+    /** POST /sessions/<id>/account — a refusal keeps the broker's code (session_busy, …). */
+    val setAccount: suspend (accountId: String) -> dev.supermux.state.AccountResult<dev.supermux.net.SessionAccountResult> =
+        { dev.supermux.state.AccountResult.Failed(null, null, "Not available on this client") },
 )
 
 /** [ChatActions] wired to a [HostStore] for one session — desktop's ergonomics, kept. */
@@ -248,6 +255,9 @@ fun rememberChatActions(
             setPermissionMode = { mode -> app.setPermissionMode(session.id, mode) },
             messageSubagent = { id, text -> app.messageSubagent(session.id, id, text) },
             stopSubagent = { id -> app.stopSubagent(session.id, id) },
+            accounts = app.accounts,
+            ensureAccounts = { app.ensureAccounts() },
+            setAccount = { id -> app.setSessionAccount(session.id, id) },
         )
     }
 }
@@ -383,6 +393,8 @@ fun ChatPanel(
     val dead = agent?.state == "dead"
 
     LaunchedEffect(session.id) { actions.ensureMessagesLoaded() }
+    val sessionAccounts by actions.accounts.collectAsState(null)
+    LaunchedEffect(actions, showHeader) { if (showHeader) actions.ensureAccounts() }
 
     var pendingRespondIds by remember(session.id) { mutableStateOf(setOf<String>()) }
     val liveRequestIds = remember(state.requests) { state.requests.map { it.requestId }.toSet() }
@@ -661,6 +673,16 @@ fun ChatPanel(
                         }
                     }
                 }
+                // The session's account: shown on an added account, or when the agent has more
+                // than one to switch between (dev.supermux.ui.accounts.SessionAccountPill).
+                dev.supermux.ui.accounts.SessionAccountPill(
+                    agent = session.agent,
+                    accountId = session.account,
+                    accountLabel = session.accountLabel,
+                    accounts = sessionAccounts,
+                    onSwitch = actions.setAccount,
+                    narrow = headerWidth < 460.dp,
+                )
                 headerLinks(proxies, forceLinksMenu, onForceLinksMenuConsumed)
                 if (hasNative) {
                     Spacer(Modifier.width(Space.xs))

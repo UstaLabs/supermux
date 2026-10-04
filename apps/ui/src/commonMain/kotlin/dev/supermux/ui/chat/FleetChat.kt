@@ -81,5 +81,11 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
             setPermissionMode = { fleet.setPermissionMode(sessionId, it) },
             messageSubagent = { id, text -> fleet.messageSubagent(sessionId, id, text) },
             stopSubagent = { id -> fleet.stopSubagent(sessionId, id) },
+            accounts = fleet.appFor(sessionId)?.accounts ?: kotlinx.coroutines.flow.flowOf(null),
+            ensureAccounts = { fleet.appFor(sessionId)?.ensureAccounts() },
+            setAccount = { id ->
+                fleet.appFor(sessionId)?.setSessionAccount(sessionId, id)
+                    ?: dev.supermux.state.AccountResult.Failed(null, null, "No host connected")
+            },
         )
     }

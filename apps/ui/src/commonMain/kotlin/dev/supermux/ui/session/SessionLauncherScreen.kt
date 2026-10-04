@@ -67,6 +67,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -253,6 +254,8 @@ fun SessionLauncherScreen(
         baseBranch: String?,
         replaceDraftId: String?,
         permissionMode: String?,
+        /** Account id for [agent]; null = its system account (the default). */
+        account: String?,
     ) -> String?,
     /** Snapshot catalog keyed by agent (labels + descriptions + default). */
     permissionCatalog: Map<String, List<PermissionModeInfo>> = emptyMap(),
@@ -348,6 +351,12 @@ fun SessionLauncherScreen(
     var launcherPermissionModes by remember { mutableStateOf(emptyMap<String, String>()) }
     var permissionMode by remember { mutableStateOf<String?>(null) }
     var permissionMenu by remember { mutableStateOf(false) }
+    // The account for this chat: null = the agent's system login. Nothing is remembered — a new
+    // chat always starts on the system account, and switching agent drops the choice.
+    var account by remember { mutableStateOf<String?>(null) }
+    val accounts by actions.accounts.collectAsState(null)
+    LaunchedEffect(actions) { actions.ensureAccounts() }
+    LaunchedEffect(agent) { account = null }
 
     var models by remember { mutableStateOf(emptyList<ModelInfo>()) }
     var agentMenu by remember { mutableStateOf(false) }
@@ -847,9 +856,11 @@ fun SessionLauncherScreen(
         draftCleared = true
         scope.launch {
             try {
+                // Only an account this agent still has; a removed one falls back to the system login.
+                val chosenAccount = account?.takeIf { id -> accounts.orEmpty().any { it.id == id && it.agent == agent } }
                 val sessionId = onSubmit(
                     wd.trim(), agent, model, reasoningLevel, message.text.trim(),
-                    toUpload, wantsWorktree, base, activeDraftId, permissionMode,
+                    toUpload, wantsWorktree, base, activeDraftId, permissionMode, chosenAccount,
                 )
                 onClearDraft()
                 if (sessionId != null) onOpenSession?.invoke(sessionId)
@@ -1051,6 +1062,9 @@ fun SessionLauncherScreen(
                                 enabled = !launcherRestoring,
                                 onClick = { agentMenu = true },
                                 modifier = Modifier.testTag("launcher_agent_pill"),
+                                // Compact: the account lives in this menu, so the pill says when
+                                // the chat will NOT run on the system login.
+                                onAddedAccount = compact && account != null,
                             )
                             DropdownMenu(expanded = agentMenu, onDismissRequest = { agentMenu = false }) {
                                 agents.forEach { a ->
@@ -1065,8 +1079,27 @@ fun SessionLauncherScreen(
                                         },
                                     )
                                 }
+                                // A compact toolbar has no room for an account pill: the agent
+                                // menu carries the choice instead (wider windows get the pill).
+                                if (compact) {
+                                    dev.supermux.ui.accounts.LauncherAccountMenuSection(
+                                        agent = agent,
+                                        accounts = accounts,
+                                        selected = account,
+                                        onSelect = { account = it; agentMenu = false },
+                                    )
+                                }
                             }
                         }
+                    }
+                    val accountControl: @Composable () -> Unit = {
+                        if (!compact) dev.supermux.ui.accounts.LauncherAccountPicker(
+                            agent = agent,
+                            accounts = accounts,
+                            selected = account,
+                            onSelect = { account = it },
+                            enabled = !launcherRestoring,
+                        )
                     }
                     val modelLabel = model?.let { id ->
                         models.firstOrNull { it.id == id }?.displayName ?: id
@@ -1335,6 +1368,7 @@ fun SessionLauncherScreen(
                                     ) {
                                         composer.Attach()
                                         agentControl()
+                                        accountControl()
                                         modelControl()
                                         effortControl()
                                         permissionsControl()
@@ -1354,6 +1388,7 @@ fun SessionLauncherScreen(
                                     horizontalArrangement = Arrangement.spacedBy(Space.sm),
                                 ) {
                                     agentControl()
+                                    accountControl()
                                     modelControl()
                                     effortControl()
                                     permissionsControl()
@@ -1535,6 +1570,8 @@ private fun LauncherAgentPill(
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The chat will run on an added account (chosen in this pill's menu): show a small mark. */
+    onAddedAccount: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
@@ -1585,6 +1622,14 @@ private fun LauncherAgentPill(
             fontWeight = if (pointer) FontWeight.Normal else FontWeight.Medium,
             maxLines = 1,
         )
+        if (onAddedAccount) {
+            Icon(
+                Icons.Outlined.AccountCircle,
+                contentDescription = "On an added account",
+                tint = cs.primary,
+                modifier = Modifier.size(13.dp).testTag("launcher_agent_account_mark"),
+            )
+        }
         Icon(
             Icons.Filled.KeyboardArrowDown,
             contentDescription = null,

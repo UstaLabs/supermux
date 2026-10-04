@@ -604,11 +604,11 @@ fun SupermuxApp(
             // doSubmit try/catch turns into the inline launcher_error text. The BROKER delivers
             // the first message (text + pre-uploaded files) with the spawn, so nothing about it
             // depends on this pane staying composed.
-            onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode ->
+            onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account ->
                 onCreated(
                     if (tab == null) {
                         launcherActions.createSessionWithFirstMessage(
-                            workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode,
+                            workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account,
                         )
                     } else {
                         // A workspace tab's composer: JOIN that workspace and fill this very tab.
@@ -618,6 +618,7 @@ fun SupermuxApp(
                             workspaceId = tab.workspaceId,
                             viewId = tab.viewId,
                             permissionMode = permissionMode,
+                            account = account,
                         )
                     },
                 )

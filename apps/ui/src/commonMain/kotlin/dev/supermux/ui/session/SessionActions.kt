@@ -88,6 +88,10 @@ class LauncherActions(
         { _, _ -> emptyList() },
     /** The host's INSTALLED agent kinds; empty keeps each launcher's own fallback list. */
     val launcherAgents: suspend () -> List<String> = { emptyList() },
+    /** The target host's accounts (every agent), live; null until loaded. Drives the picker. */
+    val accounts: Flow<List<dev.supermux.net.AccountDto>?> = flowOf(null),
+    /** Start following [accounts] (the first call fetches GET /accounts). */
+    val ensureAccounts: () -> Unit = {},
     /** Snapshot catalog of permission modes, keyed by agent. */
     val permissionModes: Map<String, List<PermissionModeInfo>> = emptyMap(),
     val listForges: suspend () -> List<ForgeConnection> = { emptyList() },
@@ -117,7 +121,8 @@ class LauncherActions(
         baseBranch: String?,
         replaceDraftId: String?,
         permissionMode: String?,
-    ) -> String = { _, _, _, _, _, _, _, _, _, _ -> error("No host connected") },
+        account: String?,
+    ) -> String = { _, _, _, _, _, _, _, _, _, _, _ -> error("No host connected") },
     /** Save as a draft session (no agent process). Returns the draft's id, null on failure. */
     val createDraftSession: suspend (
         workdir: String,
@@ -157,6 +162,8 @@ fun rememberLauncherActions(
             launcherRepoInfo = { workdir, fetch -> app.launcherRepoInfo(workdir, fetch) },
             launcherCommands = { agent, workdir -> app.launcherCommands(agent, workdir) },
             launcherAgents = { app.launcherAgents() },
+            accounts = app.accounts,
+            ensureAccounts = { app.ensureAccounts() },
             listForges = { app.listForges() },
             searchForge = { app.searchForge(it) },
             cloneForge = { cid, owner, name -> app.cloneForge(cid, owner, name) },
@@ -165,10 +172,10 @@ fun rememberLauncherActions(
             fetchGlossary = { app.fetchGlossary().orEmpty() },
             transcribeDraft = { draft -> app.transcribeDraft(null, draft)?.text },
             transcribeAudio = { bytes, name, mime -> app.transcribeAudio(null, bytes, name, mime)?.text },
-            createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm ->
+            createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->
                 app.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,
-                    permissionMode = perm,
+                    permissionMode = perm, account = acct,
                 )
             },
             createDraftSession = { wd, agent, model, level, text, replace ->
@@ -207,6 +214,8 @@ fun rememberLauncherActions(
             launcherRepoInfo = { workdir, fetch -> fleet.launcherRepoInfo(workdir, fetch) },
             launcherCommands = { agent, workdir -> fleet.launcherCommands(agent, workdir) },
             launcherAgents = { fleet.agentStatuses().orEmpty().filter { it.installed }.map { it.kind } },
+            accounts = fleet.activeAccounts,
+            ensureAccounts = { fleet.activeApp()?.ensureAccounts() },
             listForges = { fleet.listForges() },
             searchForge = { fleet.searchForge(it) },
             cloneForge = { cid, owner, name -> fleet.cloneForge(cid, owner, name) },
@@ -215,10 +224,10 @@ fun rememberLauncherActions(
             fetchGlossary = { fleet.fetchGlossary().orEmpty() },
             transcribeDraft = { draft -> fleet.transcribeDraft(null, draft) },
             transcribeAudio = { bytes, name, mime -> fleet.transcribeAudio(null, bytes, name, mime) },
-            createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm ->
+            createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->
                 fleet.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,
-                    permissionMode = perm,
+                    permissionMode = perm, account = acct,
                 )
             },
             createDraftSession = { wd, agent, model, level, text, replace ->

@@ -772,6 +772,8 @@ fun TimelineItemRow(
                             )
                         } else if (isUser) {
                             UserMessage(text)
+                        } else if (dev.supermux.ui.accounts.isAccountNotice(text)) {
+                            dev.supermux.ui.accounts.AccountNoticeRow(text)
                         } else if (text.startsWith("📖 Walkthrough ready")) {
                             WalkthroughReadyCard(text, onOpenWalkthrough)
                         } else {

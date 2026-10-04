@@ -51,8 +51,8 @@ class SessionLauncherDictationTest {
         draft: LauncherDraft = LauncherDraft(),
         onSubmit: suspend (
             String, String, String?, String?, String, List<dev.supermux.state.StagedUpload>,
-            Boolean, String?, String?, String?,
-        ) -> String? = { _, _, _, _, _, _, _, _, _, _ -> null },
+            Boolean, String?, String?, String?, String?,
+        ) -> String? = { _, _, _, _, _, _, _, _, _, _, _ -> null },
     ) {
         SupermuxTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(

@@ -8,6 +8,8 @@ package dev.supermux.ui.nav
  */
 enum class SettingsSection(val label: String) {
     Agents("Agents"),
+    /** Extra logins per agent, picked per chat; auto-switch on a usage limit (slice A3b). */
+    Accounts("Accounts"),
     Devices("Devices"),
     System("System"),
     GitHosting("Git hosting"),

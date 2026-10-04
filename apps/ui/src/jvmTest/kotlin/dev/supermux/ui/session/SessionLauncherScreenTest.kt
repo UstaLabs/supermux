@@ -142,9 +142,10 @@ class SessionLauncherScreenTest {
         onDraftChange: (LauncherDraft) -> Unit = {},
         onClearDraft: () -> Unit = {},
         onOpenSession: ((String) -> Unit)? = null,
-        onSubmit: suspend (String, String, String?, String?, String, List<StagedUpload>, Boolean, String?, String?, String?) -> String? =
-            { _, _, _, _, _, _, _, _, _, _ -> null },
+        onSubmit: suspend (String, String, String?, String?, String, List<StagedUpload>, Boolean, String?, String?, String?, String?) -> String? =
+            { _, _, _, _, _, _, _, _, _, _, _ -> null },
         permissionCatalog: Map<String, List<PermissionModeInfo>> = emptyMap(),
+        accounts: kotlinx.coroutines.flow.Flow<List<dev.supermux.net.AccountDto>?> = kotlinx.coroutines.flow.flowOf(null),
     ) {
         SupermuxTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(
@@ -160,6 +161,7 @@ class SessionLauncherScreenTest {
                     launcherReasoning = { a, m -> modelCalls?.add("reasoning:$a"); reasoning(a, m) },
                     launcherRepoInfo = { w, _ -> asked?.add(w); repoInfoAt?.invoke(w) ?: repoInfo },
                     launcherCommands = { _, w -> asked?.add(w); commands },
+                    accounts = accounts,
                 ),
                 loadPrefs = { prefs },
                 onPrefsChange = onPrefsChange,
@@ -243,7 +245,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 onClearDraft = { cleared = true },
-                onSubmit = { w, a, m, r, t, s, wt, b, _replaceDraftId, _perm ->
+                onSubmit = { w, a, m, r, t, s, wt, b, _replaceDraftId, _perm, _ ->
                     captured = Submitted(w, a, m, r, t, s.size, wt, b)
                     null
                 },
@@ -259,6 +261,89 @@ class SessionLauncherScreenTest {
         assertTrue(cleared) // successful submit clears the draft
     }
 
+    @Test fun account_picker_sends_the_chosen_account_and_defaults_to_the_system_login() = runComposeUiTest {
+        val sent = mutableListOf<String?>()
+        val accounts = kotlinx.coroutines.flow.MutableStateFlow<List<dev.supermux.net.AccountDto>?>(
+            listOf(
+                dev.supermux.net.AccountDto(id = "claude:system", agent = "claude", method = "system", label = "System login", system = true),
+                dev.supermux.net.AccountDto(id = "claude-work", agent = "claude", method = "subscription", label = "Work"),
+                dev.supermux.net.AccountDto(id = "codex:system", agent = "codex", method = "system", label = "System login", system = true),
+            ),
+        )
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
+                accounts = accounts,
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, account -> sent += account; null },
+            )
+        }
+        waitForIdle()
+        // Default: the system login, so nothing is sent.
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<String?>(null), sent)
+    }
+
+    @Test fun account_picker_choice_reaches_onSubmit() = runComposeUiTest {
+        val sent = mutableListOf<String?>()
+        val accounts = kotlinx.coroutines.flow.MutableStateFlow<List<dev.supermux.net.AccountDto>?>(
+            listOf(
+                dev.supermux.net.AccountDto(id = "claude:system", agent = "claude", method = "system", label = "System login", system = true),
+                dev.supermux.net.AccountDto(id = "claude-work", agent = "claude", method = "subscription", label = "Work"),
+            ),
+        )
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
+                accounts = accounts,
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, account -> sent += account; null },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("account-picker").performClick()
+        waitForIdle()
+        onNodeWithTag("account-picker-item:claude-work").performClick()
+        waitForIdle()
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<String?>("claude-work"), sent)
+    }
+
+    @Test fun compact_launcher_carries_the_account_in_the_agent_menu() = runComposeUiTest {
+        val sent = mutableListOf<String?>()
+        val accounts = kotlinx.coroutines.flow.MutableStateFlow<List<dev.supermux.net.AccountDto>?>(
+            listOf(
+                dev.supermux.net.AccountDto(id = "claude:system", agent = "claude", method = "system", label = "System login", system = true),
+                dev.supermux.net.AccountDto(id = "claude-work", agent = "claude", method = "subscription", label = "Work"),
+            ),
+        )
+        touchContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
+                accounts = accounts,
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, account -> sent += account; null },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("account-picker").assertDoesNotExist()
+        onNodeWithTag("launcher_agent_pill").performClick()
+        waitForIdle()
+        onNodeWithTag("account-picker-item:claude-work").performClick()
+        waitForIdle()
+        onNodeWithTag("launcher_agent_account_mark", useUnmergedTree = true).assertExists()
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<String?>("claude-work"), sent)
+    }
+
+    @Test fun no_account_picker_without_a_choice() = runComposeUiTest {
+        pointerContent { Harness(accounts = kotlinx.coroutines.flow.flowOf(listOf(
+            dev.supermux.net.AccountDto(id = "claude:system", agent = "claude", method = "system", label = "System login", system = true),
+        ))) }
+        waitForIdle()
+        onNodeWithTag("account-picker").assertDoesNotExist()
+    }
+
     @Test fun submit_sends_sticky_permission_mode() = runComposeUiTest {
         var perm: String? = "unset"
         val catalog = mapOf(
@@ -272,7 +357,7 @@ class SessionLauncherScreenTest {
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 prefs = LauncherPrefs(permissionModes = mapOf("claude" to "ask")),
                 permissionCatalog = catalog,
-                onSubmit = { _, _, _, _, _, _, _, _, _, p ->
+                onSubmit = { _, _, _, _, _, _, _, _, _, p, _ ->
                     perm = p
                     null
                 },
@@ -320,7 +405,7 @@ class SessionLauncherScreenTest {
                 draft = LauncherDraft(workdir = "/other/proj", useWorktree = true, baseBranch = "dev", text = "tab text"),
                 repoInfo = repo,
                 workspaceWorkdir = "/ws/tree",
-                onSubmit = { w, a, m, r, t, s, wt, b, _, _perm ->
+                onSubmit = { w, a, m, r, t, s, wt, b, _, _perm, _ ->
                     captured = Submitted(w, a, m, r, t, s.size, wt, b)
                     null
                 },
@@ -344,7 +429,7 @@ class SessionLauncherScreenTest {
                 draft = LauncherDraft(text = "hi"),
                 projects = listOf("/proj/a"),
                 workspaceWorkdir = "/ws/tree",
-                onSubmit = { w, a, m, r, t, s, wt, b, _, _perm ->
+                onSubmit = { w, a, m, r, t, s, wt, b, _, _perm, _ ->
                     captured = Submitted(w, a, m, r, t, s.size, wt, b)
                     null
                 },
@@ -376,7 +461,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "keep me"),
                 onDraftChange = { drafts.add(it) },
-                onSubmit = { _, _, _, _, _, _, _, _, _, _ -> throw IllegalStateException("nope") },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, _ -> throw IllegalStateException("nope") },
             )
         }
         waitForIdle()
@@ -506,7 +591,7 @@ class SessionLauncherScreenTest {
                 // No text yet: typing freezes the project, and this one must follow recency.
                 sessions = sessions,
                 repoInfoAt = { w -> if (w == "/proj/y") gate.await() else repo },
-                onSubmit = { w, a, m, r, t, st, wt, b, _, _ -> captured = Submitted(w, a, m, r, t, st.size, wt, b); null },
+                onSubmit = { w, a, m, r, t, st, wt, b, _, _, _ -> captured = Submitted(w, a, m, r, t, st.size, wt, b); null },
             )
         }
         waitForIdle()
@@ -569,7 +654,7 @@ class SessionLauncherScreenTest {
                 prefs = LauncherPrefs(worktreeOff = setOf(worktreeChoiceKey("", "/proj/x"))),
                 draft = LauncherDraft(workdir = "/proj/x", text = "go"),
                 repoInfo = repo,
-                onSubmit = { w, a, m, r, t, st, wt, b, _, _ -> captured = Submitted(w, a, m, r, t, st.size, wt, b); null },
+                onSubmit = { w, a, m, r, t, st, wt, b, _, _, _ -> captured = Submitted(w, a, m, r, t, st.size, wt, b); null },
             )
         }
         waitForIdle()
@@ -597,7 +682,7 @@ class SessionLauncherScreenTest {
         pointerContent {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
-                onSubmit = { _, _, _, _, _, _, _, _, _, _ ->
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, _ ->
                     throw IllegalStateException("spawn refused: workdir is not a directory")
                 },
             )
@@ -657,7 +742,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = ""),
                 commands = listOf(cmd("review")),
-                onSubmit = { _, _, _, _, _, _, _, _, _, _ -> submits++; null },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, _ -> submits++; null },
             )
         }
         waitForIdle()
@@ -763,7 +848,7 @@ class SessionLauncherScreenTest {
                     ),
                     loadPrefs = { LauncherPrefs() },
                     loadDraft = { LauncherDraft(workdir = "/proj/x") },
-                    onSubmit = { _, _, _, _, _, _, _, _, _, _ -> null },
+                    onSubmit = { _, _, _, _, _, _, _, _, _, _, _ -> null },
                     standalone = true,
                 )
             }
@@ -819,7 +904,7 @@ class SessionLauncherScreenTest {
                     onBack = {},
                     loadPrefs = { LauncherPrefs() },
                     loadDraft = { LauncherDraft() },
-                    onSubmit = { _, _, _, _, _, _, _, _, _, _ -> null },
+                    onSubmit = { _, _, _, _, _, _, _, _, _, _, _ -> null },
                     topBarShown = true,
                 )
             }
@@ -855,7 +940,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "go"),
                 onOpenSession = { opened.add(it) },
-                onSubmit = { _, _, _, _, _, _, _, _, _, _ -> "s-new" },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, _ -> "s-new" },
             )
         }
         waitForIdle()

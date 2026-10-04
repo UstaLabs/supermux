@@ -86,6 +86,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -388,6 +389,33 @@ class FleetStore(
             .distinctUntilChanged()
             .flatMapLatest { app -> app?.agentModels ?: flowOf(null) }
             .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /**
+     * The ACTIVE host's accounts ([HostStore.accounts]) — null until a screen asked for them
+     * ([HostStore.ensureAccounts]) and the host answered. Keyed on the live [HostStore] like
+     * [activeAgentModels].
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAccounts: StateFlow<List<dev.supermux.net.AccountDto>?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.accounts ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /** The ACTIVE host's accounts auto-switch setting ([HostStore.accountsAutoSwitch]). */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAccountsAutoSwitch: StateFlow<Boolean?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.accountsAutoSwitch ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /** `account_login_state` frames from the ACTIVE host. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAccountLogins: Flow<dev.supermux.net.AccountLoginStateDto> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.accountLogins ?: emptyFlow() }
 
     /**
      * The ACTIVE host's project catalog for the launcher — empty until that host's catalog is
@@ -1621,12 +1649,13 @@ class FleetStore(
         hostRecordId: String? = null,
         viewId: String? = null,
         permissionMode: String? = null,
+        account: String? = null,
     ): String {
         val app = spawnTarget(hostRecordId, workspaceId)
             ?: throw IllegalStateException("No host connected")
         val newId = app.createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode, account,
         )
         return newId
     }
