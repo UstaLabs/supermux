@@ -1,6 +1,8 @@
 import {createInterface} from 'node:readline'
 import {appendFileSync,writeFileSync} from 'node:fs'
 if(process.env.PID_FILE) writeFileSync(process.env.PID_FILE,String(process.pid))
+// Accounts tests: what the driver launched with.
+if (process.env.ENV_TRACE) writeFileSync(process.env.ENV_TRACE, JSON.stringify({ argv: process.argv.slice(2), env: process.env }))
 if(process.env.MODE==='stubborn') process.on('SIGTERM',()=>{})
 const send=o=>process.stdout.write(JSON.stringify(o)+'\n')
 let thread='native-1',turn=0, initialized=false

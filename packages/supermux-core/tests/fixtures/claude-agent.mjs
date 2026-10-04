@@ -3,6 +3,8 @@ import {appendFileSync, writeFileSync} from 'node:fs'
 
 const argv = process.argv.slice(2)
 if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid))
+// Accounts tests: what the driver launched with.
+if (process.env.ENV_TRACE) writeFileSync(process.env.ENV_TRACE, JSON.stringify({ argv: process.argv.slice(2), env: process.env }))
 if (process.env.MODE === 'stubborn') process.on('SIGTERM', () => {})
 if (process.env.TRACE) appendFileSync(process.env.TRACE, JSON.stringify({argv}) + '\n')
 

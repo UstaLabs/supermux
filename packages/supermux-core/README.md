@@ -15,7 +15,8 @@ import { claude } from "supermux-core/claude"
 import { codex } from "supermux-core/codex"
 import { cursor } from "supermux-core/cursor"
 import { grok, opencode, cursor } from "supermux-core/agents"
-import { copiedCredentials, withAuth } from "supermux-core/auth"
+import { fileVault, memoryVault, ensureHome, pickAccount } from "supermux-core/accounts"
+import { copiedCredentials, withAuth } from "supermux-core/auth" // deprecated
 ```
 
 Root also exports types including `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `AdoptOptions`, `ResumeOptions`, `SessionConfiguration`, `DriverContext`, `CoreEvent`, `Observer`. There is no root barrel that re-exports drivers.
@@ -91,11 +92,15 @@ Call `onActivity` only for work the native runtime started **outside** an owned 
 
 ## Auth, env, secrets
 
-Env merge (ACP/Claude/Codex/Cursor/Grok): process env unless `inheritEnv: false`, then driver `env`, then **profile `env` last**.
+Env merge (ACP/Claude/Codex/Cursor/Grok): process env unless `inheritEnv: false`, then driver `env`, then **profile `env` last**, then the profile's `unsetEnv` keys are removed. Profile `args` are appended to the CLI args.
 
 Records store the **profile name**, never env or tokens. Reopening a core requires the host to pass profiles again.
 
-`copiedCredentials` + `withAuth` copies a credential file into a per-session home. Copied homes **cannot fork** (`fork: false`). `withAuth` forwards configure/history. Native token expiry is **agent-owned**: the library copies/promotes nonempty JSON objects and propagates driver errors; it does not inspect TTL or open a login UI. Real-agent examples in this package do **not** copy credentials.
+`copiedCredentials` + `withAuth` (**deprecated**, use accounts) copies a credential file into a per-session home. Copied homes **cannot fork** (`fork: false`). `withAuth` forwards configure/history. Native token expiry is **agent-owned**: the library copies/promotes nonempty JSON objects and propagates driver errors; it does not inspect TTL or open a login UI. Real-agent examples in this package do **not** copy credentials.
+
+## Accounts
+
+Several logins per agent, picked per session: `createCore({ …, accounts: { vault?, homes?, autoSwitch? } })`, then `core.accounts.add({ agent: "claude", method: "token", secret })` and `core.sessions.create({ …, account: id })`. Every agent has a built-in `<agent>:system` account: the CLI's own login, never copied or moved. Without an `account`, sessions use it exactly as before. Keys and tokens are injected by env from the vault. Subscription logins live in one persistent **account home** per login. Its history entries (Claude `projects/`, Codex `sessions/`, …) are symlinks to one shared root, so `sessions.resume(id, { account })` moves a session to another account and keeps its history (verified live for Claude and Codex). Adding a second copy of a rotating login (same identity) is refused, because refresh tokens are single-use. With `autoSwitch`, a rate-limit window at 100% moves the session to the best other account after its turn ends (`account.switched` / `account.exhausted`). Full reference: API.md "Accounts". Live check: `SUPERMUX_TEST_CLAUDE_TOKEN_FILE=… bun scripts/accounts-live.ts`. Scratch goes to `~/.cache/accounts-live`.
 
 ## Requests
 

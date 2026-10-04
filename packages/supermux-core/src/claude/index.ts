@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentDriver, CloseOptions, ContentBlock, PermissionHandler, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
+import { launchArgs, launchEnv } from '../launch.js'
 import { appliedFor, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
@@ -393,8 +394,8 @@ export function claude(options: ClaudeOptions): AgentDriver {
       } else a.completion.resolve({ stopReason: typeof frame.stop_reason === 'string' && frame.stop_reason ? frame.stop_reason : 'end_turn' })
     }
     const rpc = await transport({
-      command: options.command, args: argv(options, agentSessionId, !!context.resumeId),
-      env: { ...(options.inheritEnv ? process.env : {}), ...options.env, ...context.profile?.env },
+      command: options.command, args: launchArgs(argv(options, agentSessionId, !!context.resumeId), context.profile),
+      env: launchEnv(options.inheritEnv, options.env, context.profile),
       cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes,
       sessionId: context.sessionId,
       keeper,

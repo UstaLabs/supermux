@@ -18,7 +18,8 @@ Use `module` / `moduleResolution` `NodeNext`. Add `@types/node` **22** as a **de
 | `supermux-core/codex` | `codex` |
 | `supermux-core/cursor` | `cursor` (re-export of `supermux-core/agents`) |
 | `supermux-core/agents` | `grok`, `opencode`, `cursor` |
-| `supermux-core/auth` | `copiedCredentials`, `withAuth` |
+| `supermux-core/auth` | `copiedCredentials`, `withAuth` (**deprecated**, see Accounts) |
+| `supermux-core/accounts` | `fileVault`, `memoryVault`, `AccountRegistry`, `ensureHome`, `claudeLayout`, `codexLayout`, adapters, `pickAccount`, `score`, usage parsers |
 | `supermux-core/environment` | `prepareGrokEnvironment`, `prepareCodexEnvironment`, `prepareOpenCodeEnvironment`, `prepareCursorEnvironment`, credential helpers |
 
 Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `AdoptOptions`, `ResumeOptions`, `SessionConfiguration`, `DriverContext`, `CoreEvent`, `Observer`, `AgentDriver`, `AgentRuntime`, `Host`, `HostHandle`, `HostRegistration`.
@@ -29,7 +30,7 @@ Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `A
 createCore(options: CoreOptions): Core
 ```
 
-`CoreOptions`: `stateDirectory` (required), `agents` (unique nonempty **ids**; the array may be empty), **`limits` (required, no defaults)**: `{ interruptTimeoutMs, maxPending, outstandingActivity }` each a **positive safe integer**. Missing `limits` or an invalid field → `TypeError` naming it. `profiles?`, `onObserverError?`. Permission answers are `session.requests.respond`, not a Core callback.
+`CoreOptions`: `stateDirectory` (required), `agents` (unique nonempty **ids**; the array may be empty), **`limits` (required, no defaults)**: `{ interruptTimeoutMs, maxPending, outstandingActivity }` each a **positive safe integer**. Missing `limits` or an invalid field → `TypeError` naming it. `profiles?`, `accounts?` (see Accounts), `onObserverError?`. Permission answers are `session.requests.respond`, not a Core callback.
 
 ### Configuration
 
@@ -50,10 +51,10 @@ Nonempty create/resume-open config requires the opened runtime to advertise `con
 
 ### `core.sessions`
 
-- `create({ agent, cwd, id, authProfile?, configuration? })` → `Session`. `id` is required (`TypeError` if missing). `cwd` must be an existing absolute directory. Session id `^[a-zA-Z0-9_-]{1,128}$`.
+- `create({ agent, cwd, id, authProfile?, account?, configuration? })` → `Session`. `account` xor `authProfile`. `id` is required (`TypeError` if missing). `cwd` must be an existing absolute directory. Session id `^[a-zA-Z0-9_-]{1,128}$`.
 - `adopt({ id, agent, agentSessionId, cwd, createdAt?, authProfile?, configuration? })` → `SessionRecord`. No spawn. Resume later must keep that native id.
 - `get(id)`, `list({ agent? })`.
-- `resume(id, { configuration? }?)` — exact native id. See table.
+- `resume(id, { configuration?, account? }?)` — exact native id. See table. `account` switches accounts (see Accounts).
 - `forget(id)` — metadata only; session must already be closed. Leftover ownership is `session_busy` until confirmed close.
 - `close(id, { mode: "shutdown" | "detach" })` — `mode` is required (no default). No spawn/resume. Validates id (`invalid_session_id`). Joins in-flight same-id close **before** the shutdown gate (joining an already-running close still works after `core.close({ agents })` starts). A **new** close after shutdown → `core_closed`; `core.close({ agents })` finishes remaining leftovers. Waits already-started create/adopt/**fork**/resume (`opening` / restore; ignores setup rejection), then live `Session.close({ mode })` or leftover cleanup. Does **not** abort a pending custom-driver `open`. Do not `await sessions.close(id, { mode })` from inside that same id’s `driver.open`. Fire-and-forget from `open` is fine. Unknown valid id is idempotent. Failed close keeps leftover; retry `sessions.close(id, { mode })` or `core.close({ agents })`. Different ids are independent. `detach` is supported only by keeper-backed runtimes (Codex today); other drivers reject `unsupported_operation` (`detach`) before any side effect. A detached session’s record stays on disk with its native id so a later resume re-attaches.
 
@@ -67,7 +68,7 @@ Duplicate saved id → `session_exists`. Core closing → `core_closed` on **new
 
 Events are live microtask notifications, not a durable log. ACP history load updates may set `replay: true`. Initialize metadata is **not** replay.
 
-`CoreEvent` variants: `session.created` | `session.resumed` | `session.stateChanged` | `session.update` | `session.event` | `session.failed` | `message.accepted` | `message.started` | `message.completed`.
+`CoreEvent` variants: `session.created` | `session.resumed` | `session.stateChanged` | `session.update` | `session.event` | `session.failed` | `message.accepted` | `message.started` | `message.completed` | `account.switched` | `account.exhausted`.
 
 ## Normalized events
 
@@ -122,7 +123,7 @@ Steer without an active owned prompt → `session_not_running`. Close/fail/inter
 
 ## Types (selected)
 
-`SessionRecord` version `1`. Secrets never stored. `AuthProfile` is `{ agent, env?, methodId? }` in **caller** configuration.
+`SessionRecord` version `1`. Secrets never stored. `AuthProfile` is `{ agent, env?, methodId?, unsetEnv?, args? }` in **caller** configuration. `SessionRecord.account?` (id only; never together with `authProfile`).
 
 `AgentUpdate`: `{ protocol: "acp" | "native", value, replay? }`.
 
@@ -132,7 +133,7 @@ Drivers still receive `DriverContext.requestPermission` and `DriverContext.reque
 
 ## Errors
 
-`CoreError` with `code`: `invalid_options`, `invalid_input`, `invalid_session_id`, `invalid_workdir`, `invalid_auth_profile`, `unknown_agent`, `session_exists`, `session_busy`, `session_not_found`, `session_closed`, `session_failed`, `session_not_running`, `queue_full`, `idempotency_conflict`, `request_not_found`, `core_closed`, `resume_identity_changed`, `fork_identity_unchanged`, `activity_overflow`, `unsupported_operation`, `already_live`, `host_closing`, `subagent_not_found` (unknown subagent id), `subagent_unavailable` (the agent says the action cannot work now; message is its short reason), `runtime_closed` (a driver runtime was used after it closed), `busy` (Grok wrapper: a prompt is already running).
+`CoreError` with `code`: `invalid_options`, `invalid_input`, `invalid_session_id`, `invalid_workdir`, `invalid_auth_profile`, `unknown_agent`, `session_exists`, `session_busy`, `session_not_found`, `session_closed`, `session_failed`, `session_not_running`, `queue_full`, `idempotency_conflict`, `request_not_found`, `core_closed`, `resume_identity_changed`, `fork_identity_unchanged`, `activity_overflow`, `unsupported_operation`, `unknown_account`, `account_exists`, `account_expired`, `account_secret_missing`, `account_home_conflict`, `invalid_account_id`, `invalid_account_record`, `already_live`, `host_closing`, `subagent_not_found` (unknown subagent id), `subagent_unavailable` (the agent says the action cannot work now; message is its short reason), `runtime_closed` (a driver runtime was used after it closed), `busy` (Grok wrapper: a prompt is already running).
 
 `UnsupportedOperation` extends `CoreError` (`unsupported_operation`). Driver-thrown values (e.g. Grok `TypeError` on effort) are not rewritten into these codes. Host adds `already_live` and `host_closing`.
 
@@ -198,7 +199,40 @@ Grok writes `<home>/.grok/config.toml`, points `GROK_AUTH_PATH` at the canonical
 
 Credential helpers (`promoteCredential`, `promoteIfNewer`, `jwtExpiryMs`, `readCredentialJson`, `cursorCredentialFreshness`) are exported for copy-transport agents.
 
-## Auth helper
+## Accounts
+
+`supermux-core/accounts` (root re-exports `fileVault`, `memoryVault` and the account types). Several logins per agent, chosen per session. **Credentials travel by environment; homes hold history.**
+
+`CoreOptions.accounts?`: `{ vault?, homes?: { claudeRoot?, codexRoot? }, autoSwitch? }`. `vault` defaults to `fileVault(<stateDirectory>/accounts/vault)` (dir 0700, one 0600 file per secret, atomic write+rename, ids `^[a-zA-Z0-9_-]{1,128}$`, no encryption). `memoryVault()` is for tests. History roots default to `$CLAUDE_CONFIG_DIR` or `~/.claude`, and `$CODEX_HOME` or `~/.codex`. `autoSwitch` defaults to off.
+
+`Account`: `{ id, agent, method: "system" | "api_key" | "token" | "subscription", label?, identity?: { email?, org?, accountId? }, isolated?, provider?, createdAt }`. Metadata lives in `<stateDirectory>/accounts/accounts.json` (atomic, 0600). Secrets live only in the vault. `SessionRecord.account` holds the id only.
+
+`core.accounts`:
+- `list(agent?)`, `get(id)`. One built-in **system** account per configured agent (`"<agent>:system"`): the CLI's own login in the real home. supermux never moves, copies or overrides it, and the CLI refreshes it in place. Its identity is read lazily (Claude `oauthAccount` from `.claude.json`, which is `~/.claude.json` for the real `~/.claude`; Codex `auth.json` `tokens.account_id` plus the `id_token` email).
+- `add({ id?, agent, method, secret?, label?, isolated?, identity?, provider? })`. `api_key`/`token` need `secret`. `subscription` refuses one (its login stays in the account home). `id` defaults to `<agent>-<8 hex>`. Methods per agent: claude all, codex all, cursor/grok `api_key` + `subscription`, opencode `api_key` (needs `provider`). An agent id with no adapter has only its system account. A **rotating** login (system, subscription, or a Codex token whose secret has a `refresh_token`) whose identity matches another rotating login of that agent → `account_exists`, because refresh tokens are single-use and two copies log each other out. Non-rotating tokens/keys may share an identity.
+- `remove(id)`: removes the metadata and secret. A subscription home stays on disk because it holds that login. System accounts cannot be removed (`invalid_input`).
+- `system(agent)`, `home(id)`: `home` creates and returns a subscription account's home, so the host can run the CLI's login in it (e.g. `CLAUDE_CONFIG_DIR=<home> claude auth login`, `CODEX_HOME=<home> codex login`).
+- `pick(agent, exclude?)`, `usage(id)` (see policy).
+
+What each method does at launch (adapter `materialize` → `profile.env` / `profile.unsetEnv` / `profile.args`):
+
+| Agent | api_key | token | subscription |
+| --- | --- | --- | --- |
+| claude | `ANTHROPIC_API_KEY`, unset `CLAUDE_CODE_OAUTH_TOKEN` | `CLAUDE_CODE_OAUTH_TOKEN` (setup-token), unset `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` | `CLAUDE_CONFIG_DIR=<home>`, unset all three |
+| codex | `CODEX_API_KEY` + `OPENAI_API_KEY` | vault JSON `{access_token, account_id, refresh_token?, expires_at?}` → `SUPERMUX_CODEX_ACCESS_TOKEN` + `-c model_provider=supermux_chatgpt …` (ChatGPT backend, `chatgpt-account-id` header). Expired → `account_expired` (no refresh in A1) | `CODEX_HOME=<home>` |
+| cursor | `CURSOR_API_KEY` | n/a | `XDG_CONFIG_HOME=<home>/xdg` |
+| grok | `XAI_API_KEY` | n/a | `GROK_AUTH_PATH=<home>/auth.json` |
+| opencode | `OPENCODE_AUTH_CONTENT`: the v2 `account.json` shape **plus** a legacy `{ <provider>: { type: "api", key } }` entry. opencode 1.16.2 reads both: v2 alone leaves the provider without a credential, and legacy alone is migrated into a written `account.json` | n/a | n/a |
+
+**Account homes** (`<stateDirectory>/accounts/homes/<agent>/<id>/`, 0700). Shared entries are symlinked to the history root (a missing root entry is created first: a dir, an empty file, or `{}` for `settings.json`). Claude shares `projects/ skills/ commands/ agents/ plugins/ history.jsonl settings.json CLAUDE.md`. `.credentials.json`, `.claude.json`, `sessions/` and `ide/` stay private. Codex shares `sessions/ archived_sessions/ thread-writer-locks/ session_index.jsonl history.jsonl`. `auth.json`, `models_cache.json` and the sqlite state stay private (verified live: app-server `thread/resume` works across homes without sharing sqlite). An existing non-link entry is replaced only when empty, otherwise `account_home_conflict`. `isolated` accounts get no links and are never switched to. Windows: directory junctions for dirs; shared files are `unsupported_operation`, so use isolated accounts there.
+
+**Sessions.** `create({ …, account })`: `account` and `authProfile` are mutually exclusive (`invalid_input`). With neither, the session runs on the system account exactly as before: no profile, and no `account` in the record. `resume(id, { account })` switches the account. The account must belong to the session's agent (`invalid_input`; unknown → `unknown_account`). A session with an `authProfile` cannot switch (`invalid_input`). A live session is shut down (`close({ mode: "shutdown" })`, which cancels an in-flight turn and queued input) and reopened with the **same native id** under the new account. The record is updated and `account.switched { sessionId, from, to, reason: "manual" }` is emitted. Same account → no reopen. **Detached keeper sessions:** a resume re-attaches to the parked process, which keeps its old environment. To switch, first reopen it and `close({ mode: "shutdown" })`, then resume with the account. `DriverContext.account` carries the id. `AuthProfile.unsetEnv` keys are removed after the env merge, and `AuthProfile.args` are appended to the CLI args (Codex: before the multi_agent v1 catalog step, which keeps `app-server` first). All three driver families (claude, codex, acp/grok/cursor/opencode) honour both.
+
+**Usage and policy** (`accounts/policy.ts`). `usage` bodies' `rateLimits` are normalised per adapter into `UsageWindow { name, usedPercent, resetsAt? }`. Claude: `rate_limit_info.unifiedWindows[*].utilization` ×100, and `status: "rejected"` marks `rateLimitType` full. Codex: `primary`/`secondary.usedPercent`, named `<windowDurationMins>m`, and `rateLimitReachedType` marks a full window. Unknown shapes are skipped. `pick` (Ghostex "Auto"): per account, the min over windows of `(100 − used) / max(hoursUntilReset, 1/60)`. A window without `resetsAt` counts as 1 h, and a window past its reset counts as unused. Highest wins. Limited accounts are skipped. Accounts without data rank after those with data, in list order (system first). Isolated and Cursor accounts are never picked. With `autoSwitch`, a window ≥ 100% on a session queues a switch. When the current turn has ended (state idle/failed, never mid-turn), Core resumes the session on the picked account and emits `account.switched` with `reason: "limit"`, or `account.exhausted { sessionId, agent, account }` when nothing is available. Input queued behind the limited turn runs first and may fail. Sessions on isolated or Cursor accounts are not auto-switched. Usage is in-memory, per process.
+
+## Auth helper (deprecated)
+
+**Deprecated:** per-session credential copies race on single-use refresh tokens. Use accounts (env injection, or one shared account home per login). The code stays for existing callers.
 
 `copiedCredentials({ source, homesDirectory, filename, homeVariable })` + `withAuth(driver, provider)`. Fork disabled. Failed open + failed lease release: `provider.close()`. Native expiry stays on the driver; Core does not inspect tokens. This is **opt-in**; examples that talk to real CLIs should use caller env/home instead of silent copies.
 

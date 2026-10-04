@@ -3,6 +3,8 @@ import { Readable, Writable } from 'node:stream';
 import { appendFileSync, writeFileSync } from 'node:fs';
 const mode = process.env.FIXTURE_MODE;
 if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid));
+// Accounts tests: what the driver launched with.
+if (process.env.ENV_TRACE) writeFileSync(process.env.ENV_TRACE, JSON.stringify({ argv: process.argv.slice(2), env: process.env }))
 if (mode === 'stubborn') process.on('SIGTERM', () => {});
 let finish;
 let promptActive = false;

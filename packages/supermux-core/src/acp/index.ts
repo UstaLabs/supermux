@@ -3,6 +3,7 @@ import { CLIENT_METHODS, ClientSideConnection, ndJsonStream, PROTOCOL_METHODS, P
 import type { AnyMessage, AuthMethod, McpServer, RequestPermissionResponse, SessionNotification } from '@agentclientprotocol/sdk'
 import type { AgentDriver, AgentRuntime, AgentUpdate, AuthContext, Capabilities, CloseOptions, ContentBlock, DriverContext, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
+import { launchArgs, launchEnv } from '../launch.js'
 import { ACTIVITY_OVERFLOW } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import { acpPermissionDecision, appliedFor, validatePermissionsSpec } from '../permissions.js'
@@ -196,8 +197,8 @@ export function acp(options: AcpOptions): AgentDriver {
     const plannedServer: OpenCodeServerInfo | undefined = options.vendor === 'opencode' ? newOpenCodeServerInfo(await freeLoopbackPort()) : undefined
     const io = await connectAcpProcess({
       command: options.command,
-      args: plannedServer ? [...options.args, '--port', String(plannedServer.port)] : options.args,
-      env: { ...(options.inheritEnv ? globalThis.process.env : {}), ...options.env, ...context.profile?.env, ...(plannedServer ? { OPENCODE_SERVER_PASSWORD: plannedServer.password } : {}) },
+      args: plannedServer ? [...launchArgs(options.args, context.profile), '--port', String(plannedServer.port)] : launchArgs(options.args, context.profile),
+      env: { ...launchEnv(options.inheritEnv, options.env, context.profile), ...(plannedServer ? { OPENCODE_SERVER_PASSWORD: plannedServer.password } : {}) },
       cwd: session?.cwd ?? process.cwd(),
       sessionId,
       shutdownTimeoutMs: shutdownTimeout,

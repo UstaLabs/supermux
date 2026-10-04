@@ -6,6 +6,7 @@ import type {
   EventEnvelope, NativeProtocol, NormalizedBody, SubagentActionsSource, SubagentDelivery, SubagentEndedBy,
   SubagentMessaging,
 } from "./events/normalized.js"
+import type { AccountsOptions } from "./accounts/types.js"
 
 export type PermissionOptionKind = "allow_once" | "allow_always" | "reject_once" | "reject_always"
 
@@ -95,6 +96,10 @@ export type AuthProfile = {
   agent: string
   env?: Record<string, string>
   methodId?: string
+  /** Removed from the launch environment after merging (inherited, driver and profile env). */
+  unsetEnv?: string[]
+  /** Appended to the agent CLI args. */
+  args?: string[]
 }
 
 export type ForkOptions = { id: string; at?: { nativeTurnId: string } }
@@ -108,6 +113,8 @@ export type SessionRecord = {
   cwd: string
   createdAt: string
   authProfile?: string
+  /** Account id (see core.accounts). Absent: the agent's system account (or `authProfile`). */
+  account?: string
   lineage?: { parentSessionId: string; nativeTurnId?: string }
   configuration?: SessionConfiguration
   permissions?: PermissionsSpec
@@ -141,6 +148,9 @@ export type CoreEvent =
   | { type: "message.accepted"; sessionId: string; messageId: string }
   | { type: "message.started"; sessionId: string; messageId: string }
   | { type: "message.completed"; sessionId: string; messageId: string; result: Completion }
+  | { type: "account.switched"; sessionId: string; from: string; to: string; reason: "manual" | "limit" }
+  /** A rate limit was hit and no other account of the agent is available. */
+  | { type: "account.exhausted"; sessionId: string; agent: string; account: string }
 
 export type Observer = (event: CoreEvent) => void | Promise<void>
 
@@ -217,6 +227,8 @@ export type DriverContext = {
   sessionId: string
   cwd: string
   profile?: AuthProfile
+  /** The session's account id (no secrets; its env/args arrive in `profile`). */
+  account?: string
   signal: AbortSignal
   resumeId?: string
   forkFrom?: ForkSource
@@ -325,14 +337,17 @@ export type CoreOptions = {
   stateDirectory: string
   agents: AgentDriver[]
   profiles?: Record<string, AuthProfile>
+  accounts?: AccountsOptions
   onObserverError?: (error: Error) => void
   limits: CoreLimits
 }
 
-export type CreateOptions = { agent: string; cwd: string; id: string; authProfile?: string; configuration?: SessionConfiguration; permissions?: PermissionsSpec }
+/** `account` and `authProfile` are mutually exclusive. Neither: the agent's system account. */
+export type CreateOptions = { agent: string; cwd: string; id: string; authProfile?: string; account?: string; configuration?: SessionConfiguration; permissions?: PermissionsSpec }
 
 /** Optional resume overrides. `configuration: undefined` is omitted (no-options resume). `{}` is an explicit no-op patch. */
-export type ResumeOptions = { configuration?: SessionConfiguration }
+/** `account` switches the session to another account of the same agent (a live session is shut down and reopened). */
+export type ResumeOptions = { configuration?: SessionConfiguration; account?: string }
 
 /** Metadata-only registration of an existing native conversation. Native history is checked later by resume. */
 export type AdoptOptions = {

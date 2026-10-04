@@ -179,6 +179,7 @@ function validRecord(value: unknown): value is SessionRecord {
     && typeof r.cwd === "string" && isAbsolute(r.cwd)
     && typeof r.createdAt === "string" && Number.isFinite(Date.parse(r.createdAt))
     && (r.authProfile === undefined || typeof r.authProfile === "string")
+    && (r.account === undefined || (typeof r.account === "string" && !!r.account && r.authProfile === undefined))
     && (r.lineage === undefined || (!!r.lineage && typeof r.lineage === "object"
       && typeof (r.lineage as Record<string, unknown>).parentSessionId === "string"
       && ((r.lineage as Record<string, unknown>).nativeTurnId === undefined || typeof (r.lineage as Record<string, unknown>).nativeTurnId === "string")))

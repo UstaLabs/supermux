@@ -7,8 +7,12 @@ import { Events } from "./events.js"
 import { requireCloseMode, requireAgentsCloseMode } from "./types.js"
 import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
+import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
+import { adapterFor } from "./accounts/adapters/index.js"
+import { limited, pickAccount, switchable } from "./accounts/policy.js"
+import type { Account, AddAccountOptions, UsageWindow } from "./accounts/types.js"
 import type {
-  ActivityNotice, AgentDriver, AgentRuntime, AuthProfile, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
+  ActivityNotice, AgentDriver, AgentRuntime, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
   SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec,
 } from "./types.js"
 
@@ -42,6 +46,13 @@ export class Core {
   private readonly interruptTimeoutMs: number
   private readonly maxPending: number
   private readonly outstandingActivity: number
+  private readonly registry: AccountRegistry
+  private readonly autoSwitch: boolean
+  /** Latest rate-limit windows per account id (from `usage` events). */
+  private readonly usage = new Map<string, UsageWindow[]>()
+  /** Sessions that hit a limit and switch accounts once their current turn ends. */
+  private readonly switchQueue = new Set<string>()
+  private readonly switching = new Set<string>()
 
   constructor(private readonly options: CoreOptions) {
     if (!options.stateDirectory) throw new CoreError("invalid_options", "stateDirectory is required")
@@ -57,6 +68,11 @@ export class Core {
     this.profiles = structuredClone(options.profiles ?? {})
     this.store = new SessionStore(options.stateDirectory)
     this.events = new Events(options.onObserverError)
+    const accounts = options.accounts ?? {}
+    if (accounts.autoSwitch !== undefined && typeof accounts.autoSwitch !== "boolean") throw new TypeError("accounts.autoSwitch must be a boolean")
+    this.autoSwitch = accounts.autoSwitch === true
+    this.registry = new AccountRegistry(options.stateDirectory, [...this.drivers.keys()], accounts)
+    this.events.subscribe(event => this.observeAccounts(event))
   }
 
   subscribe(observer: Observer): () => void { return this.events.subscribe(observer) }
@@ -67,12 +83,14 @@ export class Core {
       input.configuration = normalizeRequestedConfiguration(input.configuration)
       this.driver(input.agent)
       this.profile(input.agent, input.authProfile)
+      assertAccountChoice(input)
       if (typeof input.id !== "string") throw new TypeError("id is required")
       const id = input.id
       assertSessionId(id)
       return this.withReservation(id, async () => {
         await assertWorkdir(input.cwd)
         await this.ready()
+        if (input.account !== undefined) await this.account(input.agent, input.account)
         if (await this.store.get(id)) throw new CoreError("session_exists", `Session ${id} already exists`)
         return this.openSession({ ...input, id, createdAt: new Date().toISOString() })
       })
@@ -113,59 +131,7 @@ export class Core {
       await this.ready()
       return (await this.store.list()).filter(record => !filter.agent || record.agent === filter.agent)
     }),
-    resume: (id: string, options?: ResumeOptions): Promise<Session> => {
-      if (this.shuttingDown) return Promise.reject(new CoreError("core_closed", "Core is closing or closed"))
-      let patch: SessionConfiguration | undefined
-      try {
-        if (options && options.configuration !== undefined) {
-          const snapshot = structuredClone(options)
-          assertConfiguration(snapshot.configuration)
-          patch = snapshot.configuration
-        }
-      } catch (error) {
-        return Promise.reject(asError(error))
-      }
-      const requestedPatch = patch
-      const explicit = requestedPatch !== undefined
-      if (this.lifecycleBusy(id) || this.reserved.has(id) || this.forgetting.has(id)) {
-        return Promise.reject(new CoreError("session_busy", "Session has an outstanding lifecycle operation"))
-      }
-      const pending = this.restoring.get(id)
-      if (pending) {
-        if (explicit || this.restoringOverride.has(id)) {
-          return Promise.reject(new CoreError("session_busy", "Session has an outstanding lifecycle operation"))
-        }
-        return pending
-      }
-      const operation = this.operation(async () => {
-        await this.ready()
-        const current = this.live.get(id)
-        if (current && current.snapshot().state !== "closed") {
-          if (current.snapshot().state === "closing" || current.snapshot().state === "failed") {
-            // Failed/closing handle must be shut down before resume can reopen the native agent.
-            await current.close({ mode: "shutdown" })
-          }
-          else {
-            if (explicit) await current.configure(requestedPatch)
-            return current
-          }
-        }
-        const record = await this.store.get(id)
-        if (!record) throw new CoreError("session_not_found", `Session ${id} was not found`)
-        const original = structuredClone(record)
-        const configuration = explicit
-          ? mergeConfiguration(record.configuration ?? {}, requestedPatch)
-          : record.configuration
-        return this.openSession({ ...record, configuration }, record.agentSessionId, undefined, original)
-      })
-      this.restoring.set(id, operation)
-      if (explicit) this.restoringOverride.add(id)
-      void operation.finally(() => {
-        if (this.restoring.get(id) === operation) this.restoring.delete(id)
-        this.restoringOverride.delete(id)
-      }).catch(() => {})
-      return operation
-    },
+    resume: (id: string, options?: ResumeOptions): Promise<Session> => this.resume(id, options, "manual"),
     forget: (id: string): Promise<void> => {
       if (this.lifecycleBusy(id) || this.forgetting.has(id) || this.restoring.has(id) || this.reserved.has(id)) {
         return Promise.reject(new CoreError("session_busy", "Session has an outstanding lifecycle operation"))
@@ -234,6 +200,53 @@ export class Core {
     }),
   }
 
+  /**
+   * Accounts per agent: the built-in `<agent>:system` account (the CLI's own login) plus added
+   * api_key / token / subscription accounts. Secrets go to the vault, never to records or events.
+   */
+  readonly accounts = {
+    list: (agent?: string): Promise<Account[]> => this.operation(async () => {
+      if (agent !== undefined) this.driver(agent)
+      await this.ready()
+      return this.registry.list(agent)
+    }),
+    get: (id: string): Promise<Account | undefined> => this.operation(async () => {
+      await this.ready()
+      return this.registry.get(id)
+    }),
+    add: (options: AddAccountOptions): Promise<Account> => this.operation(async () => {
+      await this.ready()
+      return this.registry.add(options)
+    }),
+    /** Removes metadata and secret; a subscription home stays on disk. */
+    remove: (id: string): Promise<void> => this.operation(async () => {
+      await this.ready()
+      return this.registry.remove(id)
+    }),
+    system: (agent: string): Promise<Account> => this.operation(async () => {
+      this.driver(agent)
+      await this.ready()
+      return (await this.registry.get(systemAccountId(agent)))!
+    }),
+    /** A subscription account's home (created if missing), e.g. to run the CLI's login inside it. */
+    home: (id: string): Promise<string> => this.operation(async () => {
+      await this.ready()
+      return this.registry.home(id)
+    }),
+    /** The policy's choice among `agent`'s accounts (see accounts/policy.ts); undefined when none is available. */
+    pick: (agent: string, exclude: string[] = []): Promise<Account | undefined> => this.operation(async () => {
+      this.driver(agent)
+      await this.ready()
+      const candidates = (await this.registry.list(agent)).filter(account => !exclude.includes(account.id))
+      return pickAccount(candidates, id => this.usage.get(id))
+    }),
+    /** Latest rate-limit windows seen for an account in this process. */
+    usage: (id: string): UsageWindow[] | undefined => {
+      const windows = this.usage.get(id)
+      return windows ? structuredClone(windows) : undefined
+    },
+  }
+
   close(options: CoreCloseOptions): Promise<void> {
     const agents = requireAgentsCloseMode(options)
     if (this.closing) return this.closing
@@ -258,6 +271,140 @@ export class Core {
     this.events.clear()
   }
 
+  private resume(id: string, options: ResumeOptions | undefined, reason: "manual" | "limit"): Promise<Session> {
+    if (this.shuttingDown) return Promise.reject(new CoreError("core_closed", "Core is closing or closed"))
+    let patch: SessionConfiguration | undefined
+    let requestedAccount: string | undefined
+    try {
+      if (options && options.configuration !== undefined) {
+        const snapshot = structuredClone(options)
+        assertConfiguration(snapshot.configuration)
+        patch = snapshot.configuration
+      }
+      if (options && options.account !== undefined) {
+        if (typeof options.account !== "string" || !options.account) throw new CoreError("invalid_input", "account must be a nonempty string")
+        requestedAccount = options.account
+      }
+    } catch (error) {
+      return Promise.reject(asError(error))
+    }
+    const requestedPatch = patch
+    const explicit = requestedPatch !== undefined
+    const overriding = explicit || requestedAccount !== undefined
+    if (this.lifecycleBusy(id) || this.reserved.has(id) || this.forgetting.has(id)) {
+      return Promise.reject(new CoreError("session_busy", "Session has an outstanding lifecycle operation"))
+    }
+    const pending = this.restoring.get(id)
+    if (pending) {
+      if (overriding || this.restoringOverride.has(id)) {
+        return Promise.reject(new CoreError("session_busy", "Session has an outstanding lifecycle operation"))
+      }
+      return pending
+    }
+    const operation = this.operation(async () => {
+      await this.ready()
+      let switchFrom: string | undefined
+      if (requestedAccount !== undefined) {
+        const saved = await this.store.get(id)
+        if (!saved) throw new CoreError("session_not_found", `Session ${id} was not found`)
+        if (saved.authProfile !== undefined) throw new CoreError("invalid_input", "Session uses an authProfile; accounts cannot replace it")
+        await this.account(saved.agent, requestedAccount)
+        const from = saved.account ?? systemAccountId(saved.agent)
+        if (from !== requestedAccount) switchFrom = from
+      }
+      const current = this.live.get(id)
+      if (current && current.snapshot().state !== "closed") {
+        if (current.snapshot().state === "closing" || current.snapshot().state === "failed" || switchFrom !== undefined) {
+          // Failed/closing handle must be shut down before resume can reopen the native agent.
+          // An account switch needs a fresh process with the new credentials (same native id).
+          await current.close({ mode: "shutdown" })
+        }
+        else {
+          if (explicit) await current.configure(requestedPatch)
+          return current
+        }
+      }
+      const record = await this.store.get(id)
+      if (!record) throw new CoreError("session_not_found", `Session ${id} was not found`)
+      const original = structuredClone(record)
+      const configuration = explicit
+        ? mergeConfiguration(record.configuration ?? {}, requestedPatch)
+        : record.configuration
+      const session = await this.openSession({ ...record, configuration, ...(switchFrom !== undefined ? { account: requestedAccount } : {}) }, record.agentSessionId, undefined, original)
+      if (switchFrom !== undefined) this.events.emit({ type: "account.switched", sessionId: id, from: switchFrom, to: requestedAccount!, reason })
+      return session
+    })
+    this.restoring.set(id, operation)
+    if (overriding) this.restoringOverride.add(id)
+    void operation.finally(() => {
+      if (this.restoring.get(id) === operation) this.restoring.delete(id)
+      this.restoringOverride.delete(id)
+    }).catch(() => {})
+    return operation
+  }
+
+  /** The account `id` of `agent`, or unknown_account / invalid_input (wrong agent). */
+  private async account(agent: string, id: string): Promise<Account> {
+    if (typeof id !== "string" || !id) throw new CoreError("invalid_input", "account must be a nonempty string")
+    const account = await this.registry.get(id)
+    if (!account) throw new CoreError("unknown_account", `Account ${id} was not found`)
+    if (account.agent !== agent) throw new CoreError("invalid_input", `Account ${id} belongs to agent ${account.agent}, not ${agent}`)
+    return account
+  }
+
+  private async accountProfile(agent: string, id: string): Promise<AuthProfile> {
+    const materialized = await this.registry.materialize(await this.account(agent, id))
+    return {
+      agent, env: { ...materialized.env },
+      ...(materialized.unset?.length ? { unsetEnv: [...materialized.unset] } : {}),
+      ...(materialized.args?.length ? { args: [...materialized.args] } : {}),
+    }
+  }
+
+  /** Usage bookkeeping and the limit switch. Never throws (it runs as an observer). */
+  private observeAccounts(event: CoreEvent): void {
+    if (event.type === "session.event" && event.event.kind === "usage" && event.event.rateLimits !== undefined) {
+      const record = this.live.get(event.sessionId)?.snapshot()
+      if (!record || record.authProfile !== undefined) return
+      const windows = adapterFor(record.agent).usage?.(event.event.rateLimits) ?? []
+      if (!windows.length) return
+      const accountId = record.account ?? systemAccountId(record.agent)
+      this.usage.set(accountId, windows)
+      if (this.autoSwitch && limited(windows)) {
+        this.switchQueue.add(event.sessionId)
+        void this.limitSwitch(event.sessionId)
+      }
+    } else if (event.type === "session.stateChanged" && this.switchQueue.has(event.sessionId)) {
+      void this.limitSwitch(event.sessionId)
+    }
+  }
+
+  /** Runs a queued limit switch once the session's current turn has ended (never mid-turn). */
+  private async limitSwitch(id: string): Promise<void> {
+    if (this.switching.has(id) || this.shuttingDown) return
+    const live = this.live.get(id)
+    const state = live?.snapshot().state
+    if (!live || state === "closing" || state === "closed") { this.switchQueue.delete(id); return }
+    if (state === "running" || state === "interrupting") return
+    this.switchQueue.delete(id)
+    this.switching.add(id)
+    try {
+      const record = live.snapshot()
+      const from = record.account ?? systemAccountId(record.agent)
+      const current = await this.registry.get(from)
+      if (!current || !switchable(current)) return
+      const candidates = (await this.registry.list(record.agent)).filter(account => account.id !== from)
+      const next = pickAccount(candidates, account => this.usage.get(account))
+      if (!next) {
+        this.events.emit({ type: "account.exhausted", sessionId: id, agent: record.agent, account: from })
+        return
+      }
+      await this.resume(id, { account: next.id }, "limit")
+    } catch (error) {
+      try { this.options.onObserverError?.(asError(error)) } catch { /* reporting cannot own control */ }
+    } finally { this.switching.delete(id) }
+  }
+
   private async openSession(
     input: CreateOptions & { id: string; createdAt: string; lineage?: SessionRecord["lineage"]; configuration?: SessionConfiguration },
     resumeId?: string,
@@ -266,7 +413,8 @@ export class Core {
   ): Promise<Session> {
     this.assertOpen()
     const driver = this.driver(input.agent)
-    const profile = this.profile(input.agent, input.authProfile)
+    if (input.account !== undefined && input.authProfile !== undefined) throw new CoreError("invalid_input", "account and authProfile are mutually exclusive")
+    const profile = input.account !== undefined ? await this.accountProfile(input.agent, input.account) : this.profile(input.agent, input.authProfile)
     let session: Session | undefined
     let failed: Error | undefined
     let runtime: AgentRuntime | undefined
@@ -301,6 +449,7 @@ export class Core {
       const subagents = resumeId ? await this.store.getSubagents(input.id) : []
       runtime = await driver.open({
         sessionId: input.id, cwd: input.cwd, profile, resumeId, forkFrom, signal: this.lifetime.signal,
+        ...(input.account !== undefined ? { account: input.account } : {}),
         ...(subagents.length ? { subagents: structuredClone(subagents) } : {}),
         ...(nonemptyConfiguration(input.configuration) ? { configuration: structuredClone(input.configuration) } : {}),
         ...(input.permissions ? { permissions: structuredClone(input.permissions) } : originalRecord?.permissions ? { permissions: structuredClone(originalRecord.permissions) } : {}),
@@ -348,6 +497,7 @@ export class Core {
         version: 1, id: input.id, agent: input.agent, cwd: input.cwd,
         createdAt: input.createdAt, agentSessionId: runtime.agentSessionId,
         ...(input.authProfile ? { authProfile: input.authProfile } : {}),
+        ...(input.account ? { account: input.account } : {}),
         ...(input.lineage ? { lineage: {...input.lineage} } : {}),
         ...(nonemptyConfiguration(input.configuration) ? { configuration: structuredClone(input.configuration) } : {}),
         ...(input.permissions ? { permissions: structuredClone(input.permissions) } : originalRecord?.permissions ? { permissions: structuredClone(originalRecord.permissions) } : {}),
@@ -364,6 +514,7 @@ export class Core {
         assertSessionId(id)
         return this.withReservation(id, () => this.openSession({
           agent: record.agent, cwd: record.cwd, authProfile: record.authProfile,
+          ...(record.account !== undefined ? { account: record.account } : {}),
           id, createdAt: new Date().toISOString(),
           lineage: { parentSessionId: record.id, ...(options.at ? {nativeTurnId: options.at.nativeTurnId} : {}) },
           ...(record.configuration ? { configuration: structuredClone(record.configuration) } : {}),
@@ -507,6 +658,12 @@ async function assertWorkdir(cwd: string): Promise<void> {
     if (error instanceof CoreError) throw error
     throw new CoreError("invalid_workdir", "cwd must be an existing absolute directory", { cause: error })
   }
+}
+
+function assertAccountChoice(input: { account?: unknown; authProfile?: unknown }): void {
+  if (input.account === undefined) return
+  if (typeof input.account !== "string" || !input.account) throw new CoreError("invalid_input", "account must be a nonempty string")
+  if (input.authProfile !== undefined) throw new CoreError("invalid_input", "account and authProfile are mutually exclusive")
 }
 
 const SESSION_ID = /^[a-zA-Z0-9_-]{1,128}$/

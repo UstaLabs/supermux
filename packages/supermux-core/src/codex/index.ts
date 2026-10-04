@@ -1,5 +1,6 @@
 import type { AgentDriver, ContentBlock, HistoryOptions, PermissionHandler, SessionConfiguration, CloseOptions, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
+import { launchArgs, launchEnv } from '../launch.js'
 import { appliedFor, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse, ToolKind } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
@@ -733,13 +734,13 @@ export function codex(options: CodexOptions): AgentDriver {
         await rpc.request('turn/steer', { threadId: agentSessionId, expectedTurnId: slot.id, input: input([{ type: 'text', text }]) })
       }).catch(() => { /* turn ended or steer refused: the request was already resolved */ }).finally(() => clearInterval(watch))
     }
-    const env = { ...(options.inheritEnv ? process.env : {}), ...options.env, ...context.profile?.env }
+    const env = launchEnv(options.inheritEnv, options.env, context.profile)
     // Pin subagents to multi_agent v1 (children accept direct input); see catalog.ts.
     // A process flag, so it covers start, resume and fork alike; a reattached
     // keeper keeps the flags its app-server was started with.
     // A catalog whose format changed is left alone (feature detection, see catalog.ts); the
     // warning is shown on the first turn, when the session can display it.
-    const launch = await multiAgentV1Launch(options.command, options.args, env, context.cwd)
+    const launch = await multiAgentV1Launch(options.command, launchArgs(options.args, context.profile), env, context.cwd)
     const args = launch.args
     let catalogWarning = launch.warning
     const rpc = await transport({ command: options.command, args, env, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper }, dispatchNotify, fail)
