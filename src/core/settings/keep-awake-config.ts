@@ -16,13 +16,14 @@ export type KeepAwakeEnv = Record<string, string | undefined>
 
 /**
  * Defaults: ON for a desktop-managed broker (`MUX_MANAGED_BY=desktop`), OFF for a CLI/server broker.
- * `MUX_KEEP_AWAKE=1|0` overrides that default (it never overrides a saved choice).
+ * `MUX_KEEP_AWAKE` (1/0, true/false, on/off, any case) overrides that default (it never overrides a
+ * saved choice). Anything else is ignored.
  */
 export function defaultKeepAwakeSettings(env: KeepAwakeEnv): KeepAwakeSettings {
   let enabled = env.MUX_MANAGED_BY === "desktop"
-  const override = env.MUX_KEEP_AWAKE?.trim()
-  if (override === "1") enabled = true
-  else if (override === "0") enabled = false
+  const override = env.MUX_KEEP_AWAKE?.trim().toLowerCase()
+  if (override === "1" || override === "true" || override === "on") enabled = true
+  else if (override === "0" || override === "false" || override === "off") enabled = false
   return { enabled, onBattery: true }
 }
 

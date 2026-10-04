@@ -16,10 +16,13 @@ describe("keep-awake defaults", () => {
     expect(defaultKeepAwakeSettings({ MUX_MANAGED_BY: "systemd" })).toEqual({ enabled: false, onBattery: true })
   })
 
-  test("MUX_KEEP_AWAKE=1|0 overrides the default", () => {
-    expect(defaultKeepAwakeSettings({ MUX_KEEP_AWAKE: "1" }).enabled).toBe(true)
-    expect(defaultKeepAwakeSettings({ MUX_MANAGED_BY: "desktop", MUX_KEEP_AWAKE: "0" }).enabled).toBe(false)
-    expect(defaultKeepAwakeSettings({ MUX_KEEP_AWAKE: "yes" }).enabled).toBe(false) // only 1/0
+  test("MUX_KEEP_AWAKE (1/0, true/false, on/off) overrides the default", () => {
+    for (const v of ["1", "true", "on", "TRUE", " On "]) expect(defaultKeepAwakeSettings({ MUX_KEEP_AWAKE: v }).enabled).toBe(true)
+    for (const v of ["0", "false", "off", "Off"]) {
+      expect(defaultKeepAwakeSettings({ MUX_MANAGED_BY: "desktop", MUX_KEEP_AWAKE: v }).enabled).toBe(false)
+    }
+    expect(defaultKeepAwakeSettings({ MUX_KEEP_AWAKE: "yes" }).enabled).toBe(false) // unknown: ignored
+    expect(defaultKeepAwakeSettings({ MUX_MANAGED_BY: "desktop", MUX_KEEP_AWAKE: "maybe" }).enabled).toBe(true)
   })
 
   test("a saved choice wins over the env override", () => {
