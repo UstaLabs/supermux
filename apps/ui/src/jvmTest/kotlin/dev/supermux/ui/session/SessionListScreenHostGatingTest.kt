@@ -2,6 +2,7 @@ package dev.supermux.ui.session
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
@@ -40,6 +41,26 @@ class SessionListScreenHostGatingTest {
         }
         // Decorative inside the clickable (merged) session row, so it lives in the unmerged tree.
         onNodeWithTag("host_badge_h1", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test fun an_offline_host_asks_whether_the_computer_is_awake_first() = runComposeUiTest {
+        setContent {
+            SessionListScreen(
+                mode = SessionListMode.Fleet,
+                sessions = listOf(session("s1"), session("s2")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                hosts = twoHosts,
+                sessionHost = mapOf("s1" to "h1", "s2" to "h2"),
+            )
+        }
+        onNodeWithTag("offline_host_h2").assertIsDisplayed()
+        onNodeWithTag("offline_host_hint_h2", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assertTextEquals("Is the computer awake and logged in?")
+        // A reachable host gets no hint.
+        onNodeWithTag("offline_host_hint_h1", useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test fun badgesHidden_withASingleHost() = runComposeUiTest {
