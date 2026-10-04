@@ -171,6 +171,6 @@ export type LoginConfig = {
   runner?: LoginRunner
   /** CLI per agent kind. Defaults: claude, codex, grok, cursor-agent (or agent). */
   commands?: Partial<Record<"claude" | "codex" | "grok" | "cursor", string>>
-  /** Whole login, including the user's part. Default 600000 (10 min). */
+  /** Whole login, including the user's part. Default 1800000 (30 min): a link opened on a phone takes a while. */
   timeoutMs?: number
 }

@@ -22,7 +22,7 @@ import type { AgentDriver, LoginState } from "../src/index.js"
 
 const argv = process.argv.slice(2)
 const agent = argv[0]
-if (!agent || agent.startsWith("-")) { console.error("usage: accounts-login-live.ts <agent> [--as subscription|token] [--id ID] [--label L] [--email E] [--state DIR] [--cancel-at-url]"); process.exit(2) }
+if (!agent || agent.startsWith("-")) { console.error("usage: accounts-login-live.ts <agent> [--as subscription|token] [--id ID] [--label L] [--email E] [--state DIR] [--timeout-min N] [--cancel-at-url]"); process.exit(2) }
 const flag = (name: string) => { const i = argv.indexOf(name); return i > 0 ? argv[i + 1] : undefined }
 const as = flag("--as") as "subscription" | "token" | undefined
 const cancelAtUrl = argv.includes("--cancel-at-url")
@@ -41,7 +41,9 @@ function snapshot(): Record<string, string> {
 }
 
 const stub: AgentDriver = { id: agent, async open() { throw new Error("this script runs logins only") } }
-const core = createCore({ stateDirectory, agents: [stub], limits: { interruptTimeoutMs: 10_000, maxPending: 16, outstandingActivity: 256 } })
+const timeoutMinutes = Number(flag("--timeout-min") ?? 10)
+const core = createCore({ stateDirectory, agents: [stub], limits: { interruptTimeoutMs: 10_000, maxPending: 16, outstandingActivity: 256 },
+  accounts: { login: { timeoutMs: timeoutMinutes * 60_000 } } })
 const before = snapshot()
 const handle = core.accounts.login({
   agent,

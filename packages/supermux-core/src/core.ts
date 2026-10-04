@@ -823,7 +823,7 @@ const DEFAULT_CONTINUE_PROMPT = "Continue from where you stopped. Your previous 
 const LIMIT_STOP_REASON = /limit|quota/i
 /** Token sessions open with at least this much validity and are reopened (when idle) this long before expiry. */
 const SESSION_TOKEN_MARGIN_MS = 30 * 60_000
-const LOGIN_TIMEOUT_MS = 10 * 60_000
+const LOGIN_TIMEOUT_MS = 30 * 60_000
 const MAX_TIMER_MS = 2 ** 31 - 1
 
 function assertAccountChoice(input: { account?: unknown; authProfile?: unknown }): void {
