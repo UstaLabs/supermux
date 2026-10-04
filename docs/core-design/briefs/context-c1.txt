@@ -1,0 +1,110 @@
+BRIEF: session context, slice C1: `context` on create/resume/fork (startup only)
+
+Worktree: /home/ahmet/.mux/worktrees/b4d27b57-c621-4a5a-90fe-c19ffa36328d-0ba396a5/a2dac5b8-a140-4d86-b85d-3d3a46d25663
+branch mux/supermux-core-exploratio. Package: packages/supermux-core.
+
+READ FIRST
+- docs/core-design/session-context.md: the design. C1 = its "C1, context" slice.
+- docs/core-design/context-c0-report.md and packages/supermux-core/scripts/context-probe.ts:
+  the VERIFIED per-agent mechanisms, with exact request shapes. Build on what C0 proved, and
+  don't invent channels.
+- ~/.mux/domains/claudemux.digest.md (gotchas), packages/supermux-core/API.md, README.md.
+- How accounts (A1/A2) feed drivers: src/launch.ts (env/unsetEnv/args merge), DriverContext,
+  src/accounts/. Context must compose with accounts, never replace their env/args.
+
+SCOPE (C1)
+Public API:
+  type SessionContext = {
+    instructions?: string | string[]   // appended to the agent's own prompt
+    skills?: string[]                  // absolute folders of <name>/SKILL.md
+    plugins?: string[]                 // absolute plugin folders
+    mcpServers?: ExternalMcpServer[]   // { name, command, args, env } stdio
+  }
+  createCore({ …, context?: SessionContext, contextPolicy?: "error" | "warn" })
+  core.sessions.create({ …, context?, contextPolicy? })
+  core.sessions.resume(id, { context? })  // replaces the session's own context for this and later launches
+  core.sessions.fork(id, { context? })    // inherits parent's, overridable
+  core.capabilities(agent).context        // per item: "supported" | "unsupported" | "unverified", plus a note
+  event { type: "context.degraded", sessionId, dropped: [{ item, reason }] }
+  errors: invalid_context, context_unsupported
+Leave room in the types for C2's host MCP servers (`mcpServers` will become a union) and
+C1b's `session.updateContext`. Do NOT implement either.
+
+Rules
+- Merge: core default + session (instructions and lists concatenated in that order; duplicate
+  MCP server names → invalid_context). Validate: absolute paths that exist, MCP names
+  /^[A-Za-z0-9_-]+$/, a plugin must be a directory.
+- Persistence: the session record stores the session's own context (serialisable) and the
+  policy. Resume after a core restart reapplies it. The store change must be backward
+  compatible with existing records.
+- Honesty: resolve the merged context against the agent's capabilities BEFORE launching. With
+  "error" (default), anything unsupported → context_unsupported (message lists the items) and
+  nothing launches. With "warn", launch and emit context.degraded. "unverified" counts as
+  supported, but it is listed in capabilities so a host can choose.
+- NEVER write into the session's workdir or the user's real agent homes. Everything generated goes
+  in a core-owned per-session folder, e.g. <stateDirectory>/sessions/<id>/context/ (match the
+  store's existing layout). Delete it when the session is deleted.
+- No context given → launch args/env/files are byte-for-byte what they are today. A test must
+  prove this for every driver.
+
+Per agent (from C0; anything not proven there is "unsupported" or "unverified")
+- Claude: --append-system-prompt-file <ctx>/instructions.md; ONE --plugin-dir <ctx>/plugins, which
+  is a folder of plugins: each plugin symlinked in, and the skill folders wrapped in a
+  generated plugin inside it (C1b will reuse this folder for live reload_plugins);
+  --mcp-config <ctx>/mcp.json. Do not add --strict-mcp-config (the host may pass it itself).
+- Codex: instructions → thread/start developerInstructions (only when the thread is created).
+  On resume, if the instructions differ from what the thread started with, it is unsupported
+  (C0: resume ignores them). Never silently ignore. Skills → app-server skills/extraRoots/set
+  before thread/start or thread/resume. Plugins → MAPPED, not installed: the plugin's skills/ goes
+  to extraRoots and its .mcp.json servers go to mcpServers; any hooks/commands/agents it has are
+  reported as dropped. Native install is later. MCP servers → per PROCESS, not by editing a
+  config.toml in CODEX_HOME. Under accounts (A1), CODEX_HOME can be a home SHARED by every
+  session of that account. Find a per-process channel (e.g. `-c mcp_servers.<n>.command=…` args
+  on the app-server launch, or the thread/start `config` override) and verify it live.
+  Note: the existing persistPolicyToConfig() also writes into CODEX_HOME assuming it's
+  session-private. Report that conflict; don't fix it in this slice unless trivial. MCP tools
+  need approval_policy "on-request" plus auto-accepting mcpServer/elicitation/request (C0). Do
+  this ONLY for context-declared servers, and make sure the session's permission mode is not
+  weakened for anything else. If that can't be done cleanly, stop and report instead of
+  guessing.
+- Grok: instructions → ACP session/new `_meta.rules` (fixed at creation; a change on resume is
+  unsupported). Skills → [skills] paths and plugins → `grok agent --plugin-dir <p>` args. Find
+  where the grok config lives for a core session. If adding skills would mean writing into a
+  home that isn't session-private, report skills as unsupported for now rather than writing
+  there. MCP → ACP mcpServers (the driver already sends options.mcpServers; merge the context's
+  servers in).
+- OpenCode: instructions/skills/plugins via its config. Prefer a session-private config file
+  passed by env (check whether OPENCODE_CONFIG works and merges with the user's config; verify
+  live), otherwise XDG_CONFIG_HOME pointed at <ctx>. MCP → ACP mcpServers. Plugins are mapped:
+  skills/ → skills.paths, .opencode/plugins/*.js → plugin.
+- Cursor: MCP → ACP mcpServers ("unverified"). Plugins → --plugin-dir ("unverified"). Skills →
+  wrapped in a generated plugin with --plugin-dir ("unverified"). Instructions → "unsupported".
+  The account has no quota, so there's no live check.
+
+TESTS
+- Unit: merge/validation, policy error vs warn, persistence + resume + fork, the
+  "no context = unchanged launch" check for every driver, and each driver's args/env/requests
+  using the existing fixtures (the tests/fixtures env-trace pattern).
+- Live: scripts/context-live.ts goes through core.sessions.create (not raw CLIs) for claude,
+  codex, grok and opencode. Each gets instructions + skill + plugin + MCP server, each with its
+  own code word (say "probe token", not "secret"; haiku refuses that). Also: resume → still
+  recalls; a Codex resume with changed instructions → context_unsupported; the warn policy →
+  context.degraded. Use cheap models. Scratch repo and state under ~/.cache/context-c1/. Never
+  touch the real ~/.claude ~/.codex ~/.cursor ~/.grok or opencode dirs (snapshot listing+mtimes
+  before/after). Kill all children.
+- Gates: core `bun run typecheck`, the full core suite (`bun test` in packages/supermux-core), the
+  broker typecheck (`bunx tsc --noEmit -p .` at the repo root). The broker must still compile
+  unchanged.
+
+WORKTREE HYGIENE
+Another agent has UNCOMMITTED work in apps/, tests/ui/ and graphify-out/. Never edit, stage,
+stash or revert those. Only touch packages/supermux-core/** and docs/core-design/**. Commit
+with explicit paths only (never `git add -A`). docs/ is in .git/info/exclude, so use
+`git add -f` for docs.
+
+DELIVERABLES
+- Code + tests + API.md/README (a "Session context" section) + docs/core-design/session-context.md
+  updated where reality differed. One commit (or two: core + docs).
+- Append dated durable facts to ~/.mux/domains/claudemux.md.
+- Report: the public API as built, the per-agent mechanism actually used, live results with
+  evidence, anything unsupported, and the CODEX_HOME sharing finding.

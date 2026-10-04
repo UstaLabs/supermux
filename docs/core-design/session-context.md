@@ -40,6 +40,47 @@ MCP clients: Codex asks for protocol 2025-06-18; Claude, Cursor, Grok and OpenCo
 2025-11-25. Claude first sends `server/discover` (2026-07-28 style); the v2 SDK answers "method not
 found" and Claude falls back to `initialize`. All five negotiated with `@modelcontextprotocol/server` 2.3.0.
 
+## C1 as built (2026-10-04)
+
+C1 is implemented in `packages/supermux-core/src/context/` (reference: `API.md` "Session context").
+Live check through `core.sessions.create`: `bun scripts/context-live.ts` — 40/40 checks passed for
+claude, codex, grok and opencode (runs `run-2026-10-04T20-01-58-374Z` and `…T20-02-06-649Z` under
+`~/.cache/context-c1/`): instructions, skill, plugin skill and MCP tool each returned their own probe
+token; after a core restart the resumed session repeated the instruction token and the earlier MCP
+word; a Codex resume with changed instructions was `context_unsupported`; policy "warn" emitted
+`context.degraded` for a plugin's hooks on Codex. Where reality differs from the plan below:
+
+- **Codex MCP is per process, not `config.toml`.** `codex app-server -c mcp_servers.<n>.command=…
+  -c …args=[…] -c …env={…}` works, and nothing is written to `CODEX_HOME`. MCP approval needs no
+  policy change: `-c mcp_servers.<n>.default_tools_approval_mode="approve"` lets that server's tools
+  run under approval policy `never` and skips the elicitation under `on-request` (verified on 0.159.2:
+  never+approve → runs; never+none → "requires approval, but approval policy is never";
+  on-request+none → one `mcpServer/elicitation/request`). Only context servers get it; the session's
+  policy is untouched for everything else.
+- **Grok skills ride the plugin channel** (a generated plugin per skills folder, `--plugin-dir`),
+  so no grok config is written. Proven live.
+- **OpenCode uses `OPENCODE_CONFIG`** (a session file), merged over the user's config:
+  `instructions` and `plugin` concatenate, but `skills.paths` **replaces** the global list, so the
+  core repeats the global paths in the session file. Any `plugin` entry makes OpenCode install
+  `@opencode-ai/plugin` into the global config dir (`<XDG_CONFIG_HOME>/opencode/node_modules`):
+  OpenCode's own write, which a host avoids with a session-private `XDG_CONFIG_HOME`.
+- **Claude:** a repeated `--append-system-prompt-file` keeps only the **last** one, so the core
+  copies a host's own appended prompt into its file first. A repeated `--mcp-config` accumulates.
+- **Fork** stays on `Session.fork({ id, at?, context? })`; there is no `core.sessions.fork`.
+- **Instructions fixed at creation** (Codex, Grok) are compared with the record's
+  `createdInstructions`; a different merged text on resume/fork is unsupported.
+- `createHost` drivers declare no context support yet (C3). Cursor: instructions unsupported,
+  the rest unverified (no quota).
+- **`CODEX_HOME` sharing (open, not fixed in C1):** under a Codex subscription account (A1)
+  `CODEX_HOME` is the account home, shared by every session of that account. Two Codex driver writes
+  assume it is session-private: `persistPolicyToConfig()` (`config/batchWrite` of `sandbox_mode` /
+  `approval_policy`, so sessions of one account overwrite each other's child-thread policy) and the
+  multi-agent v1 catalog (`<CODEX_HOME>/supermux-model-catalog.json`, same content for all, so
+  harmless). The context code writes nothing there. The broker refuses Codex subscription accounts
+  today (A3a), which hides the conflict.
+- A detached (keeper) session that is re-attached keeps the args it was launched with: a resume with
+  a changed context on a still-running keeper process does not reach the agent until it relaunches.
+
 ## API
 
 ```ts
@@ -231,7 +272,7 @@ The function runs **in the host process**, with the session's context.
   and an MCP tool returns word D. Then **mid-session**, it adds a second skill, plugin, MCP
   server and tool, each with a new word, through each "live" mechanism. The answers fill both
   tables and decide which items need a reload.
-- **C1, context:** `SessionContext` (instructions, skills, plugins, mcpServers), capability
+- **C1, context, done (see "C1 as built"):** `SessionContext` (instructions, skills, plugins, mcpServers), capability
   resolution, `context.degraded`, persistence plus resume/fork, and per-agent drivers using
   the per-session channels. The environment helpers become internal (the current exports
   are kept as deprecated). Live check: the C0 script through `core.sessions.create`.
