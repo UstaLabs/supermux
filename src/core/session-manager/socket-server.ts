@@ -3,6 +3,7 @@ import { mkdirSync, chmodSync, existsSync, unlinkSync } from "fs"
 import { localEndpoint, usesFilesystemEndpoint } from "../local-endpoint"
 import { encodeFrame, decodeFrames } from "../../shared/frame-codec"
 import { makeLogger } from "../../shared/log"
+import { TickGap } from "../power/wake"
 import { parseSocketFrame, type OrchestrationFrame, type OutboundFrame, type RegisterFrame, type SocketFrame } from "../../shared/socket-frames"
 
 const log = makeLogger("socket-server")
@@ -24,6 +25,45 @@ export type SocketServer = {
   // non-claude session the frame just queues and expires (inbound_undeliverable).
   sendInbound: (session_id: string, payload: { content: string; meta: Record<string, string> }) => Promise<void>
   close: () => Promise<void>
+}
+
+export const SHIM_STALE_AFTER_MS = 45_000
+export const SHIM_PING_INTERVAL_MS = 15_000
+
+/**
+ * Per-session "last frame from a shim" times, judged on every ping tick. Sleep is not silence: a
+ * tick that finds a wall-clock gap (the computer slept; the shims slept with it) moves every
+ * baseline forward by the slept time instead of declaring every session dead on wake.
+ */
+export class ShimLiveness {
+  private readonly lastPong = new Map<string, number>()
+  private readonly gap = new TickGap(SHIM_PING_INTERVAL_MS)
+
+  /** A frame arrived. True on the stale→alive edge (first frame, or after going stale). */
+  markAlive(session_id: string, now: number): boolean {
+    const prev = this.lastPong.get(session_id)
+    this.lastPong.set(session_id, now)
+    return prev == null || (now - prev) > SHIM_STALE_AFTER_MS
+  }
+
+  get(session_id: string): number | undefined {
+    return this.lastPong.get(session_id)
+  }
+
+  /** One ping tick: the sessions (of [ids]) whose last frame is too old, with that time. */
+  tick(now: number, ids: Iterable<string>): Array<{ session_id: string; lastPong: number }> {
+    const slept = this.gap.gap(now)
+    if (slept > 0) {
+      for (const [id, lp] of this.lastPong) this.lastPong.set(id, lp + slept)
+      log.info("shim_liveness_shifted_after_sleep", { sleptMs: slept })
+    }
+    const stale: Array<{ session_id: string; lastPong: number }> = []
+    for (const session_id of ids) {
+      const lp = this.lastPong.get(session_id)
+      if (lp != null && (now - lp) > SHIM_STALE_AFTER_MS) stale.push({ session_id, lastPong: lp })
+    }
+    return stale
+  }
 }
 
 export async function startSocketServer(opts: {
@@ -53,16 +93,11 @@ export async function startSocketServer(opts: {
   // session socket but does not surface channel notifications to Claude.
   const channelConns = new Map<string, Set<Socket>>()
   const servers = new Map<string, Server>()
-  const lastPong = new Map<string, number>()
-  const STALE_AFTER_MS = 45_000
-  const PING_INTERVAL_MS = 15_000
+  const liveness = new ShimLiveness()
   // Any frame from a shim proves liveness; only announce the false->true edge.
   function markAlive(session_id: string): void {
     const now = Date.now()
-    const prev = lastPong.get(session_id)
-    const wasStale = prev == null || (now - prev) > STALE_AFTER_MS
-    lastPong.set(session_id, now)
-    if (wasStale) opts.onStatusChange?.(session_id, true, now)
+    if (liveness.markAlive(session_id, now)) opts.onStatusChange?.(session_id, true, now)
   }
 
   // Single-flight dedup for orchestration calls. A Claude session runs TWO shim
@@ -293,17 +328,16 @@ export async function startSocketServer(opts: {
 
   setInterval(() => {
     const now = Date.now()
+    const ping = encodeFrame({ kind: "ping" })
     for (const session_id of conns.keys()) {
-      const ping = encodeFrame({ kind: "ping" })
       for (const conn of liveConns(session_id)) {
         try { conn.write(ping) } catch { /* pruned via close handler */ }
       }
-      const lp = lastPong.get(session_id)
-      if (lp != null && (now - lp) > STALE_AFTER_MS) {
-        opts.onStatusChange?.(session_id, false, lp)
-      }
     }
-  }, PING_INTERVAL_MS).unref()
+    for (const { session_id, lastPong } of liveness.tick(now, conns.keys())) {
+      opts.onStatusChange?.(session_id, false, lastPong)
+    }
+  }, SHIM_PING_INTERVAL_MS).unref()
 
   return {
     async bind(session_id) {
