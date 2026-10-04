@@ -70,9 +70,9 @@ async function claudeCheck(): Promise<unknown> {
     await core.accounts.add({ id: "claude-b", agent: "claude", method: "subscription", label: "B" })
     const word = `ZEBRA${Math.floor(Math.random() * 9000 + 1000)}`
     const session = await core.sessions.create({ id: "live-claude", agent: "claude", cwd: work, account: "claude-a" })
-    const first = await ask(session, events, `Remember this secret word: ${word}. Reply with just OK. Do not use tools.`)
+    const first = await ask(session, events, `My pet zebra is called ${word}. Reply with just OK. Do not use tools.`)
     const switched = await core.sessions.resume("live-claude", { account: "claude-b" })
-    const second = await ask(switched, events, "What was the secret word I gave you? Reply with the word only. Do not use tools.")
+    const second = await ask(switched, events, "What is my pet zebra called? Reply with the name only. Do not use tools.")
     const record = await core.sessions.get("live-claude")
     const homeA = join(base, "state", "accounts", "homes", "claude", "claude-a")
     return {
@@ -124,12 +124,12 @@ async function codexCheck(): Promise<unknown> {
     await core.accounts.add({ id: "codex-b", agent: "codex", method: "token", secret, label: "B" })
     const word = `OTTER${Math.floor(Math.random() * 9000 + 1000)}`
     const session = await core.sessions.create({ id: "live-codex", agent: "codex", cwd: work, account: "codex-a", configuration: { model: "gpt-5.6-luna", reasoningEffort: "low" } })
-    const first = await ask(session, events, `Remember this secret word: ${word}. Reply with just OK. Do not run any commands.`)
+    const first = await ask(session, events, `My pet zebra is called ${word}. Reply with just OK. Do not run any commands.`)
     let second: string | undefined
     let resumeError: string | undefined
     try {
       const switched = await core.sessions.resume("live-codex", { account: "codex-b" })
-      second = await ask(switched, events, "What was the secret word I gave you? Reply with the word only. Do not run any commands.")
+      second = await ask(switched, events, "What is my pet zebra called? Reply with the name only. Do not run any commands.")
     } catch (error) { resumeError = (error as Error).message }
     const record = await core.sessions.get("live-codex")
     const list = (dir: string) => existsSync(dir) ? readdirSync(dir).sort() : []
