@@ -1,15 +1,23 @@
-// Sleep/wake detection by wall-clock gaps (spec 2026-09-30-desktop-hosting-lifecycle-design, "Wake
-// reconnect, sleep ≠ idle"). A 5 s interval notes the wall clock at every tick; a tick that finds
-// more than 30 s since the previous one means the computer slept (or the process was frozen) in
-// between. The wall clock is what counts: on macOS the monotonic clock can stop during sleep, so
-// `performance.now()` deltas would hide the gap.
+// Sleep/wake detection by clock gaps (spec 2026-09-30-desktop-hosting-lifecycle-design, "Wake
+// reconnect, sleep ≠ idle"). A 5 s interval notes the wall clock and the monotonic clock
+// (`performance.now()`) at every tick.
+//   - Linux: CLOCK_MONOTONIC pauses during suspend, so sleep is the part of the wall-clock delta the
+//     monotonic clock did not see: `wallDelta - monoDelta > 30 s`. A stall (a frozen event loop, a
+//     SIGSTOP) moves both clocks and is NOT a wake.
+//   - macOS / Windows: whether the monotonic clock pauses isn't known, so a wall-clock delta over
+//     30 s between ticks counts as a sleep (a long stall counts too).
 
 export const WAKE_TICK_MS = 5_000
 /** A wall-clock gap between ticks above this is a sleep. */
 export const SLEEP_GAP_MS = 30_000
 
 export interface WakeDetectorDeps {
+  /** Which rule applies (default: process.platform). */
+  platform?: NodeJS.Platform
+  /** The wall clock (default Date.now). */
   now?: () => number
+  /** The monotonic clock (default performance.now). */
+  mono?: () => number
   setInterval?: (fn: () => void, ms: number) => unknown
   clearInterval?: (handle: unknown) => void
   intervalMs?: number
@@ -39,6 +47,7 @@ export class TickGap {
 
 export class WakeDetector {
   private last: number | undefined
+  private lastMono: number | undefined
   private timer: unknown = undefined
   private readonly listeners = new Set<(sleptMs: number) => void>()
 
@@ -48,6 +57,10 @@ export class WakeDetector {
     return this.deps.now?.() ?? Date.now()
   }
 
+  private monoNow(): number {
+    return this.deps.mono?.() ?? performance.now()
+  }
+
   private get intervalMs(): number {
     return this.deps.intervalMs ?? WAKE_TICK_MS
   }
@@ -55,6 +68,7 @@ export class WakeDetector {
   start(): void {
     if (this.timer !== undefined) return
     this.last = this.now()
+    this.lastMono = this.monoNow()
     const set = this.deps.setInterval ?? ((fn: () => void, ms: number) => setInterval(fn, ms))
     const h = set(() => { this.check() }, this.intervalMs)
     ;(h as { unref?: () => void } | undefined)?.unref?.()
@@ -80,13 +94,26 @@ export class WakeDetector {
    */
   check(): number | undefined {
     const now = this.now()
+    const mono = this.monoNow()
     const prev = this.last
+    const prevMono = this.lastMono
     this.last = now
-    if (prev === undefined) return undefined
-    const elapsed = now - prev
-    if (elapsed <= (this.deps.thresholdMs ?? SLEEP_GAP_MS)) return undefined
-    const sleptMs = Math.max(0, elapsed - this.intervalMs)
-    try { this.deps.log?.("wake", { sleptMs }) } catch { /* logging never blocks wake handling */ }
+    this.lastMono = mono
+    if (prev === undefined || prevMono === undefined) return undefined
+    const wallDeltaMs = now - prev
+    const monoDeltaMs = mono - prevMono
+    const threshold = this.deps.thresholdMs ?? SLEEP_GAP_MS
+    let sleptMs: number
+    if ((this.deps.platform ?? process.platform) === "linux") {
+      sleptMs = wallDeltaMs - monoDeltaMs
+      if (sleptMs <= threshold) return undefined
+    } else {
+      if (wallDeltaMs <= threshold) return undefined
+      sleptMs = Math.max(0, wallDeltaMs - this.intervalMs)
+    }
+    try {
+      this.deps.log?.("wake", { sleptMs, wallDeltaMs, monoDeltaMs: Math.round(monoDeltaMs) })
+    } catch { /* logging never blocks wake handling */ }
     for (const fn of this.listeners) {
       try { fn(sleptMs) } catch (err) {
         try { this.deps.log?.("wake_listener_failed", { err: String(err) }) } catch {}

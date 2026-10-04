@@ -1,14 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import { SLEEP_GAP_MS, TickGap, WAKE_TICK_MS, WakeDetector, runWakeActions } from "./wake"
 
-function harness() {
+function harness(platform: NodeJS.Platform = "darwin") {
   let t = 1_000_000
+  let m = 50_000
   let tick: (() => void) | undefined
   let interval = 0
   let cleared = false
   const logs: Array<[string, Record<string, unknown>]> = []
   const d = new WakeDetector({
+    platform,
     now: () => t,
+    mono: () => m,
     setInterval: (fn, ms) => { tick = fn; interval = ms; return 7 },
     clearInterval: (h) => { if (h === 7) cleared = true },
     log: (e, data) => logs.push([e, data]),
@@ -19,13 +22,13 @@ function harness() {
     d, woke, logs,
     get interval() { return interval },
     get cleared() { return cleared },
-    /** Move the wall clock forward [ms] and fire one tick. */
-    step(ms: number) { t += ms; tick!() },
-    advance(ms: number) { t += ms },
+    /** Move the wall clock forward [ms] (the monotonic clock by [mono], default the same) and tick. */
+    step(ms: number, mono = ms) { t += ms; m += mono; tick!() },
+    advance(ms: number, mono = ms) { t += ms; m += mono },
   }
 }
 
-describe("WakeDetector", () => {
+describe("WakeDetector (macOS / Windows: wall clock only)", () => {
   test("ticks every 5 s; regular ticks are not wakes", () => {
     const h = harness()
     h.d.start()
@@ -35,13 +38,13 @@ describe("WakeDetector", () => {
     expect(h.woke).toEqual([])
   })
 
-  test("a wall-clock gap over 30 s is a wake: logs `wake {sleptMs}` then calls listeners", () => {
+  test("a wall-clock gap over 30 s is a wake: logs `wake` with both deltas, then calls listeners", () => {
     const h = harness()
     h.d.start()
     h.step(5_000)
-    h.step(3_600_000)
+    h.step(3_600_000, 3_600_000) // the monotonic clock may or may not have paused: wall decides
     expect(h.woke).toEqual([3_600_000 - WAKE_TICK_MS])
-    expect(h.logs).toEqual([["wake", { sleptMs: 3_600_000 - WAKE_TICK_MS }]])
+    expect(h.logs).toEqual([["wake", { sleptMs: 3_600_000 - WAKE_TICK_MS, wallDeltaMs: 3_600_000, monoDeltaMs: 3_600_000 }]])
     h.step(5_000)
     expect(h.woke).toHaveLength(1)
   })
@@ -69,10 +72,29 @@ describe("WakeDetector", () => {
   test("a backwards clock jump is not a wake; stop clears the interval", () => {
     const h = harness()
     h.d.start()
-    h.step(-60_000)
+    h.step(-60_000, 5_000)
     expect(h.woke).toEqual([])
     h.d.stop()
     expect(h.cleared).toBe(true)
+  })
+})
+
+describe("WakeDetector (Linux: wall minus monotonic)", () => {
+  test("a suspend (wall jumps, CLOCK_MONOTONIC paused) is a wake of exactly the unseen time", () => {
+    const h = harness("linux")
+    h.d.start()
+    h.step(3_600_000 + 5_000, 5_000)
+    expect(h.woke).toEqual([3_600_000])
+    expect(h.logs).toEqual([["wake", { sleptMs: 3_600_000, wallDeltaMs: 3_605_000, monoDeltaMs: 5_000 }]])
+  })
+
+  test("a stall (wall and monotonic both jump) is NOT a wake", () => {
+    const h = harness("linux")
+    h.d.start()
+    h.step(120_000, 120_000)
+    h.step(5_000)
+    expect(h.woke).toEqual([])
+    expect(h.logs).toEqual([])
   })
 })
 
