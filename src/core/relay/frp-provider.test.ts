@@ -1022,3 +1022,105 @@ test("stop kills the sidecar, reports disabled, and logs without observer failur
   expect(child.killed).toBe(true)
   expect(provider.status().state).toBe("disabled")
 })
+
+// ── refreshAfterWake (spec "Wake reconnect") ─────────────────────────────────────────────────
+
+test("refreshAfterWake re-acquires a lease and swaps in a fresh frpc right away", async () => {
+  const children: Array<ReturnType<typeof fakeChild>> = []
+  const timers = fakeTimers()
+  const logger = fakeLogger()
+  let leaseCalls = 0
+  const provider = new FrpRelayProvider(providerOpts({
+    fetchImpl: async () => { leaseCalls++; return jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }) },
+    spawn: () => { const c = fakeChild(); children.push(c); return c },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    log: logger.log,
+  }))
+  await provider.start()
+  expect(children).toHaveLength(1)
+
+  await provider.refreshAfterWake()
+  await settle()
+  expect(leaseCalls).toBe(2)
+  expect(children).toHaveLength(2)
+  expect(children[0]!.killed).toBe(true)
+  expect(children[1]!.killed).toBe(false)
+  expect(children[1]!.activations).toBe(1)
+  expect(provider.status()).toEqual({ state: "online", relayUrl: "https://h-habc.relay.supermux.dev" })
+  expect(logger.records.map((r) => r.event)).toContain("relay_wake_refresh")
+  expect(logger.records).toContainEqual({
+    level: "info", event: "relay_lease_acquired", fields: { hostId: "habc", expiresAt: 3_700_000, trigger: "wake" },
+  })
+  // The old child's exit (we killed it) does not trigger a child_exit retry.
+  expect(timers.active(1_000)).toHaveLength(0)
+  await provider.stop()
+})
+
+test("refreshAfterWake cancels a waiting retry, restarts the backoff, and abandons a hung attempt", async () => {
+  const timers = fakeTimers()
+  let leaseCalls = 0
+  const hung = deferred<Response>()
+  const provider = new FrpRelayProvider(providerOpts({
+    fetchImpl: async () => {
+      leaseCalls++
+      if (leaseCalls === 1) return jsonResponse({}, 503) // startup fails → 5 s retry
+      if (leaseCalls === 2) return jsonResponse({}, 503) // retry fails → 10 s retry
+      if (leaseCalls === 3) return hung.promise // a request that never answers (dead socket)
+      return jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 })
+    },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  }))
+  await provider.start()
+  await fire(timers.active(5_000)[0]!)
+  const waiting = timers.active(10_000)[0]!
+  expect(waiting).toBeDefined()
+  await fire(waiting) // attempt 3 hangs
+  expect(leaseCalls).toBe(3)
+
+  await provider.refreshAfterWake()
+  await settle()
+  expect(leaseCalls).toBe(4)
+  expect(provider.status().state).toBe("online")
+
+  // The hung pre-sleep attempt finally answers: it no longer owns anything and changes nothing.
+  hung.resolve(jsonResponse({}, 503))
+  await settle()
+  expect(provider.status().state).toBe("online")
+  await provider.stop()
+})
+
+test("refreshAfterWake after a failed wake re-acquire retries from the first backoff step", async () => {
+  const timers = fakeTimers()
+  let leaseCalls = 0
+  const provider = new FrpRelayProvider(providerOpts({
+    fetchImpl: async () => ++leaseCalls === 1
+      ? jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 })
+      : jsonResponse({}, 503),
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  }))
+  await provider.start()
+  await fire(timers.active(3_300_000)[0]!) // renewal fails → 5 s
+  await fire(timers.active(5_000).at(-1)!) // → 10 s
+  expect(timers.active(10_000)).toHaveLength(1)
+  await provider.refreshAfterWake()
+  expect(timers.active(10_000)).toHaveLength(0) // the waiting retry was cancelled
+  expect(timers.active(5_000)).toHaveLength(1) // and the wake failure starts over at 5 s
+  await provider.stop()
+})
+
+test("refreshAfterWake does nothing when the relay was never started or is stopped", async () => {
+  let leaseCalls = 0
+  const provider = new FrpRelayProvider(providerOpts({
+    fetchImpl: async () => { leaseCalls++; return jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }) },
+  }))
+  await provider.refreshAfterWake()
+  expect(leaseCalls).toBe(0)
+  await provider.start()
+  await provider.stop()
+  await provider.refreshAfterWake()
+  expect(leaseCalls).toBe(1)
+  expect(provider.status()).toEqual({ state: "disabled" })
+})

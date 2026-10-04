@@ -39,7 +39,7 @@ export interface FrpProviderOpts {
   log?: Pick<Logger, "info" | "warn">
 }
 
-type AcquireTrigger = "startup" | "renewal" | "audit" | "child_exit" | "retry"
+type AcquireTrigger = "startup" | "renewal" | "audit" | "child_exit" | "retry" | "wake"
 type AcquireFailureCode =
   | "nonce_failed"
   | "lease_request_failed"
@@ -328,6 +328,23 @@ export class FrpRelayProvider implements RelayProvider {
     } finally {
       if (this.activeAttempt === attempt) this.activeAttempt = undefined
     }
+  }
+
+  /**
+   * The computer just woke from sleep. frpc's control connection almost certainly died with the
+   * network, and frpc would only notice after its own heartbeat timeout and redial backoff; the
+   * lease may also have expired while asleep. So: re-acquire NOW — a fresh lease and a fresh frpc
+   * (the normal acquire path swaps the child, killing the old one). A retry that was waiting is
+   * cancelled and the backoff restarts from its first step; an attempt that started before the
+   * sleep (its request likely hung on a dead socket) is abandoned rather than waited on.
+   */
+  async refreshAfterWake(): Promise<void> {
+    if (!this.desired) return
+    this.emit("info", "relay_wake_refresh", { hostId: this.o.identity.hostId, state: this.state.state })
+    this.clearRetryTimer()
+    this.retryIndex = 0
+    this.activeAttempt = undefined
+    await this.acquire("wake")
   }
 
   async stop(): Promise<void> {
