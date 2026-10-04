@@ -64,6 +64,8 @@ import dev.supermux.desktop.host.HostingTrayMenu
 import dev.supermux.desktop.host.QuitAction
 import dev.supermux.desktop.host.TrayAction
 import dev.supermux.desktop.host.TrayModel
+import dev.supermux.desktop.host.TrayPower
+import dev.supermux.desktop.host.TrayToggle
 import java.awt.desktop.QuitResponse
 import java.util.concurrent.atomic.AtomicReference
 import dev.supermux.desktop.host.hostingFacts
@@ -432,6 +434,19 @@ fun main() {
         val hostingStatus by supervisor.status.collectAsState()
         val hostingPrefs by supervisor.prefs.collectAsState()
         val backgroundError by supervisor.backgroundError.collectAsState()
+        // "Keep this computer awake" + "Even with the lid closed": host computer only (tray + Settings).
+        val keepAwakeControls = remember { DesktopHostBootstrap.keepAwake() }
+        LaunchedEffect(Unit) {
+            if (hostsNatively) {
+                keepAwakeControls.hosts = { hostStore.list() }
+                keepAwakeControls.start()
+            }
+        }
+        val keepAwakeState by keepAwakeControls.keepAwake.collectAsState()
+        val hasBattery by keepAwakeControls.hasBattery.collectAsState()
+        val lidClosed by keepAwakeControls.lidClosed.collectAsState()
+        val lidBusy by keepAwakeControls.lidBusy.collectAsState()
+        val trayPower = TrayPower.of(keepAwakeState, keepAwakeControls.isMac, hasBattery, lidClosed, lidBusy)
         val fleetFacts by remember(pairedFleet) {
             pairedFleet?.hostingFacts(supervisor.hostId) ?: flowOf(FleetFacts.EMPTY)
         }.collectAsState(FleetFacts.EMPTY)
@@ -475,6 +490,7 @@ fun main() {
                 hostingStatus, fleetFacts.localSessions, supervisor.quitStopsBroker,
                 // No tray, no notification: never mark it shown there.
                 noticeShown = noticeShown || !isTraySupported,
+                keepsAwake = QuitAction.keepsAwake(hostingPrefs.background, keepAwakeState),
             )
             when (action) {
                 is QuitAction.Confirm -> {
@@ -700,6 +716,7 @@ fun main() {
                     HostingTrayMenu(
                         model = trayModel,
                         background = hostingPrefs.background,
+                        power = if (quitting) TrayPower.NONE else trayPower,
                         onAction = { action ->
                             when (action) {
                                 TrayAction.OPEN -> showWindow()
@@ -710,7 +727,15 @@ fun main() {
                                 TrayAction.QUIT -> requestQuit()
                             }
                         },
-                        onBackground = { on -> hostScope.launch(Dispatchers.Default) { supervisor.setBackground(on) } },
+                        onToggle = { toggle, on ->
+                            hostScope.launch(Dispatchers.Default) {
+                                when (toggle) {
+                                    TrayToggle.BACKGROUND -> supervisor.setBackground(on)
+                                    TrayToggle.KEEP_AWAKE -> keepAwakeControls.setEnabled(on)
+                                    TrayToggle.LID_CLOSED -> keepAwakeControls.setLidClosed(on)
+                                }
+                            }
+                        },
                     )
                 },
             )
@@ -1766,6 +1791,7 @@ fun main() {
                     CompositionLocalProvider(
                         // Settings ▸ Hosting reads the app-wide supervisor (null where the app does not host).
                         LocalHostSupervisor provides supervisor.takeIf { hostsNatively },
+                        dev.supermux.desktop.settings.LocalKeepAwakeControls provides keepAwakeControls.takeIf { hostsNatively },
                         LocalPairedHostStore provides hostStore,
                         LocalHostingFleet provides fleet,
                         LocalHostingSessions provides fleetFacts.localSessions,

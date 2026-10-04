@@ -96,12 +96,24 @@ sealed interface QuitAction {
          * broker: a running, app-owned broker that stops gets the confirm dialog; one that keeps
          * running (a service, the XDG stand-in) quits at once with the one-time notice (unless
          * [noticeShown]); read-only, not hosting, starting, can't-start quit at once, silently.
+         * [keepsAwake]: the broker that keeps running also keeps this computer awake ("Keep this
+         * computer awake" on and holding), so the notice says so.
          */
-        fun of(s: HostingStatus, sessions: Int, quitStopsBroker: Boolean, noticeShown: Boolean): QuitAction = when {
+        fun of(
+            s: HostingStatus,
+            sessions: Int,
+            quitStopsBroker: Boolean,
+            noticeShown: Boolean,
+            keepsAwake: Boolean = false,
+        ): QuitAction = when {
             s !is HostingStatus.Running || s.readOnly -> Now()
             quitStopsBroker -> Confirm(QuitText.stops(sessions))
-            else -> Now(QuitText.BACKGROUND.takeUnless { noticeShown })
+            else -> Now((if (keepsAwake) QuitText.BACKGROUND_AWAKE else QuitText.BACKGROUND).takeUnless { noticeShown })
         }
+
+        /** Background on and the broker holds keep-awake: it stays awake after the app quits. */
+        fun keepsAwake(background: Boolean, keepAwake: dev.supermux.net.KeepAwakeState?): Boolean =
+            background && keepAwake?.enabled == true && keepAwake.active
     }
 }
 
@@ -109,14 +121,53 @@ sealed interface QuitAction {
 sealed interface TrayItem {
     data class Header(val text: String) : TrayItem
     data class Action(val id: TrayAction, val label: String, val enabled: Boolean = true) : TrayItem
-    data class Checkbox(val label: String, val checked: Boolean, val enabled: Boolean) : TrayItem
+    data class Checkbox(
+        val label: String,
+        val checked: Boolean,
+        val enabled: Boolean,
+        val id: TrayToggle = TrayToggle.BACKGROUND,
+    ) : TrayItem
     data object Separator : TrayItem
 }
 
 enum class TrayAction { OPEN, SHOW_LOG, RESTART, QUIT }
 
+enum class TrayToggle { BACKGROUND, KEEP_AWAKE, LID_CLOSED }
+
+/**
+ * The tray's keep-awake checkmarks ("Also on battery" stays in Settings, so the tray isn't crowded).
+ * [keepAwake] null hides "Keep this computer awake" (the broker hasn't said, or is older);
+ * [lidClosed] null hides "Even with the lid closed" (not a Mac laptop).
+ */
+data class TrayPower(
+    val keepAwake: Boolean? = null,
+    val keepAwakeEnabled: Boolean = true,
+    val lidClosed: Boolean? = null,
+    val lidEnabled: Boolean = true,
+) {
+    companion object {
+        val NONE = TrayPower()
+        const val KEEP_AWAKE = "Keep this computer awake"
+        const val LID_CLOSED = "Even with the lid closed"
+
+        /** Pure: what the tray shows from the broker's state and the local facts. */
+        fun of(
+            keepAwake: dev.supermux.net.KeepAwakeState?,
+            isMac: Boolean,
+            hasBattery: Boolean?,
+            lidClosed: Boolean,
+            lidBusy: Boolean,
+        ): TrayPower = TrayPower(
+            keepAwake = keepAwake?.enabled,
+            keepAwakeEnabled = keepAwake?.supported ?: false,
+            lidClosed = if (isMac && hasBattery == true) lidClosed else null,
+            lidEnabled = !lidBusy,
+        )
+    }
+}
+
 /** The tray menu (spec §States, "Tray menu"). Hosting off: header, Open, Quit. */
-fun trayMenuItems(model: TrayModel, background: Boolean): List<TrayItem> = buildList {
+fun trayMenuItems(model: TrayModel, background: Boolean, power: TrayPower = TrayPower.NONE): List<TrayItem> = buildList {
     add(TrayItem.Header(trayHeaderLine(model)))
     add(TrayItem.Action(TrayAction.OPEN, "Open supermux"))
     if (model.showLog) add(TrayItem.Action(TrayAction.SHOW_LOG, "Show log"))
@@ -125,6 +176,12 @@ fun trayMenuItems(model: TrayModel, background: Boolean): List<TrayItem> = build
         model.restartLabel?.let { add(TrayItem.Action(TrayAction.RESTART, it, model.restartEnabled)) }
         if (model.showKeepRunning) {
             add(TrayItem.Checkbox("Keep running in the background", background, model.keepRunningEnabled))
+            power.keepAwake?.let {
+                add(TrayItem.Checkbox(TrayPower.KEEP_AWAKE, it, power.keepAwakeEnabled, TrayToggle.KEEP_AWAKE))
+            }
+            power.lidClosed?.let {
+                add(TrayItem.Checkbox(TrayPower.LID_CLOSED, it, power.lidEnabled, TrayToggle.LID_CLOSED))
+            }
         }
     }
     add(TrayItem.Separator)
@@ -136,15 +193,16 @@ fun trayMenuItems(model: TrayModel, background: Boolean): List<TrayItem> = build
 fun MenuScope.HostingTrayMenu(
     model: TrayModel,
     background: Boolean,
+    power: TrayPower,
     onAction: (TrayAction) -> Unit,
-    onBackground: (Boolean) -> Unit,
+    onToggle: (TrayToggle, Boolean) -> Unit,
 ) {
-    for (item in trayMenuItems(model, background)) {
+    for (item in trayMenuItems(model, background, power)) {
         when (item) {
             is TrayItem.Header -> Item(item.text, enabled = false, onClick = {})
             is TrayItem.Action -> Item(item.label, enabled = item.enabled, onClick = { onAction(item.id) })
             is TrayItem.Checkbox ->
-                CheckboxItem(item.label, checked = item.checked, enabled = item.enabled, onCheckedChange = onBackground)
+                CheckboxItem(item.label, checked = item.checked, enabled = item.enabled, onCheckedChange = { onToggle(item.id, it) })
             TrayItem.Separator -> Separator()
         }
     }

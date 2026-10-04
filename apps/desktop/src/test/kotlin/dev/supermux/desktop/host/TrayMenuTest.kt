@@ -4,6 +4,7 @@ import dev.supermux.host.HostView
 import dev.supermux.proto.SessionInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -175,6 +176,72 @@ class TrayMenuTest {
             listOf("H:🟡 Quitting…", "Open supermux", "--", "Quit supermux"),
             labels(trayMenuItems(TrayModel.QUITTING, background = true)),
         )
+    }
+
+    // ── keep awake ──
+
+    private val awake = dev.supermux.net.KeepAwakeState(enabled = true, onBattery = true, active = true, supported = true)
+
+    @Test fun backgroundAndAwakeSaysItKeepsTheComputerAwake() {
+        val keeps = QuitAction.keepsAwake(background = true, keepAwake = awake)
+        assertTrue(keeps)
+        assertEquals(
+            QuitAction.Now(
+                "supermux keeps running in the background and keeps this computer awake. Turn off 'Keep this computer awake' to let it sleep.",
+            ),
+            QuitAction.of(running, 3, quitStopsBroker = false, noticeShown = false, keepsAwake = keeps),
+        )
+        // Still one-time.
+        assertEquals(QuitAction.Now(null), QuitAction.of(running, 3, quitStopsBroker = false, noticeShown = true, keepsAwake = true))
+        // A broker that stops with the app: the confirm, as before.
+        assertEquals(QuitAction.Confirm("This stops supermux."), QuitAction.of(running, 0, quitStopsBroker = true, noticeShown = false, keepsAwake = true))
+    }
+
+    @Test fun keepsAwakeNeedsBackgroundEnabledAndActive() {
+        assertFalse(QuitAction.keepsAwake(background = false, keepAwake = awake))
+        assertFalse(QuitAction.keepsAwake(background = true, keepAwake = awake.copy(enabled = false)))
+        assertFalse(QuitAction.keepsAwake(background = true, keepAwake = awake.copy(active = false, reasonCode = "denied")))
+        assertFalse(QuitAction.keepsAwake(background = true, keepAwake = null))
+    }
+
+    @Test fun runningMenuWithKeepAwakeAndLid() {
+        val m = TrayModel.of(running, HostingPrefs(), 2, null)
+        val power = TrayPower.of(awake, isMac = true, hasBattery = true, lidClosed = false, lidBusy = false)
+        assertEquals(
+            listOf(
+                "H:🟢 supermux is running · 2 sessions", "Open supermux", "--", "Restart",
+                "[x]Keep running in the background", "[x]Keep this computer awake", "[ ]Even with the lid closed",
+                "--", "Quit supermux",
+            ),
+            labels(trayMenuItems(m, background = true, power = power)),
+        )
+        val ids = trayMenuItems(m, true, power).filterIsInstance<TrayItem.Checkbox>().map { it.id }
+        assertEquals(listOf(TrayToggle.BACKGROUND, TrayToggle.KEEP_AWAKE, TrayToggle.LID_CLOSED), ids)
+    }
+
+    @Test fun noLidOffAMacLaptopAndNoBatteryRowInTheTray() {
+        val m = TrayModel.of(running, HostingPrefs(), 0, null)
+        val desktopMac = labels(trayMenuItems(m, true, TrayPower.of(awake, isMac = true, hasBattery = false, lidClosed = true, lidBusy = false)))
+        assertFalse(desktopMac.any { "lid" in it })
+        val linuxLaptop = labels(trayMenuItems(m, true, TrayPower.of(awake, isMac = false, hasBattery = true, lidClosed = true, lidBusy = false)))
+        assertFalse(linuxLaptop.any { "lid" in it })
+        assertTrue("[x]Keep this computer awake" in linuxLaptop)
+        assertFalse(linuxLaptop.any { "battery" in it.lowercase() })
+    }
+
+    @Test fun keepAwakeHiddenUntilTheBrokerSaysAndDisabledWhereUnsupported() {
+        val m = TrayModel.of(running, HostingPrefs(), 0, null)
+        assertFalse(labels(trayMenuItems(m, true, TrayPower.of(null, false, null, false, false))).any { "awake" in it })
+        val unsupported = awake.copy(enabled = true, active = false, supported = false, reason = "no inhibitor", reasonCode = "unsupported")
+        assertTrue("[x]Keep this computer awake(off)" in labels(trayMenuItems(m, true, TrayPower.of(unsupported, false, null, false, false))))
+        // Busy installing the lid helper: the lid item is greyed.
+        assertTrue("[ ]Even with the lid closed(off)" in labels(trayMenuItems(m, true, TrayPower.of(awake, true, true, false, lidBusy = true))))
+    }
+
+    @Test fun notHostingMenuHasNoPowerItems() {
+        val m = TrayModel.of(HostingStatus.NotHosting, HostingPrefs(hosting = false), 0, null)
+        val power = TrayPower.of(awake, isMac = true, hasBattery = true, lidClosed = true, lidBusy = false)
+        assertEquals(listOf("H:⚪ Not hosting", "Open supermux", "--", "Quit supermux"), labels(trayMenuItems(m, true, power)))
     }
 
     @Test fun actionsCarryTheirIds() {

@@ -74,6 +74,10 @@ data class TrayModel(
 object QuitText {
     const val BACKGROUND = "supermux will keep running in the background."
 
+    /** Background on, and "Keep this computer awake" is on and holding: say that it stays awake. */
+    const val BACKGROUND_AWAKE =
+        "supermux keeps running in the background and keeps this computer awake. Turn off 'Keep this computer awake' to let it sleep."
+
     /** The confirm text: what stops. */
     fun stops(sessions: Int): String = when {
         sessions <= 0 -> "This stops supermux."
