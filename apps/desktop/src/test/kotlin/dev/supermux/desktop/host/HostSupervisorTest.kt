@@ -1493,4 +1493,13 @@ class HostSupervisorTest {
         assertFalse(Files.exists(h.ourPlist), "it would open the app at every login")
         assertEquals(running, h.sup.status.value)
     }
+
+    @Test fun windowsNeverAsksATakeoverItCannotDo() = runTest {
+        val h = Harness(this, os = OsEnv.Os.WINDOWS, captures = noProcesses)
+        h.probeFn = { h.outside("h-cli") }
+        h.sup.ensure() // returns: no question to wait on
+        assertEquals(HostingStatus.Running(9898, readOnly = true), h.sup.status.value)
+        assertEquals("h-cli", h.sup.hostId.value)
+        assertTrue(h.launches.isEmpty() && h.env.ran.none { it.firstOrNull() == "schtasks" })
+    }
 }

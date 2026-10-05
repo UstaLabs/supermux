@@ -495,7 +495,17 @@ class HostSupervisor(
                 _build.value = (found as HostProbeResult.Supermux).build
                 readOnlyLocked(prefs, found.hostId)
             }
-            is HostPlan.AskTakeover -> return ask(Question.Takeover(plan.hostId, prefs.port))
+            is HostPlan.AskTakeover -> {
+                // Windows has no takeover (no old service is ever found there): "yes" could only fail,
+                // so don't ask; use it read-only.
+                if (osEnv.os == OsEnv.Os.WINDOWS && withContext(io) { Takeover.findOldServices(osEnv) }.isEmpty()) {
+                    log("supermux on port ${prefs.port} wasn't set up by this app and can't be taken over here; using it read-only")
+                    _build.value = (found as HostProbeResult.Supermux).build
+                    readOnlyLocked(prefs, plan.hostId)
+                    return null
+                }
+                return ask(Question.Takeover(plan.hostId, prefs.port))
+            }
             is HostPlan.AskDowngrade -> return ask(Question.Downgrade(plan.hostId, prefs.port))
             HostPlan.Wait -> Unit // unreachable: turned into MovePort above
         }
