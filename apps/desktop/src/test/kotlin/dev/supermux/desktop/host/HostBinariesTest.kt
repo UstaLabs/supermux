@@ -3,6 +3,7 @@ package dev.supermux.desktop.host
 import dev.supermux.desktop.host.HostBinaries.Binary
 import dev.supermux.desktop.host.HostBinaries.Os
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -235,5 +236,27 @@ class HostBinariesTest {
         Thread.sleep(5)
         val c = HostBinaries.materialize(src, destDir, "bin", executable = true)
         assertEquals("v2-longer", Files.readString(c))
+    }
+
+    @Test fun aRunningExeIsSetAsideAndReplacedThenSweptNextTime() {
+        val src = tmp().resolve("supermux-broker.exe")
+        Files.writeString(src, "v1")
+        val destDir = tmp()
+        HostBinaries.materialize(src, destDir, "supermux-broker.exe", executable = true)
+        Files.writeString(src, "v2-new")
+        // Windows: replacing the file a shim is running fails, renaming it works.
+        var fails = 1
+        val windowsLike: (Path, Path) -> Unit = { t, d ->
+            if (fails-- > 0) throw java.nio.file.AccessDeniedException(d.toString())
+            Files.move(t, d, StandardCopyOption.REPLACE_EXISTING)
+        }
+        val dest = HostBinaries.materialize(src, destDir, "supermux-broker.exe", executable = true, replace = windowsLike)
+        assertEquals("v2-new", Files.readString(dest))
+        val aside = Files.list(destDir).use { l -> l.filter { it.fileName.toString().startsWith("supermux-broker.exe.old-") }.toList() }
+        assertEquals(1, aside.size, "the running copy was renamed, not lost")
+        assertEquals("v1", Files.readString(aside.single()))
+        // Next time (its process gone) the aside copy is swept.
+        HostBinaries.materialize(src, destDir, "supermux-broker.exe", executable = true)
+        assertTrue(Files.list(destDir).use { l -> l.noneMatch { it.fileName.toString().contains(".old-") } })
     }
 }

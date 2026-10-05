@@ -23,6 +23,8 @@ internal suspend fun HostSupervisor.launchLocked(
     carried: Map<String, String>,
     allowChildFallback: Boolean,
     healthTimeoutMs: Long = timing.healthTimeoutMs,
+    /** The caller already stopped our service's broker ([stopWindowsServiceLocked]). */
+    serviceStopped: Boolean = false,
 ): String? {
     _backgroundError.value = null
     if (!prefs.background) return launchChildLocked(prefs, bins, carried, healthTimeoutMs)
@@ -36,7 +38,7 @@ internal suspend fun HostSupervisor.launchLocked(
     val replacingOurs = ourServiceInstalled()
     if (!replacingOurs) secondBrokerReason(prefs.port)?.let { return it }
     val spec = BrokerService.Spec(broker, brokerEnvFor(prefs, bins, carried), logFile)
-    val installed = withContext(io) { BrokerService.install(spec, osEnv) }
+    val installed = withContext(io) { BrokerService.install(spec, osEnv, alreadyStopped = serviceStopped) }
     log("service install${if (replacingOurs) " (replacing ours)" else ""}: ${installed.describe()}")
     val failure = when (val result = installed) {
         is BrokerService.Result.Installed -> when {
@@ -56,7 +58,18 @@ internal suspend fun HostSupervisor.launchLocked(
                 "the service didn't start"
             }
         }
-        is BrokerService.Result.Failed -> result.message
+        is BrokerService.Result.Failed -> {
+            if (result.previousStillRunning) {
+                // Our previous definition is running again (Windows: UAC declined for a changed
+                // task). Keep it: no removal (a second UAC prompt) and no child next to it.
+                mode = HostSupervisor.Mode.SERVICE
+                childDetached = false
+                _backgroundError.value = result.message
+                log(result.message)
+                return awaitHealthy(prefs.port, null, healthTimeoutMs)
+            }
+            result.message
+        }
         BrokerService.Result.Unsupported -> "not supported on this system"
         is BrokerService.Result.Removed -> result.toString()
     }

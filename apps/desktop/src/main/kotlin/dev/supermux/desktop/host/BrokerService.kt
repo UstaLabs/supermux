@@ -16,6 +16,9 @@ object BrokerService {
     const val WINDOWS_TASK_NAME = "Supermux Host"
     const val WINDOWS_BROKER_EXE = "supermux-broker.exe"
     const val WINDOWS_TASK_XML = "Supermux/supermux-host-task.xml"
+    const val WINDOWS_UPDATE_DECLINED =
+        "Couldn't update the background service (permission declined); still running the previous version."
+
     /** Set in the Scheduled Task broker's env: it runs under the task's restart loop. */
     const val WINDOWS_TASK_ENV = "MUX_WINDOWS_TASK"
 
@@ -31,7 +34,12 @@ object BrokerService {
         data class Installed(val path: Path, val enabled: Boolean) : Result
         data class Removed(val path: Path?) : Result
         data object Unsupported : Result
-        data class Failed(val message: String) : Result
+        /**
+         * [previousStillRunning]: the install didn't happen, but OUR previous service definition is
+         * still installed and was started again, so a broker is running (an older one). Windows:
+         * the user declined the UAC prompt for a changed task definition.
+         */
+        data class Failed(val message: String, val previousStillRunning: Boolean = false) : Result
     }
 
     /** Every definition we write carries these so [Takeover] can never mistake it for an old service. */
@@ -161,9 +169,14 @@ Terminal=false
     fun windowsTaskXml(spec: Spec): String {
         val sets = (withManaged(spec.env) + (WINDOWS_TASK_ENV to "1")).entries
             .joinToString("; ") { (k, v) -> "\$env:$k = ${powershellLiteral(v)}" }
+        // The parent (the task's conhost) is looked up once and its handle opened (`.Handle`), so
+        // HasExited stays about THAT process even if its pid is reused later. If WMI can't answer
+        // (null), the loop just never stops on its own; stopping the task then kills it by pid.
+        // No double quotes anywhere: the script travels inside one quoted -Command argument.
         val script = "\$PSDefaultParameterValues['Out-File:Encoding']='utf8'; $sets; " +
-            "\$supermuxHost = Get-Process -Id (Get-CimInstance Win32_Process -Filter \"ProcessId=\$PID\").ParentProcessId -ErrorAction SilentlyContinue; " +
-            "while (\$true) { & ${powershellLiteral(spec.broker.toString())} 2>&1 | ForEach-Object { \"\$_\" } | " +
+            "\$supermuxHost = Get-Process -Id (Get-CimInstance Win32_Process -Filter ('ProcessId=' + \$PID)).ParentProcessId -ErrorAction SilentlyContinue; " +
+            "if (\$supermuxHost) { \$null = \$supermuxHost.Handle }; " +
+            "while (\$true) { & ${powershellLiteral(spec.broker.toString())} 2>&1 | ForEach-Object { \$_.ToString() } | " +
             "Out-File -Append -FilePath ${powershellLiteral(spec.log.toString())}; " +
             "if (\$supermuxHost -and \$supermuxHost.HasExited) { break }; Start-Sleep -Seconds 5 }"
         val arguments = listOf(
@@ -219,10 +232,14 @@ Terminal=false
 """
     }
 
-    fun install(spec: Spec, env: OsEnv = SystemOsEnv): Result = when (env.os) {
+    /**
+     * Install (or re-install, which restarts) the service. [alreadyStopped]: the caller just stopped
+     * our running service broker itself ([stop], Windows), so don't stop it again.
+     */
+    fun install(spec: Spec, env: OsEnv = SystemOsEnv, alreadyStopped: Boolean = false): Result = when (env.os) {
         OsEnv.Os.MAC -> installLaunchd(spec, env)
         OsEnv.Os.LINUX -> installSystemd(spec, env)
-        OsEnv.Os.WINDOWS -> installWindowsTask(spec, env)
+        OsEnv.Os.WINDOWS -> installWindowsTask(spec, env, alreadyStopped)
         OsEnv.Os.OTHER -> Result.Unsupported
     }
 
@@ -382,27 +399,120 @@ Terminal=false
      */
     fun stop(env: OsEnv = SystemOsEnv): Boolean = env.os == OsEnv.Os.WINDOWS && stopWindowsTask(env)
 
+    /**
+     * Stop the task's loop, then its broker, BY PID, and wait for the broker to exit. Never by image
+     * name: every agent's MCP shim is `supermux-broker.exe shim` (and the credential helper
+     * `supermux-broker.exe credential`), and those must survive a broker restart or update.
+     * False when the processes couldn't be listed or a broker is still alive after ~10 s.
+     */
     private fun stopWindowsTask(env: OsEnv): Boolean {
+        val procs = listWindowsProcesses(env) ?: return false
+        val targets = windowsTaskTargets(procs)
         // The loop first, or it starts the broker again ~5 s after the kill.
-        env.run(stopWindowsTaskLoopArgv())
-        env.run(listOf("taskkill", "/F", "/IM", WINDOWS_BROKER_EXE))
-        return awaitWindowsBrokerGone(env)
+        if (targets.loops.isNotEmpty()) env.run(taskkillArgv(targets.loops))
+        if (targets.brokers.isNotEmpty()) env.run(taskkillArgv(targets.brokers))
+        return awaitWindowsPidsGone(env, targets.brokers)
     }
 
-    private fun installWindowsTask(spec: Spec, env: OsEnv): Result {
+    /** One `Win32_Process` row: what [windowsTaskTargets] decides on. */
+    data class WinProcess(val pid: Long, val parentPid: Long, val name: String, val commandLine: String)
+
+    /** The task's restart loops and the brokers to stop; agents' `… shim` / `… credential` processes never. */
+    data class WindowsTaskTargets(val loops: List<Long>, val brokers: List<Long>)
+
+    /**
+     * Pure. A loop is a powershell.exe whose command line runs the broker and sets
+     * [WINDOWS_TASK_ENV] under the task's (headless) conhost — or orphaned once `schtasks /End`
+     * killed that conhost — or, for loops an older app version installed, `MUX_MANAGED_BY`. A broker
+     * is a `supermux-broker.exe` that is a loop's child or runs with no subcommand at all (a bare
+     * broker); `supermux-broker.exe shim|credential|…` is never one.
+     */
+    fun windowsTaskTargets(procs: List<WinProcess>): WindowsTaskTargets {
+        val byPid = procs.associateBy { it.pid }
+        fun named(p: WinProcess?, n: String) = p != null && p.name.equals(n, ignoreCase = true)
+        val loops = procs.filter { p ->
+            named(p, "powershell.exe") && p.commandLine.contains(WINDOWS_BROKER_EXE, ignoreCase = true) && when {
+                p.commandLine.contains(WINDOWS_TASK_ENV) -> byPid[p.parentPid].let { it == null || named(it, "conhost.exe") }
+                else -> p.commandLine.contains("MUX_MANAGED_BY")
+            }
+        }.map { it.pid }
+        val brokers = procs.filter { p ->
+            named(p, WINDOWS_BROKER_EXE) && (p.parentPid in loops || isBareBrokerCommandLine(p.commandLine))
+        }.map { it.pid }
+        return WindowsTaskTargets(loops, brokers)
+    }
+
+    /** `"C:\…\supermux-broker.exe"` (or unquoted) with nothing after it: the broker itself, no subcommand. */
+    fun isBareBrokerCommandLine(commandLine: String): Boolean {
+        val c = commandLine.trim()
+        if (c.isEmpty()) return false
+        val rest = if (c.startsWith('"')) {
+            val end = c.indexOf('"', 1)
+            if (end < 0) return false
+            if (!c.substring(1, end).endsWith(WINDOWS_BROKER_EXE, ignoreCase = true)) return false
+            c.substring(end + 1)
+        } else {
+            val end = c.indexOf(WINDOWS_BROKER_EXE, ignoreCase = true)
+            if (end < 0) return false
+            c.substring(end + WINDOWS_BROKER_EXE.length)
+        }
+        return rest.isBlank()
+    }
+
+    /**
+     * Lists powershell / conhost / broker processes as `pid TAB parentPid TAB name TAB commandLine`.
+     * No double quotes in the script: Java does not escape them on Windows.
+     */
+    internal fun listWindowsProcessesArgv(): List<String> = listOf(
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+        "Get-CimInstance Win32_Process | Where-Object { \$_.Name -eq 'powershell.exe' -or \$_.Name -eq 'conhost.exe' -or " +
+            "\$_.Name -eq '$WINDOWS_BROKER_EXE' } | ForEach-Object { [string]\$_.ProcessId + [char]9 + [string]\$_.ParentProcessId + " +
+            "[char]9 + \$_.Name + [char]9 + [string]\$_.CommandLine }",
+    )
+
+    internal fun listWindowsProcesses(env: OsEnv): List<WinProcess>? =
+        env.runCapture(listWindowsProcessesArgv())?.let(::parseWindowsProcesses)
+
+    /** Pure: [listWindowsProcessesArgv]'s output → rows (malformed lines are skipped). */
+    fun parseWindowsProcesses(out: String): List<WinProcess> = out.lineSequence().mapNotNull { line ->
+        val f = line.trimEnd('\r').split('\t', limit = 4)
+        if (f.size < 3) return@mapNotNull null
+        val pid = f[0].trim().toLongOrNull() ?: return@mapNotNull null
+        WinProcess(pid, f[1].trim().toLongOrNull() ?: 0, f[2].trim(), f.getOrElse(3) { "" })
+    }.toList()
+
+    private fun taskkillArgv(pids: List<Long>): List<String> =
+        listOf("taskkill", "/F") + pids.flatMap { listOf("/PID", it.toString()) }
+
+    /** Poll `tasklist` until none of [pids] runs, up to 20 × 500 ms. True once they're all gone. */
+    internal fun awaitWindowsPidsGone(env: OsEnv, pids: List<Long>): Boolean {
+        fun alive(pid: Long) = env.runCapture(listOf("tasklist", "/FI", "PID eq $pid", "/NH"))
+            ?.contains(WINDOWS_BROKER_EXE, ignoreCase = true) == true
+        var left = pids
+        for (i in 1..20) {
+            left = left.filter(::alive)
+            if (left.isEmpty()) return true
+            env.sleep(500)
+        }
+        return left.none(::alive)
+    }
+
+    private fun installWindowsTask(spec: Spec, env: OsEnv, alreadyStopped: Boolean): Result {
         val taskXml = env.localAppData.resolve(WINDOWS_TASK_XML)
         val content = "\uFEFF" + windowsTaskXml(spec)
+        val run = listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME)
         return runCatching {
             Files.createDirectories(taskXml.parent)
             val unchanged = runCatching { Files.readString(taskXml, Charsets.UTF_16LE) }.getOrNull() == content
-            if (unchanged && isInstalled(env)) {
+            val wasInstalled = isInstalled(env)
+            // A running instance must not keep the old loop (and broker) alive past re-registration,
+            // and an unchanged one restarts with the (maybe new) broker binary.
+            if (wasInstalled && !alreadyStopped) stopWindowsTask(env)
+            if (unchanged && wasInstalled) {
                 // The registered task already says exactly this (an app update with the same env, a
-                // restart): no UAC prompt, just restart it — the broker binary may be new.
-                stopWindowsTask(env)
-                if (env.run(listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME))) return Result.Installed(taskXml, true)
+                // restart): no UAC prompt, just start it again.
+                if (env.run(run)) return Result.Installed(taskXml, true)
             }
-            // A running instance must not keep the old loop (and broker) alive past re-registration.
-            if (isInstalled(env)) stopWindowsTask(env)
             Files.writeString(taskXml, content, Charsets.UTF_16LE)
             // ONE elevated invocation (one UAC prompt): create the task, then start it now.
             val ok = runElevatedSchtasksBatch(
@@ -413,7 +523,14 @@ Terminal=false
                 ),
             )
             if (!ok) {
+                // The file must not claim a definition that was never registered (the next install
+                // would skip the prompt and run the old one).
                 Files.deleteIfExists(taskXml)
+                // Declined UAC on a CHANGED definition: we stopped the old broker above, so start the
+                // old definition again (no elevation) rather than leave nothing running.
+                if (wasInstalled && env.run(run)) {
+                    return Result.Failed(WINDOWS_UPDATE_DECLINED, previousStillRunning = true)
+                }
                 Result.Failed("Windows Scheduled Task install failed (elevation declined or schtasks error)")
             } else Result.Installed(taskXml, true)
         }.getOrElse { Result.Failed("Windows Scheduled Task install failed: ${it.message}") }
@@ -440,28 +557,6 @@ Terminal=false
             val existed = Files.deleteIfExists(taskXml)
             Result.Removed(if (existed) taskXml else null)
         }.getOrElse { Result.Failed("Windows Scheduled Task remove failed: ${it.message}") }
-    }
-
-    /**
-     * PowerShell that stops the task's restart loop: the powershell.exe whose command line sets
-     * `MUX_MANAGED_BY` (every version of the loop does; never itself). No double quotes: Java does
-     * not escape them on Windows.
-     */
-    internal fun stopWindowsTaskLoopArgv(): List<String> = listOf(
-        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
-        "Get-CimInstance Win32_Process | Where-Object { \$_.Name -eq 'powershell.exe' -and \$_.ProcessId -ne \$PID -and " +
-            "\$_.CommandLine -like '*MUX_MANAGED_BY*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }",
-    )
-
-    /** Poll `tasklist` until no [WINDOWS_BROKER_EXE] runs, up to 20 × 500 ms. True once it's gone. */
-    internal fun awaitWindowsBrokerGone(env: OsEnv): Boolean {
-        val argv = listOf("tasklist", "/FI", "IMAGENAME eq $WINDOWS_BROKER_EXE", "/NH")
-        fun gone() = env.runCapture(argv)?.contains(WINDOWS_BROKER_EXE, ignoreCase = true) != true
-        for (i in 1..20) {
-            if (gone()) return true
-            env.sleep(500)
-        }
-        return gone()
     }
 
     /**

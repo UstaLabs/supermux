@@ -570,7 +570,7 @@ class HostSupervisor(
             if (windows) stopWindowsServiceLocked(prefs0.port)
             val bins = binaries()
             if (lastCopyFailed && !windows) return keepRunning(prefs0, Mode.SERVICE)
-            afterLaunch(prefs0, launchLocked(prefs0.copy(background = true), bins, carriedStore.load(), allowChildFallback = true))
+            afterLaunch(prefs0, launchLocked(prefs0.copy(background = true), bins, carriedStore.load(), allowChildFallback = true, serviceStopped = windows))
             warnIfStillOld()
             return
         }
@@ -669,10 +669,11 @@ class HostSupervisor(
         stopWatch()
         retries.reset()
         _status.value = HostingStatus.Starting
-        if (mode == Mode.SERVICE && osEnv.os == OsEnv.Os.WINDOWS) stopWindowsServiceLocked(p.port)
+        val stopped = mode == Mode.SERVICE && osEnv.os == OsEnv.Os.WINDOWS
+        if (stopped) stopWindowsServiceLocked(p.port)
         val bins = binaries()
         val why = if (mode == Mode.SERVICE) {
-            launchLocked(p.copy(background = true), bins, carriedStore.load(), allowChildFallback = true)
+            launchLocked(p.copy(background = true), bins, carriedStore.load(), allowChildFallback = true, serviceStopped = stopped)
         } else {
             val detached = childDetached
             stopChildLocked()

@@ -226,10 +226,18 @@ object HostBinaries {
      * from the identical source (matching `size:mtime` stamp) is reused; a changed source (app
      * update) re-materializes. Never leaves a partial file the fast-path would then trust.
      */
-    fun materialize(source: Path, destDir: Path, name: String, executable: Boolean): Path {
+    fun materialize(
+        source: Path,
+        destDir: Path,
+        name: String,
+        executable: Boolean,
+        replace: (tmp: Path, dest: Path) -> Unit = ::replaceFile,
+    ): Path {
         val dest = destDir.resolve(name)
         val stamp = destDir.resolve(name + STAMP_SUFFIX)
         val sig = signature(source)
+        // Copies set aside by an earlier update (below) whose process has exited by now.
+        sweepAside(destDir, name)
         if (Files.exists(dest) && runCatching { Files.readString(stamp) }.getOrNull() == sig) return dest
 
         Files.createDirectories(destDir)
@@ -238,9 +246,15 @@ object HostBinaries {
             Files.copy(source, tmp, StandardCopyOption.REPLACE_EXISTING)
             if (executable) makeExecutable(tmp)
             try {
-                Files.move(tmp, dest, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-            } catch (_: Exception) {
-                Files.move(tmp, dest, StandardCopyOption.REPLACE_EXISTING)
+                replace(tmp, dest)
+            } catch (e: Exception) {
+                // Windows can't overwrite an .exe something is running (the agents' MCP shims are
+                // `supermux-broker.exe shim`, a live sessiond is mux-sessiond.exe), but it can RENAME
+                // it: set the running copy aside, then put the new one in its place. Running
+                // processes keep their image; the aside copy is deleted once nothing uses it.
+                if (!Files.exists(dest)) throw e
+                Files.move(dest, destDir.resolve("$name$ASIDE_INFIX${System.currentTimeMillis()}"))
+                replace(tmp, dest)
             }
             runCatching { Files.writeString(stamp, sig) }
         } catch (e: Exception) {
@@ -248,6 +262,24 @@ object HostBinaries {
             throw e
         }
         return dest
+    }
+
+    private const val ASIDE_INFIX = ".old-"
+
+    private fun replaceFile(tmp: Path, dest: Path) {
+        try {
+            Files.move(tmp, dest, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            Files.move(tmp, dest, StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    /** Best-effort: delete `<name>.old-*` copies; one still running (Windows) just stays until next time. */
+    private fun sweepAside(destDir: Path, name: String) {
+        if (!Files.isDirectory(destDir)) return
+        runCatching {
+            Files.newDirectoryStream(destDir, "$name$ASIDE_INFIX*").use { dir -> dir.forEach { runCatching { Files.deleteIfExists(it) } } }
+        }
     }
 
     private fun signature(source: Path): String {
