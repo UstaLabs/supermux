@@ -18,33 +18,33 @@ class LidSleepHelperTest {
     // ── user name validation ──
 
     @Test fun user_names_are_restricted_to_a_safe_set() {
-        for (ok in listOf("ahmet", "john.doe", "a_b-c", "User1")) assertTrue(LidSleepHelper.validUser(ok), ok)
+        for (ok in listOf("alex", "john.doe", "a_b-c", "User1")) assertTrue(LidSleepHelper.validUser(ok), ok)
         for (bad in listOf(null, "", ".", "..", "-rf", "a b", "a'b", "a\"b", "a;b", "a/b", "\$(id)", "a`b`", "ä", "x".repeat(65))) {
             assertFalse(LidSleepHelper.validUser(bad), "$bad")
         }
     }
 
     @Test fun the_lease_lives_in_the_users_state_dir() {
-        assertEquals("/Users/ahmet/.mux/state/lidsleep.lease", LidSleepHelper.leasePath("ahmet"))
+        assertEquals("/Users/alex/.mux/state/lidsleep.lease", LidSleepHelper.leasePath("alex"))
         assertFailsWith<IllegalArgumentException> { LidSleepHelper.leasePath("a'b") }
         assertFailsWith<IllegalArgumentException> { LidSleepHelper.daemonScript("\$(reboot)") }
     }
 
     // ── the daemon script ──
 
-    private val script = LidSleepHelper.daemonScript("ahmet", "/Applications/supermux.app")
+    private val script = LidSleepHelper.daemonScript("alex", "/Applications/supermux.app")
 
     @Test fun the_script_bakes_in_the_user_lease_and_app() {
         assertTrue(script.startsWith("#!/bin/sh\n"))
-        assertTrue("LEASE='/Users/ahmet/.mux/state/lidsleep.lease'" in script)
-        assertTrue("OWNER='ahmet'" in script)
+        assertTrue("LEASE='/Users/alex/.mux/state/lidsleep.lease'" in script)
+        assertTrue("OWNER='alex'" in script)
         assertTrue("APP='/Applications/supermux.app'" in script)
         assertTrue("MARKER='/Library/PrivilegedHelperTools/dev.supermux.lidsleep.held'" in script)
         assertTrue("MAX_AGE=45" in script)
         assertTrue("\"\$SLEEP\" 10 &" in script)
         assertTrue(script.trimEnd().endsWith("main \"\$@\""))
-        assertTrue("APP=''" in LidSleepHelper.daemonScript("ahmet", null))
-        assertFailsWith<IllegalArgumentException> { LidSleepHelper.daemonScript("ahmet", "/Applications/my app.app") }
+        assertTrue("APP=''" in LidSleepHelper.daemonScript("alex", null))
+        assertFailsWith<IllegalArgumentException> { LidSleepHelper.daemonScript("alex", "/Applications/my app.app") }
     }
 
     @Test fun the_script_only_runs_fixed_argv_pmset() {
@@ -143,10 +143,10 @@ class LidSleepHelperTest {
     }
 
     @Test fun only_a_users_home_under_users_is_supported() {
-        assertTrue(LidSleepHelper.homeSupported("ahmet", "/Users/ahmet"))
-        assertTrue(LidSleepHelper.homeSupported("ahmet", "/Users/ahmet/"))
-        assertFalse(LidSleepHelper.homeSupported("ahmet", "/Volumes/Data/ahmet"))
-        assertFalse(LidSleepHelper.homeSupported("ahmet", null))
+        assertTrue(LidSleepHelper.homeSupported("alex", "/Users/alex"))
+        assertTrue(LidSleepHelper.homeSupported("alex", "/Users/alex/"))
+        assertFalse(LidSleepHelper.homeSupported("alex", "/Volumes/Data/alex"))
+        assertFalse(LidSleepHelper.homeSupported("alex", null))
         assertFalse(LidSleepHelper.homeSupported("a b", "/Users/a b"))
     }
 
@@ -226,7 +226,7 @@ class LidSleepHelperTest {
             override fun runResult(argv: List<String>): OsEnv.RunResult { ran += argv; return OsEnv.RunResult(0, "", "") }
             override fun runResult(argv: List<String>, timeoutMs: Long) = runResult(argv)
         }
-        assertTrue(LidSleepHelper.install("ahmet", linux) is LidSleepHelper.Outcome.Failed)
+        assertTrue(LidSleepHelper.install("alex", linux) is LidSleepHelper.Outcome.Failed)
         assertTrue(LidSleepHelper.uninstall(linux) is LidSleepHelper.Outcome.Failed)
         assertTrue(ran.isEmpty())
     }
@@ -237,11 +237,11 @@ class LidSleepHelperTest {
             override fun runResult(argv: List<String>): OsEnv.RunResult { ran += argv; return OsEnv.RunResult(1, "", "User canceled. (-128)") }
             override fun runResult(argv: List<String>, timeoutMs: Long) = runResult(argv)
         }
-        val r = LidSleepHelper.install("ahmet", mac, appBundle = "/Applications/supermux.app")
+        val r = LidSleepHelper.install("alex", mac, appBundle = "/Applications/supermux.app")
         assertEquals(LidSleepHelper.Outcome.Failed(LidSleepHelper.CANCELLED), r)
         assertEquals(1, ran.size)
         assertEquals("/usr/bin/osascript", ran[0][0])
-        assertTrue(LidSleepHelper.base64(LidSleepHelper.daemonScript("ahmet", "/Applications/supermux.app")) in ran[0][2])
+        assertTrue(LidSleepHelper.base64(LidSleepHelper.daemonScript("alex", "/Applications/supermux.app")) in ran[0][2])
     }
 
     @Test fun a_cancelled_uninstall_says_it_is_still_installed() {
@@ -256,11 +256,11 @@ class LidSleepHelperTest {
         val dir = Files.createTempDirectory("lid")
         val sc = dir.resolve("s.sh")
         val pl = dir.resolve("p.plist")
-        assertEquals(LidSleepHelper.InstallState.NOT_INSTALLED, LidSleepHelper.installState("ahmet", sc, pl))
-        Files.writeString(sc, LidSleepHelper.daemonScript("ahmet"))
-        assertEquals(LidSleepHelper.InstallState.NOT_INSTALLED, LidSleepHelper.installState("ahmet", sc, pl))
+        assertEquals(LidSleepHelper.InstallState.NOT_INSTALLED, LidSleepHelper.installState("alex", sc, pl))
+        Files.writeString(sc, LidSleepHelper.daemonScript("alex"))
+        assertEquals(LidSleepHelper.InstallState.NOT_INSTALLED, LidSleepHelper.installState("alex", sc, pl))
         Files.writeString(pl, LidSleepHelper.plist())
-        assertEquals(LidSleepHelper.InstallState.INSTALLED, LidSleepHelper.installState("ahmet", sc, pl))
+        assertEquals(LidSleepHelper.InstallState.INSTALLED, LidSleepHelper.installState("alex", sc, pl))
         assertEquals(LidSleepHelper.InstallState.OTHER_USER, LidSleepHelper.installState("someone", sc, pl))
     }
 

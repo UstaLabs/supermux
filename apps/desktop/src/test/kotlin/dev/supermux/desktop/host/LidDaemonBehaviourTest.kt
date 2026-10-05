@@ -49,7 +49,7 @@ class LidDaemonBehaviourTest {
             |""".trimMargin(),
         )
         val launchctl = exe("launchctl", "#!/bin/sh\necho \"launchctl \$*\" >> '$log'\n")
-        var text = LidSleepHelper.daemonScript("ahmet", "/Applications/supermux.app")
+        var text = LidSleepHelper.daemonScript("alex", "/Applications/supermux.app")
         fun set(name: String, value: String) {
             text = text.replace(Regex("^$name=.*$", RegexOption.MULTILINE), Regex.escapeReplacement("$name=$value"))
         }

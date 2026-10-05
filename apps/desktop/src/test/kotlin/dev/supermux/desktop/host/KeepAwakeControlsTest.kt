@@ -182,7 +182,7 @@ class KeepAwakeLidFlowTest {
         val ts: kotlinx.coroutines.test.TestScope,
         prefs: HostingPrefs = HostingPrefs(),
         var state: LidSleepHelper.InstallState = LidSleepHelper.InstallState.NOT_INSTALLED,
-        home: String = "/Users/ahmet",
+        home: String = "/Users/alex",
     ) {
         var saved = prefs
         val ops = Ops()
@@ -208,7 +208,7 @@ class KeepAwakeLidFlowTest {
         val controls = KeepAwakeControls(
             supervisor = sup,
             os = FakeOs(OsEnv.Os.MAC),
-            user = "ahmet",
+            user = "alex",
             home = home,
             facts = PowerFactsCache(FakeOs(OsEnv.Os.MAC), dispatcher, battery = { true }, fileVault = { true }),
             scope = ts.backgroundScope,
@@ -316,7 +316,7 @@ class KeepAwakeLidFlowTest {
     }
 
     @Test fun a_home_outside_users_cannot_tick() = runTest {
-        val r = Rig(this, home = "/Volumes/Data/ahmet")
+        val r = Rig(this, home = "/Volumes/Data/alex")
         r.controls.start()
         settle()
         assertFalse(r.controls.lid.value.homeSupported)

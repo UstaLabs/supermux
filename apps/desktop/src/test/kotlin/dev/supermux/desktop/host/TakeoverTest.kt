@@ -36,7 +36,7 @@ class TakeoverTest {
 
     @Test fun plistEnvKeepsMuxKeysExceptOnesWeOwn() {
         val env = Takeover.carriedEnv(Takeover.parsePlistEnv(plistText))
-        assertEquals("ahmet’s MacBook Air", env["MUX_HOST_NAME"])
+        assertEquals("Alex’s MacBook Air", env["MUX_HOST_NAME"])
         assertTrue("MUX_WEB_PORT" !in env && "MUX_STATE_DIR" !in env && "PATH" !in env)
         // loopback public URL and the relay domain are ours to decide, not carried
         assertTrue("MUX_WEB_PUBLIC_URL" !in env && "MUX_RELAY_DOMAIN" !in env)
@@ -95,7 +95,7 @@ class TakeoverTest {
     @Test fun macDevCheckoutIsRejected() {
         val m = Mac()
         m.plist("dev.supermux.broker", plistText.replace(
-            "<string>/Users/ahmet/.mux/state/bin/supermux-broker</string>",
+            "<string>/Users/alex/.mux/state/bin/supermux-broker</string>",
             "<string>/opt/homebrew/bin/bun</string><string>/Users/a/projects/supermux/src/main.ts</string>"))
         assertTrue(Takeover.findOldServices(macEnv(m)).isEmpty())
     }
@@ -195,7 +195,7 @@ class TakeoverTest {
         assertTrue(Files.exists(plist))
         assertEquals(plistText, String(Files.readAllBytes(Path.of(p.olds.single().backup)), Charsets.UTF_8))
         assertEquals(true, p.oldRelay)
-        assertEquals("ahmet’s MacBook Air", p.carriedEnv["MUX_HOST_NAME"])
+        assertEquals("Alex’s MacBook Air", p.carriedEnv["MUX_HOST_NAME"])
     }
 
     @Test fun otherLabelPlistSurvivesPrepareIsDeletedByCommitAndBootstrappedByRollback() {
@@ -302,11 +302,11 @@ class TakeoverTest {
         val m = Mac()
         m.plist("dev.supermux.host", plistText)
         m.plist("dev.supermux.broker", plistText.replace("<string>dev.supermux.host</string>", "<string>dev.supermux.broker</string>")
-            .replace("ahmet’s MacBook Air", "other").replace("<key>MUX_RELAY_DOMAIN</key>", "<key>MUX_EXTRA</key><string>e</string><key>MUX_RELAY_DOMAIN</key>"))
+            .replace("Alex’s MacBook Air", "other").replace("<key>MUX_RELAY_DOMAIN</key>", "<key>MUX_EXTRA</key><string>e</string><key>MUX_RELAY_DOMAIN</key>"))
         val env = macEnv(m, failing = setOf(printHost, printBroker))
         val p = ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env))
         assertEquals(2, p.olds.size)
-        assertEquals("ahmet’s MacBook Air", p.carriedEnv["MUX_HOST_NAME"])
+        assertEquals("Alex’s MacBook Air", p.carriedEnv["MUX_HOST_NAME"])
         assertEquals("e", p.carriedEnv["MUX_EXTRA"])
     }
 
