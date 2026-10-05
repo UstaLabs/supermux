@@ -25,14 +25,14 @@ in the same repo overwrite each other's instructions; Codex plugins can't differ
 ## Per-session channels, verified live (C0, 2026-10-04)
 
 Proven against the real CLIs with a distinct code word per mechanism (`scripts/context-probe.ts`,
-report: `context-c0-report.md`, commit `43bd1ccc`). Cursor is **unproven**: the account was out of
-quota during the probe; the script tries four instruction channels and re-runs as-is.
+report: `context-c0-report.md`, commit `43bd1ccc`). Cursor was proven on 2026-10-05 with model Auto
+(the only model a free plan accepts; see "Cursor cells as built").
 
 | Agent | Instructions | Skills | Plugins | MCP | Subagents get the MCP servers |
 |---|---|---|---|---|---|
 | Claude | `--append-system-prompt-file` (at creation only: `--resume` keeps the stored prompt, C1b) | generated plugin dir → `--plugin-dir` | `--plugin-dir <plugin>`, or `--plugin-dir <folder of plugins>` (each child loads) | `--mcp-config` + `--strict-mcp-config` | yes |
 | Codex | `thread/start {developerInstructions}` | `skills/extraRoots/set`, or `<CODEX_HOME>/skills` | local marketplace + `codex plugin add` into the session `CODEX_HOME` | session `config.toml`; needs approval policy `on-request` + auto-accept `mcpServer/elicitation/request` (with `never`, MCP tools never run) | yes |
-| Cursor | unproven (candidates: plugin `rules/`, `$HOME/.cursor/rules`, `$HOME/AGENTS.md`, `--add-dir`) | unproven; ACP lists `$HOME/.cursor/skills` | unproven (`--plugin-dir`) | unproven (ACP `mcpServers`) | unproven |
+| Cursor | **no system channel** (plugin `rules/`, `$HOME/.cursor/rules`, `$HOME/AGENTS.md`, `--add-dir`, ACP `_meta.rules`, `$HOME/.cursor/hooks.json` all ignored); the first prompt's leading block works and `session/load` keeps it | only `$HOME/.cursor/skills` / `$HOME/.agents/skills` (host-owned HOME); `--plugin-dir` ignored | **none**: `cursor-agent acp` ignores `--plugin-dir` | ACP `mcpServers` | yes (inferred) |
 | Grok | ACP `session/new` `_meta.rules` (**`--rules` does nothing under `agent stdio`**) | `[skills] paths` | `grok agent --plugin-dir <p> stdio` (per process); `grok plugin install` not needed | ACP `mcpServers` | yes |
 | OpenCode | config `instructions` | `skills.paths` | plugin's `skills/` → `skills.paths` (+ `plugin` for JS plugins) | ACP `mcpServers` | inferred, not observed |
 
@@ -71,7 +71,7 @@ word; a Codex resume with changed instructions was `context_unsupported`; policy
   `createdInstructions` in C1; since C1b every agent's later launches use that snapshot directly
   (see "Instructions are fixed at creation").
 - ~~`createHost` drivers declare no context support yet~~: C3 (`HostOptions.context`). Cursor:
-  instructions unsupported, the rest unverified (no quota).
+  see "Cursor cells as built".
 - ~~**`CODEX_HOME` sharing**~~ (fixed in C3: the policy is per process, see "C3a as built"): under a Codex subscription account (A1)
   `CODEX_HOME` is the account home, shared by every session of that account. Two Codex driver writes
   assume it is session-private: `persistPolicyToConfig()` (`config/batchWrite` of `sandbox_mode` /
@@ -148,7 +148,7 @@ with its own probe token through the core (`context-live-update.ts`, runs under
 |---|---|---|---|
 | Claude | **live**: a `supermux-skills-N` wrapper in `<ctx>/plugins` + `reload_plugins` (`reload_skills` does NOT load a new wrapper plugin: probe answered NONE) | **live**: symlink in `<ctx>/plugins` + `reload_plugins` (`hold_on_cache_impact` passed through) | **live**: `mcp_set_servers` with the full *dynamic* set; a launch (`--mcp-config`) server can only go by **reload** |
 | Codex | **live**: `skills/extraRoots/set` with the full list | **live** for a skills-only plugin; **reload** when it has `.mcp.json` servers | **reload**: new app-server (`-c` args) + `thread/resume` |
-| Cursor | reload (unverified) | reload (unverified) | reload (unverified) |
+| Cursor | unsupported | unsupported | **reload**: new process + `session/load` (proven 2026-10-05) |
 | Grok | reload | reload | reload |
 | OpenCode | reload | reload | reload |
 
@@ -398,7 +398,7 @@ Open (for C3 / mux-shim):
   the secret anyway. A token file or Codex `env_vars` pass-through would hide it.
 - `create` servers get no relaunch on tool changes for agents that ignore `list_changed`.
 - The `server/discover` fallback is not special-cased (Claude falls back to `initialize`).
-- Cursor: `mcpListChanged` unknown (treated as reload); not run live (quota).
+- ~~Cursor: `mcpListChanged` unknown~~: Cursor ignores `list_changed` (C0 2026-10-05): `hostToolChanges: "reload"`, proven through the core (C2 (b)).
 - `core.mcp.unregister` closes live connections; a session keeps the reference and its next launch is
   `missing_mcp_servers`.
 
@@ -427,7 +427,7 @@ env (except OpenCode's `OPENCODE_CONFIG`), credential files. The intended differ
 |---|---|---|---|
 | Claude | same text; file in the core's session folder instead of the session home. PA: ONE value (below) | same plugins, via `--plugin-dir <ctx>/plugins` (symlinks) instead of one flag each | mux-shim unchanged (`~/.claude.json` / account `--mcp-config`); rpc servers → context (`--mcp-config <ctx>/mcp.json`), `--strict-mcp-config` kept as a host arg |
 | Codex | `thread/start developerInstructions` instead of `<CODEX_HOME>/AGENTS.md` (pre-C3 sessions keep the file, below) | core mapping: `skills/` → `skills/extraRoots/set` (hooks / commands / agents dropped with `context.degraded`) instead of the `mux` marketplace + `codex plugin add` + `-c plugins."x@mux".enabled` | `app-server -c mcp_servers.mux-shim.*` + `default_tools_approval_mode="approve"` instead of `config.toml` |
-| Cursor | unchanged: `CURSOR_REPO_RULE_FALLBACK` (below) | unchanged plugin set, `--plugin-dir` per (symlinked) plugin | ACP `mcpServers` instead of `$HOME/.cursor/mcp.json` (unverified in core) |
+| Cursor | since 2026-10-05: the same text as the first prompt's leading block instead of `<workdir>/.cursor/rules/mux.mdc` (the repo-rule fallback is deleted) | dropped with `context.degraded` (Cursor's ACP server ignores `--plugin-dir`, so they never loaded) | ACP `mcpServers` instead of `$HOME/.cursor/mcp.json` (proven) |
 | Grok | ACP `session/new _meta.rules` instead of `AGENTS.md` / `AGENTS.override.md` written into the repo (+ `.git/info/exclude`) | whole plugin via `grok agent --plugin-dir` instead of its `skills/` in `[skills] paths`; a plugin `SessionStart` hook did NOT run (live) | ACP `mcpServers` instead of `config.toml` |
 | OpenCode | session `OPENCODE_CONFIG` instead of the session XDG `opencode.json` + `<home>/AGENTS.md` | JS plugins as `file://…/.opencode/plugins/*.js` entries and every plugin's `skills/` in `skills.paths` (was: root dirs in `plugin`, `skills.paths` only for plugins without JS) | ACP `mcpServers` instead of the XDG `opencode.json` `mcp` |
 
@@ -447,8 +447,7 @@ their stored prompt (Claude ignores a new one on `--resume`); only new PAs get t
 
 **Existing sessions.** Instructions are fixed from their first C3 launch (`adoptInstructions`):
 the text the broker generates then. Before C3 the broker regenerated them on every launch for
-Codex (`AGENTS.md`), OpenCode (config), Grok and Cursor (repo files); that stops (deliberate),
-except Cursor (fallback). Per agent:
+Codex (`AGENTS.md`), OpenCode (config), Grok and Cursor (repo files); that stops (deliberate). Per agent:
 - Claude: unchanged in effect (Claude already kept its stored prompt).
 - Codex: Codex re-reads `<CODEX_HOME>/AGENTS.md` on `thread/resume`
   (`packages/supermux-core/scripts/codex-agents-md-probe.ts`: rewritten → the resumed thread saw
@@ -462,13 +461,14 @@ except Cursor (fallback). Per agent:
   removing a file from the user's repo was out of scope). Open: a NEW Grok session in such a repo
   sees that stale file AND its rules.
 
-**Cursor decision.** Core has no proven per-session instructions channel for Cursor (C0 out of
-quota: `cursorContext` reports instructions `unsupported`). Dropping them would silently lose the
-session's identity, memory and rules. So `CURSOR_REPO_RULE_FALLBACK` in
-`src/core/agents/cursor/core-host.ts` keeps exactly today's repo rule
-(`<workdir>/.cursor/rules/mux.mdc`, git-excluded, regenerated every launch), with a TODO pointing
-at the C0 cells: re-run `bun scripts/context-probe.ts cursor`, implement the proven channel in
-core, delete the fallback. Plugins and mux-shim are context (both "unverified" for Cursor).
+**Cursor decision.** ~~`CURSOR_REPO_RULE_FALLBACK`~~ (deleted 2026-10-05). The C0 cursor cells
+found no per-session system-prompt channel outside the workdir, so the core sends the instructions
+as the leading text block of the session's first prompt (see "Cursor cells as built"); the broker
+passes them as context and writes nothing into the repo. A rule file the old broker left at
+`<workdir>/.cursor/rules/mux.mdc` stays (removing a file from the user's repo is out of scope): a
+session in such a repo still loads it next to its preamble, until the user deletes it.
+Existing Cursor sessions: their conversation already has a turn, so they get no preamble; they
+keep reading the stale `mux.mdc` (regenerated no more).
 
 **Claude, `~/.claude.json` and `--mcp-config`.** mux-shim is NOT a context server for Claude.
 System-account sessions get `mux-shim` (tools) and `mux-channel` (channel-only, zero tools) from
@@ -526,9 +526,9 @@ tmux-era command builders, used by nothing but their test. `writeSessionMemoryPr
   that stale file next to their `_meta.rules`. Codex/OpenCode: plugin skills are now plain skill
   roots (Codex extraRoots) instead of installed `mux@mux` plugins: skill names / slash-command
   lists may change (Codex had `mux:soul`-style plugin namespacing).
-- Cursor: mux-shim and plugins ride channels the core marks "unverified" (ACP `mcpServers`,
-  `--plugin-dir` via symlinks); not run live (no quota). If ACP `mcpServers` fails on Cursor, its
-  sessions lose the mux-shim tools.
+- Cursor (2026-10-05): ACP `mcpServers` and host servers are proven live; registry plugins are
+  dropped (they never loaded under ACP); the instructions are a first-prompt preamble, not a system
+  prompt (weaker than a rule: the model may give them less weight, subagents do not get them).
 - Codex: a session in a non-default permission mode now gives its children that mode, not full
   access (fix, but visible); a live mode change reaches children only after a relaunch.
 - A Claude PA created after C3 gets a much longer system prompt (soul, environment.md and the
@@ -543,9 +543,60 @@ header), a registry plugin's skill word, and mux-shim started by the agent with 
 command / env, registered with the fake broker and its `list_sessions` called (Claude: two shim
 processes, mux-shim + mux-channel, one call). Nothing written into any workdir.
 
+## Cursor cells as built (2026-10-05)
+
+cursor-agent 2026.09.18, model **Auto** (a free plan refuses every named model: "Free plans can
+only use Auto"; Cursor's ACP picker value is `default[]`, `session/set_config_option {value:"auto"}`
+is "Invalid model value", the core's driver resolves "auto" by option name). Every run used a
+session-private HOME with a copy of the credentials; the real `~/.cursor` / `~/.config/cursor` were
+only read. Scratch: `~/.cache/context-cursor/`. The Auto model answers questions by searching the
+filesystem, so every script now rejects a token the agent found by a search / shell call or read
+from a file (only a listed skill's own SKILL.md may be read).
+
+| Cell | Result | Evidence |
+|---|---|---|
+| Instructions: plugin `rules/`, `$HOME/.cursor/rules/*.mdc`, `$HOME/AGENTS.md`, `--add-dir <root>/AGENTS.md`, ACP `_meta.rules`, `$HOME/.cursor/hooks.json` `sessionStart` / `beforeSubmitPrompt` `additional_context` | **no** (all) | C0 `run-2026-10-05T16-54-30-589Z`: only the preamble token listed, no tool calls; same after a relaunch with changed words |
+| Instructions: first-prompt preamble | **yes**, kept by `session/load` | C0 same run (`BISON9055` before and after the relaunch); C1 `EMBER5224` through the core, recalled after a core restart; C1b `HERON7120` after two MCP reloads and a restart |
+| Skills: generated wrapper plugin via `--plugin-dir` | **no** | C0 `…T16-57-26-636Z`: `NONE`; the agent's skill list did not contain it |
+| Skills: `$HOME/.cursor/skills` (also a symlinked folder), `$HOME/.agents/skills` | **yes** | same run, each SKILL.md read from the listed path |
+| Plugins: `--plugin-dir <plugin>` (create and after a relaunch) | **no** | same run: `NONE`; the ACP chunk set of the bundle has no plugin service |
+| MCP: ACP `session/new mcpServers` | **yes** | C0 `LYNX2951`; C1 `GLACIER3890` |
+| MCP reaches a subagent | **yes** (inferred) | C0: main session's only tool call `Task`, probesub logged a call; C2 (d): host tool `whoami` called from a Cursor subagent (`subagentId` on the tool event, `ctx.sessionId` the session's) |
+| `tools/list_changed` | **no** → reload | C0 first run: "Tool … was not found", one `tools/list`; C2 (b): `context.updated how: "reload"`, new pid, the new tool answered |
+| Add / remove MCP server | **reload** | C0 item 7; C1b: add `COBALT6628` + recall `FALCON3963`, remove → `NONE`, its process stopped |
+| `session/load` keeps the conversation | **yes** | C0 item 9; C1 resume after a core restart; C1b |
+| Host MCP servers through the bridge (C2) | **yes** for (a) 2 host + 1 external, (b) live tool add (reload), (c) a throwing tool, (d) a subagent, (e) detached re-attach (same pid, bridges kept). The (e) call through the reconnected bridge is **unproven**: the plan's Auto quota ran out on that turn ("Upgrade your plan to continue") | C2 `~/.cache/context-cursor/c2/run-2026-10-05T17-05-14-321Z` (11/12) |
+| C3b host-mode mux-shim on Cursor (`scripts/c3b-live.ts cursor`) | **not run** (quota) | the harness supports cursor now |
+
+**Core.** `cursorContext`: instructions **supported** (`firstPromptPreamble`: the text wrapped in
+`<session-instructions>…</session-instructions>` with a one-line note that it is the application's
+standing instructions), skills and plugins **unsupported** (no `--plugin-dir` any more; nothing is
+generated for them), MCP servers **supported**, updates: MCP **reload**, no `mcpListChanged`
+(`hostToolChanges: "reload"`). The ACP driver sends the preamble as the first content block of the
+conversation's first `session/prompt` only: on create; after a `session/load` whose replay had no
+`user_message_chunk` (a relaunch before the first turn); after a keeper re-attach while the meta
+says `preamblePending`. Fixed at creation like every agent's instructions (later launches carry the
+`createdInstructions` snapshot but send nothing once the conversation has a turn).
+Tests: `tests/context-drivers.test.ts` (no `--plugin-dir`, first prompt only, load with / without a
+replayed user message).
+
+**Broker.** `src/core/agents/cursor/core-host.ts` passes `cursorInstructions(...)` as context
+instructions and `prepareCursorEnvironment({ instructions: null })`: nothing is written into the
+workdir (`CURSOR_REPO_RULE_FALLBACK` deleted). Registry plugins are still handed over and dropped
+with `context.degraded` (policy "warn"). `muxShimModeFor` no longer pins Cursor to "external": it
+follows the `muxShim` setting like every agent. Launch equivalence: `tests/c3-launch-equivalence.test.ts`
+and `tests/c3b-launch-modes.test.ts` (`CURSOR_C3`: the rule file and its git exclude gone, the
+instructions channel and its wrapped text, plugins empty; the wrapped text is exactly
+`cursorPreamble(<the old rule body>)`).
+
+**Live re-runs.** `bun scripts/context-probe.ts cursor --cursor-model auto` (`CONTEXT_PROBE_DIR`
+for the scratch root), `scripts/context-live.ts cursor` (9/9), `context-live-update.ts cursor`
+(13/13), `context-live-mcp.ts cursor` (11/12, quota), all with `CONTEXT_LIVE_DIR` /
+`CONTEXT_LIVE_CURSOR_MODEL`; `scripts/c3b-live.ts cursor` (root) not run yet.
+
 ## Slices
 
-- **C0, live probe (no API yet), done (`43bd1ccc`; Cursor pending quota):** a script that tries each "(C0)" cell above per agent with
+- **C0, live probe (no API yet), done (`43bd1ccc`; Cursor 2026-10-05):** a script that tries each "(C0)" cell above per agent with
   secret words. An instruction says word A, a skill says word B, a plugin's skill says word C,
   and an MCP tool returns word D. Then **mid-session**, it adds a second skill, plugin, MCP
   server and tool, each with a new word, through each "live" mechanism. The answers fill both
@@ -570,9 +621,8 @@ processes, mux-shim + mux-channel, one call). Nothing written into any workdir.
 
 ## Open questions
 
-1. Cursor: all cells unproven (account out of quota). Re-run `bun scripts/context-probe.ts cursor`
-   once it has quota; until then the core reports Cursor's context capabilities as unknown.
-   Never write into the repo as a fallback.
+1. ~~Cursor: all cells unproven~~: proven 2026-10-05 ("Cursor cells as built"). Open: skills for
+   Cursor would need the host's session HOME (`$HOME/.cursor/skills`), which the core does not own.
 2. ~~Grok `--rules`~~: answered no; use ACP `_meta.rules`, fixed at session creation.
 3. ~~Codex `developerInstructions` on resume~~: ignored (neither replaces nor adds).
 4. ~~Subagents~~: they inherit the session's MCP servers (Claude, Codex, Grok proven; OpenCode

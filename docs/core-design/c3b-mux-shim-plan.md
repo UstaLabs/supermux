@@ -206,13 +206,14 @@ LIVE broker (`mux.service`, `~/projects/supermux`).
 
 1. **Mode switch.** `muxShim: "external" | "host"`: the settings-table key `muxShim` (JSON string),
    else env `MUX_SHIM`, else `"external"`. Read once at boot (`mux_shim_mode` log line); a flip is a
-   restart. `"external"` launches byte-for-byte as C3a (`tests/c3b-launch-modes.test.ts`). Cursor is
-   external in both modes. Both host servers are registered with every agent host in both modes.
+   restart. `"external"` launches byte-for-byte as C3a (`tests/c3b-launch-modes.test.ts`; Cursor
+   apart from its 2026-10-05 instructions / plugins change, `CURSOR_C3`). Since 2026-10-05 Cursor
+   follows the mode like every agent (it was external in both). Both host servers are registered with every agent host in both modes.
 2. **Step 1: external.** Restart the preview on this commit with no `MUX_SHIM` (or
    `MUX_SHIM=external`). Expect `mux_shim_mode {"mode":"external"}`; sessions resume as with C3a.
    What changed in this mode: the shared handlers (same results, de-dup now in the handler), and the
    dead inbound channel path is gone (see "C3b as built").
-3. **Step 2: host, when sessions are idle.** The flip changes every non-Cursor session's context
+3. **Step 2: host, when sessions are idle.** The flip changes every session's context (Cursor too since 2026-10-05)
    (mux-shim external spec → host server), hence its keeper fingerprint: the first resume of a
    detached session relaunches its agent instead of re-attaching, which cuts a running detached
    turn. Recreate the unit with the same env plus `MUX_SHIM=host` (systemd-run gotcha: a stopped
@@ -233,7 +234,7 @@ LIVE broker (`mux.service`, `~/projects/supermux`).
      `claude_duplicate_mux_shim` must never appear;
    - each agent, new session: `reply` with a file, `rename_session`, `list_sessions` (PA ok,
      worker `permission denied (can_orchestrate=false)`); no `src/shim/index.ts` process for a
-     non-Cursor session (apart from that stray mux-channel); the UI connected dot follows the
+     session (apart from that stray mux-channel); the UI connected dot follows the
      adapter (sweep every 2 s).
 4. **Rollback.** Recreate the unit without `MUX_SHIM`. Records naming `{ kind: "host", name:
    "mux-shim" }` get the external spec back on their next resume (the context is replaced on every
@@ -242,7 +243,7 @@ LIVE broker (`mux.service`, `~/projects/supermux`).
    entries again only through `preAcceptTrust` (PA spawns), as in C3a: if host mode had removed
    this broker's own entries, Claude system-account sessions resumed before the next PA spawn have
    no mux-shim (not the case on the preview today, whose entries are the live broker's).
-5. **Later** (after a quiet period in host mode, and once Cursor is verified): delete `src/shim`,
+5. **Later** (after a quiet period in host mode; Cursor's host server is verified, see below, apart from the C3b live run): delete `src/shim`,
    the socket tool frames, the external spec, the setting, the zero-tools `mux-channel`, and the
    `@modelcontextprotocol/sdk` v1 dependency.
 
@@ -260,8 +261,11 @@ LIVE broker (`mux.service`, `~/projects/supermux`).
 - **Interrupt now cancels tool calls** (C2 semantics) — new for mutating orchestration tools.
 - **Non-core rows** on the live state (the live broker predates the core): the channel removal must
   wait until they are migrated, or those sessions lose input.
-- **Cursor:** host servers on Cursor are unverified (no quota in C0/C2); keep `external` for Cursor
-  until a live check passes.
+- **Cursor (2026-10-05):** host servers work on Cursor (C2 live with model Auto: two host + one
+  external server, a tool added mid-session through a reload, a throwing tool, a subagent calling a
+  host tool, a detached re-attach on the same pid with the bridges kept; the call through the
+  reconnected bridge and `scripts/c3b-live.ts cursor` were not run: the free plan's Auto quota ran
+  out). Cursor now follows `muxShim` like every agent.
 
 ## C3b as built (2026-10-05)
 
@@ -285,7 +289,7 @@ verbatim, arguments are validated by the SDK's ajv validator, extra properties p
   interrupt gets the core's "Cancelled" answer while the mutation finishes; the retry gets the
   de-duplicated result (`server.test.ts`: spawn_session and kill_session cancelled mid-flight).
 - `src/core/mux-tools/mode.ts`: `muxShim` setting → `MUX_SHIM` → "external"; `muxShimModeFor`
-  (Cursor always external). Core-hosts: `muxShimContextServer` (Codex / Grok / OpenCode / Cursor);
+  (the same for every agent; until 2026-10-05 Cursor was always external). Core-hosts: `muxShimContextServer` (Codex / Grok / OpenCode / Cursor);
   Claude: host → `[muxShimHostServer]`, rpc worker → `[muxRpcHostServer]` (still
   `--strict-mcp-config`; the rpc json file is still written and only read in external mode).
   `claudeAccountArgs`: no `mcp-account.json` in host mode.
@@ -300,15 +304,15 @@ verbatim, arguments are validated by the SDK's ajv validator, extra properties p
   `CoreAdapter.isAlive()` every 2 s (`adapter-liveness.ts`) and feeds the edges into
   `applyConnectionStatus` (the socket's old callback body: `session_state` broadcast, "connected"
   revives a dead session, a non-suspended session going down → "dead", background tasks cleared,
-  subagents abandoned). Socket status is ignored for core sessions in host mode (Cursor's shim
-  still connects). External mode: unchanged (the socket drives it).
+  subagents abandoned). Socket status is ignored for core sessions in host mode (a leftover shim
+  may still connect). External mode: unchanged (the socket drives it).
 
 **Equivalence** (`tests/c3b-launch-modes.test.ts`, baseline `tests/c3-launch/c3a.json` recorded on
 `0f83c1f3` before any C3b change, deterministic across two captures): external mode, all five
 agents × worker / PA, `toEqual` the C3a launch (args, env, instructions, plugins, MCP servers,
 generated files). Host mode: the only diff key is `mcpServers`; the `mux-shim` entry becomes
 `process.execPath <core>/src/mcp/bridge.ts --server mux-shim` with env
-`SUPERMUX_MCP_SESSION/SOCKET/TOKEN` and nothing else changes; Cursor identical to C3a. The pre-C3
+`SUPERMUX_MCP_SESSION/SOCKET/TOKEN` and nothing else changes (Cursor: also `CURSOR_C3`; until 2026-10-05 Cursor was identical to C3a). The pre-C3
 equivalence test still passes.
 
 **Live** (`bun scripts/c3b-live.ts`, broker core-hosts in host mode with the REAL shared handlers
@@ -343,7 +347,7 @@ answered the call) and `mux-channel` (source `user`, started, zero tools).
 Kept, and why: `MUX_CHANNEL_ONLY` as a ZERO-TOOLS `mux-channel` (external mode still writes the
 `mux-channel` entry, and a Claude with any such entry starts it: with tools it would double every
 call); the `mux-channel` entries in `preAcceptTrust` (external) and the rpc json; the frame parser's
-`inbound` / `channel_only` (wire compatibility with older shims); the shim tool path (Cursor,
+`inbound` / `channel_only` (wire compatibility with older shims); the shim tool path (
 external mode, rollback); the tmux helpers (`retireTmuxWindow` and the non-core kill branch
 retire a tmux-era Claude window on its first Core resume: the migration the plan asks for).
 
@@ -366,7 +370,8 @@ socket inbound fallback had no user on the preview: removed, no fallback kept.
 - Shared HOME with the live broker: see rollout step 3 (`~/.claude.json` entries) and the stray
   zero-tools `mux-channel` every host-mode Claude system-account session starts from them.
 - Keeper fingerprint relaunch on every flip (both directions).
-- Cursor stays external (unverified in core); its sessions keep the shim socket and its liveness.
+- ~~Cursor stays external~~: since 2026-10-05 Cursor follows the mode (host servers proven on
+  Cursor in C2; `scripts/c3b-live.ts cursor` supports it but has not run: quota).
 - rpc workers in host mode were unit-tested (tool list, resolve → settle) but not run live.
 - Token in the Codex app-server argv (C2 item), unchanged.
 - A live rollout to `mux.service` state would meet tmux-era Claude rows (`core=0`) with live panes,
