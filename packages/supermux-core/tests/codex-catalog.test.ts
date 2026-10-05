@@ -22,6 +22,9 @@ const CATALOG = JSON.stringify({ models: [
   { slug: "gpt-5.5" },
 ] })
 
+/** The session policy the driver appends per process (C3). */
+const POLICY = ["-c", 'sandbox_mode="read-only"', "-c", 'approval_policy="never"']
+
 /** A stand-in `codex`: `debug models` prints the catalog (or fails), `app-server …` records argv and runs the fixture. */
 function fakeCodex(debug: "ok" | "fail" | "no-v2" | "no-field"): string {
   const dir = temp("fake-codex-")
@@ -88,19 +91,19 @@ test("driver starts the app-server with the v1 catalog override (start and resum
   const command = fakeCodex("ok")
   const flag = `model_catalog_json=${JSON.stringify(join(home, CATALOG_FILE))}`
   const started = await driver(command, home).open(ctx())
-  try { expect(readFileSync(join(home, "argv.txt"), "utf8").split("\n")).toEqual(["app-server", "-c", flag, ""]) } finally { await started.close({ mode: "shutdown" }) }
+  try { expect(readFileSync(join(home, "argv.txt"), "utf8").split("\n")).toEqual(["app-server", "-c", flag, ...POLICY, ""]) } finally { await started.close({ mode: "shutdown" }) }
   rmSync(join(home, "argv.txt"))
   const resumed = await driver(command, home).open({ ...ctx(), resumeId: "old" })
   try {
     expect(resumed.agentSessionId).toBe("old")
-    expect(readFileSync(join(home, "argv.txt"), "utf8").split("\n")).toEqual(["app-server", "-c", flag, ""])
+    expect(readFileSync(join(home, "argv.txt"), "utf8").split("\n")).toEqual(["app-server", "-c", flag, ...POLICY, ""])
   } finally { await resumed.close({ mode: "shutdown" }) }
 })
 
 test("driver still opens without the override when the catalog dump fails", async () => {
   const home = temp("codex-home-")
   const r = await driver(fakeCodex("fail"), home).open(ctx())
-  try { expect(readFileSync(join(home, "argv.txt"), "utf8").split("\n")).toEqual(["app-server", ""]) } finally { await r.close({ mode: "shutdown" }) }
+  try { expect(readFileSync(join(home, "argv.txt"), "utf8").split("\n")).toEqual(["app-server", ...POLICY, ""]) } finally { await r.close({ mode: "shutdown" }) }
 })
 
 // ── Feature detection: the catalog shape is undocumented; a changed one is left alone, with a warning ──
@@ -138,7 +141,7 @@ test("driver: a catalog without multi_agent_version starts Codex unchanged and s
     const events: any[] = []
     core.subscribe((e: CoreEvent) => { if (e.type === "session.event") events.push(e.event) })
     const session = await core.sessions.create({ id: nextId("codex-catalog-"), agent: "codex", cwd: home })
-    expect(readFileSync(join(home, "argv.txt"), "utf8").split("\n")).toEqual(["app-server", ""])
+    expect(readFileSync(join(home, "argv.txt"), "utf8").split("\n")).toEqual(["app-server", ...POLICY, ""])
     for (const text of ["one", "two"]) {
       const receipt = await session.send({ content: [{ type: "text", text }], whenBusy: "queue" })
       expect((await receipt.completed).status).toBe("completed")

@@ -619,3 +619,19 @@ test('declined inline question steers an explicit decline; cancelled sends nothi
   expect(steer.params.input[0].text).toContain('decline')
  }finally{await a.r.close({mode:'shutdown'});await rm(a.dir,{recursive:true,force:true})}
 })
+
+// C3: CODEX_HOME can be an account home shared by several sessions, so the session's policy is
+// passed per process (`app-server -c sandbox_mode=… -c approval_policy=…`, which child threads
+// spawned by the collab tools read) and never written into CODEX_HOME (no config/batchWrite).
+test('the session policy is per process: launch -c args, no config/batchWrite at open or on setPermissions', async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'codex-policy-'));const trace=join(dir,'trace');const envTrace=join(dir,'env')
+ const r=await driver({TRACE:trace,ENV_TRACE:envTrace,EXPECT_POLICY:'on-request',EXPECT_SANDBOX:'workspace-write'},{sandbox:'workspace-write',approvalPolicy:'on-request',permissions:{kind:'codex',approvalPolicy:'on-request',sandbox:'workspace-write'}}).open(ctx())
+ try{
+  const {argv}=JSON.parse(await readFile(envTrace,'utf8'))
+  expect(argv).toEqual(['-c','sandbox_mode="workspace-write"','-c','approval_policy="on-request"'])
+  await r.setPermissions!({kind:'codex',approvalPolicy:'never',sandbox:'danger-full-access'})
+  expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
+  const lines=(await readFile(trace,'utf8')).trim().split('\n').map(l=>JSON.parse(l))
+  expect(lines.some(l=>l.method==='config/batchWrite'||l.configWrite)).toBe(false)
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true,force:true})}
+})
