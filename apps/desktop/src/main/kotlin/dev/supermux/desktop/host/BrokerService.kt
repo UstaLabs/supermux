@@ -48,7 +48,12 @@ object BrokerService {
     }
 
     sealed interface Result {
-        data class Installed(val path: Path, val enabled: Boolean) : Result
+        /**
+         * [nextLogin]: written, but it takes effect only at the next login — the app itself runs as
+         * the job under our name (a 1.0.0 keep-alive), and replacing that job now would kill the
+         * app. Run the broker as the app's child until then.
+         */
+        data class Installed(val path: Path, val enabled: Boolean, val nextLogin: Boolean = false) : Result
         data class Removed(val path: Path?) : Result
         data object Unsupported : Result
         /**
@@ -270,26 +275,83 @@ Terminal=false
 """
     }
 
+    // ── the 1.0.0 keep-alive ─────────────────────────────────────────────────────────────────
+    //
+    // 1.0.0's keep-alive ran THE APP at login, under the very names the broker service uses now
+    // (launchd `dev.supermux.host`, systemd `supermux-host.service`, XDG `supermux-host.desktop`,
+    // task "Supermux Host"), with SUPERMUX_KEEP_ALIVE=1 and no managed marker. After an upgrade the
+    // app may well be running AS that job. The invariant: never boot out, restart or end a job whose
+    // process is the running app. Such an install only writes the new definition, which takes over
+    // at the next login; until then the broker runs as the app's child (Result.Installed.nextLogin).
+
+    /** Set in the env of everything the 1.0.0 keep-alive started (the app). */
+    const val LEGACY_KEEP_ALIVE_ENV = "SUPERMUX_KEEP_ALIVE"
+
+    /**
+     * True iff THIS process (the app) is what our service name's job runs: launchd started us as
+     * `dev.supermux.host` (`XPC_SERVICE_NAME`), we live in `supermux-host.service`'s cgroup, or the
+     * 1.0.0 keep-alive's env says so (Windows: its task ran PowerShell, which ran the app).
+     */
+    fun appRunsAsService(env: OsEnv = SystemOsEnv): Boolean {
+        if (env.getenv(LEGACY_KEEP_ALIVE_ENV) == "1") return true
+        return when (env.os) {
+            OsEnv.Os.MAC -> env.getenv("XPC_SERVICE_NAME") == LAUNCHD_LABEL
+            OsEnv.Os.LINUX -> env.selfCgroup()?.lineSequence()?.any { it.trimEnd().endsWith("/$SYSTEMD_UNIT") } == true
+            else -> false
+        }
+    }
+
+    /** A 1.0.0 definition: it launches the app (SUPERMUX_KEEP_ALIVE), never the broker, and has no marker. */
+    internal fun isLegacyDefinition(text: String): Boolean =
+        MANAGED_MARKER !in text && LEGACY_KEEP_ALIVE_ENV in text && "supermux-broker" !in text
+
+    /** 1.0.0's XDG entry set no env: it is the one named "supermux host" that runs no broker. */
+    internal fun isLegacyXdgEntry(text: String): Boolean =
+        MANAGED_MARKER !in text && "Name=supermux host" in text && "supermux-broker" !in text
+
+    /** True iff a 1.0.0 keep-alive definition (it runs the app, not the broker) is installed under our names. */
+    fun isLegacyInstalled(env: OsEnv = SystemOsEnv): Boolean = runCatching {
+        fun file(p: Path) = if (Files.isRegularFile(p)) Files.readString(p) else null
+        when (env.os) {
+            OsEnv.Os.MAC -> file(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))?.let(::isLegacyDefinition) == true
+            OsEnv.Os.LINUX -> file(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT"))?.let(::isLegacyDefinition) == true ||
+                file(xdgAutostartPath(env))?.let(::isLegacyXdgEntry) == true
+            OsEnv.Os.WINDOWS -> registeredTaskXml(env)?.let(::isLegacyDefinition) == true
+            OsEnv.Os.OTHER -> false
+        }
+    }.getOrDefault(false)
+
+    private fun registeredTaskXml(env: OsEnv): String? =
+        env.runCapture(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME, "/XML"))
+
     /**
      * Install (or re-install, which restarts) the service. [alreadyStopped]: the caller just stopped
-     * our running service broker itself ([stop], Windows), so don't stop it again.
+     * our running service broker itself ([stop], Windows), so don't stop it again. When the app runs
+     * as the job ([appRunsAsService]) nothing running is touched: see [Result.Installed.nextLogin].
      */
-    fun install(spec: Spec, env: OsEnv = SystemOsEnv, alreadyStopped: Boolean = false): Result = when (env.os) {
-        OsEnv.Os.MAC -> installLaunchd(spec, env)
-        OsEnv.Os.LINUX -> installSystemd(spec, env)
-        OsEnv.Os.WINDOWS -> installWindowsTask(spec, env, alreadyStopped)
-        OsEnv.Os.OTHER -> Result.Unsupported
+    fun install(spec: Spec, env: OsEnv = SystemOsEnv, alreadyStopped: Boolean = false): Result {
+        val asJob = appRunsAsService(env)
+        return when (env.os) {
+            OsEnv.Os.MAC -> installLaunchd(spec, env, asJob)
+            OsEnv.Os.LINUX -> installSystemd(spec, env, asJob)
+            OsEnv.Os.WINDOWS -> installWindowsTask(spec, env, alreadyStopped, asJob)
+            OsEnv.Os.OTHER -> Result.Unsupported
+        }
     }
 
-    fun remove(env: OsEnv = SystemOsEnv): Result = when (env.os) {
-        OsEnv.Os.MAC -> removeLaunchd(env)
-        OsEnv.Os.LINUX -> removeSystemd(env)
-        OsEnv.Os.WINDOWS -> removeWindowsTask(env)
-        OsEnv.Os.OTHER -> Result.Unsupported
+    /** Remove our definition (or a 1.0.0 one). When the app runs as the job, the job itself is left to end with the app. */
+    fun remove(env: OsEnv = SystemOsEnv): Result {
+        val asJob = appRunsAsService(env)
+        return when (env.os) {
+            OsEnv.Os.MAC -> removeLaunchd(env, asJob)
+            OsEnv.Os.LINUX -> removeSystemd(env, asJob)
+            OsEnv.Os.WINDOWS -> removeWindowsTask(env, asJob)
+            OsEnv.Os.OTHER -> Result.Unsupported
+        }
     }
 
-    /** Restart the running service in place. True iff the OS accepted the command. */
-    fun restart(env: OsEnv = SystemOsEnv): Boolean = when (env.os) {
+    /** Restart the running service in place. True iff the OS accepted the command. Never the job that is the app. */
+    fun restart(env: OsEnv = SystemOsEnv): Boolean = if (appRunsAsService(env)) false else when (env.os) {
         OsEnv.Os.MAC -> env.uid != null && env.run(listOf("launchctl", "kickstart", "-k", "gui/${env.uid}/$LAUNCHD_LABEL"))
         OsEnv.Os.LINUX -> env.run(listOf("systemctl", "--user", "restart", SYSTEMD_NAME))
         // Stop the loop and its broker, then start the task afresh; no elevation needed. /Run also
@@ -316,7 +378,8 @@ Terminal=false
         when (env.os) {
             OsEnv.Os.MAC -> ours(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))
             OsEnv.Os.LINUX -> ours(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")) || ours(xdgAutostartPath(env))
-            OsEnv.Os.WINDOWS -> isInstalled(env)
+            // The 1.0.0 task had the same name; it runs the app, not the broker.
+            OsEnv.Os.WINDOWS -> isInstalled(env) && registeredTaskXml(env)?.let(::isLegacyDefinition) != true
             OsEnv.Os.OTHER -> false
         }
     }.getOrDefault(false)
@@ -359,12 +422,20 @@ Terminal=false
         }
     }
 
-    private fun installLaunchd(spec: Spec, env: OsEnv): Result {
+    private fun installLaunchd(spec: Spec, env: OsEnv, asJob: Boolean): Result {
         val plist = env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist")
         return runCatching {
             Files.createDirectories(plist.parent)
             spec.log.parent?.let { Files.createDirectories(it) }
             writePrivate(plist, launchdPlist(spec))
+            if (asJob) {
+                // We ARE the loaded dev.supermux.host job: a bootout would SIGTERM this app. launchd
+                // loads the new plist at the next login; `enable` only clears a disabled override.
+                if (env.hasCommand("launchctl") && env.uid != null) {
+                    env.runResult(listOf("launchctl", "enable", "gui/${env.uid}/$LAUNCHD_LABEL"))
+                }
+                return Result.Installed(plist, enabled = false, nextLogin = true)
+            }
             if (env.hasCommand("launchctl") && env.uid != null) {
                 val domain = "gui/${env.uid}"
                 env.runResult(listOf("launchctl", "bootout", "$domain/$LAUNCHD_LABEL")) // ignore: first install has none
@@ -402,10 +473,11 @@ Terminal=false
         return last
     }
 
-    private fun removeLaunchd(env: OsEnv): Result {
+    private fun removeLaunchd(env: OsEnv, asJob: Boolean): Result {
         val plist = env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist")
         return runCatching {
-            if (env.hasCommand("launchctl") && env.uid != null) {
+            // As the job, the file goes and the loaded job (us) ends with the app.
+            if (!asJob && env.hasCommand("launchctl") && env.uid != null) {
                 env.run(listOf("launchctl", "bootout", "gui/${env.uid}/$LAUNCHD_LABEL"))
                 awaitLaunchdGone("gui/${env.uid}/$LAUNCHD_LABEL", env)
             }
@@ -413,7 +485,7 @@ Terminal=false
         }.getOrElse { Result.Failed("launchd remove failed: ${it.message}") }
     }
 
-    private fun installSystemd(spec: Spec, env: OsEnv): Result {
+    private fun installSystemd(spec: Spec, env: OsEnv, asJob: Boolean): Result {
         // systemd --user needs both systemctl and a runtime dir; otherwise fall back to XDG autostart.
         if (!env.hasCommand("systemctl") || env.xdgRuntimeDir.isNullOrBlank()) {
             return installXdgAutostart(spec, env)
@@ -423,7 +495,18 @@ Terminal=false
             Files.createDirectories(unit.parent)
             spec.log.parent?.let { Files.createDirectories(it) }
             writePrivate(unit, systemdUnit(spec))
+            // 1.0.0's XDG entry launched the app at login: the unit replaces it.
+            val xdg = xdgAutostartPath(env)
+            if (Files.isRegularFile(xdg) && isLegacyXdgEntry(Files.readString(xdg))) Files.deleteIfExists(xdg)
             env.run(listOf("systemctl", "--user", "daemon-reload"))
+            if (asJob) {
+                // This app runs inside supermux-host.service: `restart` / `enable --now` would stop it.
+                // Enabled, the new definition starts at the next login (and, Restart=always, as soon
+                // as the app exits).
+                val enabled = env.run(listOf("systemctl", "--user", "enable", SYSTEMD_NAME))
+                env.uid?.let { env.run(listOf("loginctl", "enable-linger", it.toString())) }
+                return Result.Installed(unit, enabled, nextLogin = true)
+            }
             val enabled = env.run(listOf("systemctl", "--user", "enable", "--now", SYSTEMD_NAME))
             // enable --now is a no-op for an already-running unit; restart applies a new env/binary.
             env.run(listOf("systemctl", "--user", "restart", SYSTEMD_NAME))
@@ -443,18 +526,18 @@ Terminal=false
         }.getOrElse { Result.Failed("xdg autostart install failed: ${it.message}") }
     }
 
-    private fun removeSystemd(env: OsEnv): Result {
+    private fun removeSystemd(env: OsEnv, asJob: Boolean): Result {
         val unit = env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")
         val autostart = env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE")
         return runCatching {
-            if (env.hasCommand("systemctl") && !env.xdgRuntimeDir.isNullOrBlank()) {
-                env.run(listOf("systemctl", "--user", "disable", "--now", SYSTEMD_NAME))
-                env.run(listOf("systemctl", "--user", "daemon-reload"))
-            }
+            val systemd = env.hasCommand("systemctl") && !env.xdgRuntimeDir.isNullOrBlank()
+            // As the job, never --now: that stops this app. The unit ends with the app.
+            if (systemd) env.run(listOf("systemctl", "--user", "disable") + (if (asJob) emptyList() else listOf("--now")) + SYSTEMD_NAME)
             val a = Files.deleteIfExists(unit)
             Files.deleteIfExists(env.home.resolve(".config/systemd/user/default.target.wants/$SYSTEMD_UNIT"))
             val b = Files.deleteIfExists(autostart)
             Files.deleteIfExists(xdgEnvPath(env))
+            if (systemd) env.run(listOf("systemctl", "--user", "daemon-reload"))
             Result.Removed(when { a -> unit; b -> autostart; else -> null })
         }.getOrElse { Result.Failed("systemd remove failed: ${it.message}") }
     }
@@ -561,7 +644,7 @@ Terminal=false
     /** What [Result.Installed] / [Result.Removed] name for the Windows task: it has no file of ours. */
     val WINDOWS_TASK_PATH: Path = Path.of("Task Scheduler", WINDOWS_TASK_NAME)
 
-    private fun installWindowsTask(spec: Spec, env: OsEnv, alreadyStopped: Boolean): Result {
+    private fun installWindowsTask(spec: Spec, env: OsEnv, alreadyStopped: Boolean, asJob: Boolean): Result {
         val envFile = windowsEnvPath(env)
         val xml = windowsTaskXml(spec, envFile)
         val run = listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME)
@@ -572,7 +655,20 @@ Terminal=false
             Files.deleteIfExists(env.localAppData.resolve(WINDOWS_TASK_XML))
             val wasInstalled = isInstalled(env)
             // Compare with what is REGISTERED: that is what runs.
-            val unchanged = wasInstalled && sameTaskAction(env.runCapture(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME, "/XML")), xml)
+            val registered = if (wasInstalled) registeredTaskXml(env) else null
+            val unchanged = wasInstalled && sameTaskAction(registered, xml)
+            // The 1.0.0 task (same name) runs the app: never "the previous broker" to fall back to.
+            val wasOurs = wasInstalled && registered?.let(::isLegacyDefinition) != true
+            if (asJob) {
+                // This app runs under the task: ending or re-running it (StopExisting) could end the app.
+                // Register the new definition only; it starts the broker from the next logon.
+                if (unchanged) return Result.Installed(WINDOWS_TASK_PATH, enabled = false, nextLogin = true)
+                return if (runElevated(env, registerTaskScript(xml, start = false))) {
+                    Result.Installed(WINDOWS_TASK_PATH, enabled = false, nextLogin = true)
+                } else {
+                    Result.Failed("Windows Scheduled Task install failed (elevation declined or Task Scheduler error)")
+                }
+            }
             // A running instance must not keep the old loop (and broker) alive past re-registration,
             // and an unchanged one restarts with the (maybe new) broker binary.
             // If it won't stop, change nothing: a new loop next to the old broker would be a second one.
@@ -589,7 +685,7 @@ Terminal=false
             if (!ok) {
                 // Declined UAC on a CHANGED definition: we stopped the old broker above, so start the
                 // old definition again (no elevation) rather than leave nothing running.
-                if (wasInstalled && env.run(run)) {
+                if (wasOurs && env.run(run)) {
                     return Result.Failed(WINDOWS_UPDATE_DECLINED, previousStillRunning = true)
                 }
                 Result.Failed("Windows Scheduled Task install failed (elevation declined or Task Scheduler error)")
@@ -615,7 +711,7 @@ Terminal=false
         return if (start) "$register; & schtasks.exe /Run /TN $name; exit \$LASTEXITCODE" else "$register; exit 0"
     }
 
-    private fun removeWindowsTask(env: OsEnv): Result {
+    private fun removeWindowsTask(env: OsEnv, asJob: Boolean): Result {
         val taskXml = env.localAppData.resolve(WINDOWS_TASK_XML)
         return runCatching {
             Files.deleteIfExists(taskXml)
@@ -624,10 +720,11 @@ Terminal=false
                 return Result.Removed(null)
             }
             // /End first: the task's PowerShell loop would otherwise respawn the broker ~5 s after taskkill.
-            val ended = runElevated(env, schtasksScript(listOf(
-                listOf("/End", "/TN", WINDOWS_TASK_NAME),
-                listOf("/Delete", "/TN", WINDOWS_TASK_NAME, "/F"),
-            )))
+            // Not when the app runs under the task: /End would end the app; deleting it leaves us running.
+            val delete = listOf("/Delete", "/TN", WINDOWS_TASK_NAME, "/F")
+            val ended = runElevated(env, schtasksScript(
+                if (asJob) listOf(delete) else listOf(listOf("/End", "/TN", WINDOWS_TASK_NAME), delete),
+            ))
             // Declined UAC or a failed /Delete leaves the task registered; its loop would respawn the broker.
             if (!ended) return Result.Failed("Windows Scheduled Task remove failed: the elevated /End + /Delete did not succeed")
             // /End only terminates the task's own process (the headless conhost): stop its loop too,

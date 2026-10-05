@@ -46,6 +46,13 @@ internal suspend fun HostSupervisor.launchLocked(
             // Still background mode for the prefs and UI; the child outlives the app.
             result.path == BrokerService.xdgAutostartPath(osEnv) ->
                 return launchChildLocked(prefs, bins, carried, healthTimeoutMs, detached = true)
+            // The app runs as the 1.0.0 keep-alive job: the new definition takes over at the next
+            // login. Until then the broker is the app's own child (it stops with the app).
+            result.nextLogin -> {
+                _backgroundError.value = HostSupervisor.NEXT_LOGIN
+                log(HostSupervisor.NEXT_LOGIN)
+                return launchChildLocked(prefs, bins, carried, healthTimeoutMs)
+            }
             result.enabled -> {
                 mode = HostSupervisor.Mode.SERVICE
                 childDetached = false
@@ -74,8 +81,10 @@ internal suspend fun HostSupervisor.launchLocked(
         is BrokerService.Result.Removed -> result.toString()
     }
     if (!allowChildFallback) return failure
-    // Never leave a definition that could start a second broker; if it can't be removed, no child either.
-    removeServiceLocked(prefs.port)?.let { return it }
+    // Never leave a definition that could start a second broker; if it can't be removed, no child
+    // either. A 1.0.0 definition (it runs the app, not a broker) is no such risk: left alone, so
+    // a declined prompt isn't followed by a second one.
+    if (withContext(io) { BrokerService.isOursInstalled(osEnv) }) removeServiceLocked(prefs.port)?.let { return it }
     mode = null
     _backgroundError.value = "Couldn't keep supermux running in the background: $failure"
     log(_backgroundError.value!!)
@@ -141,9 +150,11 @@ internal suspend fun HostSupervisor.removeServiceLocked(port: Int): String? {
  */
 internal suspend fun HostSupervisor.removeOurDefinitionsLocked(port: Int): String? {
     if (ourServiceInstalled()) return removeServiceLocked(port)
-    if (!withContext(io) { BrokerService.isOursInstalled(osEnv) }) return null
+    // Not a live service: the XDG autostart, one written for the next login, or a 1.0.0 one.
+    // None of them has a broker of its own holding the port.
+    if (!withContext(io) { BrokerService.isOursInstalled(osEnv) || BrokerService.isLegacyInstalled(osEnv) }) return null
     val r = withContext(io) { BrokerService.remove(osEnv) }
-    log("autostart remove: ${r.describe()}")
+    log("login definition remove: ${r.describe()}")
     return (r as? BrokerService.Result.Failed)?.let { "Couldn't remove the login autostart: ${it.message}" }
 }
 
@@ -279,9 +290,14 @@ internal fun HostSupervisor.adoptOrphanLocked(): Boolean {
     return true
 }
 
-/** Our service definition (not the XDG autostart, which is supervised like a child). */
-internal suspend fun HostSupervisor.ourServiceInstalled(): Boolean =
-    withContext(io) { BrokerService.isOursInstalled(osEnv) && !BrokerService.isOursXdgAutostart(osEnv) }
+/**
+ * Our service definition, live: not the XDG autostart (supervised like a child), and not one
+ * written for the next login while this app itself runs as the 1.0.0 keep-alive job (nothing of
+ * it runs yet; the broker is our child until then).
+ */
+internal suspend fun HostSupervisor.ourServiceInstalled(): Boolean = withContext(io) {
+    BrokerService.isOursInstalled(osEnv) && !BrokerService.isOursXdgAutostart(osEnv) && !BrokerService.appRunsAsService(osEnv)
+}
 
 /**
  * The broker's own guard against a second broker on one state dir reads /proc (Linux only), so

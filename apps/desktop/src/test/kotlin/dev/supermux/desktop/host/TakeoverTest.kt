@@ -27,6 +27,11 @@ class TakeoverTest {
 
     private fun ok(r: Takeover.PrepareResult) = assertIs<Takeover.PrepareResult.Ok>(r).prepared
 
+    @Test fun the100KeepAliveIsNotAnOldService() {
+        val m = Mac(); m.plist("dev.supermux.host", LegacyKeepAlive.plist)
+        assertTrue(Takeover.findOldServices(macEnv(m)).isEmpty(), "it runs the app; taking it over would boot out the app")
+    }
+
     // ---- parsing / env ----
 
     @Test fun plistEnvKeepsMuxKeysExceptOnesWeOwn() {

@@ -261,7 +261,16 @@ class HostSupervisor(
                 afterLaunch(p, launchLocked(p, bins, carriedStore.load(), allowChildFallback = true))
             } else {
                 _backgroundError.value = null
-                if (mode == Mode.CHILD && !childDetached && child?.isAlive == true) return@withLock
+                if (mode == Mode.CHILD && !childDetached && child?.isAlive == true) {
+                    // Child mode normally has nothing installed, but a definition written for the next
+                    // login (the app ran as the 1.0.0 job), or a 1.0.0 one, would start at login.
+                    removeOurDefinitionsLocked(p.port)?.let { why ->
+                        savePrefsNow(p.copy(background = true))
+                        _backgroundError.value = why
+                        log(why)
+                    }
+                    return@withLock
+                }
                 stopWatch()
                 removeOurDefinitionsLocked(p.port)?.let { why ->
                     // Still registered (e.g. UAC declined): it would respawn next to a child.
@@ -802,6 +811,8 @@ class HostSupervisor(
             "supermux was already running with the app from a previous session, so it isn't running in the background. Turn background mode on again to switch."
         const val STILL_RUNNING = "supermux is still running from a previous session. Quit it to stop hosting."
         const val RESTORED_SILENT = "The previous supermux service was restored but isn't answering. Check it, then try again."
+        const val NEXT_LOGIN =
+            "An older version set supermux up to open the app at login. From your next login supermux runs in the background on its own; until then it runs with the app."
 
         fun defaultLog(stateDir: Path): (String) -> Unit {
             val file = HostLogFile(stateDir.resolve("desktop-host.log"))

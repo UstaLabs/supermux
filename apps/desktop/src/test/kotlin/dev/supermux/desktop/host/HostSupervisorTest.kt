@@ -51,12 +51,14 @@ private class Harness(
     scripted: Map<List<String>, List<OsEnv.RunResult>> = emptyMap(),
     failIf: (List<String>) -> Boolean = { false },
     captures: Map<List<String>, String> = emptyMap(),
+    envVars: Map<String, String> = emptyMap(),
+    cgroup: String? = null,
     val repo: Path? = null,
     xdg: String? = null,
     val home: Path = createTempDirectory("sup-home"),
     val state: Path = createTempDirectory("sup-state"),
 ) {
-    val env = FakeOsEnv(os = os, home = home, uid = 501, xdgRuntimeDir = xdg, commands = commands, failing = failing, scripted = scripted, failIf = failIf, captures = captures)
+    val env = FakeOsEnv(os = os, home = home, uid = 501, xdgRuntimeDir = xdg, commands = commands, failing = failing, scripted = scripted, failIf = failIf, captures = captures, envVars = envVars, cgroup = cgroup)
     val events = mutableListOf<String>()
     var saved = prefs
     val children = mutableListOf<FakeChild>()
@@ -1403,5 +1405,60 @@ class HostSupervisorTest {
         assertTrue(h.saved.hosting, "the task is still registered: we are still hosting")
         assertTrue(h.sup.prefs.value.hosting)
         assertTrue(h.launches.isEmpty())
+    }
+
+    // ── upgrading from 1.0.0 while the app runs as its keep-alive job ──
+
+    private val jobVerbs = setOf("bootout", "bootstrap", "kickstart", "restart", "stop")
+
+    @Test fun macUpgradeAsThe100JobNeverBootsTheAppOut() = runTest {
+        val h = Harness(this, prefs = HostingPrefs(background = true), envVars = LegacyKeepAlive.macJobEnv)
+        Files.createDirectories(h.ourPlist.parent); Files.writeString(h.ourPlist, LegacyKeepAlive.plist)
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        assertEquals(running, h.sup.status.value)
+        assertTrue(h.env.ran.none { it.getOrNull(1) in jobVerbs }, h.env.ran.toString())
+        assertTrue(BrokerService.MANAGED_MARKER in Files.readString(h.ourPlist), "the broker service takes over at the next login")
+        assertEquals(1, h.launches.size, "until then the broker is the app's child")
+        assertEquals(HostSupervisor.Mode.CHILD, h.sup.mode)
+        assertEquals(HostSupervisor.NEXT_LOGIN, h.sup.backgroundError.value)
+        assertTrue(h.sup.quitStopsBroker)
+        // The child crashing restarts the child: the next-login service runs nothing yet.
+        h.children[0].exit(1)
+        advanceTimeBy(5_000); runCurrent()
+        assertEquals(2, h.launches.size)
+        assertTrue(h.env.ran.none { it.getOrNull(1) in jobVerbs }, h.env.ran.toString())
+        // Background off: the next-login definition goes; the job (this app) and its child stay.
+        h.sup.setBackground(false)
+        assertFalse(Files.exists(h.ourPlist))
+        assertTrue(h.liveChild != null)
+        assertTrue(h.env.ran.none { it.getOrNull(1) in jobVerbs }, h.env.ran.toString())
+        assertFalse(h.saved.background)
+    }
+
+    @Test fun linuxUpgradeAsThe100UnitNeverRestartsIt() = runTest {
+        val h = Harness(this, os = OsEnv.Os.LINUX, prefs = HostingPrefs(background = true), xdg = "/run/user/1000", cgroup = LegacyKeepAlive.LINUX_JOB_CGROUP)
+        val unit = h.home.resolve(".config/systemd/user/supermux-host.service")
+        Files.createDirectories(unit.parent); Files.writeString(unit, LegacyKeepAlive.unit)
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        assertEquals(running, h.sup.status.value)
+        assertTrue(h.env.ran.none { "--now" in it || it.getOrNull(2) in jobVerbs }, h.env.ran.toString())
+        assertTrue(BrokerService.MANAGED_MARKER in Files.readString(unit))
+        assertEquals(HostSupervisor.Mode.CHILD, h.sup.mode)
+        h.sup.setHosting(false)
+        assertFalse(Files.exists(unit))
+        assertTrue(h.env.ran.none { "--now" in it || it.getOrNull(2) in jobVerbs }, h.env.ran.toString())
+        assertEquals(HostingStatus.NotHosting, h.sup.status.value)
+    }
+
+    @Test fun backgroundOffAlsoRemovesThe100KeepAlive() = runTest {
+        val h = Harness(this)
+        Files.createDirectories(h.ourPlist.parent); Files.writeString(h.ourPlist, LegacyKeepAlive.plist)
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        h.sup.setBackground(false)
+        assertFalse(Files.exists(h.ourPlist), "it would open the app at every login")
+        assertEquals(running, h.sup.status.value)
     }
 }

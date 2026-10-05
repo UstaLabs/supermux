@@ -29,6 +29,12 @@ interface OsEnv {
 
     /** Run [argv] and return its stdout, or null on failure. Never throws. */
     fun runCapture(argv: List<String>): String?
+
+    /** This process's environment variable [name]; null when unset. */
+    fun getenv(name: String): String? = null
+
+    /** Linux: this process's `/proc/self/cgroup` (which systemd unit runs us); null elsewhere or unreadable. */
+    fun selfCgroup(): String? = null
 }
 
 /** The real environment: OS from `os.name`, uid via UnixSystem (guarded), PATH command probing. */
@@ -85,6 +91,12 @@ object SystemOsEnv : OsEnv {
     override fun sleep(ms: Long) {
         Thread.sleep(ms)
     }
+
+    override fun getenv(name: String): String? = System.getenv(name)
+
+    override fun selfCgroup(): String? =
+        if (os != OsEnv.Os.LINUX) null
+        else runCatching { java.nio.file.Files.readString(Path.of("/proc/self/cgroup")) }.getOrNull()
 
     override fun runCapture(argv: List<String>): String? = runCatching {
         val p = ProcessBuilder(argv).redirectError(ProcessBuilder.Redirect.DISCARD).start()

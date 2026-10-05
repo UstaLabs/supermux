@@ -569,6 +569,111 @@ class BrokerServiceTest {
         assertTrue(run in env.ran)
     }
 
+    // ── upgrading from 1.0.0, whose keep-alive ran the APP under our names ─────────────────────
+
+    @Test fun appRunsAsServiceRecognisesTheJobOnEachOs() {
+        val home = createTempDirectory()
+        assertTrue(BrokerService.appRunsAsService(FakeOsEnv(os = OsEnv.Os.MAC, home = home, envVars = mapOf("XPC_SERVICE_NAME" to "dev.supermux.host"))))
+        assertFalse(BrokerService.appRunsAsService(FakeOsEnv(os = OsEnv.Os.MAC, home = home, envVars = mapOf("XPC_SERVICE_NAME" to "application.dev.supermux.desktop.123"))))
+        assertTrue(BrokerService.appRunsAsService(FakeOsEnv(os = OsEnv.Os.LINUX, home = home, cgroup = LegacyKeepAlive.LINUX_JOB_CGROUP)))
+        assertFalse(BrokerService.appRunsAsService(FakeOsEnv(os = OsEnv.Os.LINUX, home = home, cgroup = "0::/user.slice/user-1000.slice/session-2.scope\n")))
+        assertTrue(BrokerService.appRunsAsService(FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home, envVars = mapOf("SUPERMUX_KEEP_ALIVE" to "1"))))
+        assertFalse(BrokerService.appRunsAsService(FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home)))
+    }
+
+    @Test fun legacyDefinitionsAreRecognisedAndAreNotOurs() {
+        val home = createTempDirectory()
+        val mac = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501)
+        val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist")
+        Files.createDirectories(plist.parent); Files.writeString(plist, LegacyKeepAlive.plist)
+        assertTrue(BrokerService.isLegacyInstalled(mac)); assertFalse(BrokerService.isOursInstalled(mac))
+        Files.writeString(plist, BrokerService.launchdPlist(spec))
+        assertFalse(BrokerService.isLegacyInstalled(mac)); assertTrue(BrokerService.isOursInstalled(mac))
+
+        val linux = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000)
+        val unit = home.resolve(".config/systemd/user/supermux-host.service")
+        Files.createDirectories(unit.parent); Files.writeString(unit, LegacyKeepAlive.unit)
+        assertTrue(BrokerService.isLegacyInstalled(linux)); assertFalse(BrokerService.isOursInstalled(linux))
+        Files.delete(unit)
+        val xdg = home.resolve(".config/autostart/supermux-host.desktop")
+        Files.createDirectories(xdg.parent); Files.writeString(xdg, LegacyKeepAlive.xdg)
+        assertTrue(BrokerService.isLegacyInstalled(linux)); assertFalse(BrokerService.isOursInstalled(linux))
+
+        val win = winEnv(registered = LegacyKeepAlive.taskXml)
+        assertTrue(BrokerService.isLegacyInstalled(win)); assertFalse(BrokerService.isOursInstalled(win), "same task name, but it runs the app")
+        assertFalse(BrokerService.isLegacyInstalled(winEnv(registered = winXml(createTempDirectory()))))
+    }
+
+    @Test fun macInstallAsThe100JobWritesTheNewPlistAndBootsNothingOut() {
+        val home = createTempDirectory()
+        val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist")
+        Files.createDirectories(plist.parent); Files.writeString(plist, LegacyKeepAlive.plist)
+        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, envVars = LegacyKeepAlive.macJobEnv)
+        val r = assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env))
+        assertTrue(r.nextLogin && !r.enabled)
+        assertTrue(BrokerService.MANAGED_MARKER in Files.readString(plist), "the new definition is in place for the next login")
+        assertEquals("rw-------", mode(plist))
+        assertEquals(listOf(listOf("launchctl", "enable", "gui/501/dev.supermux.host")), env.ran, "no bootout, bootstrap or kickstart of the job that is this app")
+        env.ran.clear()
+        assertFalse(BrokerService.restart(env))
+        assertIs<BrokerService.Result.Removed>(BrokerService.remove(env))
+        assertFalse(Files.exists(plist))
+        assertEquals(emptyList(), env.ran, "the job (this app) ends with the app")
+    }
+
+    @Test fun linuxInstallAsThe100JobEnablesWithoutStoppingIt() {
+        val home = createTempDirectory()
+        val unit = home.resolve(".config/systemd/user/supermux-host.service")
+        Files.createDirectories(unit.parent); Files.writeString(unit, LegacyKeepAlive.unit)
+        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000", cgroup = LegacyKeepAlive.LINUX_JOB_CGROUP)
+        val r = assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env))
+        assertTrue(r.nextLogin)
+        assertTrue(BrokerService.MANAGED_MARKER in Files.readString(unit))
+        assertTrue(listOf("systemctl", "--user", "enable", "supermux-host") in env.ran)
+        assertTrue(env.ran.none { "--now" in it || "restart" in it || "stop" in it }, env.ran.toString())
+        env.ran.clear()
+        assertFalse(BrokerService.restart(env))
+        BrokerService.remove(env)
+        assertFalse(Files.exists(unit))
+        assertTrue(listOf("systemctl", "--user", "disable", "supermux-host") in env.ran)
+        assertTrue(env.ran.none { "--now" in it }, env.ran.toString())
+    }
+
+    @Test fun linuxUnitReplacesThe100XdgEntry() {
+        val home = createTempDirectory()
+        val xdg = home.resolve(".config/autostart/supermux-host.desktop")
+        Files.createDirectories(xdg.parent); Files.writeString(xdg, LegacyKeepAlive.xdg)
+        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env))
+        assertFalse(Files.exists(xdg), "it would open the app at every login")
+    }
+
+    @Test fun windowsInstallAsThe100JobRegistersWithoutEndingOrRunningIt() {
+        val home = createTempDirectory()
+        val base = winEnv(home, registered = LegacyKeepAlive.taskXml)
+        val env = object : OsEnv by base {
+            override fun getenv(name: String): String? = if (name == "SUPERMUX_KEEP_ALIVE") "1" else null
+        }
+        val r = assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec, env))
+        assertTrue(r.nextLogin)
+        val script = elevatedCalls(base).single().last()
+        assertTrue("Register-ScheduledTask" in script && "/Run" !in script, script)
+        assertTrue(run !in base.ran && base.ran.none { it.firstOrNull() == "taskkill" })
+        assertFalse(BrokerService.restart(env))
+        base.ran.clear()
+        BrokerService.remove(env)
+        val removal = elevatedCalls(base).single().last()
+        assertTrue("/Delete" in removal && "/End" !in removal, removal)
+    }
+
+    @Test fun windowsDeclinedUacOverThe100TaskDoesNotRunTheOldApp() {
+        val home = createTempDirectory()
+        val env = winEnv(home, registered = LegacyKeepAlive.taskXml, failIf = { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") })
+        val r = assertIs<BrokerService.Result.Failed>(BrokerService.install(winSpec, env))
+        assertFalse(r.previousStillRunning, "the old task runs the app, not a broker")
+        assertTrue(run !in env.ran)
+    }
+
     @Test fun removeOnMacBootsOutAndDeletes() {
         val home = createTempDirectory()
         val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501)
@@ -591,7 +696,13 @@ class FakeOsEnv(
     /** Per-argv scripted results, consumed in order; once empty (or absent) the default applies. */
     private val scripted: Map<List<String>, List<OsEnv.RunResult>> = emptyMap(),
     private val failIf: (List<String>) -> Boolean = { false },
+    /** This process's env ([OsEnv.getenv]). */
+    private val envVars: Map<String, String> = emptyMap(),
+    /** `/proc/self/cgroup` ([OsEnv.selfCgroup]). */
+    private val cgroup: String? = null,
 ) : OsEnv {
+    override fun getenv(name: String): String? = envVars[name]
+    override fun selfCgroup(): String? = cgroup
     val ran = mutableListOf<List<String>>()
     val sleeps = mutableListOf<Long>()
     private val calls = mutableMapOf<List<String>, Int>()

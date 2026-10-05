@@ -73,11 +73,16 @@ object Takeover {
     private fun isDevCommand(firstWord: String, whole: String) =
         "src/main.ts" in whole || firstWord.endsWith("/bun") || firstWord == "bun"
 
-    /** Our own service (marker or MUX_MANAGED_BY) and dev checkouts (bun + src/main.ts) are never old services. */
+    /**
+     * Our own service (marker or MUX_MANAGED_BY), 1.0.0's keep-alive (it runs the app) and dev
+     * checkouts (bun + src/main.ts) are never old services.
+     */
     private fun isOldPlist(xml: String): Boolean {
         if (MANAGED_MARKER in xml) return false
         val plist = parsePlist(xml) ?: return false
         if ("MUX_MANAGED_BY" in plist.env) return false
+        // 1.0.0's keep-alive ran the APP under dev.supermux.host: not a broker service (and the app may be running as it).
+        if (BrokerService.LEGACY_KEEP_ALIVE_ENV in plist.env) return false
         val first = plist.args.firstOrNull() ?: return false
         if (isDevCommand(first, plist.args.joinToString(" "))) return false
         return plist.args.any { "supermux" in it }
