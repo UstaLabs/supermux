@@ -7,6 +7,7 @@ import type { AccountsOptions } from "../accounts/types.js"
 import { systemAccountId } from "../accounts/registry.js"
 import { normalizeContext, withoutInstructions } from "../context/index.js"
 import type { ContextPolicy, DriverContextSupport, SessionContext } from "../context/types.js"
+import type { HostMcpServer } from "../mcp/server.js"
 
 export type HostRegistration = {
   id: string
@@ -69,6 +70,12 @@ export type HostOptions = {
   context?: DriverContextSupport
   /** The Core's default context policy (`createCore({ contextPolicy })`). Default "error". */
   contextPolicy?: ContextPolicy
+  /**
+   * Host MCP servers registered with the Core up front (`createCore({ mcpServers })`): a session's
+   * context (or `prepare`'s) may then name them as `{ kind: "host", name }`, and a stored session
+   * that names one can launch after a host restart (otherwise `missing_mcp_servers`).
+   */
+  mcpServers?: HostMcpServer[]
 }
 
 export type Host = {
@@ -172,6 +179,7 @@ class HostImpl implements Host {
       limits: options.limits,
       ...(options.accounts !== undefined ? { accounts: options.accounts } : {}),
       ...(options.contextPolicy !== undefined ? { contextPolicy: options.contextPolicy } : {}),
+      ...(options.mcpServers !== undefined ? { mcpServers: options.mcpServers } : {}),
     })
     // A Core-internal reopen (limit switch, token refresh, context or host-tool reload) replaces
     // the live Session: keep the ready handle pointing at the new one.

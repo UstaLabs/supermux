@@ -265,6 +265,27 @@ test("create(ctx): any SDK McpServer, built once per connection with that connec
   expect(() => server.add("x", tool({ description: "x", run: () => "" }))).toThrow()
 })
 
+test("create(ctx) with JSON Schema tools: McpServer + fromJsonSchema re-exported from supermux-core/mcp (no zod in the host)", async () => {
+  const { McpServer: Sdk, fromJsonSchema } = await import("../src/mcp/index.js")
+  const schema = { type: "object", properties: { text: { type: "string" }, format: { type: "string", enum: ["text", "markdownv2"] } }, required: ["text"] }
+  const server = mcpServer({
+    name: "jsonschema",
+    create: () => {
+      const sdk = new Sdk({ name: "jsonschema", version: "1.0.0" })
+      sdk.registerTool("say", { description: "say", inputSchema: fromJsonSchema(schema) }, async (args: Record<string, unknown>) => ({ content: [{ type: "text", text: `said ${JSON.stringify(args)}` }] }))
+      return sdk
+    },
+  })
+  const host = await startHost(scratch(), [server])
+  const client = await bridge(host, "jsonschema")
+  await client.initialize()
+  const listed = await client.request("tools/list", {})
+  expect(listed.result.tools[0].inputSchema).toEqual(schema)
+  expect(text(await client.request("tools/call", { name: "say", arguments: { text: "hi" } }))).toBe('said {"text":"hi"}')
+  const invalid = await client.request("tools/call", { name: "say", arguments: { format: "bad" } })
+  expect(invalid.result.isError).toBe(true)
+})
+
 // ------------------------------------------------------------ reconnect
 
 test("reconnect: host unavailable while down, then the bridge replays initialize to the new host and calls work again", async () => {
