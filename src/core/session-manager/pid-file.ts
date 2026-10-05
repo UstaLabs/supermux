@@ -26,16 +26,26 @@ const defaultProbeDeps: BrokerProbeDeps = {
   },
 }
 
+/** The desktop app's own executables: never a broker, whatever their name says. */
+const DESKTOP_APP = [
+  /\.app\/Contents\/MacOS\//i, // macOS bundle (Supermux Desktop.app)
+  /\/opt\/supermux\//i, // Linux .deb / .rpm
+  /[\\/]Program Files( \(x86\))?[\\/]supermux[\\/]/i, // Windows MSI (C:\Program Files\supermux\supermux.exe)
+]
+
 /**
- * A broker command line: the compiled `supermux-broker` binary, or `bun` running the broker's entry
- * (`src/main.ts`, or `src/cli.ts` which boots it). Deliberately NOT any path containing "supermux":
- * the desktop app (`Supermux.app`, `/opt/supermux/bin/supermux`, `supermux.exe`) is not a broker,
- * and treating it as one would lock the broker out of its own state dir.
+ * A broker command line: the bundled `supermux-broker` binary, `bun` running the broker's entry
+ * (`src/main.ts`, or `src/cli.ts` which boots it), or the CLI-installed single binary (`supermux` /
+ * `supermux.exe`, e.g. `~/.local/bin/supermux`, which `supermux setup` makes the service's
+ * ExecStart). The desktop app is also named `supermux` on Linux and Windows, so its install
+ * locations are excluded: treating the app as a broker would lock the broker out of its state dir.
  */
 export function looksLikeBrokerCommand(s: string): boolean {
   const cmd = s.replace(/\0/g, " ")
   if (/supermux-broker/i.test(cmd)) return true
-  return /(^|[\\/\s"])bun(\.exe)?($|[\s"])/i.test(cmd) && /(^|[\\/\s"])(main|cli)\.ts($|[\s"])/i.test(cmd)
+  if (/(^|[\\/\s"])bun(\.exe)?($|[\s"])/i.test(cmd) && /(^|[\\/\s"])(main|cli)\.ts($|[\s"])/i.test(cmd)) return true
+  if (DESKTOP_APP.some((re) => re.test(cmd))) return false
+  return /(^|[\\/\s"])supermux(\.exe)?($|[\s"])/i.test(cmd)
 }
 
 /**
@@ -49,8 +59,9 @@ export function isBrokerProcessWith(pid: number, deps: BrokerProbeDeps): boolean
       const ps = deps.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`])
       if (ps !== null && ps.trim()) return looksLikeBrokerCommand(ps)
       const tl = deps.run(["tasklist", "/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"])
-      // tasklist shows the image name only: bun.exe may be running the broker, so it counts.
-      if (tl !== null && tl.trim()) return /supermux-broker|"bun(\.exe)?"/i.test(tl)
+      // tasklist shows the image name only: bun.exe or supermux.exe may be running the broker
+      // (the desktop app is supermux.exe too, but this is the uncertain fallback: assume a broker).
+      if (tl !== null && tl.trim()) return /supermux-broker|"bun(\.exe)?"|"supermux\.exe"/i.test(tl)
       return true
     }
     const out = deps.run(["ps", "-p", String(pid), "-o", "command="])
@@ -127,7 +138,11 @@ export function acquirePidFile(path: string, deps: PidFileDeps = defaultPidFileD
   throw new Error(`could not claim ${path}: it keeps changing`)
 }
 
-/** Remove `path` only while it still names this process: never another broker's claim. */
+/**
+ * Remove `path` only while it still names this process: never another broker's claim. Between the
+ * read and the unlink another broker could only replace the file if it judged ours stale, i.e. after
+ * this process died, and release runs while we are alive (on exit): the window is accepted.
+ */
 export function releasePidFile(path: string, pid: number = process.pid): void {
   try {
     if (readFileSync(path, "utf8").trim() !== String(pid)) return

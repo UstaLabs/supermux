@@ -32,9 +32,21 @@ test("broker commands: the compiled binary and bun running the entry, nothing el
   // The desktop app is never a broker, whatever its path says.
   expect(looksLikeBrokerCommand("/Applications/Supermux Desktop.app/Contents/MacOS/Supermux Desktop")).toBe(false)
   expect(looksLikeBrokerCommand("/opt/supermux/bin/supermux")).toBe(false)
+  expect(looksLikeBrokerCommand("/usr/share/applications/../../opt/supermux/bin/supermux")).toBe(false)
   expect(looksLikeBrokerCommand("C:\\Program Files\\supermux\\supermux.exe")).toBe(false)
   expect(looksLikeBrokerCommand("/usr/bin/bun\0run\0dev")).toBe(false)
   expect(looksLikeBrokerCommand("tmux attach -t mux")).toBe(false)
+})
+
+test("the CLI-installed broker is a broker; the desktop app of the same name is not", () => {
+  expect(looksLikeBrokerCommand("/home/u/.local/bin/supermux")).toBe(true)
+  expect(looksLikeBrokerCommand("/home/u/.local/bin/supermux\0")).toBe(true)
+  expect(looksLikeBrokerCommand("/usr/local/bin/supermux")).toBe(true)
+  expect(looksLikeBrokerCommand("\"C:\\Users\\a\\AppData\\Local\\supermux\\bin\\supermux.exe\"")).toBe(true)
+  expect(looksLikeBrokerCommand("/opt/supermux/bin/supermux")).toBe(false)
+  expect(looksLikeBrokerCommand("\"C:\\Program Files\\supermux\\supermux.exe\"")).toBe(false)
+  expect(looksLikeBrokerCommand("/Applications/Supermux Desktop.app/Contents/MacOS/Supermux Desktop")).toBe(false)
+  expect(looksLikeBrokerCommand("/home/u/projects/supermux/tool")).toBe(false)
 })
 
 test("linux: cmdline match / no match", () => {
@@ -68,8 +80,9 @@ test("win32: powershell fails, tasklist decides", () => {
   expect(isBrokerProcessWith(9, deps({ platform: "win32", run }))).toBe(true)
   const other = (c: string[]) => c[0] === "tasklist" ? "\"notepad.exe\",\"9\"\r\n" : null
   expect(isBrokerProcessWith(9, deps({ platform: "win32", run: other }))).toBe(false)
+  // Image name only: supermux.exe may be the CLI broker, so the uncertain fallback says broker.
   const app = (c: string[]) => c[0] === "tasklist" ? "\"supermux.exe\",\"9\"\r\n" : null
-  expect(isBrokerProcessWith(9, deps({ platform: "win32", run: app }))).toBe(false)
+  expect(isBrokerProcessWith(9, deps({ platform: "win32", run: app }))).toBe(true)
 })
 
 test("win32: both fail assumes a broker", () => {
