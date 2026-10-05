@@ -91,6 +91,7 @@ class ContractTest {
         val f = json.decodeFromString<ServerFrame>(load("keep_awake")) as ServerFrame.KeepAwakeChanged
         kotlin.test.assertEquals(dev.supermux.net.KeepAwakeState.REASON_DENIED, f.keepAwake.reasonCode)
         kotlin.test.assertEquals(false, f.keepAwake.active)
+        kotlin.test.assertEquals(true, f.keepAwake.retrying)
     }
 
     @Test fun fs_dir_carries_real() {

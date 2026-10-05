@@ -82,7 +82,8 @@ data class HostIdentity(
  * [onBattery] are the settings ("Also on battery"); [active] says the inhibitor holds right now;
  * [supported] is false where the computer has no way to hold one. [reason] says why it isn't held
  * although enabled, and [reasonCode] tells the cases apart: "unsupported", "denied" (the desktop
- * refused every inhibitor; [hint] names the fix), "gave_up" (it kept exiting) or "on_battery".
+ * refused every inhibitor; [hint] names the fix; [retrying] while the broker keeps trying, e.g.
+ * "Waiting for you to log in…" at boot), "gave_up" (it kept exiting) or "on_battery".
  * Only the host computer itself may change it: the broker answers a PUT from anywhere else with 403.
  */
 @Serializable
@@ -94,6 +95,8 @@ data class KeepAwakeState(
     val reason: String? = null,
     val reasonCode: String? = null,
     val hint: String? = null,
+    /** "denied" on Linux: the broker keeps re-trying (e.g. until the desktop session starts). */
+    val retrying: Boolean = false,
 ) {
     companion object {
         const val REASON_DENIED = "denied"

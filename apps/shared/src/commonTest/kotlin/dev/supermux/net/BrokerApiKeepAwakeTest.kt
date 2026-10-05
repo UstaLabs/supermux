@@ -45,6 +45,7 @@ class BrokerApiKeepAwakeTest {
         ).getHost()
         assertEquals(KeepAwakeState.REASON_DENIED, host.keepAwake!!.reasonCode)
         assertEquals("Add a polkit rule", host.keepAwake!!.hint)
+        assertEquals(false, host.keepAwake!!.retrying) // absent: false
     }
 
     @Test fun an_older_broker_has_no_keep_awake() = runTest {

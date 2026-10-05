@@ -105,6 +105,15 @@ class DesktopHostingSettingsTest {
         assertEquals("Kept awake by the supermux app while it's open.", held.note)
     }
 
+    @Test fun denied_while_retrying_waits_for_the_login() {
+        val waiting = on.copy(active = false, reason = "The desktop refused it", reasonCode = "denied", hint = "Add a polkit rule", retrying = true)
+        val ui = keepAwakeUi(waiting, hasBattery = false, appHeld = false)!!
+        assertEquals("Waiting for you to log in… supermux keeps this computer awake once your desktop session starts.", ui.note)
+        assertNull(ui.warning)
+        // The app holding it wins: the computer IS kept awake.
+        assertEquals("Kept awake by the supermux app while it's open.", keepAwakeUi(waiting, false, appHeld = true)!!.note)
+    }
+
     @Test fun on_battery_is_a_neutral_pause() {
         val ui = keepAwakeUi(on.copy(onBattery = false, active = false, reason = "On battery", reasonCode = "on_battery"), true, false)!!
         assertEquals("Paused while on battery", ui.note)

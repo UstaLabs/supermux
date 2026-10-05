@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   CAFFEINATE, ES_CONTINUOUS_SYSTEM_REQUIRED, HINT_DENIED, KeepAwake, LINUX_BOUND_SH, LINUX_WAIT_SH, PROBE_MS,
-  REASON_DENIED, REASON_GAVE_UP, REASON_NO_LINUX_INHIBITOR, REASON_ON_BATTERY, RESPAWN_MAX_PER_HOUR,
+  REASON_DENIED, REASON_GAVE_UP, SESSION_POLL_MS, REASON_NO_LINUX_INHIBITOR, REASON_ON_BATTERY, RESPAWN_MAX_PER_HOUR,
   inhibitorPlan, isDenied, linuxOnBatteryFrom, parsePmsetBatt, parseWin32BatteryStatus, sessionBusEnv,
   spawnInhibitor, windowsKeepAwakeScript,
   type InhibitorChild, type InhibitorExit, type KeepAwakeClock, type KeepAwakeState,
@@ -53,10 +53,13 @@ const LINUX_ALL = (b: string) => `/usr/bin/${b}`
 function harness(opts: {
   platform?: NodeJS.Platform; enabled?: boolean; onBatterySetting?: boolean; which?: (b: string) => string | null
   spawnThrows?: boolean; env?: Record<string, string | undefined>
+  /** A child for which this returns true is refused at once ("Access denied" on stderr). */
+  deny?: (argv: string[]) => boolean
 } = {}) {
   const clock = new FakeClock()
   const children: FakeChild[] = []
   let battery: boolean | undefined = false
+  let session: boolean | undefined = false
   const states: KeepAwakeState[] = []
   const ka = new KeepAwake({
     platform: opts.platform ?? "darwin",
@@ -67,15 +70,21 @@ function harness(opts: {
       if (opts.spawnThrows) throw new Error("boom")
       const c = new FakeChild(argv, o?.env)
       children.push(c)
+      if (opts.deny?.(argv)) c.die({ code: 1, stderr: "Failed to inhibit: Access denied" })
       return c
     },
     onBattery: async () => battery,
+    sessionActive: async () => session,
     env: opts.env ?? { DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus" },
     uid: 1000,
     exists: () => true,
   }, { enabled: opts.enabled ?? true, onBattery: opts.onBatterySetting ?? true })
   ka.onChange((s) => states.push(s))
-  return { ka, clock, children, states, setBattery: (b: boolean | undefined) => { battery = b } }
+  return {
+    ka, clock, children, states,
+    setBattery: (b: boolean | undefined) => { battery = b },
+    setSession: (a: boolean | undefined) => { session = a },
+  }
 }
 
 const live = (cs: FakeChild[]) => cs.filter((c) => !c.killed)
@@ -254,9 +263,10 @@ describe("KeepAwake", () => {
     expect(h.children[2]!.argv[0]).toBe("/usr/bin/kde-inhibit")
     h.children[2]!.die({ code: 1, stderr: "access denied" })
     await flush()
-    await h.clock.advance(3_600_000)
     expect(h.children).toHaveLength(3)
-    const final: KeepAwakeState = { enabled: true, onBattery: true, active: false, supported: true, reason: REASON_DENIED, reasonCode: "denied", hint: HINT_DENIED }
+    const final: KeepAwakeState = {
+      enabled: true, onBattery: true, active: false, supported: true, reason: REASON_DENIED, reasonCode: "denied", hint: HINT_DENIED, retrying: true,
+    }
     expect(h.ka.state()).toEqual(final)
     expect(h.states.at(-1)).toEqual(final)
     expect(HINT_DENIED).toContain("org.freedesktop.login1.inhibit-block-sleep")
@@ -264,6 +274,93 @@ describe("KeepAwake", () => {
     h.ka.update({ enabled: true, onBattery: true })
     expect(h.children).toHaveLength(4)
     expect(h.children[3]!.argv[0]).toBe("/usr/bin/systemd-inhibit")
+  })
+
+  // ── Linux: a denial at boot is re-tried (no active session yet) ────────────────────────────
+
+  test("denied at boot, then the session turns active: the re-try holds and reports active", async () => {
+    let sessionUp = false
+    const h = harness({ platform: "linux", deny: () => !sessionUp })
+    h.setSession(false)
+    h.ka.start()
+    await flush()
+    expect(h.children).toHaveLength(3) // systemd-inhibit, gnome, kde: all refused
+    expect(h.ka.state()).toMatchObject({ active: false, reasonCode: "denied", retrying: true })
+    // The user logs in a little later.
+    sessionUp = true
+    h.setSession(true)
+    await h.clock.advance(SESSION_POLL_MS)
+    expect(h.children).toHaveLength(4)
+    expect(h.children[3]!.argv[0]).toBe("/usr/bin/systemd-inhibit")
+    // Not "active" until it survives the probe window (a refusal would come back within it).
+    expect(h.ka.state()).toMatchObject({ active: false, reasonCode: "denied", retrying: true })
+    await h.clock.advance(PROBE_MS)
+    expect(h.ka.state()).toEqual(ON)
+    expect(h.states.at(-1)).toEqual(ON)
+    // Holding: no more re-tries or session polls.
+    expect(h.clock.pending).toHaveLength(0)
+    await h.clock.advance(3_600_000)
+    expect(h.children).toHaveLength(4)
+  })
+
+  test("while denied, re-tries follow 15 s, 30 s, 60 s, then every 2 min (no tight loop)", async () => {
+    const h = harness({ platform: "linux", deny: () => true })
+    h.setSession(undefined) // loginctl unknown: only the schedule drives re-tries
+    h.ka.start()
+    await flush()
+    const chains = () => h.children.filter((c) => c.argv[0] === "/usr/bin/systemd-inhibit").length
+    expect(chains()).toBe(1)
+    const at: number[] = []
+    const t0 = h.clock.t
+    for (let i = 0; i < 6 * 60; i++) {
+      const before = chains()
+      await h.clock.advance(1_000)
+      if (chains() > before) at.push(h.clock.t - t0)
+    }
+    expect(at).toEqual([15_000, 45_000, 105_000, 225_000, 345_000])
+    expect(h.children).toHaveLength(6 * 3) // three refusals per chain, nothing more
+    expect(h.ka.state()).toMatchObject({ active: false, reasonCode: "denied", retrying: true })
+  })
+
+  test("a wake re-tries the chain at once", async () => {
+    let allow = false
+    const h = harness({ platform: "linux", deny: () => !allow })
+    h.ka.start()
+    await flush()
+    expect(h.children).toHaveLength(3)
+    allow = true
+    await h.ka.refresh()
+    expect(h.children).toHaveLength(4)
+    await h.clock.advance(PROBE_MS)
+    expect(h.ka.state().active).toBe(true)
+  })
+
+  test("an already-active session that is denied (a real polkit refusal) keeps to the schedule", async () => {
+    const h = harness({ platform: "linux", deny: () => true })
+    h.setSession(true)
+    h.ka.start()
+    await flush()
+    await h.clock.advance(14_000)
+    expect(h.children).toHaveLength(3) // session polls saw no change: no extra re-try
+    await h.clock.advance(1_000)
+    expect(h.children).toHaveLength(6)
+  })
+
+  test("turning it off while denied stops the re-tries", async () => {
+    const h = harness({ platform: "linux", deny: () => true })
+    h.ka.start()
+    await flush()
+    h.ka.update({ enabled: false, onBattery: true })
+    expect(h.clock.pending).toHaveLength(0)
+    await h.clock.advance(600_000)
+    expect(h.children).toHaveLength(3)
+    expect(h.ka.state().retrying).toBeUndefined()
+  })
+
+  test("macOS never reports retrying", async () => {
+    const h = harness({ platform: "darwin" })
+    h.ka.start()
+    expect(h.ka.state().retrying).toBeUndefined()
   })
 
   test("a fallback that holds stays: its later exits get the normal backoff", async () => {

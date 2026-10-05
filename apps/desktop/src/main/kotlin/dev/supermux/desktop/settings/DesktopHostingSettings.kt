@@ -180,6 +180,8 @@ internal fun keepAwakeUi(state: KeepAwakeState?, hasBattery: Boolean?, appHeld: 
         !state.supported -> note = reason
         !state.enabled -> Unit
         appHeld -> note = HostingCopy.APP_HELD
+        // Linux at boot: no desktop session yet, so the inhibitors are refused; the broker re-tries.
+        state.reasonCode == KeepAwakeState.REASON_DENIED && state.retrying -> note = HostingCopy.WAITING_FOR_LOGIN
         state.reasonCode == KeepAwakeState.REASON_ON_BATTERY -> note = HostingCopy.PAUSED_ON_BATTERY
         !state.active && reason != null -> warning = reason
     }

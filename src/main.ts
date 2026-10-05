@@ -145,7 +145,7 @@ import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
 import { curatorPromptPath, frpcPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
-import { KeepAwake, batteryProbe, spawnInhibitor } from "./core/power/keep-awake"
+import { KeepAwake, batteryProbe, loginSessionProbe, spawnInhibitor } from "./core/power/keep-awake"
 import { WakeDetector, runWakeActions } from "./core/power/wake"
 import { SearchStore } from "./core/search/store"
 import { ForgeStore } from "./core/forge/store"
@@ -372,6 +372,8 @@ const keepAwake = new KeepAwake({
   spawn: spawnInhibitor,
   which: (bin) => bunWhich(bin, process.env.PATH ?? ""),
   onBattery: batteryProbe(process.platform),
+  // Linux: a denial at boot (no active session yet) is re-tried once loginctl shows one.
+  ...(process.platform === "linux" ? { sessionActive: loginSessionProbe(process.getuid?.()) } : {}),
   log: (event, data) => keepAwakeLog.info(event, data),
 }, settings.getKeepAwake(process.env))
 keepAwake.start()

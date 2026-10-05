@@ -10,6 +10,10 @@
 //          wrapper (GNOME; session bus, no polkit)
 //       3. `kde-inhibit --power sh -c <wait for the broker>` (KDE; session bus, no polkit)
 //     If every one is refused, the state says so (`reasonCode: "denied"`) with a hint naming the fix.
+//     That is not final: at boot (a lingering user unit, autologin) there is no active session yet,
+//     so logind refuses and GNOME isn't up. While denied, the whole chain is re-tried after 15 s,
+//     30 s, 60 s and then every 2 min, at once on a wake, and at once when `loginctl` shows this
+//     user's session turn active (`retrying: true` meanwhile).
 //   - Windows: a hidden PowerShell that calls `SetThreadExecutionState(ES_CONTINUOUS |
 //     ES_SYSTEM_REQUIRED)` and then `Wait-Process -Id <brokerPid>`
 // "Also on battery" off releases the inhibitor while the computer runs on battery (polled every
@@ -39,6 +43,8 @@ export interface KeepAwakeState {
   reasonCode?: KeepAwakeReasonCode
   /** What the user can do about it ([reasonCode] "denied"). */
   hint?: string
+  /** "denied" on Linux: the chain is re-tried (e.g. once the desktop session starts). */
+  retrying?: boolean
 }
 
 /** How the inhibitor ended: a normal exit (code/signal) or a failure to start (error). */
@@ -86,6 +92,8 @@ export interface KeepAwakeDeps {
   env?: Record<string, string | undefined>
   uid?: number
   exists?: (path: string) => boolean
+  /** Linux: is this user's login session active (`loginctl show-user`)? undefined when unknown. */
+  sessionActive?: () => Promise<boolean | undefined>
 }
 
 export const BATTERY_POLL_MS = 30_000
@@ -100,6 +108,11 @@ const HEALTHY_RUN_MS = 60_000
  * as "couldn't hold one here" (no session bus, no session manager), and the next one is tried.
  */
 export const PROBE_MS = 5_000
+
+/** Linux, while denied: re-try the whole chain after these delays, the last one repeating. */
+export const DENIED_RETRY_MS = [15_000, 30_000, 60_000, 120_000] as const
+/** Linux, while denied: how often `loginctl` is asked whether the session turned active. */
+export const SESSION_POLL_MS = 10_000
 
 export const REASON_ON_BATTERY = "Released while on battery"
 export const REASON_GAVE_UP = "The keep-awake helper kept exiting; it was stopped after 10 tries in an hour"
@@ -394,6 +407,16 @@ export function batteryProbe(platform: NodeJS.Platform): () => Promise<boolean |
   return async () => undefined
 }
 
+/** `loginctl show-user <uid> -p State --value` == "active"; undefined when it can't tell. */
+export function loginSessionProbe(uid: number | undefined): () => Promise<boolean | undefined> {
+  return async () => {
+    if (uid === undefined) return undefined
+    const out = await execText("loginctl", ["show-user", String(uid), "-p", "State", "--value"])
+    if (out === undefined) return undefined
+    return out.trim() === "active"
+  }
+}
+
 export const realClock: KeepAwakeClock = {
   now: () => Date.now(),
   setTimeout: (fn, ms) => {
@@ -423,6 +446,13 @@ export class KeepAwake {
   private candidateHeld = false
   /** Every candidate was refused or couldn't hold. */
   private exhausted = false
+  /** Linux: a re-try of the chain after a denial is under way (not yet confirmed holding). */
+  private retryingChain = false
+  private deniedRetryTimer: unknown = undefined
+  private deniedRetryStep = 0
+  private sessionPollTimer: unknown = undefined
+  private lastSessionActive: boolean | undefined = undefined
+  private confirmTimer: unknown = undefined
   private child: InhibitorChild | undefined
   private childStartedAt = 0
   private respawnTimer: unknown = undefined
@@ -470,16 +500,17 @@ export class KeepAwake {
     const s: KeepAwakeState = {
       enabled: this.settings.enabled,
       onBattery: this.settings.onBattery,
-      active: this.child !== undefined,
+      active: this.child !== undefined && !this.retryingChain,
       supported: "candidates" in plan,
     }
     if ("unsupported" in plan) {
       s.reason = plan.unsupported
       s.reasonCode = "unsupported"
-    } else if (this.settings.enabled && this.exhausted) {
+    } else if (this.settings.enabled && (this.exhausted || this.retryingChain)) {
       s.reason = REASON_DENIED
       s.reasonCode = "denied"
       s.hint = HINT_DENIED
+      if (this.retriesDenied()) s.retrying = true
     } else if (this.settings.enabled && this.gaveUp) {
       s.reason = this.lastError ? `${REASON_GAVE_UP} (${this.lastError})` : REASON_GAVE_UP
       s.reasonCode = "gave_up"
@@ -518,6 +549,7 @@ export class KeepAwake {
     this.settings = { ...next }
     this.gaveUp = false
     this.exhausted = false
+    this.clearDeniedRetry()
     this.candidateIndex = 0
     this.candidateHeld = false
     this.failures = []
@@ -535,6 +567,8 @@ export class KeepAwake {
   /** Re-check the battery now and re-apply (after a wake: the power source may have changed). */
   async refresh(): Promise<void> {
     if (!this.started || this.stopped) return
+    // Linux, denied: a wake is a good moment to try again (the session may be active now).
+    if (this.exhausted && this.settings.enabled && this.retriesDenied()) this.retryChain("wake")
     if (this.needsBattery()) await this.pollBattery()
     else {
       this.apply()
@@ -547,6 +581,7 @@ export class KeepAwake {
     this.stopped = true
     this.started = false
     this.clearRespawn()
+    this.clearDeniedRetry()
     this.stopPoll()
     this.release()
   }
@@ -593,6 +628,20 @@ export class KeepAwake {
     this.child = child
     this.childStartedAt = this.clock.now()
     this.log("keep_awake_acquired", { platform: this.deps.platform, inhibitor: candidate.name })
+    if (this.retryingChain) {
+      // A re-try only counts once the inhibitor has survived the probe window (a refusal comes
+      // back within it): until then the state stays "denied, retrying" instead of flickering.
+      this.clearConfirm()
+      this.confirmTimer = this.clock.setTimeout(() => {
+        this.confirmTimer = undefined
+        if (this.child !== child || !this.retryingChain) return
+        this.retryingChain = false
+        this.deniedRetryStep = 0
+        this.clearDeniedRetry()
+        this.log("keep_awake_retry_held", { inhibitor: candidate.name })
+        this.emitIfChanged()
+      }, PROBE_MS)
+    }
     const onExit = (e: InhibitorExit) => {
       if (this.child !== child) return // released on purpose, or replaced
       this.child = undefined
@@ -623,7 +672,10 @@ export class KeepAwake {
     this.candidateHeld = false
     if (this.candidateIndex >= candidates.length) {
       this.exhausted = true
+      this.retryingChain = false
+      this.clearConfirm()
       this.log("keep_awake_denied", { tried: candidates.map((c) => c.name) })
+      if (this.retriesDenied()) this.scheduleDeniedRetry()
       this.emitIfChanged()
       return
     }
@@ -633,6 +685,7 @@ export class KeepAwake {
 
   private onUnexpectedExit(e: InhibitorExit, livedMs = 0): void {
     const now = this.clock.now()
+    this.clearConfirm()
     this.lastError = e.error ?? (e.code != null ? `exit ${e.code}` : e.signal ? `signal ${e.signal}` : undefined)
     this.log("keep_awake_child_exited", { ...e, livedMs })
     if (livedMs >= PROBE_MS) this.candidateHeld = true
@@ -670,6 +723,86 @@ export class KeepAwake {
       }
     }, delay)
     this.emitIfChanged()
+  }
+
+  /** Denials are re-tried on Linux only (boot before the session; macOS/Windows never deny). */
+  private retriesDenied(): boolean {
+    return this.deps.platform === "linux"
+  }
+
+  /** The next scheduled re-try of the chain, plus the session watch, while denied. */
+  private scheduleDeniedRetry(): void {
+    if (!this.started || this.stopped || !this.settings.enabled) return
+    if (this.deniedRetryTimer !== undefined) this.clock.clearTimeout(this.deniedRetryTimer)
+    const delay = DENIED_RETRY_MS[Math.min(this.deniedRetryStep, DENIED_RETRY_MS.length - 1)]!
+    this.deniedRetryStep++
+    this.deniedRetryTimer = this.clock.setTimeout(() => {
+      this.deniedRetryTimer = undefined
+      this.retryChain("schedule")
+    }, delay)
+    this.startSessionWatch()
+  }
+
+  /** Try the whole chain again from the first inhibitor. */
+  private retryChain(trigger: "schedule" | "wake" | "session"): void {
+    if (!this.started || this.stopped || !this.settings.enabled || !this.exhausted) return
+    if (this.deniedRetryTimer !== undefined) {
+      this.clock.clearTimeout(this.deniedRetryTimer)
+      this.deniedRetryTimer = undefined
+    }
+    this.log("keep_awake_retry", { trigger, step: this.deniedRetryStep })
+    this.exhausted = false
+    this.candidateIndex = 0
+    this.candidateHeld = false
+    if (!this.shouldHold()) {
+      // e.g. released on battery right now: stay denied and keep to the schedule.
+      this.exhausted = true
+      this.scheduleDeniedRetry()
+      return
+    }
+    this.retryingChain = true
+    this.acquire()
+  }
+
+  private startSessionWatch(): void {
+    const probe = this.deps.sessionActive
+    if (!probe || this.sessionPollTimer !== undefined) return
+    const poll = async () => {
+      let now: boolean | undefined
+      try { now = await probe() } catch { now = undefined }
+      if (this.sessionPollTimer === undefined) return // stopped meanwhile
+      const prev = this.lastSessionActive
+      this.lastSessionActive = now
+      if (now === true && prev !== true && this.exhausted) {
+        this.log("keep_awake_session_active", {})
+        this.deniedRetryStep = 0
+        this.retryChain("session")
+      }
+    }
+    this.sessionPollTimer = this.clock.setInterval(() => { void poll() }, SESSION_POLL_MS)
+    // The state at the denial is the baseline: only a change to "active" triggers a re-try.
+    if (this.lastSessionActive === undefined) {
+      void (async () => {
+        try { this.lastSessionActive = await probe() } catch { /* unknown */ }
+      })()
+    }
+  }
+
+  private clearDeniedRetry(): void {
+    if (this.deniedRetryTimer !== undefined) this.clock.clearTimeout(this.deniedRetryTimer)
+    this.deniedRetryTimer = undefined
+    if (this.sessionPollTimer !== undefined) this.clock.clearInterval(this.sessionPollTimer)
+    this.sessionPollTimer = undefined
+    this.lastSessionActive = undefined
+    this.deniedRetryStep = 0
+    this.retryingChain = false
+    this.clearConfirm()
+  }
+
+  private clearConfirm(): void {
+    if (this.confirmTimer === undefined) return
+    this.clock.clearTimeout(this.confirmTimer)
+    this.confirmTimer = undefined
   }
 
   private clearRespawn(): void {

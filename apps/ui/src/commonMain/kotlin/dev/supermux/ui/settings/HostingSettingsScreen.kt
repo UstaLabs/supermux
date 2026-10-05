@@ -190,6 +190,7 @@ object HostingCopy {
     const val ON_BATTERY = "Also on battery"
     const val PAUSED_ON_BATTERY = "Paused while on battery"
     const val APP_HELD = "Kept awake by the supermux app while it's open."
+    const val WAITING_FOR_LOGIN = "Waiting for you to log in… supermux keeps this computer awake once your desktop session starts."
     const val LID_CLOSED = "Even with the lid closed"
     const val LID_CLOSED_HELP =
         "Your Mac stays awake with the lid closed. It can get hot: don't put it in a bag while this is on."
