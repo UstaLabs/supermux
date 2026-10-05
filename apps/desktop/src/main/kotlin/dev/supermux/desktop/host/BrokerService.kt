@@ -16,6 +16,9 @@ object BrokerService {
     const val WINDOWS_TASK_NAME = "Supermux Host"
     const val WINDOWS_BROKER_EXE = "supermux-broker.exe"
     const val WINDOWS_TASK_XML = "Supermux/supermux-host-task.xml"
+    /** ERROR_CANCELLED: what the elevated batch exits with when the UAC prompt is declined. */
+    internal const val UAC_DECLINED_EXIT = 1223
+
     const val WINDOWS_UPDATE_DECLINED =
         "Couldn't update the background service (permission declined); still running the previous version."
 
@@ -572,9 +575,13 @@ Terminal=false
         }
         val innerArgs = listOf("-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsArgument(inner))
             .joinToString(" ")
+        // A declined UAC prompt makes Start-Process fail with a NON-terminating error: $process is
+        // then null and `exit $null.ExitCode` exits 0, reporting a success that never happened
+        // (the task looked installed and no broker ran). Stop on it and exit 1223 (ERROR_CANCELLED).
         val script =
-            "\$process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru " +
-                "-ArgumentList ${powershellLiteral(innerArgs)}; exit \$process.ExitCode"
+            "try { \$process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ErrorAction Stop " +
+                "-ArgumentList ${powershellLiteral(innerArgs)} } catch { exit $UAC_DECLINED_EXIT }; " +
+                "if (-not \$process) { exit $UAC_DECLINED_EXIT }; exit \$process.ExitCode"
         return env.run(
             listOf(
                 "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",

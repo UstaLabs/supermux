@@ -242,6 +242,15 @@ class BrokerServiceTest {
         assertTrue("\"A=x\\\\\$y%%z\"" in d, d)
     }
 
+    @Test fun aDeclinedUacPromptIsAFailureNotASuccess() {
+        val env = winEnv()
+        BrokerService.install(winSpec, env)
+        val script = elevatedCalls(env).single().last()
+        // Start-Process's error is non-terminating: without -ErrorAction Stop + a null check,
+        // `exit $process.ExitCode` would exit 0 after a "No".
+        assertTrue("-ErrorAction Stop" in script && "catch { exit 1223 }" in script && "if (-not \$process) { exit 1223 }" in script, script)
+    }
+
     @Test fun windowsInstallIsOneElevatedCallWithCreateAndRun() {
         val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory())
         BrokerService.install(winSpec, env)
