@@ -241,6 +241,11 @@ export type AcpContextLaunch = {
   mcpServers: McpServer[]
   /** `_meta` of `session/new` (only when the session is created). */
   newSessionMeta?: Record<string, unknown>
+  /**
+   * Text sent once as the leading block of the conversation's first prompt (Cursor's instructions
+   * channel). Given on every launch; the driver sends it only while the conversation has no turn.
+   */
+  firstPromptPreamble?: string
 }
 
 export type AcpContextAdapter = {
@@ -292,29 +297,47 @@ export function grokContext(factoryServers: McpServer[]): AcpContextAdapter {
   }
 }
 
+/**
+ * The text Cursor gets in front of a session's first prompt: Cursor's ACP server has no per-session
+ * system-prompt channel (C0, cursor-agent 2026.09.18: plugin rules/, $HOME/.cursor/rules,
+ * $HOME/AGENTS.md, --add-dir, ACP _meta.rules and $HOME/.cursor/hooks.json sessionStart /
+ * beforeSubmitPrompt additional_context all ignored; only workdir rules load), so the instructions
+ * ride the conversation itself: once, as the first prompt's leading text block. session/load
+ * keeps the conversation, so a reloaded session still has them (proven live).
+ */
+export function cursorPreamble(instructions: string): string {
+  return [
+    "<session-instructions>",
+    "Standing instructions for this whole session, set by the application that runs you (not a message from the user). Follow them in every turn; do not reply to this block itself.",
+    "",
+    instructions,
+    "</session-instructions>",
+  ].join("\n")
+}
+
 export function cursorContext(factoryServers: McpServer[]): AcpContextAdapter {
   return {
     support: {
       capabilities: {
-        instructions: { support: "unsupported", note: "No proven per-session instructions channel for Cursor (C0 ran out of quota); never written into the repo" },
-        skills: { support: "unverified", note: "a generated plugin per skills folder via --plugin-dir (not verified: Cursor does not advertise plugin skills over ACP)" },
-        plugins: { support: "unverified", note: "--plugin-dir <plugin> (not verified live)" },
-        mcpServers: { support: "unverified", note: "ACP session/new mcpServers (the server starts and lists; a tool call was not verified)" },
+        instructions: { support: "supported", note: "the first prompt's leading text block (Cursor's ACP server has no system-prompt channel); fixed at creation, kept by session/load; subagents do not get it" },
+        skills: { support: "unsupported", note: "Cursor's ACP server ignores --plugin-dir and reads skills only from the workspace and $HOME/.cursor/skills / $HOME/.agents/skills (host-owned); never written into the repo" },
+        plugins: { support: "unsupported", note: "Cursor's ACP server ignores --plugin-dir (verified live on 2026.09.18: neither plugin skills nor plugin rules load)" },
+        mcpServers: { support: "supported", note: "ACP session/new mcpServers (subagents get them too)" },
       },
       drops: context => acpServerDrops(context, factoryServers),
       update: {
-        skills: { add: "reload", remove: "reload", note: "unverified for Cursor: a change relaunches the agent" },
-        plugins: { add: "reload", remove: "reload", note: "unverified for Cursor: a change relaunches the agent" },
-        mcpServers: { add: "reload", remove: "reload", note: "unverified for Cursor: a change relaunches the agent" },
+        skills: { add: "reload", remove: "reload", note: "skills are unsupported on Cursor" },
+        plugins: { add: "reload", remove: "reload", note: "plugins are unsupported on Cursor" },
+        mcpServers: { add: "reload", remove: "reload", note: "ACP mcpServers are passed at session/new|load: a change relaunches cursor-agent (new process + session/load)" },
       },
+      // C0: Cursor does NOT re-list on notifications/tools/list_changed (a tool added later is "not found").
     },
     launch(context) {
       const use = applied(context)
-      const args: string[] = []
-      if (use.skills.length || use.plugins.length) {
-        for (const entry of pluginFolder(context, use.skills, use.plugins, [".cursor-plugin", ".claude-plugin"]).entries) args.push("--plugin-dir", entry)
+      return {
+        args: [], env: {}, mcpServers: use.mcpServers.map(toAcp),
+        ...(use.instructions !== undefined ? { firstPromptPreamble: cursorPreamble(use.instructions) } : {}),
       }
-      return { args, env: {}, mcpServers: use.mcpServers.map(toAcp) }
     },
   }
 }

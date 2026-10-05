@@ -235,6 +235,14 @@ export function acp(options: AcpOptions): AgentDriver {
     let turn: AbortController | undefined
     let cancelRetry: ReturnType<typeof setTimeout> | undefined
     let replay = false
+    /** User messages the session/load replay carried (0: the conversation has no turn yet). */
+    let replayedUserMessages = 0
+    /**
+     * Context instructions still to send as the first prompt's leading block (Cursor). Pending
+     * while the conversation has no turn: on create, after a load whose replay had no user
+     * message, or on re-attach when the keeper meta says so.
+     */
+    let preamble: string | undefined
     let closed = false
     let runtimeReady = false
     let agentSessionId = ''
@@ -480,6 +488,7 @@ export function acp(options: AcpOptions): AgentDriver {
           if (childToolSessions.size > 512) childToolSessions.delete(childToolSessions.keys().next().value as string)
         }
       }
+      if (replay && !child && (notification.update as { sessionUpdate?: unknown } | undefined)?.sessionUpdate === 'user_message_chunk') replayedUserMessages++
       emitUpdate({ protocol: 'acp', value: notification.update as SessionNotification['update'], ...(typeof sessionId === 'string' ? { sessionId } : {}), ...(replay ? { replay: true } : {}) })
       io.ackConsumed()
     }
@@ -804,7 +813,13 @@ export function acp(options: AcpOptions): AgentDriver {
       turn = active
       const onAbort = () => { if (turn === active) beginCancel() }
       signal.addEventListener('abort', onAbort, { once: true })
-      try { return await ioWait(connection.prompt({ sessionId: agentSessionId, prompt: content })) }
+      // The preamble goes with the first prompt only; once sent it is part of the conversation.
+      const blocks: ContentBlock[] = preamble !== undefined ? [{ type: 'text', text: preamble }, ...content] : content
+      if (preamble !== undefined) {
+        preamble = undefined
+        try { io.setMeta({ preamblePending: false }) } catch { /* */ }
+      }
+      try { return await ioWait(connection.prompt({ sessionId: agentSessionId, prompt: blocks })) }
       finally {
         signal.removeEventListener('abort', onAbort)
         promptActivityIds.clear()
@@ -992,6 +1007,7 @@ export function acp(options: AcpOptions): AgentDriver {
         advertisedModes = io.welcome.meta.advertisedModes === true
         hasModeConfig = io.welcome.meta.hasModeConfig === true
         cursorSubagents = io.welcome.meta.cursorSubagents === true
+        if (io.welcome.meta.preamblePending === true) preamble = sessionContext?.firstPromptPreamble
         if (typeof io.welcome.meta.grokSubagentCancel === 'boolean') grokSubagentCancel = io.welcome.meta.grokSubagentCancel
         startSideChannel(readOpenCodeServerInfo(io.welcome.meta.opencodeServer))
         runtimeReady = true
@@ -1023,11 +1039,14 @@ export function acp(options: AcpOptions): AgentDriver {
         else if (canLoad) {
           replay = true
           try { configOptions = readConfigOptions(await setup(connection.loadSession({ ...params, sessionId: agentSessionId }))) } finally { replay = false }
+          // A conversation that never had a turn (relaunched before its first prompt) still needs it.
+          if (replayedUserMessages === 0) preamble = sessionContext?.firstPromptPreamble
         } else throw new UnsupportedOperation('resume', options.id)
       } else {
         const created = await setup(connection.newSession(sessionContext?.newSessionMeta ? { ...params, _meta: sessionContext.newSessionMeta } : params))
         agentSessionId = created.sessionId
         configOptions = readConfigOptions(created)
+        preamble = sessionContext?.firstPromptPreamble
       }
       // load/resume results carry no option lists (Cursor), so a caller's picker-style
       // value could not be resolved on a resumed session. A turn-less session/new is
@@ -1047,7 +1066,7 @@ export function acp(options: AcpOptions): AgentDriver {
       // A process this connect spawned uses the planned server; one we re-attached without an
       // agent session keeps whatever server it recorded (none when an older build spawned it).
       const serverInfo = readOpenCodeServerInfo(io.welcome.meta.opencodeServer) ?? (io.welcome.meta.agentSessionId === undefined ? plannedServer : undefined)
-      io.setMeta({ agentSessionId, permissions: livePermissions, advertisedModes, hasModeConfig, cursorSubagents, ...(options.sessionConfig ? { sessionConfig: appliedConfig } : {}), ...(configOptions.length ? { configOptions } : {}), ...(serverInfo ? { opencodeServer: serverInfo } : {}) })
+      io.setMeta({ agentSessionId, permissions: livePermissions, advertisedModes, hasModeConfig, cursorSubagents, preamblePending: preamble !== undefined, ...(options.sessionConfig ? { sessionConfig: appliedConfig } : {}), ...(configOptions.length ? { configOptions } : {}), ...(serverInfo ? { opencodeServer: serverInfo } : {}) })
       startSideChannel(serverInfo)
       finishSetup()
       runtimeReady = true

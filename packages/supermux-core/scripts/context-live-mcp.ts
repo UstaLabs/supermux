@@ -2,7 +2,10 @@
  * Host MCP servers (slice C2) live check: real CLIs driven through the core with host servers whose
  * tools are TypeScript functions in this process.
  *
- *   bun scripts/context-live-mcp.ts [claude] [codex] [grok] [opencode]
+ *   bun scripts/context-live-mcp.ts [claude] [codex] [cursor] [grok] [opencode]
+ *
+ * Cursor runs model Auto (CONTEXT_LIVE_CURSOR_MODEL overrides) in a session-private HOME;
+ * CONTEXT_LIVE_DIR overrides the scratch root.
  *
  * Per agent, one session with two host servers ("orders", "calendar") + one external stdio server
  * ("extprobe", the C0 probe server); every tool returns its own random probe token and the prompts
@@ -30,22 +33,23 @@ import { createCore } from "../src/index.js"
 import type { AgentDriver, Core, CoreEvent, Session } from "../src/index.js"
 import { claude } from "../src/claude/index.js"
 import { codex } from "../src/codex/index.js"
-import { grok, opencode } from "../src/agents/index.js"
+import { cursor, grok, opencode } from "../src/agents/index.js"
+import { prepareCursorEnvironment } from "../src/environment/index.js"
 import { codexTokenArgs, CODEX_TOKEN_ENV } from "../src/accounts/adapters/codex.js"
 import { mcpServer, tool, type HostMcpServer, type ToolContext } from "../src/mcp/index.js"
 
 const HOME = homedir()
-const RUN = join(HOME, ".cache", "context-c2", `run-${new Date().toISOString().replace(/[:.]/g, "-")}`)
+const RUN = join(process.env.CONTEXT_LIVE_DIR || join(HOME, ".cache", "context-c2"), `run-${new Date().toISOString().replace(/[:.]/g, "-")}`)
 const MCP_SERVER = join(HOME, ".cache", "context-c0", "mcp", "probe-mcp-server.mjs")
 const LIMITS = { interruptTimeoutMs: 10_000, maxPending: 16, outstandingActivity: 256 }
 const KEEPER = { parkedDeadlineMs: 60_000, journalMaxBytes: 8_000_000, connectTimeoutMs: 15_000 }
 const TIMEOUTS = { setupTimeoutMs: 120_000, shutdownTimeoutMs: 5_000, maxFrameBytes: 32 << 20 }
 const ACP = { ...TIMEOUTS, maxOutstandingActivity: 256, cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, inheritEnv: false }
-const ALL = ["claude", "codex", "grok", "opencode"] as const
+const ALL = ["claude", "codex", "cursor", "grok", "opencode"] as const
 type Agent = typeof ALL[number]
 const wanted = (process.argv.slice(2).filter(a => (ALL as readonly string[]).includes(a)) as Agent[])
 const agents: Agent[] = wanted.length ? wanted : [...ALL]
-const LIST_CHANGED: Record<Agent, boolean> = { claude: true, opencode: true, codex: false, grok: false }
+const LIST_CHANGED: Record<Agent, boolean> = { claude: true, opencode: true, codex: false, cursor: false, grok: false }
 
 type Line = { agent: string; check: string; ok: boolean; evidence: unknown }
 const results: Line[] = []
@@ -141,7 +145,7 @@ function lateTool(words: Words, calls: Calls) {
 // ---------------------------------------------------------------- drivers (same scheme as context-live.ts)
 type Setup = { driver: AgentDriver; profiles?: Record<string, { agent: string; env?: Record<string, string>; args?: string[] }>; authProfile?: string; keeperDir: string }
 
-function setup(agent: Agent, dir: string): Setup {
+async function setup(agent: Agent, dir: string): Promise<Setup> {
   const keeperDir = join(dir, "keeper")
   const keeper = { stateDirectory: keeperDir, limits: KEEPER }
   if (agent === "claude") {
@@ -181,6 +185,21 @@ function setup(agent: Agent, dir: string): Setup {
       keeperDir,
       driver: grok({
         id: "grok", command: "grok", commandArgs: [], noLeader: true, reasoningEffort: "low", authPath: auth, env: { ...baseEnv(), HOME: home },
+        mcpServers: [], permissions: { kind: "acp", policy: "auto-approve", nativeMode: null }, ...ACP, keeper,
+      }),
+    }
+  }
+  if (agent === "cursor") {
+    // A session-private HOME with a copy of the Cursor credentials (never --model against the real HOME).
+    const home = join(dir, "home")
+    await prepareCursorEnvironment({
+      home, workdir: join(dir, "work"), mcpServers: [], skillsPaths: [], instructions: null, sharedRuntime: null, platform: process.platform,
+      credentials: { apiKey: null, userCursorDir: join(HOME, ".cursor"), userConfigDir: join(HOME, ".config") },
+    })
+    return {
+      keeperDir,
+      driver: cursor({
+        id: "cursor", command: "cursor-agent", commandArgs: [], env: { ...baseEnv(), HOME: home }, model: process.env.CONTEXT_LIVE_CURSOR_MODEL || "auto",
         mcpServers: [], permissions: { kind: "acp", policy: "auto-approve", nativeMode: null }, ...ACP, keeper,
       }),
     }
@@ -236,7 +255,7 @@ async function check(agent: Agent) {
   const dir = join(RUN, agent)
   const work = scratchRepo(join(dir, "work"))
   const state = join(dir, "state")
-  const s = setup(agent, dir)
+  const s = await setup(agent, dir)
   const id = `mcp-${agent}`
   const words: Words = { orders: word(), calendar: word(), ext: word(), late: word(), fail: word(), whoami: word(), restart: word() }
   const calls: Calls = []

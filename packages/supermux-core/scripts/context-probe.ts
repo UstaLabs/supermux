@@ -3,7 +3,10 @@
  * CLIs on this host. Every "yes" is proven by the agent repeating a code word that only the
  * mechanism under test could have given it.
  *
- *   bun scripts/context-probe.ts [claude] [codex] [cursor] [grok] [opencode] [--only N[,N]]
+ *   bun scripts/context-probe.ts [claude] [codex] [cursor] [grok] [opencode] [--only N[,N]] [--cursor-model M]
+ *
+ * Env: CONTEXT_PROBE_CURSOR_MODEL (or --cursor-model) overrides Cursor's model (a free plan only
+ * accepts "auto"); CONTEXT_PROBE_DIR overrides the scratch root (default ~/.cache/context-c0).
  *
  * Items: 1 instructions · 2 skills · 3 plugins · 4 MCP (+ initialize log, subagent) ·
  *        5 tools/list_changed · 6 add skill/plugin mid-session · 7 add MCP server mid-session ·
@@ -33,7 +36,7 @@ import { codexTokenArgs, CODEX_TOKEN_ENV } from "../src/accounts/adapters/codex.
 
 // ---------- setup ----------
 const HOME = homedir()
-const C0 = join(HOME, ".cache", "context-c0")
+const C0 = process.env.CONTEXT_PROBE_DIR || join(HOME, ".cache", "context-c0")
 const RUN = join(C0, `run-${new Date().toISOString().replace(/[:.]/g, "-")}`)
 const MCP_DIR = join(C0, "mcp")
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -47,7 +50,11 @@ type Agent = typeof AGENTS[number]
 const wanted = argv.filter(a => (AGENTS as readonly string[]).includes(a)) as Agent[]
 const want = (n: number) => !ONLY || ONLY.has(n)
 
-const MODELS = { claude: "haiku", codex: "gpt-5.6-luna", cursor: "gemini-3.7-flash[effort=high]", opencode: "opencode-go/qwen3.7-plus" }
+/** Cursor's ACP model picker calls Auto "default[]" ("auto" is refused as an invalid value). */
+function cursorAlias(model: string) { return model.toLowerCase() === "auto" ? "default[]" : model }
+const cursorModelArg = argv.find(a => a.startsWith("--cursor-model"))
+const cursorModel = cursorModelArg?.includes("=") ? cursorModelArg.split("=")[1] : cursorModelArg ? argv[argv.indexOf(cursorModelArg) + 1] : undefined
+const MODELS = { claude: "haiku", codex: "gpt-5.6-luna", cursor: cursorAlias(cursorModel || process.env.CONTEXT_PROBE_CURSOR_MODEL || "gemini-3.7-flash[effort=high]"), opencode: "opencode-go/qwen3.7-plus" }
 
 type Status = "yes" | "no" | "unproven" | "live" | "reload" | "impossible" | "info"
 type Cell = { agent: Agent; item: string; cell: string; status: Status; mechanism: string; evidence: string }
@@ -66,6 +73,18 @@ let nounIndex = Math.floor(Math.random() * NOUNS.length)
 function word(): string { return `${NOUNS[nounIndex++ % NOUNS.length]}${Math.floor(Math.random() * 9000 + 1000)}` }
 const has = (reply: string | undefined, w: string) => !!reply && reply.toUpperCase().includes(w)
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+/**
+ * An ACP turn's token is only attributable to the mechanism when the agent did not find it in a file:
+ * any search / shell call taints the turn; a read taints it unless `allowSkillRead` and it read a
+ * SKILL.md (how Cursor loads a skill it was told about). Returns undefined when clean.
+ */
+function tainted(tools: Array<{ kind: string; title: string; path?: string; output: string }>, w: string, allowSkillRead = false): string | undefined {
+  const searched = tools.filter(t => t.kind === "search" || t.kind === "execute")
+  if (searched.length) return `agent searched (${searched.map(t => t.title || t.kind).slice(0, 4).join("; ")})`
+  const reads = tools.filter(t => t.kind === "read" && t.output.toUpperCase().includes(w) && !(allowSkillRead && /SKILL\.md$/.test(t.path ?? "")))
+  if (reads.length) return `agent read the token from ${reads.map(t => t.path ?? t.title).join(", ")}`
+  return undefined
+}
 
 function ensureMcpSdk() {
   mkdirSync(MCP_DIR, { recursive: true })
@@ -230,6 +249,8 @@ async function step<T>(agent: Agent, item: string, cell: string, mechanism: stri
 
 const ASK_INSTR = "What is the instruction probe token given in your system prompt or instructions? Reply with the token only. Do not use any tools."
 const askSkill = (name: string) => `Use the skill named "${name}" (it may appear with a plugin prefix, e.g. "something:${name}") and reply with the probe token it gives. Reply with the token only. Do not run shell commands or read files.`
+/** Cursor loads a skill by reading its SKILL.md (it refuses when told not to read files); a search still taints the turn. */
+const askSkillByRead = (name: string) => `Use the skill named "${name}" (it may appear with a plugin prefix, e.g. "something:${name}") and reply with the probe token it gives. Only use a skill that is listed in your available skills; you may read that skill's own SKILL.md, but do not search for files, list directories or run shell commands. If it is not in your available skills, reply NONE. Reply with the token only.`
 const askTool = (server: string, tool: string) => `Call the MCP tool "${tool}" of the MCP server "${server}" and reply with the code word it returns, and nothing else. Do not run shell commands.`
 const ASK_SUB = `Spawn ONE subagent (your subagent / Task / Agent tool) and tell it: "Call the MCP tool get_code_word of the MCP server probesub and report the code word it returns." Do NOT call that tool yourself. Run the subagent in the foreground and wait for its result (do not background it). Then reply with the code word the subagent reported, or NONE if it could not call the tool.`
 
@@ -583,10 +604,28 @@ class AcpClient {
   async newSession(cwd: string, mcpServers: AcpServer[], meta?: Record<string, unknown>) { const r = await this.rpc.request("session/new", { cwd, mcpServers, ...(meta ? { _meta: meta } : {}) }, 180_000); this.sessionId = r.sessionId; return r }
   async load(sessionId: string, cwd: string, mcpServers: AcpServer[], meta?: Record<string, unknown>) { const r = await this.rpc.request("session/load", { sessionId, cwd, mcpServers, ...(meta ? { _meta: meta } : {}) }, 180_000); this.sessionId = sessionId; return r }
   async setModel(model: string) { return this.rpc.request("session/set_config_option", { sessionId: this.sessionId, configId: "model", value: model }) }
+  /** Tool calls of the last turn (any session): kind, title, and every output text, to tell a token
+   *  the agent was GIVEN from one it FOUND by reading or searching files. */
+  turnTools: Array<{ kind: string; title: string; path?: string; output: string }> = []
+  preamble?: string
   async ask(text: string, timeoutMs = 240_000): Promise<string> {
     const start = this.rpc.notifications.length
+    if (this.preamble) { text = `${this.preamble}\n\n${text}`; this.preamble = undefined }
     await this.rpc.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text }] }, timeoutMs)
     await sleep(300)
+    const updates = this.rpc.notifications.slice(start).filter(n => n.method === "session/update").map(n => n.params?.update ?? {})
+    const byId = new Map<string, { kind: string; title: string; path?: string; output: string }>()
+    for (const u of updates) {
+      if (u.sessionUpdate !== "tool_call" && u.sessionUpdate !== "tool_call_update") continue
+      const t = byId.get(u.toolCallId) ?? { kind: "", title: "", output: "" }
+      if (u.kind) t.kind = u.kind
+      if (u.title) t.title = u.title
+      const path = u.rawInput?.path ?? u.locations?.[0]?.path
+      if (path) t.path = path
+      if (u.rawOutput !== undefined || u.content !== undefined) t.output += JSON.stringify([u.rawOutput, u.content])
+      byId.set(u.toolCallId, t)
+    }
+    this.turnTools = [...byId.values()]
     return this.rpc.notifications.slice(start)
       .filter(n => n.method === "session/update" && n.params?.sessionId === this.sessionId && n.params?.update?.sessionUpdate === "agent_message_chunk")
       .map(n => n.params.update.content?.text ?? "").join("").trim()
@@ -604,6 +643,10 @@ type AcpPlan = {
   skills: Array<{ label: string; name: string; word: string; phase: "A" | "B"; mechanism: string }>
   mcp: { A: McpServerSpec[]; B: McpServerSpec[] }
   model?: string
+  /** The skill question (default askSkill). */
+  askSkill?: (name: string) => string
+  /** Text prefixed to the first prompt of phase A (a first-prompt instructions preamble). */
+  preamble?: string
   /** ACP `_meta` for session/new (A) and session/load (B). */
   meta?: (phase: "A" | "B") => Record<string, unknown> | undefined
   /** Optional live attempt for item 6 before phase B (Grok: rewrite [skills] paths). */
@@ -621,6 +664,11 @@ async function runAcp(plan: AcpPlan) {
     ? "List every probe token that appears anywhere in your system prompt, rules, user rules, workspace rules or instructions. Reply with the tokens only, space separated. Do not use any tools."
     : ASK_INSTR
   let sessionId = ""
+  /** Records a cell, downgraded to "unproven" when the agent found the token itself (see tainted). */
+  const judge = (acp: AcpClient, item: string, cell: string, reply: string, w: string, ok: Status, mechanism: string, evidence: unknown = reply, allowSkillRead = false) => {
+    const t = has(reply, w) ? tainted(acp.turnTools, w, allowSkillRead) : undefined
+    record(agent, item, cell, !has(reply, w) ? "no" : t ? "unproven" : ok, t ? `${mechanism} (${t})` : mechanism, evidence)
+  }
   // ---- phase A ----
   {
     const l = plan.launch("A")
@@ -632,20 +680,24 @@ async function runAcp(plan: AcpPlan) {
       await acp.newSession(work, plan.mcp.A.map(acpMcp), plan.meta?.("A"))
       sessionId = acp.sessionId
       if (plan.model) await step(agent, "-", "model", "session/set_config_option", () => acp.setModel(plan.model!))
+      if (plan.preamble && (want(1) || want(8))) {
+        acp.preamble = plan.preamble
+        await step(agent, "1", "preamble turn", "first prompt", () => acp.ask("Reply with OK only. Do not use any tools."))
+      }
       if (want(1)) {
         const channels = plan.instructions("A")
         const r = await step(agent, "1", "instructions", "see channels", () => acp.ask(askInstr(channels)))
-        if (r !== undefined) for (const c of channels) record(agent, "1", `instructions: ${c.label}`, has(r, c.word) ? "yes" : "no", c.label, r)
+        if (r !== undefined) for (const c of channels) judge(acp, "1", `instructions: ${c.label}`, r, c.word, "yes", c.label)
       }
       for (const s of plan.skills.filter(s => s.phase === "A")) {
         const n = s.label.startsWith("plugin") ? 3 : 2
         if (!want(n)) continue
-        const r = await step(agent, String(n), s.label, s.mechanism, () => acp.ask(askSkill(s.name)))
-        if (r !== undefined) record(agent, String(n), s.label, has(r, s.word) ? "yes" : "no", s.mechanism, r)
+        const r = await step(agent, String(n), s.label, s.mechanism, () => acp.ask((plan.askSkill ?? askSkill)(s.name)))
+        if (r !== undefined) judge(acp, String(n), s.label, r, s.word, "yes", s.mechanism, { reply: r, tools: acp.turnTools.map(t => `${t.kind}:${t.title}`) }, true)
       }
       if (want(4)) {
         const r = await step(agent, "4", "MCP", "ACP mcpServers", () => acp.ask(askTool("probe", "get_code_word")))
-        if (r !== undefined) record(agent, "4", "MCP", has(r, W.mcp) ? "yes" : "no", "ACP session/new {mcpServers:[{name,command,args,env}]}", r)
+        if (r !== undefined) judge(acp, "4", "MCP", r, W.mcp, "yes", "ACP session/new {mcpServers:[{name,command,args,env}]}")
         record(agent, "4", "MCP initialize", initializeEvidence(logs.probe).negotiated.length ? "info" : "no", "probe server log", initializeEvidence(logs.probe))
         const start = acp.rpc.notifications.length
         const s = await step(agent, "4", "MCP in subagent", "subagent", () => acp.ask(ASK_SUB, 300_000))
@@ -659,7 +711,7 @@ async function runAcp(plan: AcpPlan) {
           // OpenCode does not forward a child session's updates over ACP: then the proof is that the main
           // session's only tool calls were the subagent tool while the probesub server logged a call.
           const mainTitles = notes.filter(n => n.params?.sessionId === sessionId && n.params?.update?.sessionUpdate === "tool_call").map(n => String(n.params.update.title ?? n.params.update.kind ?? ""))
-          const inferred = calls >= 1 && mainTitles.length > 0 && mainTitles.every(t => /^(task|spawn_subagent|agent|subagent)$/i.test(t) || /subagent/i.test(t))
+          const inferred = calls >= 1 && mainTitles.length > 0 && mainTitles.every(t => /^(task|spawn_subagent|agent|subagent)$/i.test(t) || /^task:/i.test(t) || /subagent/i.test(t))
           record(agent, "4", "MCP in subagent", has(s, W.sub) && (childCall || inferred) ? "yes" : has(s, W.sub) ? "unproven" : "no", "ask the agent to delegate the probesub call to a subagent", { reply: s, childSessionToolCallOnProbesub: childCall, inferredFromMainToolCalls: inferred, parentDirectCall: parentDirect, otherSessionIds: [...otherSessions], probesubCalls: calls, toolCalls: notes.filter(n => n.params?.update?.sessionUpdate === "tool_call").map(n => `${n.params.sessionId === sessionId ? "main" : "child"}:${n.params.update.title ?? n.params.update.kind}`).slice(0, 10) })
         }
       }
@@ -674,8 +726,8 @@ async function runAcp(plan: AcpPlan) {
       if (want(6) && plan.live6) {
         const live = await plan.live6()
         if (live) {
-          const r = await step(agent, "6", "add skill live", live.mechanism, () => acp.ask(askSkill(live.name)))
-          if (r !== undefined) record(agent, "6", "add skill (live, same process)", has(r, live.word) ? "live" : "no", live.mechanism, r)
+          const r = await step(agent, "6", "add skill live", live.mechanism, () => acp.ask((plan.askSkill ?? askSkill)(live.name)))
+          if (r !== undefined) judge(acp, "6", "add skill (live, same process)", r, live.word, "live", live.mechanism, r, true)
         }
       }
     } finally { await proc.kill() }
@@ -693,21 +745,21 @@ async function runAcp(plan: AcpPlan) {
       if (plan.model) await step(agent, "-", "model", "session/set_config_option", () => acp.setModel(plan.model!))
       if (want(9) || want(7)) {
         const r = await step(agent, "9", "reload keeps conversation", "session/load", () => acp.ask(`Earlier in this conversation an MCP tool "get_code_word" of the server "probe" returned a code word. What was it? Do not call any tools; answer from the conversation history. Reply with the word only.`))
-        if (r !== undefined) record(agent, "9", "reload keeps conversation", has(r, W.mcp) ? "yes" : "no", "new process + ACP session/load {sessionId, cwd, mcpServers}", r)
+        if (r !== undefined) judge(acp, "9", "reload keeps conversation", r, W.mcp, "yes", "new process + ACP session/load {sessionId, cwd, mcpServers}")
       }
       if (want(7)) {
         const r = await step(agent, "7", "add MCP server", "session/load mcpServers", () => acp.ask(askTool("probe2", "get_code_word")))
-        if (r !== undefined) record(agent, "7", "add MCP server", has(r, W.mcp2) ? "reload" : "no", "new process + session/load with mcpServers [probe, probe2]", { reply: r, initialize: initializeEvidence(logs.probe2) })
+        if (r !== undefined) judge(acp, "7", "add MCP server", r, W.mcp2, "reload", "new process + session/load with mcpServers [probe, probe2]", { reply: r, initialize: initializeEvidence(logs.probe2) })
       }
       if (want(6)) for (const s of plan.skills.filter(s => s.phase === "B")) {
-        const r = await step(agent, "6", s.label, s.mechanism, () => acp.ask(askSkill(s.name)))
-        if (r !== undefined) record(agent, "6", s.label, has(r, s.word) ? "reload" : "no", s.mechanism, r)
+        const r = await step(agent, "6", s.label, s.mechanism, () => acp.ask((plan.askSkill ?? askSkill)(s.name)))
+        if (r !== undefined) judge(acp, "6", s.label, r, s.word, "reload", s.mechanism, { reply: r, tools: acp.turnTools.map(t => `${t.kind}:${t.title}`) }, true)
       }
       if (want(8)) {
         const channels = plan.instructions("B")
         if (channels.length) {
           const r = await step(agent, "8", "change instructions", "reload", () => acp.ask(askInstr(channels.length > 1 ? channels : [...channels, ...channels])))
-          if (r !== undefined) for (const c of channels) record(agent, "8", `change instructions: ${c.label}`, has(r, c.word) ? "reload" : "no", `${c.label} changed + new process + session/load`, r)
+          if (r !== undefined) for (const c of channels) judge(acp, "8", `change instructions: ${c.label}`, r, c.word, "reload", `${c.label} changed + new process + session/load`)
         }
       }
     } finally { await proc.kill() }
@@ -736,7 +788,8 @@ async function probeCursor() {
   const agent: Agent = "cursor"
   const f = acpFixtures(agent)
   const W = f.W
-  const I = { plugRule: word(), homeRule: word(), homeAgents: word(), addDir: word(), plugRuleB: word(), homeRuleB: word() }
+  const I = { plugRule: word(), homeRule: word(), homeAgents: word(), addDir: word(), meta: word(), hookStart: word(), hookPrompt: word(), preamble: word(), plugRuleB: word(), homeRuleB: word(), metaB: word(), hookStartB: word(), hookPromptB: word() }
+  const homeSkillWord = word(), linkedSkillWord = word(), agentsSkillWord = word()
   const home = join(f.dir, "home")
   await prepareCursorEnvironment({
     home, workdir: f.work, mcpServers: [], skillsPaths: [], instructions: null, sharedRuntime: null, platform: process.platform,
@@ -755,6 +808,26 @@ async function probeCursor() {
   }
   writeInstr(I.plugRule, I.homeRule)
   writeFileSync(join(home, "AGENTS.md"), `Home AGENTS.md: the home-agents probe token is ${I.homeAgents}.\n`)
+  skill(join(home, ".cursor", "skills"), "probe-skill-home", homeSkillWord)
+  // A skill folder symlinked into $HOME/.cursor/skills (how a core would map a session's skills there),
+  // and $HOME/.agents/skills (Cursor's other user-level skills root).
+  skill(join(f.dir, "linked-skills"), "probe-skill-linked", linkedSkillWord)
+  symlinkSync(join(f.dir, "linked-skills", "probe-skill-linked"), join(home, ".cursor", "skills", "probe-skill-linked"))
+  skill(join(home, ".agents", "skills"), "probe-skill-agents", agentsSkillWord)
+  // Hooks in the session HOME: sessionStart / beforeSubmitPrompt returning additional_context.
+  const writeHooks = (start: string, prompt: string) => {
+    const hook = (name: string, text: string) => {
+      const file = join(f.dir, "gen", `${name}.sh`)
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '${JSON.stringify({ additional_context: text, continue: true })}'\n`, { mode: 0o755 })
+      return file
+    }
+    writeFileSync(join(home, ".cursor", "hooks.json"), JSON.stringify({ version: 1, hooks: {
+      sessionStart: [{ command: hook("session-start", `Session start hook: the session-start-hook probe token is ${start}.`) }],
+      beforeSubmitPrompt: [{ command: hook("before-submit", `Prompt hook: the prompt-hook probe token is ${prompt}.`) }],
+    } }, null, 2))
+  }
+  writeHooks(I.hookStart, I.hookPrompt)
   const addDir = join(f.dir, "extra-root")
   mkdirSync(addDir, { recursive: true })
   writeFileSync(join(addDir, "AGENTS.md"), `Extra root AGENTS.md: the add-dir probe token is ${I.addDir}.\n`)
@@ -765,19 +838,28 @@ async function probeCursor() {
   const env = { ...baseEnv(), ...{ HOME: home } }
   await runAcp({
     agent, work: f.work, dir: f.dir, W, logs: f.logs, mcp: f.mcp, model: MODELS.cursor,
+    meta: phase => ({ rules: `Session meta rules: the meta-rules probe token is ${phase === "A" ? I.meta : I.metaB}.` }),
+    askSkill: askSkillByRead,
+    preamble: `Session instructions (first-prompt preamble): the preamble probe token is ${I.preamble}.`,
     launch: phase => {
       if (phase === "B") {
         writeInstr(I.plugRuleB, I.homeRuleB)
+        writeHooks(I.hookStartB, I.hookPromptB)
         if (!existsSync(join(wrapRoot, "probe-skill-echo"))) symlinkSync(join(f.skillsRootB, "probe-skill-echo"), join(wrapRoot, "probe-skill-echo"))
       }
       const plugins = phase === "A" ? [wrap, f.pluginA, instrPlugin] : [wrap, f.pluginA, instrPlugin, f.pluginC]
       return { command: "cursor-agent", args: [...plugins.flatMap(p => ["--plugin-dir", p]), "--add-dir", addDir, "--approve-mcps", "acp"], env }
     },
     instructions: phase => phase === "A"
-      ? [{ label: "plugin rules/ (--plugin-dir)", word: I.plugRule }, { label: "$HOME/.cursor/rules/*.mdc (session HOME)", word: I.homeRule }, { label: "$HOME/AGENTS.md (session HOME)", word: I.homeAgents }, { label: "--add-dir <root>/AGENTS.md", word: I.addDir }]
-      : [{ label: "plugin rules/ (--plugin-dir)", word: I.plugRuleB }, { label: "$HOME/.cursor/rules/*.mdc (session HOME)", word: I.homeRuleB }],
+      ? [{ label: "plugin rules/ (--plugin-dir)", word: I.plugRule }, { label: "$HOME/.cursor/rules/*.mdc (session HOME)", word: I.homeRule }, { label: "$HOME/AGENTS.md (session HOME)", word: I.homeAgents }, { label: "--add-dir <root>/AGENTS.md", word: I.addDir }, { label: "ACP _meta.rules", word: I.meta },
+        { label: "$HOME/.cursor/hooks.json sessionStart additional_context", word: I.hookStart }, { label: "$HOME/.cursor/hooks.json beforeSubmitPrompt additional_context", word: I.hookPrompt }, { label: "first-prompt preamble", word: I.preamble }]
+      : [{ label: "plugin rules/ (--plugin-dir)", word: I.plugRuleB }, { label: "$HOME/.cursor/rules/*.mdc (session HOME)", word: I.homeRuleB }, { label: "ACP _meta.rules", word: I.metaB },
+        { label: "$HOME/.cursor/hooks.json sessionStart additional_context", word: I.hookStartB }, { label: "$HOME/.cursor/hooks.json beforeSubmitPrompt additional_context", word: I.hookPromptB }, { label: "first-prompt preamble (kept by session/load)", word: I.preamble }],
     skills: [
       { label: "skills", name: "probe-skill-alpha", word: W.skill, phase: "A", mechanism: "generated plugin wrapping the skills (symlinks) → --plugin-dir" },
+      { label: "skills ($HOME/.cursor/skills)", name: "probe-skill-home", word: homeSkillWord, phase: "A", mechanism: "$HOME/.cursor/skills in the session HOME" },
+      { label: "skills ($HOME/.cursor/skills symlink)", name: "probe-skill-linked", word: linkedSkillWord, phase: "A", mechanism: "a skill folder symlinked into $HOME/.cursor/skills" },
+      { label: "skills ($HOME/.agents/skills)", name: "probe-skill-agents", word: agentsSkillWord, phase: "A", mechanism: "$HOME/.agents/skills in the session HOME" },
       { label: "plugin (--plugin-dir)", name: "probe-plugin-a-skill", word: W.pluginA, phase: "A", mechanism: "--plugin-dir <plugin> before `acp`" },
       { label: "add skill (reload)", name: "probe-skill-echo", word: W.skillNew, phase: "B", mechanism: "symlink added to the wrapper plugin's skills + new process + session/load" },
       { label: "add plugin (reload)", name: "probe-plugin-c-skill", word: W.pluginC, phase: "B", mechanism: "extra --plugin-dir + new process + session/load" },

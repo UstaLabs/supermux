@@ -1,7 +1,11 @@
 /**
  * Session context in flight (slice C1b) live check: real CLIs driven through `session.updateContext`.
  *
- *   bun scripts/context-live-update.ts [claude] [codex] [grok] [opencode]
+ *   bun scripts/context-live-update.ts [claude] [codex] [cursor] [grok] [opencode]
+ *
+ * Cursor (model Auto; CONTEXT_LIVE_CURSOR_MODEL overrides) has no skills / plugins channel: its
+ * session starts without skills, and adding a skills folder or a plugin must be refused
+ * (`context_unsupported`). CONTEXT_LIVE_DIR overrides the scratch root.
  *
  * Per agent: a session starts with context A (a skills folder + an MCP server), answers one turn,
  * then MID-SESSION gets a second skills folder and a plugin (the next turn must return both
@@ -28,18 +32,19 @@ import { createCore } from "../src/index.js"
 import type { AgentDriver, Core, CoreEvent, UpdateContextResult } from "../src/index.js"
 import { claude } from "../src/claude/index.js"
 import { codex } from "../src/codex/index.js"
-import { grok, opencode } from "../src/agents/index.js"
+import { cursor, grok, opencode } from "../src/agents/index.js"
+import { prepareCursorEnvironment } from "../src/environment/index.js"
 import { codexTokenArgs, CODEX_TOKEN_ENV } from "../src/accounts/adapters/codex.js"
 import type { ContextUpdateHow, ExternalMcpServer } from "../src/context/types.js"
 
 const HOME = homedir()
-const RUN = join(HOME, ".cache", "context-c1b", `run-${new Date().toISOString().replace(/[:.]/g, "-")}`)
+const RUN = join(process.env.CONTEXT_LIVE_DIR || join(HOME, ".cache", "context-c1b"), `run-${new Date().toISOString().replace(/[:.]/g, "-")}`)
 const MCP_SERVER = join(HOME, ".cache", "context-c0", "mcp", "probe-mcp-server.mjs")
 const LIMITS = { interruptTimeoutMs: 10_000, maxPending: 16, outstandingActivity: 256 }
 const KEEPER = { parkedDeadlineMs: 60_000, journalMaxBytes: 8_000_000, connectTimeoutMs: 15_000 }
 const TIMEOUTS = { setupTimeoutMs: 120_000, shutdownTimeoutMs: 5_000, maxFrameBytes: 32 << 20 }
 const ACP = { ...TIMEOUTS, maxOutstandingActivity: 256, cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, inheritEnv: false }
-const ALL = ["claude", "codex", "grok", "opencode"] as const
+const ALL = ["claude", "codex", "cursor", "grok", "opencode"] as const
 type Agent = typeof ALL[number]
 const wanted = (process.argv.slice(2).filter(a => (ALL as readonly string[]).includes(a)) as Agent[])
 const agents: Agent[] = wanted.length ? wanted : [...ALL]
@@ -48,6 +53,7 @@ const agents: Agent[] = wanted.length ? wanted : [...ALL]
 const EXPECTED: Record<Agent, { skill: ContextUpdateHow; plugin: ContextUpdateHow; mcp: ContextUpdateHow; removeMcp: ContextUpdateHow }> = {
   claude: { skill: "live", plugin: "live", mcp: "live", removeMcp: "live" },
   codex: { skill: "live", plugin: "live", mcp: "reload", removeMcp: "reload" },
+  cursor: { skill: "unsupported", plugin: "unsupported", mcp: "reload", removeMcp: "reload" },
   grok: { skill: "reload", plugin: "reload", mcp: "reload", removeMcp: "reload" },
   opencode: { skill: "reload", plugin: "reload", mcp: "reload", removeMcp: "reload" },
 }
@@ -126,7 +132,7 @@ const askTool = (name: string) => `Call the MCP tool "get_code_word" of the MCP 
 // ---------------------------------------------------------------- drivers (as in context-live.ts)
 type Setup = { driver: AgentDriver; profiles?: Record<string, { agent: string; env?: Record<string, string>; args?: string[] }>; authProfile?: string; keeperDir: string }
 
-function setup(agent: Agent, dir: string): Setup {
+async function setup(agent: Agent, dir: string): Promise<Setup> {
   const keeperDir = join(dir, "keeper")
   const keeper = { stateDirectory: keeperDir, limits: KEEPER }
   if (agent === "claude") {
@@ -170,6 +176,21 @@ function setup(agent: Agent, dir: string): Setup {
       }),
     }
   }
+  if (agent === "cursor") {
+    // A session-private HOME with a copy of the Cursor credentials (never --model against the real HOME).
+    const home = join(dir, "home")
+    await prepareCursorEnvironment({
+      home, workdir: join(dir, "work"), mcpServers: [], skillsPaths: [], instructions: null, sharedRuntime: null, platform: process.platform,
+      credentials: { apiKey: null, userCursorDir: join(HOME, ".cursor"), userConfigDir: join(HOME, ".config") },
+    })
+    return {
+      keeperDir,
+      driver: cursor({
+        id: "cursor", command: "cursor-agent", commandArgs: [], env: { ...baseEnv(), HOME: home }, model: process.env.CONTEXT_LIVE_CURSOR_MODEL || "auto",
+        mcpServers: [], permissions: { kind: "acp", policy: "auto-approve", nativeMode: null }, ...ACP, keeper,
+      }),
+    }
+  }
   const xdg = { XDG_CONFIG_HOME: join(dir, "xdg-config"), XDG_DATA_HOME: join(dir, "xdg-data"), XDG_STATE_HOME: join(dir, "xdg-state"), XDG_CACHE_HOME: join(dir, "xdg-cache") }
   for (const path of Object.values(xdg)) mkdirSync(path, { recursive: true })
   mkdirSync(join(xdg.XDG_DATA_HOME, "opencode"), { recursive: true })
@@ -189,7 +210,7 @@ async function check(agent: Agent) {
   const dir = join(RUN, agent)
   const work = scratchRepo(join(dir, "work"))
   const state = join(dir, "state")
-  const s = setup(agent, dir)
+  const s = await setup(agent, dir)
   const id = `upd-${agent}`
   const W = { skillA: word(), mcpA: word(), skillB: word(), plugin: word(), mcp2: word(), instr: word() }
   const names = { skillA: `upd-skill-a-${agent}`, skillB: `upd-skill-b-${agent}`, plugin: `upd-plugin-${agent}` }
@@ -230,12 +251,15 @@ async function check(agent: Agent) {
   try {
     record(agent, "capabilities.contextUpdate", true, core.capabilities(agent).contextUpdate)
     const instructions = `Session instructions. The instruction probe token is ${W.instr}. When asked for the instruction probe token, reply with it.`
-    await core.sessions.create({ id, agent, cwd: work, context: { instructions, skills: [skillsA], mcpServers: [server(dir, "ctxprobe", W.mcpA)] }, ...(s.authProfile ? { authProfile: s.authProfile } : {}) })
+    await core.sessions.create({ id, agent, cwd: work, context: { instructions, ...(agent === "cursor" ? {} : { skills: [skillsA] }), mcpServers: [server(dir, "ctxprobe", W.mcpA)] }, ...(s.authProfile ? { authProfile: s.authProfile } : {}) })
     const live = () => core.sessions.live(id)!
     const askInstructions = async (label: string) => {
       try {
+        const start = events.length
         const reply = await ask(ASK_INSTR)
-        record(agent, label, has(reply, W.instr), { word: W.instr, reply, pid: agentPid() })
+        // A token the agent searched for or read from a file does not count.
+        const tools = events.slice(start).flatMap(e => e.type === "session.event" && e.event.kind === "tool-call" && e.event.category !== "mcp" ? [`${e.event.category}:${e.event.title ?? e.event.tool}`] : [])
+        record(agent, label, has(reply, W.instr) && tools.length === 0, { word: W.instr, reply, pid: agentPid(), ...(tools.length ? { toolCalls: tools } : {}) })
       } catch (error) { record(agent, label, false, { error: (error as Error).message }) }
     }
     const restartAndAsk = async () => {
@@ -261,7 +285,7 @@ async function check(agent: Agent) {
     await update("add plugin", () => live().updateContext({ plugins: { add: [pluginDir] } }), EXPECTED[agent].plugin)
     // Asked BEFORE the MCP change, so a live skill/plugin is not masked by a later relaunch (one
     // turn each: a small model asked for both in one turn sometimes repeats one token).
-    for (const [label, name, w] of [["skill", names.skillB, W.skillB], ["plugin", `${names.plugin}-skill`, W.plugin]] as const) {
+    for (const [label, name, w] of agent === "cursor" ? [] : [["skill", names.skillB, W.skillB], ["plugin", `${names.plugin}-skill`, W.plugin]] as const) {
       try {
         const reply = await ask(`${askSkill(name)} Reply with the token only. Do not run shell commands or read files.`)
         record(agent, `next turn returns the new ${label} token`, has(reply, w), { word: w, reply, pidStart, pidNow: agentPid(), samePid: agentPid() === pidStart })
@@ -293,7 +317,7 @@ async function check(agent: Agent) {
     } catch (error) { record(agent, "removed MCP server", false, { error: (error as Error).message }) }
     if (agent === "claude") record(agent, "live removal kept the same process", agentPid() === pidBeforeRemove, { pidBeforeRemove, pidNow: agentPid() })
     await askInstructions("after the changes (and any reloads): the ORIGINAL instruction token")
-    record(agent, "context.updated events", events.filter(e => e.type === "context.updated").length >= 4, events.filter(e => e.type === "context.updated").map(e => (e as { applied: unknown }).applied))
+    record(agent, "context.updated events", events.filter(e => e.type === "context.updated").length >= (agent === "cursor" ? 2 : 4), events.filter(e => e.type === "context.updated").map(e => (e as { applied: unknown }).applied))
     await restartAndAsk()
   } finally {
     await core.close({ agents: "shutdown" }).catch(error => console.error("close failed", error))

@@ -226,16 +226,59 @@ test("grok: --plugin-dir per plugin and skills wrapper before stdio, _meta.rules
   expect(load.mcpServers.map((server: { name: string }) => server.name)).toEqual(["ctx"])
 })
 
-test("cursor: --plugin-dir before acp, mcpServers; instructions are unsupported", async () => {
+test("cursor: no --plugin-dir (ignored by its ACP server), mcpServers on session/new, instructions as the first prompt's preamble", async () => {
   const f = contextFixture()
   const context = f.launch()
   const { argv, params } = await launch("cursor", { sessionContext: context })
-  expect(argv).toEqual(["--plugin-dir", join(context.directory, "plugins", "01-my-plugin"), "--plugin-dir", join(context.directory, "plugins", "supermux-skills-1"), "acp"])
-  expect(existsSync(join(context.directory, "plugins", "supermux-skills-1", ".cursor-plugin", "plugin.json"))).toBe(true)
-  expect(params.find(p => p.method === "session/new")!.params.mcpServers.map((s: { name: string }) => s.name)).toEqual(["ctx"])
+  expect(argv).toEqual(["acp"])
+  expect(existsSync(join(context.directory, "plugins"))).toBe(false)
+  const created = params.find(p => p.method === "session/new")!.params
+  expect(created.mcpServers.map((s: { name: string }) => s.name)).toEqual(["ctx"])
+  expect(created._meta).toBeUndefined()
   const caps = AGENTS.cursor!({}).context!.capabilities
-  expect(caps.instructions.support).toBe("unsupported")
-  expect(caps.mcpServers.support).toBe("unverified")
+  expect(caps.instructions.support).toBe("supported")
+  expect(caps.skills.support).toBe("unsupported")
+  expect(caps.plugins.support).toBe("unsupported")
+  expect(caps.mcpServers.support).toBe("supported")
+  expect(AGENTS.cursor!({}).context!.mcpListChanged).toBeFalsy()
+})
+
+/** Opens cursor with a context, sends two prompts, and returns the prompt blocks it received. */
+async function cursorPrompts(sessionContext: LaunchContext, options: { resumeId?: string; env?: Record<string, string> } = {}) {
+  const dir = scratch(), paramsTrace = join(dir, "params.jsonl")
+  const driver = AGENTS.cursor!({ ENV_TRACE: join(dir, "env.json"), PARAMS_TRACE: paramsTrace, ...options.env })
+  const runtime = await driver.open({
+    sessionId: "ctx-1", cwd: process.cwd(), signal: new AbortController().signal, sessionContext,
+    ...(options.resumeId ? { resumeId: options.resumeId } : {}),
+    onUpdate() {}, onExit() {},
+    requestPermission: async () => ({ outcome: { outcome: "cancelled" } }), requestAnswers: async () => ({ outcome: "cancelled" as const }),
+  })
+  try {
+    await runtime.prompt([{ type: "text", text: "hello" }], new AbortController().signal)
+    await runtime.prompt([{ type: "text", text: "again" }], new AbortController().signal)
+  } finally { await runtime.close({ mode: "shutdown" }) }
+  return readFileSync(paramsTrace, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(line => line.method === "session/prompt").map(line => line.params.prompt)
+}
+
+test("cursor: the instructions preamble leads the conversation's first prompt only", async () => {
+  const f = contextFixture()
+  const [first, second] = await cursorPrompts(f.launch())
+  expect(first).toHaveLength(2)
+  expect(first[0].type).toBe("text")
+  expect(first[0].text).toContain("<session-instructions>")
+  expect(first[0].text).toContain("Probe instructions.")
+  expect(first[1]).toEqual({ type: "text", text: "hello" })
+  expect(second).toEqual([{ type: "text", text: "again" }])
+})
+
+test("cursor: a loaded conversation that already has a turn gets no preamble; one without a turn still does", async () => {
+  const f = contextFixture()
+  const withTurn = await cursorPrompts(f.launch({ launch: "resume" }), { resumeId: "agent-1", env: { REPLAY_USER: "1" } })
+  expect(withTurn[0]).toEqual([{ type: "text", text: "hello" }])
+  const noTurn = await cursorPrompts(f.launch({ launch: "resume" }), { resumeId: "agent-1" })
+  expect(noTurn[0]).toHaveLength(2)
+  expect(noTurn[0][0].text).toContain("Probe instructions.")
+  expect(noTurn[1]).toEqual([{ type: "text", text: "again" }])
 })
 
 test("opencode: a session OPENCODE_CONFIG (instructions, skills.paths kept with the global ones, JS plugin) + ACP mcpServers", async () => {

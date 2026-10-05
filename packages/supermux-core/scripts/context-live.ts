@@ -1,7 +1,12 @@
 /**
  * Session context (slice C1) live check: real CLIs driven through `core.sessions.create`.
  *
- *   bun scripts/context-live.ts [claude] [codex] [grok] [opencode]
+ *   bun scripts/context-live.ts [claude] [codex] [cursor] [grok] [opencode]
+ *
+ * Cursor (model Auto; CONTEXT_LIVE_CURSOR_MODEL overrides) has no skills / plugins channel: its
+ * session runs with policy "warn" and must report both in `context.degraded`; a token the agent
+ * FOUND by searching or reading files does not count (its turn's tool calls are checked).
+ * CONTEXT_LIVE_DIR overrides the scratch root.
  *
  * Each agent gets one session with instructions + a skills folder + a plugin + an MCP server, each
  * carrying its own code word ("probe token"); the prompts never contain the words. Then:
@@ -26,18 +31,19 @@ import { createCore } from "../src/index.js"
 import type { AgentDriver, Core, CoreEvent, Session } from "../src/index.js"
 import { claude } from "../src/claude/index.js"
 import { codex } from "../src/codex/index.js"
-import { grok, opencode } from "../src/agents/index.js"
+import { cursor, grok, opencode } from "../src/agents/index.js"
+import { prepareCursorEnvironment } from "../src/environment/index.js"
 import { codexTokenArgs, CODEX_TOKEN_ENV } from "../src/accounts/adapters/codex.js"
 import type { SessionContext } from "../src/context/types.js"
 
 const HOME = homedir()
-const RUN = join(HOME, ".cache", "context-c1", `run-${new Date().toISOString().replace(/[:.]/g, "-")}`)
+const RUN = join(process.env.CONTEXT_LIVE_DIR || join(HOME, ".cache", "context-c1"), `run-${new Date().toISOString().replace(/[:.]/g, "-")}`)
 const MCP_SERVER = join(HOME, ".cache", "context-c0", "mcp", "probe-mcp-server.mjs")
 const LIMITS = { interruptTimeoutMs: 10_000, maxPending: 16, outstandingActivity: 256 }
 const KEEPER = { parkedDeadlineMs: 60_000, journalMaxBytes: 8_000_000, connectTimeoutMs: 15_000 }
 const TIMEOUTS = { setupTimeoutMs: 120_000, shutdownTimeoutMs: 5_000, maxFrameBytes: 32 << 20 }
 const ACP = { ...TIMEOUTS, maxOutstandingActivity: 256, cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, inheritEnv: false }
-const ALL = ["claude", "codex", "grok", "opencode"] as const
+const ALL = ["claude", "codex", "cursor", "grok", "opencode"] as const
 type Agent = typeof ALL[number]
 const wanted = (process.argv.slice(2).filter(a => (ALL as readonly string[]).includes(a)) as Agent[])
 const agents: Agent[] = wanted.length ? wanted : [...ALL]
@@ -127,6 +133,15 @@ const askSkill = (name: string) => `Use the skill named "${name}" (it may appear
 const ASK_MCP = `Call the MCP tool "get_code_word" of the MCP server "ctxprobe" and reply with the code word it returns, and nothing else. Do not run shell commands.`
 const ASK_RECALL = "Reply with exactly two tokens separated by a space: first the instruction probe token from your instructions, then the code word the ctxprobe MCP tool returned earlier in this conversation. Do not use any tools."
 
+/** Why a token in the reply does not count: the agent searched, ran a command, or read it from a file in that turn. */
+function foundByAgent(events: CoreEvent[], start: number, w: string): string | undefined {
+  const calls = events.slice(start).flatMap(e => e.type === "session.event" && e.event.kind === "tool-call" ? [e.event] : [])
+  const searched = calls.filter(c => c.category === "search" || c.category === "execute")
+  if (searched.length) return `searched: ${searched.map(c => c.title ?? c.tool).slice(0, 4).join("; ")}`
+  const read = calls.filter(c => c.category === "read" && JSON.stringify(c.output ?? "").toUpperCase().includes(w))
+  return read.length ? `read it: ${read.map(c => c.title ?? c.tool).join("; ")}` : undefined
+}
+
 async function ask(session: Session, events: CoreEvent[], text: string, timeoutMs = 300_000): Promise<string> {
   const start = events.length
   const receipt = await session.send({ content: [{ type: "text", text }], whenBusy: "reject" })
@@ -139,7 +154,7 @@ async function ask(session: Session, events: CoreEvent[], text: string, timeoutM
 // ---------------------------------------------------------------- drivers
 type Setup = { driver: AgentDriver; profiles?: Record<string, { agent: string; env?: Record<string, string>; args?: string[] }>; authProfile?: string; inspect?: () => unknown }
 
-function setup(agent: Agent, dir: string): Setup {
+async function setup(agent: Agent, dir: string): Promise<Setup> {
   const keeper = { stateDirectory: join(dir, "keeper"), limits: KEEPER }
   if (agent === "claude") {
     const token = JSON.parse(readFileSync(join(HOME, ".claude", ".credentials.json"), "utf8"))?.claudeAiOauth?.accessToken
@@ -183,6 +198,21 @@ function setup(agent: Agent, dir: string): Setup {
       inspect: () => ({ grokConfig: readFileSync(join(home, ".grok", "config.toml"), "utf8") }),
     }
   }
+  if (agent === "cursor") {
+    // A session-private HOME with a copy of the Cursor credentials (never --model against the real HOME).
+    const home = join(dir, "home")
+    await prepareCursorEnvironment({
+      home, workdir: join(dir, "work"), mcpServers: [], skillsPaths: [], instructions: null, sharedRuntime: null, platform: process.platform,
+      credentials: { apiKey: null, userCursorDir: join(HOME, ".cursor"), userConfigDir: join(HOME, ".config") },
+    })
+    return {
+      driver: cursor({
+        id: "cursor", command: "cursor-agent", commandArgs: [], env: { ...baseEnv(), HOME: home }, model: process.env.CONTEXT_LIVE_CURSOR_MODEL || "auto",
+        mcpServers: [], permissions: { kind: "acp", policy: "auto-approve", nativeMode: null }, ...ACP, keeper,
+      }),
+      inspect: () => ({ cursorHome: readdirSync(join(home, ".cursor")) }),
+    }
+  }
   const xdg = { XDG_CONFIG_HOME: join(dir, "xdg-config"), XDG_DATA_HOME: join(dir, "xdg-data"), XDG_STATE_HOME: join(dir, "xdg-state"), XDG_CACHE_HOME: join(dir, "xdg-cache") }
   for (const path of Object.values(xdg)) mkdirSync(path, { recursive: true })
   mkdirSync(join(xdg.XDG_DATA_HOME, "opencode"), { recursive: true })
@@ -202,7 +232,7 @@ async function check(agent: Agent) {
   const work = scratchRepo(join(dir, "work"))
   const state = join(dir, "state")
   const { context, words, names } = contextFor(agent, dir)
-  const s = setup(agent, dir)
+  const s = await setup(agent, dir)
   const events: CoreEvent[] = []
   const open = (): Core => {
     const core = createCore({ stateDirectory: state, agents: [s.driver], limits: LIMITS, ...(s.profiles ? { profiles: s.profiles } : {}) })
@@ -212,24 +242,39 @@ async function check(agent: Agent) {
   let core = open()
   try {
     record(agent, "capabilities", true, core.capabilities(agent).context)
-    const session = await core.sessions.create({ id: `live-${agent}`, agent, cwd: work, context, ...(s.authProfile ? { authProfile: s.authProfile } : {}) })
+    const warnStart = events.length
+    const session = await core.sessions.create({ id: `live-${agent}`, agent, cwd: work, context, ...(agent === "cursor" ? { contextPolicy: "warn" as const } : {}), ...(s.authProfile ? { authProfile: s.authProfile } : {}) })
+    if (agent === "cursor") {
+      await new Promise(resolve => setTimeout(resolve, 50))
+      const degraded = events.slice(warnStart).filter(e => e.type === "context.degraded") as Array<{ dropped: Array<{ kind: string }> }>
+      const kinds = degraded.flatMap(e => e.dropped.map(d => d.kind)).sort()
+      record(agent, "skills + plugins unsupported → context.degraded (policy warn)", JSON.stringify(kinds) === JSON.stringify(["plugins", "skills"]), degraded)
+    }
     const ctxDir = join(state, "context", `live-${agent}`)
     record(agent, "context folder is core-owned", existsSync(ctxDir) && !readdirSync(work).some(n => n !== ".git" && n !== "README.md"), { ctxDir, files: readdirSync(ctxDir), workdir: readdirSync(work) })
     const step = async (label: string, prompt: string, w: string) => {
-      try { const reply = await ask(session, events, prompt); record(agent, label, has(reply, w), { word: w, reply }) }
-      catch (error) { record(agent, label, false, { word: w, error: (error as Error).message }) }
+      try {
+        const start = events.length
+        const reply = await ask(session, events, prompt)
+        const found = foundByAgent(events, start, w)
+        record(agent, label, has(reply, w) && !found, { word: w, reply, ...(found ? { foundByAgent: found } : {}) })
+      } catch (error) { record(agent, label, false, { word: w, error: (error as Error).message }) }
     }
     await step("instructions", ASK_INSTR, words.instr)
-    await step("skill", askSkill(names.skill), words.skill)
-    await step("plugin", askSkill(names.plugin), words.plugin)
+    if (agent !== "cursor") {
+      await step("skill", askSkill(names.skill), words.skill)
+      await step("plugin", askSkill(names.plugin), words.plugin)
+    }
     await step("mcp server", ASK_MCP, words.mcp)
     // Restart: close the whole core, reopen, resume from the record.
     await core.close({ agents: "shutdown" })
     core = open()
     const resumed = await core.sessions.resume(`live-${agent}`)
     try {
+      const start = events.length
       const reply = await ask(resumed, events, ASK_RECALL)
-      record(agent, "resume after core restart (instructions reapplied + conversation kept)", has(reply, words.instr) && has(reply, words.mcp), { words: [words.instr, words.mcp], reply })
+      const found = foundByAgent(events, start, words.instr)
+      record(agent, "resume after core restart (instructions reapplied + conversation kept)", has(reply, words.instr) && has(reply, words.mcp) && !found, { words: [words.instr, words.mcp], reply, ...(found ? { foundByAgent: found } : {}) })
     } catch (error) { record(agent, "resume after core restart", false, { error: (error as Error).message }) }
     if (agent === "codex") {
       await core.sessions.close(`live-${agent}`, { mode: "shutdown" })

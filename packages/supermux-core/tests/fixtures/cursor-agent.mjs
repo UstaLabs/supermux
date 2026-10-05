@@ -56,6 +56,8 @@ new AgentSideConnection(client => ({
     paramsTrace('session/load', params)
   record('load');
   if(params.sessionId === 'missing') throw new Error('missing session');
+  // Real Cursor replays the user's messages as standard session/update user_message_chunk.
+  if (process.env.REPLAY_USER === '1') await client.sessionUpdate({sessionId:params.sessionId,update:{sessionUpdate:'user_message_chunk',content:{type:'text',text:'earlier'}}});
   await client.sessionUpdate({sessionId:params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'history'}}});
   await client.extNotification('_x.ai/session/update', { sessionId: params.sessionId, update: { sessionUpdate: 'user_message_chunk', prompt_id: 'hist-1', content: { type: 'text', text: 'old' } } });
   await client.extNotification('_x.ai/session/update', { sessionId: params.sessionId, update: { sessionUpdate: 'turn_completed', prompt_id: 'hist-1' } });
@@ -67,6 +69,7 @@ new AgentSideConnection(client => ({
   return {};
  },
  async prompt(params) {
+  paramsTrace('session/prompt', params)
   const text = params.prompt[0].text;
   if(text === 'disconnect') { process.exit(19); return new Promise(()=>{}); }
   if(text === 'error') throw new Error('prompt rejected');
