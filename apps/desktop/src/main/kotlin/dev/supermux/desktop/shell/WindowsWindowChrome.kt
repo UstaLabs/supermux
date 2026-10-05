@@ -27,7 +27,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.jetbrains.JBR
 import com.jetbrains.WindowDecorations
-import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -97,27 +96,24 @@ fun rememberWindowsWindowChrome(window: ComposeWindow, dark: Boolean): WindowsWi
     val (decorations, bar) = setup
     val regions = remember(window) { MacChromeRegions() }
     DisposableEffect(window, bar) {
-        val listener = object : MouseAdapter() {
-            // JBR contract (as on macOS): update the hit test on every mouse event but EXITED/WHEEL.
-            // Content-relative AWT points → Compose px with this monitor's transform.
-            private fun update(e: MouseEvent) {
-                val t = window.graphicsConfiguration?.defaultTransform
-                val p = Offset((e.x * (t?.scaleX ?: 1.0)).toFloat(), (e.y * (t?.scaleY ?: 1.0)).toFloat())
-                bar.forceHitTest(!regions.allowsNativeDrag(p))
-            }
-
-            override fun mousePressed(e: MouseEvent) = update(e)
-            override fun mouseReleased(e: MouseEvent) = update(e)
-            override fun mouseEntered(e: MouseEvent) = update(e)
-            override fun mouseDragged(e: MouseEvent) = update(e)
-            override fun mouseMoved(e: MouseEvent) = update(e)
+        // An AWT-wide listener, not window.addMouseListener: ComposeWindow hands that to its content
+        // component, and on Windows the title-bar band's events aren't routed there — the hit test
+        // was never updated, so the whole band (the ☰ and toggle buttons too) acted as caption.
+        // JBR contract (as on macOS): update the hit test on every mouse event but EXITED/WHEEL.
+        val listener = java.awt.event.AWTEventListener { ev ->
+            val e = ev as? MouseEvent ?: return@AWTEventListener
+            if (e.id == MouseEvent.MOUSE_EXITED || e.id == MouseEvent.MOUSE_WHEEL) return@AWTEventListener
+            val src = e.component ?: return@AWTEventListener
+            if (javax.swing.SwingUtilities.getWindowAncestor(src) !== window && src !== window) return@AWTEventListener
+            val pt = javax.swing.SwingUtilities.convertPoint(src, e.point, window.rootPane)
+            // Root-pane AWT points → Compose px with this monitor's transform.
+            val t = window.graphicsConfiguration?.defaultTransform
+            val p = Offset((pt.x * (t?.scaleX ?: 1.0)).toFloat(), (pt.y * (t?.scaleY ?: 1.0)).toFloat())
+            bar.forceHitTest(!regions.allowsNativeDrag(p))
         }
-        window.addMouseListener(listener)
-        window.addMouseMotionListener(listener)
-        onDispose {
-            window.removeMouseListener(listener)
-            window.removeMouseMotionListener(listener)
-        }
+        val toolkit = java.awt.Toolkit.getDefaultToolkit()
+        toolkit.addAWTEventListener(listener, java.awt.AWTEvent.MOUSE_EVENT_MASK or java.awt.AWTEvent.MOUSE_MOTION_EVENT_MASK)
+        onDispose { toolkit.removeAWTEventListener(listener) }
     }
     // JBR reports the caption buttons' width once the window is shown, and again after a DPI change.
     var width by remember(bar) { mutableStateOf(WindowsWindowChrome.captionButtonsWidth(bar.rightInset)) }
