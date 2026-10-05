@@ -49,9 +49,10 @@ test("readiness is not consulted at all when the caller does not pass it", () =>
   expect(r.warnings.some((w) => w.includes("Workspace terminals"))).toBe(false)
 })
 
-test("no agent CLI at all is still fatal", () => {
+test("no agent CLI at all is a warning, not fatal (onboarding installs one through the broker)", () => {
   const r = checkPreflight(has([]))
-  expect(r.fatal.length).toBeGreaterThan(0)
+  expect(r.fatal).toEqual([])
+  expect(r.warnings.some((m) => m.includes("No agent CLI found"))).toBe(true)
 })
 
 test("tmux present produces no tmux warning", () => {

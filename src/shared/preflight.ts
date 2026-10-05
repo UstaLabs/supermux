@@ -65,7 +65,10 @@ export function checkPreflight(
 
   const present = AGENT_CLIS.filter((cli) => cli.names.some(has))
   if (present.length === 0) {
-    fatal.push(`No agent CLI found on PATH — install at least one of: ${AGENT_CLIS.map((cli) => cli.label).join(", ")}.`)
+    // A WARNING, not fatal: a fresh desktop install has no agent CLI yet, and the app's own
+    // onboarding installs one THROUGH this broker (POST /agents/install). Exiting here left the
+    // service crash-looping every 3 s on a new machine (found on a fresh Ubuntu VM, 2026-10-05).
+    warnings.push(`No agent CLI found on PATH — install at least one of: ${AGENT_CLIS.map((cli) => cli.label).join(", ")}. Sessions can't start until one is installed.`)
   } else {
     for (const cli of AGENT_CLIS) {
       if (!cli.names.some(has)) warnings.push(`Optional agent CLI '${cli.label}' not found on PATH — sessions using it will fail to spawn.`)
