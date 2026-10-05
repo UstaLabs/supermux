@@ -742,6 +742,38 @@ class HostSupervisorTest {
         assertTrue(h.events.none { it.startsWith("save:") })
     }
 
+    @Test fun aBrokerStillStartingIsAdoptedOnceItAnswers() = runTest {
+        val h = Harness(this)
+        // It holds broker.pid but hasn't bound the port yet.
+        Files.writeString(h.state.resolve("broker.pid"), "999")
+        h.table.procs[999] = ProcInfo(0, "/x/supermux-broker") to null
+        var bound = false
+        h.probeFn = { if (bound) h.desktop("h-booted") else HostProbeResult.PortFree }
+        val job = launch { h.sup.ensure() }
+        advanceTimeBy(3_000)
+        bound = true
+        job.join()
+        assertEquals(running, h.sup.status.value)
+        assertEquals("h-booted", h.sup.hostId.value)
+        assertTrue(h.launches.isEmpty(), "no second broker")
+    }
+
+    @Test fun anOutsideBrokerStillStartingGetsTheTakeoverQuestion() = runTest {
+        val h = Harness(this)
+        Files.writeString(h.state.resolve("broker.pid"), "999")
+        h.table.procs[999] = ProcInfo(0, "/x/supermux-broker") to null
+        var bound = false
+        h.probeFn = { if (bound) h.outside("h-cli") else HostProbeResult.PortFree }
+        val job = launch { h.sup.ensure() }
+        advanceTimeBy(3_000)
+        bound = true
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(HostingStatus.AskTakeover("h-cli"), h.sup.status.value)
+        assertTrue(h.launches.isEmpty())
+        job.cancel()
+    }
+
     @Test fun aReusedBrokerPidDoesNotBlock() = runTest {
         val h = Harness(this)
         Files.writeString(h.state.resolve("broker.pid"), "999")

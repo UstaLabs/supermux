@@ -30,8 +30,9 @@ import java.util.concurrent.TimeUnit
  * every mode change; a generation counter ([watchGen]) makes a stale loop drop out as soon as it
  * next takes the lock. Waiting for the user's takeover answer happens OUTSIDE the lock.
  *
- * Never two brokers on one state dir: the broker's own pid-file guard only works on Linux, so before
- * starting one the supervisor stops its own child and refuses when `broker.pid` names a live process.
+ * Never two brokers on one state dir: the broker refuses a second one itself (`broker.pid`), but only
+ * once it runs, so before starting one the supervisor stops its own child and waits on a live
+ * `broker.pid` ([secondBrokerCheck]): it adopts one that finishes starting and refuses one that never answers.
  *
  * No public method throws: failures are logged and published as [HostingStatus.CantStart].
  */
@@ -453,7 +454,18 @@ class HostSupervisor(
                 stopChildLocked()
                 plan = HostPlan.Start
             }
-            secondBrokerReason(prefs.port)?.let { return cantStart(it) }
+            // The plan came from a probe that found no supermux there: one answering now has just started.
+            when (val sb = secondBrokerCheck(prefs.port, silentBefore = true)) {
+                SecondBroker.None -> Unit
+                is SecondBroker.Refuse -> return cantStart(sb.reason)
+                is SecondBroker.Answering -> {
+                    // It was still starting: decide again on what answers now (ours, or a takeover question).
+                    found = sb.found
+                    plan = decideHost(found, prefs, bundled, appState)
+                    if (plan == HostPlan.UpdateOwn && updateTried) plan = HostPlan.UseOwn
+                    log("a broker that was still starting answers now: ${found.describe()}; plan: $plan")
+                }
+            }
         }
 
         when (plan) {

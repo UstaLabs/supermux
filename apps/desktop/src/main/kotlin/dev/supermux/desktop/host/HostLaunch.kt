@@ -299,22 +299,63 @@ internal suspend fun HostSupervisor.ourServiceInstalled(): Boolean = withContext
     BrokerService.isOursInstalled(osEnv) && !BrokerService.isOursXdgAutostart(osEnv) && !BrokerService.appRunsAsService(osEnv)
 }
 
+/** What [secondBrokerCheck] found behind a live `broker.pid`. */
+internal sealed interface SecondBroker {
+    /** Nothing (any more): go ahead. */
+    data object None : SecondBroker
+    /** It was still starting (it holds `broker.pid` before it binds the port) and now answers. */
+    data class Answering(val found: HostProbeResult.Supermux) : SecondBroker
+    /** A live broker that never answered: starting another would be a second one. */
+    data class Refuse(val reason: String) : SecondBroker
+}
+
 /**
- * The broker's own guard against a second broker on one state dir reads /proc (Linux only), so
- * check its pid file here: a live process that isn't our child means don't start another.
+ * Before starting a broker: is another one alive on our state dir? The broker refuses a second
+ * one itself (its `broker.pid`), but only once it runs, so check its pid file here. A live process
+ * that isn't our child is waited for, up to [HostSupervisor.Timing.exitingBrokerMs]: it may be
+ * exiting (a service job launchd is tearing down, a child we just stopped), or still booting. The
+ * port is re-probed throughout; once a supermux STARTS answering there (it didn't, then it does), it
+ * is [SecondBroker.Answering]. [silentBefore]: the caller just saw the port not answering as a supermux.
+ * One that answers all along is an exiting broker, waited for like any other.
  */
-internal suspend fun HostSupervisor.secondBrokerReason(port: Int): String? {
-    val pid = otherLiveBrokerPid() ?: return null
-    // It may be exiting (a service job launchd is tearing down, a child we just stopped): a graceful
-    // shutdown takes a few seconds. Wait for it to finish and the port to be free; still alive after
-    // [HostSupervisor.Timing.exitingBrokerMs] means a real second broker.
+internal suspend fun HostSupervisor.secondBrokerCheck(port: Int, silentBefore: Boolean = false): SecondBroker {
+    val pid = otherLiveBrokerPid() ?: return SecondBroker.None
     val deadline = now() + timing.exitingBrokerMs
-    while (now() < deadline) {
+    var silent = silentBefore
+    while (true) {
+        val r = probe(port)
+        if (r is HostProbeResult.Supermux) {
+            if (silent) return SecondBroker.Answering(r)
+        } else {
+            silent = true
+        }
+        if (otherLiveBrokerPid() == null && r == HostProbeResult.PortFree) return SecondBroker.None
+        if (now() >= deadline) break
         delay(timing.healthPollMs)
-        if (otherLiveBrokerPid() == null && probe(port) == HostProbeResult.PortFree) return null
     }
-    if (otherLiveBrokerPid() == null) return null
-    return "supermux is already running on this computer (pid $pid) but isn't answering on port $port. Quit it, then try again."
+    if (otherLiveBrokerPid() == null) return SecondBroker.None
+    return SecondBroker.Refuse(
+        "supermux is already running on this computer (pid $pid) but isn't answering on port $port. Quit it, then try again.",
+    )
+}
+
+/**
+ * [secondBrokerCheck] for a launch: null to go ahead, else why not. A broker of ours that finished
+ * starting meanwhile is adopted (watched, like one we couldn't re-parent) instead of refused.
+ */
+internal suspend fun HostSupervisor.secondBrokerReason(port: Int): String? = when (val sb = secondBrokerCheck(port)) {
+    SecondBroker.None -> null
+    is SecondBroker.Refuse -> sb.reason
+    is SecondBroker.Answering -> if (sb.found.isOurs()) {
+        log("a broker of ours finished starting on port $port; using it")
+        _hostId.value = sb.found.hostId
+        lastHealthyBuild = sb.found.build
+        mode = HostSupervisor.Mode.ORPHAN
+        childDetached = false
+        null
+    } else {
+        "Another supermux started on port $port meanwhile. Try again."
+    }
 }
 
 /** The live pid in `broker.pid` when it isn't our child (and isn't a reused pid), else null. */
