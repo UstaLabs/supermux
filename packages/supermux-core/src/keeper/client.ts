@@ -358,8 +358,11 @@ async function connectLocked(options: {
       send({ type: 'meta', value })
     },
     async detach() {
+      // The keeper may already be gone (it exits right after its agent, or crashed) without an
+      // `exit` frame: then 'close' has already fired and waiting for it would never settle.
+      if (closed) return
       if (!sock.destroyed) sock.end()
-      await new Promise<void>(r => sock.once('close', () => r()))
+      await new Promise<void>(r => { if (closed) r(); else sock.once('close', () => r()) })
     },
     async shutdown() {
       // A destroyed socket means the keeper already went away (or is finishing); do not throw,
