@@ -6,6 +6,8 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { acp } from "../src/acp/index.js"
 import { cursor, grok, opencode } from "../src/agents/index.js"
+import { hideInstructions } from "../src/acp/index.js"
+import { stripInstructionsEcho } from "../src/context/agents.js"
 import { claude } from "../src/claude/index.js"
 import { codex } from "../src/codex/index.js"
 import type { ContextDrop, LaunchContext } from "../src/context/types.js"
@@ -226,7 +228,7 @@ test("grok: --plugin-dir per plugin and skills wrapper before stdio, _meta.rules
   expect(load.mcpServers.map((server: { name: string }) => server.name)).toEqual(["ctx"])
 })
 
-test("cursor: no --plugin-dir (ignored by its ACP server), mcpServers on session/new, instructions as the first prompt's preamble", async () => {
+test("cursor: no --plugin-dir (ignored by its ACP server), mcpServers on session/new, instructions as a first-prompt block", async () => {
   const f = contextFixture()
   const context = f.launch()
   const { argv, params } = await launch("cursor", { sessionContext: context })
@@ -243,42 +245,110 @@ test("cursor: no --plugin-dir (ignored by its ACP server), mcpServers on session
   expect(AGENTS.cursor!({}).context!.mcpListChanged).toBeFalsy()
 })
 
-/** Opens cursor with a context, sends two prompts, and returns the prompt blocks it received. */
+/** Opens cursor with a context, sends two prompts, and returns the prompt blocks it received and every update. */
 async function cursorPrompts(sessionContext: LaunchContext, options: { resumeId?: string; env?: Record<string, string> } = {}) {
   const dir = scratch(), paramsTrace = join(dir, "params.jsonl")
   const driver = AGENTS.cursor!({ ENV_TRACE: join(dir, "env.json"), PARAMS_TRACE: paramsTrace, ...options.env })
+  const updates: unknown[] = []
   const runtime = await driver.open({
     sessionId: "ctx-1", cwd: process.cwd(), signal: new AbortController().signal, sessionContext,
     ...(options.resumeId ? { resumeId: options.resumeId } : {}),
-    onUpdate() {}, onExit() {},
+    onUpdate(update) { updates.push(update) }, onExit() {},
     requestPermission: async () => ({ outcome: { outcome: "cancelled" } }), requestAnswers: async () => ({ outcome: "cancelled" as const }),
   })
   try {
     await runtime.prompt([{ type: "text", text: "hello" }], new AbortController().signal)
     await runtime.prompt([{ type: "text", text: "again" }], new AbortController().signal)
   } finally { await runtime.close({ mode: "shutdown" }) }
-  return readFileSync(paramsTrace, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(line => line.method === "session/prompt").map(line => line.params.prompt)
+  const prompts = readFileSync(paramsTrace, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(line => line.method === "session/prompt").map(line => line.params.prompt)
+  return Object.assign(prompts, { updates })
 }
 
-test("cursor: the instructions preamble leads the conversation's first prompt only", async () => {
+const userChunks = (updates: unknown[]) => updates.flatMap(update => {
+  const u = update as { protocol?: string; value?: { sessionUpdate?: string; content?: { text?: string } } }
+  return u.protocol === "acp" && u.value?.sessionUpdate === "user_message_chunk" ? [u.value.content] : []
+})
+
+test("cursor: the instructions are an embedded resource block for the assistant, in front of the first prompt only", async () => {
   const f = contextFixture()
   const [first, second] = await cursorPrompts(f.launch())
   expect(first).toHaveLength(2)
-  expect(first[0].type).toBe("text")
-  expect(first[0].text).toContain("<session-instructions>")
-  expect(first[0].text).toContain("Probe instructions.")
+  expect(first[0].type).toBe("resource")
+  expect(first[0].resource.uri).toBe("supermux://instructions")
+  expect(first[0].resource.mimeType).toBe("text/markdown")
+  expect(first[0].resource.text).toContain("<session-instructions>")
+  expect(first[0].resource.text).toContain("Probe instructions.")
+  expect(first[0].annotations).toEqual({ audience: ["assistant"] })
   expect(first[1]).toEqual({ type: "text", text: "hello" })
   expect(second).toEqual([{ type: "text", text: "again" }])
 })
 
-test("cursor: a loaded conversation that already has a turn gets no preamble; one without a turn still does", async () => {
+test("cursor: a loaded conversation that already has a turn gets no instructions block; one without a turn still does", async () => {
   const f = contextFixture()
   const withTurn = await cursorPrompts(f.launch({ launch: "resume" }), { resumeId: "agent-1", env: { REPLAY_USER: "1" } })
   expect(withTurn[0]).toEqual([{ type: "text", text: "hello" }])
   const noTurn = await cursorPrompts(f.launch({ launch: "resume" }), { resumeId: "agent-1" })
   expect(noTurn[0]).toHaveLength(2)
-  expect(noTurn[0][0].text).toContain("Probe instructions.")
+  expect(noTurn[0][0].resource.text).toContain("Probe instructions.")
   expect(noTurn[1]).toEqual([{ type: "text", text: "again" }])
+})
+
+test("cursor: the instructions never appear in the user's echoed message, live or in a session/load replay", async () => {
+  const f = contextFixture()
+  const live = await cursorPrompts(f.launch(), { env: { ECHO_USER: "1" } })
+  expect(userChunks(live.updates)).toEqual([{ type: "text", text: "hello" }, { type: "text", text: "again" }])
+  expect(JSON.stringify(live.updates)).not.toContain("Probe instructions.")
+  // Cursor's own replay of that first message (flattened, as cursor-agent 2026.09.18 sends it).
+  const replayed = "hello\n\nAdditional ACP context:\n[ACP embedded_resource] supermux://instructions\n<session-instructions>\nProbe instructions.\n</session-instructions>"
+  const loaded = await cursorPrompts(f.launch({ launch: "resume" }), { resumeId: "agent-1", env: { REPLAY_USER: "1", REPLAY_USER_TEXT: replayed } })
+  expect(loaded[0]).toEqual([{ type: "text", text: "hello" }])
+  expect(userChunks(loaded.updates)[0]).toEqual({ type: "text", text: "hello" })
+  expect(JSON.stringify(loaded.updates)).not.toContain("Probe instructions.")
+  expect(JSON.stringify(loaded.updates)).not.toContain("supermux://instructions")
+})
+
+test("stripInstructionsEcho: cuts only the instructions section of Cursor's flattened user message", () => {
+  const ours = "[ACP embedded_resource] supermux://instructions\n<session-instructions>\nX\n</session-instructions>"
+  expect(stripInstructionsEcho(`hi\n\nAdditional ACP context:\n${ours}`)).toBe("hi")
+  expect(stripInstructionsEcho(`hi\n\nAdditional ACP context:\n${ours}\n[ACP embedded_resource] file:///a.md\nbody`)).toBe("hi\n\nAdditional ACP context:\n[ACP embedded_resource] file:///a.md\nbody")
+  expect(stripInstructionsEcho("<session-instructions>\nX\n</session-instructions>\nhi")).toBe("hi")
+  expect(stripInstructionsEcho("plain text")).toBe("plain text")
+  expect(hideInstructions({ sessionUpdate: "user_message_chunk", content: { type: "resource", resource: { uri: "supermux://instructions", text: "X" } } })).toBeUndefined()
+  expect(hideInstructions({ sessionUpdate: "user_message_chunk", content: { type: "text", text: `Additional ACP context:\n${ours}` } })).toBeUndefined()
+})
+
+test("cursor: a detached session re-attached before its first turn still sends the instructions; after a turn it does not", async () => {
+  const f = contextFixture()
+  const dir = scratch(), paramsTrace = join(dir, "params.jsonl")
+  const k = keeper()
+  const driver = () => cursor({
+    id: "cursor", command: process.execPath, commandArgs: [fixture("cursor-agent.mjs")], env: { PARAMS_TRACE: paramsTrace }, mcpServers: [],
+    permissions: TEST_ACP_PERMISSIONS, ...ACP, keeper: k,
+  })
+  const context = f.launch()
+  const open = (resumeId?: string) => driver().open({
+    sessionId: "ctx-reattach", cwd: process.cwd(), signal: new AbortController().signal,
+    sessionContext: resumeId ? { ...context, launch: "resume" } : context, ...(resumeId ? { resumeId } : {}),
+    onUpdate() {}, onExit() {},
+    requestPermission: async () => ({ outcome: { outcome: "cancelled" } }), requestAnswers: async () => ({ outcome: "cancelled" as const }),
+  })
+  const lines = () => readFileSync(paramsTrace, "utf8").trim().split("\n").map(line => JSON.parse(line))
+  const prompts = () => lines().filter(line => line.method === "session/prompt").map(line => line.params.prompt)
+  const loads = () => lines().filter(line => line.method === "session/load").length
+  let runtime = await open()
+  await runtime.close({ mode: "detach" })
+  runtime = await open("agent-1")
+  expect(loads()).toBe(0) // re-attached to the parked process: no session/load
+  await runtime.prompt([{ type: "text", text: "hello" }], new AbortController().signal)
+  expect(prompts()[0]).toHaveLength(2)
+  expect(prompts()[0][0].resource.uri).toBe("supermux://instructions")
+  await runtime.close({ mode: "detach" })
+  runtime = await open("agent-1")
+  try {
+    await runtime.prompt([{ type: "text", text: "again" }], new AbortController().signal)
+    expect(loads()).toBe(0)
+    expect(prompts()[1]).toEqual([{ type: "text", text: "again" }])
+  } finally { await runtime.close({ mode: "shutdown" }) }
 })
 
 test("opencode: a session OPENCODE_CONFIG (instructions, skills.paths kept with the global ones, JS plugin) + ACP mcpServers", async () => {

@@ -13,7 +13,7 @@ import { freeLoopbackPort, isOpenCodeEndpointMissing, newOpenCodeServerInfo, ope
 import type { KeeperFrameEvent } from '../keeper/client.js'
 import { REASON, SUBAGENT_STATE_METHOD } from '../subagent-actions.js'
 import type { SubagentSnapshot } from '../types.js'
-import { genericAcpContext, type AcpContextAdapter } from '../context/agents.js'
+import { genericAcpContext, INSTRUCTIONS_URI, stripInstructionsEcho, type AcpContextAdapter } from '../context/agents.js'
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
 
 export type AcpActivityHint = { id?: string; phase: 'started' | 'completed' }
@@ -156,6 +156,22 @@ function resolveConfigValue(configOptions: ConfigOption[], configId: string, val
   return byName ? byName.value : value
 }
 
+/**
+ * A `user_message_chunk` without the session-instructions block: a chunk that IS the block (an
+ * embedded resource or text with its URI / wrapper) → undefined; Cursor's flattened text form →
+ * the text with the block cut out (see `stripInstructionsEcho`).
+ */
+export function hideInstructions(update: unknown): unknown {
+  const content = (update as { content?: { type?: unknown; text?: unknown; resource?: { uri?: unknown } } } | undefined)?.content
+  if (!content) return update
+  if (content.type === 'resource' && content.resource?.uri === INSTRUCTIONS_URI) return undefined
+  if (content.type !== 'text' || typeof content.text !== 'string') return update
+  const text = stripInstructionsEcho(content.text)
+  if (text === content.text) return update
+  if (!text.trim()) return undefined
+  return { ...(update as object), content: { ...content, text } }
+}
+
 export function acp(options: AcpOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('ACP options are required')
   for (const field of ['id', 'command', 'args', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'captureStderr', 'permissions'] as const) {
@@ -242,7 +258,7 @@ export function acp(options: AcpOptions): AgentDriver {
      * while the conversation has no turn: on create, after a load whose replay had no user
      * message, or on re-attach when the keeper meta says so.
      */
-    let preamble: string | undefined
+    let preamble: ContentBlock | undefined
     let closed = false
     let runtimeReady = false
     let agentSessionId = ''
@@ -488,8 +504,12 @@ export function acp(options: AcpOptions): AgentDriver {
           if (childToolSessions.size > 512) childToolSessions.delete(childToolSessions.keys().next().value as string)
         }
       }
-      if (replay && !child && (notification.update as { sessionUpdate?: unknown } | undefined)?.sessionUpdate === 'user_message_chunk') replayedUserMessages++
-      emitUpdate({ protocol: 'acp', value: notification.update as SessionNotification['update'], ...(typeof sessionId === 'string' ? { sessionId } : {}), ...(replay ? { replay: true } : {}) })
+      const userChunk = (notification.update as { sessionUpdate?: unknown } | undefined)?.sessionUpdate === 'user_message_chunk'
+      if (replay && !child && userChunk) replayedUserMessages++
+      // The instructions block is never part of the user's message: drop / strip its echo (live and replayed).
+      const update = userChunk && sessionContext?.firstPromptBlock ? hideInstructions(notification.update) : notification.update
+      if (update === undefined) { io.ackConsumed(); return }
+      emitUpdate({ protocol: 'acp', value: update as SessionNotification['update'], ...(typeof sessionId === 'string' ? { sessionId } : {}), ...(replay ? { replay: true } : {}) })
       io.ackConsumed()
     }
     /** Session updates outside the SDK schema (Cursor's subagents extension) that its validator would drop. */
@@ -814,7 +834,7 @@ export function acp(options: AcpOptions): AgentDriver {
       const onAbort = () => { if (turn === active) beginCancel() }
       signal.addEventListener('abort', onAbort, { once: true })
       // The preamble goes with the first prompt only; once sent it is part of the conversation.
-      const blocks: ContentBlock[] = preamble !== undefined ? [{ type: 'text', text: preamble }, ...content] : content
+      const blocks: ContentBlock[] = preamble !== undefined ? [preamble, ...content] : content
       if (preamble !== undefined) {
         preamble = undefined
         try { io.setMeta({ preamblePending: false }) } catch { /* */ }
@@ -1007,7 +1027,7 @@ export function acp(options: AcpOptions): AgentDriver {
         advertisedModes = io.welcome.meta.advertisedModes === true
         hasModeConfig = io.welcome.meta.hasModeConfig === true
         cursorSubagents = io.welcome.meta.cursorSubagents === true
-        if (io.welcome.meta.preamblePending === true) preamble = sessionContext?.firstPromptPreamble
+        if (io.welcome.meta.preamblePending === true) preamble = sessionContext?.firstPromptBlock
         if (typeof io.welcome.meta.grokSubagentCancel === 'boolean') grokSubagentCancel = io.welcome.meta.grokSubagentCancel
         startSideChannel(readOpenCodeServerInfo(io.welcome.meta.opencodeServer))
         runtimeReady = true
@@ -1040,13 +1060,13 @@ export function acp(options: AcpOptions): AgentDriver {
           replay = true
           try { configOptions = readConfigOptions(await setup(connection.loadSession({ ...params, sessionId: agentSessionId }))) } finally { replay = false }
           // A conversation that never had a turn (relaunched before its first prompt) still needs it.
-          if (replayedUserMessages === 0) preamble = sessionContext?.firstPromptPreamble
+          if (replayedUserMessages === 0) preamble = sessionContext?.firstPromptBlock
         } else throw new UnsupportedOperation('resume', options.id)
       } else {
         const created = await setup(connection.newSession(sessionContext?.newSessionMeta ? { ...params, _meta: sessionContext.newSessionMeta } : params))
         agentSessionId = created.sessionId
         configOptions = readConfigOptions(created)
-        preamble = sessionContext?.firstPromptPreamble
+        preamble = sessionContext?.firstPromptBlock
       }
       // load/resume results carry no option lists (Cursor), so a caller's picker-style
       // value could not be resolved on a resumed session. A turn-less session/new is

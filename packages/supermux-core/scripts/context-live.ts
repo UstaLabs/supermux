@@ -269,7 +269,16 @@ async function check(agent: Agent) {
     // Restart: close the whole core, reopen, resume from the record.
     await core.close({ agents: "shutdown" })
     core = open()
+    const resumeStart = events.length
     const resumed = await core.sessions.resume(`live-${agent}`)
+    if (agent === "cursor") {
+      // The session/load replay as the host sees it: the user's messages, never the instructions block.
+      const stream = events.slice(resumeStart).filter(e => e.type === "session.update" || e.type === "session.event")
+      const replayedUser = stream.flatMap(e => e.type === "session.update" && (e.update.value as { sessionUpdate?: string })?.sessionUpdate === "user_message_chunk" ? [(e.update.value as { content?: { text?: string } }).content?.text] : [])
+      const text = JSON.stringify(stream)
+      const leaked = ["supermux://instructions", "session-instructions", "Session context instructions."].filter(marker => text.includes(marker))
+      record(agent, "session/load replay: user messages without the instructions block", replayedUser.length > 0 && leaked.length === 0, { replayedUser, leaked })
+    }
     try {
       const start = events.length
       const reply = await ask(resumed, events, ASK_RECALL)

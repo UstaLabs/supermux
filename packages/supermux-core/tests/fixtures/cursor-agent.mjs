@@ -7,6 +7,11 @@ const mode = process.env.FIXTURE_MODE;
 if (process.env.TRACE) appendFileSync(process.env.TRACE, JSON.stringify({ argv: process.argv.slice(2) }) + '\n');
 if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid));
 if (mode === 'stubborn') process.on('SIGTERM', () => {});
+export function flattenPrompt(prompt) {
+  const texts = prompt.filter(block => block.type === 'text').map(block => block.text)
+  const resources = prompt.filter(block => block.type === 'resource').map(block => `[ACP embedded_resource] ${block.resource.uri}\n${block.resource.text}`)
+  return texts.join('\n') + (resources.length ? `\n\nAdditional ACP context:\n${resources.join('\n')}` : '')
+}
 let finish;
 let promptActive = false;
 let nativeTurn = false;
@@ -57,7 +62,7 @@ new AgentSideConnection(client => ({
   record('load');
   if(params.sessionId === 'missing') throw new Error('missing session');
   // Real Cursor replays the user's messages as standard session/update user_message_chunk.
-  if (process.env.REPLAY_USER === '1') await client.sessionUpdate({sessionId:params.sessionId,update:{sessionUpdate:'user_message_chunk',content:{type:'text',text:'earlier'}}});
+  if (process.env.REPLAY_USER === '1') await client.sessionUpdate({sessionId:params.sessionId,update:{sessionUpdate:'user_message_chunk',content:{type:'text',text:process.env.REPLAY_USER_TEXT || 'earlier'}}});
   await client.sessionUpdate({sessionId:params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'history'}}});
   await client.extNotification('_x.ai/session/update', { sessionId: params.sessionId, update: { sessionUpdate: 'user_message_chunk', prompt_id: 'hist-1', content: { type: 'text', text: 'old' } } });
   await client.extNotification('_x.ai/session/update', { sessionId: params.sessionId, update: { sessionUpdate: 'turn_completed', prompt_id: 'hist-1' } });
@@ -70,7 +75,10 @@ new AgentSideConnection(client => ({
  },
  async prompt(params) {
   paramsTrace('session/prompt', params)
-  const text = params.prompt[0].text;
+  const text = params.prompt.find(block => block.type === 'text')?.text;
+  // Like the real cursor-agent: the user's message echoed as ONE text chunk, embedded resources
+  // flattened after it ("Additional ACP context:\n[ACP embedded_resource] <uri>\n<text>").
+  if (process.env.ECHO_USER === '1') await client.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: flattenPrompt(params.prompt) } } });
   if(text === 'disconnect') { process.exit(19); return new Promise(()=>{}); }
   if(text === 'error') throw new Error('prompt rejected');
   if(text === 'hang') { promptActive = true; return new Promise(resolve => finish=resolve); }

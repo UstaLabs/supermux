@@ -5,7 +5,7 @@
  */
 import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { basename, join } from "node:path"
-import type { McpServer } from "@agentclientprotocol/sdk"
+import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk"
 import { mappedPluginDrops, mappedPluginServers, readPlugin, writeSkillsPlugin } from "./plugins.js"
 import type {
   ContextCapabilities, ContextChange, ContextDrop, ContextUpdateSupport, DriverContextSupport, LaunchContext, ResolvedContext, ResolvedMcpServer,
@@ -242,10 +242,11 @@ export type AcpContextLaunch = {
   /** `_meta` of `session/new` (only when the session is created). */
   newSessionMeta?: Record<string, unknown>
   /**
-   * Text sent once as the leading block of the conversation's first prompt (Cursor's instructions
-   * channel). Given on every launch; the driver sends it only while the conversation has no turn.
+   * A content block sent once in front of the conversation's first prompt (Cursor's instructions
+   * channel). Given on every launch; the driver sends it only while the conversation has no turn,
+   * and strips its echo from the user's replayed / echoed messages (see `stripInstructionsEcho`).
    */
-  firstPromptPreamble?: string
+  firstPromptBlock?: ContentBlock
 }
 
 export type AcpContextAdapter = {
@@ -315,11 +316,52 @@ export function cursorPreamble(instructions: string): string {
   ].join("\n")
 }
 
+/** The URI of the embedded instructions resource (also how its echo is recognised). */
+export const INSTRUCTIONS_URI = "supermux://instructions"
+
+/**
+ * The instructions as an ACP embedded text resource for the assistant only. Cursor accepts it
+ * (although `promptCapabilities.embeddedContext` is false) and the model reads it (C0 2026-10-05);
+ * Cursor flattens it into the user's message as
+ * `<user text>\n\nAdditional ACP context:\n[ACP embedded_resource] supermux://instructions\n<text>`.
+ */
+export function instructionsBlock(instructions: string): ContentBlock {
+  return {
+    type: "resource",
+    resource: { uri: INSTRUCTIONS_URI, mimeType: "text/markdown", text: cursorPreamble(instructions) },
+    annotations: { audience: ["assistant"] },
+  }
+}
+
+const ECHO_MARK = `[ACP embedded_resource] ${INSTRUCTIONS_URI}`
+const ECHO_HEADER = "Additional ACP context:"
+
+/**
+ * The text of a user message with the instructions block removed, as Cursor echoes it in
+ * `user_message_chunk` (live and in a session/load replay). Other embedded resources stay. Returns
+ * the text unchanged when it carries no instructions.
+ */
+export function stripInstructionsEcho(text: string): string {
+  const at = text.indexOf(ECHO_MARK)
+  if (at < 0) return text.includes("<session-instructions>") ? text.replace(/<session-instructions>[\s\S]*?<\/session-instructions>\n?/g, "").trimEnd() : text
+  // Our section runs to the next embedded item (Cursor starts each with "[ACP ") or the end.
+  const next = text.indexOf("\n[ACP ", at + ECHO_MARK.length)
+  let before = text.slice(0, at)
+  const after = next < 0 ? "" : text.slice(next + 1)
+  if (!after) {
+    // Nothing else was embedded: the "Additional ACP context:" header goes too.
+    const header = before.lastIndexOf(ECHO_HEADER)
+    if (header >= 0 && before.slice(header + ECHO_HEADER.length).trim() === "") before = before.slice(0, header)
+    return before.replace(/\s+$/, "")
+  }
+  return before + after
+}
+
 export function cursorContext(factoryServers: McpServer[]): AcpContextAdapter {
   return {
     support: {
       capabilities: {
-        instructions: { support: "supported", note: "the first prompt's leading text block (Cursor's ACP server has no system-prompt channel); fixed at creation, kept by session/load; subagents do not get it" },
+        instructions: { support: "supported", note: "an embedded resource block (supermux://instructions, audience assistant) in front of the first prompt (Cursor's ACP server has no system-prompt channel); fixed at creation, kept by session/load, hidden from the user's echoed messages; subagents do not get it" },
         skills: { support: "unsupported", note: "Cursor's ACP server ignores --plugin-dir and reads skills only from the workspace and $HOME/.cursor/skills / $HOME/.agents/skills (host-owned); never written into the repo" },
         plugins: { support: "unsupported", note: "Cursor's ACP server ignores --plugin-dir (verified live on 2026.09.18: neither plugin skills nor plugin rules load)" },
         mcpServers: { support: "supported", note: "ACP session/new mcpServers (subagents get them too)" },
@@ -336,7 +378,7 @@ export function cursorContext(factoryServers: McpServer[]): AcpContextAdapter {
       const use = applied(context)
       return {
         args: [], env: {}, mcpServers: use.mcpServers.map(toAcp),
-        ...(use.instructions !== undefined ? { firstPromptPreamble: cursorPreamble(use.instructions) } : {}),
+        ...(use.instructions !== undefined ? { firstPromptBlock: instructionsBlock(use.instructions) } : {}),
       }
     },
   }

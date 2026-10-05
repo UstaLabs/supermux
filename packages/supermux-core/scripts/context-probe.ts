@@ -50,6 +50,14 @@ type Agent = typeof AGENTS[number]
 const wanted = argv.filter(a => (AGENTS as readonly string[]).includes(a)) as Agent[]
 const want = (n: number) => !ONLY || ONLY.has(n)
 
+/** The first-prompt instructions block: an embedded resource (default) or a text block, both for the assistant only. */
+const shapeArg = argv.find(a => a.startsWith("--instructions-shape"))
+const INSTRUCTIONS_SHAPE = (shapeArg?.includes("=") ? shapeArg.split("=")[1] : shapeArg ? argv[argv.indexOf(shapeArg) + 1] : "resource") === "text" ? "text" : "resource"
+function instructionsBlock(text: string): unknown {
+  return INSTRUCTIONS_SHAPE === "resource"
+    ? { type: "resource", resource: { uri: "supermux://instructions", mimeType: "text/markdown", text }, annotations: { audience: ["assistant"] } }
+    : { type: "text", text, annotations: { audience: ["assistant"] } }
+}
 /** Cursor's ACP model picker calls Auto "default[]" ("auto" is refused as an invalid value). */
 function cursorAlias(model: string) { return model.toLowerCase() === "auto" ? "default[]" : model }
 const cursorModelArg = argv.find(a => a.startsWith("--cursor-model"))
@@ -607,11 +615,13 @@ class AcpClient {
   /** Tool calls of the last turn (any session): kind, title, and every output text, to tell a token
    *  the agent was GIVEN from one it FOUND by reading or searching files. */
   turnTools: Array<{ kind: string; title: string; path?: string; output: string }> = []
-  preamble?: string
+  /** A separate content block sent before the next prompt's text (the first-prompt instructions). */
+  preamble?: unknown
   async ask(text: string, timeoutMs = 240_000): Promise<string> {
     const start = this.rpc.notifications.length
-    if (this.preamble) { text = `${this.preamble}\n\n${text}`; this.preamble = undefined }
-    await this.rpc.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text }] }, timeoutMs)
+    const prompt = [...(this.preamble ? [this.preamble] : []), { type: "text", text }]
+    this.preamble = undefined
+    await this.rpc.request("session/prompt", { sessionId: this.sessionId, prompt }, timeoutMs)
     await sleep(300)
     const updates = this.rpc.notifications.slice(start).filter(n => n.method === "session/update").map(n => n.params?.update ?? {})
     const byId = new Map<string, { kind: string; title: string; path?: string; output: string }>()
@@ -681,8 +691,9 @@ async function runAcp(plan: AcpPlan) {
       sessionId = acp.sessionId
       if (plan.model) await step(agent, "-", "model", "session/set_config_option", () => acp.setModel(plan.model!))
       if (plan.preamble && (want(1) || want(8))) {
-        acp.preamble = plan.preamble
-        await step(agent, "1", "preamble turn", "first prompt", () => acp.ask("Reply with OK only. Do not use any tools."))
+        acp.preamble = instructionsBlock(plan.preamble)
+        const ok = await step(agent, "1", "preamble turn", `first prompt, ${INSTRUCTIONS_SHAPE} block`, () => acp.ask("Reply with OK only. Do not use any tools."))
+        if (ok !== undefined) record(agent, "1", `instructions block accepted (${INSTRUCTIONS_SHAPE})`, "info", "session/prompt [block, text]", ok)
       }
       if (want(1)) {
         const channels = plan.instructions("A")
@@ -740,8 +751,11 @@ async function runAcp(plan: AcpPlan) {
     const acp = new AcpClient(proc)
     try {
       await acp.init()
+      const replayStart = acp.rpc.notifications.length
       const loaded = await step(agent, "9", "session/load", "session/load", () => acp.load(sessionId, work, plan.mcp.B.map(acpMcp), plan.meta?.("B")))
       if (loaded === undefined) return
+      const echoed = acp.updatesSince(replayStart).filter(u => u?.update?.sessionUpdate === "user_message_chunk").map(u => u.update.content)
+      record(agent, "9", "session/load replays the user's messages (content blocks)", "info", "user_message_chunk during session/load", echoed.map(c => ({ type: c?.type, uri: c?.resource?.uri, annotations: c?.annotations, text: String(c?.text ?? c?.resource?.text ?? "").slice(0, 80) })))
       if (plan.model) await step(agent, "-", "model", "session/set_config_option", () => acp.setModel(plan.model!))
       if (want(9) || want(7)) {
         const r = await step(agent, "9", "reload keeps conversation", "session/load", () => acp.ask(`Earlier in this conversation an MCP tool "get_code_word" of the server "probe" returned a code word. What was it? Do not call any tools; answer from the conversation history. Reply with the word only.`))
