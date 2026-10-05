@@ -1,9 +1,11 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 import org.jetbrains.compose.reload.gradle.ComposeHotRun
+import dev.supermux.desktop.packaging.DebLauncherEntry
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.util.Collections
 import java.util.zip.CRC32
@@ -60,6 +62,9 @@ dependencies {
 }
 
 kotlin { jvmToolchain(17) }
+
+// The .deb launcher-entry edit (packaging/src, compiled into buildSrc for the build) is tested here.
+sourceSets["test"].java.srcDir("packaging/src")
 
 // The app's own version, baked in so the updater knows what it is running — and which release
 // channel it follows (a prerelease like 0.12.0-alpha.1 follows channels.alpha). CI passes the tag
@@ -454,40 +459,48 @@ fun rewritePackagedNativeDigests(appDir: File): List<File> {
  * the launcher and the dock shows a second, anonymous icon. jpackage would take an overriding
  * template from `--resource-dir`, but Compose always passes its own (cleared and refilled inside
  * the task action, and jpackage keeps the last value of a repeated option), so the entry is fixed
- * in the built package instead: unpack, add the line, rebuild root-owned.
+ * in the built package instead: unpack, edit (DebLauncherEntry, packaging/src), rebuild
+ * root-owned. Fails the build when the entry is missing or still lacks the line.
  */
 fun addStartupWmClassToDebs(debDir: File) {
     fun run(vararg argv: String) {
         val proc = ProcessBuilder(*argv).redirectErrorStream(true).start()
         val out = proc.inputStream.bufferedReader().readText()
-        check(proc.waitFor() == 0) { "${argv.joinToString(" ")} failed: $out" }
+        if (proc.waitFor() != 0) throw GradleException("${argv.joinToString(" ")} failed: $out")
     }
-    for (deb in debDir.listFiles().orEmpty().filter { it.isFile && it.name.endsWith(".deb") }) {
+    val debs = debDir.listFiles().orEmpty().filter { it.isFile && it.name.endsWith(".deb") }
+    if (debs.isEmpty()) throw GradleException("addStartupWmClassToDebs: no .deb in $debDir")
+    for (deb in debs) {
         val work = Files.createTempDirectory("deb-wmclass").toFile()
         try {
+            // dpkg-deb -b packs the root dir's own mode into the package's "./" entry, and dpkg
+            // applies it to / on install: a 0700 temp dir would lock everyone else out of /.
+            Files.setPosixFilePermissions(work.toPath(), PosixFilePermissions.fromString("rwxr-xr-x"))
             run("dpkg-deb", "-R", deb.absolutePath, work.absolutePath)
             val entries = work.walkTopDown()
                 .filter { it.isFile && it.name.endsWith(".desktop") && !it.path.contains("/DEBIAN/") }
                 .toList()
+            if (entries.isEmpty()) {
+                throw GradleException("addStartupWmClassToDebs: ${deb.name} has no .desktop launcher entry to add StartupWMClass to")
+            }
             var changed = false
             for (entry in entries) {
-                val lines = entry.readLines()
-                if (lines.any { it.startsWith("StartupWMClass=") }) continue
-                val at = lines.indexOfFirst { it.startsWith("Type=") }.let { if (it < 0) lines.size else it + 1 }
-                entry.writeText((lines.take(at) + "StartupWMClass=supermux" + lines.drop(at)).joinToString("\n", postfix = "\n"))
+                val before = entry.readText()
+                val after = DebLauncherEntry.withStartupWmClass(before, "supermux")
+                if (after == before) continue
+                entry.writeText(after)
                 changed = true
+                val rel = entry.relativeTo(work).invariantSeparatorsPath
                 // Keep DEBIAN/md5sums (when jpackage wrote one) true to the edited file.
                 val sums = File(work, "DEBIAN/md5sums")
                 if (sums.isFile) {
-                    val rel = entry.relativeTo(work).invariantSeparatorsPath
                     val md5 = MessageDigest.getInstance("MD5").digest(entry.readBytes()).joinToString("") { "%02x".format(it) }
-                    sums.writeText(
-                        sums.readLines().joinToString("\n", postfix = "\n") { line ->
-                            if (line.substringAfter("  ") == rel) "$md5  $rel" else line
-                        },
-                    )
+                    sums.writeText(DebLauncherEntry.withMd5(sums.readText(), rel, md5))
                 }
-                logger.lifecycle("deb: StartupWMClass=supermux added to ${deb.name}!/${entry.relativeTo(work).invariantSeparatorsPath}")
+                logger.lifecycle("deb: StartupWMClass=supermux added to ${deb.name}!/$rel")
+            }
+            if (entries.none { DebLauncherEntry.hasStartupWmClass(it.readText()) }) {
+                throw GradleException("addStartupWmClassToDebs: no launcher entry in ${deb.name} has StartupWMClass")
             }
             if (changed) run("dpkg-deb", "--root-owner-group", "-b", work.absolutePath, deb.absolutePath)
         } finally {
