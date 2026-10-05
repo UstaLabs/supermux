@@ -459,7 +459,9 @@ export class Session {
       if (!this.runtime.capabilities.fork) throw new UnsupportedOperation("fork", this.record.agent)
       if (this.active || this.queue.length || this.activity.size || this.state !== "idle") throw new CoreError("session_busy", "Fork requires an idle session with no pending input")
       if (options.at && (typeof options.at.nativeTurnId !== "string" || !options.at.nativeTurnId)) throw new CoreError("invalid_input", "Fork point must identify a native turn")
-      const input = structuredClone(options)
+      // `context` may hold host MCP server objects (code): the core normalizes it, it is not cloned here.
+      const { context, ...rest } = options
+      const input: ForkOptions = { ...structuredClone(rest), ...(context !== undefined ? { context } : {}) }
       this.forking = Promise.resolve().then(() => this.createFork(input))
       void this.forking.finally(() => { this.forking = undefined }).catch(() => {})
       return this.forking

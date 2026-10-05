@@ -41,7 +41,12 @@
     "./environment": {
       "types": "./dist/environment/index.d.ts",
       "import": "./dist/environment/index.js"
-    }
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
+    },
+    "./mcp-bridge": "./dist/mcp/bridge.js"
   },
   "files": [
     "dist",
@@ -57,7 +62,8 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
-    "zod": "^3.25.0"
+    "@modelcontextprotocol/server": "2.3.0",
+    "zod": "^4.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

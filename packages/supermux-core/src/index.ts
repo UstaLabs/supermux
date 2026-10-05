@@ -29,7 +29,7 @@ export type {
   LoginState, LoginPhase, LoginOptions, LoginHandle, LoginRunner, LoginSpawn, LoginProcess, LoginConfig, FetchLike,
 } from "./accounts/types.js"
 export type {
-  SessionContext, ExternalMcpServer, ContextMcpServer, ContextPolicy, ContextItemKind, ContextSupport, ContextItemCapability,
+  SessionContext, ExternalMcpServer, HostMcpServerRef, ContextMcpServer, ToolChangeApplied, ContextPolicy, ContextItemKind, ContextSupport, ContextItemCapability,
   ContextCapabilities, AgentCapabilities, ContextDrop, LaunchContext, ResolvedContext, ResolvedMcpServer, DriverContextSupport,
   ContextPatch, UpdateContextOptions, ContextUpdateHow, ContextChange, ContextApplied, UpdateContextResult, ContextUpdateSupport,
   RuntimeContextControl,

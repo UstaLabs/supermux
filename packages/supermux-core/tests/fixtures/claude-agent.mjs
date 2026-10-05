@@ -1,5 +1,6 @@
 import {createInterface} from 'node:readline'
-import {appendFileSync, writeFileSync} from 'node:fs'
+import {appendFileSync, readFileSync, writeFileSync} from 'node:fs'
+import {spawn} from 'node:child_process'
 
 const argv = process.argv.slice(2)
 if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid))
@@ -19,6 +20,47 @@ const flag = (name) => {
 }
 
 const send = o => process.stdout.write(JSON.stringify(o) + '\n')
+
+// FIXTURE_MCP=1: start every stdio server of every --mcp-config like Claude does (an MCP client
+// that initializes at startup); a user turn "mcp-call <server> <tool> <json args>" calls a tool.
+const mcp = new Map()
+if (process.env.FIXTURE_MCP === '1') {
+  const configs = argv.flatMap((a, i) => a === '--mcp-config' && argv[i + 1] ? [argv[i + 1]] : [])
+  for (const path of configs) {
+    for (const [name, spec] of Object.entries(JSON.parse(readFileSync(path, 'utf8')).mcpServers ?? {})) {
+      const child = spawn(spec.command, spec.args ?? [], {stdio: ['pipe', 'pipe', 'ignore'], env: {...process.env, ...spec.env}})
+      const client = {child, next: 1, waiting: new Map(), notifications: []}
+      client.request = (method, params) => new Promise(resolve => {
+        const id = client.next++
+        client.waiting.set(id, resolve)
+        child.stdin.write(JSON.stringify({jsonrpc: '2.0', id, method, params}) + '\n')
+      })
+      createInterface({input: child.stdout}).on('line', line => {
+        const message = JSON.parse(line)
+        if (message.id !== undefined && message.method === undefined) { client.waiting.get(message.id)?.(message); client.waiting.delete(message.id) }
+        else if (message.method) client.notifications.push(message.method)
+      })
+      client.ready = client.request('initialize', {protocolVersion: '2025-11-25', capabilities: {}, clientInfo: {name: 'claude-fixture', version: '1'}})
+        .then(() => child.stdin.write(JSON.stringify({jsonrpc: '2.0', method: 'notifications/initialized'}) + '\n'))
+      mcp.set(name, client)
+    }
+  }
+}
+async function mcpCall(target, line) {
+  const [, server, tool, ...rest] = line.split(' ')
+  const client = mcp.get(server)
+  let reply
+  if (!client) reply = `no MCP server ${server}`
+  else {
+    await client.ready
+    const response = await client.request('tools/call', {name: tool, arguments: JSON.parse(rest.join(' ') || '{}')})
+    reply = response.error ? `MCP error ${response.error.code}: ${response.error.message}` : `MCP ${response.result.isError ? 'isError ' : ''}${response.result.content?.[0]?.text ?? ''}`
+  }
+  if (hanging !== target) return
+  hanging = undefined
+  send({type: 'assistant', session_id: target.session, uuid: target.uuid, user_message_uuid: target.uuid, message: {role: 'assistant', content: [{type: 'text', text: reply}]}})
+  finish(target, 'end_turn')
+}
 const CREATE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const resume = flag('--resume')
 const sessionIdArg = flag('--session-id')
@@ -179,6 +221,7 @@ if (process.env.MODE === 'setup-hang') {
     if (text === 'malformed') { process.stdout.write('{bad}\n'); return }
     if (text === 'oversize') { process.stdout.write('x'.repeat(5000)); return }
     if (text === 'hang') { hanging = {session, uuid}; return }
+    if (typeof text === 'string' && text.startsWith('mcp-call ')) { hanging = {session, uuid}; void mcpCall(hanging, text); return }
     if (text === 'hang-then-result') {
       hanging = {session, uuid}
       setTimeout(() => {

@@ -21,6 +21,8 @@ Use `module` / `moduleResolution` `NodeNext`. Add `@types/node` **22** as a **de
 | `supermux-core/auth` | `copiedCredentials`, `withAuth` (**deprecated**, see Accounts) |
 | `supermux-core/accounts` | `fileVault`, `memoryVault`, `AccountRegistry`, `ensureHome`, `claudeLayout`, `codexLayout`, adapters, `pickAccount`, `score`, usage parsers, `RefreshCoordinator`, `refreshCodexToken`, `UsageStore`, login parsers + `defaultLoginRunner` |
 | `supermux-core/environment` | `prepareGrokEnvironment`, `prepareCodexEnvironment`, `prepareOpenCodeEnvironment`, `prepareCursorEnvironment`, credential helpers |
+| `supermux-core/mcp` | `mcpServer`, `tool`, `HostMcpServer`, `isHostMcpServer`, `toCallToolResult`, `bridgeEntry`, `socketPath`, `BRIDGE_ENV` (see "Host MCP servers") |
+| `supermux-core/mcp-bridge` | the bridge script itself (`dist/mcp/bridge.js`, no dependencies); the core runs it for you |
 
 Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `AdoptOptions`, `ResumeOptions`, `SessionConfiguration`, `DriverContext`, `CoreEvent`, `Observer`, `AgentDriver`, `AgentRuntime`, `Host`, `HostHandle`, `HostRegistration`.
 
@@ -70,7 +72,7 @@ Duplicate saved id → `session_exists`. Core closing → `core_closed` on **new
 
 Events are live microtask notifications, not a durable log. ACP history load updates may set `replay: true`. Initialize metadata is **not** replay.
 
-`CoreEvent` variants: `session.created` | `session.resumed` | `session.stateChanged` | `session.update` | `session.event` | `session.failed` | `message.accepted` | `message.started` | `message.completed` | `account.switched` | `account.exhausted` | `account.refreshed` | `context.degraded`.
+`CoreEvent` variants: `session.created` | `session.resumed` | `session.stateChanged` | `session.update` | `session.event` | `session.failed` | `message.accepted` | `message.started` | `message.completed` | `account.switched` | `account.exhausted` | `account.refreshed` | `context.degraded` | `context.updated` | `tool.called` | `tool.finished` (host MCP server calls, see "Host MCP servers").
 
 ## Normalized events
 
@@ -137,7 +139,7 @@ Drivers still receive `DriverContext.requestPermission` and `DriverContext.reque
 
 ## Errors
 
-`CoreError` with `code`: `invalid_options`, `invalid_input`, `invalid_session_id`, `invalid_workdir`, `invalid_auth_profile`, `unknown_agent`, `session_exists`, `session_busy`, `session_not_found`, `session_closed`, `session_failed`, `session_not_running`, `queue_full`, `idempotency_conflict`, `request_not_found`, `core_closed`, `resume_identity_changed`, `fork_identity_unchanged`, `activity_overflow`, `unsupported_operation`, `unknown_account`, `account_exists`, `account_expired`, `account_secret_missing`, `account_home_conflict`, `account_refresh_failed`, `account_identity_mismatch`, `login_failed`, `login_timeout`, `login_cancelled`, `invalid_account_id`, `invalid_account_record`, `invalid_context` (malformed context or patch, a path that is not an existing absolute directory, a bad or duplicate MCP server name, a patch that removes what the session does not own or adds what it has), `context_unsupported` (policy "error": the agent cannot apply an item; the message lists each one), `already_live`, `host_closing`, `subagent_not_found` (unknown subagent id), `subagent_unavailable` (the agent says the action cannot work now; message is its short reason), `runtime_closed` (a driver runtime was used after it closed), `busy` (Grok wrapper: a prompt is already running).
+`CoreError` with `code`: `invalid_options`, `invalid_input`, `invalid_session_id`, `invalid_workdir`, `invalid_auth_profile`, `unknown_agent`, `session_exists`, `session_busy`, `session_not_found`, `session_closed`, `session_failed`, `session_not_running`, `queue_full`, `idempotency_conflict`, `request_not_found`, `core_closed`, `resume_identity_changed`, `fork_identity_unchanged`, `activity_overflow`, `unsupported_operation`, `unknown_account`, `account_exists`, `account_expired`, `account_secret_missing`, `account_home_conflict`, `account_refresh_failed`, `account_identity_mismatch`, `login_failed`, `login_timeout`, `login_cancelled`, `invalid_account_id`, `invalid_account_record`, `invalid_context` (malformed context or patch, a path that is not an existing absolute directory, a bad or duplicate MCP server name, two different host server objects with one name, a patch that removes what the session does not own or adds what it has), `context_unsupported` (policy "error": the agent cannot apply an item; the message lists each one), `missing_mcp_servers` (a launch names a host MCP server that is not registered with this core; never dropped silently), `mcp_socket_in_use` (another live core owns this state directory's MCP socket), `already_live`, `host_closing`, `subagent_not_found` (unknown subagent id), `subagent_unavailable` (the agent says the action cannot work now; message is its short reason), `runtime_closed` (a driver runtime was used after it closed), `busy` (Grok wrapper: a prompt is already running).
 
 `UnsupportedOperation` extends `CoreError` (`unsupported_operation`). Driver-thrown values (e.g. Grok `TypeError` on effort) are not rewritten into these codes. Host adds `already_live` and `host_closing`.
 
@@ -197,7 +199,9 @@ type SessionContext = {
   instructions?: string | string[]   // appended to the agent's own system prompt; entries joined with a blank line
   skills?: string[]                  // absolute folders holding <name>/SKILL.md
   plugins?: string[]                 // absolute plugin folders
-  mcpServers?: ExternalMcpServer[]   // { name, command, args?, env? } stdio; name ^[A-Za-z0-9_-]+$
+  mcpServers?: (ExternalMcpServer | HostMcpServer | HostMcpServerRef)[]
+  // external: { name, command, args?, env? } stdio; name ^[A-Za-z0-9_-]+$
+  // host: a mcpServer() object (tools are TS functions in this process), or { kind: "host", name } for a registered one
 }
 createCore({ …, context?, contextPolicy?: "error" | "warn" })   // default for every session
 core.sessions.create({ …, context?, contextPolicy? })
@@ -264,6 +268,51 @@ core.capabilities(agent).contextUpdate             // { skills|plugins|mcpServer
 | ACP (generic) | unsupported | unsupported | reload (unverified) |
 
 Live mechanisms are confirmed per process: a Claude process launched without the plugin folder (a session that had no context) reloads instead; a re-attached Claude process recorded which servers it got at launch in keeper meta. Live check: `bun scripts/context-live-update.ts [claude] [codex] [grok] [opencode]` (scratch in `~/.cache/context-c1b/`).
+
+## Host MCP servers
+
+MCP servers whose tools are TypeScript functions in the host process. The core ships **no default server**; a host builds as many as it wants and attaches them like any MCP server. All MCP logic runs on the official SDK `@modelcontextprotocol/server` 2.3.0 (zod 4): one SDK `McpServer` per (session, server) connection.
+
+```ts
+import { mcpServer, tool } from "supermux-core/mcp"
+import { z } from "zod"                                  // zod 4 (the SDK's peer)
+
+const orders = mcpServer({
+  name: "orders",                                        // ^[A-Za-z0-9_-]+$, unique per session
+  instructions: "Order lookup",                          // optional, MCP server instructions
+  toolChanges: "reload",                                 // default; or "live-only" (see below)
+  tools: {
+    lookup: tool({
+      description: "Look up an order",
+      input: z.object({ id: z.string() }),               // validated before run; omitted: no arguments
+      output: z.object({ total: z.number() }),           // optional: the result also goes out as structuredContent
+      async run({ id }, ctx) { return db.orders.get(id) },
+    }),
+  },
+})
+// or any SDK server, built once per (session, connection): an SDK server serves one connection
+const custom = mcpServer({ name: "custom", create: ctx => buildMyMcpServer(ctx) })
+
+createCore({ …, mcpServers: [orders], context: { mcpServers: [orders] } })   // registry + a default for every session
+core.sessions.create({ …, context: { mcpServers: [custom, { name: "github", command: "gh-mcp" }] } })
+orders.add("cancel", tool({ … }))                         // live in every attached session (below)
+orders.remove("lookup")
+core.mcp.register(server) / core.mcp.unregister(name) / core.mcp.get(name) / core.mcp.list() / core.mcp.socket()
+core.capabilities(agent).hostToolChanges                 // "live" | "reload"
+```
+
+- **`ctx`** = `{ sessionId, agent, account?, server, signal }`. `sessionId` is the core session whose agent (or one of its subagents: they share the agent's MCP connections) made the call. For a tool, `signal` aborts when the agent cancels the call (`notifications/cancelled`) or the session is interrupted (`session.interrupt`); for `create(ctx)` it aborts when that connection closes.
+- **Results:** a `string` → one text block; an MCP `CallToolResult` (`{ content: [...], isError? }`) as is; any other value → its JSON as text (plus `structuredContent` when the tool has `output`). A throw → `{ isError: true, content: [{ type: "text", text: message }] }`. Invalid arguments → an `isError` result "Input validation error: …" (the SDK's).
+- **Registry and records.** `SessionContext.mcpServers` takes host server objects on create, resume, fork and `updateContext` (`mcpServers: { add: [server], remove: ["name"] }`), exactly like external ones. An object in a context is registered automatically; a second, different object with a registered name → `invalid_context` (`core.mcp.register` → `invalid_input`, `createCore({ mcpServers })` → `invalid_options`). The record stores `{ kind: "host", name }` only. Every launch (create, resume, reload, keeper relaunch) resolves the names through the registry; an unregistered one → `missing_mcp_servers` and nothing launches. After a host restart, pass the servers again (`createCore({ mcpServers })` or `core.mcp.register`) before resuming. `unregister` closes the server's open connections (their bridges answer "host unavailable" and keep retrying).
+- **How it reaches the agent.** Each attached host server is one ordinary stdio MCP server under its own name (`mcp__orders__lookup` in Claude), using the C1 channels (Claude `--mcp-config`, Codex `-c mcp_servers.*` with the per-server approve, ACP `mcpServers`). Its command is the bridge: `process.execPath` + [`dist/mcp/bridge.js` (or `src/mcp/bridge.ts` when the host runs the sources under Bun), `--server`, name], env `SUPERMUX_MCP_SOCKET`, `SUPERMUX_MCP_SESSION`, `SUPERMUX_MCP_TOKEN`. A host on Node gets `node …/dist/mcp/bridge.js`; on Bun, `bun …/bridge.(js|ts)`. The bridge has no dependencies and no MCP code: it pipes newline-delimited JSON-RPC between stdio and the socket after a one-line hello `{ protocol: "supermux-mcp-bridge/1", token, sessionId, server }`.
+- **Socket.** One Unix socket per core, `<stateDirectory>/mcp/mcp.sock` (0600, directory 0700), opened at the first launch that has a host server. When that path exceeds sun_path (107 bytes on Linux, 103 on macOS) it is `$XDG_RUNTIME_DIR` (or the OS temp dir) `/supermux-mcp-<sha256(stateDirectory)[:16]>/mcp.sock`. A stale socket file is removed on start; a live one (another core) → `mcp_socket_in_use`.
+- **Token.** `HMAC-SHA256(secret, sessionId + "\0" + server)`, the secret generated once into `<stateDirectory>/mcp/secret` (0600). It is the same on every launch and after a host restart, so a detached session's bridge still authenticates. The hello is refused for a bad token (the bridge exits), an unknown server or session, or a server the session does not have (those keep retrying). It never enters the record or the keeper fingerprint.
+- **Detached sessions.** The keeper fingerprint holds a host server's **name** only (plus its sorted tool names on an agent that ignores `list_changed`, see below), never the token, socket or runtime path, so a restart with the same servers re-attaches the running agent. When the host goes away the bridge keeps running and reconnects with backoff (100 ms doubling to 5 s; `SUPERMUX_MCP_RETRY_MAX_MS`). While it is disconnected every JSON-RPC **request** from the agent gets `{ code: -32000, message: "host unavailable" }` at once; notifications are dropped; calls are never queued. On reconnect the bridge replays the agent's original `initialize` (its answer is swallowed) and `notifications/initialized` before anything else, so the new host-side server is initialized.
+- **Tool changes.** `server.add(name, tool)` / `server.remove(name)` (tools servers only; a `create` server changes its own SDK servers) register / remove the tool on every live connection; the SDK sends `notifications/tools/list_changed`. Claude and OpenCode re-list (`hostToolChanges: "live"`): `context.updated` with `{ kind: "tools", op, item: "<server>/<tool>", how: "live" }`. Codex, Grok and Cursor ignore it (`"reload"`): the core relaunches each affected open session at idle (the updateContext rules: never mid-turn, queue held, one relaunch for all changes made meanwhile) and emits `how: "reload"`. With `toolChanges: "live-only"` there is no relaunch (`how: "unsupported"`; the agent sees the change at its next launch).
+- **Events** on the session stream: `{ type: "tool.called", sessionId, server, tool, callId }` and `{ type: "tool.finished", sessionId, server, tool, callId, ok, durationMs }` (`ok` false for an error, an `isError` result, a cancel or a lost connection). Never arguments or results: they may be secret; log them in `run()` if needed. The agent's own MCP tool events (`mcp-tool` / `tool-call` bodies) show the same calls.
+- **Protocol notes.** The SDK negotiates 2025-06-18 (Codex) and 2025-11-25 (the others). Claude sends `server/discover` first; the SDK answers -32601 and Claude falls back to `initialize` (not special-cased).
+
+Live check: `bun scripts/context-live-mcp.ts [claude] [codex] [grok] [opencode]` (scratch in `~/.cache/context-c2/`): per agent two host servers plus one external server, a mid-session tool add, a throwing tool, a subagent's call, and a detached restart (same agent pid, a call through the reconnected bridge). Results in `docs/core-design/session-context.md` "C2 as built".
 
 ## Environment
 

@@ -16,6 +16,7 @@ import { codex } from "supermux-core/codex"
 import { cursor } from "supermux-core/cursor"
 import { grok, opencode, cursor } from "supermux-core/agents"
 import { fileVault, memoryVault, ensureHome, pickAccount } from "supermux-core/accounts"
+import { mcpServer, tool } from "supermux-core/mcp"
 import { copiedCredentials, withAuth } from "supermux-core/auth" // deprecated
 ```
 
@@ -127,6 +128,10 @@ Grok: `noLeader` and `alwaysApprove` are **required**. A broker that wants unatt
 ## Session context
 
 `createCore({ context })` and `core.sessions.create({ context, contextPolicy })` give a session extra instructions, skills, plugins and stdio MCP servers. Each agent gets them through a per-session channel (CLI flags, app-server requests, ACP `session/new` fields or a private config file in `<stateDirectory>/context/<id>/`); nothing goes into the workdir or the user's agent homes. Under the default policy `"error"`, an item the agent cannot apply fails the create with `context_unsupported` before anything launches; `"warn"` launches and emits `context.degraded`. `core.capabilities(agent).context` shows the table, Instructions are snapshotted at creation (`createdInstructions`) and never change afterwards; `sessions.resume(id, { context })` replaces the skills, plugins and MCP servers, `session.fork({ id, context })` inherits or replaces them. `session.updateContext(patch)` (or `core.sessions.updateContext(id, patch)`) changes skills, plugins and MCP servers in flight: per item `live` (the running agent takes it), `reload` (relaunch on the same conversation between turns, never cancelling one) or `unsupported`, reported in `applied`. Full reference and the per-agent tables: API.md "Session context" and "Changing context in flight". Live checks: `bun scripts/context-live.ts`, `bun scripts/context-live-update.ts`.
+
+## Host MCP servers
+
+`mcpServer({ name, tools: { lookup: tool({ description, input: z.object(…), run: async (args, ctx) => … }) } })` (from `supermux-core/mcp`, zod 4) builds an MCP server whose tools are functions in the host process; pass it in any session context (`mcpServers: [orders]`) or `createCore({ mcpServers })`. The agent runs a tiny dependency-free bridge (`supermux-core/mcp-bridge`) as an ordinary stdio MCP server; it talks to the core over a 0600 Unix socket with a per-(session, server) HMAC token, and all MCP logic runs on the official `@modelcontextprotocol/server` SDK in the host. `ctx` says which session called (`sessionId`, `agent`, `account`, `server`, `signal`). `orders.add(name, tool)` / `orders.remove(name)` reach every attached session: live where the agent re-lists on `list_changed` (Claude, OpenCode), by a relaunch between turns elsewhere. Records keep host servers by name; a resume after a restart needs them registered again (`missing_mcp_servers` otherwise). Detached sessions keep their bridges across a host restart: they answer "host unavailable" while it is down and reconnect (replaying `initialize`) when it is back. Events: `tool.called` / `tool.finished` (no arguments or results). Reference: API.md "Host MCP servers". Live check: `bun scripts/context-live-mcp.ts`.
 
 ## Capabilities (current drivers)
 

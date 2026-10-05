@@ -7,7 +7,8 @@ import type {
   SubagentMessaging,
 } from "./events/normalized.js"
 import type { AccountsOptions } from "./accounts/types.js"
-import type { ContextApplied, ContextDrop, ContextPolicy, DriverContextSupport, LaunchContext, RuntimeContextControl, SessionContext, SessionContextUpdate } from "./context/types.js"
+import type { ContextApplied, ContextDrop, ContextPolicy, DriverContextSupport, LaunchContext, RuntimeContextControl, SessionContext, SessionContextUpdate, ToolChangeApplied } from "./context/types.js"
+import type { HostMcpServer } from "./mcp/server.js"
 
 export type PermissionOptionKind = "allow_once" | "allow_always" | "reject_once" | "reject_always"
 
@@ -166,8 +167,12 @@ export type CoreEvent =
   | { type: "account.exhausted"; sessionId: string; agent: string; account: string }
   /** The session launched (policy "warn") without these context items. */
   | { type: "context.degraded"; sessionId: string; dropped: ContextDrop[] }
-  /** `updateContext` finished: what each change did (see ContextApplied). */
-  | { type: "context.updated"; sessionId: string; applied: ContextApplied[] }
+  /** `updateContext` finished, or a host server's tools changed: what each change did (see ContextApplied, ToolChangeApplied). */
+  | { type: "context.updated"; sessionId: string; applied: Array<ContextApplied | ToolChangeApplied> }
+  /** A host MCP server tool call started (from the agent or one of its subagents). Never carries arguments. */
+  | { type: "tool.called"; sessionId: string; server: string; tool: string; callId: string }
+  /** It ended: `ok` false for an error, an isError result, a cancel or a lost connection. Never carries the result. */
+  | { type: "tool.finished"; sessionId: string; server: string; tool: string; callId: string; ok: boolean; durationMs: number }
 
 export type Observer = (event: CoreEvent) => void | Promise<void>
 
@@ -367,6 +372,8 @@ export type CoreOptions = {
   context?: SessionContext
   /** Default "error": a context item the agent cannot apply fails the launch. "warn": launch and emit `context.degraded`. */
   contextPolicy?: ContextPolicy
+  /** Host MCP servers registered up front (see `core.mcp`), so stored sessions that name them can launch. */
+  mcpServers?: HostMcpServer[]
 }
 
 /** `account` and `authProfile` are mutually exclusive. Neither: the agent's system account. */

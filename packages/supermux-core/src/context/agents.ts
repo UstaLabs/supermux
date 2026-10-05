@@ -116,7 +116,8 @@ export const CLAUDE_CONTEXT: DriverContextSupport = {
     skills: { add: "live", remove: "live", note: "a skills wrapper plugin added to / removed from the session plugin folder, then reload_plugins (reload_skills does not load a new plugin); live only when the process was launched with that folder" },
     plugins: { add: "live", remove: "live", note: "a symlink added to / removed from the session plugin folder, then reload_plugins; live only when the process was launched with that folder" },
     mcpServers: { add: "live", remove: "live", note: "mcp_set_servers with the full dynamic set; a server from the launch (--mcp-config) can only go with a relaunch" },
-  },
+  },  // C0: Claude re-lists a server's tools on notifications/tools/list_changed and calls a new one next turn.
+  mcpListChanged: true,
 }
 
 /** The last value of a flag in `args` (Claude keeps the last of a repeated single-value flag). */
@@ -373,6 +374,8 @@ export function opencodeContext(factoryServers: McpServer[]): AcpContextAdapter 
         plugins: { add: "reload", remove: "reload", note: "OpenCode reads the mapped plugin parts at start: a change relaunches it" },
         mcpServers: { add: "reload", remove: "reload", note: "ACP mcpServers are passed at session/new|load: a change relaunches OpenCode" },
       },
+      // C0: OpenCode re-lists on notifications/tools/list_changed (Codex and Grok ignore it).
+      mcpListChanged: true,
     },
     launch(context, env) {
       const use = applied(context)

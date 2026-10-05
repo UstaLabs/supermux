@@ -2,10 +2,12 @@ import { createHash } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { isAbsolute } from "node:path"
 import { CoreError } from "../errors.js"
+import { isHostMcpServer } from "../mcp/brand.js"
 import type {
-  ContextCapabilities, ContextDrop, ContextItemKind, ContextPolicy, DriverContextSupport, ResolvedContext,
+  ContextCapabilities, ContextDrop, ContextItemKind, ContextMcpServer, ContextPolicy, DriverContextSupport, HostMcpServerRef, ResolvedContext,
   ResolvedMcpServer, SessionContext,
 } from "./types.js"
+import type { HostMcpServer } from "../mcp/server.js"
 
 export type * from "./types.js"
 
@@ -47,9 +49,22 @@ export function normalizeContext(value: unknown, field = "context"): SessionCont
   return out
 }
 
-function normalizeServer(value: unknown, field: string): ResolvedMcpServer {
+/** A host server entry (a `mcpServer()` object or a `{ kind: "host", name }` reference). */
+export function isHostEntry(server: ContextMcpServer): server is HostMcpServerRef | HostMcpServer {
+  return isHostMcpServer(server) || (server as { kind?: unknown }).kind === "host"
+}
+
+function normalizeServer(value: unknown, field: string): ContextMcpServer {
+  // A host server object is kept as is (it is code); the core registers it and stores a reference.
+  if (isHostMcpServer(value)) return value
   if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid(`${field} must be an object`)
   const server = value as Record<string, unknown>
+  if (server.kind !== undefined) {
+    if (server.kind !== "host") throw invalid(`${field}.kind must be "host"`)
+    for (const key of Object.keys(server)) if (key !== "kind" && key !== "name") throw invalid(`${field}.${key} is not a host MCP server reference field`)
+    if (typeof server.name !== "string" || !MCP_SERVER_NAME.test(server.name)) throw invalid(`${field}.name must match ${MCP_SERVER_NAME}`)
+    return { kind: "host", name: server.name }
+  }
   for (const key of Object.keys(server)) {
     if (key !== "name" && key !== "command" && key !== "args" && key !== "env") throw invalid(`${field}.${key} is not an MCP server field`)
   }
@@ -101,21 +116,35 @@ async function directory(path: string, field: string): Promise<void> {
   if (!info.isDirectory()) throw invalid(`${field} ${path} must be a directory`)
 }
 
+/** Resolves a host server name to its stdio launch (the bridge); undefined when no such server is registered. */
+export type HostResolver = (name: string) => Promise<ResolvedMcpServer | undefined>
+
 /**
  * Validates a merged context against the filesystem: every skills/plugins entry an existing
- * absolute directory, MCP server names unique. Duplicate paths are applied once.
+ * absolute directory, MCP server names unique. Duplicate paths are applied once. Host servers
+ * resolve through `hosts`; any that cannot → `missing_mcp_servers` (never dropped silently).
  */
-export async function resolveContext(merged: SessionContext): Promise<ResolvedContext> {
+export async function resolveContext(merged: SessionContext, hosts?: HostResolver): Promise<ResolvedContext> {
   const context = normalizeContext(merged) ?? {}
   const skills = [...new Set(context.skills ?? [])]
   const plugins = [...new Set(context.plugins ?? [])]
   for (const path of skills) await directory(path, "skills folder")
   for (const path of plugins) await directory(path, "plugin")
-  const mcpServers = (context.mcpServers ?? []) as ResolvedMcpServer[]
   const names = new Set<string>()
-  for (const server of mcpServers) {
+  for (const server of context.mcpServers ?? []) {
     if (names.has(server.name)) throw invalid(`Duplicate MCP server name ${server.name}`)
     names.add(server.name)
+  }
+  const mcpServers: ResolvedMcpServer[] = []
+  const missing: string[] = []
+  for (const server of context.mcpServers ?? []) {
+    if (!isHostEntry(server)) { mcpServers.push(server as ResolvedMcpServer); continue }
+    const resolved = hosts ? await hosts(server.name) : undefined
+    if (resolved) mcpServers.push(resolved)
+    else missing.push(server.name)
+  }
+  if (missing.length) {
+    throw new CoreError("missing_mcp_servers", `Host MCP server(s) ${missing.join(", ")} are not registered with this core (pass them in createCore({ mcpServers }) or core.mcp.register)`)
   }
   const instructions = joinInstructions(context.instructions)
   return { ...(instructions !== undefined ? { instructions } : {}), skills, plugins, mcpServers }
@@ -188,10 +217,10 @@ function canonical(context: SessionContext | undefined) {
     instructions: instructionList(context?.instructions),
     skills: context?.skills ?? [],
     plugins: context?.plugins ?? [],
-    mcpServers: (context?.mcpServers ?? []).map(server => ({
+    mcpServers: (context?.mcpServers ?? []).map(server => isHostEntry(server) ? { kind: "host", name: server.name } : {
       name: server.name, command: server.command, args: server.args ?? [],
       env: Object.fromEntries(Object.entries(server.env ?? {}).sort(([a], [b]) => a.localeCompare(b))),
-    })),
+    }),
   }
 }
 
@@ -210,10 +239,14 @@ export function contextFingerprint(context: ResolvedContext, dropped: ContextDro
     instructions: kept("instructions", "instructions") ? context.instructions ?? null : null,
     skills: context.skills.filter(path => kept("skills", path)),
     plugins: context.plugins.filter(path => kept("plugins", path)),
-    mcpServers: context.mcpServers.filter(server => kept("mcpServers", server.name)).map(server => ({
+    // A host server is its name (and tool set when that must relaunch): the bridge command, the
+    // JS runtime path and the per-session token never make a re-attach look like another launch.
+    mcpServers: context.mcpServers.filter(server => kept("mcpServers", server.name)).map(server => server.host ? {
+      name: server.name, host: true, ...(server.host.tools ? { tools: [...server.host.tools].sort() } : {}),
+    } : {
       name: server.name, command: server.command, args: server.args,
       env: Object.fromEntries(Object.entries(server.env).sort(([a], [b]) => a.localeCompare(b))),
-    })),
+    }),
     parts: dropped.filter(drop => drop.item.endsWith(")")).map(drop => `${drop.kind}\0${drop.item}`).sort(),
   }
   return createHash("sha256").update(JSON.stringify(applied)).digest("hex").slice(0, 32)

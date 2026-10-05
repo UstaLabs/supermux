@@ -14,13 +14,16 @@ import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
 import {
-  contextDrops, contextFingerprint, isContextEmpty, isEmptyContext, mergeContexts, noContextCapabilities, normalizeContext, normalizeContextUpdate, normalizePolicy,
-  resolveContext, sameContext, unsupportedError, withoutInstructions,
+  contextDrops, contextFingerprint, isContextEmpty, isEmptyContext, isHostEntry, mergeContexts, noContextCapabilities, normalizeContext, normalizeContextUpdate, normalizePolicy,
+  resolveContext, sameContext, unsupportedError, withoutInstructions, type HostResolver,
 } from "./context/index.js"
+import { isHostMcpServer } from "./mcp/brand.js"
+import { BRIDGE_ENV, McpHost, bridgeEntry, type HostLookup } from "./mcp/host.js"
+import type { HostMcpServer, ToolChange } from "./mcp/server.js"
 import { applyChanges, changeKey, normalizePatch, normalizeUpdateOptions, patchChanges, planChanges, reloadOnlyUpdates } from "./context/update.js"
 import type {
-  AgentCapabilities, ContextApplied, ContextDrop, ContextPatch, ContextPolicy, LaunchContext, ResolvedContext, SessionContext,
-  ContextUpdateKind, UpdateContextOptions, UpdateContextResult,
+  AgentCapabilities, ContextApplied, ContextDrop, ContextMcpServer, ContextPatch, ContextPolicy, LaunchContext, ResolvedContext, ResolvedMcpServer, SessionContext,
+  ContextUpdateKind, ToolChangeApplied, UpdateContextOptions, UpdateContextResult,
 } from "./context/types.js"
 import type { Account, AddAccountOptions, LoginHandle, LoginOptions, UsageWindow } from "./accounts/types.js"
 import type {
@@ -78,6 +81,13 @@ export class Core {
   private readonly defaultPolicy: ContextPolicy
   /** updateContext calls per session, run one after another. */
   private readonly contextUpdates = new Map<string, Promise<unknown>>()
+  /** Host MCP servers by name (core.mcp), each with its tool-change subscription. */
+  private readonly hostServers = new Map<string, { server: HostMcpServer; unsubscribe: () => void }>()
+  private mcpHostInstance?: McpHost
+  /** Sessions being launched: a bridge may connect before the record exists. */
+  private readonly hostLaunching = new Map<string, { agent: string; account?: string; servers: Set<string> }>()
+  /** Tool changes waiting for a session's relaunch (agents that ignore tools/list_changed). */
+  private readonly toolReloads = new Map<string, ToolChangeApplied[]>()
 
   constructor(private readonly options: CoreOptions) {
     if (!options.stateDirectory) throw new CoreError("invalid_options", "stateDirectory is required")
@@ -91,7 +101,11 @@ export class Core {
     this.maxPending = requirePositiveSafeInteger(limits.maxPending, "maxPending")
     this.outstandingActivity = requirePositiveSafeInteger(limits.outstandingActivity, "outstandingActivity")
     this.profiles = structuredClone(options.profiles ?? {})
-    this.defaultContext = normalizeContext(options.context, "options.context")
+    if (options.mcpServers !== undefined) {
+      if (!Array.isArray(options.mcpServers)) throw new CoreError("invalid_options", "mcpServers must be an array of mcpServer() values")
+      for (const server of options.mcpServers) this.registerHost(server, "invalid_options")
+    }
+    this.defaultContext = this.adoptHosts(normalizeContext(options.context, "options.context"))
     this.defaultPolicy = normalizePolicy(options.contextPolicy, "options.contextPolicy") ?? "error"
     this.store = new SessionStore(options.stateDirectory)
     this.events = new Events(options.onObserverError)
@@ -118,6 +132,10 @@ export class Core {
     this.registry = accounts.registry ?? new AccountRegistry(options.stateDirectory, [...this.drivers.keys()], accounts)
     this.usage = accounts.usage ?? new UsageStore(join(this.registry.directory, "usage.json"))
     this.events.subscribe(event => this.observeAccounts(event))
+    // A session interrupt aborts its in-flight host tool calls too.
+    this.events.subscribe(event => {
+      if (event.type === "session.stateChanged" && event.state === "interrupting") this.mcpHostInstance?.interrupt(event.sessionId)
+    })
   }
 
   subscribe(observer: Observer): () => void { return this.events.subscribe(observer) }
@@ -126,17 +144,44 @@ export class Core {
   capabilities(agent: string): AgentCapabilities {
     const support = this.driver(agent).context
     const context = support?.capabilities ?? noContextCapabilities()
-    return { context: structuredClone(context), contextUpdate: structuredClone(support?.update ?? reloadOnlyUpdates(context)) }
+    return {
+      context: structuredClone(context), contextUpdate: structuredClone(support?.update ?? reloadOnlyUpdates(context)),
+      hostToolChanges: support?.mcpListChanged ? "live" : "reload",
+    }
+  }
+
+  /**
+   * Host MCP servers (see API.md "Host MCP servers"). Sessions name them in their context; every
+   * launch (create, resume, reload, keeper relaunch) resolves the names here, and a missing one
+   * is `missing_mcp_servers`. A server object passed in a context is registered automatically.
+   */
+  readonly mcp = {
+    register: (server: HostMcpServer): void => { this.assertOpen(); this.registerHost(server, "invalid_input") },
+    /** Removes a server: later launches that name it fail with missing_mcp_servers; its open connections are closed (their bridges answer "host unavailable"). */
+    unregister: (name: string): boolean => {
+      const entry = this.hostServers.get(name)
+      if (!entry) return false
+      entry.unsubscribe()
+      this.hostServers.delete(name)
+      this.mcpHostInstance?.disconnectServer(name)
+      return true
+    },
+    get: (name: string): HostMcpServer | undefined => this.hostServers.get(name)?.server,
+    list: (): string[] => [...this.hostServers.keys()],
+    /** The Unix socket the bridges connect to (undefined until a session with a host server launched). */
+    socket: (): string | undefined => this.mcpHostInstance?.socket,
   }
 
   readonly sessions = {
     create: (options: CreateOptions): Promise<Session> => this.operation(() => {
-      const input = structuredClone(options)
+      // `context` may hold host MCP server objects (code): registered and replaced by references, never cloned.
+      const { context: rawContext, ...rest } = options ?? {} as CreateOptions
+      const input: CreateOptions = structuredClone(rest) as CreateOptions
       input.configuration = normalizeRequestedConfiguration(input.configuration)
       this.driver(input.agent)
       this.profile(input.agent, input.authProfile)
       assertAccountChoice(input)
-      input.context = normalizeContext(options.context)
+      input.context = this.adoptHosts(normalizeContext(rawContext))
       input.contextPolicy = normalizePolicy(options.contextPolicy)
       if (input.context === undefined) delete input.context
       if (input.contextPolicy === undefined) delete input.contextPolicy
@@ -334,6 +379,7 @@ export class Core {
 
   private async shutdown(agents: CloseMode): Promise<void> {
     // No new operations can enter after shuttingDown becomes true.
+    for (const entry of this.hostServers.values()) entry.unsubscribe()
     for (const timer of this.refreshTimers.values()) clearTimeout(timer)
     this.refreshTimers.clear()
     const logins = [...this.logins]
@@ -344,6 +390,8 @@ export class Core {
     const remaining = await Promise.allSettled([...this.cleanup.keys()].map(id => this.closeOwnedRuntime(id, agents)))
     const results = [...await first, ...remaining]
     const errors = results.filter((r): r is PromiseRejectedResult => r.status === "rejected").map(r => r.reason)
+    // Detached agents keep their bridges: they answer "host unavailable" and reconnect to the next core.
+    await this.mcpHostInstance?.close().catch(() => {})
     if (errors.length) throw new AggregateError(errors, "One or more agent runtimes failed to close")
     if (this.started) await this.started.catch(() => {})
     await Promise.allSettled(logins.map(login => login.done))
@@ -359,9 +407,9 @@ export class Core {
     let requestedAccount: string | undefined
     let requestedContext: SessionContext | undefined
     try {
-      if (options && options.context !== undefined) requestedContext = normalizeContextUpdate(options.context)
+      if (options && options.context !== undefined) requestedContext = this.adoptHosts(normalizeContextUpdate(options.context))
       if (options && options.configuration !== undefined) {
-        const snapshot = structuredClone(options)
+        const snapshot = structuredClone({ configuration: options.configuration })
         assertConfiguration(snapshot.configuration)
         patch = snapshot.configuration
       }
@@ -673,6 +721,8 @@ export class Core {
     try {
       // A resumed session gets back the subagents it had, so they stay addressable.
       const subagents = resumeId ? await this.store.getSubagents(input.id) : []
+      const hostNames = (prepared.sessionContext?.mcpServers ?? []).filter(server => server.host).map(server => server.name)
+      if (hostNames.length) this.hostLaunching.set(input.id, { agent: input.agent, ...(input.account !== undefined ? { account: input.account } : {}), servers: new Set(hostNames) })
       runtime = await driver.open({
         sessionId: input.id, cwd: input.cwd, profile, resumeId, forkFrom, signal: this.lifetime.signal,
         ...(input.account !== undefined ? { account: input.account } : {}),
@@ -734,6 +784,7 @@ export class Core {
       }
       persistenceAttempted = true
       await this.store.put(record)
+      this.hostLaunching.delete(input.id)
       this.assertOpen()
       if (failed) throw failed
       session = new Session(record, runtime, event => this.events.emit(event), this.interruptTimeoutMs, this.maxPending, this.outstandingActivity, () => {
@@ -742,7 +793,7 @@ export class Core {
         if (typeof options.id !== "string") throw new TypeError("id is required")
         const id = options.id
         assertSessionId(id)
-        const forkContext = options.context !== undefined ? keepInstructions(record.context, normalizeContextUpdate(options.context)!) : record.context
+        const forkContext = options.context !== undefined ? keepInstructions(record.context, this.adoptHosts(normalizeContextUpdate(options.context))!) : record.context
         return this.withReservation(id, () => this.openSession({
           agent: record.agent, cwd: record.cwd, authProfile: record.authProfile,
           ...(record.account !== undefined ? { account: record.account } : {}),
@@ -769,6 +820,7 @@ export class Core {
       if (prepared.dropped.length) this.events.emit({ type: "context.degraded", sessionId: record.id, dropped: structuredClone(prepared.dropped) })
       return session
     } catch (error) {
+      this.hostLaunching.delete(input.id)
       discarded = true
       attachSession(null)
       outstandingActivity.clear()
@@ -840,7 +892,7 @@ export class Core {
     input: { id: string; context?: SessionContext; contextPolicy?: ContextPolicy; createdInstructions?: string },
     launch: "create" | "resume" | "fork",
   ): Promise<{ sessionContext?: LaunchContext; dropped: ContextDrop[]; createdInstructions?: string }> {
-    const resolved = await this.resolveLaunchContext(input.context, launch === "create" ? undefined : { createdInstructions: input.createdInstructions })
+    const resolved = await this.resolveLaunchContext(input.context, launch === "create" ? undefined : { createdInstructions: input.createdInstructions }, this.hostResolver(input.id, driver))
     const directory = this.store.contextDirectory(input.id)
     const dropped = contextDrops(resolved, driver.context)
     if (dropped.length && (input.contextPolicy ?? this.defaultPolicy) === "error") throw unsupportedError(driver.id, dropped)
@@ -857,9 +909,9 @@ export class Core {
   }
 
   /** Create: the core default merged with `own`. Later launches (`fixed` given): the same without instructions, plus the snapshot. */
-  private async resolveLaunchContext(own: SessionContext | undefined, fixed?: { createdInstructions: string | undefined }): Promise<ResolvedContext> {
-    if (!fixed) return resolveContext(mergeContexts(this.defaultContext, own))
-    const resolved = await resolveContext(mergeContexts(withoutInstructions(this.defaultContext), withoutInstructions(own)))
+  private async resolveLaunchContext(own: SessionContext | undefined, fixed: { createdInstructions: string | undefined } | undefined, hosts: HostResolver): Promise<ResolvedContext> {
+    if (!fixed) return resolveContext(mergeContexts(this.defaultContext, own), hosts)
+    const resolved = await resolveContext(mergeContexts(withoutInstructions(this.defaultContext), withoutInstructions(own)), hosts)
     return fixed.createdInstructions !== undefined ? { ...resolved, instructions: fixed.createdInstructions } : resolved
   }
 
@@ -868,6 +920,7 @@ export class Core {
     try {
       assertSessionId(id)
       normalized = normalizePatch(patch)
+      if (normalized.mcpServers?.add) normalized.mcpServers.add = this.adoptHosts({ mcpServers: normalized.mcpServers.add })!.mcpServers!
       opts = normalizeUpdateOptions(options)
     } catch (error) { return Promise.reject(asError(error)) }
     const previous = this.contextUpdates.get(id) ?? Promise.resolve()
@@ -898,12 +951,13 @@ export class Core {
     const busy = live !== undefined && live.snapshot().state !== "idle"
     const changes = patchChanges(record.context, this.defaultContext, patch)
     if (!changes.length) return { applied: [], effective: "now" }
-    // Every added path must exist and every server name stay unique, supported or not.
-    await resolveContext(mergeContexts(this.defaultContext, applyChanges(record.context, patch, changes)))
+    const hosts = this.hostResolver(id, driver)
+    // Every added path must exist, every server name stay unique and every host server be registered, supported or not.
+    await resolveContext(mergeContexts(this.defaultContext, applyChanges(record.context, patch, changes)), hosts)
     const capabilities = driver.context?.capabilities ?? noContextCapabilities()
     const runtime = live?.contextControl()
     const launchFor = async (own: SessionContext) => {
-      const resolved = await this.resolveLaunchContext(own, { createdInstructions: record.createdInstructions })
+      const resolved = await this.resolveLaunchContext(own, { createdInstructions: record.createdInstructions }, hosts)
       const dropped = contextDrops(resolved, driver.context)
       const next: LaunchContext = {
         ...resolved, directory: this.store.contextDirectory(id), launch: "resume", dropped, fingerprint: contextFingerprint(resolved, dropped),
@@ -915,7 +969,7 @@ export class Core {
     let applied = planChanges({
       agent: driver.id, changes, support: driver.context, capabilities, runtime, next: preliminary.next, options, open: live !== undefined,
     })
-    const before = contextDrops(await this.resolveLaunchContext(record.context, { createdInstructions: record.createdInstructions }), driver.context)
+    const before = contextDrops(await this.resolveLaunchContext(record.context, { createdInstructions: record.createdInstructions }, hosts), driver.context)
     const known = new Set(before.map(drop => `${drop.kind}\0${drop.item}`))
     let outcome!: Awaited<ReturnType<typeof launchFor>>
     let own!: SessionContext
@@ -1013,6 +1067,138 @@ export class Core {
       Session.failCarried(carried, asError(error))
       throw error
     } finally { this.switching.delete(id) }
+  }
+
+  // ---------------------------------------------------------------- host MCP servers (C2)
+
+  private registerHost(server: HostMcpServer, code: "invalid_input" | "invalid_context" | "invalid_options"): void {
+    if (!isHostMcpServer(server)) throw new CoreError(code, "A host MCP server must be built with mcpServer()")
+    const existing = this.hostServers.get(server.name)
+    if (existing?.server === server) return
+    if (existing) throw new CoreError(code, `Another host MCP server named ${server.name} is already registered`)
+    const unsubscribe = server.onChange(change => this.hostToolsChanged(server, change))
+    this.hostServers.set(server.name, { server, unsubscribe })
+  }
+
+  /** A normalized context with its host server objects registered and replaced by `{ kind: "host", name }`. */
+  private adoptHosts<T extends SessionContext | undefined>(context: T): T {
+    if (!context?.mcpServers?.some(server => isHostMcpServer(server))) return context
+    const mcpServers: ContextMcpServer[] = context.mcpServers.map(server => {
+      if (!isHostMcpServer(server)) return server
+      this.registerHost(server, "invalid_context")
+      return { kind: "host" as const, name: server.name }
+    })
+    return { ...context, mcpServers }
+  }
+
+  /** The socket host, started on first use (a launch that has a host server). */
+  private async mcpHost(): Promise<McpHost> {
+    this.mcpHostInstance ??= new McpHost({
+      stateDirectory: this.options.stateDirectory,
+      lookup: this.hostLookup,
+      onEvent: event => this.events.emit(event),
+      onError: error => this.reportObserverError(error),
+    })
+    await this.mcpHostInstance.start()
+    return this.mcpHostInstance
+  }
+
+  /** A host server of session `id` as the stdio command the agent runs: the bridge, with the socket and the session's token. */
+  private hostResolver(id: string, driver: AgentDriver): HostResolver {
+    return async name => {
+      const server = this.hostServers.get(name)?.server
+      if (!server) return undefined
+      const host = await this.mcpHost()
+      // Agents that ignore tools/list_changed carry the tool set in the fingerprint: a changed set relaunches them.
+      const tools = !driver.context?.mcpListChanged && server.toolChanges === "reload" && !server.create ? { tools: server.tools } : {}
+      const resolved: ResolvedMcpServer = {
+        name, command: process.execPath, args: [bridgeEntry(), "--server", name],
+        env: { [BRIDGE_ENV.socket]: host.socket, [BRIDGE_ENV.session]: id, [BRIDGE_ENV.token]: await host.token(id, name) },
+        host: tools,
+      }
+      return resolved
+    }
+  }
+
+  /** Who a bridge's hello speaks for: a session being launched, or a stored session that has the server. */
+  private readonly hostLookup: HostLookup = async (sessionId, name) => {
+    const server = this.hostServers.get(name)?.server
+    if (!server) return { ok: false, code: "unknown_server", message: `No host MCP server ${name} is registered` }
+    const launching = this.hostLaunching.get(sessionId)
+    if (launching) {
+      if (!launching.servers.has(name)) return { ok: false, code: "not_attached", message: `Session ${sessionId} does not have ${name}` }
+      return { ok: true, server, agent: launching.agent, ...(launching.account !== undefined ? { account: launching.account } : {}) }
+    }
+    let record: SessionRecord | undefined
+    try { record = await this.store.get(sessionId) } catch { record = undefined }
+    if (!record) return { ok: false, code: "unknown_session", message: `Session ${sessionId} was not found` }
+    const names = [...this.defaultContext?.mcpServers ?? [], ...record.context?.mcpServers ?? []].filter(isHostEntry).map(entry => entry.name)
+    if (!names.includes(name)) return { ok: false, code: "not_attached", message: `Session ${sessionId} does not have ${name}` }
+    return { ok: true, server, agent: record.agent, ...(record.account !== undefined ? { account: record.account } : {}) }
+  }
+
+  /** Open sessions that have host server `name` (core default or their own context). */
+  private sessionsWithHost(name: string): Session[] {
+    const inDefault = (this.defaultContext?.mcpServers ?? []).some(server => isHostEntry(server) && server.name === name)
+    return [...this.live.values()].filter(session => {
+      const snapshot = session.snapshot()
+      if (snapshot.state === "closed" || snapshot.state === "closing" || snapshot.state === "failed") return false
+      return inDefault || (snapshot.context?.mcpServers ?? []).some(server => isHostEntry(server) && server.name === name)
+    })
+  }
+
+  /**
+   * A tool was added to / removed from a host server. Live connections already got it (the SDK
+   * sent list_changed). Agents that ignore list_changed are relaunched between turns, unless the
+   * server is `toolChanges: "live-only"`.
+   */
+  private hostToolsChanged(server: HostMcpServer, change: ToolChange): void {
+    if (this.shuttingDown) return
+    for (const session of this.sessionsWithHost(server.name)) {
+      const id = session.id
+      const driver = this.drivers.get(session.snapshot().agent)
+      const entry = { kind: "tools" as const, op: change.op, item: `${server.name}/${change.tool}` }
+      if (driver?.context?.mcpListChanged) {
+        this.events.emit({ type: "context.updated", sessionId: id, applied: [{ ...entry, how: "live" }] })
+        continue
+      }
+      if (server.toolChanges === "live-only") {
+        this.events.emit({ type: "context.updated", sessionId: id, applied: [{ ...entry, how: "unsupported", reason: `${session.snapshot().agent} ignores tools/list_changed and ${server.name} is toolChanges "live-only": the agent sees the change at its next launch` }] })
+        continue
+      }
+      const queued = this.toolReloads.get(id)
+      if (queued) { queued.push({ ...entry, how: "reload" }); continue }
+      this.toolReloads.set(id, [{ ...entry, how: "reload" }])
+      void this.reloadForTools(id)
+    }
+  }
+
+  /** Relaunches a session for its pending tool changes once it is idle (queued with its updateContext calls; never mid-turn). */
+  private reloadForTools(id: string): Promise<void> {
+    const previous = this.contextUpdates.get(id) ?? Promise.resolve()
+    const run = this.operation(() => previous.catch(() => {}).then(async () => {
+      const session = this.live.get(id)
+      const state = session?.snapshot().state
+      if (!session || state === "closed" || state === "closing" || state === "failed") { this.toolReloads.delete(id); return }
+      const release = session.holdQueue()
+      let applied: ToolChangeApplied[] = []
+      try {
+        await session.whenIdle()
+        // Taken now: every change made while the turn ran rides this one relaunch.
+        applied = this.toolReloads.get(id) ?? []
+        this.toolReloads.delete(id)
+        if (!applied.length) return
+        await this.reloadForContext(id, session)
+      } catch (error) {
+        applied = applied.map(entry => ({ ...entry, how: "unsupported" as const, reason: `The relaunch failed: ${asError(error).message}` }))
+        this.reportObserverError(error)
+      } finally { release() }
+      if (applied.length) this.events.emit({ type: "context.updated", sessionId: id, applied })
+    }))
+    const settled = run.catch(error => this.reportObserverError(error))
+    this.contextUpdates.set(id, settled)
+    void settled.finally(() => { if (this.contextUpdates.get(id) === settled) this.contextUpdates.delete(id) })
+    return settled
   }
 
   private ready(): Promise<void> {

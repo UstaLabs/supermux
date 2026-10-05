@@ -2,8 +2,9 @@
  * Session context (slice C1): extra instructions, skills, plugins and MCP servers for a session,
  * applied at launch through per-session channels that never touch the workdir or the user's homes.
  */
+import type { HostMcpServer } from "../mcp/server.js"
 
-/** A stdio MCP server the agent starts itself. (C2 adds host servers built with `mcpServer()`.) */
+/** A stdio MCP server the agent starts itself. */
 export type ExternalMcpServer = {
   /** Unique within the session; `^[A-Za-z0-9_-]+$`. */
   name: string
@@ -12,8 +13,17 @@ export type ExternalMcpServer = {
   env?: Record<string, string>
 }
 
-/** Every MCP server entry a context may hold. C2 widens this union with host servers. */
-export type ContextMcpServer = ExternalMcpServer
+/**
+ * A host MCP server by name (C2): what a record stores for a `mcpServer()` object. Every launch
+ * resolves the name through the core's registry (`core.mcp`); a missing one is `missing_mcp_servers`.
+ */
+export type HostMcpServerRef = { kind: "host"; name: string }
+
+/**
+ * Every MCP server entry a context may hold: an external server, a host server object (registered
+ * with the core automatically) or a reference to a registered one.
+ */
+export type ContextMcpServer = ExternalMcpServer | HostMcpServer | HostMcpServerRef
 
 export type SessionContext = {
   /** Appended to the agent's own system prompt, never replacing it. Several entries are joined in order. */
@@ -40,8 +50,12 @@ export type ContextItemCapability = { support: ContextSupport; note: string }
 
 export type ContextCapabilities = Record<ContextItemKind, ContextItemCapability>
 
-/** `core.capabilities(agent)`. `contextUpdate`: how `session.updateContext` reaches a running session. */
-export type AgentCapabilities = { context: ContextCapabilities; contextUpdate: ContextUpdateSupport }
+/**
+ * `core.capabilities(agent)`. `contextUpdate`: how `session.updateContext` reaches a running session.
+ * `hostToolChanges`: how a tool added to / removed from a live host server reaches it ("live":
+ * the agent re-lists on `tools/list_changed`; "reload": it ignores that, so the core relaunches it).
+ */
+export type AgentCapabilities = { context: ContextCapabilities; contextUpdate: ContextUpdateSupport; hostToolChanges: "live" | "reload" }
 
 /** One context item (or part of one) that a launch could not apply. */
 export type ContextDrop = {
@@ -51,8 +65,18 @@ export type ContextDrop = {
   reason: string
 }
 
-/** An MCP server after validation: every field present. */
-export type ResolvedMcpServer = { name: string; command: string; args: string[]; env: Record<string, string> }
+/**
+ * An MCP server after validation: every field present. A host server resolves to the bridge
+ * command; `host` then says so, and only its name (plus `tools`, when set) enters the fingerprint,
+ * never the per-session token or the JS runtime path.
+ */
+export type ResolvedMcpServer = {
+  name: string; command: string; args: string[]; env: Record<string, string>
+  host?: {
+    /** The tool names, set when a change of them must relaunch the agent (it ignores tools/list_changed). */
+    tools?: string[]
+  }
+}
 
 /** The merged (core default + session), validated context. */
 export type ResolvedContext = {
@@ -85,6 +109,8 @@ export type DriverContextSupport = {
   drops?(context: ResolvedContext): ContextDrop[]
   /** In-flight changes (`session.updateContext`). Absent: every change needs a reload. */
   update?: ContextUpdateSupport
+  /** The agent re-lists an MCP server's tools on `notifications/tools/list_changed` (C0: Claude, OpenCode). */
+  mcpListChanged?: boolean
 }
 
 // ---------------------------------------------------------------- in flight (C1b)
@@ -123,6 +149,14 @@ export type ContextUpdateKind = Exclude<ContextItemKind, "instructions">
 export type ContextChange = { kind: ContextUpdateKind; op: "add" | "remove"; item: string }
 
 export type ContextApplied = ContextChange & { how: ContextUpdateHow; reason?: string }
+
+/**
+ * A tool added to / removed from a live host server (C2), in `context.updated`: `item` is
+ * `<server>/<tool>`. `live`: the agent re-lists on list_changed; `reload`: the core relaunched the
+ * agent between turns; `unsupported`: the agent ignores list_changed and the server is
+ * `toolChanges: "live-only"` (the agent sees it at its next launch).
+ */
+export type ToolChangeApplied = { kind: "tools"; op: "add" | "remove"; item: string; how: ContextUpdateHow; reason?: string }
 
 export type UpdateContextResult = {
   applied: ContextApplied[]

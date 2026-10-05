@@ -298,7 +298,7 @@ it depends only on `zod ^4.2` and `@modelcontextprotocol/core`. The core imports
 How it reaches the agent: every agent speaks **stdio MCP**, so each attached host server
 becomes one ordinary stdio MCP entry, under the host's name. Its command is a small bridge
 program shipped with the core (`supermux-core/mcp-bridge --server orders`). The bridge
-connects to a Unix socket owned by the core (`<state>/mcp.sock`, 0600; a per-session,
+connects to a Unix socket owned by the core (`<state>/mcp/mcp.sock`, 0600; a per-session,
 per-server token passed by env) and relays `initialize`, `tools/list` and `tools/call`.
 The function runs **in the host process**, with the session's context.
 
@@ -318,6 +318,90 @@ The function runs **in the host process**, with the session's context.
 - **Events:** `tool.called` / `tool.finished` (with `server`) on the session stream; the agent's
   own MCP tool events show the same calls.
 
+## C2 as built (2026-10-05)
+
+Implemented in `packages/supermux-core/src/mcp/` (`server.ts`: `mcpServer` / `tool`; `host.ts`: socket,
+token, SDK transport; `bridge.ts`: the agent-side script) plus the registry in `core.ts`. Reference:
+`API.md` "Host MCP servers". Export paths `supermux-core/mcp` and `supermux-core/mcp-bridge`.
+Dependencies: `@modelcontextprotocol/server` 2.3.0, core zod `^3.25` → `^4.2` (4.6.5 installed).
+
+**API as built.**
+`mcpServer({ name, instructions?, version?, toolChanges?: "reload" | "live-only", tools: { x: tool({ description, input?, output?, annotations?, run }) } })`
+or `mcpServer({ name, create: ctx => McpServer })`; `server.add(name, tool)` / `server.remove(name)` (tools
+servers only). `ctx = { sessionId, agent, account?, server, signal }`. `SessionContext.mcpServers` is
+`(ExternalMcpServer | HostMcpServer | { kind: "host", name })[]` on create, resume, fork and
+`updateContext`. `createCore({ mcpServers })`, `core.mcp.{register, unregister, get, list, socket}`,
+`core.capabilities(agent).hostToolChanges` ("live" | "reload"). Events `tool.called` / `tool.finished`;
+tool changes show up in `context.updated` as `{ kind: "tools", op, item: "<server>/<tool>", how }`.
+New error codes: `missing_mcp_servers`, `mcp_socket_in_use`.
+
+Choices and where reality differed from the plan above:
+
+- **Socket** is `<state>/mcp/mcp.sock` (not `<state>/mcp.sock`) so it sits in a 0700 directory with the
+  0600 `secret`. Too long for sun_path (107 bytes Linux, 103 macOS) → `$XDG_RUNTIME_DIR` or tmpdir
+  `/supermux-mcp-<sha256(state)[:16]>/mcp.sock`. Opened lazily at the first launch with a host server
+  (a core without host servers opens nothing). Stale file removed; a live owner → `mcp_socket_in_use`.
+- **Token** = HMAC-SHA256(secret, `sessionId\0server`), deterministic, so it is stable across launches and
+  host restarts. The fingerprint does not include it anyway: a host server enters the keeper
+  fingerprint as `{ name, host: true }` only, plus its sorted tool names when the agent ignores
+  `list_changed` (so a host restart with a changed tool set relaunches Codex/Grok instead of
+  re-attaching a process that would never see the change). C1b open question 5 is closed.
+- **Bridge launch**: `process.execPath` + `dist/mcp/bridge.js` (or `src/mcp/bridge.ts` under Bun from
+  source); verified under Node 24 from `dist`. Env `SUPERMUX_MCP_SOCKET/SESSION/TOKEN`.
+- **A bridge can connect before the record exists** (Claude starts MCP servers inside `driver.open`):
+  the core keeps a "launching" entry per session id until the record is stored, and the hello is
+  checked against it, else against the stored record (+ core default). Refusals: bad token → the
+  bridge exits; unknown server / session or a server the session does not have → it keeps retrying.
+- **Interrupt and cancellation are done at the transport** (so they also cover `create` servers): the
+  host tracks in-flight `tools/call` ids per connection; an agent `notifications/cancelled` ends the
+  call (`tool.finished ok:false`, the SDK aborts `ctx.signal` and sends nothing); a session interrupt
+  (`session.stateChanged` → `interrupting`) injects `notifications/cancelled` into the SDK AND answers
+  the agent with an `isError` "Cancelled: The session was interrupted" result; a late SDK answer for
+  it is dropped. Events are produced there too, never with arguments or results.
+- **Bridge buffering**: messages are held only during the first connect attempt and during a replay;
+  otherwise disconnected = immediate `-32000 "host unavailable"` for requests, notifications dropped.
+  The replayed `initialize` gets id `supermux-bridge-replay-<n>`; its answer is swallowed.
+- **Tool changes** relaunch at idle through the same per-session queue as `updateContext` (hold the
+  queue, `whenIdle`, `reloadForContext`), one relaunch for every change made meanwhile. Drivers say
+  `DriverContextSupport.mcpListChanged` (Claude, OpenCode true). `create` servers are never relaunched
+  for (the core cannot see their tools).
+- An empty tools server registers and removes a placeholder so the SDK installs `tools/list`.
+- Records never hold the token; `mcp.json` (Claude) holds it in the 0600 context folder.
+
+**Live check** (`bun scripts/context-live-mcp.ts`, haiku / gpt-5.6-luna low / grok low /
+opencode-go qwen3.7-plus): 45/45 (claude run `run-2026-10-05T12-07-26-554Z` 12/12, codex + grok +
+opencode run `run-2026-10-05T12-08-12-964Z` 33/33, under `~/.cache/context-c2/`).
+
+| Agent | (a) 2 host + 1 external | (b) mid-session `orders.add` | (c) throw → error text | (d) subagent call, ctx.sessionId | (e) detached restart |
+|---|---|---|---|---|---|
+| Claude | all 3 tokens | **live**, same pid 157740 | yes | yes: `mcp__orders__whoami` with subagentId, ctx `mcp-claude` | same pid 157740, same bridge pids 157798/157799, new host's token |
+| Codex | all 3 tokens | **reload**, pid 158879 → 159305 | yes | yes: `mcp-tool whoami` on the child thread, ctx `mcp-codex` | same pid 159305, same 3 bridge pids, new token |
+| Grok | all 3 tokens | **reload**, pid 160419 → 160866 | yes ("Failed to call fail_probe: …") | yes: child `use_tool`, ctx `mcp-grok` | same pid 160866, same bridges, new token |
+| OpenCode | all 3 tokens | **live**, same pid 161938 | yes | not run (no live child stream over ACP) | same pid 161938, same bridges, new token |
+
+In every (e) the agent stayed alive while no core ran, the SAME bridge processes reconnected to the
+new core, and the call returned the token of the NEW `orders` object (not the old one). After the
+final shutdown no agent or bridge process was left; the real agent homes were untouched (only Claude
+Code's own `~/.claude/backups` rotated, from the parent session, unrelated to the run).
+Unit/integration: `tests/mcp-host.test.ts` (bridge against the real host and a raw fake host: auth,
+refusal, results, isError, zod errors, output schema, list_changed, cancel + interrupt, `create`,
+reconnect with "host unavailable", byte-level replay, long socket path, stale/live socket, token) and
+`tests/mcp-core.test.ts` (registry, records, `missing_mcp_servers`, fingerprint, tool-change
+live/reload/live-only, Claude-fixture keeper re-attach + call through the reconnected bridge,
+"host unavailable" while unregistered, interrupt).
+
+Open (for C3 / mux-shim):
+- The broker root still pins zod `^3.23`; host tools must use zod 4 schemas (core's dependency). C3
+  needs zod 4 where it builds tools (or its own `create` server on the v2 SDK).
+- On Codex the token is in the app-server argv (`-c mcp_servers.<n>.env={…}`), readable by other local
+  users via `ps`. They cannot use it (the socket is 0600 in a 0700 dir); same-user processes can read
+  the secret anyway. A token file or Codex `env_vars` pass-through would hide it.
+- `create` servers get no relaunch on tool changes for agents that ignore `list_changed`.
+- The `server/discover` fallback is not special-cased (Claude falls back to `initialize`).
+- Cursor: `mcpListChanged` unknown (treated as reload); not run live (quota).
+- `core.mcp.unregister` closes live connections; a session keeps the reference and its next launch is
+  `missing_mcp_servers`.
+
 ## Slices
 
 - **C0, live probe (no API yet), done (`43bd1ccc`; Cursor pending quota):** a script that tries each "(C0)" cell above per agent with
@@ -333,7 +417,7 @@ The function runs **in the host process**, with the session's context.
   `core.sessions.updateContext` for skills, plugins and MCP servers, the live mechanisms proven per
   agent, reload otherwise, the keeper fingerprint relaunch; instructions fixed at creation for
   every agent (snapshot in `createdInstructions`).
-- **C2, host MCP servers:** `mcpServer()` / `tool()`, the bridge, the socket, live tool
+- **C2, host MCP servers, done (see "C2 as built"):** `mcpServer()` / `tool()`, the bridge, the socket, live tool
   add/remove, cancellation, events, and keeper reconnect. Live check: each agent gets two host
   servers plus one external one, calls a tool on each and repeats the secret results; a tool
   is added mid-session; then a restart test with a detached session.
@@ -350,7 +434,7 @@ The function runs **in the host process**, with the session's context.
 4. ~~Subagents~~: they inherit the session's MCP servers (Claude, Codex, Grok proven; OpenCode
    inferred), so host servers reach subagents for free; `ctx` should say when the caller is a
    subagent if the agent exposes that.
-5. (C1b) The keeper fingerprint covers MCP server `env`: C2 host servers must keep per-launch
+5. ~~(C1b) The keeper fingerprint covers MCP server `env`~~ (C2: host servers enter it by name only): C2 host servers must keep per-launch
    tokens out of it, or every re-attach after a host restart becomes a relaunch.
 6. ~~(C1b) Codex appended instructions lost on a relaunch~~: the append path was removed.
 7. (C1b) No explicit `mcpServerStatus` ready-wait after a Codex reload: in every live run the next
