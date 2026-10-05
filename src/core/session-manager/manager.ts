@@ -186,6 +186,8 @@ export class SessionManager {
   private readonly ports: SessionManagerPorts
   /** Orchestration single-flight (see orchestration()). */
   private readonly orchInflight = new Map<string, Promise<OpResult>>()
+  /** resumeAtBoot's cap per session (env MUX_BOOT_RESUME_TIMEOUT_MS; tests set it directly). */
+  bootResumeTimeoutMs = bootResumeTimeoutMs(process.env.MUX_BOOT_RESUME_TIMEOUT_MS)
 
   constructor(registry: Registry, ports: SessionManagerPorts) {
     this.registry = registry
@@ -1360,85 +1362,112 @@ export class SessionManager {
 
   /** Broker boot: rebuild the in-process adapters for non-claude sessions.
    *  (Claude sessions are reconciled by the supervisor: surviving panes
-   *  reattach via the shim; dead ones suspend.) Failures log and continue. */
+   *  reattach via the shim; dead ones suspend.) Failures log and continue.
+   *
+   *  Sequential (one agent launch at a time, as before), but each session gets at most
+   *  `bootResumeTimeoutMs`: a resume that never settles (2026-10-05: a Codex keeper lost in
+   *  setup hung `core.sessions.resume` and the web port never opened) is left running in the
+   *  background, logged `boot_resume_timeout`, and boot moves on. Its own ok/failed line is
+   *  still logged if it settles later. */
   async resumeAtBoot(): Promise<void> {
     for (const s of this.registry.list()) {
-      if (s.agent === "claude") {
-        const agentHome = s.agent_home || claudeSessionHome(s.name)
-        try {
-          if (s.agent_session_id) {
-            await this.resumeClaudeCoreArm({ ...s, agent_home: agentHome }, s.name)
-          } else {
-            await this.resumeClaudeCoreArm({ ...s, agent_home: agentHome, agent_session_id: undefined }, s.name)
-          }
-          this.registry.sessions.setCore(s.id, true)
-          this.registry.sessions.setAgentHome(s.id, agentHome)
-          if (s.status === "suspended") this.registry.sessions.activate(s.id, 0)
-          log.info("claude_core_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
-        } catch (err: any) {
-          log.warn("claude_core_resume_failed", { name: s.name, err: String(err) })
+      const work = this.resumeOneAtBoot(s)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timedOut = await Promise.race([
+        work.then(() => false),
+        new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), this.bootResumeTimeoutMs) }),
+      ])
+      clearTimeout(timer)
+      if (timedOut) log.warn("boot_resume_timeout", { name: s.name, agent: s.agent, timeout_ms: this.bootResumeTimeoutMs })
+    }
+  }
+
+  /** One session of resumeAtBoot. Never rejects: every outcome is logged here. */
+  private async resumeOneAtBoot(s: ReturnType<Registry["list"]>[number]): Promise<void> {
+    if (s.agent === "claude") {
+      const agentHome = s.agent_home || claudeSessionHome(s.name)
+      try {
+        if (s.agent_session_id) {
+          await this.resumeClaudeCoreArm({ ...s, agent_home: agentHome }, s.name)
+        } else {
+          await this.resumeClaudeCoreArm({ ...s, agent_home: agentHome, agent_session_id: undefined }, s.name)
         }
-      } else if (s.agent === "codex") {
-        if (!s.agent_session_id || !s.agent_home) {
-          log.warn("codex_resume_skip", { name: s.name, reason: "missing agent_session_id or agent_home" })
-          continue
-        }
-        try {
-          await this.resumeCodexArm({ ...s, agent_home: s.agent_home }, s.name)
-          if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
-          log.info("codex_resume_ok", { name: s.name, thread: s.agent_session_id })
-        } catch (err: any) {
-          log.warn("codex_resume_failed", { name: s.name, err: String(err) })
-        }
-      } else if (s.agent === "cursor") {
-        // Cursor sessions are per-turn — no persistent process. The adapter
-        // just needs agent_home (config + auth dir). agent_session_id may be
-        // absent if the session never received a first message yet; that's OK —
-        // initialSessionId=undefined means the first turn starts fresh.
-        if (!s.agent_home) {
-          log.warn("cursor_resume_skip", { name: s.name, reason: "missing agent_home" })
-          continue
-        }
-        try {
-          await this.resumeCursorArm({ ...s, agent_home: s.agent_home }, s.name)
-          if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
-          log.info("cursor_resume_ready", { name: s.name, session_id: s.agent_session_id ?? "(first turn pending)" })
-        } catch (err: any) {
-          log.warn("cursor_resume_failed", { name: s.name, err: String(err) })
-        }
-      } else if (s.agent === "opencode") {
-        // opencode's worker (in-process adapter + broker-child `opencode serve`)
-        // dies with the broker; without this respawn the row survives but the
-        // runtime is empty → inbound hits adapter_not_ready and never replies.
-        if (!s.agent_home) {
-          log.warn("opencode_resume_skip", { name: s.name, reason: "missing agent_home" })
-          continue
-        }
-        try {
-          await this.resumeOpenCodeArm({ ...s, agent_home: s.agent_home }, s.name)
-          if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
-          log.info("opencode_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
-        } catch (err: any) {
-          log.warn("opencode_resume_failed", { name: s.name, err: String(err) })
-        }
-      } else if (s.agent === AgentKind.Grok) {
-        // grok's worker (in-process adapter + `grok agent stdio` child) dies with
-        // the broker; same rationale as opencode. agent_home holds the private
-        // ~/.grok (config + credential path) the child needs.
-        if (!s.agent_home) {
-          log.warn("grok_resume_skip", { name: s.name, reason: "missing agent_home" })
-          continue
-        }
-        try {
-          await this.resumeGrokArm({ ...s, agent_home: s.agent_home }, s.name)
-          if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
-          log.info("grok_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
-        } catch (err: any) {
-          log.warn("grok_resume_failed", { name: s.name, err: String(err) })
-        }
+        this.registry.sessions.setCore(s.id, true)
+        this.registry.sessions.setAgentHome(s.id, agentHome)
+        if (s.status === "suspended") this.registry.sessions.activate(s.id, 0)
+        log.info("claude_core_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
+      } catch (err: any) {
+        log.warn("claude_core_resume_failed", { name: s.name, err: String(err) })
+      }
+    } else if (s.agent === "codex") {
+      if (!s.agent_session_id || !s.agent_home) {
+        log.warn("codex_resume_skip", { name: s.name, reason: "missing agent_session_id or agent_home" })
+        return
+      }
+      try {
+        await this.resumeCodexArm({ ...s, agent_home: s.agent_home }, s.name)
+        if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
+        log.info("codex_resume_ok", { name: s.name, thread: s.agent_session_id })
+      } catch (err: any) {
+        log.warn("codex_resume_failed", { name: s.name, err: String(err) })
+      }
+    } else if (s.agent === "cursor") {
+      // Cursor sessions are per-turn — no persistent process. The adapter
+      // just needs agent_home (config + auth dir). agent_session_id may be
+      // absent if the session never received a first message yet; that's OK —
+      // initialSessionId=undefined means the first turn starts fresh.
+      if (!s.agent_home) {
+        log.warn("cursor_resume_skip", { name: s.name, reason: "missing agent_home" })
+        return
+      }
+      try {
+        await this.resumeCursorArm({ ...s, agent_home: s.agent_home }, s.name)
+        if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
+        log.info("cursor_resume_ready", { name: s.name, session_id: s.agent_session_id ?? "(first turn pending)" })
+      } catch (err: any) {
+        log.warn("cursor_resume_failed", { name: s.name, err: String(err) })
+      }
+    } else if (s.agent === "opencode") {
+      // opencode's worker (in-process adapter + broker-child `opencode serve`)
+      // dies with the broker; without this respawn the row survives but the
+      // runtime is empty → inbound hits adapter_not_ready and never replies.
+      if (!s.agent_home) {
+        log.warn("opencode_resume_skip", { name: s.name, reason: "missing agent_home" })
+        return
+      }
+      try {
+        await this.resumeOpenCodeArm({ ...s, agent_home: s.agent_home }, s.name)
+        if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
+        log.info("opencode_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
+      } catch (err: any) {
+        log.warn("opencode_resume_failed", { name: s.name, err: String(err) })
+      }
+    } else if (s.agent === AgentKind.Grok) {
+      // grok's worker (in-process adapter + `grok agent stdio` child) dies with
+      // the broker; same rationale as opencode. agent_home holds the private
+      // ~/.grok (config + credential path) the child needs.
+      if (!s.agent_home) {
+        log.warn("grok_resume_skip", { name: s.name, reason: "missing agent_home" })
+        return
+      }
+      try {
+        await this.resumeGrokArm({ ...s, agent_home: s.agent_home }, s.name)
+        if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
+        log.info("grok_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
+      } catch (err: any) {
+        log.warn("grok_resume_failed", { name: s.name, err: String(err) })
       }
     }
   }
+}
+
+/** Longer than any healthy launch (Codex: `codex debug models` 15 s + keeper connect + setup
+ *  30 s + failed-start cleanup is about a minute), short enough that boot cannot stall. */
+export const BOOT_RESUME_TIMEOUT_MS = 90_000
+
+export function bootResumeTimeoutMs(env: string | undefined): number {
+  const value = Number(env)
+  return Number.isSafeInteger(value) && value > 0 ? value : BOOT_RESUME_TIMEOUT_MS
 }
 
 // ---- socket-op argument parsing (moved with the handlers from main.ts) ----

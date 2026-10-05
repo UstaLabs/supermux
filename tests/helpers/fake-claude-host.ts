@@ -5,7 +5,7 @@ import { createClaudeCoreHost, type ClaudeCoreHost } from "../../src/core/agents
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../packages/supermux-core/src/index.js"
 import type { ClaudeOptions } from "../../packages/supermux-core/src/claude/index.js"
 
-export function fakeClaudeHost(nativeId = "claude-session-id"): {
+export function fakeClaudeHost(nativeId = "claude-session-id", options: { openHangs?: (ctx: DriverContext) => boolean } = {}): {
   host: ClaudeCoreHost
   opens: DriverContext[]
   prompts: string[][]
@@ -18,6 +18,8 @@ export function fakeClaudeHost(nativeId = "claude-session-id"): {
     id: "claude",
     async open(ctx) {
       opens.push(ctx)
+      // Never settles on its own; only the core's lifetime abort (host close) ends it.
+      if (options.openHangs?.(ctx)) return new Promise<AgentRuntime>((_, reject) => ctx.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }))
       const runtime: AgentRuntime = {
         agentSessionId: ctx.resumeId ?? nativeId,
         capabilities: { resume: true, steer: false, fork: false, detach: true, configure: false, history: false },

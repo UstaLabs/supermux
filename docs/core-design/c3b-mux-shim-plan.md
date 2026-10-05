@@ -376,3 +376,20 @@ socket inbound fallback had no user on the preview: removed, no fallback kept.
 - Token in the Codex app-server argv (C2 item), unchanged.
 - A live rollout to `mux.service` state would meet tmux-era Claude rows (`core=0`) with live panes,
   which no longer get input until they are resumed through Core (the socket fallback is gone).
+
+**Boot hang on the host-mode preview (fixed 2026-10-05).** `MUX_SHIM=host` boot stopped after 7
+sessions at Codex "Friendly Chat", whose app-server exits ~30 ms after spawn (ext2 keeper status:
+`agentExited: 1`, 34 ms after `startedAt`; journal: only the driver's `initialize`). Root cause in the
+core, not host-specific: `KeeperConnection.detach()` waited for the socket's `close` event, and when
+the keeper had already closed the socket WITHOUT an `exit` frame (its agent died before the client
+attached, so the keeper exits 10 ms after the hello; or the keeper crashed / was killed) that event
+had already fired: the transport's `close()` never settled. Every driver awaits it in its failed
+setup (and its setup timeout reuses the same promise), so `core.sessions.resume` never settled.
+When the agent dies after attach the keeper sends `exit` first and `close()` settles: the external
+run hit that ordering ("Codex process exited", fast); host mode only shifted the timing. Fix:
+`detach()` returns when the socket is already closed (`keeper/client.ts`). Test
+`packages/supermux-core/tests/keeper-lost.test.ts`: the connection itself, and claude / codex /
+grok / cursor / opencode resumed with a host MCP server while the keeper is SIGKILLed in setup (all
+six hung before, now reject in < 1 s). Broker: `resumeAtBoot` stays sequential but caps each
+session at `bootResumeTimeoutMs` (90 s, env `MUX_BOOT_RESUME_TIMEOUT_MS`), logs
+`boot_resume_timeout` and moves on (`tests/boot-resume-timeout.test.ts`).
