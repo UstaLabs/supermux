@@ -40,7 +40,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
@@ -144,6 +143,18 @@ import dev.supermux.ui.shell.windows.extraWindowTitle
 import dev.supermux.desktop.shell.LocalMacWindowChrome
 import dev.supermux.desktop.shell.MacTrafficLightsWidth
 import dev.supermux.desktop.shell.rememberMacWindowChrome
+import dev.supermux.desktop.shell.ChromeOs
+import dev.supermux.desktop.shell.DesktopMenuBar
+import dev.supermux.desktop.shell.LinuxSidebarChrome
+import dev.supermux.desktop.shell.LinuxTitleBarHeight
+import dev.supermux.desktop.shell.LinuxWindowChrome
+import dev.supermux.desktop.shell.LinuxWindowChromeOverlay
+import dev.supermux.desktop.shell.LocalWindowChromeInsets
+import dev.supermux.desktop.shell.MainMenuEntry
+import dev.supermux.desktop.shell.MainMenuGroup
+import dev.supermux.desktop.shell.MenuShortcut
+import dev.supermux.desktop.shell.chromeInsets
+import dev.supermux.desktop.shell.rememberLinuxWindowChrome
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.windows.WindowBounds
@@ -355,6 +366,11 @@ fun main() {
     // macOS menu bar: the tray icon is a template image the OS tints for a light or dark bar. Read
     // once, when AWT's tray first loads, so it is set before anything touches AWT (also a jvmArg).
     if (isMacOs()) System.setProperty(TrayIcons.TEMPLATE_PROPERTY, "true")
+    // Linux: name the X11 windows "supermux" before the first one exists (the dock groups them with
+    // the launcher), then decide once whether the window draws its own chrome — it is created
+    // undecorated or not (LinuxWindowChrome.kt).
+    if (isLinuxOs()) LinuxWindowChrome.setWmClass()
+    val linuxMoveResize = LinuxWindowChrome.detect(isLinuxOs())
 
     val store = DesktopTokenStore()
     // Reclaim aged clipboard-paste PNGs under <config>/paste-cache/ (app-owned; never /tmp).
@@ -813,10 +829,14 @@ fun main() {
             visible = windowVisible,
             // Empty on macOS: with the transparent/full-size-content title bar below, a non-empty
             // title still paints centred over our own UI on runtimes that ignore
-            // `apple.awt.windowTitleVisible`. Other platforms keep the normal caption text.
+            // `apple.awt.windowTitleVisible`. Other platforms keep the normal caption text — on
+            // Linux even with the custom chrome: an undecorated window has no title bar to paint
+            // it in, and GNOME's overview and Alt+Tab caption the window with it.
             title = if (isMacOs()) "" else "supermux",
             icon = painterResource("supermux-icon.png"),
             state = windowState,
+            // Linux custom chrome: no system frame; our band, buttons and edge handles replace it.
+            undecorated = linuxMoveResize != null,
         ) {
             if (shuttingDown) return@Window
 
@@ -832,6 +852,7 @@ fun main() {
             // inset under the traffic lights for the sidebar toggle (see MacChrome.kt).
             // No-ops off macOS, but gated anyway to keep it obvious.
             val macChrome = if (isMacOs()) rememberMacWindowChrome(window) else null
+            val linuxChrome = linuxMoveResize?.let { rememberLinuxWindowChrome(window, it) }
             if (isMacOs()) LaunchedEffect(window) { installMacTrackpadMagnify(window.rootPane) }
             if (isMacOs() && macChrome?.titleBar == null) {
                 LaunchedEffect(window) {
@@ -862,17 +883,18 @@ fun main() {
             // New Session keeps its conventional Ctrl+N accelerator too — it and the in-app shortcut
             // both just flip `ui.launcherOpen`, which is idempotent, so a double-fire (menu action +
             // the key event still bubbling to shellShortcuts) is harmless.
-            if (paired) {
-                MenuBar {
-                    Menu("File", mnemonic = 'F') {
-                        Item("New Session", shortcut = KeyShortcut(Key.N, ctrl = true)) {
-                            ui.openLauncher()
-                        }
-                        Item("Move workspace to New Window") {
-                            // Through the seam (cluster G1); AppShell binds the live registry into it.
-                            DesktopWindowHostController.tearOutCanvas()
-                        }
-                        Item("Move group to New Window") {
+            // One menu, two renderings (DesktopMainMenu.kt): the native menu bar, or — under the
+            // Linux custom chrome, which has no system frame to hang a menu bar in — the main-menu
+            // button in the sidebar band.
+            val mainMenu = listOf(
+                MainMenuGroup(
+                    "File",
+                    'F',
+                    listOf(
+                        MainMenuEntry.Action("New Session", MenuShortcut(Key.N, ctrl = true)) { ui.openLauncher() },
+                        // Through the seam (cluster G1); AppShell binds the live registry into it.
+                        MainMenuEntry.Action("Move workspace to New Window") { DesktopWindowHostController.tearOutCanvas() },
+                        MainMenuEntry.Action("Move group to New Window") {
                             val bind = ui.panesBind
                             if (bind != null) {
                                 val tree = bind.ws.layoutSync.tree
@@ -882,52 +904,50 @@ fun main() {
                                     tearOutGroupLive(desktopWindows.registry, tree, gid, bind.current.id)
                                 }
                             }
-                        }
-                        Item("Archived…") {
-                            ui.openArchived()
-                        }
-                        Item("Displays…") {
-                            ui.openDisplays()
-                        }
-                        Item("Usage…") {
-                            ui.openUsage()
-                        }
-                        Item("Settings…") {
-                            ui.openSettings()
-                        }
+                        },
+                        MainMenuEntry.Action("Archived…") { ui.openArchived() },
+                        MainMenuEntry.Action("Displays…") { ui.openDisplays() },
+                        MainMenuEntry.Action("Usage…") { ui.openUsage() },
+                        MainMenuEntry.Action("Settings…") { ui.openSettings() },
                         // Existing items keep working — they open the Settings hub focused on
                         // that section (same overlay as Settings…, not a separate stack).
-                        Item("Editor / LSP…") {
-                            ui.openLspSettings()
-                        }
-                        Item("Personal Assistants…") {
-                            ui.openPersonalAssistants()
-                        }
-                        Item("Check for Updates…") {
-                            ui.openAppUpdate()
-                        }
-                        Separator()
-                        Item("Unpair…") { showUnpairConfirm = true }
-                    }
-                    Menu("Edit", mnemonic = 'E') {
+                        MainMenuEntry.Action("Editor / LSP…") { ui.openLspSettings() },
+                        MainMenuEntry.Action("Personal Assistants…") { ui.openPersonalAssistants() },
+                        MainMenuEntry.Action("Check for Updates…") { ui.openAppUpdate() },
+                        MainMenuEntry.Separator,
+                        MainMenuEntry.Action("Unpair…") { showUnpairConfirm = true },
+                    ),
+                ),
+                MainMenuGroup(
+                    "Edit",
+                    'E',
+                    listOf(
                         // Same paste-image path as Ctrl/Cmd+V / right-click in the composer.
                         // The accelerator exists only while a chat composer has the focus: a
                         // window-wide Ctrl+V would steal every paste from the code editor (M5 B2).
-                        Item("Paste image", shortcut = pasteImageShortcut(dev.supermux.ui.chat.ChatInputFocus.focused)) {
-                            ui.requestPasteImage()
-                        }
-                    }
-                    Menu("View", mnemonic = 'V') {
+                        MainMenuEntry.Action(
+                            "Paste image",
+                            // The same Ctrl+V as pasteImageShortcut, as menu data.
+                            pasteImageShortcut(dev.supermux.ui.chat.ChatInputFocus.focused)
+                                ?.let { MenuShortcut(Key.V, ctrl = true) },
+                        ) { ui.requestPasteImage() },
+                    ),
+                ),
+                MainMenuGroup(
+                    "View",
+                    'V',
+                    listOf(
                         // Only the sidebar is left: Editor/Terminal/Display were toggles for the
                         // old shell's four fixed panes. A workspace has no fixed panes — views are
                         // created, split and closed on its own layout tree, from the tab strip's
                         // "+" — so there is nothing here to check on or off.
-                        CheckboxItem("Show Sidebar", checked = !ui.sidebarCollapsed) {
+                        MainMenuEntry.Toggle("Show Sidebar", checked = !ui.sidebarCollapsed) {
                             ui.sidebarCollapsed = !ui.sidebarCollapsed
-                        }
-                    }
-                }
-            }
+                        },
+                    ),
+                ),
+            )
+            if (paired && linuxChrome == null) DesktopMenuBar(mainMenu)
 
             // Appearance lives on [ui] so the sidebar toggle, theme, and ui-state.json share one source.
             ProvideDesktopAdaptiveLocals {
@@ -935,12 +955,28 @@ fun main() {
               // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
               // places the sidebar toggle next to them and pads only the sidebar body under that
               // band — no full-window dead strip across the title bar.
+              // Linux custom chrome: the band's drag regions and the controls' room, for the whole
+              // window (the wizard too). Neither is provided on macOS here — its shell-level
+              // provider below is unchanged.
+              CompositionLocalProvider(
+                  LocalMacWindowChrome provides linuxChrome?.regions,
+                  LocalWindowChromeInsets provides chromeInsets(ChromeOs.of(), customChrome = linuxChrome != null),
+              ) {
               Box(
                   Modifier
                       .fillMaxSize()
                       .background(MaterialTheme.colorScheme.background),
               ) {
                 if (!paired) {
+                    // No sidebar band or tab strip before pairing: the whole top band drags.
+                    if (linuxChrome != null) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(LinuxTitleBarHeight)
+                                .macTitleBarDragRegion("onboarding-band"),
+                        )
+                    }
                     val scope = rememberCoroutineScope()
                     // First-run choice (spec §6 / D6 choice A): on every native-host desktop platform
                     // the default first run is the desktop-as-host wizard — this computer becomes a host,
@@ -1854,7 +1890,7 @@ fun main() {
                         LocalPairedHostStore provides hostStore,
                         LocalHostingFleet provides fleet,
                         LocalHostingSessions provides fleetFacts.localSessions,
-                        LocalMacWindowChrome provides macChrome?.regions,
+                        LocalMacWindowChrome provides (macChrome?.regions ?: linuxChrome?.regions),
                         LocalMacTrafficLightsInset provides (
                             macChrome?.trafficLightsInset ?: MacTrafficLightsWidth
                         ),
@@ -1872,8 +1908,29 @@ fun main() {
                             // macOS: no full-window dead strip under the transparent title bar.
                             // Detail content runs to the top edge; only the sidebar body is padded
                             // under the traffic-light band.
-                            sidebarTopPad = if (isMacOs()) MacTitleBarHeight else 0.dp,
+                            // Linux custom chrome: the same band, one tab strip tall, holding the
+                            // main menu and the sidebar toggle.
+                            sidebarTopPad = when {
+                                isMacOs() -> MacTitleBarHeight
+                                linuxChrome != null -> LinuxTitleBarHeight
+                                else -> 0.dp
+                            },
                             sidebarChrome = { sidebarWidth, collapsed ->
+                                if (linuxChrome != null) {
+                                    Box(
+                                        Modifier
+                                            .align(Alignment.TopStart)
+                                            .width(if (collapsed) 64.dp else sidebarWidth)
+                                            .height(LinuxTitleBarHeight)
+                                            .macTitleBarDragRegion("sidebar-band"),
+                                    )
+                                    LinuxSidebarChrome(
+                                        menu = mainMenu,
+                                        collapsed = collapsed,
+                                        onCollapse = { ui.sidebarCollapsed = true },
+                                        modifier = Modifier.align(Alignment.TopStart).zIndex(30f),
+                                    )
+                                }
                                 if (isMacOs() && !collapsed) {
                                     // Native window-drag handle: the empty sidebar band under the
                                     // traffic lights. Layout-only Box (draws nothing, no pointer
@@ -1951,6 +2008,8 @@ fun main() {
                         )
                     }
                 }
+                // Last, so the buttons and edge handles sit over every screen.
+                linuxChrome?.let { LinuxWindowChromeOverlay(it) }
               }
               // Hosting questions and the quit confirm, over the wizard AND the shell: the wizard's
               // own ensure() waits on a takeover answer too.
@@ -1962,6 +2021,7 @@ fun main() {
                   onQuit = { confirmQuit = null; quitNow() },
                   onCancelQuit = { cancelQuit() },
               )
+              } // CompositionLocalProvider (Linux chrome)
             }
             } // ProvideDesktopAdaptiveLocals
 

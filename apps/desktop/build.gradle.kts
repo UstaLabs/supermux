@@ -98,6 +98,16 @@ val macJvmArgs = if (macBuildHost) {
     emptyList()
 }
 
+// Linux custom window chrome (shell/LinuxWindowChrome.kt): the WM_CLASS name and the
+// `_NET_WM_MOVERESIZE` edge resize reach AWT's X11 internals, which java.desktop does not open.
+// Without these the app simply keeps the system title bar.
+val linuxBuildHost = hostOs.contains("linux")
+val linuxJvmArgs = if (linuxBuildHost) {
+    listOf("--add-opens=java.desktop/sun.awt=ALL-UNNAMED", "--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED")
+} else {
+    emptyList()
+}
+
 // The app runs on — and ships with — a pinned JetBrains Runtime (plain JBR, no JCEF since the M5
 // native-editor cutover). A JBR is what makes MacWindowChrome's custom title bar and its drag
 // arbitration work (libs.jbr.api is a no-op facade on any other JVM), and it is the runtime Compose
@@ -209,14 +219,14 @@ tasks.withType<ComposeHotRun>().configureEach {
     mainClass.set("dev.supermux.desktop.MainKt")
     dependsOn(prepareJbrRuntime)
     javaLauncher.set(jbrLauncher)
-    jvmArgs(macJvmArgs)
+    jvmArgs(macJvmArgs + linuxJvmArgs)
 }
 
 // The normal Compose run task uses the same JBR as packaged builds.
 tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
     dependsOn(prepareJbrRuntime)
     javaLauncher.set(jbrLauncher)
-    jvmArgs(macJvmArgs)
+    jvmArgs(macJvmArgs + linuxJvmArgs)
 }
 
 // Never launch a real system browser from unit/UI tests (Agent OAuth, timeline links, etc.).
@@ -241,7 +251,7 @@ tasks.register<JavaExec>("previewWorkspaceList") {
 compose.desktop {
     application {
         mainClass = "dev.supermux.desktop.MainKt"
-        jvmArgs += macJvmArgs
+        jvmArgs += macJvmArgs + linuxJvmArgs
         nativeDistributions {
             // Host-scoped: jpackage can only ever build the formats of the OS it runs on, AND on
             // macOS Compose eagerly creates a `notarize<Format>` task per declared format —
