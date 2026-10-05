@@ -556,7 +556,7 @@ from a file (only a listed skill's own SKILL.md may be read).
 | Cell | Result | Evidence |
 |---|---|---|
 | Instructions: plugin `rules/`, `$HOME/.cursor/rules/*.mdc`, `$HOME/AGENTS.md`, `--add-dir <root>/AGENTS.md`, ACP `_meta.rules`, `$HOME/.cursor/hooks.json` `sessionStart` / `beforeSubmitPrompt` `additional_context` | **no** (all) | C0 `run-2026-10-05T16-54-30-589Z`: only the preamble token listed, no tool calls; same after a relaunch with changed words |
-| Instructions: first-prompt preamble | **yes**, kept by `session/load` | C0 same run (`BISON9055` before and after the relaunch); C1 `EMBER5224` through the core, recalled after a core restart; C1b `HERON7120` after two MCP reloads and a restart |
+| Instructions: first-prompt block (text in pass 1, embedded resource since pass 2) | **yes**, kept by `session/load` | C0 same run (`BISON9055` before and after the relaunch); C1 `EMBER5224` through the core, recalled after a core restart; C1b `HERON7120` after two MCP reloads and a restart |
 | Skills: generated wrapper plugin via `--plugin-dir` | **no** | C0 `…T16-57-26-636Z`: `NONE`; the agent's skill list did not contain it |
 | Skills: `$HOME/.cursor/skills` (also a symlinked folder), `$HOME/.agents/skills` | **yes** | same run, each SKILL.md read from the listed path |
 | Plugins: `--plugin-dir <plugin>` (create and after a relaunch) | **no** | same run: `NONE`; the ACP chunk set of the bundle has no plugin service |
@@ -568,17 +568,39 @@ from a file (only a listed skill's own SKILL.md may be read).
 | Host MCP servers through the bridge (C2) | **yes** for (a) 2 host + 1 external, (b) live tool add (reload), (c) a throwing tool, (d) a subagent, (e) detached re-attach (same pid, bridges kept). The (e) call through the reconnected bridge is **unproven**: the plan's Auto quota ran out on that turn ("Upgrade your plan to continue") | C2 `~/.cache/context-cursor/c2/run-2026-10-05T17-05-14-321Z` (11/12) |
 | C3b host-mode mux-shim on Cursor (`scripts/c3b-live.ts cursor`) | **not run** (quota) | the harness supports cursor now |
 
-**Core.** `cursorContext`: instructions **supported** (`firstPromptPreamble`: the text wrapped in
-`<session-instructions>…</session-instructions>` with a one-line note that it is the application's
-standing instructions), skills and plugins **unsupported** (no `--plugin-dir` any more; nothing is
+**Instructions block (changed 2026-10-05, second pass).** The instructions are a SEPARATE content
+block in front of the user's blocks in the first `session/prompt`: an ACP embedded resource
+`{ type: "resource", resource: { uri: "supermux://instructions", mimeType: "text/markdown", text },
+annotations: { audience: ["assistant"] } }` (`instructionsBlock`; `text` is the instructions wrapped
+in `<session-instructions>…</session-instructions>` with a one-line note). Cursor accepts it although
+`promptCapabilities.embeddedContext` is false, and the model reads it: C0
+`run-2026-10-05T17-34-40-012Z` (`--instructions-shape resource`, `--only 1,8`) returned the token
+`LYNX4615` with no tool call, and again after a relaunch + `session/load`; C1 `run-…T17-40-31-969Z`
+10/10. The text-block fallback was not needed (the probe keeps `--instructions-shape text`).
+Cursor stores the message flattened: its `session/load` replay echoes the first user message as ONE
+text chunk `<user text>\n\nAdditional ACP context:\n[ACP embedded_resource] supermux://instructions\n<text>`
+(a live turn echoes nothing). The ACP driver strips that section (`stripInstructionsEcho` /
+`hideInstructions`, other embedded resources kept; a chunk that is only the block is dropped) from
+every `user_message_chunk`, live and replayed, before it becomes a `session.update`; the normalizer
+already drops user chunks and the broker drops replayed events, so neither transcripts, the
+timeline nor activity rows can carry it. Live: the C1 replay check saw both user messages and no
+instructions text. The hidden `cursor-agent --system-prompt <file>` flag ("Anysphere/OpenAI team
+only") is **ignored** under `acp` for this account (one turn: "I don't have a system prompt probe
+token", no tool calls).
+
+**Core.** `cursorContext`: instructions **supported** (`firstPromptBlock`, above), skills and plugins **unsupported** (no `--plugin-dir` any more; nothing is
 generated for them), MCP servers **supported**, updates: MCP **reload**, no `mcpListChanged`
-(`hostToolChanges: "reload"`). The ACP driver sends the preamble as the first content block of the
+(`hostToolChanges: "reload"`). The ACP driver sends the block in front of the user's blocks in the
 conversation's first `session/prompt` only: on create; after a `session/load` whose replay had no
 `user_message_chunk` (a relaunch before the first turn); after a keeper re-attach while the meta
 says `preamblePending`. Fixed at creation like every agent's instructions (later launches carry the
 `createdInstructions` snapshot but send nothing once the conversation has a turn).
-Tests: `tests/context-drivers.test.ts` (no `--plugin-dir`, first prompt only, load with / without a
-replayed user message).
+Tests: `tests/context-drivers.test.ts` (no `--plugin-dir`; the resource block with its annotation,
+first prompt only; load with / without a replayed user message; the echo hidden live and in a replay;
+`stripInstructionsEcho`; a keeper re-attach before the first turn still sends the block, after one
+it does not), broker `src/core/agents/cursor/instructions-hidden.test.ts` (run alone: sets HOME):
+through the cursor core-host and `CoreAdapter`, a live echo and a flattened replay leave no
+instructions text in the adapter events or the core's `session.event` / `session.update` stream.
 
 **Broker.** `src/core/agents/cursor/core-host.ts` passes `cursorInstructions(...)` as context
 instructions and `prepareCursorEnvironment({ instructions: null })`: nothing is written into the
