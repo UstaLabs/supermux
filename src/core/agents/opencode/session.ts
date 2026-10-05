@@ -6,7 +6,7 @@ import type { OpenCodeCommandClient } from "../../slash-commands/types"
 import { CoreAdapter, OPENCODE_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getOpenCodeCoreHost } from "./core-host-provider"
 import type { OpenCodeCoreHost, OpenCodePrepareExtra } from "./core-host"
-import { opencodeConfigEntries } from "../../plugins"
+import { opencodePluginRoots } from "../../plugins"
 import { join } from "path"
 import { randomUUID } from "crypto"
 import { STATE_DIR } from "../../../shared/paths"
@@ -24,7 +24,7 @@ export type OpenCodeCommandContext = {
 
 export function commandContext(ctx: CommandContextCtx): OpenCodeCommandContext {
   return {
-    pluginDirs: opencodeConfigEntries({ sessionName: ctx.sessionName }).pluginPaths,
+    pluginDirs: opencodePluginRoots(ctx.sessionName),
   }
 }
 

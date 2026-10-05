@@ -19,6 +19,7 @@ import { createCursorCoreHost } from "../../src/core/agents/cursor/core-host"
 import { createGrokCoreHost } from "../../src/core/agents/grok/core-host"
 import { createOpenCodeCoreHost } from "../../src/core/agents/opencode/core-host"
 import { brokerCodexArgs } from "../../src/core/agents/codex/session"
+import * as codexDriver from "../../packages/supermux-core/src/codex/index.js"
 
 export type Agent = "claude" | "codex" | "cursor" | "grok" | "opencode"
 export const AGENTS: Agent[] = ["claude", "codex", "cursor", "grok", "opencode"]
@@ -296,7 +297,9 @@ export async function effectiveLaunch(agent: Agent, role: Role, s: Scratch): Pro
     }
   } else if (agent === "codex") {
     const launch = sc ? codexContextLaunch(sc) : undefined
-    const all = [...(options.args as string[]), ...(launch?.args ?? [])]
+    // What the driver itself adds per process (C3: the session's policy), when it does.
+    const policyArgs = (codexDriver as { codexPolicyArgs?: (spec: unknown) => string[] }).codexPolicyArgs
+    const all = [...(options.args as string[]), ...(policyArgs ? policyArgs(options.permissions) : []), ...(launch?.args ?? [])]
     const parsed = codexArgs(all)
     const configToml = files["<home>/config.toml"] ?? ""
     const agentsMd = files["<home>/AGENTS.md"]
@@ -325,7 +328,7 @@ export async function effectiveLaunch(agent: Agent, role: Role, s: Scratch): Pro
     const tomlSkills = /\[skills\]\npaths = (\[.*\])/.exec(configToml)
     if (tomlSkills) skills.push(...JSON.parse(tomlSkills[1]!))
     const fileMcp = agent === "cursor" && files["<home>/.cursor/mcp.json"] ? mcpFromJson(join(c.sessionHome, ".cursor", "mcp.json")) : mcpFromToml(configToml)
-    const acp = [...((options.mcpServers as never[]) ?? []), ...(launch?.mcpServers ?? [])].map((server: { name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }) => ({
+    const acp = ([...((options.mcpServers as never[]) ?? []), ...(launch?.mcpServers ?? [])] as Array<{ name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }>).map((server) => ({
       name: server.name, command: server.command, args: server.args, env: Object.fromEntries(server.env.map(e => [e.name, e.value])),
     }))
     const repoRule = Object.keys(files).find(k => /^<work>\/(AGENTS(\.override)?\.md|\.cursor\/rules\/mux\.mdc)$/.test(k))
@@ -349,7 +352,7 @@ export async function effectiveLaunch(agent: Agent, role: Role, s: Scratch): Pro
     const pluginEntries = [...((xdg.plugin as string[]) ?? []), ...((session.plugin as string[]) ?? [])]
     const skillPaths = [...new Set([...(((xdg.skills as { paths?: string[] })?.paths) ?? []), ...(((session.skills as { paths?: string[] })?.paths) ?? [])])]
     const fileMcp = Object.entries((xdg.mcp as Record<string, { command: string[]; environment: Record<string, string> }>) ?? {}).map(([name, v]) => ({ name, command: v.command[0]!, args: v.command.slice(1), env: v.environment }))
-    const acp = [...((options.mcpServers as never[]) ?? []), ...(launch?.mcpServers ?? [])].map((server: { name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }) => ({
+    const acp = ([...((options.mcpServers as never[]) ?? []), ...(launch?.mcpServers ?? [])] as Array<{ name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }>).map((server) => ({
       name: server.name, command: server.command, args: server.args, env: Object.fromEntries(server.env.map(e => [e.name, e.value])),
     }))
     out = {

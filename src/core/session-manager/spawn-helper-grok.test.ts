@@ -84,7 +84,7 @@ describe("Grok spawn", () => {
     expect(child.opens[0]?.resumeId).toBeUndefined()
   })
 
-  test("registers mux-shim in the session-private config.toml and writes the AGENTS.md preamble", async () => {
+  test("mux-shim and the instructions are session context; nothing is written into the repo (C3)", async () => {
     const child = fakeChildFactory()
     const dir = mkdtempSync(join(tmpdir(), "mux-grok-core-"))
     dirs.push(dir)
@@ -110,16 +110,17 @@ describe("Grok spawn", () => {
     expect(child.grokCalls[0]?.options.env?.HOME).toBe(sessionHome)
 
     const toml = readFileSync(join(sessionHome, ".grok", "config.toml"), "utf8")
-    expect(toml).toContain("[mcp_servers.mux-shim]")
-    expect(toml).toContain(`MUX_SESSION_ID = ${JSON.stringify(result.session_id)}`)
-    expect(toml).toContain('MUX_DISPLAY_NAME = "grok-shim"')
-    expect(toml).toContain('MUX_AGENT_KIND = "grok"')
+    expect(toml).not.toContain("mcp_servers")
     expect(toml).toContain("[claude_compat]")
     expect(toml).toContain("imported = true")
-
-    const preamble = join(workdir, "AGENTS.md")
-    expect(existsSync(preamble)).toBe(true)
-    expect(readFileSync(preamble, "utf8")).toContain("grok-shim")
+    // C3: mux-shim (ACP mcpServers) and the instructions (ACP _meta.rules) are session context;
+    // nothing is written into the repo.
+    const launched = child.opens[0]!.sessionContext!
+    const shim = launched.mcpServers.find((server) => server.name === "mux-shim")!
+    expect(shim.env).toMatchObject({ MUX_SESSION_ID: result.session_id, MUX_DISPLAY_NAME: "grok-shim", MUX_AGENT_KIND: "grok" })
+    expect(launched.instructions).toContain("grok-shim")
+    expect(existsSync(join(workdir, "AGENTS.md"))).toBe(false)
+    expect(existsSync(join(workdir, "AGENTS.override.md"))).toBe(false)
   })
 
   test("permissionMode ask maps onto the first open (no restart)", async () => {

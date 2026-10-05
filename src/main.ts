@@ -68,7 +68,7 @@ import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
-import { pluginSpawnArgsForKind, codexPrepareGlobal, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
+import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
 import { getUsageStore, isUsageProvider } from "./core/usage/store"
@@ -3449,11 +3449,9 @@ if (!settings.getAppConfig(appConfigEnv).onboarded &&
 await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor, sessionBackend })
 
 
-// Regenerate Codex's marketplace.json from the registry BEFORE resuming codex
-// sessions — resumeNonClaudeAdapters runs `codex plugin add` per session home,
-// which reads this marketplace; a stale/missing one (e.g. right after a rename)
-// makes those adds fail until the next boot. Awaited so the file is current
-// first. Never throws — logs and continues so plugin config can't block boot.
+// Sync the first-party plugin and the registry BEFORE resuming sessions: every session's plugins
+// reach its agent through its session context at launch (C3; no Codex marketplace install any
+// more). Never throws — logs and continues so plugin config can't block boot.
 if (!IS_TEST_BROKER) {
   try {
     if (ensureMuxCoreSkills()) {
@@ -3473,8 +3471,6 @@ if (!IS_TEST_BROKER) {
   } catch (err: any) {
     log.warn("mux_core_soul_skill_sync_failed", { err: err?.message ?? String(err) })
   }
-  await codexPrepareGlobal({ onError: (err) => log.warn("codex_prepare_global_failed", { err }) })
-    .catch((err) => log.warn("codex_prepare_global_failed", { err: String(err) }))
 }
 
 await sessionManager.resumeAtBoot()

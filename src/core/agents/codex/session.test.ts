@@ -223,11 +223,15 @@ describe("codex core spawn/resume dialect", () => {
     const stateTexts = JSON.stringify(child.opens)
     expect(stateTexts).not.toContain("secret-live")
     const toml = readFileSync(join(sessionHome, "config.toml"), "utf8")
-    expect(toml).toContain("mux-shim")
-    expect(existsSync(join(sessionHome, "AGENTS.md")) || existsSync(join(workdir, "AGENTS.md"))).toBe(true)
+    expect(toml).not.toContain("mux-shim")
+    expect(existsSync(join(sessionHome, "AGENTS.md")) || existsSync(join(workdir, "AGENTS.md"))).toBe(false)
+    // C3: mux-shim and the instructions are session context, not files.
+    const launched = child.opens[0]!.sessionContext!
+    expect(launched.mcpServers.map((server) => server.name)).toEqual(["mux-shim"])
+    expect(launched.instructions).toBeTruthy()
   })
 
-  test("command/args reach the driver factory with plugin flags and without -c model", async () => {
+  test("command/args reach the driver factory: app-server only (policy per process by the core, plugins as context), without -c model", async () => {
     process.env.OPENAI_API_KEY = "test-key"
     const child = fakeChildFactory({ nativeId: "n1" })
     const host = await makeHost(child.factory)
@@ -247,9 +251,9 @@ describe("codex core spawn/resume dialect", () => {
       effort: "high",
     })
     const args = child.codexCalls[0]?.options.args ?? []
-    expect(args[0]).toBe("app-server")
-    expect(args).toContain('approval_policy="never"')
-    expect(args).toContain('sandbox_mode="danger-full-access"')
+    expect(args).toEqual(["app-server"])
+    expect(child.codexCalls[0]?.options.approvalPolicy).toBe("never")
+    expect(child.codexCalls[0]?.options.sandbox).toBe("danger-full-access")
     expect(args.join(" ")).not.toContain("model=")
     expect(args.join(" ")).not.toContain("model_reasoning_effort")
     expect(child.codexCalls[0]?.options.command).toBeTruthy()

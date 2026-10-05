@@ -12,7 +12,6 @@ import { fakeCodexHost } from "./helpers/fake-codex-host"
 // real modules are captured first and restored in afterAll — otherwise later
 // test files would see the fakes (same pattern as tests/spawn-opencode.test.ts).
 const realCodexCoreHost = { ...(await import("../src/core/agents/codex/core-host-provider")) }
-const realPlugins = { ...(await import("../src/core/plugins")) }
 
 let fake = fakeCodexHost()
 
@@ -20,15 +19,9 @@ mock.module("../src/core/agents/codex/core-host-provider", () => ({
   ...realCodexCoreHost,
   getCodexCoreHost: () => fake.host,
 }))
-mock.module("../src/core/plugins", () => ({
-  ...realPlugins,
-  codexPrepareSessionHome: async () => {},
-  codexSpawnArgs: () => ({ args: [], env: {} }),
-}))
 
 afterAll(() => {
   mock.module("../src/core/agents/codex/core-host-provider", () => realCodexCoreHost)
-  mock.module("../src/core/plugins", () => realPlugins)
 })
 
 let tmpDir: string

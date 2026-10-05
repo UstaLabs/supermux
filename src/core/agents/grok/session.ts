@@ -11,7 +11,7 @@ import { randomUUID } from "crypto"
 import { STATE_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
-import { grokConfigEntries } from "../../plugins"
+import { grokSkillsDirs } from "../../plugins"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
 export type GrokCommandContext = {
@@ -22,7 +22,7 @@ export type GrokCommandContext = {
 export function commandContext(ctx: CommandContextCtx): GrokCommandContext {
   return {
     commands: (ctx.adapter as { availableCommands?: GrokAcpCommand[] } | undefined)?.availableCommands,
-    skillsDirs: grokConfigEntries({ sessionName: ctx.sessionName }).skillsPaths,
+    skillsDirs: grokSkillsDirs(ctx.sessionName),
   }
 }
 

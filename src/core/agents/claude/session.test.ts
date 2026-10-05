@@ -227,7 +227,8 @@ describe("claude core spawn/resume dialect", () => {
       expect(pa?.role).toBe("personal_assistant")
       expect(pa?.pid).toBe(0)
       expect(pa?.core).toBe(true)
-      const paInstr = readFileSync(join(pa!.agent_home!, "instructions.md"), "utf8")
+      // C3: one instructions value, given to the core as session context.
+      const paInstr = paChild.opens[0]!.sessionContext!.instructions!
       expect(paInstr).toContain("SOUL-MARKER-UNIQUE")
       expect(paInstr).toContain("use the reply tool ONLY for files")
 
@@ -247,7 +248,8 @@ describe("claude core spawn/resume dialect", () => {
         agent: AgentKind.Claude,
       })
       const worker = wReg.resolveName("worker-one")
-      const wInstr = readFileSync(join(worker!.agent_home!, "instructions.md"), "utf8")
+      expect(worker).toBeDefined()
+      const wInstr = wChild.opens[0]!.sessionContext!.instructions!
       expect(wInstr).not.toContain("SOUL-MARKER-UNIQUE")
       expect(wInstr).toContain("use the reply tool ONLY for files")
     } finally {

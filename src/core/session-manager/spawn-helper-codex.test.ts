@@ -89,7 +89,11 @@ describe("Codex spawn", () => {
     expect(child.opens[0]?.resumeId).toBeUndefined()
     expect(child.codexCalls[0]?.options.env?.CODEX_HOME).toBe(row?.agent_home)
     expect(existsSync(join(row!.agent_home!, "config.toml"))).toBe(true)
-    expect(readFileSync(join(row!.agent_home!, "config.toml"), "utf8")).toContain("mux-shim")
+    // C3: mux-shim is a session-context server (per process, app-server -c), not config.toml.
+    expect(readFileSync(join(row!.agent_home!, "config.toml"), "utf8")).not.toContain("mux-shim")
+    const shim = child.opens[0]!.sessionContext!.mcpServers.find((server) => server.name === "mux-shim")!
+    expect(shim.env.MUX_SESSION_ID).toBe(result.session_id)
+    expect(shim.env.MUX_AGENT_KIND).toBe("codex")
   })
 
   test("permissionMode maps onto the first open (no restart)", async () => {

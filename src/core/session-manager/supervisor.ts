@@ -87,8 +87,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function corePaAlive(pa: Session): boolean {
     const adapter = opts.sessionManager?.adapterFor?.(pa.id)
     if (!(adapter instanceof CoreAdapter) || adapter.kind !== "claude") return false
-    const state = adapter.sessionSnapshotState()
-    return state !== undefined && state !== "closed" && state !== "failed"
+    // isAlive: open, or being replaced by a restart / a core-side reload (C3), never a dead PA.
+    return adapter.isAlive()
   }
   // Prefer caller-supplied values (from config store); fall back to the built-in
   // default. The env var MUX_PA_WORKDIR is now read by the caller (main.ts via

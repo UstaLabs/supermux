@@ -3,9 +3,13 @@ import { createHost, type AccountsOptions, type CoreLimits, type Host, type Host
 import { grok, type GrokOptions } from "../../../../packages/supermux-core/src/agents/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareGrokEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
+import { grokContext } from "../../../../packages/supermux-core/src/context/agents.js"
 import { grokInstructions } from "./preamble-writer"
-import { grokConfigEntries } from "../../plugins"
+import { sessionPlugins } from "../../plugins"
 import { muxShimServer } from "../mux-shim-server"
+import { makeLogger } from "../../../shared/log"
+
+const log = makeLogger("agents/grok/core-host")
 import { HOME } from "../../session-manager/spawn-helper"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { grokAccountEnv } from "../account-env"
@@ -89,6 +93,11 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "grok",
+    // Instructions (ACP session/new _meta.rules, nothing written into the repo any more),
+    // plugins (grok agent --plugin-dir) and mux-shim (ACP mcpServers) are session context (C3).
+    // The driver's own mcpServers are [], so no context server name collides.
+    context: grokContext([]).support,
+    contextPolicy: "warn",
     ...(options.accounts ? { accounts: options.accounts } : {}),
     driver: async (registration, ctx) => {
       const settings = driverSettingsFor("grok", extraPermissionMode(registration.extra, "grok"))
@@ -104,15 +113,22 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
       const prepared = await prepareGrokEnvironment({
         home: extra.sessionHome,
         workdir: extra.workdir,
-        mcpServers: [muxShimServer("grok", extra.sessionId, extra.sessionName)],
-        skillsPaths: grokConfigEntries({ sessionName: extra.sessionName }).skillsPaths,
-        instructions: grokInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
+        mcpServers: [],
+        skillsPaths: [],
+        instructions: null,
         credentials: { canonicalAuthPath: join(HOME, ".grok", "auth.json") },
         autoUpdate: false,
         importClaudeConfig: false,
         platform: process.platform,
       })
-      return { env: prepared.env }
+      return {
+        env: prepared.env,
+        context: {
+          instructions: grokInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
+          plugins: sessionPlugins("grok", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
+          mcpServers: [muxShimServer("grok", extra.sessionId, extra.sessionName)],
+        },
+      }
     },
   })
 }

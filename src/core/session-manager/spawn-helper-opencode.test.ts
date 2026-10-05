@@ -84,7 +84,7 @@ describe("OpenCode spawn", () => {
     expect(child.opens[0]?.resumeId).toBeUndefined()
   })
 
-  test("registers mux-shim in session-private opencode.json and writes AGENTS.md in session home", async () => {
+  test("mux-shim and the instructions are session context (C3); the session XDG opencode.json keeps the rest", async () => {
     const child = fakeChildFactory()
     const dir = mkdtempSync(join(tmpdir(), "mux-oc-core-"))
     dirs.push(dir)
@@ -109,11 +109,14 @@ describe("OpenCode spawn", () => {
     const sessionHome = reg.get(result.session_id)!.agent_home!
     expect(child.ocCalls[0]?.options.env?.XDG_CONFIG_HOME).toBe(join(sessionHome, "config"))
 
+    const launched = child.opens[0]!.sessionContext!
+    const shim = launched.mcpServers.find((server) => server.name === "mux-shim")!
+    expect(shim.env.MUX_SESSION_ID).toBe(result.session_id)
+    expect(shim.env.MUX_DISPLAY_NAME).toBe("oc-shim")
+    expect(launched.instructions).toContain("oc-shim")
     const json = readFileSync(join(sessionHome, "config", "opencode", "opencode.json"), "utf8")
-    expect(json).toContain("mux-shim")
-    expect(json).toContain(result.session_id)
-    expect(json).toContain("oc-shim")
-    expect(existsSync(join(sessionHome, "AGENTS.md"))).toBe(true)
+    expect(json).not.toContain("mux-shim")
+    expect(existsSync(join(sessionHome, "AGENTS.md"))).toBe(false)
   })
 
   test("permissionMode ask is stored and applied on first open", async () => {

@@ -2,12 +2,12 @@ import { existsSync, readFileSync } from "fs"
 import { basename, join } from "path"
 import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { claude, type ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
-import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
+import type { AgentDriver, ExternalMcpServer, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareClaudeEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
-import type { McpServerSpec } from "../../../../packages/supermux-core/src/environment/types.js"
-import { claudePersonalAssistantInstructions, claudeWorkerInstructions, writeSessionMemoryPreamble } from "./preamble-writer"
-import { claudeSpawnArgs } from "../../plugins"
-import { environmentMdPath, promptsDir, replyFallbackPath } from "../../runtime-assets"
+import { CLAUDE_CONTEXT } from "../../../../packages/supermux-core/src/context/agents.js"
+import { claudePersonalAssistantInstructions, claudeWorkerInstructions } from "./preamble-writer"
+import { sessionPlugins } from "../../plugins"
+import { promptsDir } from "../../runtime-assets"
 import { SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
@@ -52,24 +52,13 @@ function asEffort(value: unknown): ClaudeOptions["effort"] | undefined {
   return value as ClaudeOptions["effort"]
 }
 
-function pluginDirsFor(sessionName: string): { dirs: string[]; coreReplyHookPresent: boolean } {
-  const { args } = claudeSpawnArgs({ sessionName })
-  const dirs: string[] = []
-  let coreReplyHookPresent = false
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--plugin-dir" && args[i + 1]) {
-      const dir = args[i + 1]!
-      dirs.push(dir)
-      if (basename(dir) === CORE_PLUGIN_NAME && existsSync(join(dir, "hooks", "session-start"))) {
-        coreReplyHookPresent = true
-      }
-      i++
-    }
-  }
+function pluginsFor(sessionName: string): { dirs: string[]; coreReplyHookPresent: boolean } {
+  const dirs = sessionPlugins("claude", sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) })
+  const coreReplyHookPresent = dirs.some((dir) => basename(dir) === CORE_PLUGIN_NAME && existsSync(join(dir, "hooks", "session-start")))
   return { dirs, coreReplyHookPresent }
 }
 
-function parseRpcMcpServers(path: string): McpServerSpec[] {
+function parseRpcMcpServers(path: string): ExternalMcpServer[] {
   const raw = JSON.parse(readFileSync(path, "utf8")) as { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }> }
   const servers = raw.mcpServers ?? {}
   return Object.entries(servers).map(([name, v]) => ({
@@ -120,6 +109,10 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "claude",
+    // Instructions, plugins and the rpc MCP servers are session context, applied by the core
+    // (C3). "warn": a plugin part Claude cannot load never blocks a launch (none today).
+    context: CLAUDE_CONTEXT,
+    contextPolicy: "warn",
     ...(options.accounts ? { accounts: options.accounts } : {}),
     driver: async (registration, ctx) => {
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
@@ -156,36 +149,32 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
     },
     prepare: async (registration) => {
       const extra = asPrepareExtra(registration)
-      const { dirs: pluginDirs, coreReplyHookPresent } = pluginDirsFor(extra.sessionName)
+      const { dirs: plugins, coreReplyHookPresent } = pluginsFor(extra.sessionName)
+      // ONE instructions value (a PA's used to be several appended files, of which Claude kept
+      // only the last). Fixed when the session is created; an existing session keeps its own.
       const instructions = extra.pa
-        ? claudePersonalAssistantInstructions({ sessionName: extra.sessionName, workdir: extra.workdir })
+        ? claudePersonalAssistantInstructions({ sessionName: extra.sessionName, workdir: extra.workdir, replyFallback: !coreReplyHookPresent })
         : claudeWorkerInstructions({ sessionName: extra.sessionName, workdir: extra.workdir })
-      const systemPromptFiles: string[] = extra.pa
-        ? [
-            environmentMdPath(STATE_DIR),
-            writeSessionMemoryPreamble(
-              extra.sessionId,
-              extra.sessionName,
-              "personal_assistant",
-              extra.workdir,
-            ),
-            ...(!coreReplyHookPresent ? [replyFallbackPath(STATE_DIR)] : []),
-          ]
-        : []
+      // mux-shim is NOT a context server for Claude: it comes from the user's ~/.claude.json
+      // (system account, written by session-manager/trust.ts) or from the account's extra
+      // --mcp-config (account-env.ts). Adding it here too would register its tools twice. An rpc
+      // worker's own servers are context servers; --strict-mcp-config (a host arg) keeps the
+      // ~/.claude.json servers out of it, as before.
       const mcpServers = extra.rpcMcpConfig ? parseRpcMcpServers(extra.rpcMcpConfig) : []
       const prepared = await prepareClaudeEnvironment({
         home: extra.sessionHome,
         workdir: extra.workdir,
-        mcpServers,
+        mcpServers: [],
         skillsPaths: [],
-        instructions,
-        pluginDirs,
+        instructions: null,
+        pluginDirs: [],
         addDirs: [promptsDir(STATE_DIR)],
-        systemPromptFiles,
-        strictMcp: extra.rpcMcpConfig ? true : false,
+        systemPromptFiles: [],
+        strictMcp: false,
         nativeMemory: false,
         coreReplyContract: true,
       })
+      const args = extra.rpcMcpConfig ? [...(prepared.args ?? []), "--strict-mcp-config"] : (prepared.args ?? [])
       // Claude keeps the user's global ~/.claude.json, whose `mux-shim` MCP entry
       // reads the session identity from the PROCESS env (the tmux-era spawn set
       // it the same way); without these the shim registers as a random id on
@@ -197,7 +186,11 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         MUX_SOCKETS_DIR: SOCKETS_DIR,
         MUX_SESSION_ROLE: extra.pa ? "personal_assistant" : "worker",
       }
-      return { env: { ...prepared.env, ...identity }, args: prepared.args }
+      return {
+        env: { ...prepared.env, ...identity },
+        args,
+        context: { instructions, plugins, ...(mcpServers.length ? { mcpServers } : {}) },
+      }
     },
   })
 }

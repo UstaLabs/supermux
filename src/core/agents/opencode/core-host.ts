@@ -3,9 +3,13 @@ import { createHost, type AccountsOptions, type CoreLimits, type Host, type Host
 import { opencode, type OpenCodeOptions } from "../../../../packages/supermux-core/src/agents/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareOpenCodeEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
+import { opencodeContext } from "../../../../packages/supermux-core/src/context/agents.js"
 import { openCodeInstructions } from "./preamble-writer"
-import { opencodeConfigEntries } from "../../plugins"
+import { sessionPlugins } from "../../plugins"
 import { muxShimServer } from "../mux-shim-server"
+import { makeLogger } from "../../../shared/log"
+
+const log = makeLogger("agents/opencode/core-host")
 import { readGlobalProviderConfig } from "./provider-config"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 
@@ -93,6 +97,11 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "opencode",
+    // Instructions and plugins go into a session OPENCODE_CONFIG, mux-shim into ACP mcpServers,
+    // applied by the core (C3). "warn": plugin parts OpenCode cannot map (hooks, commands,
+    // agents) are dropped with context.degraded instead of refusing the launch.
+    context: opencodeContext([]).support,
+    contextPolicy: "warn",
     ...(options.accounts ? { accounts: options.accounts } : {}),
     driver: (registration, ctx) => {
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
@@ -105,22 +114,28 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
     prepare: async (registration) => {
       const extra = asPrepareExtra(registration)
       const configHome = joinConfigHome(extra.sessionHome)
-      const { pluginPaths, skillsPaths } = opencodeConfigEntries({ sessionName: extra.sessionName })
       const prepared = await prepareOpenCodeEnvironment({
         home: extra.sessionHome,
         workdir: extra.workdir,
-        mcpServers: [muxShimServer("opencode", extra.sessionId, extra.sessionName)],
-        skillsPaths,
-        pluginPaths,
+        mcpServers: [],
+        skillsPaths: [],
+        pluginPaths: [],
         permissions: (() => {
           const settings = driverSettingsFor("opencode", extra.permissionMode ?? extraPermissionMode(registration.extra, "opencode"))
           return settings.environmentPermissions ?? { edit: "ask", bash: "ask", webfetch: "ask" }
         })(),
         provider: readGlobalProviderConfig() ?? null,
-        instructions: openCodeInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
+        instructions: null,
         configHome,
       })
-      return { env: prepared.env }
+      return {
+        env: prepared.env,
+        context: {
+          instructions: openCodeInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
+          plugins: sessionPlugins("opencode", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
+          mcpServers: [muxShimServer("opencode", extra.sessionId, extra.sessionName)],
+        },
+      }
     },
   })
 }

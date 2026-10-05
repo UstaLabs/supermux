@@ -204,7 +204,11 @@ describe("opencode core spawn/resume dialect", () => {
     const sessionHome = reg.get(result.session_id)!.agent_home!
     expect(child.ocCalls[0]?.options.env?.XDG_CONFIG_HOME).toBe(join(sessionHome, "config"))
     const json = readFileSync(join(sessionHome, "config", "opencode", "opencode.json"), "utf8")
-    expect(json).toContain("mux-shim")
-    expect(existsSync(join(sessionHome, "AGENTS.md"))).toBe(true)
+    expect(json).not.toContain("mux-shim")
+    expect(existsSync(join(sessionHome, "AGENTS.md"))).toBe(false)
+    // C3: mux-shim and the instructions are session context, not files.
+    const launched = child.opens[0]!.sessionContext!
+    expect(launched.mcpServers.map((server) => server.name)).toEqual(["mux-shim"])
+    expect(launched.instructions).toBeTruthy()
   })
 })

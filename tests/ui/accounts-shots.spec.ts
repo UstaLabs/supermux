@@ -115,7 +115,7 @@ function fullAccounts(): Record<string, unknown>[] {
       isolated: true, system: false, createdAt: "2026-10-02T10:00:00.000Z",
       usage: [{ name: "five_hour", usedPercent: 94, resetsAt: inHours(0.3) }],
     },
-    codex,
+    codex!,
     {
       id: "codex-key", agent: "codex", method: "api_key", label: "OpenAI key", customLabel: "OpenAI key",
       isolated: false, system: false, createdAt: "2026-10-03T10:00:00.000Z", usage: [],

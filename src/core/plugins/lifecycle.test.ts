@@ -73,12 +73,10 @@ test("addPlugin copies a local source into the tree and appends to the registry"
     mkdirSync(join(src, ".claude-plugin"), { recursive: true })
     writeFileSync(join(src, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "my-plugin" }))
 
-    let prepared = 0
-    const summary = await addPlugin(src, {}, { file, pluginsDir, prepareCodex: async () => { prepared++ } })
+    const summary = await addPlugin(src, {}, { file, pluginsDir })
 
     expect(summary.name).toBe("my-plugin")
     expect(summary.compatibility.claude).toBe(true)
-    expect(prepared).toBe(1)
     const reg = loadPluginsRegistry({ file, pluginsDir })
     expect(reg.plugins.map((p) => p.name)).toEqual(["my-plugin"])
     expect(reg.plugins[0]!.source).toEqual({ type: "local", path: src })
@@ -87,7 +85,7 @@ test("addPlugin copies a local source into the tree and appends to the registry"
   }
 })
 
-test("removePlugin drops the entry, runs codex uninstall, and can purge the tree", async () => {
+test("removePlugin drops the entry and can purge the tree; no codex command runs", async () => {
   const root = mkdtempSync(join(tmpdir(), "lifecycle-rm-"))
   try {
     const pluginsDir = join(root, "plugins")
@@ -100,12 +98,11 @@ test("removePlugin drops the entry, runs codex uninstall, and can purge the tree
     await removePlugin("sp", { purge: true }, {
       file, pluginsDir,
       exec: (cmd, args) => execCalls.push([cmd, ...args]),
-      prepareCodex: async () => {},
     })
 
     expect(loadPluginsRegistry({ file, pluginsDir }).plugins).toEqual([])
     expect(existsSync(dest)).toBe(false)
-    expect(execCalls).toEqual([["codex", "plugin", "remove", "sp@mux"]])
+    expect(execCalls).toEqual([])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -116,7 +113,7 @@ test("setPluginEnabled persists the toggle", async () => {
   try {
     const file = join(root, "plugins.json")
     writeFileSync(file, JSON.stringify({ version: 1, plugins: [{ name: "sp", source: { type: "git", url: "u" }, enabled: true, scopes: ["claude", "codex"] }] }))
-    await setPluginEnabled("sp", { enabled: false }, { file, pluginsDir: root, prepareCodex: async () => {} })
+    await setPluginEnabled("sp", { enabled: false }, { file, pluginsDir: root })
     expect(loadPluginsRegistry({ file, pluginsDir: root }).plugins[0]!.enabled).toBe(false)
   } finally {
     rmSync(root, { recursive: true, force: true })

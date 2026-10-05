@@ -25,6 +25,8 @@ import type {
 } from "../../../../packages/supermux-core/src/index.js"
 
 const DEFAULT_STALL_MS = 90_000
+/** How long input waits for a core-side reopen (reload / account switch) before it is tried anyway. */
+const REOPEN_WAIT_MS = 5 * 60_000
 const log = makeLogger("agents/core-adapter")
 
 export type CoreAdapterProfile = {
@@ -249,16 +251,40 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     try { await this.restarting } finally { this.restarting = undefined }
   }
 
-  /** True while the Core session is open or a config restart is in flight: the
-   *  native process changing under a restart is not the agent dying. */
+  /** True while the Core session is open, a config restart is in flight, or the core is
+   *  replacing the session's process itself (a context / host-tool reload, an account switch):
+   *  the native process changing under a restart is not the agent dying. */
   isAlive(): boolean {
-    if (this.restarting) return true
-    const state = this.session?.snapshot().state
+    if (this.restarting || this.core.sessions.reopening(this.id)) return true
+    const state = this.current()?.snapshot().state
     return state !== undefined && state !== "closed" && state !== "failed"
   }
 
   sessionSnapshotState(): SessionState | undefined {
-    return this.session?.snapshot().state
+    return this.current()?.snapshot().state
+  }
+
+  /**
+   * The Session this adapter drives. When the core replaced it on its own (a context or host-tool
+   * reload, an account switch: the old Session is closed and core.sessions.live(id) is the new
+   * one), switch to the new one. The adapter's own start / restart / stop own `session` meanwhile.
+   */
+  private current(): Session | undefined {
+    const session = this.session
+    if (!session || this.stopped || this.restarting || this.starting) return session
+    const state = session.snapshot().state
+    if (state !== "closed" && state !== "failed" && state !== "closing") return session
+    const live = this.core.sessions.live(this.id)
+    if (live && live !== session) this.session = live
+    return this.session
+  }
+
+  /** Waits while the core is replacing the session's process (bounded), then follows it. */
+  private async settleReopen(): Promise<void> {
+    for (let waited = 0; this.core.sessions.reopening(this.id) && waited < REOPEN_WAIT_MS; waited += 25) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    this.current()
   }
 
   turnIsRunning(): boolean {
@@ -266,7 +292,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   }
 
   openRequests(): BrokerRequest[] {
-    const session = this.session
+    const session = this.current()
     if (!session) return []
     return session.requests.list().map((pending) => this.bridge.decorateRequest(mapPendingRequest(pending)))
   }
@@ -550,6 +576,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     await previous.catch(() => {})
     this.failureEmitted = false
     try {
+      await this.settleReopen()
       this.assertLive(epoch)
       const content = await this.buildContent(text, meta, epoch)
       this.assertLive(epoch)
@@ -613,7 +640,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.inputEpoch++
     this.failureEmitted = false
     const generation = this.startEpoch
-    const session = this.session
+    const session = this.current()
     if (!session) return
     this.disarmStall()
     const result: InterruptResult = await session.interrupt({ pending: "discard" })
@@ -763,15 +790,23 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   }
 
   private requireSession(): Session {
-    if (!this.session) throw new Error(`${this.kind} session not initialized`)
-    return this.session
+    const session = this.current()
+    if (!session) throw new Error(`${this.kind} session not initialized`)
+    return session
   }
 
   private onCoreEvent(event: CoreEvent, epoch: number): void {
     if (event.sessionId !== this.id) return
     if (this.abandoned(epoch)) return
     if (event.type === "session.stateChanged") {
+      // The old Session closing under a core-side reopen is not the turn or the agent ending.
+      if (event.state === "closed" && this.core.sessions.reopening(this.id)) return
       this.applyCoreState(event.state)
+      return
+    }
+    if (event.type === "session.resumed") {
+      // A core-side reopen (context / host-tool reload) opened the replacement Session.
+      if (!this.restarting && !this.starting) this.current()
       return
     }
     if (event.type === "session.update") {

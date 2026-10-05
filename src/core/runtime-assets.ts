@@ -54,7 +54,6 @@ const PTY_HELPER_SOURCE_PATH = resolvePath(import.meta.dirname, "terminal", "pty
 const REPO_PROMPTS_DIR = resolvePath(import.meta.dirname, "..", "..", "prompts")
 const CURATOR_PROMPT_SOURCE_PATH = resolvePath(REPO_PROMPTS_DIR, "knowledge-curator.md")
 const ENVIRONMENT_MD_SOURCE_PATH = resolvePath(REPO_PROMPTS_DIR, "environment.md")
-const REPLY_FALLBACK_SOURCE_PATH = resolvePath(REPO_PROMPTS_DIR, "reply-fallback.md")
 
 // pty-helper: a committed native ELF that the terminal manager EXEC's. The
 // child can't read $bunfs, so it must be a real on-disk file.
@@ -132,20 +131,18 @@ export function environmentMdContent(): string {
   return readFileSync(environmentMdEmbedded, "utf8")
 }
 
-// reply-fallback.md: spawn-command.ts passes this path to spawned claude via
-// `--append-system-prompt-file` when the mux-core plugin is absent.
-export function replyFallbackPath(stateDir: string): string {
-  if (!IS_COMPILED) return REPLY_FALLBACK_SOURCE_PATH
-  return materializeAsset({ stateDir, name: "reply-fallback.md", sourcePath: replyFallbackEmbedded })
+// reply-fallback.md: a Claude PA without the mux-core plugin's SessionStart hook gets this text
+// at the end of its (single) instructions value (C3; it used to be its own appended prompt file).
+// In-process CONTENT read (same single-importer rule as environment.md).
+export function replyFallbackContent(): string {
+  return readFileSync(replyFallbackEmbedded, "utf8")
 }
 
-// promptsDir: spawn-command.ts grants spawned claude read access to the prompts
+// promptsDir: the Claude core-host grants spawned claude read access to the prompts
 // directory via `--add-dir`. In source mode that's the repo prompts/. When
 // compiled there is no repo dir on disk, so we materialize environment.md and
-// return its containing version-keyed dir. reply-fallback.md is materialized
-// separately and conditionally by replyFallbackPath (only when the mux-core
-// plugin is absent). The spawned command references each prompt file by its
-// absolute path, so the dir listing is informational, not load-bearing.
+// return its containing version-keyed dir. The prompt texts themselves reach the
+// agent inside its instructions, so the dir listing is informational.
 export function promptsDir(stateDir: string): string {
   if (!IS_COMPILED) return REPO_PROMPTS_DIR
   // Ensure the prompt files exist on disk, then return their containing dir.

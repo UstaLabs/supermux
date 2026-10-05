@@ -12,6 +12,8 @@ import { join } from "node:path"
 const name = process.argv[2] ?? "before"
 const root = mkdtempSync(join(tmpdir(), "c3-launch-"))
 process.env.HOME = join(root, "home")
+delete process.env.XDG_CONFIG_HOME
+delete process.env.XDG_DATA_HOME
 process.env.MUX_HOME = join(root, "mux")
 process.env.MUX_STATE_DIR = join(root, "mux", "state")
 const { scratchLayout, effectiveLaunch, AGENTS } = await import("../tests/c3-launch/effective-launch")

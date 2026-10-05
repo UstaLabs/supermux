@@ -5,8 +5,7 @@ import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConf
 import type { CodexRpc } from "../../slash-commands/types"
 import { CoreAdapter, CODEX_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getCodexCoreHost } from "./core-host-provider"
-import { attachCodexRuntimeAdapter, type CodexCoreHost, type CodexPrepareExtra } from "./core-host"
-import { codexSpawnArgs } from "../../plugins"
+import { attachCodexRuntimeAdapter, BROKER_CODEX_ARGS, type CodexCoreHost, type CodexPrepareExtra } from "./core-host"
 import { resolveCommand } from "../../process/launcher"
 import { join } from "path"
 import { randomUUID } from "crypto"
@@ -41,13 +40,10 @@ function isSessionBusy(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "session_busy"
 }
 
-export function brokerCodexArgs(sessionName: string): string[] {
-  return [
-    "app-server",
-    "-c", 'approval_policy="never"',
-    "-c", 'sandbox_mode="danger-full-access"',
-    ...codexSpawnArgs({ sessionName }).args,
-  ]
+/** The app-server args a broker Codex session registers (C3: the policy and the plugins are no
+ *  longer here: the core adds the session's policy per process, plugins ride the context). */
+export function brokerCodexArgs(_sessionName: string): string[] {
+  return [...BROKER_CODEX_ARGS]
 }
 
 function resolveCodexCommand(env: Record<string, string>): string {

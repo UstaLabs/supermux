@@ -3,9 +3,29 @@ import { createHost, type AccountsOptions, type CoreLimits, type Host, type Host
 import { cursor, type CursorOptions } from "../../../../packages/supermux-core/src/agents/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareCursorEnvironment, sharedCursorDir } from "../../../../packages/supermux-core/src/environment/index.js"
+import { cursorContext } from "../../../../packages/supermux-core/src/context/agents.js"
 import { cursorInstructions } from "./preamble-writer"
-import { cursorSpawnArgs } from "../../plugins"
+import { sessionPlugins } from "../../plugins"
 import { muxShimServer } from "../mux-shim-server"
+import { makeLogger } from "../../../shared/log"
+
+const log = makeLogger("agents/cursor/core-host")
+
+/**
+ * CURSOR REPO-RULE FALLBACK (C3). The core has no per-session instructions channel for Cursor:
+ * the C0 probe could not prove any (the account was out of quota; core reports
+ * `instructions: unsupported`, see docs/core-design/session-context.md "Per-session channels" and
+ * open question 1). Dropping the instructions would silently lose the session's identity,
+ * memory and reply rules, so Cursor alone keeps today's mechanism: the broker writes
+ * `<workdir>/.cursor/rules/mux.mdc` (git-excluded) on every launch, regenerated each time like
+ * before C3, i.e. NOT fixed at creation. Everything else (plugins, mux-shim) is session context.
+ *
+ * TODO(C0 cursor cells): re-run `bun scripts/context-probe.ts cursor` (packages/supermux-core)
+ * once the account has quota. If a per-session channel is proven (plugin rules/, $HOME rules,
+ * $HOME/AGENTS.md, --add-dir), implement it in core `cursorContext`, pass the instructions as
+ * context here and delete this fallback (the core rule: never write into the workdir).
+ */
+const CURSOR_REPO_RULE_FALLBACK = true
 import { smokeCursorAgent } from "./smoke"
 import { HOME } from "../../session-manager/spawn-helper"
 import { STATE_DIR } from "../../../shared/paths"
@@ -47,7 +67,6 @@ export type CursorPrepareExtra = {
 function cursorOpts(
   stateDirectory: string,
   env: Record<string, string>,
-  pluginArgs: string[],
   model: string | undefined,
   permissionMode: string,
 ): CursorOptions {
@@ -56,7 +75,7 @@ function cursorOpts(
   return {
     id: "cursor",
     command: "cursor-agent",
-    commandArgs: pluginArgs,
+    commandArgs: [],
     env,
     inheritEnv: true,
     mcpServers: [],
@@ -121,14 +140,17 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "cursor",
+    // Plugins (--plugin-dir) and mux-shim (ACP mcpServers) are session context (C3; both
+    // "unverified" in core for Cursor). Instructions are not: see CURSOR_REPO_RULE_FALLBACK.
+    context: cursorContext([]).support,
+    contextPolicy: "warn",
     ...(options.accounts ? { accounts: options.accounts } : {}),
     driver: (registration, ctx) => {
       const extra = asPrepareExtra(registration)
       // Every open (also a Core-internal account switch): no credential copy on an account.
       syncCursorSessionCredential({ sessionHome: extra.sessionHome, userConfigDir: userConfigDir(), account: ctx.account, systemApiKey: process.env.CURSOR_API_KEY })
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
-      const pluginArgs = cursorSpawnArgs({ sessionName: extra.sessionName }).args
-      const opts = cursorOpts(stateDirectory, registration.env, pluginArgs, extraModel ?? ctx.configuration?.model, extra.permissionMode ?? extraPermissionMode(registration.extra, "cursor"))
+      const opts = cursorOpts(stateDirectory, registration.env, extraModel ?? ctx.configuration?.model, extra.permissionMode ?? extraPermissionMode(registration.extra, "cursor"))
       const overrides: SessionConfiguration = ctx.configuration ? { ...ctx.configuration } : {}
       return factory ? factory(opts, overrides) : cursor(opts)
     },
@@ -137,9 +159,9 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
       const prepared = await prepareCursorEnvironment({
         home: extra.sessionHome,
         workdir: extra.workdir,
-        mcpServers: [muxShimServer("cursor", extra.sessionId, extra.sessionName)],
+        mcpServers: [],
         skillsPaths: [],
-        instructions: cursorInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
+        instructions: CURSOR_REPO_RULE_FALLBACK ? cursorInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }) : null,
         // On an account the adapter injects the credential; the session gets no auth.json copy.
         credentials: {
           apiKey: isSystemAccount(registration.account) ? process.env.CURSOR_API_KEY ?? null : null,
@@ -154,7 +176,13 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
       })
       // Smoke is content: fail early on a broken install, after the environment is written.
       await smoke({ home: extra.sessionHome, authEnv: prepared.env })
-      return { env: prepared.env }
+      return {
+        env: prepared.env,
+        context: {
+          plugins: sessionPlugins("cursor", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
+          mcpServers: [muxShimServer("cursor", extra.sessionId, extra.sessionName)],
+        },
+      }
     },
   })
 }

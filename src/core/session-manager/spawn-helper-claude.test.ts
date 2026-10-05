@@ -82,9 +82,11 @@ describe("Claude core spawn", () => {
     expect(row?.core).toBe(true)
     expect(persisted).toContain("claude-sess-1")
     expect(child.opens[0]?.resumeId).toBeUndefined()
-    expect(existsSync(join(row!.agent_home!, "instructions.md"))).toBe(true)
     expect(child.claudeCalls[0]?.options.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1")
-    expect(child.claudeCalls[0]?.options.args?.some((a) => a === "--append-system-prompt-file")).toBe(true)
+    // C3: the instructions are session context (the core writes them into its session folder
+    // and adds --append-system-prompt-file itself), not a host arg / a session-home file.
+    expect(child.opens[0]?.sessionContext?.instructions).toContain(result.name)
+    expect(child.claudeCalls[0]?.options.args?.some((a) => a === "--append-system-prompt-file")).toBe(false)
   })
 
   test("permissionMode ask maps onto the first open (no restart)", async () => {
@@ -147,7 +149,8 @@ describe("Claude core spawn", () => {
 
     const args = child.claudeCalls[0]?.options.args ?? []
     expect(args).toContain("--strict-mcp-config")
-    expect(args).toContain("--mcp-config")
+    // The rpc servers are session-context servers (the core adds --mcp-config <ctx>/mcp.json).
+    expect(child.opens[0]?.sessionContext?.mcpServers).toEqual([{ name: "mux-rpc", command: "bun", args: ["run", "shim.ts"], env: { MUX_RPC_ONLY: "1" } }])
     expect(child.claudeCalls[0]?.options.env?.MUX_CORE).toBe("1")
   })
 })

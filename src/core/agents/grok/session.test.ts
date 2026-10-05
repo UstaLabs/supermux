@@ -215,8 +215,12 @@ describe("grok core spawn/resume dialect", () => {
     expect(child.grokCalls[0]?.options.command).toBe("grok")
     expect(child.grokCalls[0]?.options.noLeader).toBe(false)
     const toml = readFileSync(join(sessionHome, ".grok", "config.toml"), "utf8")
-    expect(toml).toContain("[mcp_servers.mux-shim]")
-    expect(existsSync(join(workdir, "AGENTS.md"))).toBe(true)
+    expect(toml).not.toContain("mux-shim")
+    expect(existsSync(join(workdir, "AGENTS.md"))).toBe(false)
+    // C3: mux-shim and the instructions are session context, not files.
+    const launched = child.opens[0]!.sessionContext!
+    expect(launched.mcpServers.map((server) => server.name)).toEqual(["mux-shim"])
+    expect(launched.instructions).toBeTruthy()
   })
 
   test("CoreAdapter setConfiguration session_busy is typed busy, native errors are not", async () => {
