@@ -70,9 +70,9 @@ word; a Codex resume with changed instructions was `context_unsupported`; policy
 - **Instructions fixed at creation** (Codex, Grok) were compared with the record's
   `createdInstructions` in C1; since C1b every agent's later launches use that snapshot directly
   (see "Instructions are fixed at creation").
-- `createHost` drivers declare no context support yet (C3). Cursor: instructions unsupported,
-  the rest unverified (no quota).
-- **`CODEX_HOME` sharing (open, not fixed in C1):** under a Codex subscription account (A1)
+- ~~`createHost` drivers declare no context support yet~~: C3 (`HostOptions.context`). Cursor:
+  instructions unsupported, the rest unverified (no quota).
+- ~~**`CODEX_HOME` sharing**~~ (fixed in C3: the policy is per process, see "C3a as built"): under a Codex subscription account (A1)
   `CODEX_HOME` is the account home, shared by every session of that account. Two Codex driver writes
   assume it is session-private: `persistPolicyToConfig()` (`config/batchWrite` of `sandbox_mode` /
   `approval_policy`, so sessions of one account overwrite each other's child-thread policy) and the
@@ -402,6 +402,146 @@ Open (for C3 / mux-shim):
 - `core.mcp.unregister` closes live connections; a session keeps the reference and its next launch is
   `missing_mcp_servers`.
 
+## C3a as built (2026-10-05)
+
+The broker's five core-hosts (`src/core/agents/<agent>/core-host.ts`) now hand the core a
+`SessionContext` from `prepare` and declare their driver's context support
+(`createHost({ context, contextPolicy: "warn" })`). `prepare*Environment` keeps only what is not
+context: credentials and accounts, HOME isolation, identity env (`MUX_SESSION_ID`…), `--add-dir`,
+`nativeMemory`, permissions, Codex `[features]`, OpenCode provider / permission.
+
+**Core changes.** `createHost`: `HostOptions.context` / `contextPolicy`; `HostRegistration.context`
+(or `prepare`'s returned `context`); on an existing record the context's skills / plugins / MCP
+servers replace the session's own and its instructions go in as `ResumeOptions.adoptInstructions`
+(taken once by a record without `createdInstructions` and without own context, then fixed). The
+ready handle follows `session.resumed`. `core.sessions.reopening(id)`. Codex policy per process
+(below). Tests: `tests/host-context.test.ts`.
+
+**Launch equivalence** (`tests/c3-launch-equivalence.test.ts` against `tests/c3-launch/before.json`,
+recorded on the pre-C3 code by `scripts/c3-launch-capture.ts`; every agent, worker and PA, through
+the real core-host and the core's own channel mapping). Identical everywhere: the instruction text
+(except the Claude PA, below), every MCP server with its exact command / args / env, other args,
+env (except OpenCode's `OPENCODE_CONFIG`), credential files. The intended differences:
+
+| Agent | Instructions | Plugins | mux-shim / rpc MCP |
+|---|---|---|---|
+| Claude | same text; file in the core's session folder instead of the session home. PA: ONE value (below) | same plugins, via `--plugin-dir <ctx>/plugins` (symlinks) instead of one flag each | mux-shim unchanged (`~/.claude.json` / account `--mcp-config`); rpc servers → context (`--mcp-config <ctx>/mcp.json`), `--strict-mcp-config` kept as a host arg |
+| Codex | `thread/start developerInstructions` instead of `<CODEX_HOME>/AGENTS.md` (pre-C3 sessions keep the file, below) | core mapping: `skills/` → `skills/extraRoots/set` (hooks / commands / agents dropped with `context.degraded`) instead of the `mux` marketplace + `codex plugin add` + `-c plugins."x@mux".enabled` | `app-server -c mcp_servers.mux-shim.*` + `default_tools_approval_mode="approve"` instead of `config.toml` |
+| Cursor | unchanged: `CURSOR_REPO_RULE_FALLBACK` (below) | unchanged plugin set, `--plugin-dir` per (symlinked) plugin | ACP `mcpServers` instead of `$HOME/.cursor/mcp.json` (unverified in core) |
+| Grok | ACP `session/new _meta.rules` instead of `AGENTS.md` / `AGENTS.override.md` written into the repo (+ `.git/info/exclude`) | whole plugin via `grok agent --plugin-dir` instead of its `skills/` in `[skills] paths`; a plugin `SessionStart` hook did NOT run (live) | ACP `mcpServers` instead of `config.toml` |
+| OpenCode | session `OPENCODE_CONFIG` instead of the session XDG `opencode.json` + `<home>/AGENTS.md` | JS plugins as `file://…/.opencode/plugins/*.js` entries and every plugin's `skills/` in `skills.paths` (was: root dirs in `plugin`, `skills.paths` only for plugins without JS) | ACP `mcpServers` instead of the XDG `opencode.json` `mcp` |
+
+Codex also loses the broker's static `-c approval_policy="never" -c sandbox_mode="danger-full-access"`:
+the core passes the session's own policy (same values in the default mode; in another mode child
+threads now get that mode instead of always full access).
+
+**The PA prompt-file finding.** A Claude PA was launched with four `--append-system-prompt-file`
+flags (instructions.md with header + reply rule + soul + environment.md + memory; environment.md
+again; the per-session memory preamble; reply-fallback.md without the mux-core hook). Claude keeps
+only the LAST one: `scripts/c3-pa-prompt-probe.ts` on the pre-C3 code (claude 2.1.289, haiku) with
+a token in soul.md (instructions file) and one in focus.md (memory preamble) answered
+`TOKENS=PA-TOKEN-FOCUS-4410; MEMORY=yes`: the soul, the header, the reply rule and environment.md
+never reached a PA. Now one value: header, reply rule, soul, environment.md (once), the per-session
+memory preamble (name, workdir soul / focus), then the reply fallback. Already-running PAs keep
+their stored prompt (Claude ignores a new one on `--resume`); only new PAs get the full text.
+
+**Existing sessions.** Instructions are fixed from their first C3 launch (`adoptInstructions`):
+the text the broker generates then. Before C3 the broker regenerated them on every launch for
+Codex (`AGENTS.md`), OpenCode (config), Grok and Cursor (repo files); that stops (deliberate),
+except Cursor (fallback). Per agent:
+- Claude: unchanged in effect (Claude already kept its stored prompt).
+- Codex: Codex re-reads `<CODEX_HOME>/AGENTS.md` on `thread/resume`
+  (`packages/supermux-core/scripts/codex-agents-md-probe.ts`: rewritten → the resumed thread saw
+  the new token; removed → none) and the core sends `developerInstructions` only at
+  `thread/start`. So a pre-C3 session keeps the file, written with its creation snapshot on every
+  launch (marker `<home>/.supermux-agents-md-session` = its session id: homes are keyed by name);
+  a C3 session's home never has one (a stale file in a reused home is removed).
+- OpenCode: the snapshot goes into the session `OPENCODE_CONFIG` every launch.
+- Grok: `_meta.rules` only applies at `session/new`, so a pre-C3 session gets no rules; it still
+  reads the `AGENTS.md` / `AGENTS.override.md` the old broker left in its repo (left in place:
+  removing a file from the user's repo was out of scope). Open: a NEW Grok session in such a repo
+  sees that stale file AND its rules.
+
+**Cursor decision.** Core has no proven per-session instructions channel for Cursor (C0 out of
+quota: `cursorContext` reports instructions `unsupported`). Dropping them would silently lose the
+session's identity, memory and rules. So `CURSOR_REPO_RULE_FALLBACK` in
+`src/core/agents/cursor/core-host.ts` keeps exactly today's repo rule
+(`<workdir>/.cursor/rules/mux.mdc`, git-excluded, regenerated every launch), with a TODO pointing
+at the C0 cells: re-run `bun scripts/context-probe.ts cursor`, implement the proven channel in
+core, delete the fallback. Plugins and mux-shim are context (both "unverified" for Cursor).
+
+**Claude, `~/.claude.json` and `--mcp-config`.** mux-shim is NOT a context server for Claude.
+System-account sessions get `mux-shim` (tools) and `mux-channel` (channel-only, zero tools) from
+the user's `~/.claude.json` (`session-manager/trust.ts`); a subscription account gets mux-shim
+from `<home>/mcp-account.json` (`account-env.ts`). The context's `--mcp-config <ctx>/mcp.json` adds
+to those (no `--strict-mcp-config` from the core), so putting mux-shim in the context too would
+start a second copy and every tool call would run twice (the reason MUX_CHANNEL_ONLY exists).
+rpc workers keep `--strict-mcp-config` as a host arg and get their servers from the context only.
+No core-host passes `--dangerously-load-development-channels`. (C3b: see `c3b-mux-shim-plan.md`.)
+
+**Codex policy fix.** `persistPolicyToConfig()` (`config/batchWrite` of `sandbox_mode` /
+`approval_policy` into `CODEX_HOME`) is gone; the driver appends `app-server -c sandbox_mode=…
+-c approval_policy=…`. Probe on 0.159.2 (`scripts/codex-policy-probe.ts`): a child of a parent
+launched `-c sandbox_mode="read-only"` stays read-only even with a danger-full-access parent
+thread/turn; `-c danger-full-access` lets it write outside the workspace: children read the process
+config. Live through `core.sessions.create` (`scripts/codex-policy-live.ts`, gpt-5.6-luna low):
+`CODEX_HOME/config.toml` pre-seeded with `sandbox_mode = "read-only"` (what another session's old
+driver would leave in a shared account home); the danger-full-access session's spawn_agent child
+ran `echo child-wrote > <outside>/child.txt` (file written, `childWriteLanded: true`) and
+`config.toml` stayed byte-for-byte unchanged. A live `setPermissions` reaches the parent from its
+next turn; children spawned by that process keep the launch policy until the next launch.
+
+**Reloads in the broker.** `CoreAdapter` follows a core-side reopen (`core.sessions.reopening` /
+`live`): `isAlive()` stays true, the old Session's `closed` is not a turn end, input sent meanwhile
+waits for the new Session, state and requests come from it
+(`core-adapter-reload.test.ts`). The supervisor's PA liveness uses `isAlive()`.
+
+**Plugin settings.** The only plugin editor is the `bun run plugin` CLI (`scripts/plugin.ts` →
+`plugins/lifecycle.ts`): registry-wide add / update / remove / enable / scopes. There is no
+per-running-session toggle and no UI, so nothing is routed through `updateContext`; a registry
+change applies at each session's next launch (also true before C3 for every agent but Codex,
+whose marketplace install ran at once).
+
+**Deleted.** `src/core/plugins/adapters/*` (claude, cursor, codex, grok, opencode,
+plugin-dir-adapter + tests): their selection rule (enabled, scoped, per-session override, the
+CLI's manifest / loadable parts) lives on as `isPluginCompatible` + `sessionPlugins` in
+`plugins/index.ts`; how each agent loads a plugin is the core's. The Codex marketplace path:
+`codexPrepareGlobal` (boot: `~/.agents/plugins/marketplace.json` + `codex plugin add` into
+`~/.codex`), `codexPrepareSessionHome` (`codex plugin add` into every session `CODEX_HOME`),
+lifecycle's `codex plugin remove` / re-prepare. `session-manager/spawn-command.ts` (+ test): the
+tmux-era command builders, used by nothing but their test. `writeSessionMemoryPreamble` and the
+`memory-preambles/` files. Left on disk, untouched: `~/.agents/plugins/marketplace.json` and the
+`mux` plugins installed in `~/.codex` and in session homes.
+
+**Open risks for the live rollout.**
+- The live broker (`~/projects/supermux`, `dev`) predates supermux-core: rolling this branch out is
+  the whole core cutover, not just C3. A preview broker writes core records (`context`,
+  `createdInstructions`, keeper fingerprints) into the shared live state; the auto-revert broker
+  does not read them.
+- Keeper fingerprints: a detached agent whose recorded fingerprint differs from the C3 launch's
+  (e.g. one launched by C1b-era code with fingerprint `"none"`) is relaunched on its next resume,
+  cutting a running detached turn. Keepers without a recorded fingerprint re-attach as before.
+- Grok: new sessions in a repo where the old broker wrote `AGENTS.md` / `AGENTS.override.md` see
+  that stale file next to their `_meta.rules`. Codex/OpenCode: plugin skills are now plain skill
+  roots (Codex extraRoots) instead of installed `mux@mux` plugins: skill names / slash-command
+  lists may change (Codex had `mux:soul`-style plugin namespacing).
+- Cursor: mux-shim and plugins ride channels the core marks "unverified" (ACP `mcpServers`,
+  `--plugin-dir` via symlinks); not run live (no quota). If ACP `mcpServers` fails on Cursor, its
+  sessions lose the mux-shim tools.
+- Codex: a session in a non-default permission mode now gives its children that mode, not full
+  access (fix, but visible); a live mode change reaches children only after a relaunch.
+- A Claude PA created after C3 gets a much longer system prompt (soul, environment.md and the
+  memory preamble together, which it never actually had before).
+
+**Live** (`bun scripts/c3-live.ts`, broker core-hosts, scratch HOME / MUX_HOME / state under
+`~/.cache/context-c3/`, token accounts for Claude / Codex, scratch credential copies for Grok /
+OpenCode, a fake broker socket speaking the shim protocol): 32/32. Runs `live-2026-10-05T13-10-02-293Z`
+(claude 8/8: haiku) and `live-2026-10-05T13-10-19-882Z` (codex gpt-5.6-luna low, grok low,
+opencode qwen3.7-plus: 24/24). Per agent: the instruction (session name from the generated
+header), a registry plugin's skill word, and mux-shim started by the agent with the broker's
+command / env, registered with the fake broker and its `list_sessions` called (Claude: two shim
+processes, mux-shim + mux-channel, one call). Nothing written into any workdir.
+
 ## Slices
 
 - **C0, live probe (no API yet), done (`43bd1ccc`; Cursor pending quota):** a script that tries each "(C0)" cell above per agent with
@@ -421,8 +561,10 @@ Open (for C3 / mux-shim):
   add/remove, cancellation, events, and keeper reconnect. Live check: each agent gets two host
   servers plus one external one, calls a tool on each and repeats the secret results; a tool
   is added mid-session; then a restart test with a detached session.
-- **C3, broker:** the broker passes its instructions/plugins/MCP through `context`, its plugin
-  adapters are deleted, and `mux-shim` becomes a host MCP server the broker attaches itself.
+- **C3a, broker, done (see "C3a as built"):** the broker passes its instructions/plugins/MCP through `context`, its plugin
+  adapters are deleted.
+- **C3b, plan only:** `mux-shim` becomes a host MCP server the broker attaches itself
+  (`c3b-mux-shim-plan.md`).
 
 ## Open questions
 
