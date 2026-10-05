@@ -477,7 +477,8 @@ from `<home>/mcp-account.json` (`account-env.ts`). The context's `--mcp-config <
 to those (no `--strict-mcp-config` from the core), so putting mux-shim in the context too would
 start a second copy and every tool call would run twice (the reason MUX_CHANNEL_ONLY exists).
 rpc workers keep `--strict-mcp-config` as a host arg and get their servers from the context only.
-No core-host passes `--dangerously-load-development-channels`. (C3b: see `c3b-mux-shim-plan.md`.)
+No core-host passes `--dangerously-load-development-channels`. (C3b: see `c3b-mux-shim-plan.md`; in
+its "host" mode Claude gets mux-shim from the context instead.)
 
 **Codex policy fix.** `persistPolicyToConfig()` (`config/batchWrite` of `sandbox_mode` /
 `approval_policy` into `CODEX_HOME`) is gone; the driver appends `app-server -c sandbox_mode=…
@@ -563,8 +564,9 @@ processes, mux-shim + mux-channel, one call). Nothing written into any workdir.
   is added mid-session; then a restart test with a detached session.
 - **C3a, broker, done (see "C3a as built"):** the broker passes its instructions/plugins/MCP through `context`, its plugin
   adapters are deleted.
-- **C3b, plan only:** `mux-shim` becomes a host MCP server the broker attaches itself
-  (`c3b-mux-shim-plan.md`).
+- **C3b, built behind `muxShim` (default "external"):** `mux-shim` / `mux-rpc` become host MCP
+  servers the broker attaches itself; the dead inbound channel path is removed
+  (`c3b-mux-shim-plan.md` "C3b as built").
 
 ## Open questions
 
