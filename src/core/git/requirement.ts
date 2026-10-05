@@ -365,8 +365,13 @@ export interface RunningInstall {
 export type DetachedSpawner = (cmd: string[]) => RunningInstall
 
 export const XCODE_SELECT_INSTALL = ["xcode-select", "--install"]
+/**
+ * `--source winget`: Git.Git lives in the community source. Without it winget also queries the
+ * Microsoft Store source, and when that one fails (certificate pinning behind TLS inspection, seen
+ * on a fresh Windows 11 VM: 0x8A15005E) `install` aborts although the package was found.
+ */
 export const WINGET_INSTALL_GIT = [
-  "winget", "install", "--id", "Git.Git", "-e", "--scope", "user",
+  "winget", "install", "--id", "Git.Git", "-e", "--source", "winget", "--scope", "user",
   "--accept-source-agreements", "--accept-package-agreements",
 ]
 /** Fixed argv, no shell: the default browser on the Git for Windows download page. */

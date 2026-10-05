@@ -301,7 +301,7 @@ test("install-git on Windows with winget runs the user-scope install and refuses
   expect(t.inst.install().body).toEqual({ ok: true })
   expect(t.spawned).toEqual([WINGET_INSTALL_GIT])
   expect(WINGET_INSTALL_GIT.join(" ")).toBe(
-    "winget install --id Git.Git -e --scope user --accept-source-agreements --accept-package-agreements",
+    "winget install --id Git.Git -e --source winget --scope user --accept-source-agreements --accept-package-agreements",
   )
   t.clock.now += 5 * 60_000
   expect(t.inst.install().body).toEqual({ ok: true, inProgress: true })
