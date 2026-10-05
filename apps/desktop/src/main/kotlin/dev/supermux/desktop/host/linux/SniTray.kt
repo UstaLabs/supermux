@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host.linux
 
+import dev.supermux.desktop.DesktopDebug
 import dev.supermux.desktop.host.TrayDispatcher
 import dev.supermux.desktop.host.TrayIcons
 import dev.supermux.desktop.host.TrayItem
@@ -81,7 +82,7 @@ class SniTray(
     /** What [notify] sends as; see [DesktopNotification.identity]. */
     @Volatile var notificationIdentity: DesktopNotification.Identity = DesktopNotification.identity()
 
-    private fun log(msg: String) = System.err.println("supermux tray (SNI): $msg")
+    private fun log(msg: String) = DesktopDebug.log("tray (SNI)", msg)
 
     /** Run [block] on the tray thread; a failure is logged, never thrown. */
     private fun onBus(block: () -> Unit) {

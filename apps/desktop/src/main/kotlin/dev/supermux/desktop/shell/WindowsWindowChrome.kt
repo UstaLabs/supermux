@@ -14,6 +14,7 @@
 // otherwise, or with SUPERMUX_SYSTEM_TITLEBAR=1, the window keeps the normal frame and menu bar.
 package dev.supermux.desktop.shell
 
+import dev.supermux.desktop.DesktopDebug
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -85,11 +86,12 @@ fun rememberWindowsWindowChrome(window: ComposeWindow, dark: Boolean): WindowsWi
                     tb.putProperty("controls.dark", dark)
                     d.setCustomTitleBar(window, tb)
                 }
-            }.onFailure { println("[WindowsWindowChrome] custom title bar failed: $it") }.getOrNull()
+            }.onFailure { DesktopDebug.log("WindowsWindowChrome", "custom title bar failed: $it") }.getOrNull()
         }
-        println(
-            if (bar != null) "[WindowsWindowChrome] custom title bar on (native caption buttons kept)"
-            else "[WindowsWindowChrome] system title bar (optOut=$optOut decorations=${decorations != null})",
+        DesktopDebug.log(
+            "WindowsWindowChrome",
+            if (bar != null) "custom title bar on (native caption buttons kept)"
+            else "system title bar (optOut=$optOut decorations=${decorations != null})",
         )
         if (decorations != null && bar != null) decorations to bar else null
     } ?: return null

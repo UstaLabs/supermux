@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host.linux
 
+import dev.supermux.desktop.DesktopDebug
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
@@ -53,5 +54,5 @@ object SniPixmap {
         val img = SniPixmap::class.java.classLoader.getResourceAsStream(name)?.use { ImageIO.read(it) }
             ?: return emptyList()
         icons(img)
-    }.onFailure { System.err.println("supermux tray: can't load $name: ${it.message}") }.getOrDefault(emptyList())
+    }.onFailure { DesktopDebug.log("tray", "can't load $name: ${it.message}") }.getOrDefault(emptyList())
 }

@@ -12,6 +12,7 @@
 // system title bar instead of shipping a window that cannot be resized.
 package dev.supermux.desktop.shell
 
+import dev.supermux.desktop.DesktopDebug
 import java.awt.Component
 import java.awt.Point
 import java.awt.Toolkit
@@ -104,7 +105,7 @@ class X11MoveResize private constructor(
 
     /** False, logging the first failure only: a broken path would otherwise log on every press. */
     private fun failed(why: String): Boolean {
-        if (warned.compareAndSet(false, true)) println("[LinuxWindowChrome] _NET_WM_MOVERESIZE not sent: $why")
+        if (warned.compareAndSet(false, true)) DesktopDebug.log("LinuxWindowChrome", "_NET_WM_MOVERESIZE not sent: $why")
         return false
     }
 
@@ -160,7 +161,7 @@ class X11MoveResize private constructor(
                 flush = method(xlib, "XFlush", Long::class.javaPrimitiveType!!),
             )
         }.getOrElse {
-            println("[LinuxWindowChrome] native move/resize unavailable: $it")
+            DesktopDebug.log("LinuxWindowChrome", "native move/resize unavailable: $it")
             null
         }
 
