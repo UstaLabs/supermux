@@ -1502,4 +1502,43 @@ class HostSupervisorTest {
         assertEquals("h-cli", h.sup.hostId.value)
         assertTrue(h.launches.isEmpty() && h.env.ran.none { it.firstOrNull() == "schtasks" })
     }
+
+    /** A broker (pid 999) holds broker.pid; once [booting] is set, the port is free once, then it answers as ours. */
+    private fun bootingBroker(h: Harness): () -> Unit {
+        var booting = false
+        var n = 0
+        val child = h.healthyIfChild()
+        h.probeFn = { port -> if (!booting) child(port) else if (n++ == 0) HostProbeResult.PortFree else h.desktop("h-booted") }
+        return {
+            Files.writeString(h.state.resolve("broker.pid"), "999")
+            h.table.procs[999] = ProcInfo(0, "/x/supermux-broker") to null
+            booting = true
+        }
+    }
+
+    @Test fun aChildRelaunchAdoptsABrokerThatFinishedStartingInsteadOfSpawning() = runTest {
+        val h = Harness(this)
+        val boot = bootingBroker(h)
+        h.sup.ensure()
+        assertEquals(1, h.launches.size)
+        boot()
+        h.sup.setRelay(false) // relaunches the child: launchChildLocked meets the booting broker
+        assertEquals(1, h.launches.size, "no second broker spawned")
+        assertEquals(running, h.sup.status.value)
+        assertEquals("h-booted", h.sup.hostId.value)
+        assertEquals(HostSupervisor.Mode.ORPHAN, h.sup.mode)
+    }
+
+    @Test fun aServiceInstallAdoptsABrokerThatFinishedStartingInsteadOfInstalling() = runTest {
+        val h = Harness(this)
+        val boot = bootingBroker(h)
+        h.sup.ensure()
+        boot()
+        h.sup.setBackground(true) // a fresh install: launchLocked meets the booting broker
+        assertFalse(h.bootstrapped(), "nothing installed next to it")
+        assertFalse(Files.exists(h.ourPlist))
+        assertEquals(1, h.launches.size)
+        assertEquals(running, h.sup.status.value)
+        assertEquals(HostSupervisor.Mode.ORPHAN, h.sup.mode)
+    }
 }

@@ -36,7 +36,11 @@ internal suspend fun HostSupervisor.launchLocked(
     }
     // Installing over OUR service replaces its broker (restart), so only a fresh install can add a second one.
     val replacingOurs = ourServiceInstalled()
-    if (!replacingOurs) secondBrokerReason(prefs.port)?.let { return it }
+    if (!replacingOurs) when (val gate = launchGate(prefs.port)) {
+        LaunchGate.Proceed -> Unit
+        is LaunchGate.Refuse -> return gate.reason
+        LaunchGate.Adopted -> return null // a broker of ours is running: nothing to install
+    }
     val spec = BrokerService.Spec(broker, brokerEnvFor(prefs, bins, carried), logFile)
     val installed = withContext(io) { BrokerService.install(spec, osEnv, alreadyStopped = serviceStopped) }
     log("service install${if (replacingOurs) " (replacing ours)" else ""}: ${installed.describe()}")
@@ -198,7 +202,11 @@ internal suspend fun HostSupervisor.launchChildLocked(
 ): String? {
     if (quitting) return HostSupervisor.QUITTING
     stopChildLocked()
-    secondBrokerReason(prefs.port)?.let { return it }
+    when (val gate = launchGate(prefs.port)) {
+        LaunchGate.Proceed -> Unit
+        is LaunchGate.Refuse -> return gate.reason
+        LaunchGate.Adopted -> return null // a broker of ours is running: no child next to it
+    }
     val repo = if (bins.brokerPath == null) repoDir() else null
     val argv = bins.brokerPath?.let { listOf(it.toString()) }
         ?: repo?.let { listOf(bunPath(), it.resolve("src/main.ts").toString()) }
@@ -339,22 +347,33 @@ internal suspend fun HostSupervisor.secondBrokerCheck(port: Int, silentBefore: B
     )
 }
 
+/** What a launch may do about a live `broker.pid` ([launchGate]). */
+internal sealed interface LaunchGate {
+    /** Nothing in the way: install / spawn. */
+    data object Proceed : LaunchGate
+    /** Don't start one: [reason]. */
+    data class Refuse(val reason: String) : LaunchGate
+    /** A broker of ours finished starting meanwhile and is now watched: the launch is done, healthy. */
+    data object Adopted : LaunchGate
+}
+
 /**
- * [secondBrokerCheck] for a launch: null to go ahead, else why not. A broker of ours that finished
- * starting meanwhile is adopted (watched, like one we couldn't re-parent) instead of refused.
+ * [secondBrokerCheck] for a launch. A broker of ours that finished starting meanwhile is adopted
+ * (service mode when our service runs it, else watched like one we couldn't re-parent) instead of
+ * refused, and the launch must then neither install nor spawn anything.
  */
-internal suspend fun HostSupervisor.secondBrokerReason(port: Int): String? = when (val sb = secondBrokerCheck(port)) {
-    SecondBroker.None -> null
-    is SecondBroker.Refuse -> sb.reason
+internal suspend fun HostSupervisor.launchGate(port: Int): LaunchGate = when (val sb = secondBrokerCheck(port)) {
+    SecondBroker.None -> LaunchGate.Proceed
+    is SecondBroker.Refuse -> LaunchGate.Refuse(sb.reason)
     is SecondBroker.Answering -> if (sb.found.isOurs()) {
         log("a broker of ours finished starting on port $port; using it")
         _hostId.value = sb.found.hostId
         lastHealthyBuild = sb.found.build
-        mode = HostSupervisor.Mode.ORPHAN
+        mode = if (ourServiceInstalled()) HostSupervisor.Mode.SERVICE else HostSupervisor.Mode.ORPHAN
         childDetached = false
-        null
+        LaunchGate.Adopted
     } else {
-        "Another supermux started on port $port meanwhile. Try again."
+        LaunchGate.Refuse("Another supermux started on port $port meanwhile. Try again.")
     }
 }
 
