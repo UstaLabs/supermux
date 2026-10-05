@@ -6,7 +6,8 @@ import { prepareCursorEnvironment, sharedCursorDir } from "../../../../packages/
 import { cursorContext } from "../../../../packages/supermux-core/src/context/agents.js"
 import { cursorInstructions } from "./preamble-writer"
 import { sessionPlugins } from "../../plugins"
-import { muxShimServer } from "../mux-shim-server"
+import { muxShimContextServer } from "../mux-shim-server"
+import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("agents/cursor/core-host")
@@ -145,6 +146,9 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
     context: cursorContext([]).support,
     contextPolicy: "warn",
     ...(options.accounts ? { accounts: options.accounts } : {}),
+    // The broker's host MCP servers (C3b), registered in BOTH mux-shim modes so a record that
+    // names one resumes after a flip back to "external" (see mux-tools/mode.ts).
+    mcpServers: MUX_HOST_SERVERS,
     driver: (registration, ctx) => {
       const extra = asPrepareExtra(registration)
       // Every open (also a Core-internal account switch): no credential copy on an account.
@@ -180,7 +184,7 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
         env: prepared.env,
         context: {
           plugins: sessionPlugins("cursor", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
-          mcpServers: [muxShimServer("cursor", extra.sessionId, extra.sessionName)],
+          mcpServers: [muxShimContextServer("cursor", extra.sessionId, extra.sessionName)],
         },
       }
     },

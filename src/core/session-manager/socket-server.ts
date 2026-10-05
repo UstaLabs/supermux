@@ -65,14 +65,9 @@ export async function startSocketServer(opts: {
     if (wasStale) opts.onStatusChange?.(session_id, true, now)
   }
 
-  // Single-flight dedup for orchestration calls. A Claude session runs TWO shim
-  // processes (tools + channel), both advertising the orchestration tools, so one
-  // agent tool-call reaches the broker twice (different call_ids). Idempotent ops
-  // (reply) collapse downstream, but spawn_session would create two sessions.
-  // Keyed by session+op+args: a duplicate within the window shares the first
-  // call's result instead of re-running. Each call_id still gets its own reply.
-  const ORCH_DEDUP_MS = 10_000
-  const orchInflight = new Map<string, Promise<{ ok: boolean; value?: unknown; error?: string }>>()
+  // Orchestration single-flight (identical calls within 10 s share one result) lives in the
+  // shared handler (SessionManager.orchestration), so it covers this socket and the host MCP
+  // server alike. Each call_id still gets its own reply.
 
   // Live = present, not destroyed, still writable. Writing to a destroyed socket
   // returns false silently and the frame is lost, so we filter first and fall
@@ -236,16 +231,7 @@ export async function startSocketServer(opts: {
           let r: { ok: boolean; value?: unknown; error?: string }
           try {
             if (m.kind === "orchestration") {
-              const key = `${session_id}|${m.op.name}|${JSON.stringify(m.op.args)}`
-              let p = orchInflight.get(key)
-              if (p) {
-                log.info("broker_call_deduped", { session_id, call_id: m.call_id, op_name: m.op.name })
-              } else {
-                p = opts.handler.onOrchestration({ ...m, session_id })
-                orchInflight.set(key, p)
-                void p.finally(() => setTimeout(() => orchInflight.delete(key), ORCH_DEDUP_MS))
-              }
-              r = await p
+              r = await opts.handler.onOrchestration({ ...m, session_id })
             } else {
               r = await opts.handler.onOutbound({ ...m, session_id })
             }

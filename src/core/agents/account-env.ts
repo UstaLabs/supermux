@@ -18,6 +18,7 @@ import {
 import { accountMethod, isSystemAccount } from "../accounts/broker-accounts"
 import { shimSpawnSpec } from "../session-manager/shim-spawn"
 import { CLAUDE_SHIM_SERVER } from "../session-manager/trust"
+import { muxShimModeFor } from "../mux-tools/mode"
 
 /** Codex: no session copy of ~/.codex/auth.json on an account; a fresh one when back on the system login. */
 export function syncCodexSessionCredential(opts: { sessionHome: string; canonicalHome: string; account: string | undefined; systemApiKey: string | undefined }): void {
@@ -60,6 +61,8 @@ export async function grokAccountEnv(env: Record<string, string>, opts: { sessio
  */
 export async function claudeAccountArgs(args: string[], opts: { sessionHome: string; account: string | undefined }): Promise<string[]> {
   if (isSystemAccount(opts.account) || args.includes("--strict-mcp-config")) return args
+  // C3b "host": mux-shim is a context server for every account; no account file.
+  if (muxShimModeFor("claude") === "host") return args
   if ((await accountMethod(opts.account)) !== "subscription") return args
   const spec = shimSpawnSpec()
   mkdirSync(opts.sessionHome, { recursive: true, mode: 0o700 })

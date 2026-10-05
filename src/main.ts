@@ -76,7 +76,10 @@ import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
 import { resolvePermissionMode } from "./core/agents/permission-modes"
-import { writeRpcWorkerMcpConfig } from "./core/session-manager/trust"
+import { writeRpcWorkerMcpConfig, removeBrokerShimEntries } from "./core/session-manager/trust"
+import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode } from "./core/mux-tools/mode"
+import { bindMuxTools } from "./core/mux-tools/server"
+import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
@@ -350,6 +353,14 @@ const appConfigEnv = {
   MUX_WHATSAPP_WEBHOOK_SECRET: process.env.MUX_WHATSAPP_WEBHOOK_SECRET,
 }
 const appConfig = settings.getAppConfig(appConfigEnv)
+// C3b: how agents get the broker's own tools (mux-shim / mux-rpc): "external" (the shim process
+// over the session socket, C3a) or "host" (a host MCP server in this process, through the core's
+// bridge). Setting `muxShim` → env MUX_SHIM → "external"; fixed for this process.
+setMuxShimMode(resolveMuxShimMode(settings.get(SETTINGS_KEY_MUX_SHIM), process.env.MUX_SHIM))
+log.info("mux_shim_mode", { mode: muxShimMode() })
+// "host": the broker's own ~/.claude.json entries go, once, before any Claude launch (only when
+// they are this broker's shim spawn spec; see trust.ts).
+if (muxShimMode() === "host") removeBrokerShimEntries()
 // Inject stored agent credentials into the broker env (non-clobbering) so every
 // spawn path inherits them: claude's `bash -lc` pane inherits process.env; codex
 // reads OPENAI_API_KEY; cursor reads CURSOR_API_KEY. Empty store ⇒ sets nothing
@@ -780,6 +791,13 @@ const sessionManager = new SessionManager(registry, {
     sessionBackend,
     tmuxSession: TMUX_SESSION,
   },
+})
+// The broker's host MCP servers (mux-shim / mux-rpc, C3b) call the same shared handlers as the
+// external shim's socket. Bound in both modes: a record that names the host server can resume
+// after a flip back to "external" and still be served while it runs.
+bindMuxTools({
+  outbound: (sessionId, op) => sessionManager.outbound(sessionId, op),
+  orchestration: (sessionId, op) => sessionManager.orchestration(sessionId, op),
 })
 const runtimes = sessionManager.runtimes
 const soulSetupQueued = new Set<string>()
@@ -2684,30 +2702,58 @@ const resumeSuspendedSession = (session: Parameters<SessionManager["resumeSuspen
 
 const resumeFromArchive = (sessionId: string) => sessionManager.resumeFromArchive(sessionId)
 
+/**
+ * A session's "connected" edge (the UI dot, a crash → "dead"). Sources: the shim socket
+ * ("external" mode, and tmux-era Claude rows in both modes) or, in "host" mode, the adapter
+ * liveness sweep below (no shim connects for a core session any more).
+ */
+function applyConnectionStatus(session_id: string, connected: boolean, last_pong_at?: number): void {
+  // session_id is the UUID from the socket. NOTE: liveness can fire slightly
+  // ahead of registration (markAlive runs before onRegister completes) — that's
+  // safe here: "connected" is a no-op unless the session was "dead", and "dead"
+  // only applies to a registered, non-suspended session.
+  registry.sessions.setConnectionStatus(session_id, connected, last_pong_at)
+  const s = registry.get(session_id)
+  webChannel?.broadcastToAll({ type: "session_state", session: session_id, connected, model: s?.model })
+  if (connected) {
+    agentStateStore.applyEvent(session_id, "connected")          // revives a dead session; no-op otherwise
+  } else if (s && s.status !== "suspended") {
+    // A Core-backed session's liveness is the Core session, not the shim socket:
+    // a model/permission-mode change restarts the native process, whose shim
+    // drops and reconnects seconds later. Only a session with no live Core
+    // session behind it is dead.
+    const adapter = sessionManager.adapterFor(session_id)
+    const coreAlive = adapter instanceof CoreAdapter && adapter.isAlive()
+    if (coreAlive) return
+    agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
+    bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
+    subagentStore.abandonRunning(session_id)  // nor finish its subagents
+  }
+}
+
+/** "host" mode: core sessions take their connected edge from the adapter, not the socket. */
+const adapterLivenessSource = (session_id: string): boolean => {
+  if (muxShimMode() !== "host") return false
+  const s = registry.get(session_id)
+  return !!s && !isPersistentRuntimeSession(s)
+}
+if (muxShimMode() === "host") {
+  setInterval(() => {
+    sweepAdapterLiveness(
+      registry.list().filter((s) => !isPersistentRuntimeSession(s)),
+      (id) => { const a = sessionManager.adapterFor(id); return a instanceof CoreAdapter && a.isAlive() },
+      (id, connected) => applyConnectionStatus(id, connected),
+    )
+  }, 2_000).unref()
+}
+
 const server = await startSocketServer({
   socketsDir: SOCKETS_DIR,
   onStatusChange: (session_id, connected, last_pong_at) => {
-    // session_id is the UUID from the socket. NOTE: liveness can fire slightly
-    // ahead of registration (markAlive runs before onRegister completes) — that's
-    // safe here: "connected" is a no-op unless the session was "dead", and "dead"
-    // only applies to a registered, non-suspended session.
-    registry.sessions.setConnectionStatus(session_id, connected, last_pong_at)
-    const s = registry.get(session_id)
-    webChannel?.broadcastToAll({ type: "session_state", session: session_id, connected, model: s?.model })
-    if (connected) {
-      agentStateStore.applyEvent(session_id, "connected")          // revives a dead session; no-op otherwise
-    } else if (s && s.status !== "suspended") {
-      // A Core-backed session's liveness is the Core session, not the shim socket:
-      // a model/permission-mode change restarts the native process, whose shim
-      // drops and reconnects seconds later. Only a session with no live Core
-      // session behind it is dead.
-      const adapter = sessionManager.adapterFor(session_id)
-      const coreAlive = adapter instanceof CoreAdapter && adapter.isAlive()
-      if (coreAlive) return
-      agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
-      bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
-      subagentStore.abandonRunning(session_id)  // nor finish its subagents
-    }
+    // In "host" mode a core session's connected state is the adapter's (sweep above); a shim
+    // that still connects (Cursor, a leftover) must not flip it.
+    if (adapterLivenessSource(session_id)) return
+    applyConnectionStatus(session_id, connected, last_pong_at)
   },
   // Safety net: a queued inbound that can't reach a live channel shim within the
   // grace window means the session crashed / never came up. Tell the user in the

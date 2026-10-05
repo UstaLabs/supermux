@@ -369,28 +369,39 @@ test("callOutbound times out if pending entry is never resolved", async () => {
   expect(true).toBe(true)
 })
 
-test("orchestration single-flight: two shims, identical call → handler runs ONCE, both get the result", async () => {
+test("orchestration single-flight: two shims, identical call → the SessionManager handler runs the spawn ONCE, both get the result", async () => {
+  // The de-dup lives in the shared handler (SessionManager.orchestration), not the socket.
+  const { openDb, runMigrations } = await import("../src/core/storage/db")
+  const { Registry } = await import("../src/core/session-manager/registry")
+  const { SessionManager } = await import("../src/core/session-manager/manager")
+  const { fakePorts } = await import("./helpers/session-manager-ports")
+  const db = openDb(":memory:")
+  runMigrations(db, join(import.meta.dirname, "../src/core/storage/migrations"))
+  const ports = fakePorts(db)
   let calls = 0
+  ports.orchestration.spawnSession = async () => {
+    calls++
+    await new Promise((r) => setTimeout(r, 60)) // spawn latency → the duplicate overlaps
+    return { name: "editor", session_id: "kid" }
+  }
+  const m = new SessionManager(new Registry(db), ports)
+  const pa = m.registry.registerPA({ name: "pa", workdir: "/tmp", pid: 0, agent: "claude" })
   const handler = {
-    onRegister: async () => ({ name: "n", session_id: "sess-dd" }),
+    onRegister: async () => ({ name: "pa", session_id: pa.id }),
     onOutbound: async () => ({ ok: true }),
-    onOrchestration: async (m: any) => {
-      calls++
-      await new Promise((r) => setTimeout(r, 60)) // spawn latency → the duplicate overlaps
-      return { ok: true, value: { name: "editor", op: m?.op?.name } }
-    },
+    onOrchestration: (msg: any) => m.handleOrchestration(msg),
   }
   server = await startSocketServer({ socketsDir: dir, handler })
-  await server.bind("sess-dd")
+  await server.bind(pa.id)
 
-  const a = await connectShim({ socketsDir: dir, sessionId: "sess-dd", workdir: "/tmp", pid: process.pid })
-  const b = await connectShim({ socketsDir: dir, sessionId: "sess-dd", workdir: "/tmp", pid: process.pid })
+  const a = await connectShim({ socketsDir: dir, sessionId: pa.id, workdir: "/tmp", pid: process.pid })
+  const b = await connectShim({ socketsDir: dir, sessionId: pa.id, workdir: "/tmp", pid: process.pid })
 
   const op = { name: "spawn_session", args: { workdir: "/x", name: "editor" } }
   const [ra, rb] = await Promise.all([a.callOrchestration(op), b.callOrchestration(op)])
 
   expect(calls).toBe(1) // the spawn ran once, not twice
-  expect(ra.value).toEqual({ name: "editor", op: "spawn_session" })
+  expect(ra.value).toEqual({ name: "editor", session_id: "kid" })
   expect(rb.value).toEqual(ra.value) // both shims got the same result
   await a.close()
   await b.close()

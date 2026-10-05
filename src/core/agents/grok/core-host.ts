@@ -6,7 +6,8 @@ import { prepareGrokEnvironment } from "../../../../packages/supermux-core/src/e
 import { grokContext } from "../../../../packages/supermux-core/src/context/agents.js"
 import { grokInstructions } from "./preamble-writer"
 import { sessionPlugins } from "../../plugins"
-import { muxShimServer } from "../mux-shim-server"
+import { muxShimContextServer } from "../mux-shim-server"
+import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("agents/grok/core-host")
@@ -99,6 +100,9 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
     context: grokContext([]).support,
     contextPolicy: "warn",
     ...(options.accounts ? { accounts: options.accounts } : {}),
+    // The broker's host MCP servers (C3b), registered in BOTH mux-shim modes so a record that
+    // names one resumes after a flip back to "external" (see mux-tools/mode.ts).
+    mcpServers: MUX_HOST_SERVERS,
     driver: async (registration, ctx) => {
       const settings = driverSettingsFor("grok", extraPermissionMode(registration.extra, "grok"))
       if (settings.initial.kind !== "acp") throw new Error("grok driver settings mismatch")
@@ -126,7 +130,7 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
         context: {
           instructions: grokInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
           plugins: sessionPlugins("grok", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
-          mcpServers: [muxShimServer("grok", extra.sessionId, extra.sessionName)],
+          mcpServers: [muxShimContextServer("grok", extra.sessionId, extra.sessionName)],
         },
       }
     },

@@ -29,7 +29,7 @@ import { buildProxyPublicUrl } from "../../channels/web/proxy"
 import { listDevices } from "../display/scrcpy/adb"
 import { INBOX_DIR } from "../../shared/paths"
 import type { RegisterReply, OpResult } from "./socket-server"
-import type { RegisterFrame, OutboundFrame, OrchestrationFrame } from "../../shared/socket-frames"
+import type { RegisterFrame, OutboundFrame, OrchestrationFrame, ToolOperation } from "../../shared/socket-frames"
 import type { Channel, OutboundAction } from "../../channels/channel"
 import type { FileStore } from "../files/store"
 import type { Db } from "../storage/db"
@@ -53,6 +53,8 @@ import { authorSteps, toWalkthroughDto, type ToolStepInput } from "../walkthroug
 const log = makeLogger("session-manager")
 
 const SOUL_SETUP_AUTO_SEND_DELAY_MS = 3_000
+/** How long a settled orchestration call's result is shared with identical calls. */
+export const ORCH_DEDUP_MS = 10_000
 
 /**
  * Narrow ports into the rest of the broker. Injected ONCE at construction —
@@ -188,6 +190,8 @@ export class SessionManager {
   /** Dedupe window for inbound message_ids — owned here so deliver() is idempotent. */
   readonly recentInbound = new RecentInboundIds()
   private readonly ports: SessionManagerPorts
+  /** Orchestration single-flight (see orchestration()). */
+  private readonly orchInflight = new Map<string, Promise<OpResult>>()
 
   constructor(registry: Registry, ports: SessionManagerPorts) {
     this.registry = registry
@@ -405,8 +409,23 @@ export class SessionManager {
     throw new Error(`unknown session: ${sessionUuid} — the broker did not spawn this session`)
   }
 
-  async handleOutbound(msg: OutboundFrame & { session_id: string }): Promise<OpResult> {
-    const fromSession = msg.session_id
+  /** The external shim's socket path (`outbound` frame): the socket's bound session id is the caller. */
+  handleOutbound(msg: OutboundFrame & { session_id: string }): Promise<OpResult> {
+    return this.outbound(msg.session_id, msg.op)
+  }
+
+  /** The external shim's socket path (`orchestration` frame). */
+  handleOrchestration(msg: OrchestrationFrame & { session_id: string }): Promise<OpResult> {
+    return this.orchestration(msg.session_id, msg.op)
+  }
+
+  /**
+   * An outbound tool call (reply, react, edit_message, download_attachment) from session
+   * `fromSession`. Shared by the external shim's socket and the broker's host MCP server
+   * (src/core/mux-tools): the caller's identity is the socket's bound session id or the host
+   * server's ctx.sessionId, never anything the agent says.
+   */
+  async outbound(fromSession: string, op: ToolOperation): Promise<OpResult> {
     // fromSession is now UUID; adapters are keyed by UUID
     // Channel resolution lives in ONE place (core/routing/address). The local
     // copy this replaced turned the bare value `web` into `telegram:web`, so a
@@ -416,7 +435,6 @@ export class SessionManager {
       return a ? { channelName: a.channel, chat_id: a.chatId } : { channelName: "", chat_id: rawChatId }
     }
     try {
-      const op = msg.op
       if (op.name === "reply") {
         const adapter = this.runtimes.get(fromSession)?.adapter
         const files = optionalStringArrayArg(op.args, "files")
@@ -520,11 +538,33 @@ export class SessionManager {
     }
   }
 
-  async handleOrchestration(msg: OrchestrationFrame & { session_id: string }): Promise<OpResult> {
+  /**
+   * An orchestration tool call from session `fromSession`, shared by the external shim's socket and
+   * the host MCP server. Single-flight per session + op + args for ORCH_DEDUP_MS after it settles:
+   * a duplicate (an agent calling twice, or two copies of mux-shim attached to one agent) shares the
+   * first call's result instead of running again, so spawn_session never creates two sessions.
+   *
+   * Cancellation: the call is never aborted midway. A host-server call whose agent cancels it, or
+   * whose session is interrupted, gets "Cancelled" from the core while the handler here runs to the
+   * end (a mutation is applied completely, never half), and a retry within the window gets the
+   * same result instead of a second mutation.
+   */
+  orchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
+    const key = `${fromSession}|${op.name}|${JSON.stringify(op.args)}`
+    const inflight = this.orchInflight.get(key)
+    if (inflight) {
+      log.info("broker_call_deduped", { session_id: fromSession, op_name: op.name })
+      return inflight
+    }
+    const p = this.runOrchestration(fromSession, op).catch((err: unknown): OpResult => ({ ok: false, error: `handler threw: ${err instanceof Error ? err.message : String(err)}` }))
+    this.orchInflight.set(key, p)
+    void p.finally(() => { const t = setTimeout(() => { if (this.orchInflight.get(key) === p) this.orchInflight.delete(key) }, ORCH_DEDUP_MS); t.unref?.() })
+    return p
+  }
+
+  private async runOrchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
     // Permission check — fromSession is UUID
-    const fromSession = msg.session_id
     const s = this.registry.get(fromSession)  // Look up by UUID
-    const op = msg.op
     const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }

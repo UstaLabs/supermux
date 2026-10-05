@@ -12,6 +12,9 @@ import { SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { claudeAccountArgs } from "../account-env"
+import { MUX_HOST_SERVERS, muxRpcHostServer, muxShimHostServer } from "../../mux-tools/server"
+import { muxShimMode, muxShimModeFor } from "../../mux-tools/mode"
+import { watchClaudeMuxShimDuplicates } from "../../mux-tools/duplicates"
 
 const log = makeLogger("agents/claude/core-host")
 const CORE_PLUGIN_NAME = "mux-core"
@@ -105,7 +108,7 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
   if (!options.stateDirectory) throw new Error("stateDirectory is required")
   const stateDirectory = options.stateDirectory
   const factory = options.driverFactory
-  return createHost({
+  const host = createHost({
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "claude",
@@ -114,6 +117,9 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
     context: CLAUDE_CONTEXT,
     contextPolicy: "warn",
     ...(options.accounts ? { accounts: options.accounts } : {}),
+    // The broker's host MCP servers (C3b), registered in BOTH mux-shim modes so a record that
+    // names one resumes after a flip back to "external" (see mux-tools/mode.ts).
+    mcpServers: MUX_HOST_SERVERS,
     driver: async (registration, ctx) => {
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
       const extraEffort = asEffort(registration.extra?.effort)
@@ -155,12 +161,19 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       const instructions = extra.pa
         ? claudePersonalAssistantInstructions({ sessionName: extra.sessionName, workdir: extra.workdir, replyFallback: !coreReplyHookPresent })
         : claudeWorkerInstructions({ sessionName: extra.sessionName, workdir: extra.workdir })
-      // mux-shim is NOT a context server for Claude: it comes from the user's ~/.claude.json
-      // (system account, written by session-manager/trust.ts) or from the account's extra
-      // --mcp-config (account-env.ts). Adding it here too would register its tools twice. An rpc
-      // worker's own servers are context servers; --strict-mcp-config (a host arg) keeps the
-      // ~/.claude.json servers out of it, as before.
-      const mcpServers = extra.rpcMcpConfig ? parseRpcMcpServers(extra.rpcMcpConfig) : []
+      // "external" (C3a): mux-shim is NOT a context server for Claude: it comes from the user's
+      // ~/.claude.json (system account, written by session-manager/trust.ts) or from the
+      // account's extra --mcp-config (account-env.ts). Adding it here too would register its tools
+      // twice. An rpc worker's own servers are context servers; --strict-mcp-config (a host arg)
+      // keeps the ~/.claude.json servers out of it, as before.
+      // "host" (C3b): the broker's host server is the context's mux-shim (rpc workers: mux-rpc)
+      // for every account; nothing is written into ~/.claude.json, and a leftover global
+      // `mux-shim` entry is shadowed: Claude keeps the --mcp-config server of the same name
+      // (claude 2.1.289, probed: one mux-shim in the init frame, the --mcp-config one).
+      const host = muxShimModeFor("claude") === "host"
+      const mcpServers = extra.rpcMcpConfig
+        ? (host ? [muxRpcHostServer] : parseRpcMcpServers(extra.rpcMcpConfig))
+        : (host ? [muxShimHostServer] : [])
       const prepared = await prepareClaudeEnvironment({
         home: extra.sessionHome,
         workdir: extra.workdir,
@@ -193,6 +206,9 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       }
     },
   })
+  // C3b: log a session that ends up with two mux-shim servers (init frame).
+  watchClaudeMuxShimDuplicates(host.core, log, muxShimMode)
+  return host
 }
 
 export function claudeSessionHome(name: string): string {

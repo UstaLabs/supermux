@@ -7,7 +7,8 @@ import { prepareCodexEnvironment } from "../../../../packages/supermux-core/src/
 import { CODEX_CONTEXT } from "../../../../packages/supermux-core/src/context/agents.js"
 import { codexInstructions } from "./preamble-writer"
 import { sessionPlugins } from "../../plugins"
-import { muxShimServer } from "../mux-shim-server"
+import { muxShimContextServer } from "../mux-shim-server"
+import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
 import { HOME } from "../../session-manager/spawn-helper"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
@@ -134,6 +135,9 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
     context: CODEX_CONTEXT,
     contextPolicy: "warn",
     ...(options.accounts ? { accounts: options.accounts } : {}),
+    // The broker's host MCP servers (C3b), registered in BOTH mux-shim modes so a record that
+    // names one resumes after a flip back to "external" (see mux-tools/mode.ts).
+    mcpServers: MUX_HOST_SERVERS,
     driver: (registration, ctx) => {
       // Every open (also a Core-internal account switch): no credential copy on an account.
       const sessionHome = registration.extra?.sessionHome
@@ -192,7 +196,7 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
         context: {
           instructions: generated,
           plugins: sessionPlugins("codex", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
-          mcpServers: [muxShimServer("codex", extra.sessionId, extra.sessionName)],
+          mcpServers: [muxShimContextServer("codex", extra.sessionId, extra.sessionName)],
         },
       }
     },

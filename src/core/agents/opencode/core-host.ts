@@ -6,7 +6,8 @@ import { prepareOpenCodeEnvironment } from "../../../../packages/supermux-core/s
 import { opencodeContext } from "../../../../packages/supermux-core/src/context/agents.js"
 import { openCodeInstructions } from "./preamble-writer"
 import { sessionPlugins } from "../../plugins"
-import { muxShimServer } from "../mux-shim-server"
+import { muxShimContextServer } from "../mux-shim-server"
+import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("agents/opencode/core-host")
@@ -103,6 +104,9 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
     context: opencodeContext([]).support,
     contextPolicy: "warn",
     ...(options.accounts ? { accounts: options.accounts } : {}),
+    // The broker's host MCP servers (C3b), registered in BOTH mux-shim modes so a record that
+    // names one resumes after a flip back to "external" (see mux-tools/mode.ts).
+    mcpServers: MUX_HOST_SERVERS,
     driver: (registration, ctx) => {
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
       const settings = driverSettingsFor("opencode", extraPermissionMode(registration.extra, "opencode"))
@@ -133,7 +137,7 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
         context: {
           instructions: openCodeInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
           plugins: sessionPlugins("opencode", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
-          mcpServers: [muxShimServer("opencode", extra.sessionId, extra.sessionName)],
+          mcpServers: [muxShimContextServer("opencode", extra.sessionId, extra.sessionName)],
         },
       }
     },
