@@ -57,6 +57,7 @@ object GitBannerCopy {
         return when (install) {
             GitRequirement.INSTALL_XCODE_SELECT -> "Apple's installer is open on $host. Follow it, then this clears by itself."
             GitRequirement.INSTALL_WINGET -> "Installing git on $host… this clears by itself when done."
+            GitRequirement.INSTALL_MINGIT -> "Installing git on $host…"
             GitRequirement.INSTALL_BROWSER -> "The Git download page is open on $host."
             else -> "The installer started on $host."
         }
@@ -97,7 +98,7 @@ fun GitRequirementBanner(
     // declined or failed must not leave "Installing…" up forever.
     LaunchedEffect(requirement.installError) { if (requirement.installError != null) status = null }
     val shown = requirement.installError?.let(GitBannerCopy::installFailed)
-        ?: (if (requirement.installing) GitBannerCopy.started(requirement.install, hostName) else null)
+        ?: (if (requirement.installing) requirement.installNote ?: GitBannerCopy.started(requirement.install, hostName) else null)
         ?: status
 
     Row(

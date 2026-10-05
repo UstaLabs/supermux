@@ -74,6 +74,10 @@ class GitRequirementBannerTest {
         onNodeWithTag(GitBannerTags.STATUS).assertTextEquals("The Git download page is open on Work PC.")
     }
 
+    @Test fun mingit_status_copy_has_no_permission_wording() {
+        assertEquals("Installing git on this computer…", GitBannerCopy.started("mingit", null))
+    }
+
     @Test fun winget_status_copy() {
         assertEquals("Installing git on Work PC… this clears by itself when done.", GitBannerCopy.started("winget", "Work PC"))
     }

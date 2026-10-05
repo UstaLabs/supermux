@@ -76,6 +76,7 @@ import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
 import { BUILD_VERSION, BUILD_COMMIT, versionString } from "./shared/build-info"
 import { captureWindowsTaskFlag } from "./core/update/apply"
+import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
 import { NullRelayProvider } from "./core/relay/provider"
@@ -223,6 +224,8 @@ process.env.PATH = withAgentBinDirs(process.env.PATH, homedir())
 // leaves PATH and everything unblocks (no restart).
 const gitRequirement = new GitRequirementMonitor({
   platform: process.platform,
+  // Windows: the one-click install is MinGit, per user (core/git/mingit.ts).
+  minGit: process.platform === "win32",
   which: bunWhich,
   // Synchronous only for the boot check (before listen); every re-check is async.
   runXcodeSelectSync: () => {
@@ -251,6 +254,19 @@ const gitInstaller = new GitInstaller({
     return spawnDetached(cmd, (event, data) => log.warn(event, data))
   },
   onStatus: (status) => gitRequirement.setInstallStatus(status),
+  installMinGit: process.platform === "win32"
+    ? async () => {
+        log.info("install_git_started", { cmd: "mingit" })
+        try {
+          const r = await installMinGit(realMinGitDeps())
+          log.info("install_git_mingit_done", { cmdDir: r.cmdDir })
+        } catch (err) {
+          log.warn("install_git_mingit_failed", { err: String(err) })
+          throw err
+        }
+      }
+    : undefined,
+  onInstalled: () => { void gitRequirement.recheck() },
 })
 {
   const git = gitRequirement.start()

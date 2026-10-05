@@ -20,7 +20,7 @@ import { execFile, spawn as nodeSpawn } from "child_process"
 import { delimiter, win32 as winPath } from "path"
 import { APPLE_GIT_STUB, applyCltGuard, noCltDir } from "./clt-guard"
 
-export type GitInstall = "xcode-select" | "winget" | "browser" | "manual"
+export type GitInstall = "xcode-select" | "mingit" | "winget" | "browser" | "manual"
 
 export interface GitRequirement {
   ok: boolean
@@ -30,12 +30,15 @@ export interface GitRequirement {
   installing?: boolean
   /** The last tracked install ended without git (declined, cancelled or failed). */
   installError?: string
+  /** What the running install is doing differently (e.g. MinGit failed, winget is the fallback). */
+  installNote?: string
 }
 
 /** The tracked install's progress, merged into [GitRequirement] while git is missing. */
 export interface GitInstallStatus {
   installing: boolean
   installError?: string
+  installNote?: string
 }
 
 export interface HostRequirements {
@@ -46,6 +49,7 @@ export const GIT_REQUIRED_MESSAGE = "This computer needs git to run agents. Inst
 
 export const GIT_WINDOWS_DOWNLOAD_URL = "https://git-scm.com/download/win"
 export const GIT_HINT_DARWIN = "Install Apple's Command Line Tools (xcode-select --install)"
+export const GIT_HINT_MINGIT = "Install git for this user (MinGit, no admin rights needed)"
 export const GIT_HINT_WINGET = "Install Git for Windows with winget"
 export const GIT_HINT_WINDOWS_BROWSER = `Download Git for Windows from ${GIT_WINDOWS_DOWNLOAD_URL}`
 export const GIT_HINT_LINUX = "Install git with your package manager (e.g. sudo apt install git)"
@@ -190,9 +194,12 @@ export function gitInstallFor(
   platform: NodeJS.Platform,
   which: (bin: string, path: string) => string | null,
   path: string,
+  /** win32: the broker can unpack MinGit per user (the default one-click install). */
+  minGit = false,
 ): { install: GitInstall; hint: string } {
   if (platform === "darwin") return { install: "xcode-select", hint: GIT_HINT_DARWIN }
   if (platform === "win32") {
+    if (minGit) return { install: "mingit", hint: GIT_HINT_MINGIT }
     return which("winget", path)
       ? { install: "winget", hint: GIT_HINT_WINGET }
       : { install: "browser", hint: GIT_HINT_WINDOWS_BROWSER }
@@ -201,6 +208,8 @@ export function gitInstallFor(
 }
 
 export interface GitRequirementDeps extends GitCheckDeps {
+  /** win32: report the MinGit one-click install (the broker has [installMinGit]). */
+  minGit?: boolean
   setInterval?: (fn: () => void, ms: number) => unknown
   clearInterval?: (handle: unknown) => void
   intervalMs?: number
@@ -240,7 +249,7 @@ export class GitRequirementMonitor {
   }
 
   private installInfo() {
-    return gitInstallFor(this.deps.platform, this.deps.which, pathWithoutShim(this.deps.env.PATH, this.deps.stateDir))
+    return gitInstallFor(this.deps.platform, this.deps.which, pathWithoutShim(this.deps.env.PATH, this.deps.stateDir), this.deps.minGit)
   }
 
   /** The boot check. On darwin, Apple's stub without the developer tools also gets the shim. */
@@ -265,8 +274,8 @@ export class GitRequirementMonitor {
 
   get git(): GitRequirement {
     if (this.state.ok || !this.installStatus) return { ...this.state }
-    const { installing, installError } = this.installStatus
-    return { ...this.state, installing, ...(installError ? { installError } : {}) }
+    const { installing, installError, installNote } = this.installStatus
+    return { ...this.state, installing, ...(installError ? { installError } : {}), ...(installNote ? { installNote } : {}) }
   }
 
   /** The install button's run started or ended: report it to every client (`/host`, the frame). */
@@ -448,7 +457,8 @@ export const WINGET_MAX_MS = 15 * 60_000
  */
 export class GitInstaller {
   private lastLaunchAt: number | undefined
-  private winget: { startedAt: number } | undefined
+  /** The tracked (MinGit or winget) install now running; one at a time. */
+  private running: { startedAt: number } | undefined
 
   constructor(private readonly deps: {
     platform: NodeJS.Platform
@@ -459,6 +469,10 @@ export class GitInstaller {
     now?: () => number
     /** The tracked (winget) install started or ended; the broker puts it in `requirements.git`. */
     onStatus?: (status: GitInstallStatus) => void
+    /** win32: unpack MinGit for this user (no UAC). Rejects when the download/verify/unpack fails. */
+    installMinGit?: () => Promise<unknown>
+    /** A tracked install finished OK: re-check git now rather than at the next 10 s tick. */
+    onInstalled?: () => void
   }) {}
 
   private now(): number {
@@ -469,8 +483,8 @@ export class GitInstaller {
     if (this.deps.requirement().ok) return { status: 200, body: { ok: true, alreadyInstalled: true } }
     const { platform } = this.deps
     const now = this.now()
-    if (this.winget && now - this.winget.startedAt < WINGET_MAX_MS) return { status: 200, body: { ok: true, inProgress: true } }
-    this.winget = undefined
+    if (this.running && now - this.running.startedAt < WINGET_MAX_MS) return { status: 200, body: { ok: true, inProgress: true } }
+    this.running = undefined
     if (this.lastLaunchAt !== undefined && now - this.lastLaunchAt < INSTALL_COOLDOWN_MS) {
       return { status: 200, body: { ok: true, inProgress: true } }
     }
@@ -481,22 +495,49 @@ export class GitInstaller {
       return { status: 200, body: { ok: true } }
     }
     if (platform === "win32") {
-      if (this.deps.hasWinget()) {
+      const minGit = this.deps.installMinGit
+      if (minGit) {
         const run = { startedAt: now }
-        this.winget = run
+        this.running = run
         this.deps.onStatus?.({ installing: true })
-        this.deps.spawn(WINGET_INSTALL_GIT).onExit((code) => {
-          if (this.winget === run) this.winget = undefined
-          // Exit 0: git is there, and the requirement's own re-check clears the banner. Anything
-          // else (UAC declined, cancelled, no network) must not leave "Installing…" up forever.
-          this.deps.onStatus?.(code === 0 ? { installing: false } : { installing: false, installError: wingetFailure(code) })
-        })
+        minGit().then(
+          () => {
+            if (this.running === run) this.running = undefined
+            this.deps.onStatus?.({ installing: false })
+            this.deps.onInstalled?.()
+          },
+          (err: unknown) => {
+            if (this.running === run) this.running = undefined
+            // Download/verify/unpack failed: the OS installer is the fallback (it asks for UAC).
+            this.windowsFallback(this.now(), `MinGit couldn't be installed (${err instanceof Error ? err.message : String(err)})`)
+          },
+        )
         return { status: 200, body: { ok: true } }
       }
-      this.deps.spawn(OPEN_GIT_DOWNLOAD_PAGE)
-      this.lastLaunchAt = now
+      this.windowsFallback(now)
       return { status: 200, body: { ok: true } }
     }
     return { status: 400, body: { error: "manual", hint: GIT_HINT_LINUX } }
+  }
+
+  /** winget when there is one (tracked), else the download page. [why]: MinGit failed first. */
+  private windowsFallback(now: number, why?: string): void {
+    if (this.deps.hasWinget()) {
+      const run = { startedAt: now }
+      this.running = run
+      const installNote = why ? `${why}; installing Git for Windows with winget instead (it asks for permission).` : undefined
+      this.deps.onStatus?.({ installing: true, ...(installNote ? { installNote } : {}) })
+      this.deps.spawn(WINGET_INSTALL_GIT).onExit((code) => {
+        if (this.running === run) this.running = undefined
+        // Exit 0: git is there, and the requirement's own re-check clears the banner. Anything
+        // else (UAC declined, cancelled, no network) must not leave "Installing…" up forever.
+        this.deps.onStatus?.(code === 0 ? { installing: false } : { installing: false, installError: wingetFailure(code) })
+        if (code === 0) this.deps.onInstalled?.()
+      })
+      return
+    }
+    this.deps.spawn(OPEN_GIT_DOWNLOAD_PAGE)
+    this.lastLaunchAt = now
+    if (why) this.deps.onStatus?.({ installing: false, installError: `${why}; the Git download page is open instead.` })
   }
 }

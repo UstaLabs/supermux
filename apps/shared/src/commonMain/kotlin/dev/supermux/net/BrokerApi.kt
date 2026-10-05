@@ -125,6 +125,8 @@ data class GitRequirement(
     val installing: Boolean = false,
     /** The last tracked install ended without git (declined, cancelled or failed). */
     val installError: String? = null,
+    /** What the running install does differently (e.g. MinGit failed and winget is the fallback). */
+    val installNote: String? = null,
 ) {
     /** Is there a one-click install on that computer? */
     val installable: Boolean get() = install != INSTALL_MANUAL
@@ -132,6 +134,8 @@ data class GitRequirement(
     companion object {
         const val INSTALL_XCODE_SELECT = "xcode-select"
         const val INSTALL_WINGET = "winget"
+        /** Windows: MinGit unpacked for this user, no UAC prompt. */
+        const val INSTALL_MINGIT = "mingit"
         const val INSTALL_BROWSER = "browser"
         const val INSTALL_MANUAL = "manual"
     }
