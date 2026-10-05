@@ -5,9 +5,9 @@ import java.net.InetAddress
 import java.net.URI
 
 /**
- * True iff [url] is an http(s) URL whose host is THIS computer's loopback: `localhost`, an IPv4
- * address in 127.0.0.0/8 (all four octets numeric, so `127.example.com` is not), or `::1` in any
- * spelling. An unparseable URL, or one with no host, is not loopback.
+ * True iff [url]'s host is THIS computer's loopback: `localhost`, an IPv4 address in 127.0.0.0/8
+ * (all four octets numeric, so `127.example.com` is not), or `::1` in any spelling. Any scheme
+ * counts (paired URLs are http(s) anyway); an unparseable URL, or one with no host, is not loopback.
  */
 fun isLoopbackUrl(url: String?): Boolean {
     val host = urlHost(url) ?: return false
