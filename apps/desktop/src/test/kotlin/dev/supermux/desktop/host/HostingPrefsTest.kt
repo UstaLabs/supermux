@@ -105,3 +105,24 @@ class HostingPrefsTest {
         assertTrue(store.exists())
     }
 }
+
+class MovePortTest {
+    @Test fun aMovedPortIsTheFirstFreeOneAboveTheDefault() {
+        kotlin.test.assertEquals(9899, firstFreePort { true })
+        kotlin.test.assertEquals(9901, firstFreePort { it > 9900 })
+        kotlin.test.assertEquals(9899..9999, MOVE_PORTS)
+    }
+
+    @Test fun aTakenPortIsSkippedForReal() {
+        java.net.ServerSocket(0, 0, java.net.InetAddress.getLoopbackAddress()).use { held ->
+            val p = held.localPort
+            val r = firstFreePort(p..p + 50)
+            kotlin.test.assertTrue(r != p && r in p..p + 50, "got $r")
+        }
+    }
+
+    @Test fun theOsPicksOnlyWhenTheWholeRangeIsTaken() {
+        val p = firstFreePort(9899..9900) { false }
+        kotlin.test.assertTrue(p !in 9899..9900 && p > 0)
+    }
+}

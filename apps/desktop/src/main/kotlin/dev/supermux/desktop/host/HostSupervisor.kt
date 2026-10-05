@@ -55,7 +55,8 @@ class HostSupervisor(
     internal val repoDir: () -> Path? = { DesktopHostBootstrap.detectRepoDir() },
     internal val bunPath: () -> String = ::defaultBunPath,
     internal val hostName: String = DesktopHostBootstrap.defaultHostName(),
-    private val freePort: () -> Int = { ServerSocket(0).use { it.localPort } },
+    /** Where a taken port moves to: the first free port of [MOVE_PORTS] (see [firstFreePort]). */
+    private val freePort: () -> Int = { firstFreePort() },
     internal val now: () -> Long = System::currentTimeMillis,
     internal val io: CoroutineDispatcher = Dispatchers.IO,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
@@ -844,3 +845,21 @@ class HostSupervisor(
 }
 
 internal fun HostProbeResult.isOurs() = this is HostProbeResult.Supermux && managedBy == "desktop"
+
+/**
+ * The ports a broker moves to when the saved one is taken: a fixed range right above
+ * [HostingPrefs.DEFAULT_PORT], below the OS's ephemeral range, so the moved port is predictable
+ * (firewall rules, the paired URL) and no outgoing connection can be holding it at the next launch.
+ */
+val MOVE_PORTS: IntRange = 9899..9999
+
+/** The first port in [range] that [canBind]; an OS-chosen one only if the whole range is taken. */
+fun firstFreePort(range: IntRange = MOVE_PORTS, canBind: (Int) -> Boolean = ::canBindLoopback): Int =
+    range.firstOrNull(canBind) ?: ServerSocket(0).use { it.localPort }
+
+private fun canBindLoopback(port: Int): Boolean = runCatching {
+    ServerSocket().use { s ->
+        s.reuseAddress = false
+        s.bind(java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), port))
+    }
+}.isSuccess
