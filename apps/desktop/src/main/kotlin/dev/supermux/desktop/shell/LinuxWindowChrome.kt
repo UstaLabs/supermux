@@ -18,6 +18,7 @@
 package dev.supermux.desktop.shell
 
 import androidx.compose.runtime.Composable
+import dev.supermux.desktop.DesktopDebug
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -75,7 +76,7 @@ object LinuxWindowChrome {
                 isAccessible = true
                 set(null, name)
             }
-        }.onFailure { println("[LinuxWindowChrome] could not set WM_CLASS: $it") }
+        }.onFailure { DesktopDebug.log("LinuxWindowChrome", "could not set WM_CLASS: $it") }
     }
 
     /**
@@ -101,15 +102,16 @@ object LinuxWindowChrome {
         val optOut = System.getenv(OPT_OUT_ENV)
         // Opted out: decide on the gate alone and never touch the X11 internals.
         if (!shouldEngage(linux, optOut, windowMoveSupported = true, nativeResize = true)) {
-            println("[LinuxWindowChrome] system title bar ($OPT_OUT_ENV=$optOut)")
+            DesktopDebug.log("LinuxWindowChrome", "system title bar ($OPT_OUT_ENV=$optOut)")
             return null
         }
         val moveResize = X11MoveResize.load()
         val move = runCatching { JBR.isWindowMoveSupported() }.getOrDefault(false)
         val engage = shouldEngage(linux, optOut, move, moveResize != null)
-        println(
-            if (engage) "[LinuxWindowChrome] custom chrome on (undecorated, WM move/resize)"
-            else "[LinuxWindowChrome] system title bar (windowMove=$move nativeResize=${moveResize != null})",
+        DesktopDebug.log(
+            "LinuxWindowChrome",
+            if (engage) "custom chrome on (undecorated, WM move/resize)"
+            else "system title bar (windowMove=$move nativeResize=${moveResize != null})",
         )
         return moveResize.takeIf { engage }
     }
@@ -195,7 +197,7 @@ fun rememberLinuxWindowChrome(frame: Frame, moveResize: X11MoveResize): LinuxWin
         frame.extendedState = state and Frame.MAXIMIZED_BOTH.inv()
         delay(REMAP_SETTLE_MS)
         frame.extendedState = state or Frame.MAXIMIZED_BOTH
-        println("[LinuxWindowChrome] re-maximised after the re-map (mutter keeps it hidden otherwise)")
+        DesktopDebug.log("LinuxWindowChrome", "re-maximised after the re-map (mutter keeps it hidden otherwise)")
     }
     DisposableEffect(frame) {
         val stateListener = WindowStateListener {
