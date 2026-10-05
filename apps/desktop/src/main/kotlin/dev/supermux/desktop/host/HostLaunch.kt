@@ -377,6 +377,26 @@ internal suspend fun HostSupervisor.launchGate(port: Int): LaunchGate = when (va
     }
 }
 
+/**
+ * Background off while a broker of ours runs that we couldn't re-parent (orphan mode: the XDG
+ * autostart or a service started it). Its definition is already removed; stop it by the pid in
+ * `broker.pid` (only if that process is a broker), then wait for the port. Null once it's gone.
+ */
+internal suspend fun HostSupervisor.stopOrphanLocked(port: Int): String? {
+    if (!probe(port).isOurs()) return null
+    val pid = otherLiveBrokerPid()
+    val h = pid?.takeIf { processes.info(it)?.command?.let(::isBrokerCommand) == true }?.let { processes.handle(it) }
+        ?: return "supermux is still running from the background setup. Quit it, then try again."
+    log("stopping the broker the background setup started (pid $pid)")
+    h.destroy()
+    if (!awaitExit(h, timing.stopGraceMs)) {
+        h.destroyForcibly()
+        awaitExit(h, 2_000)
+    }
+    if (!awaitPortFree(port)) return "supermux still answers on port $port after stopping it. Try again."
+    return null
+}
+
 /** The live pid in `broker.pid` when it isn't our child (and isn't a reused pid), else null. */
 private fun HostSupervisor.otherLiveBrokerPid(): Long? {
     val pid = runCatching { Files.readString(brokerPidFile).trim().toLong() }.getOrNull() ?: return null

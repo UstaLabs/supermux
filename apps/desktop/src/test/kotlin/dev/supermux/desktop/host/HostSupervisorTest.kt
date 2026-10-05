@@ -786,7 +786,8 @@ class HostSupervisorTest {
     }
 
     @Test fun ourPlistPlusALivePreviousChildStopsTheChildAndUsesTheService() = runTest {
-        val h = Harness(this, prefs = HostingPrefs(background = false))
+        // Background on (the service is installed), yet last session's child still runs.
+        val h = Harness(this, prefs = HostingPrefs(background = true))
         h.writeOurPlist()
         Files.writeString(h.state.resolve("desktop-broker.pid"), "777:1000")
         val orphan = FakeChild(777, startMillis = 1_000)
@@ -1495,12 +1496,13 @@ class HostSupervisorTest {
     }
 
     @Test fun windowsNeverAsksATakeoverItCannotDo() = runTest {
-        val h = Harness(this, os = OsEnv.Os.WINDOWS, captures = noProcesses)
+        // No task of ours is registered.
+        val h = Harness(this, os = OsEnv.Os.WINDOWS, captures = noProcesses, failIf = { it == listOf("schtasks", "/Query", "/TN", "Supermux Host") })
         h.probeFn = { h.outside("h-cli") }
         h.sup.ensure() // returns: no question to wait on
         assertEquals(HostingStatus.Running(9898, readOnly = true), h.sup.status.value)
         assertEquals("h-cli", h.sup.hostId.value)
-        assertTrue(h.launches.isEmpty() && h.env.ran.none { it.firstOrNull() == "schtasks" })
+        assertTrue(h.launches.isEmpty() && h.env.ran.none { it.firstOrNull() == "schtasks" && it.getOrNull(1) != "/Query" })
     }
 
     /** A broker (pid 999) holds broker.pid; once [booting] is set, the port is free once, then it answers as ours. */
@@ -1540,5 +1542,59 @@ class HostSupervisorTest {
         assertEquals(1, h.launches.size)
         assertEquals(running, h.sup.status.value)
         assertEquals(HostSupervisor.Mode.ORPHAN, h.sup.mode)
+    }
+
+    // ── background off reaches a broker the login definition started ──
+
+    @Test fun linuxXdgBackgroundOffInOrphanModeRemovesTheAutostartAndStopsItsBroker() = runTest {
+        val h = Harness(this, os = OsEnv.Os.LINUX, prefs = HostingPrefs(background = true), commands = emptySet())
+        // At login the XDG autostart started the broker: not our child, so orphan mode.
+        val autostart = h.home.resolve(".config/autostart/supermux-host.desktop")
+        Files.createDirectories(autostart.parent)
+        Files.writeString(autostart, BrokerService.xdgAutostart(BrokerService.Spec(h.bins.brokerPath!!, emptyMap(), h.state.resolve("l.log")), h.home.resolve(".config/supermux/broker.env")))
+        val atLogin = FakeChild(999, startMillis = 0)
+        Files.writeString(h.state.resolve("broker.pid"), "999")
+        h.table.procs[999] = ProcInfo(0, h.bins.brokerPath.toString()) to atLogin
+        val child = h.healthyIfChild()
+        h.probeFn = { if (atLogin.isAlive) h.desktop() else child(it) }
+        h.sup.ensure()
+        assertEquals(HostSupervisor.Mode.ORPHAN, h.sup.mode)
+        h.sup.setBackground(false)
+        assertFalse(Files.exists(autostart), "it would start a broker at the next login")
+        assertEquals(1, atLogin.destroyed)
+        assertEquals(1, h.launches.size)
+        assertEquals(HostSupervisor.Mode.CHILD, h.sup.mode)
+        assertEquals(running, h.sup.status.value)
+        assertFalse(h.saved.background)
+    }
+
+    @Test fun macBackgroundOffInOrphanModeRemovesTheServiceThenRunsAChild() = runTest {
+        val h = Harness(this, prefs = HostingPrefs(background = true))
+        h.writeOurPlist()
+        val bootout = listOf("launchctl", "bootout", "gui/501/dev.supermux.host")
+        val child = h.healthyIfChild()
+        h.probeFn = { if (bootout !in h.env.ran) h.desktop() else child(it) }
+        h.sup.ensure()
+        // e.g. the service is installed but appRunsAsService said no service was live: orphan
+        h.sup.mode = HostSupervisor.Mode.ORPHAN
+        h.sup.setBackground(false)
+        assertFalse(Files.exists(h.ourPlist))
+        assertTrue(bootout in h.env.ran)
+        assertEquals(1, h.launches.size)
+        assertEquals(running, h.sup.status.value)
+    }
+
+    @Test fun ensureRemovesAServiceLeftInstalledWithBackgroundOff() = runTest {
+        val h = Harness(this, prefs = HostingPrefs(background = false))
+        h.writeOurPlist()
+        val bootout = listOf("launchctl", "bootout", "gui/501/dev.supermux.host")
+        val child = h.healthyIfChild()
+        h.probeFn = { if (bootout !in h.env.ran) h.desktop() else child(it) }
+        h.sup.ensure()
+        assertFalse(Files.exists(h.ourPlist), "it would start a broker at every login next to our child")
+        assertEquals(1, h.launches.size)
+        assertEquals(HostSupervisor.Mode.CHILD, h.sup.mode)
+        assertEquals(running, h.sup.status.value)
+        assertFalse(h.saved.background)
     }
 }

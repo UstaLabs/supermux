@@ -247,8 +247,25 @@ class HostSupervisor(
         lock.withLock {
             val p = _prefs.value.copy(background = on)
             savePrefsNow(p)
-            // Read-only: not ours to move. Orphan: it holds the port; the next launch applies the choice.
-            if (!p.hosting || mode == Mode.READ_ONLY || mode == Mode.ORPHAN || mode == null) return@withLock
+            // Read-only: not ours to move.
+            if (!p.hosting || mode == Mode.READ_ONLY) return@withLock
+            if (!on && (mode == Mode.ORPHAN || mode == null)) {
+                // A broker the service (or the XDG autostart) started at login, which we can't
+                // re-parent: remove its definition, stop it, and run ours as the app's child.
+                stopWatch()
+                removeOurDefinitionsLocked(p.port)?.let { why ->
+                    savePrefsNow(p.copy(background = true))
+                    cantStart(why)
+                    return@withLock
+                }
+                if (mode == null) return@withLock // nothing runs: the next launch applies the choice
+                stopOrphanLocked(p.port)?.let { why -> cantStart(why); return@withLock }
+                _status.value = HostingStatus.Starting
+                afterLaunch(p, launchChildLocked(p, binaries(), carriedStore.load()))
+                return@withLock
+            }
+            // Orphan: it holds the port; the next launch applies the choice.
+            if (mode == Mode.ORPHAN || mode == null) return@withLock
             if (on) {
                 if (mode == Mode.SERVICE) return@withLock
                 val bins = binaries()
@@ -425,6 +442,14 @@ class HostSupervisor(
             found = probe(prefs.port)
         }
         val rolledBack = recovered && !healthy
+        // Background is off, yet a service (or XDG autostart) of ours is installed — a removal that
+        // didn't finish. It would start a broker at every login next to our child: remove it now.
+        // Not while this app runs as the 1.0.0 job: that definition is for the next login.
+        if (!prefs.background && withContext(io) { BrokerService.isOursInstalled(osEnv) && !BrokerService.appRunsAsService(osEnv) }) {
+            log("background is off but our service is installed; removing it")
+            removeOurDefinitionsLocked(prefs.port)?.let { why -> _backgroundError.value = why; log(why) }
+            found = probe(prefs.port)
+        }
 
         bundled = runCatching { bundledBuild() }.getOrNull()
         val appState = stateDir.toString()
