@@ -141,7 +141,7 @@ class BrokerServiceTest {
 
     @Test fun windowsInstallRegistersTheTaskElevatedFromXmlInsideTheCommand() {
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home)
+        val env = winEnv(home)
         val stale = env.localAppData.resolve("Supermux/supermux-host-task.xml")
         Files.createDirectories(stale.parent); Files.writeString(stale, "an older version's copy, env included")
         val installed = assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec, env))
@@ -159,7 +159,7 @@ class BrokerServiceTest {
 
     @Test fun windowsRemoveDeletesTheTaskAndItsEnvFile() {
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home)
+        val env = winEnv(home)
         BrokerService.install(winSpec, env)
         val removed = assertIs<BrokerService.Result.Removed>(BrokerService.remove(env))
         assertEquals(BrokerService.WINDOWS_TASK_PATH, removed.path)
@@ -284,7 +284,7 @@ class BrokerServiceTest {
     }
 
     @Test fun windowsInstallIsOneElevatedCallWithRegisterAndRun() {
-        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory())
+        val env = winEnv()
         BrokerService.install(winSpec, env)
         val elevated = elevatedCalls(env)
         assertEquals(1, elevated.size)
@@ -341,7 +341,7 @@ class BrokerServiceTest {
         assertEquals(listOf(300L), t.brokers)
     }
 
-    @Test fun windowsTaskTargetsFindOrphanedAndOldLoopsAndAChildModeBroker() {
+    @Test fun windowsTaskTargetsFindOrphanedAndOldLoopsButNeverTheAppsChildBroker() {
         fun p(pid: Long, ppid: Long, name: String, cmd: String) = BrokerService.WinProcess(pid, ppid, name, cmd)
         val procs = listOf(
             // conhost already killed by schtasks /End: the orphan still counts
@@ -352,22 +352,41 @@ class BrokerServiceTest {
             // someone's own shell that merely mentions the variable, under explorer: not ours
             p(13, 14, "explorer.exe", "explorer.exe"),
             p(15, 13, "powershell.exe", loopCmd),
-            // the app's child-mode broker (bare, parent java)
+            // the app's child-mode broker (bare, parent java): background off, never the task's
             p(20, 30, "supermux-broker.exe", "C:\\s\\supermux-broker.exe"),
             p(21, 15, "supermux-broker.exe", "\"C:\\s\\supermux-broker.exe\" shim"),
+            // the old-style loop's broker
+            p(22, 12, "supermux-broker.exe", "\"C:\\s\\supermux-broker.exe\""),
         )
         val t = BrokerService.windowsTaskTargets(procs)
         assertEquals(listOf(10L, 12L), t.loops)
-        assertEquals(listOf(20L), t.brokers)
+        assertEquals(listOf(22L), t.brokers)
     }
 
-    @Test fun bareBrokerCommandLines() {
-        assertTrue(BrokerService.isBareBrokerCommandLine("\"C:\\Program Files\\x\\supermux-broker.exe\""))
-        assertTrue(BrokerService.isBareBrokerCommandLine("C:\\s\\supermux-broker.exe  "))
-        assertFalse(BrokerService.isBareBrokerCommandLine("\"C:\\s\\supermux-broker.exe\" shim"))
-        assertFalse(BrokerService.isBareBrokerCommandLine("C:\\s\\supermux-broker.exe credential get"))
-        assertFalse(BrokerService.isBareBrokerCommandLine(""))
-        assertFalse(BrokerService.isBareBrokerCommandLine("\"C:\\s\\other.exe\""))
+    @Test fun windowsInstallAbortsWhenTheRunningBrokerWontStop() {
+        val home = createTempDirectory()
+        val env = winEnv(home, procs = null, registered = winXml(home, oldBroker))
+        val r = assertIs<BrokerService.Result.Failed>(BrokerService.install(winSpec, env))
+        assertTrue(r.previousStillRunning)
+        assertEquals(BrokerService.WINDOWS_STOP_FAILED, r.message)
+        assertEquals(emptyList(), elevatedCalls(env), "no re-registration")
+        assertTrue(run !in env.ran, "no second loop")
+    }
+
+    @Test fun windowsRestartDoesNotRunASecondLoopWhenTheBrokerWontStop() {
+        val env = winEnv(procs = null)
+        assertFalse(BrokerService.restart(env))
+        assertTrue(run !in env.ran)
+    }
+
+    @Test fun windowsRemoveFailsWhenTheBrokerOutlivesTheTask() {
+        val env = winEnv()
+        val tasklist = listOf("tasklist", "/FI", "PID eq 300", "/NH")
+        val stuck = object : OsEnv by env {
+            override fun runCapture(argv: List<String>): String? =
+                if (argv == tasklist) "supermux-broker.exe   300 Console   1  150,000 K" else env.runCapture(argv)
+        }
+        assertIs<BrokerService.Result.Failed>(BrokerService.remove(stuck))
     }
 
     @Test fun theProcessListerHasNoDoubleQuotes() {

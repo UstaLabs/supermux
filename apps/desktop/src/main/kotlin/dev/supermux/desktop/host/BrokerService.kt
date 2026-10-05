@@ -26,6 +26,9 @@ object BrokerService {
     /** ERROR_CANCELLED: what the elevated batch exits with when the UAC prompt is declined. */
     internal const val UAC_DECLINED_EXIT = 1223
 
+    const val WINDOWS_STOP_FAILED =
+        "Couldn't stop the background service to update it; it keeps running the previous version."
+
     const val WINDOWS_UPDATE_DECLINED =
         "Couldn't update the background service (permission declined); still running the previous version."
 
@@ -291,10 +294,8 @@ Terminal=false
         OsEnv.Os.LINUX -> env.run(listOf("systemctl", "--user", "restart", SYSTEMD_NAME))
         // Stop the loop and its broker, then start the task afresh; no elevation needed. /Run also
         // brings back a task whose loop died, and (StopExisting) replaces a lingering instance.
-        OsEnv.Os.WINDOWS -> {
-            stopWindowsTask(env)
-            env.run(listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME))
-        }
+        // A broker that didn't stop must not get a second loop next to it.
+        OsEnv.Os.WINDOWS -> stopWindowsTask(env) && env.run(listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME))
         OsEnv.Os.OTHER -> false
     }
 
@@ -503,8 +504,8 @@ Terminal=false
      * Pure. A loop is a powershell.exe whose command line runs the broker and sets
      * [WINDOWS_TASK_ENV] under the task's (headless) conhost — or orphaned once `schtasks /End`
      * killed that conhost — or, for loops an older app version installed, `MUX_MANAGED_BY`. A broker
-     * is a `supermux-broker.exe` that is a loop's child or runs with no subcommand at all (a bare
-     * broker); `supermux-broker.exe shim|credential|…` is never one.
+     * is a `supermux-broker.exe` whose parent is one of those loops. Never the app's own child
+     * broker (background off: its parent is the app) and never `supermux-broker.exe shim|credential|…`.
      */
     fun windowsTaskTargets(procs: List<WinProcess>): WindowsTaskTargets {
         val byPid = procs.associateBy { it.pid }
@@ -515,27 +516,8 @@ Terminal=false
                 else -> p.commandLine.contains("MUX_MANAGED_BY")
             }
         }.map { it.pid }
-        val brokers = procs.filter { p ->
-            named(p, WINDOWS_BROKER_EXE) && (p.parentPid in loops || isBareBrokerCommandLine(p.commandLine))
-        }.map { it.pid }
+        val brokers = procs.filter { p -> named(p, WINDOWS_BROKER_EXE) && p.parentPid in loops }.map { it.pid }
         return WindowsTaskTargets(loops, brokers)
-    }
-
-    /** `"C:\…\supermux-broker.exe"` (or unquoted) with nothing after it: the broker itself, no subcommand. */
-    fun isBareBrokerCommandLine(commandLine: String): Boolean {
-        val c = commandLine.trim()
-        if (c.isEmpty()) return false
-        val rest = if (c.startsWith('"')) {
-            val end = c.indexOf('"', 1)
-            if (end < 0) return false
-            if (!c.substring(1, end).endsWith(WINDOWS_BROKER_EXE, ignoreCase = true)) return false
-            c.substring(end + 1)
-        } else {
-            val end = c.indexOf(WINDOWS_BROKER_EXE, ignoreCase = true)
-            if (end < 0) return false
-            c.substring(end + WINDOWS_BROKER_EXE.length)
-        }
-        return rest.isBlank()
     }
 
     /**
@@ -593,7 +575,10 @@ Terminal=false
             val unchanged = wasInstalled && sameTaskAction(env.runCapture(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME, "/XML")), xml)
             // A running instance must not keep the old loop (and broker) alive past re-registration,
             // and an unchanged one restarts with the (maybe new) broker binary.
-            if (wasInstalled && !alreadyStopped) stopWindowsTask(env)
+            // If it won't stop, change nothing: a new loop next to the old broker would be a second one.
+            if (wasInstalled && !alreadyStopped && !stopWindowsTask(env)) {
+                return Result.Failed(WINDOWS_STOP_FAILED, previousStillRunning = true)
+            }
             if (unchanged && wasInstalled) {
                 // The registered task already says exactly this (an app update, an env change, a
                 // restart): no UAC prompt, just start it again.
@@ -647,8 +632,11 @@ Terminal=false
             if (!ended) return Result.Failed("Windows Scheduled Task remove failed: the elevated /End + /Delete did not succeed")
             // /End only terminates the task's own process (the headless conhost): stop its loop too,
             // then the broker, and wait until the broker is really gone. Starting the same .exe while
-            // the killed one is still being torn down fails with a sharing violation.
-            stopWindowsTask(env)
+            // the killed one is still being torn down fails with a sharing violation, and a broker
+            // still running must not get a child broker next to it.
+            if (!stopWindowsTask(env)) {
+                return Result.Failed("Windows Scheduled Task removed, but its broker is still running")
+            }
             Files.deleteIfExists(windowsEnvPath(env))
             Result.Removed(WINDOWS_TASK_PATH)
         }.getOrElse { Result.Failed("Windows Scheduled Task remove failed: ${it.message}") }

@@ -295,8 +295,13 @@ class HostSupervisor(
             mode = null
             if (was != Mode.READ_ONLY) {
                 if (ourServiceInstalled()) {
-                    val r = withContext(io) { BrokerService.remove(osEnv) }
-                    log("service remove: ${r.describe()}")
+                    removeServiceLocked(p.port)?.let { why ->
+                        // Still registered (e.g. UAC declined) or its broker still running: we are
+                        // still hosting, so say so rather than claim "off".
+                        savePrefsNow(p.copy(hosting = true))
+                        cantStart(why)
+                        return@withLock
+                    }
                 }
                 stopChildLocked()
                 // A broker of ours we could neither re-parent nor stop is still hosting.
@@ -567,7 +572,7 @@ class HostSupervisor(
             // Our service: restart it the way it runs, whatever prefs.background says.
             // Windows can't replace a running .exe: stop the task's broker first (no elevation; the
             // install below restarts the task, and only asks for UAC when its definition changed).
-            if (windows) stopWindowsServiceLocked(prefs0.port)
+            if (windows && !stopWindowsServiceLocked(prefs0.port)) return keepServiceAfterFailedStop(prefs0)
             val bins = binaries()
             if (lastCopyFailed && !windows) return keepRunning(prefs0, Mode.SERVICE)
             afterLaunch(prefs0, launchLocked(prefs0.copy(background = true), bins, carriedStore.load(), allowChildFallback = true, serviceStopped = windows))
@@ -670,7 +675,7 @@ class HostSupervisor(
         retries.reset()
         _status.value = HostingStatus.Starting
         val stopped = mode == Mode.SERVICE && osEnv.os == OsEnv.Os.WINDOWS
-        if (stopped) stopWindowsServiceLocked(p.port)
+        if (stopped && !stopWindowsServiceLocked(p.port)) return keepServiceAfterFailedStop(p)
         val bins = binaries()
         val why = if (mode == Mode.SERVICE) {
             launchLocked(p.copy(background = true), bins, carriedStore.load(), allowChildFallback = true, serviceStopped = stopped)

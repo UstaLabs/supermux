@@ -134,11 +134,25 @@ internal suspend fun HostSupervisor.removeServiceLocked(port: Int): String? {
     return null
 }
 
-/** Windows: stop our task's broker in place (no elevation) and wait for it to let go of [port]. */
-internal suspend fun HostSupervisor.stopWindowsServiceLocked(port: Int) {
+/**
+ * Windows: stop our task's broker in place (no elevation) and wait for it to let go of [port].
+ * False when it didn't stop: then nothing may be (re)installed or started next to it.
+ */
+internal suspend fun HostSupervisor.stopWindowsServiceLocked(port: Int): Boolean {
     val stopped = withContext(io) { BrokerService.stop(osEnv) }
     log("service stop: ${if (stopped) "the broker is gone" else "the broker is still running"}")
+    if (!stopped) return false
     if (!awaitPortFree(port)) log("port $port still answers ${timing.portFreeMs / 1000} s after stopping the service")
+    return true
+}
+
+/** Windows: our service's broker wouldn't stop. Keep it, as it runs, and say why nothing changed. */
+internal suspend fun HostSupervisor.keepServiceAfterFailedStop(prefs: HostingPrefs) {
+    mode = HostSupervisor.Mode.SERVICE
+    childDetached = false
+    _backgroundError.value = BrokerService.WINDOWS_STOP_FAILED
+    log(BrokerService.WINDOWS_STOP_FAILED)
+    afterLaunch(prefs, awaitHealthy(prefs.port, null, timing.systemdHealthMs))
 }
 
 /** True once nothing answers on [port]; false after [timeoutMs]. */

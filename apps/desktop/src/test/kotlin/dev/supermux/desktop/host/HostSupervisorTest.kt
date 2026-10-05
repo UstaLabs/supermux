@@ -50,12 +50,13 @@ private class Harness(
     commands: Set<String> = setOf("launchctl", "systemctl", "loginctl", "schtasks", "powershell.exe"),
     scripted: Map<List<String>, List<OsEnv.RunResult>> = emptyMap(),
     failIf: (List<String>) -> Boolean = { false },
+    captures: Map<List<String>, String> = emptyMap(),
     val repo: Path? = null,
     xdg: String? = null,
     val home: Path = createTempDirectory("sup-home"),
     val state: Path = createTempDirectory("sup-state"),
 ) {
-    val env = FakeOsEnv(os = os, home = home, uid = 501, xdgRuntimeDir = xdg, commands = commands, failing = failing, scripted = scripted, failIf = failIf)
+    val env = FakeOsEnv(os = os, home = home, uid = 501, xdgRuntimeDir = xdg, commands = commands, failing = failing, scripted = scripted, failIf = failIf, captures = captures)
     val events = mutableListOf<String>()
     var saved = prefs
     val children = mutableListOf<FakeChild>()
@@ -1339,11 +1340,8 @@ class HostSupervisorTest {
 
     @Test fun windowsUpdateWithUacDeclinedKeepsThePreviousTaskRunningWithoutASecondPrompt() = runTest {
         val elevated = { argv: List<String> -> argv.firstOrNull() == "powershell.exe" && argv.last().contains("-Verb RunAs") }
-        val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true), failIf = elevated)
-        // Our task is registered (schtasks /Query answers) with an older definition on disk.
-        val xml = h.env.localAppData.resolve(BrokerService.WINDOWS_TASK_XML)
-        Files.createDirectories(xml.parent)
-        Files.writeString(xml, "\uFEFF<old/>", Charsets.UTF_16LE)
+        // Our task is registered (schtasks /Query answers) with an older definition; nothing else runs.
+        val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true), failIf = elevated, captures = noProcesses)
         h.probeFn = { h.desktop(build = "1.4.0 (old)") } // the old broker, running again after /Run
         h.sup.ensure()
         assertEquals(running, h.sup.status.value)
@@ -1352,5 +1350,34 @@ class HostSupervisorTest {
         assertTrue(listOf("schtasks", "/Run", "/TN", "Supermux Host") in h.env.ran)
         assertTrue(h.launches.isEmpty(), "no child next to the service")
         assertEquals(HostSupervisor.Mode.SERVICE, h.sup.mode)
+    }
+
+    private val noProcesses = mapOf(BrokerService.listWindowsProcessesArgv() to "")
+    private val elevatedCall = { argv: List<String> -> argv.firstOrNull() == "powershell.exe" && argv.last().contains("-Verb RunAs") }
+
+    @Test fun windowsUpdateWhoseBrokerWontStopChangesNothing() = runTest {
+        // The process listing fails: the old broker may still run, so no new loop may start.
+        val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true))
+        h.probeFn = { h.desktop(build = "1.4.0 (old)") }
+        h.sup.ensure()
+        assertEquals(running, h.sup.status.value)
+        assertEquals(BrokerService.WINDOWS_STOP_FAILED, h.sup.backgroundError.value)
+        assertEquals(0, h.env.ran.count(elevatedCall), "no re-registration")
+        assertTrue(listOf("schtasks", "/Run", "/TN", "Supermux Host") !in h.env.ran, "no second loop")
+        assertTrue(h.launches.isEmpty())
+        assertEquals(HostSupervisor.Mode.SERVICE, h.sup.mode)
+    }
+
+    @Test fun hostingOffWithUacDeclinedKeepsHostingOnAndSaysWhy() = runTest {
+        val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true), failIf = elevatedCall, captures = noProcesses)
+        h.probeFn = { h.desktop() }
+        h.sup.ensure()
+        assertEquals(running, h.sup.status.value)
+        h.sup.setHosting(false)
+        val s = assertIs<HostingStatus.CantStart>(h.sup.status.value)
+        assertTrue(s.reason.startsWith("Couldn't stop the background service:"), s.reason)
+        assertTrue(h.saved.hosting, "the task is still registered: we are still hosting")
+        assertTrue(h.sup.prefs.value.hosting)
+        assertTrue(h.launches.isEmpty())
     }
 }
