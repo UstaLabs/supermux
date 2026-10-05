@@ -41,7 +41,7 @@ function isSessionBusy(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "session_busy"
 }
 
-function brokerCodexArgs(sessionName: string): string[] {
+export function brokerCodexArgs(sessionName: string): string[] {
   return [
     "app-server",
     "-c", 'approval_policy="never"',
