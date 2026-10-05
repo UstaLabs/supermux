@@ -7,7 +7,7 @@
  * carrying its own code word ("probe token"); the prompts never contain the words. Then:
  *   - the core is closed and reopened, the session resumed: it still recalls the earlier MCP word
  *     (conversation) and the instruction word (context reapplied from the record);
- *   - Codex: resume with changed instructions → `context_unsupported` (nothing launches);
+ *   - Codex: resume with instructions → `invalid_context` (fixed at creation; nothing launches);
  *   - policy "warn": a Codex session with a plugin that has hooks launches and emits `context.degraded`.
  *
  * Scratch (workdirs, agent homes, core state) lives under ~/.cache/context-c1/run-<stamp>/.
@@ -234,8 +234,8 @@ async function check(agent: Agent) {
     if (agent === "codex") {
       await core.sessions.close(`live-${agent}`, { mode: "shutdown" })
       const before = events.length
-      const error = await core.sessions.resume(`live-${agent}`, { context: { ...context, instructions: "Changed instructions." } }).then(() => undefined, e => e)
-      record(agent, "resume with changed instructions → context_unsupported", error?.code === "context_unsupported" && !events.slice(before).some(e => e.type === "session.resumed"), { code: error?.code, message: error?.message })
+      const error = await core.sessions.resume(`live-${agent}`, { context: { ...context, instructions: "Changed instructions." } as never }).then(() => undefined, e => e)
+      record(agent, "resume with instructions → invalid_context (fixed at creation)", error?.code === "invalid_context" && !events.slice(before).some(e => e.type === "session.resumed"), { code: error?.code, message: error?.message })
       const hooked = plugin(join(dir, "plugins", "hooked"), "hooked-plugin", word(), true)
       const warnEvents = events.length
       const warn = await core.sessions.create({ id: "live-codex-warn", agent, cwd: work, contextPolicy: "warn", context: { plugins: [hooked] }, ...(s.authProfile ? { authProfile: s.authProfile } : {}) })

@@ -5,7 +5,7 @@
  */
 import { isAbsolute } from "node:path"
 import { CoreError } from "../errors.js"
-import { MCP_SERVER_NAME, joinInstructions, normalizeContext } from "./index.js"
+import { INSTRUCTIONS_FIXED, MCP_SERVER_NAME, normalizeContext } from "./index.js"
 import type {
   ContextApplied, ContextCapabilities, ContextChange, ContextItemKind, ContextPatch, ContextUpdateSupport, DriverContextSupport,
   LaunchContext, ResolvedMcpServer, RuntimeContextControl, SessionContext, UpdateContextOptions,
@@ -13,18 +13,15 @@ import type {
 
 function invalid(message: string): CoreError { return new CoreError("invalid_context", message) }
 
-const PATCH_KEYS = new Set(["instructions", "skills", "plugins", "mcpServers"])
+const PATCH_KEYS = new Set(["skills", "plugins", "mcpServers"])
 
 /** Shape check and deep copy of a patch (no filesystem access). Anything malformed → invalid_context. */
 export function normalizePatch(value: unknown): ContextPatch {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid("patch must be an object")
   const input = value as Record<string, unknown>
+  if (Object.hasOwn(input, "instructions")) throw invalid(`patch.instructions: ${INSTRUCTIONS_FIXED}`)
   for (const key of Object.keys(input)) if (!PATCH_KEYS.has(key)) throw invalid(`patch.${key} is not a context field`)
   const out: ContextPatch = {}
-  if (input.instructions !== undefined) {
-    const normalized = normalizeContext({ instructions: input.instructions }, "patch")
-    out.instructions = normalized!.instructions!
-  }
   for (const key of ["skills", "plugins"] as const) {
     if (input[key] === undefined) continue
     const ops = operations(input[key], `patch.${key}`)
@@ -59,14 +56,12 @@ export function normalizeUpdateOptions(value: unknown): UpdateContextOptions {
   if (value === undefined) return {}
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new CoreError("invalid_input", "options must be an object")
   const input = value as Record<string, unknown>
-  for (const key of Object.keys(input)) if (!["reload", "holdOnCacheImpact", "codexInstructions"].includes(key)) throw new CoreError("invalid_input", `options.${key} is not an updateContext option`)
+  for (const key of Object.keys(input)) if (!["reload", "holdOnCacheImpact"].includes(key)) throw new CoreError("invalid_input", `options.${key} is not an updateContext option`)
   if (input.reload !== undefined && input.reload !== "allow" && input.reload !== "never") throw new CoreError("invalid_input", "options.reload must be \"allow\" or \"never\"")
   if (input.holdOnCacheImpact !== undefined && typeof input.holdOnCacheImpact !== "boolean") throw new CoreError("invalid_input", "options.holdOnCacheImpact must be a boolean")
-  if (input.codexInstructions !== undefined && input.codexInstructions !== "append") throw new CoreError("invalid_input", "options.codexInstructions must be \"append\"")
   return {
     ...(input.reload !== undefined ? { reload: input.reload as "allow" | "never" } : {}),
     ...(input.holdOnCacheImpact !== undefined ? { holdOnCacheImpact: input.holdOnCacheImpact as boolean } : {}),
-    ...(input.codexInstructions !== undefined ? { codexInstructions: "append" as const } : {}),
   }
 }
 
@@ -79,11 +74,6 @@ export const changeKey = (change: ContextChange) => `${change.kind}\0${change.op
  */
 export function patchChanges(own: SessionContext | undefined, base: SessionContext | undefined, patch: ContextPatch): ContextChange[] {
   const changes: ContextChange[] = []
-  if (patch.instructions !== undefined) {
-    const before = joinInstructions([...list(base?.instructions), ...list(own?.instructions)])
-    const after = joinInstructions([...list(base?.instructions), ...list(patch.instructions)])
-    if ((before ?? "") !== (after ?? "")) changes.push({ kind: "instructions", op: "replace", item: "instructions" })
-  }
   for (const kind of ["skills", "plugins"] as const) {
     const ops = patch[kind]
     if (!ops) continue
@@ -118,10 +108,6 @@ export function patchChanges(own: SessionContext | undefined, base: SessionConte
   return changes
 }
 
-function list(value: SessionContext["instructions"]): string[] {
-  return value === undefined ? [] : typeof value === "string" ? [value] : value
-}
-
 function duplicates(values: string[], field: string): void {
   if (new Set(values).size !== values.length) throw invalid(`${field} lists an entry twice`)
 }
@@ -130,10 +116,6 @@ function duplicates(values: string[], field: string): void {
 export function applyChanges(own: SessionContext | undefined, patch: ContextPatch, changes: ContextChange[]): SessionContext {
   const next: SessionContext = structuredClone(own ?? {})
   const has = (kind: ContextItemKind, op: ContextChange["op"], item: string) => changes.some(change => change.kind === kind && change.op === op && change.item === item)
-  if (changes.some(change => change.kind === "instructions")) {
-    if (list(patch.instructions).length) next.instructions = structuredClone(patch.instructions!)
-    else delete next.instructions
-  }
   for (const kind of ["skills", "plugins"] as const) {
     const kept = (next[kind] ?? []).filter(path => !has(kind, "remove", path))
     const added = (patch[kind]?.add ?? []).filter(path => has(kind, "add", path))
@@ -150,10 +132,8 @@ export function applyChanges(own: SessionContext | undefined, patch: ContextPatc
 }
 
 /** The in-flight table of a driver without one: every supported item is a reload. */
-export function reloadOnlyUpdates(capabilities: ContextCapabilities, note = "This driver applies context only at launch: a change relaunches the agent"): ContextUpdateSupport {
-  const instructions = capabilities.instructions.support === "unsupported" ? "unsupported" as const : "reload" as const
+export function reloadOnlyUpdates(_capabilities: ContextCapabilities, note = "This driver applies context only at launch: a change relaunches the agent"): ContextUpdateSupport {
   return {
-    instructions: { how: instructions, note: instructions === "unsupported" ? capabilities.instructions.note : note },
     skills: { add: "reload", remove: "reload", note },
     plugins: { add: "reload", remove: "reload", note },
     mcpServers: { add: "reload", remove: "reload", note },
@@ -171,14 +151,12 @@ export type PlanInput = {
   next: LaunchContext | undefined
   options: UpdateContextOptions
   open: boolean
-  /** The patch leaves the session with no instructions of its own. */
-  instructionsRemoved?: boolean
 }
 
 /**
- * Per change: `live` when the driver declares it and the open runtime confirms it, `append` for
- * opted-in Codex instructions, otherwise `reload` (when allowed), otherwise `unsupported`. A
- * session that is not open gets `reload` for everything its next launch can apply.
+ * Per change: `live` when the driver declares it and the open runtime confirms it, otherwise
+ * `reload` (when allowed), otherwise `unsupported`. A session that is not open gets `reload` for
+ * everything its next launch can apply.
  */
 export function planChanges(input: PlanInput): ContextApplied[] {
   const update = input.support?.update ?? reloadOnlyUpdates(input.capabilities)
@@ -186,20 +164,6 @@ export function planChanges(input: PlanInput): ContextApplied[] {
   return input.changes.map(change => {
     const capability = input.capabilities[change.kind]
     if (capability.support === "unsupported") return { ...change, how: "unsupported", reason: capability.note }
-    if (change.kind === "instructions") {
-      const how = update.instructions.how
-      if (how === "unsupported") return { ...change, how: "unsupported", reason: update.instructions.note }
-      if (how === "append") {
-        if (input.options.codexInstructions !== "append") {
-          return { ...change, how: "unsupported", reason: `${update.instructions.note}; pass codexInstructions: "append" to add the new instructions to the conversation instead` }
-        }
-        if (!input.open || !input.runtime?.appendInstructions) return { ...change, how: "unsupported", reason: "Appending instructions needs the open session" }
-        if (input.instructionsRemoved || input.next?.instructions === undefined) return { ...change, how: "unsupported", reason: "Appended instructions cannot remove instructions" }
-        return { ...change, how: "append" }
-      }
-      if (!input.open) return { ...change, how: "reload" }
-      return reloadAllowed ? { ...change, how: "reload" } : { ...change, how: "unsupported", reason: `${update.instructions.note}, and reload is "never"` }
-    }
     if (!input.open) return { ...change, how: "reload" }
     const op = change.op === "remove" ? "remove" : "add"
     if (update[change.kind][op] === "live" && input.runtime && input.next && input.runtime.live(change, input.next)) return { ...change, how: "live" }

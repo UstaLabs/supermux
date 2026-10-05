@@ -750,8 +750,6 @@ export function codex(options: CodexOptions): AgentDriver {
     const args = launch.args
     let catalogWarning = launch.warning
     const rpc = await transport({ command: options.command, args, env, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper, fingerprint: context.sessionContext?.fingerprint ?? EMPTY_CONTEXT_FINGERPRINT }, dispatchNotify, fail)
-    /** Instructions appended by updateContext (codexInstructions: "append"), sent once with the next turn (kept in keeper meta until then). */
-    let pendingInstructions: string | undefined
     const close = async (closeOptions: CloseOptions) => {
       const mode = requireCloseMode(closeOptions)
       if (!closed) { closed = true; cancelPendingPermissions(); fail(new Error('Codex runtime closed')) }
@@ -797,7 +795,6 @@ export function codex(options: CodexOptions): AgentDriver {
         if (seeded && typeof seeded === 'object') {
           try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'codex' }> } catch { /* keep factory spec */ }
         }
-        if (typeof rpc.welcome.meta.pendingInstructions === 'string') pendingInstructions = rpc.welcome.meta.pendingInstructions
         if (fatal) throw fatal
         ready = true
       } else {
@@ -867,10 +864,6 @@ export function codex(options: CodexOptions): AgentDriver {
         // The full new list replaces the old one (a root left out is no longer scanned).
         await rpc.request('skills/extraRoots/set', { extraRoots: codexExtraRoots(next) })
         return []
-      },
-      appendInstructions(text: string) {
-        pendingInstructions = text
-        try { rpc.setMeta({ pendingInstructions: text }) } catch { /* */ }
       },
       recordFingerprint: fingerprint => rpc.setFingerprint(fingerprint),
     }
@@ -1005,13 +998,7 @@ export function codex(options: CodexOptions): AgentDriver {
         const abort = () => { void interrupt().catch(error => { a.completion.reject(error) }) }
         signal.addEventListener('abort', abort, { once: true })
         try {
-          const appended = pendingInstructions
-          // Verified on 0.159.2 (C0): additionalContext is a sticky history entry, so it is sent once.
-          const result = await rpc.request('turn/start', { threadId: agentSessionId, input: converted, ...turnOverrides(), ...(appended !== undefined ? { additionalContext: { 'supermux-instructions': { kind: 'application', value: appended } } } : {}) })
-          if (appended !== undefined && pendingInstructions === appended) {
-            pendingInstructions = undefined
-            try { rpc.setMeta({ pendingInstructions: null }) } catch { /* */ }
-          }
+          const result = await rpc.request('turn/start', { threadId: agentSessionId, input: converted, ...turnOverrides() })
           if (typeof result?.turn?.id !== 'string' || !result.turn.id) throw new Error('Codex turn identity missing')
           const turnId: string = result.turn.id
           if (owned !== a) throw new Error('Codex turn already ended')

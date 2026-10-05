@@ -131,26 +131,16 @@ export function noContextCapabilities(note = "This driver declares no session co
 }
 
 /**
- * What this launch cannot apply: items the driver marks unsupported, instructions that differ
- * from the ones the conversation was created with (agents that fix them at creation), and the
- * driver's own finer drops (plugin parts it cannot map).
+ * What a launch cannot apply: items the driver marks unsupported and the driver's own finer
+ * drops (plugin parts it cannot map). Instructions never change after creation (later launches
+ * use the record's snapshot), so there is no instruction comparison.
  */
-export function contextDrops(
-  context: ResolvedContext,
-  support: DriverContextSupport | undefined,
-  launch: "create" | "resume" | "fork",
-  createdInstructions: string | undefined,
-): ContextDrop[] {
+export function contextDrops(context: ResolvedContext, support: DriverContextSupport | undefined): ContextDrop[] {
   const capabilities = support?.capabilities ?? noContextCapabilities()
   const drops: ContextDrop[] = []
   const unsupported = (kind: ContextItemKind) => capabilities[kind]?.support === "unsupported"
   if (context.instructions !== undefined && unsupported("instructions")) {
     drops.push({ kind: "instructions", item: "instructions", reason: capabilities.instructions.note })
-  } else if (support?.instructionsFixedAtCreation && launch !== "create" && (context.instructions ?? "") !== (createdInstructions ?? "")) {
-    drops.push({
-      kind: "instructions", item: "instructions",
-      reason: "This agent fixes instructions when the conversation is created; they cannot change on resume or fork",
-    })
   }
   for (const path of context.skills) if (unsupported("skills")) drops.push({ kind: "skills", item: path, reason: capabilities.skills.note })
   for (const path of context.plugins) if (unsupported("plugins")) drops.push({ kind: "plugins", item: path, reason: capabilities.plugins.note })
@@ -168,6 +158,24 @@ export function contextDrops(
 export function unsupportedError(agent: string, drops: ContextDrop[]): CoreError {
   const list = drops.map(drop => `${drop.kind === drop.item ? drop.kind : `${drop.kind} ${drop.item}`}: ${drop.reason}`).join("; ")
   return new CoreError("context_unsupported", `${agent} cannot apply this session context: ${list}`)
+}
+
+export const INSTRUCTIONS_FIXED = "instructions are fixed when the session is created"
+
+/**
+ * normalizeContext for `resume(id, { context })` / `fork({ context })`: skills, plugins and MCP
+ * servers only; an `instructions` key is `invalid_context`.
+ */
+export function normalizeContextUpdate(value: unknown, field = "context"): SessionContext | undefined {
+  if (value && typeof value === "object" && !Array.isArray(value) && Object.hasOwn(value, "instructions")) throw invalid(`${field}.instructions: ${INSTRUCTIONS_FIXED}`)
+  return normalizeContext(value, field)
+}
+
+/** A context without its instructions. */
+export function withoutInstructions(context: SessionContext | undefined): SessionContext | undefined {
+  if (!context) return context
+  const { instructions: _instructions, ...rest } = context
+  return rest
 }
 
 /** Whether two stored session contexts are the same (key order and absent-vs-empty ignored). */

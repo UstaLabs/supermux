@@ -206,7 +206,6 @@ test("codex: resume sends no developerInstructions; drops name plugin parts it c
   expect(resume).toBeDefined()
   expect("developerInstructions" in resume.params).toBe(false)
   const driver = AGENTS.codex!({})
-  expect(driver.context?.instructionsFixedAtCreation).toBe(true)
   const drops = driver.context!.drops!(f.launch())
   expect(drops.map(drop => drop.item).sort()).toEqual([`${f.plugin} (.opencode/plugins)`, `${f.plugin} (hooks)`, `${f.plugin} (mcpServers.remote)`].sort())
 })
@@ -329,7 +328,7 @@ test("claude live: holdOnCacheImpact passes hold_on_cache_impact; a held reload 
   } finally { await runtime.close({ mode: "shutdown" }) }
 })
 
-test("codex live: skills/extraRoots/set with the full new list; plugins with MCP servers and MCP changes are not live; appended instructions ride the next turn once", async () => {
+test("codex live: skills/extraRoots/set with the full new list; plugins with MCP servers and MCP changes are not live", async () => {
   const f = contextFixture()
   const launched = f.launch({ plugins: [], mcpServers: [] })
   const { runtime, trace } = await openLive("codex", launched)
@@ -341,11 +340,9 @@ test("codex live: skills/extraRoots/set with the full new list; plugins with MCP
     expect(live.live({ kind: "mcpServers", op: "add", item: "x" }, launched)).toBe(false)
     await live.apply({ ...launched, skills: [extra] }, [{ kind: "skills", op: "remove", item: f.skills }, { kind: "skills", op: "add", item: extra }], {})
     expect(trace().filter(line => line.method === "skills/extraRoots/set").map(line => line.params)).toEqual([{ extraRoots: [f.skills] }, { extraRoots: [extra] }])
-    live.appendInstructions!("New instructions.")
+    // Instructions never change after creation: no additionalContext on later turns.
     await runtime.prompt([{ type: "text", text: "one" }], new AbortController().signal)
-    await runtime.prompt([{ type: "text", text: "two" }], new AbortController().signal)
-    const turns = trace().filter(line => line.method === "turn/start").map(line => line.params.additionalContext)
-    expect(turns).toEqual([{ "supermux-instructions": { kind: "application", value: "New instructions." } }, undefined])
+    expect(trace().filter(line => line.method === "turn/start").map(line => line.params.additionalContext)).toEqual([undefined])
   } finally { await runtime.close({ mode: "shutdown" }) }
 })
 

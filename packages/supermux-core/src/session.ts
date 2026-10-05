@@ -486,11 +486,9 @@ export class Session {
   contextControl(): RuntimeContextControl | undefined { return this.runtime.context }
 
   /** Core-internal: the record's context fields after updateContext persisted them. */
-  setContextRecord(context: SessionContext | undefined, createdInstructions: string | undefined): void {
+  setContextRecord(context: SessionContext | undefined): void {
     if (context) this.record.context = structuredClone(context)
     else delete this.record.context
-    if (createdInstructions !== undefined) this.record.createdInstructions = createdInstructions
-    else delete this.record.createdInstructions
   }
 
   /** Core-internal: hold the queue (no queued input starts) until the returned release is called. */

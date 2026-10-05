@@ -8,9 +8,12 @@
  * tokens), then a second MCP server (the next turn must return its token plus the earlier MCP
  * word: the conversation is kept); one updateContext per item, each with its own probe token. The `how` of each change is checked
  * against the table (EXPECTED below). Then the added MCP server is removed again and must be gone
- * (no new call in its own log, its process stopped where the agent stops it). Then the
- * instructions are changed (OpenCode reload, Codex append opt-in, Claude and Grok unsupported: both
- * fix them when the session is created).
+ * (no new call in its own log, its process stopped where the agent stops it). Instructions are
+ * fixed at creation: the session's original instruction token must still answer after the
+ * changes (reloads included) and after a core restart + resume.
+ *
+ *   --quick: only that instruction check (create with instructions, add a skills folder, ask the
+ *   instruction token, restart the core, resume, ask again).
  * Claude: a live change must NOT restart the process (same keeper agentPid).
  *
  * Scratch (workdirs, agent homes, core state) under ~/.cache/context-c1b/run-<stamp>/; credentials
@@ -42,12 +45,14 @@ const wanted = (process.argv.slice(2).filter(a => (ALL as readonly string[]).inc
 const agents: Agent[] = wanted.length ? wanted : [...ALL]
 
 /** The table under test: how each change must be applied, per agent. */
-const EXPECTED: Record<Agent, { skill: ContextUpdateHow; plugin: ContextUpdateHow; mcp: ContextUpdateHow; removeMcp: ContextUpdateHow; instructions: ContextUpdateHow }> = {
-  claude: { skill: "live", plugin: "live", mcp: "live", removeMcp: "live", instructions: "unsupported" },
-  codex: { skill: "live", plugin: "live", mcp: "reload", removeMcp: "reload", instructions: "append" },
-  grok: { skill: "reload", plugin: "reload", mcp: "reload", removeMcp: "reload", instructions: "unsupported" },
-  opencode: { skill: "reload", plugin: "reload", mcp: "reload", removeMcp: "reload", instructions: "reload" },
+const EXPECTED: Record<Agent, { skill: ContextUpdateHow; plugin: ContextUpdateHow; mcp: ContextUpdateHow; removeMcp: ContextUpdateHow }> = {
+  claude: { skill: "live", plugin: "live", mcp: "live", removeMcp: "live" },
+  codex: { skill: "live", plugin: "live", mcp: "reload", removeMcp: "reload" },
+  grok: { skill: "reload", plugin: "reload", mcp: "reload", removeMcp: "reload" },
+  opencode: { skill: "reload", plugin: "reload", mcp: "reload", removeMcp: "reload" },
 }
+const QUICK = process.argv.includes("--quick")
+const ASK_INSTR = "What is the instruction probe token given in your system prompt or instructions? Reply with the token only. Do not use any tools."
 
 type Line = { agent: string; check: string; ok: boolean; evidence: unknown }
 const results: Line[] = []
@@ -193,8 +198,12 @@ async function check(agent: Agent) {
   skill(skillsB, names.skillB, W.skillB)
   const pluginDir = plugin(join(dir, "plugins", names.plugin), names.plugin, W.plugin)
   const events: CoreEvent[] = []
-  const core: Core = createCore({ stateDirectory: state, agents: [s.driver], limits: LIMITS, ...(s.profiles ? { profiles: s.profiles } : {}) })
-  core.subscribe(e => { events.push(e) })
+  const open = (): Core => {
+    const created = createCore({ stateDirectory: state, agents: [s.driver], limits: LIMITS, ...(s.profiles ? { profiles: s.profiles } : {}) })
+    created.subscribe(e => { events.push(e) })
+    return created
+  }
+  let core = open()
   const agentPid = (): number | undefined => { try { return JSON.parse(readFileSync(join(s.keeperDir, "keepers", id, "status.json"), "utf8")).agentPid } catch { return undefined } }
   const ask = async (text: string, timeoutMs = 300_000): Promise<string> => {
     const session = core.sessions.live(id)!
@@ -220,13 +229,34 @@ async function check(agent: Agent) {
   }
   try {
     record(agent, "capabilities.contextUpdate", true, core.capabilities(agent).contextUpdate)
-    await core.sessions.create({ id, agent, cwd: work, context: { skills: [skillsA], mcpServers: [server(dir, "ctxprobe", W.mcpA)] }, ...(s.authProfile ? { authProfile: s.authProfile } : {}) })
+    const instructions = `Session instructions. The instruction probe token is ${W.instr}. When asked for the instruction probe token, reply with it.`
+    await core.sessions.create({ id, agent, cwd: work, context: { instructions, skills: [skillsA], mcpServers: [server(dir, "ctxprobe", W.mcpA)] }, ...(s.authProfile ? { authProfile: s.authProfile } : {}) })
+    const live = () => core.sessions.live(id)!
+    const askInstructions = async (label: string) => {
+      try {
+        const reply = await ask(ASK_INSTR)
+        record(agent, label, has(reply, W.instr), { word: W.instr, reply, pid: agentPid() })
+      } catch (error) { record(agent, label, false, { error: (error as Error).message }) }
+    }
+    const restartAndAsk = async () => {
+      await core.close({ agents: "shutdown" })
+      core = open()
+      await core.sessions.resume(id)
+      await askInstructions("after a core restart + resume: the ORIGINAL instruction token")
+    }
+    if (QUICK) {
+      // The first turn never shows the token, so a later answer can only come from the instructions.
+      try { await ask("Reply with OK only. Do not use any tools.") } catch (error) { record(agent, "first turn", false, { error: (error as Error).message }) }
+      await update("add skills folder", () => live().updateContext({ skills: { add: [skillsB] } }), EXPECTED[agent].skill)
+      await askInstructions("after the change: the ORIGINAL instruction token")
+      await restartAndAsk()
+      return
+    }
     try {
       const reply = await ask(`${askTool("ctxprobe")} Reply with the code word only. Do not run shell commands.`)
       record(agent, "context A: MCP word before any change", has(reply, W.mcpA), { word: W.mcpA, reply })
     } catch (error) { record(agent, "context A: first turn", false, { error: (error as Error).message }) }
     const pidStart = agentPid()
-    const live = () => core.sessions.live(id)!
     await update("add skills folder", () => live().updateContext({ skills: { add: [skillsB] } }), EXPECTED[agent].skill)
     await update("add plugin", () => live().updateContext({ plugins: { add: [pluginDir] } }), EXPECTED[agent].plugin)
     // Asked BEFORE the MCP change, so a live skill/plugin is not masked by a later relaunch (one
@@ -262,17 +292,9 @@ async function check(agent: Agent) {
       record(agent, "removed MCP server is gone (no new call; its process stopped)", callsAfter === 0 && stopped.every(Boolean), { reply, callsAfterRemoval: callsAfter, probe2Pids, stopped, startsAfterRemoval: mcpLog(dir, "probe2").filter(e => e.event === "start").length - before.filter(e => e.event === "start").length })
     } catch (error) { record(agent, "removed MCP server", false, { error: (error as Error).message }) }
     if (agent === "claude") record(agent, "live removal kept the same process", agentPid() === pidBeforeRemove, { pidBeforeRemove, pidNow: agentPid() })
-    // Instructions.
-    const instructions = `Updated session instructions. The instruction probe token is ${W.instr}. When asked for the instruction probe token, reply with it.`
-    const pidBeforeInstr = agentPid()
-    const result = await update("change instructions", () => live().updateContext({ instructions }, agent === "codex" ? { codexInstructions: "append" } : undefined), EXPECTED[agent].instructions)
-    if (result) {
-      try {
-        const reply = await ask("What is the instruction probe token given in your instructions or application context? Reply with the token only. Do not use any tools.")
-        record(agent, "next turn sees the new instructions", has(reply, W.instr), { word: W.instr, reply, pidBeforeInstr, pidNow: agentPid() })
-      } catch (error) { record(agent, "next turn after instructions", false, { error: (error as Error).message }) }
-    }
+    await askInstructions("after the changes (and any reloads): the ORIGINAL instruction token")
     record(agent, "context.updated events", events.filter(e => e.type === "context.updated").length >= 4, events.filter(e => e.type === "context.updated").map(e => (e as { applied: unknown }).applied))
+    await restartAndAsk()
   } finally {
     await core.close({ agents: "shutdown" }).catch(error => console.error("close failed", error))
   }

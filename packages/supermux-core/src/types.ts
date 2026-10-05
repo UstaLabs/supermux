@@ -7,7 +7,7 @@ import type {
   SubagentMessaging,
 } from "./events/normalized.js"
 import type { AccountsOptions } from "./accounts/types.js"
-import type { ContextApplied, ContextDrop, ContextPolicy, DriverContextSupport, LaunchContext, RuntimeContextControl, SessionContext } from "./context/types.js"
+import type { ContextApplied, ContextDrop, ContextPolicy, DriverContextSupport, LaunchContext, RuntimeContextControl, SessionContext, SessionContextUpdate } from "./context/types.js"
 
 export type PermissionOptionKind = "allow_once" | "allow_always" | "reject_once" | "reject_always"
 
@@ -103,8 +103,8 @@ export type AuthProfile = {
   args?: string[]
 }
 
-/** `context` replaces the parent's own context for the fork; omitted, the fork inherits it. */
-export type ForkOptions = { id: string; at?: { nativeTurnId: string }; context?: SessionContext }
+/** `context` replaces the parent's own skills/plugins/MCP servers for the fork; omitted, the fork inherits them. The fork always keeps the parent's instructions (`createdInstructions`). */
+export type ForkOptions = { id: string; at?: { nativeTurnId: string }; context?: SessionContextUpdate }
 export type ForkSource = { agentSessionId: string; at?: { nativeTurnId: string } }
 
 export type SessionRecord = {
@@ -123,7 +123,11 @@ export type SessionRecord = {
   /** The session's own context (the core default is not stored; it is merged in at each launch). */
   context?: SessionContext
   contextPolicy?: ContextPolicy
-  /** Instructions the native conversation was created with (agents that fix them at creation compare against these). */
+  /**
+   * The merged instructions (core default + session) snapshotted at creation (forks inherit them).
+   * Every later launch uses this text; it is never re-merged, so a changed core default only
+   * reaches new sessions.
+   */
   createdInstructions?: string
 }
 
@@ -370,8 +374,8 @@ export type CreateOptions = { agent: string; cwd: string; id: string; authProfil
 
 /** Optional resume overrides. `configuration: undefined` is omitted (no-options resume). `{}` is an explicit no-op patch. */
 /** `account` switches the session to another account of the same agent (a live session is shut down and reopened). */
-/** `context` replaces the session's own context for this and later launches (a live idle session is relaunched). */
-export type ResumeOptions = { configuration?: SessionConfiguration; account?: string; context?: SessionContext }
+/** `context` replaces the session's own skills/plugins/MCP servers for this and later launches (a live idle session is relaunched); instructions are fixed at creation. */
+export type ResumeOptions = { configuration?: SessionConfiguration; account?: string; context?: SessionContextUpdate }
 
 /** Metadata-only registration of an existing native conversation. Native history is checked later by resume. */
 export type AdoptOptions = {

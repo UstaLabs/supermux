@@ -105,16 +105,14 @@ export function editPluginFolder(directory: string, changes: ContextChange[], ma
 
 export const CLAUDE_CONTEXT: DriverContextSupport = {
   capabilities: {
-    instructions: { support: "supported", note: "--append-system-prompt-file at session creation (a host's own appended prompt is kept: it is copied in first); fixed from then on: --resume keeps the stored prompt and ignores a new one" },
+    instructions: { support: "supported", note: "--append-system-prompt-file (a host's own appended prompt is kept: it is copied in first); Claude stores it with the session, --resume keeps it" },
     skills: { support: "supported", note: "a generated plugin per skills folder, in the session's --plugin-dir folder" },
     plugins: { support: "supported", note: "--plugin-dir <folder of plugins> (each plugin symlinked in)" },
     mcpServers: { support: "supported", note: "--mcp-config <session>/mcp.json (no --strict-mcp-config is added)" },
   },
   // Verified on 2.1.289 (C1b): a session keeps the appended system prompt it was created with;
   // `--resume` with another (or no) --append-system-prompt[-file] still answers from the stored one.
-  instructionsFixedAtCreation: true,
   update: {
-    instructions: { how: "unsupported", note: "Claude fixes the appended system prompt when the session is created: --resume ignores a new --append-system-prompt-file, and apply_flag_settings {appendSystemPrompt} succeeds but changes nothing" },
     skills: { add: "live", remove: "live", note: "a skills wrapper plugin added to / removed from the session plugin folder, then reload_plugins (reload_skills does not load a new plugin); live only when the process was launched with that folder" },
     plugins: { add: "live", remove: "live", note: "a symlink added to / removed from the session plugin folder, then reload_plugins; live only when the process was launched with that folder" },
     mcpServers: { add: "live", remove: "live", note: "mcp_set_servers with the full dynamic set; a server from the launch (--mcp-config) can only go with a relaunch" },
@@ -164,10 +162,8 @@ export const CODEX_CONTEXT: DriverContextSupport = {
     plugins: { support: "supported", note: "mapped, not installed: the plugin's skills/ → extraRoots, its .mcp.json stdio servers → MCP servers; hooks, commands and agents are dropped" },
     mcpServers: { support: "supported", note: "app-server -c mcp_servers.<name>.* (this process only; nothing is written to CODEX_HOME), tools pre-approved per server (default_tools_approval_mode=\"approve\")" },
   },
-  instructionsFixedAtCreation: true,
   drops: context => mappedPluginDrops(context, false),
   update: {
-    instructions: { how: "append", note: "Codex fixes developerInstructions at thread/start (thread/resume ignores them)" },
     skills: { add: "live", remove: "live", note: "skills/extraRoots/set with the full new list" },
     plugins: { add: "live", remove: "live", note: "live when the plugin maps to skills only (extraRoots); a plugin with MCP servers needs a relaunch" },
     mcpServers: { add: "reload", remove: "reload", note: "MCP servers are app-server -c args (this process only): a running app-server takes no per-process server (thread/resume config is ignored; config/value/write only writes the shared user config.toml), so a change starts a new app-server and resumes the thread" },
@@ -274,10 +270,8 @@ export function grokContext(factoryServers: McpServer[]): AcpContextAdapter {
         plugins: { support: "supported", note: "`grok agent --plugin-dir <plugin>` (this process only)" },
         mcpServers: { support: "supported", note: "ACP session/new mcpServers" },
       },
-      instructionsFixedAtCreation: true,
       drops: context => acpServerDrops(context, factoryServers),
       update: {
-        instructions: { how: "unsupported", note: "Grok fixes _meta.rules at session/new (session/load ignores new rules)" },
         skills: { add: "reload", remove: "reload", note: "skills ride per-process --plugin-dir: a change relaunches grok (new process + session/load)" },
         plugins: { add: "reload", remove: "reload", note: "per-process --plugin-dir: a change relaunches grok (new process + session/load)" },
         mcpServers: { add: "reload", remove: "reload", note: "ACP mcpServers are passed at session/new|load: a change relaunches grok" },
@@ -308,7 +302,6 @@ export function cursorContext(factoryServers: McpServer[]): AcpContextAdapter {
       },
       drops: context => acpServerDrops(context, factoryServers),
       update: {
-        instructions: { how: "unsupported", note: "No proven per-session instructions channel for Cursor" },
         skills: { add: "reload", remove: "reload", note: "unverified for Cursor: a change relaunches the agent" },
         plugins: { add: "reload", remove: "reload", note: "unverified for Cursor: a change relaunches the agent" },
         mcpServers: { add: "reload", remove: "reload", note: "unverified for Cursor: a change relaunches the agent" },
@@ -376,7 +369,6 @@ export function opencodeContext(factoryServers: McpServer[]): AcpContextAdapter 
       },
       drops: context => [...mappedPluginDrops(context, true), ...acpServerDrops(context, factoryServers)],
       update: {
-        instructions: { how: "reload", note: "OpenCode reads config instructions at start: a change relaunches it (new process + session/load)" },
         skills: { add: "reload", remove: "reload", note: "OpenCode reads skills.paths at start: a change relaunches it" },
         plugins: { add: "reload", remove: "reload", note: "OpenCode reads the mapped plugin parts at start: a change relaunches it" },
         mcpServers: { add: "reload", remove: "reload", note: "ACP mcpServers are passed at session/new|load: a change relaunches OpenCode" },

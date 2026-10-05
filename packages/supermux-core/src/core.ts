@@ -14,13 +14,13 @@ import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
 import {
-  contextDrops, contextFingerprint, isContextEmpty, joinInstructions, isEmptyContext, mergeContexts, noContextCapabilities, normalizeContext, normalizePolicy,
-  resolveContext, sameContext, unsupportedError,
+  contextDrops, contextFingerprint, isContextEmpty, isEmptyContext, mergeContexts, noContextCapabilities, normalizeContext, normalizeContextUpdate, normalizePolicy,
+  resolveContext, sameContext, unsupportedError, withoutInstructions,
 } from "./context/index.js"
 import { applyChanges, changeKey, normalizePatch, normalizeUpdateOptions, patchChanges, planChanges, reloadOnlyUpdates } from "./context/update.js"
 import type {
   AgentCapabilities, ContextApplied, ContextDrop, ContextPatch, ContextPolicy, LaunchContext, ResolvedContext, SessionContext,
-  UpdateContextOptions, UpdateContextResult,
+  ContextUpdateKind, UpdateContextOptions, UpdateContextResult,
 } from "./context/types.js"
 import type { Account, AddAccountOptions, LoginHandle, LoginOptions, UsageWindow } from "./accounts/types.js"
 import type {
@@ -359,7 +359,7 @@ export class Core {
     let requestedAccount: string | undefined
     let requestedContext: SessionContext | undefined
     try {
-      if (options && options.context !== undefined) requestedContext = normalizeContext(options.context)
+      if (options && options.context !== undefined) requestedContext = normalizeContextUpdate(options.context)
       if (options && options.configuration !== undefined) {
         const snapshot = structuredClone(options)
         assertConfiguration(snapshot.configuration)
@@ -400,7 +400,7 @@ export class Core {
       if (requestedContext !== undefined) {
         const saved = await this.store.get(id)
         if (!saved) throw new CoreError("session_not_found", `Session ${id} was not found`)
-        contextChange = !sameContext(saved.context, requestedContext)
+        contextChange = !sameContext(withoutInstructions(saved.context), requestedContext)
       }
       const current = this.live.get(id)
       if (current && current.snapshot().state !== "closed") {
@@ -423,7 +423,8 @@ export class Core {
       const configuration = explicit
         ? mergeConfiguration(record.configuration ?? {}, requestedPatch)
         : record.configuration
-      const ownContext = requestedContext !== undefined ? requestedContext : record.context
+      // The session's own instructions stay as given at creation (launches use createdInstructions).
+      const ownContext = requestedContext !== undefined ? keepInstructions(record.context, requestedContext) : record.context
       const { context: _previous, ...rest } = record
       const session = await this.openSession({
         ...rest, configuration, ...(switchFrom !== undefined ? { account: requestedAccount } : {}),
@@ -741,7 +742,7 @@ export class Core {
         if (typeof options.id !== "string") throw new TypeError("id is required")
         const id = options.id
         assertSessionId(id)
-        const forkContext = options.context !== undefined ? normalizeContext(options.context) : record.context
+        const forkContext = options.context !== undefined ? keepInstructions(record.context, normalizeContextUpdate(options.context)!) : record.context
         return this.withReservation(id, () => this.openSession({
           agent: record.agent, cwd: record.cwd, authProfile: record.authProfile,
           ...(record.account !== undefined ? { account: record.account } : {}),
@@ -826,29 +827,40 @@ export class Core {
    * launch. A nonempty context gets a fresh core-owned folder; an empty one gets none (the launch
    * is then exactly what it was without context).
    */
+  /**
+   * Merges the core default with the session's own context, validates it, and resolves it against
+   * the driver: under policy "error" anything it cannot apply is `context_unsupported` before any
+   * launch. Instructions are merged only on create and snapshotted as `createdInstructions`;
+   * resume and fork use that snapshot and never re-merge (a changed core default only reaches new
+   * sessions). A nonempty context gets a fresh core-owned folder; an empty one gets none (the
+   * launch is then exactly what it was without context).
+   */
   private async prepareContext(
     driver: AgentDriver,
     input: { id: string; context?: SessionContext; contextPolicy?: ContextPolicy; createdInstructions?: string },
     launch: "create" | "resume" | "fork",
   ): Promise<{ sessionContext?: LaunchContext; dropped: ContextDrop[]; createdInstructions?: string }> {
-    const resolved = await resolveContext(mergeContexts(this.defaultContext, input.context))
+    const resolved = await this.resolveLaunchContext(input.context, launch === "create" ? undefined : { createdInstructions: input.createdInstructions })
     const directory = this.store.contextDirectory(input.id)
-    const inherited = launch === "create" ? undefined : input.createdInstructions
-    const dropped = contextDrops(resolved, driver.context, launch, input.createdInstructions)
+    const dropped = contextDrops(resolved, driver.context)
     if (dropped.length && (input.contextPolicy ?? this.defaultPolicy) === "error") throw unsupportedError(driver.id, dropped)
+    const instructionsApplied = resolved.instructions !== undefined && !dropped.some(drop => drop.kind === "instructions")
+    const createdInstructions = launch === "create" ? (instructionsApplied ? resolved.instructions : undefined) : input.createdInstructions
+    const snapshot = createdInstructions !== undefined ? { createdInstructions } : {}
     if (isEmptyContext(resolved)) {
       await rm(directory, { recursive: true, force: true })
-      return { dropped, ...(inherited !== undefined ? { createdInstructions: inherited } : {}) }
+      return { dropped, ...snapshot }
     }
     await rm(directory, { recursive: true, force: true })
     await mkdir(directory, { recursive: true, mode: 0o700 })
-    const instructionsApplied = resolved.instructions !== undefined && !dropped.some(drop => drop.kind === "instructions")
-    const createdInstructions = launch === "create" ? (instructionsApplied ? resolved.instructions : undefined) : inherited
-    return {
-      sessionContext: { ...resolved, directory, launch, dropped, fingerprint: contextFingerprint(resolved, dropped) },
-      dropped,
-      ...(createdInstructions !== undefined ? { createdInstructions } : {}),
-    }
+    return { sessionContext: { ...resolved, directory, launch, dropped, fingerprint: contextFingerprint(resolved, dropped) }, dropped, ...snapshot }
+  }
+
+  /** Create: the core default merged with `own`. Later launches (`fixed` given): the same without instructions, plus the snapshot. */
+  private async resolveLaunchContext(own: SessionContext | undefined, fixed?: { createdInstructions: string | undefined }): Promise<ResolvedContext> {
+    if (!fixed) return resolveContext(mergeContexts(this.defaultContext, own))
+    const resolved = await resolveContext(mergeContexts(withoutInstructions(this.defaultContext), withoutInstructions(own)))
+    return fixed.createdInstructions !== undefined ? { ...resolved, instructions: fixed.createdInstructions } : resolved
   }
 
   private updateContext(id: string, patch: unknown, options: unknown): Promise<UpdateContextResult> {
@@ -890,33 +902,29 @@ export class Core {
     await resolveContext(mergeContexts(this.defaultContext, applyChanges(record.context, patch, changes)))
     const capabilities = driver.context?.capabilities ?? noContextCapabilities()
     const runtime = live?.contextControl()
-    const launchFor = async (own: SessionContext, createdInstructions: string | undefined) => {
-      const resolved = await resolveContext(mergeContexts(this.defaultContext, own))
-      const dropped = contextDrops(resolved, driver.context, "resume", createdInstructions)
+    const launchFor = async (own: SessionContext) => {
+      const resolved = await this.resolveLaunchContext(own, { createdInstructions: record.createdInstructions })
+      const dropped = contextDrops(resolved, driver.context)
       const next: LaunchContext = {
         ...resolved, directory: this.store.contextDirectory(id), launch: "resume", dropped, fingerprint: contextFingerprint(resolved, dropped),
       }
       return { resolved, dropped, next }
     }
     const statically = changes.filter(change => capabilities[change.kind].support !== "unsupported")
-    const preliminary = await launchFor(applyChanges(record.context, patch, statically), record.createdInstructions)
+    const preliminary = await launchFor(applyChanges(record.context, patch, statically))
     let applied = planChanges({
       agent: driver.id, changes, support: driver.context, capabilities, runtime, next: preliminary.next, options, open: live !== undefined,
-      instructionsRemoved: patch.instructions !== undefined && joinInstructions(patch.instructions) === undefined,
     })
-    const before = contextDrops(await resolveContext(mergeContexts(this.defaultContext, record.context)), driver.context, "resume", record.createdInstructions)
+    const before = contextDrops(await this.resolveLaunchContext(record.context, { createdInstructions: record.createdInstructions }), driver.context)
     const known = new Set(before.map(drop => `${drop.kind}\0${drop.item}`))
     let outcome!: Awaited<ReturnType<typeof launchFor>>
     let own!: SessionContext
-    let createdInstructions = record.createdInstructions
     let parts: ContextApplied[] = []
     for (let pass = 0; pass < 3; pass++) {
       own = applyChanges(record.context, patch, applied.filter(entry => entry.how !== "unsupported"))
-      const resolvedOwn = await resolveContext(mergeContexts(this.defaultContext, own))
-      createdInstructions = applied.some(entry => entry.how === "append") ? resolvedOwn.instructions : record.createdInstructions
-      outcome = await launchFor(own, createdInstructions)
+      outcome = await launchFor(own)
       // Drops the new context brings (e.g. a plugin part this agent cannot map, a server name the driver already uses).
-      const fresh = outcome.dropped.filter(drop => !known.has(`${drop.kind}\0${drop.item}`))
+      const fresh = outcome.dropped.filter((drop): drop is ContextDrop & { kind: ContextUpdateKind } => drop.kind !== "instructions" && !known.has(`${drop.kind}\0${drop.item}`))
       const whole = fresh.filter(drop => applied.some(entry => entry.how !== "unsupported" && entry.kind === drop.kind && entry.item === drop.item))
       parts = fresh.filter(drop => !whole.includes(drop)).map(drop => ({ kind: drop.kind, op: "add" as const, item: drop.item, how: "unsupported" as const, reason: drop.reason }))
       if (!whole.length) break
@@ -936,19 +944,15 @@ export class Core {
       return { applied, effective: "now" }
     }
     // The record first: a crash from here on never leaves it older than what is live.
-    const persist = async (context: SessionContext, created: string | undefined) => {
+    const persist = async (context: SessionContext) => {
       // Re-read: other fields (permissions, configuration) may have been saved meanwhile.
-      const { context: _context, createdInstructions: _created, ...rest } = await this.store.get(id) ?? record
-      const saved: SessionRecord = {
-        ...rest,
-        ...(!isContextEmpty(context) ? { context: structuredClone(context) } : {}),
-        ...(created !== undefined ? { createdInstructions: created } : {}),
-      }
+      const { context: _context, ...rest } = await this.store.get(id) ?? record
+      const saved: SessionRecord = { ...rest, ...(!isContextEmpty(context) ? { context: structuredClone(context) } : {}) }
       await this.store.put(saved)
       const current = this.live.get(id)
-      if (current && current.snapshot().state !== "closed") current.setContextRecord(saved.context, saved.createdInstructions)
+      if (current && current.snapshot().state !== "closed") current.setContextRecord(saved.context)
     }
-    await persist(own, createdInstructions)
+    await persist(own)
     let when: UpdateContextResult["effective"] = "next_turn"
     if (live) {
       const session = live
@@ -959,7 +963,7 @@ export class Core {
           applied = applied.map(entry => which(entry) ? { ...entry, how: "reload" as const, reason } : entry)
         }
         if (effective.some(entry => entry.how === "reload")) {
-          relaunch("Applied by the relaunch another change in this update needed", entry => entry.how === "live" || entry.how === "append")
+          relaunch("Applied by the relaunch another change in this update needed", entry => entry.how === "live")
           await this.reloadForContext(id, session)
         } else {
           const liveChanges = effective.filter(entry => entry.how === "live").map(({ kind, op, item }) => ({ kind, op, item }))
@@ -981,13 +985,11 @@ export class Core {
                 return hit ? { ...entry, how: "unsupported" as const, reason: hit.reason } : entry
               })
               own = applyChanges(record.context, patch, applied.filter(entry => entry.how !== "unsupported" && !keys.has(changeKey(entry))))
-              outcome = await launchFor(own, createdInstructions)
-              await persist(own, createdInstructions)
+              outcome = await launchFor(own)
+              await persist(own)
             }
           }
           if (!reloaded) {
-            const appended = effective.some(entry => entry.how === "append")
-            if (appended) runtime!.appendInstructions!(outcome.resolved.instructions!)
             await runtime?.recordFingerprint?.(outcome.next.fingerprint)
             // "now": the process took every applied change without waiting for a turn to end.
             if (!busy && applied.every(entry => entry.how === "live" || entry.how === "unsupported")) when = "now"
@@ -1089,6 +1091,11 @@ async function assertWorkdir(cwd: string): Promise<void> {
     if (error instanceof CoreError) throw error
     throw new CoreError("invalid_workdir", "cwd must be an existing absolute directory", { cause: error })
   }
+}
+
+/** `next` (no instructions) with the session's own instructions from `current` kept (informational; launches use createdInstructions). */
+function keepInstructions(current: SessionContext | undefined, next: SessionContext): SessionContext {
+  return current?.instructions !== undefined ? { instructions: structuredClone(current.instructions), ...next } : next
 }
 
 const DEFAULT_CONTINUE_PROMPT = "Continue from where you stopped. Your previous turn hit a usage limit and you are now on another account."

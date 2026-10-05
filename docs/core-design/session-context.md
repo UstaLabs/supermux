@@ -67,8 +67,9 @@ word; a Codex resume with changed instructions was `context_unsupported`; policy
 - **Claude:** a repeated `--append-system-prompt-file` keeps only the **last** one, so the core
   copies a host's own appended prompt into its file first. A repeated `--mcp-config` accumulates.
 - **Fork** stays on `Session.fork({ id, at?, context? })`; there is no `core.sessions.fork`.
-- **Instructions fixed at creation** (Codex, Grok) are compared with the record's
-  `createdInstructions`; a different merged text on resume/fork is unsupported.
+- **Instructions fixed at creation** (Codex, Grok) were compared with the record's
+  `createdInstructions` in C1; since C1b every agent's later launches use that snapshot directly
+  (see "Instructions are fixed at creation").
 - `createHost` drivers declare no context support yet (C3). Cursor: instructions unsupported,
   the rest unverified (no quota).
 - **`CODEX_HOME` sharing (open, not fixed in C1):** under a Codex subscription account (A1)
@@ -99,8 +100,8 @@ type SessionContext = {
 
 createCore({ …, context?: SessionContext })               // defaults for every session
 core.sessions.create({ agent, cwd, context?: SessionContext })
-core.sessions.resume(id, { context?: SessionContext })    // replace for this and later launches
-core.sessions.fork(id, { context?: SessionContext })      // inherits parent's, overridable
+core.sessions.resume(id, { context?: Omit<SessionContext, "instructions"> })  // replace for this and later launches
+session.fork({ id, context?: Omit<SessionContext, "instructions"> })        // inherits parent's (instructions always), overridable
 ```
 
 - **Merge:** session context is added on top of the core default (instructions and lists
@@ -125,9 +126,8 @@ const r = await session.updateContext({
   skills: { add: ["/p/new-skills"], remove: ["/p/old"] },
   plugins: { add: ["/p/my-plugin"] },
   mcpServers: { add: [githubMcp], remove: ["old"] },  // external servers (host servers: C2)
-  instructions: "…",                                   // replaces this session's own instructions
-}, { reload: "allow", holdOnCacheImpact: false, codexInstructions: undefined })
-// r.applied: [{ kind, op, item, how: "live" | "reload" | "append" | "unsupported", reason? }]
+}, { reload: "allow", holdOnCacheImpact: false })      // no instructions: fixed at creation
+// r.applied: [{ kind, op, item, how: "live" | "reload" | "unsupported", reason? }]
 // r.effective: "now" | "next_turn"; event { type: "context.updated", sessionId, applied }
 core.sessions.updateContext(id, patch, options)   // a session that is not open: record only
 ```
@@ -137,7 +137,6 @@ core.sessions.updateContext(id, patch, options)   // a session that is not open:
   account-switch path: shutdown + resume with the record's context). It waits for the turn to
   end and never cancels it; the queue is held meanwhile and queued input moves to the relaunched
   `Session` and runs after the reload.
-- **append:** Codex only, opt-in: new instructions ride the next `turn/start.additionalContext`.
 - **unsupported:** reported, never faked, and not stored in the record. Under policy "error"
   anything unsupported refuses the whole update (nothing applied, nothing stored).
 
@@ -145,13 +144,29 @@ The record is persisted before anything reaches the agent. Every live mechanism 
 with its own probe token through the core (`context-live-update.ts`, runs under
 `~/.cache/context-c1b/`), or by a raw probe where noted.
 
-| Agent | Add / remove skill | Add / remove plugin | Add / remove MCP server | Change instructions |
-|---|---|---|---|---|
-| Claude | **live**: a `supermux-skills-N` wrapper in `<ctx>/plugins` + `reload_plugins` (`reload_skills` does NOT load a new wrapper plugin: probe answered NONE) | **live**: symlink in `<ctx>/plugins` + `reload_plugins` (`hold_on_cache_impact` passed through) | **live**: `mcp_set_servers` with the full *dynamic* set; a launch (`--mcp-config`) server can only go by **reload** | **unsupported**: the appended prompt is stored with the session; `--resume` ignores a new `--append-system-prompt[-file]` (probe: NONE / old token) |
-| Codex | **live**: `skills/extraRoots/set` with the full list | **live** for a skills-only plugin; **reload** when it has `.mcp.json` servers | **reload**: new app-server (`-c` args) + `thread/resume` | **append** (opt-in `codexInstructions: "append"`), else **unsupported** |
-| Cursor | reload (unverified) | reload (unverified) | reload (unverified) | unsupported |
-| Grok | reload | reload | reload | **unsupported** (`_meta.rules` fixed at `session/new`) |
-| OpenCode | reload | reload | reload | reload |
+| Agent | Add / remove skill | Add / remove plugin | Add / remove MCP server |
+|---|---|---|---|
+| Claude | **live**: a `supermux-skills-N` wrapper in `<ctx>/plugins` + `reload_plugins` (`reload_skills` does NOT load a new wrapper plugin: probe answered NONE) | **live**: symlink in `<ctx>/plugins` + `reload_plugins` (`hold_on_cache_impact` passed through) | **live**: `mcp_set_servers` with the full *dynamic* set; a launch (`--mcp-config`) server can only go by **reload** |
+| Codex | **live**: `skills/extraRoots/set` with the full list | **live** for a skills-only plugin; **reload** when it has `.mcp.json` servers | **reload**: new app-server (`-c` args) + `thread/resume` |
+| Cursor | reload (unverified) | reload (unverified) | reload (unverified) |
+| Grok | reload | reload | reload |
+| OpenCode | reload | reload | reload |
+
+### Instructions are fixed at creation (decision 2026-10-05)
+
+Instructions never change after a session is created, for every agent (OpenCode included). At
+create the merged instructions (core default + session) are snapshotted into
+`record.createdInstructions`; resume, reload, keeper relaunch, OpenCode config regeneration and
+forks all use the snapshot and never re-merge. A changed core default therefore reaches only new
+sessions and never makes an existing session's resume fail. `updateContext`, `resume(id, { context })`
+and `fork({ context })` take no `instructions` (`invalid_context` "instructions are fixed when the
+session is created"); their context type is `Omit<SessionContext, "instructions">`. A fork inherits
+the parent's snapshot (a fork continues the parent's conversation, which already carries those
+instructions for Claude and Codex; OpenCode gets the same text in its config). The opt-in Codex
+`additionalContext` append path built first in C1b was removed with this decision. Live
+(`context-live-update.ts --quick`, run `2026-10-05T11-30-48-776Z`): OpenCode after a reload (add a
+skill) and Claude after a live add both still answered the ORIGINAL instruction token, and again
+after a core restart + resume (that second answer could also come from the history).
 
 Where reality differed from the C0-based plan:
 
@@ -159,9 +174,8 @@ Where reality differed from the C0-based plan:
   (2.1.289): a session created without an appended prompt and resumed with
   `--append-system-prompt-file` (or `--append-system-prompt`) answers "NONE"; a session created
   with token A and resumed with a file holding token B (or with no flag at all) still answers A.
-  The prompt is stored with the session. So Claude is now `instructionsFixedAtCreation` (C1's
-  resume with changed instructions is `context_unsupported` for Claude too, like Codex and Grok),
-  and in flight it is `unsupported`. C1's "instructions reapplied after a restart" evidence came
+  The prompt is stored with the session (one of the reasons instructions are now fixed at
+  creation for every agent, see above). C1's "instructions reapplied after a restart" evidence came
   from the stored prompt (and the history), not from the flag.
 - **Claude skills use `reload_plugins`.** A new skills folder is a new wrapper plugin, which
   `reload_skills` does not load (C0's live skill was a new skill *inside* an already loaded
@@ -316,8 +330,9 @@ The function runs **in the host process**, with the session's context.
   the per-session channels. The environment helpers become internal (the current exports
   are kept as deprecated). Live check: the C0 script through `core.sessions.create`.
 - **C1b, in flight, done (see "Changing context in flight"):** `session.updateContext` /
-  `core.sessions.updateContext`, the live mechanisms proven per agent, reload otherwise, the
-  keeper fingerprint relaunch, Claude instructions fixed at creation.
+  `core.sessions.updateContext` for skills, plugins and MCP servers, the live mechanisms proven per
+  agent, reload otherwise, the keeper fingerprint relaunch; instructions fixed at creation for
+  every agent (snapshot in `createdInstructions`).
 - **C2, host MCP servers:** `mcpServer()` / `tool()`, the bridge, the socket, live tool
   add/remove, cancellation, events, and keeper reconnect. Live check: each agent gets two host
   servers plus one external one, calls a tool on each and repeats the secret results; a tool
@@ -337,11 +352,8 @@ The function runs **in the host process**, with the session's context.
    subagent if the agent exposes that.
 5. (C1b) The keeper fingerprint covers MCP server `env`: C2 host servers must keep per-launch
    tokens out of it, or every re-attach after a host restart becomes a relaunch.
-6. (C1b) Codex appended instructions wait in keeper meta for the next turn; if the app-server is
-   relaunched (reload, restart) before that turn, they are lost while the record already counts
-   them as part of the conversation. Send them with the first turn after any relaunch, or refuse
-   an append that cannot be delivered.
+6. ~~(C1b) Codex appended instructions lost on a relaunch~~: the append path was removed.
 7. (C1b) No explicit `mcpServerStatus` ready-wait after a Codex reload: in every live run the next
    turn called the new server (Codex starts it with the thread), but a slow server could still race.
-8. (C1b) Changing the core default instructions between host restarts makes every Claude, Codex and
-   Grok session's resume `context_unsupported` under policy "error" (instructions fixed at creation).
+8. ~~(C1b) A changed core default instruction text failing resumes~~: fixed, later launches use the
+   creation snapshot.

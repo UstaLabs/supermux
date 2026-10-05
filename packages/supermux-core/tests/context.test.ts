@@ -211,18 +211,38 @@ test("resume({context}) on a live idle session relaunches it; the same context d
   expect(live.snapshot().state).toBe("closed")
 })
 
-test("instructions fixed at creation: a changed resume is context_unsupported, an unchanged one is fine", async () => {
+test("instructions are snapshotted at create: later launches use the snapshot, never re-merge; resume/fork cannot change them", async () => {
   const f = fixtures(), state = scratch(), opened: Opened[] = []
-  const c = core(state, [fakeDriver("fixed", { ...ALL_SUPPORTED, instructionsFixedAtCreation: true }, opened)])
-  await c.sessions.create({ agent: "fixed", cwd: f.cwd, id: "s1", context: { instructions: "A" } })
-  expect((await c.sessions.get("s1"))?.createdInstructions).toBe("A")
-  await c.sessions.close("s1", { mode: "shutdown" })
-  await expect(c.sessions.resume("s1", { context: { instructions: "B" } })).rejects.toMatchObject({ code: "context_unsupported" })
-  expect(opened).toHaveLength(1)
-  expect((await c.sessions.get("s1"))?.context).toEqual({ instructions: "A" })
+  const driver = fakeDriver("fake", ALL_SUPPORTED, opened)
+  let c = core(state, [driver], { context: { instructions: "Core v1." } })
+  await c.sessions.create({ agent: "fake", cwd: f.cwd, id: "s1", context: { instructions: "Mine." } })
+  expect((await c.sessions.get("s1"))?.createdInstructions).toBe("Core v1.\n\nMine.")
+  await c.close({ agents: "shutdown" })
+  // A new core with another default: the existing session keeps its snapshot and resumes fine.
+  c = core(state, [driver], { context: { instructions: "Core v2." } })
   await c.sessions.resume("s1")
-  expect(opened[1]!.sessionContext!.instructions).toBe("A")
+  expect(opened[1]!.sessionContext!.instructions).toBe("Core v1.\n\nMine.")
   expect(opened[1]!.sessionContext!.dropped).toEqual([])
+  // New sessions get the new default.
+  await c.sessions.create({ agent: "fake", cwd: f.cwd, id: "s2" })
+  expect(opened[2]!.sessionContext!.instructions).toBe("Core v2.")
+  // resume({ context }) and fork({ context }) take no instructions.
+  await c.sessions.close("s1", { mode: "shutdown" })
+  await expect(c.sessions.resume("s1", { context: { instructions: "B" } as never })).rejects.toMatchObject({ code: "invalid_context", message: expect.stringContaining("instructions are fixed when the session is created") })
+  const resumed = await c.sessions.resume("s1", { context: { skills: [f.skills] } })
+  expect(opened.at(-1)!.sessionContext!.instructions).toBe("Core v1.\n\nMine.")
+  expect((await c.sessions.get("s1"))?.context).toEqual({ instructions: "Mine.", skills: [f.skills] })
+  await expect(resumed.fork({ id: "f1", context: { instructions: "x" } as never })).rejects.toMatchObject({ code: "invalid_context" })
+})
+
+test("a fork inherits the parent's instruction snapshot", async () => {
+  const f = fixtures(), state = scratch(), opened: Opened[] = []
+  const driver = fakeDriver("fake", ALL_SUPPORTED, opened)
+  const c = core(state, [driver], { context: { instructions: "Core." } })
+  const parent = await c.sessions.create({ agent: "fake", cwd: f.cwd, id: "p", context: { instructions: "Parent." } })
+  await parent.fork({ id: "child", context: { plugins: [f.plugin] } })
+  expect(opened[1]!.sessionContext!.instructions).toBe("Core.\n\nParent.")
+  expect((await c.sessions.get("child"))?.createdInstructions).toBe("Core.\n\nParent.")
 })
 
 test("fork inherits the parent's context, or takes its own", async () => {

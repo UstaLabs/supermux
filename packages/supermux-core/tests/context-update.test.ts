@@ -31,11 +31,10 @@ function fixtures() {
 }
 
 const SUPPORTED = { support: "supported" as const, note: "n" }
-/** All items supported; skills and MCP add/remove live, plugins reload, instructions reload. */
+/** All items supported; skills and MCP add/remove live, plugins reload. */
 const MIXED: DriverContextSupport = {
   capabilities: { instructions: SUPPORTED, skills: SUPPORTED, plugins: SUPPORTED, mcpServers: SUPPORTED },
   update: {
-    instructions: { how: "reload", note: "instructions reload" },
     skills: { add: "live", remove: "live", note: "skills live" },
     plugins: { add: "reload", remove: "reload", note: "plugins reload" },
     mcpServers: { add: "live", remove: "live", note: "mcp live" },
@@ -46,7 +45,6 @@ type Fake = {
   driver: AgentDriver
   opened: DriverContext[]
   applies: Array<{ next: LaunchContext; changes: ContextChange[]; options: UpdateContextOptions; recordAtApply?: unknown }>
-  appended: string[]
   fingerprints: string[]
   prompts: string[]
   interrupts: number
@@ -58,9 +56,9 @@ type Fake = {
   readRecord?: () => Promise<unknown>
 }
 
-function fakeDriver(id: string, support: DriverContextSupport | undefined, extra: { append?: boolean } = {}): Fake {
+function fakeDriver(id: string, support: DriverContextSupport | undefined): Fake {
   const fake: Fake = {
-    opened: [], applies: [], appended: [], fingerprints: [], prompts: [], interrupts: 0, blockPrompts: false,
+    opened: [], applies: [], fingerprints: [], prompts: [], interrupts: 0, blockPrompts: false,
     releasePrompt: () => {},
     driver: undefined as never,
   }
@@ -79,7 +77,6 @@ function fakeDriver(id: string, support: DriverContextSupport | undefined, extra
           if (fake.failApply) throw fake.failApply
           return changes.flatMap(change => { const reason = fake.refuse?.(change); return reason ? [{ change, reason }] : [] })
         },
-        ...(extra.append ? { appendInstructions: (text: string) => { fake.appended.push(text) } } : {}),
         recordFingerprint: async fingerprint => { fake.fingerprints.push(fingerprint) },
       }
       return {
@@ -299,39 +296,26 @@ test("reload: never → reload items are unsupported (error policy refuses, warn
 
 // ------------------------------------------------------------ instructions
 
-const APPENDS: DriverContextSupport = { ...MIXED, instructionsFixedAtCreation: true, update: { ...MIXED.update!, instructions: { how: "append", note: "fixed at thread start" } } }
-
-test("Codex-style instructions: unsupported without the opt-in; codexInstructions: append adds them and the record follows", async () => {
-  const f = fixtures(), state = scratch(), fake = fakeDriver("codexish", APPENDS, { append: true })
-  const c = core(state, [fake.driver], { context: { instructions: "Core." } })
-  const session = await c.sessions.create({ agent: "codexish", cwd: f.cwd, id: "s1", context: { instructions: "Old." } })
-  await expect(session.updateContext({ instructions: "New." })).rejects.toMatchObject({ code: "context_unsupported" })
-  expect(fake.appended).toEqual([])
-  const result = await session.updateContext({ instructions: "New." }, { codexInstructions: "append" })
-  expect(result).toEqual({ applied: [{ kind: "instructions", op: "replace", item: "instructions", how: "append" }], effective: "next_turn" })
-  expect(fake.appended).toEqual(["Core.\n\nNew."])
-  const record = (await c.sessions.get("s1"))!
-  expect(record.context).toEqual({ instructions: "New." })
-  // The conversation now carries these instructions: a later resume does not flag them.
-  expect(record.createdInstructions).toBe("Core.\n\nNew.")
-  await c.sessions.close("s1", { mode: "shutdown" })
-  await c.sessions.resume("s1")
-  expect(fake.opened.at(-1)!.sessionContext!.dropped).toEqual([])
-  // Removing instructions cannot be appended.
-  await expect(c.sessions.live("s1")!.updateContext({ instructions: [] }, { codexInstructions: "append" })).rejects.toMatchObject({ code: "context_unsupported" })
+test("instructions cannot be changed in flight: invalid_context, nothing stored", async () => {
+  const f = fixtures(), state = scratch(), fake = fakeDriver("fake", MIXED)
+  const c = core(state, [fake.driver])
+  const session = await c.sessions.create({ agent: "fake", cwd: f.cwd, id: "s1", context: { instructions: "Old." } })
+  const before = await c.sessions.get("s1")
+  await expect(session.updateContext({ instructions: "New." } as never)).rejects.toMatchObject({ code: "invalid_context", message: expect.stringContaining("instructions are fixed when the session is created") })
+  await expect(c.sessions.updateContext("s1", { instructions: [], skills: { add: [f.skillsA] } } as never)).rejects.toMatchObject({ code: "invalid_context" })
+  await expect(session.updateContext({ skills: { add: [f.skillsA] } }, { codexInstructions: "append" } as never)).rejects.toMatchObject({ code: "invalid_input" })
+  expect(await c.sessions.get("s1")).toEqual(before)
 })
 
-test("instructions reload on a reload-instructions agent; unsupported where they are fixed", async () => {
+test("a reload keeps the instruction snapshot, even after the core default changed", async () => {
   const f = fixtures(), state = scratch(), fake = fakeDriver("fake", MIXED)
-  const grokish = fakeDriver("grokish", { ...MIXED, update: { ...MIXED.update!, instructions: { how: "unsupported", note: "fixed at session/new" } } })
-  const c = core(state, [fake.driver, grokish.driver])
-  const session = await c.sessions.create({ agent: "fake", cwd: f.cwd, id: "s1", context: { instructions: "Old." } })
-  expect((await session.updateContext({ instructions: ["A", "B"] })).applied).toEqual([{ kind: "instructions", op: "replace", item: "instructions", how: "reload" }])
-  expect(fake.opened[1]!.sessionContext!.instructions).toBe("A\n\nB")
-  // Same text → no change at all.
-  expect(await c.sessions.live("s1")!.updateContext({ instructions: "A\n\nB" })).toEqual({ applied: [], effective: "now" })
-  const other = await c.sessions.create({ agent: "grokish", cwd: f.cwd, id: "s2", context: { instructions: "Old." } })
-  await expect(other.updateContext({ instructions: "New." })).rejects.toMatchObject({ code: "context_unsupported", message: expect.stringContaining("fixed at session/new") })
+  let c = core(state, [fake.driver], { context: { instructions: "Core v1." } })
+  await c.sessions.create({ agent: "fake", cwd: f.cwd, id: "s1", context: { instructions: "Mine." } })
+  await c.close({ agents: "shutdown" })
+  c = core(state, [fake.driver], { context: { instructions: "Core v2." } })
+  const session = await c.sessions.resume("s1")
+  expect((await session.updateContext({ plugins: { add: [f.pluginA] } })).applied[0]!.how).toBe("reload")
+  expect(fake.opened.map(open => open.sessionContext!.instructions)).toEqual(["Core v1.\n\nMine.", "Core v1.\n\nMine.", "Core v1.\n\nMine."])
 })
 
 // ------------------------------------------------------------ closed sessions
@@ -362,10 +346,9 @@ test("core.sessions.updateContext on an open session takes the live path", async
 
 // ------------------------------------------------------------ the per-driver tables
 
-const control = (live: (change: ContextChange) => boolean, append = false): RuntimeContextControl => ({ live, apply: async () => [], ...(append ? { appendInstructions: () => {} } : {}) })
+const control = (live: (change: ContextChange) => boolean): RuntimeContextControl => ({ live, apply: async () => [] })
 const NEXT = { instructions: "x", skills: [], plugins: [], mcpServers: [], directory: "/d", launch: "resume", dropped: [], fingerprint: "f" } as LaunchContext
 const CHANGES: ContextChange[] = [
-  { kind: "instructions", op: "replace", item: "instructions" },
   { kind: "skills", op: "add", item: "/s" }, { kind: "skills", op: "remove", item: "/s0" },
   { kind: "plugins", op: "add", item: "/p" }, { kind: "plugins", op: "remove", item: "/p0" },
   { kind: "mcpServers", op: "add", item: "m" }, { kind: "mcpServers", op: "remove", item: "m0" },
@@ -375,26 +358,26 @@ const hows = (support: DriverContextSupport, runtime: RuntimeContextControl | un
 
 test("planChanges per driver table: live only where declared AND confirmed by the running process", () => {
   // Claude: the runtime confirms (launched with the plugin folder; m0 was added live).
-  // Claude instructions: fixed at creation (--resume keeps the stored appended prompt).
-  expect(hows(CLAUDE_CONTEXT, control(() => true))).toEqual(["unsupported", "live", "live", "live", "live", "live", "live"])
-  expect(hows(CLAUDE_CONTEXT, control(change => change.kind !== "mcpServers" || change.op === "add"))).toEqual(["unsupported", "live", "live", "live", "live", "live", "reload"])
-  expect(hows(CLAUDE_CONTEXT, control(() => false), { reload: "never" })).toEqual(["unsupported", "unsupported", "unsupported", "unsupported", "unsupported", "unsupported", "unsupported"])
-  // Codex: skills live, plugins live only when skills-only, MCP always reload, instructions append (opt-in).
-  expect(hows(CODEX_CONTEXT, control(change => change.kind === "skills"), {})).toEqual(["unsupported", "live", "live", "reload", "reload", "reload", "reload"])
-  expect(hows(CODEX_CONTEXT, control(() => true, true), { codexInstructions: "append" })).toEqual(["append", "live", "live", "live", "live", "reload", "reload"])
-  // Grok and OpenCode: reload (Grok instructions unsupported).
-  expect(hows(grokContext([]).support, control(() => true))).toEqual(["unsupported", "reload", "reload", "reload", "reload", "reload", "reload"])
-  expect(hows(opencodeContext([]).support, control(() => true))).toEqual(["reload", "reload", "reload", "reload", "reload", "reload", "reload"])
+  expect(hows(CLAUDE_CONTEXT, control(() => true))).toEqual(["live", "live", "live", "live", "live", "live"])
+  expect(hows(CLAUDE_CONTEXT, control(change => change.kind !== "mcpServers" || change.op === "add"))).toEqual(["live", "live", "live", "live", "live", "reload"])
+  expect(hows(CLAUDE_CONTEXT, control(() => false), { reload: "never" })).toEqual(["unsupported", "unsupported", "unsupported", "unsupported", "unsupported", "unsupported"])
+  // Codex: skills live, plugins live only when skills-only, MCP always reload.
+  expect(hows(CODEX_CONTEXT, control(change => change.kind === "skills"))).toEqual(["live", "live", "reload", "reload", "reload", "reload"])
+  expect(hows(CODEX_CONTEXT, control(() => true))).toEqual(["live", "live", "live", "live", "reload", "reload"])
+  // Grok and OpenCode: reload.
+  expect(hows(grokContext([]).support, control(() => true))).toEqual(["reload", "reload", "reload", "reload", "reload", "reload"])
+  expect(hows(opencodeContext([]).support, control(() => true))).toEqual(["reload", "reload", "reload", "reload", "reload", "reload"])
   // No runtime (closed session): everything applicable is reload.
   expect(planChanges({ agent: "a", changes: CHANGES, support: CLAUDE_CONTEXT, capabilities: CLAUDE_CONTEXT.capabilities, runtime: undefined, next: NEXT, options: { reload: "never" }, open: false }).map(entry => entry.how))
-    .toEqual(["unsupported", "reload", "reload", "reload", "reload", "reload", "reload"])
+    .toEqual(["reload", "reload", "reload", "reload", "reload", "reload"])
 })
 
 test("core.capabilities exposes the in-flight table", async () => {
   const state = scratch(), fake = fakeDriver("fake", MIXED), bare = fakeDriver("bare", undefined)
   const c = core(state, [fake.driver, bare.driver])
   expect(c.capabilities("fake").contextUpdate).toEqual(MIXED.update!)
-  expect(c.capabilities("bare").contextUpdate.instructions.how).toBe("unsupported")
+  expect("instructions" in c.capabilities("bare").contextUpdate).toBe(false)
+  expect(c.capabilities("bare").contextUpdate.skills.add).toBe("reload")
 })
 
 // ------------------------------------------------------------ keeper: a changed launch is never re-attached
