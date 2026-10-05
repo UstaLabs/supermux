@@ -7,3 +7,7 @@ internal fun isMacOs(osName: String? = System.getProperty("os.name")): Boolean =
 /** True on Linux (the StatusNotifierItem tray). */
 internal fun isLinuxOs(osName: String? = System.getProperty("os.name")): Boolean =
     osName?.lowercase()?.contains("linux") ?: false
+
+/** True on Windows (the tray glyph follows the taskbar theme). */
+internal fun isWindowsOs(osName: String? = System.getProperty("os.name")): Boolean =
+    osName?.lowercase()?.startsWith("windows") ?: false

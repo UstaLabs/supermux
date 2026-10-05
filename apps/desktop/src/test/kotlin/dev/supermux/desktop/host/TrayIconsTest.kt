@@ -48,6 +48,18 @@ class TrayIconsTest {
         assertIs<BitmapPainter>(TrayIcons.painter(mac = false))
     }
 
+    @Test fun aLightWindowsTaskbarGetsTheBlackGlyph() {
+        assertIs<MultiSizeBitmapPainter>(TrayIcons.painter(mac = false, darkGlyph = true))
+    }
+
+    @Test fun parsesTheTaskbarThemeFromRegQuery() {
+        val light = "\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\r\n" +
+            "    SystemUsesLightTheme    REG_DWORD    0x1\r\n\r\n"
+        assertEquals(true, TrayIcons.parseSystemUsesLightTheme(light))
+        assertEquals(false, TrayIcons.parseSystemUsesLightTheme(light.replace("0x1", "0x0")))
+        assertEquals(null, TrayIcons.parseSystemUsesLightTheme("ERROR: The system was unable to find the specified registry key or value."))
+    }
+
     /** What Compose's Tray does with the painter on a Retina Mac: 22 pt at density 2. */
     @Test fun retinaVariantIsThe44pxTemplateOneToOne() {
         val awt = TrayIcons.painter(mac = true).toAwtImage(Density(2f), LayoutDirection.Ltr, Size(22f, 22f))

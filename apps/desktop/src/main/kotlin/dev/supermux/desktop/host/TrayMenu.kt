@@ -18,8 +18,11 @@ fun dotGlyph(d: Dot): String = when (d) {
     Dot.GREY -> "⚪"
 }
 
-/** The disabled first tray item: dot + header. */
-fun trayHeaderLine(m: TrayModel): String = "${dotGlyph(m.dot)} ${m.header}"
+/**
+ * The disabled first tray item: dot + header. [dot] false drops the colour-emoji dot: Windows' native
+ * (AWT) tray menu can't draw it and shows two empty boxes instead.
+ */
+fun trayHeaderLine(m: TrayModel, dot: Boolean = true): String = if (dot) "${dotGlyph(m.dot)} ${m.header}" else m.header
 
 /**
  * What the tray needs from the fleet: the live session count on THIS computer's broker, and the
@@ -175,9 +178,9 @@ data class TrayPower(
     }
 }
 
-/** The tray menu (spec §States, "Tray menu"). Hosting off: header, Open, Quit. */
-fun trayMenuItems(model: TrayModel, background: Boolean, power: TrayPower = TrayPower.NONE): List<TrayItem> = buildList {
-    add(TrayItem.Header(trayHeaderLine(model)))
+/** The tray menu (spec §States, "Tray menu"). Hosting off: header, Open, Quit. [dot]: see [trayHeaderLine]. */
+fun trayMenuItems(model: TrayModel, background: Boolean, power: TrayPower = TrayPower.NONE, dot: Boolean = true): List<TrayItem> = buildList {
+    add(TrayItem.Header(trayHeaderLine(model, dot)))
     add(TrayItem.Action(TrayAction.OPEN, "Open supermux"))
     if (model.showLog) add(TrayItem.Action(TrayAction.SHOW_LOG, "Show log"))
     if (model.restartLabel != null || model.showKeepRunning) {
@@ -204,8 +207,9 @@ fun MenuScope.HostingTrayMenu(
     background: Boolean,
     power: TrayPower,
     dispatcher: TrayDispatcher,
+    dot: Boolean = true,
 ) {
-    for (item in trayMenuItems(model, background, power)) {
+    for (item in trayMenuItems(model, background, power, dot)) {
         when (item) {
             is TrayItem.Header -> Item(item.text, enabled = false, onClick = {})
             is TrayItem.Action -> Item(item.label, enabled = item.enabled, onClick = { dispatcher.onAction(item.id) })

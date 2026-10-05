@@ -28,14 +28,35 @@ object TrayIcons {
     /** JDK 17+ (JDK-8252015): the macOS tray marks its image as a template. Read when AWT's tray loads. */
     const val TEMPLATE_PROPERTY = "apple.awt.enableTemplateImages"
 
-    /** The painter for this OS; falls back to the colour icon when a template can't be loaded. */
-    fun painter(mac: Boolean): Painter {
-        if (mac) {
+    /**
+     * The painter for this OS; falls back to the colour icon when a template can't be loaded.
+     * [darkGlyph]: draw the black glyph (the template bitmaps) — macOS always (the OS tints it), and
+     * Windows when the taskbar is light, where the white colour icon is invisible.
+     */
+    fun painter(mac: Boolean, darkGlyph: Boolean = mac): Painter {
+        if (mac || darkGlyph) {
             val variants = TEMPLATES.mapNotNull(::load)
             if (variants.size == TEMPLATES.size) return MultiSizeBitmapPainter(variants)
         }
         return BitmapPainter(load(COLOUR) ?: ImageBitmap(1, 1))
     }
+
+    /** `SystemUsesLightTheme` (the taskbar's own theme, not the apps'), under this key in HKCU. */
+    private const val PERSONALIZE_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+
+    /** True iff the Windows taskbar is light (the Windows 11 default). False on failure: the white icon. */
+    fun windowsTaskbarIsLight(): Boolean = runCatching {
+        val p = ProcessBuilder("reg", "query", PERSONALIZE_KEY, "/v", "SystemUsesLightTheme")
+            .redirectErrorStream(true).start()
+        val out = p.inputStream.bufferedReader().readText()
+        p.waitFor()
+        parseSystemUsesLightTheme(out) ?: false
+    }.getOrDefault(false)
+
+    /** Pure: the `reg query … /v SystemUsesLightTheme` output → light (true) / dark (false), or null. */
+    fun parseSystemUsesLightTheme(regOutput: String): Boolean? =
+        Regex("""SystemUsesLightTheme\s+REG_DWORD\s+0x([0-9a-fA-F]+)""").find(regOutput)
+            ?.groupValues?.get(1)?.toLongOrNull(16)?.let { it != 0L }
 
     private fun load(name: String): ImageBitmap? = runCatching {
         val bytes = TrayIcons::class.java.classLoader.getResourceAsStream(name)?.use { it.readBytes() } ?: return null

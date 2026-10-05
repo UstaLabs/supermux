@@ -67,6 +67,7 @@ import dev.supermux.desktop.host.trayMenuItems
 import dev.supermux.desktop.host.linux.SniStatus
 import dev.supermux.desktop.host.linux.SniTray
 import dev.supermux.desktop.platform.isLinuxOs
+import dev.supermux.desktop.platform.isWindowsOs
 import dev.supermux.desktop.host.QuitAction
 import dev.supermux.desktop.host.TrayAction
 import dev.supermux.desktop.host.TrayModel
@@ -806,8 +807,13 @@ fun main() {
         }
 
         if (useAwtTray) {
-            // macOS: a black + alpha template drawn 1:1 at 22 and 44 px (see TrayIcons); elsewhere colour.
-            val trayIcon = if (isMacOs()) remember { TrayIcons.painter(mac = true) } else painterResource(TrayIcons.COLOUR)
+            // macOS: a black + alpha template drawn 1:1 at 22 and 44 px (see TrayIcons). Windows: the
+            // same black glyph on a light taskbar, where the white colour icon is invisible; else colour.
+            val trayIcon = when {
+                isMacOs() -> remember { TrayIcons.painter(mac = true) }
+                isWindowsOs() -> remember { TrayIcons.painter(mac = false, darkGlyph = TrayIcons.windowsTaskbarIsLight()) }
+                else -> painterResource(TrayIcons.COLOUR)
+            }
             Tray(
                 icon = trayIcon,
                 state = trayState,
@@ -819,6 +825,7 @@ fun main() {
                         background = hostingPrefs.background,
                         power = trayPowerShown,
                         dispatcher = trayDispatcher,
+                        dot = !isWindowsOs(),
                     )
                 },
             )

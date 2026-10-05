@@ -24,6 +24,7 @@ class TrayMenuTest {
     @Test fun headerLineLeadsWithTheDot() {
         val m = TrayModel.of(HostingStatus.Running(9898, false), HostingPrefs(), 2, null)
         assertEquals("🟢 supermux is running · 2 sessions", trayHeaderLine(m))
+        assertEquals("supermux is running · 2 sessions", trayHeaderLine(m, dot = false), "Windows' AWT menu can't draw the emoji")
     }
 
     @Test fun countsOnlyTheLocalHostsSessions() {
