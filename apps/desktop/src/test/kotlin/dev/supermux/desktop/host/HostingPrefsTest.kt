@@ -87,12 +87,14 @@ class HostingPrefsTest {
     }
 
     @Test fun loopbackUrls() {
-        assertTrue(isLoopbackUrl("http://127.0.0.1:9898"))
-        assertTrue(isLoopbackUrl("http://LOCALHOST:1"))
-        assertTrue(isLoopbackUrl("http://[::1]:9898"))
-        assertTrue(!isLoopbackUrl("http://192.168.1.5:9898"))
-        assertTrue(!isLoopbackUrl(null))
-        assertTrue(!isLoopbackUrl("not a url"))
+        for (u in listOf(
+            "http://127.0.0.1:9898", "http://127.5.6.7", "http://LOCALHOST:1", "http://[::1]:9898",
+            "http://[0:0:0:0:0:0:0:1]:9898", "http://[0000:0000:0000:0000:0000:0000:0000:0001]/",
+        )) assertTrue(isLoopbackUrl(u), u)
+        for (u in listOf(
+            "http://192.168.1.5:9898", null, "", "not a url", "http://127.example.com:9898", "http://127.0.0.1.nip.io/",
+            "http://128.0.0.1/", "http://[::2]/", "http://localhost.evil.com/", "http://127.0.0.256/", "http:///nohost",
+        )) assertTrue(!isLoopbackUrl(u), u.toString())
     }
 
     @Test fun storeExists() {

@@ -67,14 +67,6 @@ class HostingPrefsStore(
             Path.of(System.getProperty("user.home") ?: ".", ".config", "supermux-desktop", "hosting.json")
     }
 }
-/** A paired record for THIS computer's broker: its direct URL is loopback. */
-fun isLoopbackUrl(url: String?): Boolean {
-    if (url.isNullOrBlank()) return false
-    val host = runCatching { java.net.URI(url.trim()).host }.getOrNull()?.lowercase()?.removeSurrounding("[", "]")
-        ?: return false
-    return host == "localhost" || host == "::1" || host == "0:0:0:0:0:0:0:1" || host.startsWith("127.")
-}
-
 /**
  * The first prefs, decided before the first `ensure()` so an upgrade never starts hosting by surprise.
  * Returns null when nothing should be written:

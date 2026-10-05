@@ -150,10 +150,6 @@ object DesktopHostBootstrap {
         return HostClaim(localToken = token, claimSecret = secret, relayUrl = relay(token))
     }
 
-    /** "This computer"'s record: the one with [hostId], else one whose direct URL is loopback. */
-    fun thisComputerRecord(hosts: List<PairedHost>, hostId: String?): PairedHost? =
-        hosts.firstOrNull { hostId != null && it.hostId == hostId } ?: hosts.firstOrNull { isLoopbackUrl(it.directUrl) }
-
     /** Store (or refresh) "This computer" in [hostStore], then tell the live fleet. */
     fun saveThisComputer(
         hostStore: PairedHostStore,
@@ -292,7 +288,7 @@ object DesktopHostBootstrap {
         provideLocalUrl = { supervisor.localBaseUrl },
         mintClaim = {
             // Reuse an existing "This computer" token if we already have one (reconnect), else bootstrap.
-            val existing = hostStore.list().firstOrNull { it.hostId == supervisor.hostId.value }?.token
+            val existing = thisComputerRecord(hostStore.list(), supervisor.hostId.value, supervisor.prefs.value.port)?.token
             mintLocalClaim(
                 supervisor.localBaseUrl, hostName, existing,
                 // A trust-on-first-connect token is stored at once, not only on Done.

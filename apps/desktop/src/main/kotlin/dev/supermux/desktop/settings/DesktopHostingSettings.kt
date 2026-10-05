@@ -59,6 +59,8 @@ import dev.supermux.desktop.host.lanIpv4
 import dev.supermux.desktop.host.openFile
 import dev.supermux.desktop.host.systemNetIfs
 import dev.supermux.desktop.host.tailLines
+import dev.supermux.desktop.host.thisComputerRecord
+import dev.supermux.desktop.host.urlPort
 import dev.supermux.host.PairedHostStore
 import dev.supermux.net.GitRequirement
 import dev.supermux.net.KeepAwakeState
@@ -266,7 +268,7 @@ internal suspend fun installGitOnLocalBroker(
     log: (String) -> Unit,
     post: suspend (url: String, token: String) -> dev.supermux.net.InstallGitResult? = DesktopHostBootstrap::installGit,
 ): Boolean {
-    val token = DesktopHostBootstrap.thisComputerRecord(hosts, hostId)?.token?.takeIf { it.isNotBlank() }
+    val token = thisComputerRecord(hosts, hostId, urlPort(localUrl))?.token?.takeIf { it.isNotBlank() }
         ?: wizardToken?.takeIf { it.isNotBlank() }
     if (token == null) {
         log("install git: no token for this computer")
@@ -317,7 +319,7 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
             relayUrl = null
             return@LaunchedEffect
         }
-        val token = hostStore?.let { DesktopHostBootstrap.thisComputerRecord(it.list(), hostId) }
+        val token = hostStore?.let { thisComputerRecord(it.list(), hostId, prefs.port) }
             ?.token?.takeIf { it.isNotBlank() }
         relayUrl = token?.let { DesktopHostBootstrap.localRelayUrl(sup.localBaseUrl, it) }
     }
@@ -439,7 +441,7 @@ private fun TurnOnWizardDialog(
 fun PairQrDialog(sup: HostSupervisor, hostStore: PairedHostStore, lanIp: String?, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     val model = remember {
-        val token = DesktopHostBootstrap.thisComputerRecord(hostStore.list(), sup.hostId.value)?.token
+        val token = thisComputerRecord(hostStore.list(), sup.hostId.value, sup.prefs.value.port)?.token
         DesktopHostBootstrap.pairOnlyModel(
             scope = scope,
             hostName = DesktopHostBootstrap.defaultHostName(),

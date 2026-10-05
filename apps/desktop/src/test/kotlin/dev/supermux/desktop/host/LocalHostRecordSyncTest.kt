@@ -36,10 +36,14 @@ class LocalHostRecordSyncTest {
         assertNull(thisComputerRecordFix(listOf(rec("old", "otherhostotherhostotherhos", "http://127.0.0.1:9898")), id, now))
     }
 
-    @Test fun aLoopbackRecordWithNoHostIdIsUpdatedAndGetsTheHostId() {
-        assertEquals(HostRecordFix("legacy", now, id), thisComputerRecordFix(listOf(remote, rec("legacy", null, "http://127.0.0.1:9898")), id, now))
-        // Same port, but the hostId is still missing: fill it in.
-        assertEquals(HostRecordFix("legacy", now, id), thisComputerRecordFix(listOf(rec("legacy", null, now)), id, now))
+    @Test fun aLoopbackRecordWithNoHostIdOnOurPortGetsTheHostId() {
+        assertEquals(HostRecordFix("legacy", now, id), thisComputerRecordFix(listOf(remote, rec("legacy", null, now)), id, now))
+        assertEquals(HostRecordFix("legacy", now, id), thisComputerRecordFix(listOf(rec("legacy", null, "http://localhost:8787/")), id, now))
+    }
+
+    @Test fun aLoopbackRecordWithNoHostIdOnAnotherPortIsLeftAlone() {
+        // It may be another broker on this computer: never rewrite it onto ours.
+        assertNull(thisComputerRecordFix(listOf(remote, rec("legacy", null, "http://127.0.0.1:9898")), id, now))
     }
 
     @Test fun nothingHappensWithoutARunningHostId() {
@@ -47,7 +51,7 @@ class LocalHostRecordSyncTest {
     }
 
     @Test fun theHostIdMatchWinsOverALegacyLoopbackRecord() {
-        val fix = thisComputerRecordFix(listOf(rec("legacy", null, "http://127.0.0.1:9898"), rec("me", id, "http://127.0.0.1:9898")), id, now)
+        val fix = thisComputerRecordFix(listOf(rec("legacy", null, now), rec("me", id, "http://127.0.0.1:9898")), id, now)
         assertEquals("me", fix?.recordId)
     }
 
@@ -72,7 +76,7 @@ class LocalHostRecordSyncTest {
     }
 
     @Test fun applyFillsTheHostIdOfALegacyRecordWithoutAddingOne() {
-        val store = PairedHostStore(FakePersistence(listOf(rec("legacy", null, "http://127.0.0.1:9898")))) { "new" }
+        val store = PairedHostStore(FakePersistence(listOf(rec("legacy", null, "http://localhost:8787")))) { "new" }
         val fix = thisComputerRecordFix(store.list(), id, now)!!
         assertTrue(applyHostRecordFix(store, fix, id))
         val only = store.list().single()

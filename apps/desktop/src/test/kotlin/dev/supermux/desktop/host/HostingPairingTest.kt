@@ -91,9 +91,9 @@ class HostingPairingTest {
         val other = PairedHost(recordId = "r1", hostId = "other", displayName = "B", token = "t1", directUrl = "http://10.0.0.2:9898")
         val loop = PairedHost(recordId = "r2", hostId = null, displayName = "A", token = "t2", directUrl = "http://127.0.0.1:9898")
         val mine = PairedHost(recordId = "r3", hostId = hostId, displayName = "C", token = "t3")
-        assertEquals("r3", DesktopHostBootstrap.thisComputerRecord(listOf(other, loop, mine), hostId)?.recordId)
-        assertEquals("r2", DesktopHostBootstrap.thisComputerRecord(listOf(other, loop), hostId)?.recordId)
-        assertNull(DesktopHostBootstrap.thisComputerRecord(listOf(other), hostId))
+        assertEquals("r3", thisComputerRecord(listOf(other, loop, mine), hostId, 9898)?.recordId)
+        assertEquals("r2", thisComputerRecord(listOf(other, loop), hostId, 9898)?.recordId)
+        assertNull(thisComputerRecord(listOf(other), hostId, 9898))
     }
 
     @Test fun pairOnlyWithoutATokenMakesNoModelAndNoCall() = runTest {

@@ -39,24 +39,22 @@ data class FleetFacts(
 }
 
 /**
- * Pure: [localHostId] is the supervisor's broker. This computer's record is the fleet host with that
- * hostId, else one with a loopback direct URL ([loopbackRecordIds]). Sessions count when their
+ * Pure: [localRecordId] is "This computer"'s record ([thisComputerRecord]). Sessions count when their
  * owning record ([sessionHost]: sessionId → recordId) is that record; 0 while it is not in the fleet.
- * The "remote" host is the first fleet host that is neither: after hosting is turned off the user's
- * own former "This computer" must not read as the remote.
+ * The "remote" host is the first fleet host that is neither that record nor a loopback one
+ * ([loopbackRecordIds]): after hosting is turned off the user's own former "This computer" must not
+ * read as the remote.
  */
 fun fleetFacts(
-    localHostId: String?,
+    localRecordId: String?,
     hosts: List<HostView>,
     sessions: List<SessionInfo>,
     sessionHost: Map<String, String>,
     loopbackRecordIds: Set<String> = emptySet(),
 ): FleetFacts {
-    fun isLocal(h: HostView) = (localHostId != null && h.hostId == localHostId) || h.recordId in loopbackRecordIds
-    val local = localHostId?.let { id -> hosts.firstOrNull { it.hostId == id } }
-        ?: hosts.firstOrNull { it.recordId in loopbackRecordIds }
+    val local = localRecordId?.let { id -> hosts.firstOrNull { it.recordId == id } }
     val count = local?.let { h -> sessions.count { sessionHost[it.id] == h.recordId } } ?: 0
-    val remote = hosts.firstOrNull { !isLocal(it) }
+    val remote = hosts.firstOrNull { it.recordId != localRecordId && it.recordId !in loopbackRecordIds }
     return FleetFacts(
         localSessions = count,
         remoteName = remote?.displayLabel,
@@ -64,12 +62,16 @@ fun fleetFacts(
     )
 }
 
-/** [fleetFacts] kept live. Distinct, so a session's activity does not recompose the app root. */
-fun FleetStore.hostingFacts(localHostId: Flow<String?>): Flow<FleetFacts> =
-    combine(localHostId, hostViews, sessions, sessionHost) { id, hosts, list, owners ->
+/**
+ * [fleetFacts] kept live for the supervisor's [localHostId] on its [port]. Distinct, so a session's
+ * activity does not recompose the app root.
+ */
+fun FleetStore.hostingFacts(localHostId: Flow<String?>, port: Flow<Int>): Flow<FleetFacts> =
+    combine(combine(localHostId, port, ::Pair), hostViews, sessions, sessionHost) { (id, p), hosts, list, owners ->
         // Records change only with hostViews (add/forget/rename), so reading them here stays current.
-        val loopback = store.list().filter { isLoopbackUrl(it.directUrl) }.map { it.recordId }.toSet()
-        fleetFacts(id, hosts, list, owners, loopback)
+        val records = store.list()
+        val loopback = records.filter { isLoopbackUrl(it.directUrl) }.map { it.recordId }.toSet()
+        fleetFacts(thisComputerRecord(records, id, p)?.recordId, hosts, list, owners, loopback)
     }.distinctUntilChanged()
 
 /** Open [file] with the OS default app (the log). Best-effort. */

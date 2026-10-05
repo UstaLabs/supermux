@@ -7,7 +7,6 @@ import org.w3c.dom.Element
 import org.w3c.dom.Node
 import org.xml.sax.InputSource
 import java.io.StringReader
-import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -52,7 +51,6 @@ object Takeover {
         "MUX_WEB_PORT", "MUX_MANAGED_BY", "MUX_STATE_DIR", "MUX_HOME", "MUX_RELAY_DOMAIN", "MUX_WEB_PUBLIC_URL",
         "MUX_SERVICE_UNIT", "MUX_SERVICE_LABEL",
     )
-    private val LOOPBACK = setOf("127.0.0.1", "localhost", "::1")
     private const val JOURNAL = "pending.json"
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 
@@ -220,13 +218,10 @@ object Takeover {
     }
 
     fun carriedEnv(all: Map<String, String>): Map<String, String> =
-        all.filter { (k, v) -> k.startsWith("MUX_") && (k !in OWNED || (k == "MUX_WEB_PUBLIC_URL" && !isLoopbackUrl(v))) }
+        all.filter { (k, v) -> k.startsWith("MUX_") && (k !in OWNED || (k == "MUX_WEB_PUBLIC_URL" && isRealPublicUrl(v))) }
 
-    private fun isLoopbackUrl(url: String): Boolean {
-        val host = runCatching { URI(url.trim()).host }.getOrNull()?.removePrefix("[")?.removeSuffix("]")?.lowercase()
-            ?: return true // unparseable: not a "real domain", don't carry
-        return host in LOOPBACK || host.startsWith("127.")
-    }
+    /** A tunnel or domain worth carrying: it parses, has a host, and isn't loopback. */
+    private fun isRealPublicUrl(url: String): Boolean = urlHost(url) != null && !isLoopbackUrl(url)
 
     // ---- prepare / commit / rollback / recover ----------------------------------------------
 

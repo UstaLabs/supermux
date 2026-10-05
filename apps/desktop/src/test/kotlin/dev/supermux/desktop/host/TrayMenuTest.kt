@@ -29,7 +29,7 @@ class TrayMenuTest {
 
     @Test fun countsOnlyTheLocalHostsSessions() {
         val f = fleetFacts(
-            localHostId = "h-here",
+            localRecordId = "r-here",
             hosts = listOf(there, here),
             sessions = listOf(session("a"), session("b"), session("c")),
             sessionHost = mapOf("a" to "r-here", "b" to "r-there", "c" to "r-here"),
@@ -40,7 +40,7 @@ class TrayMenuTest {
     }
 
     @Test fun zeroWhenTheLocalHostIsNotInTheFleet() {
-        val f = fleetFacts("h-unknown", listOf(there), listOf(session("b")), mapOf("b" to "r-there"))
+        val f = fleetFacts("r-unknown", listOf(there), listOf(session("b")), mapOf("b" to "r-there"))
         assertEquals(0, f.localSessions)
         assertEquals("ustalabs-linux", f.remoteName)
     }
@@ -55,7 +55,7 @@ class TrayMenuTest {
     @Test fun loopbackRecordIsNeverTheRemote() {
         // Hosting turned off: the supervisor reports no hostId, but "This computer" is a loopback record.
         val f = fleetFacts(
-            localHostId = null,
+            localRecordId = null,
             hosts = listOf(here, there),
             sessions = listOf(session("a"), session("b")),
             sessionHost = mapOf("a" to "r-here", "b" to "r-there"),
@@ -63,7 +63,8 @@ class TrayMenuTest {
         )
         assertEquals("ustalabs-linux", f.remoteName)
         assertEquals(false, f.remoteReachable)
-        assertEquals(1, f.localSessions)
+        // Not hosting: no "This computer" record, so nothing counts as running here.
+        assertEquals(0, f.localSessions)
     }
 
     @Test fun onlyLoopbackRecordsMeansNoRemote() {
@@ -72,13 +73,13 @@ class TrayMenuTest {
     }
 
     @Test fun noRemoteHost() {
-        val f = fleetFacts("h-here", listOf(here), emptyList(), emptyMap())
+        val f = fleetFacts("r-here", listOf(here), emptyList(), emptyMap())
         assertNull(f.remoteName)
         assertEquals(true, f.remoteReachable)
     }
 
     @Test fun factsFeedTheNotHostingHeader() {
-        val f = fleetFacts("h-here", listOf(here, there), emptyList(), emptyMap())
+        val f = fleetFacts("r-here", listOf(here, there), emptyList(), emptyMap())
         val m = TrayModel.of(HostingStatus.NotHosting, HostingPrefs(hosting = false), f.localSessions, f.remoteName, f.remoteReachable)
         assertEquals("🟡 Can't reach ustalabs-linux · retrying", trayHeaderLine(m))
     }
@@ -86,7 +87,7 @@ class TrayMenuTest {
     @Test fun movedPortHeaderCarriesTheLocalCount() {
         // The VM case: the broker moved to 60094; the tray must still say how many sessions run here.
         val f = fleetFacts(
-            localHostId = "h-here",
+            localRecordId = "r-here",
             hosts = listOf(here, there),
             sessions = listOf(session("a"), session("b")),
             sessionHost = mapOf("a" to "r-here", "b" to "r-here"),

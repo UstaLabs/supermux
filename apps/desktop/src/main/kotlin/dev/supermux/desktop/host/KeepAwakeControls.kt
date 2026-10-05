@@ -305,7 +305,7 @@ internal suspend fun setKeepAwakeOnLocalBroker(
     log: (String) -> Unit,
     put: suspend (url: String, token: String, patch: KeepAwakePatch) -> KeepAwakeState?,
 ): KeepAwakeState? {
-    val token = DesktopHostBootstrap.thisComputerRecord(hosts, hostId)?.token?.takeIf { it.isNotBlank() }
+    val token = thisComputerRecord(hosts, hostId, urlPort(localUrl))?.token?.takeIf { it.isNotBlank() }
     if (token == null) {
         log("keep awake: no token for this computer")
         return null

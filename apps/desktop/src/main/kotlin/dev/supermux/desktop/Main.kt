@@ -80,6 +80,7 @@ import dev.supermux.desktop.host.syncThisComputerRecord
 import dev.supermux.desktop.host.TrayIcons
 import dev.supermux.desktop.host.openFile
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.awt.Desktop
 import java.awt.desktop.AppReopenedListener
@@ -523,7 +524,7 @@ fun main() {
         val lidStatus by keepAwakeControls.lid.collectAsState()
         val trayPower = TrayPower.of(keepAwakeState, keepAwakeControls.isMac, hasBattery, lidStatus)
         val fleetFacts by remember(pairedFleet) {
-            pairedFleet?.hostingFacts(supervisor.hostId) ?: flowOf(FleetFacts.EMPTY)
+            pairedFleet?.hostingFacts(supervisor.hostId, supervisor.prefs.map { it.port }) ?: flowOf(FleetFacts.EMPTY)
         }.collectAsState(FleetFacts.EMPTY)
         var windowVisible by remember { mutableStateOf(true) }
         var confirmQuit by remember { mutableStateOf<String?>(null) }

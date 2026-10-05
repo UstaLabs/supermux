@@ -17,17 +17,15 @@ import kotlinx.coroutines.flow.filterNotNull
 data class HostRecordFix(val recordId: String, val directUrl: String, val fillHostId: String?)
 
 /**
- * Pure. [hostId] is the supervisor's running broker. "This computer" is the record with that hostId,
- * else a loopback record with no hostId (one paired before hostIds existed). Only a loopback (or
- * missing) direct URL is rewritten: a record that reaches this computer some other way is the
- * user's. Remote hosts and loopback records naming another hostId are never touched.
+ * Pure. [hostId] is the supervisor's running broker. "This computer" is [thisComputerRecord] on
+ * [localBaseUrl]'s port. Only a loopback (or missing) direct URL is rewritten: a record that reaches
+ * this computer some other way is the user's. Remote hosts and loopback records naming another
+ * hostId (or, with no hostId, another port) are never touched.
  * Null = nothing to do.
  */
 fun thisComputerRecordFix(hosts: List<PairedHost>, hostId: String?, localBaseUrl: String): HostRecordFix? {
     if (hostId.isNullOrBlank()) return null
-    val rec = hosts.firstOrNull { it.hostId == hostId }
-        ?: hosts.firstOrNull { it.hostId.isNullOrBlank() && isLoopbackUrl(it.directUrl) }
-        ?: return null
+    val rec = thisComputerRecord(hosts, hostId, urlPort(localBaseUrl)) ?: return null
     val direct = rec.directUrl?.takeIf { it.isNotBlank() }
     if (direct != null && !isLoopbackUrl(direct)) return null
     val fill = hostId.takeIf { rec.hostId.isNullOrBlank() }
