@@ -351,6 +351,11 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
  * but `bun` in source mode (use SETUP.md's manual unit for source installs).
  */
 function installService(flags: Flags, println: (s: string) => void): void {
+  if (process.platform === "win32") {
+    // No CLI service on Windows: the desktop app's "Supermux Host" Scheduled Task is the service.
+    println("Note: on Windows the supermux desktop app keeps the broker running in the background. Skipping service setup.")
+    return
+  }
   if (!IS_COMPILED && !flags.forceSourceUnit) {
     println(
       "Note: setup's service unit targets the compiled binary. This looks like a" +
