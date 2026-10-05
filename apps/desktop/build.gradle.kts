@@ -446,6 +446,56 @@ fun rewritePackagedNativeDigests(appDir: File): List<File> {
     return changed
 }
 
+/**
+ * Adds `StartupWMClass=supermux` to the launcher entry inside each .deb in [debDir].
+ *
+ * The app names its X11 windows "supermux" (WM_CLASS, shell/LinuxWindowChrome.kt), but jpackage's
+ * entry is `supermux-supermux.desktop` with no StartupWMClass, so GNOME cannot tie the window to
+ * the launcher and the dock shows a second, anonymous icon. jpackage would take an overriding
+ * template from `--resource-dir`, but Compose always passes its own (cleared and refilled inside
+ * the task action, and jpackage keeps the last value of a repeated option), so the entry is fixed
+ * in the built package instead: unpack, add the line, rebuild root-owned.
+ */
+fun addStartupWmClassToDebs(debDir: File) {
+    fun run(vararg argv: String) {
+        val proc = ProcessBuilder(*argv).redirectErrorStream(true).start()
+        val out = proc.inputStream.bufferedReader().readText()
+        check(proc.waitFor() == 0) { "${argv.joinToString(" ")} failed: $out" }
+    }
+    for (deb in debDir.listFiles().orEmpty().filter { it.isFile && it.name.endsWith(".deb") }) {
+        val work = Files.createTempDirectory("deb-wmclass").toFile()
+        try {
+            run("dpkg-deb", "-R", deb.absolutePath, work.absolutePath)
+            val entries = work.walkTopDown()
+                .filter { it.isFile && it.name.endsWith(".desktop") && !it.path.contains("/DEBIAN/") }
+                .toList()
+            var changed = false
+            for (entry in entries) {
+                val lines = entry.readLines()
+                if (lines.any { it.startsWith("StartupWMClass=") }) continue
+                val at = lines.indexOfFirst { it.startsWith("Type=") }.let { if (it < 0) lines.size else it + 1 }
+                entry.writeText((lines.take(at) + "StartupWMClass=supermux" + lines.drop(at)).joinToString("\n", postfix = "\n"))
+                changed = true
+                // Keep DEBIAN/md5sums (when jpackage wrote one) true to the edited file.
+                val sums = File(work, "DEBIAN/md5sums")
+                if (sums.isFile) {
+                    val rel = entry.relativeTo(work).invariantSeparatorsPath
+                    val md5 = MessageDigest.getInstance("MD5").digest(entry.readBytes()).joinToString("") { "%02x".format(it) }
+                    sums.writeText(
+                        sums.readLines().joinToString("\n", postfix = "\n") { line ->
+                            if (line.substringAfter("  ") == rel) "$md5  $rel" else line
+                        },
+                    )
+                }
+                logger.lifecycle("deb: StartupWMClass=supermux added to ${deb.name}!/${entry.relativeTo(work).invariantSeparatorsPath}")
+            }
+            if (changed) run("dpkg-deb", "--root-owner-group", "-b", work.absolutePath, deb.absolutePath)
+        } finally {
+            work.deleteRecursively()
+        }
+    }
+}
+
 // Compose configures its jpackage task inputs after the nativeDistributions DSL is evaluated. Apply
 // the verified JBR home afterward so its late default cannot restore a jlink runtime built from the
 // build JDK (which is not a JBR: MacWindowChrome's title bar would silently fall back). The build JDK
@@ -455,6 +505,10 @@ afterEvaluate {
         dependsOn(prepareJbrRuntime)
         runtimeImage.set(jbrHome)
         runtimeImage.finalizeValue()
+        // The .deb's launcher entry gets StartupWMClass (see addStartupWmClassToDebs).
+        if (targetFormat == TargetFormat.Deb) {
+            doLast { addStartupWmClassToDebs(destinationDir.get().asFile) }
+        }
     }
     tasks.named<AbstractJPackageTask>("createDistributable") {
         doLast {
