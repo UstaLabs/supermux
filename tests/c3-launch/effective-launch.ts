@@ -333,10 +333,11 @@ export async function effectiveLaunch(agent: Agent, role: Role, s: Scratch): Pro
     }))
     const repoRule = Object.keys(files).find(k => /^<work>\/(AGENTS(\.override)?\.md|\.cursor\/rules\/mux\.mdc)$/.test(k))
     const rules = launch?.newSessionMeta?.rules as string | undefined
-    const preamble = launch?.firstPromptPreamble
+    const block = launch?.firstPromptBlock as { type: string; resource?: { uri: string; text: string } } | undefined
+    const preamble = block?.type === "resource" ? block.resource!.text : undefined
     out = {
       instructions: rules !== undefined ? { channel: "ACP session/new _meta.rules", text: rules }
-        : preamble !== undefined ? { channel: "first prompt preamble (ACP session/prompt)", text: preamble }
+        : preamble !== undefined ? { channel: "first-prompt embedded resource supermux://instructions (ACP session/prompt)", text: preamble }
         : repoRule ? { channel: `repo file ${repoRule}`, text: files[repoRule]! } : null,
       plugins, skills,
       mcpServers: sortServers([...fileMcp, ...acp]),

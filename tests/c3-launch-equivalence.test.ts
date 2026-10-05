@@ -66,8 +66,8 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
       expect(Object.keys(after.files).filter((f) => f.startsWith("<work>/") && !f.startsWith("<work>/.git/"))).toEqual([])
     }
     if (agent === "cursor") {
-      // The same instruction text, now the first prompt's preamble; nothing in the repo.
-      expect(after.instructions!.channel).toBe("first prompt preamble (ACP session/prompt)")
+      // The same instruction text, now an embedded resource in front of the first prompt; nothing in the repo.
+      expect(after.instructions!.channel).toBe("first-prompt embedded resource supermux://instructions (ACP session/prompt)")
       expect(after.instructions!.text).toBe(cursorPreamble(cursorRuleBody(before[key].instructions.text)))
       expect(Object.keys(after.files).filter((f) => f.startsWith("<work>/"))).toEqual([])
       expect(after.plugins).toEqual([])
