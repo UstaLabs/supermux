@@ -5,7 +5,7 @@ import { delimiter, join, win32 as winPath } from "path"
 import { APPLE_GIT_STUB, noCltDir } from "./clt-guard"
 import {
   GIT_HINT_DARWIN, GIT_HINT_LINUX, GIT_HINT_WINDOWS_BROWSER, GIT_REQUIRED_MESSAGE, GitInstaller, GitRequiredError,
-  GitRequirementMonitor, INSTALL_COOLDOWN_MS, OPEN_GIT_DOWNLOAD_PAGE, WINGET_INSTALL_GIT, WINGET_MAX_MS,
+  GitRequirementMonitor, type GitInstallStatus, INSTALL_COOLDOWN_MS, wingetFailure, OPEN_GIT_DOWNLOAD_PAGE, WINGET_INSTALL_GIT, WINGET_MAX_MS,
   XCODE_SELECT_INSTALL, checkGit, checkGitSync, expandWindowsVars, gitInstallFor, gitRequiredBody,
   parseRegQueryPath, spawnDetached, type GitRequirement, type GitRequirementDeps, type RegistryScope,
 } from "./requirement"
@@ -271,7 +271,8 @@ test("the refusal carries the message and the requirement object", () => {
 
 function installer(platform: NodeJS.Platform, opts: { winget?: boolean; ok?: boolean } = {}) {
   const spawned: string[][] = []
-  const exits: Array<() => void> = []
+  const exits: Array<(code: number | null) => void> = []
+  const statuses: GitInstallStatus[] = []
   const clock = { now: 1_000_000 }
   const req: GitRequirement = { ok: opts.ok ?? false, install: "manual", hint: "h" }
   const inst = new GitInstaller({
@@ -280,8 +281,9 @@ function installer(platform: NodeJS.Platform, opts: { winget?: boolean; ok?: boo
     hasWinget: () => opts.winget ?? false,
     spawn: (cmd) => { spawned.push(cmd); return { onExit: (cb) => { exits.push(cb) } } },
     now: () => clock.now,
+    onStatus: (st) => statuses.push(st),
   })
-  return { inst, spawned, exits, clock }
+  return { inst, spawned, exits, clock, statuses }
 }
 
 test("install-git on macOS runs xcode-select --install, then cools down for 60 s", () => {
@@ -305,7 +307,7 @@ test("install-git on Windows with winget runs the user-scope install and refuses
   )
   t.clock.now += 5 * 60_000
   expect(t.inst.install().body).toEqual({ ok: true, inProgress: true })
-  t.exits[0]!() // winget finished
+  t.exits[0]!(0) // winget finished
   expect(t.inst.install().body).toEqual({ ok: true })
   expect(t.spawned).toHaveLength(2)
 })
@@ -341,7 +343,35 @@ test("install-git with git already present does nothing", () => {
 test("the real spawner survives a missing binary (async ENOENT is handled, not thrown) and reports the exit", async () => {
   const logged: string[] = []
   const run = spawnDetached(["supermux-definitely-not-a-binary-xyz"], (e) => logged.push(e))
-  const exited = new Promise<void>((r) => run.onExit(r))
-  await exited
+  const code = await new Promise<number | null>((r) => run.onExit(r))
+  expect(code).toBe(null)
   expect(logged).toContain("install_git_spawn_failed")
+})
+
+test("a winget run that ends without git reports the failure, so the banner leaves Installing…", () => {
+  const t = installer("win32", { winget: true })
+  t.inst.install()
+  expect(t.statuses).toEqual([{ installing: true }])
+  t.exits[0]!(12) // UAC declined / timed out (0x8A15010C, low byte)
+  expect(t.statuses[1]).toEqual({ installing: false, installError: wingetFailure(12) })
+  // Retry starts a fresh run, which clears the error.
+  expect(t.inst.install().body).toEqual({ ok: true })
+  expect(t.statuses[2]).toEqual({ installing: true })
+  t.exits[1]!(0)
+  expect(t.statuses[3]).toEqual({ installing: false })
+})
+
+test("the monitor reports the install status in requirements.git while git is missing", () => {
+  const m = new GitRequirementMonitor({
+    platform: "win32", which: () => null, runXcodeSelectSync: () => 1, runXcodeSelect: async () => 1,
+    stateDir: "/s", env: { PATH: "" }, setInterval: () => 0, clearInterval: () => {},
+  })
+  m.start()
+  const seen: unknown[] = []
+  m.onChange((r) => seen.push(r.git))
+  m.setInstallStatus({ installing: true })
+  expect(m.git.installing).toBe(true)
+  m.setInstallStatus({ installing: false, installError: "nope" })
+  expect(m.git).toMatchObject({ ok: false, installing: false, installError: "nope" })
+  expect(seen).toHaveLength(2)
 })

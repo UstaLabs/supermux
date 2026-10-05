@@ -121,6 +121,10 @@ data class GitRequirement(
     val ok: Boolean = true,
     val install: String = INSTALL_MANUAL,
     val hint: String = "",
+    /** A tracked install (winget) is running on that computer now. */
+    val installing: Boolean = false,
+    /** The last tracked install ended without git (declined, cancelled or failed). */
+    val installError: String? = null,
 ) {
     /** Is there a one-click install on that computer? */
     val installable: Boolean get() = install != INSTALL_MANUAL

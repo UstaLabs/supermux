@@ -26,6 +26,16 @@ export interface GitRequirement {
   ok: boolean
   install: GitInstall
   hint: string
+  /** A tracked install (winget) is running on this computer. */
+  installing?: boolean
+  /** The last tracked install ended without git (declined, cancelled or failed). */
+  installError?: string
+}
+
+/** The tracked install's progress, merged into [GitRequirement] while git is missing. */
+export interface GitInstallStatus {
+  installing: boolean
+  installError?: string
 }
 
 export interface HostRequirements {
@@ -220,6 +230,7 @@ export function gitRequiredBody(requirements: HostRequirements): { error: string
  */
 export class GitRequirementMonitor {
   private state: GitRequirement
+  private installStatus: GitInstallStatus | undefined
   private timer: unknown = undefined
   private inflight: Promise<boolean> | undefined
   private readonly listeners = new Set<(r: HostRequirements) => void>()
@@ -253,7 +264,15 @@ export class GitRequirementMonitor {
   }
 
   get git(): GitRequirement {
-    return { ...this.state }
+    if (this.state.ok || !this.installStatus) return { ...this.state }
+    const { installing, installError } = this.installStatus
+    return { ...this.state, installing, ...(installError ? { installError } : {}) }
+  }
+
+  /** The install button's run started or ended: report it to every client (`/host`, the frame). */
+  setInstallStatus(status: GitInstallStatus): void {
+    this.installStatus = status
+    if (!this.state.ok) this.emit()
   }
 
   get ok(): boolean {
@@ -358,7 +377,8 @@ export type InstallGitResponse =
 
 /** A started installer: [onExit] fires once, when it exits or fails to start. */
 export interface RunningInstall {
-  onExit(cb: () => void): void
+  /** [cb] gets the exit code, or null when it failed to start (or was killed by a signal). */
+  onExit(cb: (code: number | null) => void): void
 }
 
 /** Starts [cmd] detached. Never throws, never leaves an unhandled `error` event. */
@@ -383,30 +403,39 @@ export const OPEN_GIT_DOWNLOAD_PAGE = ["explorer.exe", GIT_WINDOWS_DOWNLOAD_URL]
  */
 export function spawnDetached(cmd: string[], log?: (event: string, data: Record<string, unknown>) => void): RunningInstall {
   let done = false
-  const waiters: Array<() => void> = []
-  const finish = () => {
+  let exitCode: number | null = null
+  const waiters: Array<(code: number | null) => void> = []
+  const finish = (code: number | null) => {
     if (done) return
     done = true
+    exitCode = code
     for (const w of waiters.splice(0)) {
-      try { w() } catch {}
+      try { w(code) } catch {}
     }
   }
   try {
     const child = nodeSpawn(cmd[0]!, cmd.slice(1), { detached: true, stdio: "ignore", windowsHide: false })
     child.on("error", (err) => {
       log?.("install_git_spawn_failed", { cmd: cmd[0], err: String(err) })
-      finish()
+      finish(null)
     })
     child.on("exit", (code) => {
       log?.("install_git_exited", { cmd: cmd[0], code })
-      finish()
+      finish(code)
     })
     child.unref()
   } catch (err) {
     log?.("install_git_spawn_failed", { cmd: cmd[0], err: String(err) })
-    finish()
+    finish(null)
   }
-  return { onExit: (cb) => { if (done) cb(); else waiters.push(cb) } }
+  return { onExit: (cb) => { if (done) cb(exitCode); else waiters.push(cb) } }
+}
+
+/** What the banner says when winget ended without installing git. */
+export function wingetFailure(code: number | null): string {
+  return code === null
+    ? "The installer couldn't start."
+    : `The installer stopped before git was installed (declined, cancelled or failed; code ${code}).`
 }
 
 export const INSTALL_COOLDOWN_MS = 60_000
@@ -428,6 +457,8 @@ export class GitInstaller {
     hasWinget: () => boolean
     spawn: DetachedSpawner
     now?: () => number
+    /** The tracked (winget) install started or ended; the broker puts it in `requirements.git`. */
+    onStatus?: (status: GitInstallStatus) => void
   }) {}
 
   private now(): number {
@@ -453,7 +484,13 @@ export class GitInstaller {
       if (this.deps.hasWinget()) {
         const run = { startedAt: now }
         this.winget = run
-        this.deps.spawn(WINGET_INSTALL_GIT).onExit(() => { if (this.winget === run) this.winget = undefined })
+        this.deps.onStatus?.({ installing: true })
+        this.deps.spawn(WINGET_INSTALL_GIT).onExit((code) => {
+          if (this.winget === run) this.winget = undefined
+          // Exit 0: git is there, and the requirement's own re-check clears the banner. Anything
+          // else (UAC declined, cancelled, no network) must not leave "Installing…" up forever.
+          this.deps.onStatus?.(code === 0 ? { installing: false } : { installing: false, installError: wingetFailure(code) })
+        })
         return { status: 200, body: { ok: true } }
       }
       this.deps.spawn(OPEN_GIT_DOWNLOAD_PAGE)

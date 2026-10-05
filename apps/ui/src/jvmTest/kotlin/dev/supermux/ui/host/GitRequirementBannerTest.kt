@@ -1,6 +1,8 @@
 package dev.supermux.ui.host
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
@@ -74,5 +76,24 @@ class GitRequirementBannerTest {
 
     @Test fun winget_status_copy() {
         assertEquals("Installing git on Work PC… this clears by itself when done.", GitBannerCopy.started("winget", "Work PC"))
+    }
+
+    @Test fun a_failed_winget_run_leaves_installing_and_offers_retry() = runComposeUiTest {
+        val winget = GitRequirement(ok = false, install = "winget", hint = "Install Git for Windows with winget")
+        var req by androidx.compose.runtime.mutableStateOf(winget)
+        var calls = 0
+        setContent { MaterialTheme { GitRequirementBanner(req, onInstall = { calls++; true }) } }
+        onNodeWithTag(GitBannerTags.INSTALL).performClick()
+        waitForIdle()
+        req = winget.copy(installing = true)
+        waitForIdle()
+        onNodeWithTag(GitBannerTags.STATUS).assertTextEquals("Installing git on this computer… this clears by itself when done.")
+        onNodeWithTag(GitBannerTags.INSTALL).assertIsNotEnabled()
+        req = winget.copy(installing = false, installError = "declined")
+        waitForIdle()
+        onNodeWithTag(GitBannerTags.STATUS).assertTextEquals("Couldn't install git: declined")
+        onNodeWithTag(GitBannerTags.INSTALL).assertTextEquals(GitBannerCopy.RETRY).performClick()
+        waitForIdle()
+        assertEquals(2, calls)
     }
 }

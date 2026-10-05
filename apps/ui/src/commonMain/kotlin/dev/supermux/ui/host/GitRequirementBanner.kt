@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +43,10 @@ object GitBannerCopy {
     const val INSTALL = "Install…"
     const val STARTING = "Starting…"
     const val FAILED = "Couldn't start the installer."
+    const val RETRY = "Retry"
+
+    /** The host's own report that its last install ended without git. */
+    fun installFailed(error: String): String = "Couldn't install git: $error"
 
     /** "<host> needs git…" when a host is named; "This computer…" for the local / only host. */
     fun title(hostName: String?): String = hostName?.let { "$it needs git to run agents" } ?: TITLE
@@ -88,6 +93,12 @@ fun GitRequirementBanner(
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var status by remember(requirement.install) { mutableStateOf<String?>(null) }
+    // The host's own report wins over what this client saw after its click: a winget run that was
+    // declined or failed must not leave "Installing…" up forever.
+    LaunchedEffect(requirement.installError) { if (requirement.installError != null) status = null }
+    val shown = requirement.installError?.let(GitBannerCopy::installFailed)
+        ?: (if (requirement.installing) GitBannerCopy.started(requirement.install, hostName) else null)
+        ?: status
 
     Row(
         modifier
@@ -120,7 +131,7 @@ fun GitRequirementBanner(
                     modifier = Modifier.testTag(GitBannerTags.HINT),
                 )
             }
-            status?.let {
+            shown?.let {
                 Text(
                     it,
                     style = MaterialTheme.typography.bodySmall,
@@ -147,9 +158,17 @@ fun GitRequirementBanner(
                         busy = false
                     }
                 },
-                enabled = !busy,
+                enabled = !busy && !requirement.installing,
                 modifier = Modifier.testTag(GitBannerTags.INSTALL),
-            ) { Text(if (busy) GitBannerCopy.STARTING else GitBannerCopy.INSTALL) }
+            ) {
+                Text(
+                    when {
+                        busy -> GitBannerCopy.STARTING
+                        requirement.installError != null -> GitBannerCopy.RETRY
+                        else -> GitBannerCopy.INSTALL
+                    },
+                )
+            }
         }
     }
 }

@@ -250,6 +250,7 @@ const gitInstaller = new GitInstaller({
     log.info("install_git_started", { cmd: cmd[0] })
     return spawnDetached(cmd, (event, data) => log.warn(event, data))
   },
+  onStatus: (status) => gitRequirement.setInstallStatus(status),
 })
 {
   const git = gitRequirement.start()
