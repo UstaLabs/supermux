@@ -546,6 +546,12 @@ fun main() {
                 shuttingDown = true
             }
         }
+        // The in-app updater's Windows MSI quits the app so msiexec can replace its files.
+        DisposableEffect(Unit) {
+            val updater = dev.supermux.desktop.update.DesktopAppUpdater.shared
+            updater.onQuitForInstaller = { javax.swing.SwingUtilities.invokeLater { quitNow() } }
+            onDispose { updater.onQuitForInstaller = null }
+        }
         fun cancelQuit() {
             confirmQuit = null
             systemQuit.getAndSet(null)?.let { r -> runCatching { r.cancelQuit() } }
