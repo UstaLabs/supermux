@@ -191,10 +191,24 @@ internal suspend fun HostSupervisor.launchChildLocked(
 private fun HostSupervisor.brokerEnvFor(prefs: HostingPrefs, bins: HostBinaries.SidecarBinaries, carried: Map<String, String>) =
     brokerEnv(prefs, bins, carried, stateDir, hostName, existingPath, userHome, osEnv.os)
 
-/** The app's env minus every inherited `MUX_*` key, plus ours. */
+/**
+ * What the child must not inherit from the app: every `MUX_*` key (including `MUX_SERVICE_UNIT` /
+ * `MUX_SERVICE_LABEL`, which would make the broker's self-update restart a service it isn't), the
+ * service manager's own markers (systemd's `INVOCATION_ID` / `JOURNAL_STREAM`, launchd's
+ * `XPC_SERVICE_NAME`: an app started by a service would otherwise make its child believe it IS that
+ * service), and the 1.0.0 keep-alive's `SUPERMUX_KEEP_ALIVE`.
+ */
+internal fun isInheritedServiceKey(key: String): Boolean {
+    val k = key.uppercase()
+    return k.startsWith("MUX_") || k in INHERITED_SERVICE_KEYS
+}
+
+private val INHERITED_SERVICE_KEYS = setOf("INVOCATION_ID", "JOURNAL_STREAM", "XPC_SERVICE_NAME", "SUPERMUX_KEEP_ALIVE")
+
+/** The app's env minus [isInheritedServiceKey], plus ours. */
 private fun HostSupervisor.childEnv(prefs: HostingPrefs, bins: HostBinaries.SidecarBinaries, carried: Map<String, String>): Map<String, String> {
     val out = LinkedHashMap<String, String>()
-    for ((k, v) in baseEnv()) if (!k.uppercase().startsWith("MUX_")) out[k] = v
+    for ((k, v) in baseEnv()) if (!isInheritedServiceKey(k)) out[k] = v
     out.putAll(brokerEnvFor(prefs, bins, carried))
     return out
 }

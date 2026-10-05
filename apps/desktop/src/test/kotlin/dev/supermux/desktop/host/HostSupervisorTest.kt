@@ -1151,6 +1151,21 @@ class HostSupervisorTest {
         assertEquals(h.state.toString(), env["MUX_STATE_DIR"])
     }
 
+    @Test fun theChildEnvDropsTheServiceManagersMarkers() = runTest {
+        val h = Harness(this)
+        h.baseEnv = mapOf(
+            "HOME" to "/h", "INVOCATION_ID" to "abc", "JOURNAL_STREAM" to "8:123", "XPC_SERVICE_NAME" to "dev.supermux.host",
+            "MUX_SERVICE_UNIT" to "supermux.service", "MUX_SERVICE_LABEL" to "dev.supermux.broker", "SUPERMUX_KEEP_ALIVE" to "1",
+        )
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        val env = h.launches.single().env
+        assertEquals("/h", env["HOME"])
+        for (k in listOf("INVOCATION_ID", "JOURNAL_STREAM", "XPC_SERVICE_NAME", "MUX_SERVICE_UNIT", "MUX_SERVICE_LABEL", "SUPERMUX_KEEP_ALIVE")) {
+            assertFalse(k in env, k)
+        }
+    }
+
     @Test fun aRestoredServiceThatStaysSilentIsCantStartNotASecondBroker() = runTest {
         val h = Harness(this)
         val old = h.home.resolve("Library/LaunchAgents/dev.supermux.broker.plist")

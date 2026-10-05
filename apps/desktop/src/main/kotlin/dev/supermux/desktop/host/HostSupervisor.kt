@@ -49,7 +49,7 @@ class HostSupervisor(
     private val bundledBuild: suspend () -> String? = { BrokerVersion.defaultBundledBuild(stateDir) },
     internal val startChild: (ChildLaunch) -> ChildHandle = ::defaultStartChild,
     internal val processes: ProcessTable = SystemProcessTable,
-    /** The app's own environment; the child gets it minus every `MUX_*` key, plus [brokerEnv]. */
+    /** The app's own environment; the child gets it minus [isInheritedServiceKey], plus [brokerEnv]. */
     internal val baseEnv: () -> Map<String, String> = System::getenv,
     internal val repoDir: () -> Path? = { DesktopHostBootstrap.detectRepoDir() },
     internal val bunPath: () -> String = ::defaultBunPath,

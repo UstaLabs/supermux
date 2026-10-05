@@ -37,6 +37,11 @@ class TakeoverTest {
         assertTrue("MUX_WEB_PUBLIC_URL" !in env && "MUX_RELAY_DOMAIN" !in env)
     }
 
+    @Test fun theOldServicesOwnUnitAndLabelAreNotCarried() {
+        val env = Takeover.carriedEnv(mapOf("MUX_SERVICE_UNIT" to "supermux.service", "MUX_SERVICE_LABEL" to "dev.supermux.broker", "MUX_X" to "1"))
+        assertEquals(mapOf("MUX_X" to "1"), env)
+    }
+
     @Test fun nonLoopbackPublicUrlIsCarried() {
         assertEquals("https://me.example.com", Takeover.carriedEnv(mapOf("MUX_WEB_PUBLIC_URL" to "https://me.example.com"))["MUX_WEB_PUBLIC_URL"])
         for (u in listOf("http://127.0.0.1:9898", "http://localhost:9898", "http://[::1]:9898"))

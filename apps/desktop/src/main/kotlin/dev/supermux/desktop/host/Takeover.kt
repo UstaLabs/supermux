@@ -47,7 +47,11 @@ object Takeover {
 
     private val MAC_LABELS = listOf("dev.supermux.host", "dev.supermux.broker")
     private val LINUX_UNITS = listOf("supermux.service", "mux.service")
-    private val OWNED = setOf("MUX_WEB_PORT", "MUX_MANAGED_BY", "MUX_STATE_DIR", "MUX_HOME", "MUX_RELAY_DOMAIN", "MUX_WEB_PUBLIC_URL")
+    /** Ours to set, never carried. `MUX_SERVICE_*` name the OLD service: carried, the broker's update would restart it. */
+    private val OWNED = setOf(
+        "MUX_WEB_PORT", "MUX_MANAGED_BY", "MUX_STATE_DIR", "MUX_HOME", "MUX_RELAY_DOMAIN", "MUX_WEB_PUBLIC_URL",
+        "MUX_SERVICE_UNIT", "MUX_SERVICE_LABEL",
+    )
     private val LOOPBACK = setOf("127.0.0.1", "localhost", "::1")
     private const val JOURNAL = "pending.json"
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
