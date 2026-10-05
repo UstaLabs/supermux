@@ -49,10 +49,13 @@ object DesktopUpdateSource {
      * Windows Installer can only replace the app's files (an in-place MajorUpgrade) once this
      * process has let go of them; opening the .msi with the shell would leave the app running and
      * the installer asking to close it or to reboot. Null elsewhere: the OS opens the installer.
+     * msiexec is named by its full System32 path ([systemRoot], `%SystemRoot%`): a bare name is
+     * looked up in the app's directory and the PATH first.
      */
-    fun windowsInstallerArgv(osName: String?, file: File): List<String>? =
+    fun windowsInstallerArgv(osName: String?, file: File, systemRoot: String? = System.getenv("SystemRoot")): List<String>? =
         if (osName?.lowercase(Locale.US)?.startsWith("windows") == true && file.name.endsWith(".msi", ignoreCase = true)) {
-            listOf("msiexec.exe", "/i", file.absolutePath)
+            val root = systemRoot?.takeIf { it.isNotBlank() }?.trimEnd('\\', '/') ?: "C:\\Windows"
+            listOf("$root\\System32\\msiexec.exe", "/i", file.absolutePath)
         } else {
             null
         }

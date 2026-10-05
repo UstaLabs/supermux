@@ -8,7 +8,16 @@ import kotlin.test.assertNull
 class WindowsInstallerTest {
     @Test fun aWindowsMsiRunsMsiexecSoTheAppCanQuitForTheUpgrade() {
         val msi = File("C:\\Users\\t\\Downloads\\supermux-windows.msi")
-        assertEquals(listOf("msiexec.exe", "/i", msi.absolutePath), DesktopUpdateSource.windowsInstallerArgv("Windows 11", msi))
+        assertEquals(
+            listOf("C:\\Windows\\System32\\msiexec.exe", "/i", msi.absolutePath),
+            DesktopUpdateSource.windowsInstallerArgv("Windows 11", msi, systemRoot = "C:\\Windows"),
+        )
+    }
+
+    @Test fun msiexecIsNamedByItsSystem32Path() {
+        val msi = File("C:\\x\\supermux.msi")
+        assertEquals("D:\\WIN\\System32\\msiexec.exe", DesktopUpdateSource.windowsInstallerArgv("Windows 11", msi, systemRoot = "D:\\WIN\\")!!.first())
+        assertEquals("C:\\Windows\\System32\\msiexec.exe", DesktopUpdateSource.windowsInstallerArgv("Windows 11", msi, systemRoot = null)!!.first())
     }
 
     @Test fun elsewhereTheOsOpensTheInstaller() {
