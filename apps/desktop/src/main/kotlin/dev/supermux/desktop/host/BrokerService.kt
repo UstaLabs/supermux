@@ -16,6 +16,8 @@ object BrokerService {
     const val WINDOWS_TASK_NAME = "Supermux Host"
     const val WINDOWS_BROKER_EXE = "supermux-broker.exe"
     const val WINDOWS_TASK_XML = "Supermux/supermux-host-task.xml"
+    /** Set in the Scheduled Task broker's env: it runs under the task's restart loop. */
+    const val WINDOWS_TASK_ENV = "MUX_WINDOWS_TASK"
 
     data class Spec(val broker: Path, val env: Map<String, String>, val log: Path) {
         init {
@@ -144,13 +146,29 @@ Terminal=false
 """
     }
 
-    /** Windows Task Scheduler 1.4 XML for the current interactive user. */
+    /**
+     * Windows Task Scheduler 1.4 XML for the current interactive user.
+     *
+     * The action is `conhost.exe --headless powershell.exe …`, not powershell.exe itself: on
+     * Windows 11 the default terminal is Windows Terminal, which ignores `-WindowStyle Hidden`, so a
+     * console process started at logon gets a visible, empty terminal window, and closing it kills
+     * the loop and the broker. A headless conhost gives the loop a console with no window.
+     *
+     * Ending the task (`schtasks /End`) only terminates conhost, so the loop remembers its parent
+     * and stops once the broker exits after conhost is gone; otherwise it would respawn the broker.
+     * `MUX_WINDOWS_TASK=1` tells the broker it runs under this loop (`/system/restart` = exit).
+     */
     fun windowsTaskXml(spec: Spec): String {
-        val sets = withManaged(spec.env).entries.joinToString("; ") { (k, v) -> "\$env:$k = ${powershellLiteral(v)}" }
+        val sets = (withManaged(spec.env) + (WINDOWS_TASK_ENV to "1")).entries
+            .joinToString("; ") { (k, v) -> "\$env:$k = ${powershellLiteral(v)}" }
         val script = "\$PSDefaultParameterValues['Out-File:Encoding']='utf8'; $sets; " +
+            "\$supermuxHost = Get-Process -Id (Get-CimInstance Win32_Process -Filter \"ProcessId=\$PID\").ParentProcessId -ErrorAction SilentlyContinue; " +
             "while (\$true) { & ${powershellLiteral(spec.broker.toString())} 2>&1 | ForEach-Object { \"\$_\" } | " +
-            "Out-File -Append -FilePath ${powershellLiteral(spec.log.toString())}; Start-Sleep -Seconds 5 }"
+            "Out-File -Append -FilePath ${powershellLiteral(spec.log.toString())}; " +
+            "if (\$supermuxHost -and \$supermuxHost.HasExited) { break }; Start-Sleep -Seconds 5 }"
         val arguments = listOf(
+            "--headless",
+            "powershell.exe",
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
@@ -192,7 +210,7 @@ Terminal=false
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>powershell.exe</Command>
+      <Command>conhost.exe</Command>
       <Arguments>${xml(arguments)}</Arguments>
       <WorkingDirectory>${xml(workingDirectory)}</WorkingDirectory>
     </Exec>
@@ -219,8 +237,13 @@ Terminal=false
     fun restart(env: OsEnv = SystemOsEnv): Boolean = when (env.os) {
         OsEnv.Os.MAC -> env.uid != null && env.run(listOf("launchctl", "kickstart", "-k", "gui/${env.uid}/$LAUNCHD_LABEL"))
         OsEnv.Os.LINUX -> env.run(listOf("systemctl", "--user", "restart", SYSTEMD_NAME))
-        // The task's loop respawns the broker ~5 s after it dies; no elevation needed.
-        OsEnv.Os.WINDOWS -> env.run(listOf("taskkill", "/F", "/IM", WINDOWS_BROKER_EXE))
+        // The task's loop respawns the broker ~5 s after it dies; no elevation needed. When the
+        // loop itself is gone (the task was ended), /Run starts it again; while it runs, /Run is a
+        // no-op (MultipleInstancesPolicy IgnoreNew).
+        OsEnv.Os.WINDOWS -> {
+            env.run(listOf("taskkill", "/F", "/IM", WINDOWS_BROKER_EXE))
+            env.run(listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME))
+        }
         OsEnv.Os.OTHER -> false
     }
 
@@ -387,10 +410,36 @@ Terminal=false
             ))
             // Declined UAC or a failed /Delete leaves the task registered; its loop would respawn the broker.
             if (!ended) return Result.Failed("Windows Scheduled Task remove failed: the elevated /End + /Delete did not succeed")
+            // /End only terminates the task's own process (the headless conhost): stop its loop too,
+            // then the broker, and wait until the broker is really gone. Starting the same .exe while
+            // the killed one is still being torn down fails with a sharing violation.
+            env.run(stopWindowsTaskLoopArgv())
             env.run(listOf("taskkill", "/F", "/IM", WINDOWS_BROKER_EXE))
+            awaitWindowsBrokerGone(env)
             val existed = Files.deleteIfExists(taskXml)
             Result.Removed(if (existed) taskXml else null)
         }.getOrElse { Result.Failed("Windows Scheduled Task remove failed: ${it.message}") }
+    }
+
+    /**
+     * PowerShell that stops the task's restart loop: the powershell.exe whose command line sets
+     * [WINDOWS_TASK_ENV] (never itself). No double quotes: Java does not escape them on Windows.
+     */
+    internal fun stopWindowsTaskLoopArgv(): List<String> = listOf(
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+        "Get-CimInstance Win32_Process | Where-Object { \$_.Name -eq 'powershell.exe' -and \$_.ProcessId -ne \$PID -and " +
+            "\$_.CommandLine -like '*$WINDOWS_TASK_ENV*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }",
+    )
+
+    /** Poll `tasklist` until no [WINDOWS_BROKER_EXE] runs, up to 20 × 500 ms. True once it's gone. */
+    internal fun awaitWindowsBrokerGone(env: OsEnv): Boolean {
+        val argv = listOf("tasklist", "/FI", "IMAGENAME eq $WINDOWS_BROKER_EXE", "/NH")
+        fun gone() = env.runCapture(argv)?.contains(WINDOWS_BROKER_EXE, ignoreCase = true) != true
+        for (i in 1..20) {
+            if (gone()) return true
+            env.sleep(500)
+        }
+        return gone()
     }
 
     /**
