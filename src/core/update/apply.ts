@@ -637,11 +637,34 @@ export function restartViaLaunchd(opts: { label?: string }): boolean {
 }
 
 /**
- * Platform-dispatched broker restart: launchd on macOS, systemd elsewhere.
+ * Windows analogue: the desktop app's "Supermux Host" Scheduled Task runs the broker inside a
+ * PowerShell loop that starts it again ~5 s after it exits, and marks the broker's env with
+ * MUX_WINDOWS_TASK=1. Under that loop a restart is just a clean exit: shut down gracefully (the
+ * SIGTERM handlers) after [delayMs] so the HTTP answer goes out first. False when not under it.
+ */
+export function restartViaWindowsTask(opts: {
+  env?: Record<string, string | undefined>
+  schedule?: (fn: () => void, ms: number) => unknown
+  delayMs?: number
+} = {}): boolean {
+  const env = opts.env ?? process.env
+  if (env.MUX_WINDOWS_TASK !== "1") return false
+  const schedule = opts.schedule ?? ((fn, ms) => setTimeout(fn, ms))
+  schedule(() => {
+    // The graceful-shutdown listener ends with process.exit(0); with none, exit directly.
+    if (!process.emit("SIGTERM" as any)) process.exit(0)
+  }, opts.delayMs ?? 1_000)
+  return true
+}
+
+/**
+ * Platform-dispatched broker restart: launchd on macOS, the Scheduled Task loop on Windows,
+ * systemd elsewhere.
  * Returns true if a restart was scheduled (the service brings the new binary
  * back up), false if not service-managed (caller shows "restart required").
  */
 export function restartService(opts: { unit?: string; label?: string } = {}): boolean {
   if (process.platform === "darwin") return restartViaLaunchd({ label: opts.label })
+  if (process.platform === "win32") return restartViaWindowsTask()
   return restartViaSystemd({ unit: opts.unit })
 }

@@ -21,6 +21,7 @@ import {
   restartService,
   restartViaLaunchd,
   restartViaSystemd,
+  restartViaWindowsTask,
   rollback,
   systemdUnitFromCgroup,
   type UpdateApplyError,
@@ -837,3 +838,20 @@ describe("restartViaSystemd", () => {
 // keep an unused-import guard happy: reference the type so tsc sees it used.
 const _typecheck: UpdateApplyError | null = null
 void _typecheck
+
+// ── restartViaWindowsTask: the Scheduled Task loop respawns an exiting broker ─────
+
+describe("restartViaWindowsTask", () => {
+  test("returns false outside the Scheduled Task (no MUX_WINDOWS_TASK)", () => {
+    const scheduled: number[] = []
+    expect(restartViaWindowsTask({ env: {}, schedule: (_fn, ms) => scheduled.push(ms) })).toBe(false)
+    expect(restartViaWindowsTask({ env: { MUX_WINDOWS_TASK: "0" }, schedule: (_fn, ms) => scheduled.push(ms) })).toBe(false)
+    expect(scheduled).toEqual([])
+  })
+
+  test("under the task: schedules a graceful exit after the delay and returns true", () => {
+    const scheduled: number[] = []
+    expect(restartViaWindowsTask({ env: { MUX_WINDOWS_TASK: "1" }, schedule: (_fn, ms) => scheduled.push(ms), delayMs: 250 })).toBe(true)
+    expect(scheduled).toEqual([250])
+  })
+})
