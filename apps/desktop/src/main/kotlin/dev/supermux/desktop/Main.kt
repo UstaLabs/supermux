@@ -448,7 +448,17 @@ fun main() {
         // receiver is FrameWindowScope). windowState is hoisted alongside it — a plain val, not
         // receiver-bound — purely so the tray icon's click handler can un-minimize the SAME
         // WindowState instance passed to Window below.
-        val windowState = rememberWindowState(width = 1440.dp, height = 900.dp)
+        // 1440×900, or ~90% of a smaller screen, centred (InitialWindow.kt).
+        val initialWindow = remember { dev.supermux.desktop.platform.initialWindow(dev.supermux.desktop.platform.usableScreenBounds()) }
+        val windowState = rememberWindowState(
+            width = initialWindow.width.dp,
+            height = initialWindow.height.dp,
+            position = if (initialWindow.x != null && initialWindow.y != null) {
+                WindowPosition(initialWindow.x.dp, initialWindow.y.dp)
+            } else {
+                WindowPosition.PlatformDefault
+            },
+        )
         var shuttingDown by remember { mutableStateOf(false) }
         LaunchedEffect(shuttingDown) {
             if (shuttingDown) {
@@ -811,7 +821,7 @@ fun main() {
             // same black glyph on a light taskbar, where the white colour icon is invisible; else colour.
             val trayIcon = when {
                 isMacOs() -> remember { TrayIcons.painter(mac = true) }
-                isWindowsOs() -> remember { TrayIcons.painter(mac = false, darkGlyph = TrayIcons.windowsTaskbarIsLight()) }
+                isWindowsOs() -> remember { TrayIcons.painter(mac = false, darkGlyph = TrayIcons.darkGlyph(mac = false, windows = true)) }
                 else -> painterResource(TrayIcons.COLOUR)
             }
             Tray(

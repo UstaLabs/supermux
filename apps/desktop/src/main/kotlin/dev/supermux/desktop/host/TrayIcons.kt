@@ -44,6 +44,13 @@ object TrayIcons {
     /** `SystemUsesLightTheme` (the taskbar's own theme, not the apps'), under this key in HKCU. */
     private const val PERSONALIZE_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
 
+    /**
+     * Draw the black glyph? macOS always (a template); Windows only on a light taskbar. The registry
+     * is read ([taskbarIsLight]) only on Windows.
+     */
+    fun darkGlyph(mac: Boolean, windows: Boolean, taskbarIsLight: () -> Boolean = ::windowsTaskbarIsLight): Boolean =
+        mac || (windows && taskbarIsLight())
+
     /** True iff the Windows taskbar is light (the Windows 11 default). False on failure: the white icon. */
     fun windowsTaskbarIsLight(): Boolean = runCatching {
         val p = ProcessBuilder("reg", "query", PERSONALIZE_KEY, "/v", "SystemUsesLightTheme")

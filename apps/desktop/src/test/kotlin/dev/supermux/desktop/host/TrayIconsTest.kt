@@ -52,6 +52,17 @@ class TrayIconsTest {
         assertIs<MultiSizeBitmapPainter>(TrayIcons.painter(mac = false, darkGlyph = true))
     }
 
+    @Test fun theTaskbarThemeIsOnlyReadOnWindows() {
+        var reads = 0
+        val light = { reads++; true }
+        assertEquals(true, TrayIcons.darkGlyph(mac = true, windows = false, taskbarIsLight = light))
+        assertEquals(false, TrayIcons.darkGlyph(mac = false, windows = false, taskbarIsLight = light))
+        assertEquals(0, reads, "no registry read off Windows")
+        assertEquals(true, TrayIcons.darkGlyph(mac = false, windows = true, taskbarIsLight = light))
+        assertEquals(false, TrayIcons.darkGlyph(mac = false, windows = true, taskbarIsLight = { false }))
+        assertEquals(1, reads)
+    }
+
     @Test fun parsesTheTaskbarThemeFromRegQuery() {
         val light = "\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\r\n" +
             "    SystemUsesLightTheme    REG_DWORD    0x1\r\n\r\n"
