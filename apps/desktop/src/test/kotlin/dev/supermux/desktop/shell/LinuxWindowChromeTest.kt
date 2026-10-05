@@ -73,7 +73,7 @@ class LinuxWindowChromeTest {
     fun osNamesMapToChromeOs() {
         assertEquals(ChromeOs.MacOs, ChromeOs.of("Mac OS X"))
         assertEquals(ChromeOs.Linux, ChromeOs.of("Linux"))
-        assertEquals(ChromeOs.Other, ChromeOs.of("Windows 11"))
+        assertEquals(ChromeOs.Windows, ChromeOs.of("Windows 11"))
         assertEquals(ChromeOs.Other, ChromeOs.of(null))
     }
 

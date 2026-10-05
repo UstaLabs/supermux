@@ -164,6 +164,10 @@ import androidx.compose.ui.input.key.type
 import dev.supermux.desktop.shell.MenuShortcut
 import dev.supermux.desktop.shell.chromeInsets
 import dev.supermux.desktop.shell.rememberLinuxWindowChrome
+import dev.supermux.desktop.shell.rememberWindowsWindowChrome
+import androidx.compose.ui.graphics.luminance
+import dev.supermux.desktop.shell.WindowsTitleBarHeight
+import dev.supermux.desktop.shell.WindowsCaptionButtonsFallbackWidth
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.windows.WindowBounds
@@ -890,6 +894,11 @@ fun main() {
             // No-ops off macOS, but gated anyway to keep it obvious.
             val macChrome = if (isMacOs()) rememberMacWindowChrome(window) else null
             val linuxChrome = linuxMoveResize?.let { rememberLinuxWindowChrome(window, it) }
+            // Windows: JBR custom title bar, content edge to edge, Windows' own caption buttons
+            // kept (WindowsWindowChrome.kt). Null: the normal frame and menu bar.
+            val windowsChrome = if (isWindowsOs()) rememberWindowsWindowChrome(window, dark = true) else null
+            // The band's drag regions under the custom chrome (Linux or Windows).
+            val bandRegions = linuxChrome?.regions ?: windowsChrome?.regions
             if (isMacOs()) LaunchedEffect(window) { installMacTrackpadMagnify(window.rootPane) }
             if (isMacOs() && macChrome?.titleBar == null) {
                 LaunchedEffect(window) {
@@ -984,7 +993,7 @@ fun main() {
                     ),
                 ),
             )
-            if (paired && linuxChrome == null) DesktopMenuBar(mainMenu)
+            if (paired && linuxChrome == null && windowsChrome == null) DesktopMenuBar(mainMenu)
 
             // Appearance lives on [ui] so the sidebar toggle, theme, and ui-state.json share one source.
             ProvideDesktopAdaptiveLocals {
@@ -995,9 +1004,18 @@ fun main() {
               // Linux custom chrome: the band's drag regions and the controls' room, for the whole
               // window (the wizard too). Neither is provided on macOS here — its shell-level
               // provider below is unchanged.
+              // Windows: the native caption buttons follow the app theme (light or dark).
+              windowsChrome?.let { wc ->
+                  val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+                  LaunchedEffect(wc, dark) { wc.setDark(dark) }
+              }
               CompositionLocalProvider(
-                  LocalMacWindowChrome provides linuxChrome?.regions,
-                  LocalWindowChromeInsets provides chromeInsets(ChromeOs.of(), customChrome = linuxChrome != null),
+                  LocalMacWindowChrome provides bandRegions,
+                  LocalWindowChromeInsets provides chromeInsets(
+                      ChromeOs.of(),
+                      customChrome = linuxChrome != null || windowsChrome != null,
+                      windowsCaptionButtons = windowsChrome?.captionButtonsWidth ?: WindowsCaptionButtonsFallbackWidth,
+                  ),
               ) {
               Box(
                   Modifier
@@ -1006,7 +1024,7 @@ fun main() {
               ) {
                 if (!paired) {
                     // No sidebar band or tab strip before pairing: the whole top band drags.
-                    if (linuxChrome != null) {
+                    if (bandRegions != null) {
                         Box(
                             Modifier
                                 .fillMaxWidth()
@@ -1927,7 +1945,7 @@ fun main() {
                         LocalPairedHostStore provides hostStore,
                         LocalHostingFleet provides fleet,
                         LocalHostingSessions provides fleetFacts.localSessions,
-                        LocalMacWindowChrome provides (macChrome?.regions ?: linuxChrome?.regions),
+                        LocalMacWindowChrome provides (macChrome?.regions ?: bandRegions),
                         LocalMacTrafficLightsInset provides (
                             macChrome?.trafficLightsInset ?: MacTrafficLightsWidth
                         ),
@@ -1950,10 +1968,13 @@ fun main() {
                             sidebarTopPad = when {
                                 isMacOs() -> MacTitleBarHeight
                                 linuxChrome != null -> LinuxTitleBarHeight
+                                windowsChrome != null -> WindowsTitleBarHeight
                                 else -> 0.dp
                             },
                             sidebarChrome = { sidebarWidth, collapsed ->
-                                if (linuxChrome != null) {
+                                // Linux and Windows custom chrome: the ☰ main menu and the sidebar
+                                // toggle in the band (no system menu bar there).
+                                if (bandRegions != null && !isMacOs()) {
                                     Box(
                                         Modifier
                                             .align(Alignment.TopStart)
