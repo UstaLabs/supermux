@@ -314,7 +314,7 @@ object LidSleepHelper {
         if (!validUser(user)) return Outcome.Failed("Unsupported user name.")
         return try {
             val cmd = installCommand(daemonScript(user, appBundle?.takeIf(::safePath)), plist())
-            val r = os.runResult(adminArgv(cmd, INSTALL_PROMPT))
+            val r = os.runResult(adminArgv(cmd, INSTALL_PROMPT), OsEnv.PROMPT_TIMEOUT_MS)
             log("lid helper install: exit ${r.exit}${r.err.trim().takeIf { it.isNotEmpty() }?.let { " ($it)" } ?: ""}")
             when {
                 r.exit == 0 -> Outcome.Ok
@@ -330,7 +330,7 @@ object LidSleepHelper {
     /** Boot out and remove the daemon with one admin prompt. Blocking. */
     fun uninstall(os: OsEnv, log: (String) -> Unit = {}): Outcome {
         if (os.os != OsEnv.Os.MAC) return Outcome.Failed("The lid helper is only for Macs.")
-        val r = os.runResult(adminArgv(uninstallCommand(), UNINSTALL_PROMPT))
+        val r = os.runResult(adminArgv(uninstallCommand(), UNINSTALL_PROMPT), OsEnv.PROMPT_TIMEOUT_MS)
         log("lid helper uninstall: exit ${r.exit}${r.err.trim().takeIf { it.isNotEmpty() }?.let { " ($it)" } ?: ""}")
         return when {
             r.exit == 0 -> Outcome.Ok

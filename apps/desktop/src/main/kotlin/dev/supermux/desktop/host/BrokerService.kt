@@ -761,11 +761,12 @@ Terminal=false
             "try { \$process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ErrorAction Stop " +
                 "-ArgumentList ${powershellLiteral(innerArgs)} } catch { exit $UAC_DECLINED_EXIT }; " +
                 "if (-not \$process) { exit $UAC_DECLINED_EXIT }; exit \$process.ExitCode"
-        return env.run(
+        return env.runResult(
             listOf(
                 "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                 "-Command", script,
             ),
-        )
+            OsEnv.PROMPT_TIMEOUT_MS,
+        ).exit == 0
     }
 }

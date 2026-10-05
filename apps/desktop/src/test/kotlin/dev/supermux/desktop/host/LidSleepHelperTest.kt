@@ -224,6 +224,7 @@ class LidSleepHelperTest {
         val ran = mutableListOf<List<String>>()
         val linux = object : OsEnv by FakeOs(OsEnv.Os.LINUX) {
             override fun runResult(argv: List<String>): OsEnv.RunResult { ran += argv; return OsEnv.RunResult(0, "", "") }
+            override fun runResult(argv: List<String>, timeoutMs: Long) = runResult(argv)
         }
         assertTrue(LidSleepHelper.install("ahmet", linux) is LidSleepHelper.Outcome.Failed)
         assertTrue(LidSleepHelper.uninstall(linux) is LidSleepHelper.Outcome.Failed)
@@ -234,6 +235,7 @@ class LidSleepHelperTest {
         val ran = mutableListOf<List<String>>()
         val mac = object : OsEnv by FakeOs(OsEnv.Os.MAC) {
             override fun runResult(argv: List<String>): OsEnv.RunResult { ran += argv; return OsEnv.RunResult(1, "", "User canceled. (-128)") }
+            override fun runResult(argv: List<String>, timeoutMs: Long) = runResult(argv)
         }
         val r = LidSleepHelper.install("ahmet", mac, appBundle = "/Applications/supermux.app")
         assertEquals(LidSleepHelper.Outcome.Failed(LidSleepHelper.CANCELLED), r)
@@ -245,6 +247,7 @@ class LidSleepHelperTest {
     @Test fun a_cancelled_uninstall_says_it_is_still_installed() {
         val mac = object : OsEnv by FakeOs(OsEnv.Os.MAC) {
             override fun runResult(argv: List<String>) = OsEnv.RunResult(1, "", "User canceled. (-128)")
+            override fun runResult(argv: List<String>, timeoutMs: Long) = runResult(argv)
         }
         assertEquals(LidSleepHelper.Outcome.Failed("Cancelled. The lid helper is still installed."), LidSleepHelper.uninstall(mac))
     }

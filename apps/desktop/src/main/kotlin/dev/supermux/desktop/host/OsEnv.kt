@@ -1,6 +1,7 @@
 package dev.supermux.desktop.host
 
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 
 /**
  * Injectable OS seam: every launchctl / systemctl / schtasks / process call goes through here so
@@ -8,6 +9,11 @@ import java.nio.file.Path
  */
 interface OsEnv {
     enum class Os { MAC, LINUX, WINDOWS, OTHER }
+
+    companion object {
+        /** A command that waits on the user (a UAC or admin password prompt): long, but not forever. */
+        const val PROMPT_TIMEOUT_MS = 10 * 60_000L
+    }
 
     val os: Os
     val home: Path
@@ -21,13 +27,20 @@ interface OsEnv {
 
     data class RunResult(val exit: Int, val out: String, val err: String)
 
-    /** Run [argv], capturing exit code, stdout and stderr. Never throws (failure to start = exit -1). */
+    /**
+     * Run [argv], capturing exit code, stdout and stderr. Never throws (failure to start = exit -1).
+     * Killed (with its children) after the default timeout ([SystemOsEnv.defaultTimeoutMs]): a hung
+     * `launchctl` or `schtasks` must never hang the supervisor's lock.
+     */
     fun runResult(argv: List<String>): RunResult
+
+    /** [runResult] with its own [timeoutMs] (e.g. a UAC prompt the user takes a while to answer). */
+    fun runResult(argv: List<String>, timeoutMs: Long): RunResult = runResult(argv)
 
     /** Sleep [ms] (a seam so retry loops do not slow tests). */
     fun sleep(ms: Long)
 
-    /** Run [argv] and return its stdout, or null on failure. Never throws. */
+    /** Run [argv] and return its stdout, or null on failure or after the default timeout. Never throws. */
     fun runCapture(argv: List<String>): String?
 
     /** This process's environment variable [name]; null when unset. */
@@ -62,30 +75,44 @@ object SystemOsEnv : OsEnv {
 
     override val xdgRuntimeDir: String? get() = System.getenv("XDG_RUNTIME_DIR")
 
+    /** How long [runResult] / [runCapture] let a command run before killing it. */
+    @Volatile var defaultTimeoutMs: Long = DEFAULT_TIMEOUT_MS
+    const val DEFAULT_TIMEOUT_MS = 30_000L
+
     override fun hasCommand(name: String): Boolean =
-        runCatching {
-            val which = if (os == OsEnv.Os.WINDOWS) "where" else "which"
-            ProcessBuilder(which, name)
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start().waitFor() == 0
-        }.getOrDefault(false)
+        runResult(listOf(if (os == OsEnv.Os.WINDOWS) "where" else "which", name), 5_000).exit == 0
 
     override fun run(argv: List<String>): Boolean = runResult(argv).exit == 0
 
-    override fun runResult(argv: List<String>): OsEnv.RunResult = try {
+    override fun runResult(argv: List<String>): OsEnv.RunResult = runResult(argv, defaultTimeoutMs)
+
+    override fun runResult(argv: List<String>, timeoutMs: Long): OsEnv.RunResult = try {
         val p = ProcessBuilder(argv).start()
         p.outputStream.close()
-        var err = ""
-        val t = Thread { err = runCatching { p.errorStream.bufferedReader().readText() }.getOrDefault("") }
-        t.isDaemon = true
-        t.start()
-        val out = p.inputStream.bufferedReader().readText()
-        val exit = p.waitFor()
-        t.join(2000)
-        OsEnv.RunResult(exit, out, err)
+        fun drain(s: java.io.InputStream): () -> String {
+            var text = ""
+            val t = Thread { text = runCatching { s.bufferedReader().readText() }.getOrDefault("") }
+            t.isDaemon = true
+            t.start()
+            return { t.join(2_000); text }
+        }
+        val out = drain(p.inputStream)
+        val err = drain(p.errorStream)
+        if (!p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
+            kill(p)
+            OsEnv.RunResult(-1, out(), "timed out after $timeoutMs ms: ${argv.firstOrNull()}")
+        } else {
+            OsEnv.RunResult(p.exitValue(), out(), err())
+        }
     } catch (e: Exception) {
         OsEnv.RunResult(-1, "", e.message ?: e.toString())
+    }
+
+    /** The command and everything it started (a `Start-Process -Wait`, a shell's children). */
+    private fun kill(p: Process) {
+        runCatching { p.descendants().forEach { it.destroyForcibly() } }
+        p.destroyForcibly()
+        runCatching { p.waitFor(2, TimeUnit.SECONDS) }
     }
 
     override fun sleep(ms: Long) {
@@ -98,9 +125,6 @@ object SystemOsEnv : OsEnv {
         if (os != OsEnv.Os.LINUX) null
         else runCatching { java.nio.file.Files.readString(Path.of("/proc/self/cgroup")) }.getOrNull()
 
-    override fun runCapture(argv: List<String>): String? = runCatching {
-        val p = ProcessBuilder(argv).redirectError(ProcessBuilder.Redirect.DISCARD).start()
-        val out = p.inputStream.bufferedReader().readText()
-        if (p.waitFor() == 0) out else null
-    }.getOrNull()
+    override fun runCapture(argv: List<String>): String? =
+        runResult(argv).takeIf { it.exit == 0 }?.out
 }
