@@ -18,6 +18,9 @@ const { scratchLayout, effectiveLaunch, diffKeys, AGENTS } = await import("./c3-
 const before = JSON.parse(readFileSync(join(import.meta.dirname, "c3-launch", "before.json"), "utf8")) as Record<string, any>
 const s = scratchLayout(root)
 
+const { CURSOR_C3, cursorRuleBody } = await import("./c3-launch/effective-launch")
+const { cursorPreamble } = await import("../packages/supermux-core/src/context/agents.js")
+
 /** The intended launch changes of C3, per agent (both roles unless noted). */
 const INTENDED: Record<string, string[]> = {
   // Same args, plugins and instruction text; the instruction file now lives in the core's
@@ -30,9 +33,11 @@ const INTENDED: Record<string, string[]> = {
   // config.toml; plugins: mapped by the core (skills/ → extraRoots) instead of the mux
   // marketplace + `-c plugins."x@mux".enabled`.
   "codex/worker": ["args", "files.<home>/AGENTS.md", "files.<home>/config.toml", "instructions.channel", "plugins", "skills"],
-  // MCP via ACP mcpServers instead of ~/.cursor/mcp.json (plugins unchanged, repo rule kept as
-  // the named CURSOR_REPO_RULE_FALLBACK).
-  "cursor/worker": ["files.<home>/.cursor/mcp.json"],
+  // MCP via ACP mcpServers instead of ~/.cursor/mcp.json; instructions: the same text as the
+  // leading block of the first prompt instead of <work>/.cursor/rules/mux.mdc (+ .git/info/exclude)
+  // written into the repo; plugins: dropped (context.degraded): Cursor's ACP server ignores
+  // --plugin-dir, so they never loaded (C0 2026-10-05).
+  "cursor/worker": ["files.<home>/.cursor/mcp.json", ...CURSOR_C3],
   // Instructions: ACP _meta.rules instead of AGENTS.md written into the repo; plugins: the whole
   // plugin via --plugin-dir instead of its skills/ in config.toml; mux-shim: ACP mcpServers.
   "grok/worker": ["files.<home>/.grok/config.toml", "files.<work>/.git/info/exclude", "files.<work>/AGENTS.md", "instructions.channel", "plugins", "skills"],
@@ -59,6 +64,14 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
     if (agent === "grok") {
       expect(after.instructions!.channel).toBe("ACP session/new _meta.rules")
       expect(Object.keys(after.files).filter((f) => f.startsWith("<work>/") && !f.startsWith("<work>/.git/"))).toEqual([])
+    }
+    if (agent === "cursor") {
+      // The same instruction text, now the first prompt's preamble; nothing in the repo.
+      expect(after.instructions!.channel).toBe("first prompt preamble (ACP session/prompt)")
+      expect(after.instructions!.text).toBe(cursorPreamble(cursorRuleBody(before[key].instructions.text)))
+      expect(Object.keys(after.files).filter((f) => f.startsWith("<work>/"))).toEqual([])
+      expect(after.plugins).toEqual([])
+      expect(after.args).toEqual([])
     }
     if (agent === "claude" && role === "pa") {
       const text = after.instructions!.text

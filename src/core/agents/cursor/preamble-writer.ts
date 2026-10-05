@@ -2,14 +2,10 @@ import { buildMemoryPreamble } from "../../memory/preamble"
 import { readEnvironmentMd } from "../environment"
 import { buildAgentHeader } from "../agent-header"
 
-// cursor-agent loads project rules from <workspace>/.cursor/rules/*.mdc (a
-// directory of .mdc files with frontmatter), NOT from $HOME/.cursor/rules. This
-// was verified empirically: a single $HOME/.cursor/rules file is silently
-// ignored, while <workspace>/.cursor/rules/mux.mdc with `alwaysApply: true`
-// is loaded. File placement is library-owned; this module owns TEXT only.
-// Skills are not listed here — cursor discovers them natively via the plugin
-// host (--plugin-dir), namespaced as `<plugin>:<name>`.
-
+// Cursor's ACP server has no per-session system-prompt channel (C0, cursor-agent 2026.09.18):
+// the core sends this text as the leading block of the session's first prompt (fixed at
+// creation, kept by session/load). Nothing is written into the repo. Skills from plugins are
+// not available on Cursor (its ACP server ignores --plugin-dir).
 /** Instruction TEXT only (no front matter). File placement is library-owned. */
 export function cursorInstructions(opts: { sessionName: string; workdir: string }): string {
   const header = buildAgentHeader({ name: opts.sessionName, role: "worker", workdir: opts.workdir })

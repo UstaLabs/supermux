@@ -4,7 +4,10 @@
  * the broker's REAL shared tool handlers (SessionManager.outbound / orchestration over a scratch
  * registry) bound to the host server. NOT the live broker, NOT the preview.
  *
- *   bun scripts/c3b-live.ts [claude] [codex] [grok] [opencode] [--no-restart] [--no-foreign]
+ *   bun scripts/c3b-live.ts [claude] [codex] [cursor] [grok] [opencode] [--no-restart] [--no-foreign]
+ *
+ * Cursor runs model Auto (a free plan accepts nothing else) with the scratch HOME's copy of the
+ * Cursor credentials (cursor-agent never runs against the real HOME) and no shared runtime seed.
  *
  * Everything lives under ~/.cache/context-c3b/live-<stamp>/ (HOME, MUX_HOME, MUX_STATE_DIR, XDG).
  * Real homes are only READ for credentials (as scripts/c3-live.ts). Per agent:
@@ -31,6 +34,11 @@ for (const d of [HOME, MUX, join(HOME, ".grok"), join(HOME, ".local", "share", "
 const claudeToken: string = JSON.parse(readFileSync(join(REAL_HOME, ".claude", ".credentials.json"), "utf8")).claudeAiOauth.accessToken
 const codexTokens = JSON.parse(readFileSync(join(REAL_HOME, ".codex", "auth.json"), "utf8")).tokens
 copyFileSync(join(REAL_HOME, ".grok", "auth.json"), join(HOME, ".grok", "auth.json")); chmodSync(join(HOME, ".grok", "auth.json"), 0o600)
+for (const [from, to] of [[join(REAL_HOME, ".config", "cursor", "auth.json"), join(HOME, ".config", "cursor", "auth.json")], [join(REAL_HOME, ".cursor", "cli-config.json"), join(HOME, ".cursor", "cli-config.json")]] as const) {
+  if (!existsSync(from)) continue
+  mkdirSync(join(to, ".."), { recursive: true, mode: 0o700 })
+  copyFileSync(from, to); chmodSync(to, 0o600)
+}
 copyFileSync(join(REAL_HOME, ".local", "share", "opencode", "auth.json"), join(HOME, ".local", "share", "opencode", "auth.json")); chmodSync(join(HOME, ".local", "share", "opencode", "auth.json"), 0o600)
 process.env.HOME = HOME
 process.env.MUX_HOME = MUX
@@ -55,6 +63,7 @@ const { muxServersInInit } = await import("../src/core/mux-tools/duplicates")
 const { createClaudeCoreHost } = await import("../src/core/agents/claude/core-host")
 const { createCodexCoreHost } = await import("../src/core/agents/codex/core-host")
 const { createGrokCoreHost } = await import("../src/core/agents/grok/core-host")
+const { createCursorCoreHost } = await import("../src/core/agents/cursor/core-host")
 const { createOpenCodeCoreHost } = await import("../src/core/agents/opencode/core-host")
 const { preAcceptTrust, removeBrokerShimEntries } = await import("../src/core/session-manager/trust")
 const { shimSpawnSpec } = await import("../src/core/session-manager/shim-spawn")
@@ -124,8 +133,8 @@ function sessionProcs(id: string) {
 }
 
 // ---------------------------------------------------------------- one agent
-type Agent = "claude" | "codex" | "grok" | "opencode"
-const ALL: Agent[] = ["claude", "codex", "grok", "opencode"]
+type Agent = "claude" | "codex" | "cursor" | "grok" | "opencode"
+const ALL: Agent[] = ["claude", "codex", "cursor", "grok", "opencode"]
 const argv = process.argv.slice(2)
 const wanted = argv.filter((a): a is Agent => (ALL as string[]).includes(a))
 const doRestart = !argv.includes("--no-restart")
@@ -133,14 +142,16 @@ const doForeign = !argv.includes("--no-foreign")
 
 function makeHost(agent: Agent, state: string): Host {
   const base = { stateDirectory: state, accounts }
-  return agent === "claude" ? createClaudeCoreHost(base) : agent === "codex" ? createCodexCoreHost(base) : agent === "grok" ? createGrokCoreHost(base) : createOpenCodeCoreHost(base)
+  return agent === "claude" ? createClaudeCoreHost(base) : agent === "codex" ? createCodexCoreHost(base)
+    : agent === "cursor" ? createCursorCoreHost({ ...base, sharedRuntime: null })
+    : agent === "grok" ? createGrokCoreHost(base) : createOpenCodeCoreHost(base)
 }
 const account = (agent: Agent) => agent === "claude" ? "claude-tok" : agent === "codex" ? "codex-tok" : undefined
 const configuration = (agent: Agent) => agent === "codex" ? { model: "gpt-5.6-luna", reasoningEffort: "low" } : agent === "grok" ? { reasoningEffort: "low" } : undefined
 function extraFor(agent: Agent, id: string, name: string, work: string, pa: boolean): Record<string, unknown> {
   return {
     sessionHome: join(RUN, "agents", agent, name), sessionName: name, sessionId: id, workdir: work, cwd: work,
-    ...(agent === "claude" ? { model: "haiku", ...(pa ? { pa: true } : {}) } : agent === "opencode" ? { model: "opencode-go/qwen3.7-plus" } : {}),
+    ...(agent === "claude" ? { model: "haiku", ...(pa ? { pa: true } : {}) } : agent === "opencode" ? { model: "opencode-go/qwen3.7-plus" } : agent === "cursor" ? { model: "auto" } : {}),
   }
 }
 

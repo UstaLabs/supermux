@@ -7,7 +7,8 @@
  *   "host":    a host MCP server inside the broker (src/core/mux-tools/server.ts) given to every
  *              agent through its session context (the core's bridge); nothing in ~/.claude.json.
  *
- * Cursor stays "external" in both modes (host servers on Cursor are unverified).
+ * Cursor follows the setting like every agent (host servers through the bridge proven live on
+ * Cursor, C2 2026-10-05).
  * Resolved ONCE at boot (setting `muxShim` in the settings table → env MUX_SHIM → "external");
  * changing it takes a broker restart. A session's context is replaced on every resume, so a
  * flip reaches existing sessions at their next launch.
@@ -36,7 +37,7 @@ export function setMuxShimMode(mode: MuxShimMode): void {
   current = mode
 }
 
-/** The mode an agent's launch uses: Cursor is always "external" (unverified). */
-export function muxShimModeFor(agent: string): MuxShimMode {
-  return agent === "cursor" ? "external" : current
+/** The mode an agent's launch uses (the same for every agent). */
+export function muxShimModeFor(_agent: string): MuxShimMode {
+  return current
 }

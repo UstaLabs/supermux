@@ -2748,7 +2748,7 @@ const server = await startSocketServer({
   socketsDir: SOCKETS_DIR,
   onStatusChange: (session_id, connected, last_pong_at) => {
     // In "host" mode a core session's connected state is the adapter's (sweep above); a shim
-    // that still connects (Cursor, a leftover) must not flip it.
+    // that still connects (a leftover) must not flip it.
     if (adapterLivenessSource(session_id)) return
     applyConnectionStatus(session_id, connected, last_pong_at)
   },

@@ -333,8 +333,10 @@ export async function effectiveLaunch(agent: Agent, role: Role, s: Scratch): Pro
     }))
     const repoRule = Object.keys(files).find(k => /^<work>\/(AGENTS(\.override)?\.md|\.cursor\/rules\/mux\.mdc)$/.test(k))
     const rules = launch?.newSessionMeta?.rules as string | undefined
+    const preamble = launch?.firstPromptPreamble
     out = {
       instructions: rules !== undefined ? { channel: "ACP session/new _meta.rules", text: rules }
+        : preamble !== undefined ? { channel: "first prompt preamble (ACP session/prompt)", text: preamble }
         : repoRule ? { channel: `repo file ${repoRule}`, text: files[repoRule]! } : null,
       plugins, skills,
       mcpServers: sortServers([...fileMcp, ...acp]),
@@ -377,6 +379,13 @@ export async function effectiveLaunch(agent: Agent, role: Role, s: Scratch): Pro
 }
 
 /** Paths (dot-joined) where two launches differ. */
+/** What changed for Cursor relative to the C3a launch since the C0 cursor cells (2026-10-05). */
+export const CURSOR_C3 = ["files.<work>/.cursor/rules/mux.mdc", "files.<work>/.git/info/exclude", "instructions.channel", "instructions.text", "plugins"]
+/** The body of the old repo rule (`.cursor/rules/mux.mdc` without its front matter). */
+export function cursorRuleBody(mdc: string): string {
+  return mdc.replace(/^---\ndescription: supermux session rules\nalwaysApply: true\n---\n\n/, "")
+}
+
 export function diffKeys(a: unknown, b: unknown, prefix = ""): string[] {
   if (JSON.stringify(a) === JSON.stringify(b)) return []
   if (a && b && typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b)) {

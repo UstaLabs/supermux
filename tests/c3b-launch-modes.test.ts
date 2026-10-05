@@ -1,7 +1,9 @@
 // C3b launch modes. "external" (default) must be byte-for-byte the C3a launch
 // (tests/c3-launch/c3a.json, recorded on the C3a code by `bun scripts/c3-launch-capture.ts c3a`);
 // "host" may differ ONLY in the mux-shim MCP entry, which becomes the core's bridge to the
-// broker's host server (Cursor: unchanged, it stays external).
+// broker's host server. Cursor: since the C0 cursor cells (2026-10-05) its instructions are the
+// first prompt's preamble instead of the repo rule and its plugins are dropped (CURSOR_C3, the
+// same in both modes); it follows the mode like every agent.
 import { afterAll, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -13,7 +15,7 @@ delete process.env.XDG_CONFIG_HOME
 delete process.env.XDG_DATA_HOME
 process.env.MUX_HOME = join(root, "mux")
 process.env.MUX_STATE_DIR = join(root, "mux", "state")
-const { scratchLayout, effectiveLaunch, diffKeys, AGENTS } = await import("./c3-launch/effective-launch")
+const { scratchLayout, effectiveLaunch, diffKeys, AGENTS, CURSOR_C3 } = await import("./c3-launch/effective-launch")
 const { setMuxShimMode } = await import("../src/core/mux-tools/mode")
 const c3a = JSON.parse(readFileSync(join(import.meta.dirname, "c3-launch", "c3a.json"), "utf8")) as Record<string, any>
 const s = scratchLayout(root)
@@ -28,6 +30,11 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
     setMuxShimMode("external")
     fresh(agent, role)
     const after = await effectiveLaunch(agent, role, s)
+    if (agent === "cursor") {
+      expect(diffKeys(c3a[`${agent}/${role}`], after)).toEqual(CURSOR_C3)
+      expect(after.mcpServers).toEqual(c3a[`${agent}/${role}`].mcpServers)
+      return
+    }
     expect(diffKeys(c3a[`${agent}/${role}`], after)).toEqual([])
     expect(after).toEqual(c3a[`${agent}/${role}`])
   })
@@ -41,12 +48,7 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
     fresh(agent, role)
     const after = await effectiveLaunch(agent, role, s)
     const before = c3a[`${agent}/${role}`]
-    if (agent === "cursor") {
-      // Cursor always keeps the external shim (host servers on Cursor are unverified).
-      expect(after).toEqual(before)
-      return
-    }
-    expect(diffKeys(before, after)).toEqual(["mcpServers"])
+    expect(diffKeys(before, after)).toEqual(agent === "cursor" ? [...CURSOR_C3, "mcpServers"].sort() : ["mcpServers"])
     const others = (list: any[]) => list.filter((server) => server.name !== "mux-shim")
     expect(others(after.mcpServers)).toEqual(others(before.mcpServers))
     const shim: any[] = after.mcpServers.filter((server: any) => server.name === "mux-shim")

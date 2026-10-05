@@ -10,29 +10,14 @@ import { muxShimContextServer } from "../mux-shim-server"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
 
-const log = makeLogger("agents/cursor/core-host")
-
-/**
- * CURSOR REPO-RULE FALLBACK (C3). The core has no per-session instructions channel for Cursor:
- * the C0 probe could not prove any (the account was out of quota; core reports
- * `instructions: unsupported`, see docs/core-design/session-context.md "Per-session channels" and
- * open question 1). Dropping the instructions would silently lose the session's identity,
- * memory and reply rules, so Cursor alone keeps today's mechanism: the broker writes
- * `<workdir>/.cursor/rules/mux.mdc` (git-excluded) on every launch, regenerated each time like
- * before C3, i.e. NOT fixed at creation. Everything else (plugins, mux-shim) is session context.
- *
- * TODO(C0 cursor cells): re-run `bun scripts/context-probe.ts cursor` (packages/supermux-core)
- * once the account has quota. If a per-session channel is proven (plugin rules/, $HOME rules,
- * $HOME/AGENTS.md, --add-dir), implement it in core `cursorContext`, pass the instructions as
- * context here and delete this fallback (the core rule: never write into the workdir).
- */
-const CURSOR_REPO_RULE_FALLBACK = true
 import { smokeCursorAgent } from "./smoke"
 import { HOME } from "../../session-manager/spawn-helper"
 import { STATE_DIR } from "../../../shared/paths"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { syncCursorSessionCredential } from "../account-env"
 import { isSystemAccount } from "../../accounts/broker-accounts"
+
+const log = makeLogger("agents/cursor/core-host")
 
 export type CursorDriverFactory = (options: CursorOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -141,8 +126,10 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "cursor",
-    // Plugins (--plugin-dir) and mux-shim (ACP mcpServers) are session context (C3; both
-    // "unverified" in core for Cursor). Instructions are not: see CURSOR_REPO_RULE_FALLBACK.
+    // Instructions (the first prompt's leading block: Cursor's ACP server has no system-prompt
+    // channel; nothing is written into the repo any more) and mux-shim (ACP mcpServers) are
+    // session context. Plugins are passed too but Cursor's ACP server cannot load them
+    // (--plugin-dir is ignored): "warn" drops them with context.degraded.
     context: cursorContext([]).support,
     contextPolicy: "warn",
     ...(options.accounts ? { accounts: options.accounts } : {}),
@@ -165,7 +152,7 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
         workdir: extra.workdir,
         mcpServers: [],
         skillsPaths: [],
-        instructions: CURSOR_REPO_RULE_FALLBACK ? cursorInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }) : null,
+        instructions: null,
         // On an account the adapter injects the credential; the session gets no auth.json copy.
         credentials: {
           apiKey: isSystemAccount(registration.account) ? process.env.CURSOR_API_KEY ?? null : null,
@@ -183,6 +170,7 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
       return {
         env: prepared.env,
         context: {
+          instructions: cursorInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
           plugins: sessionPlugins("cursor", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("cursor", extra.sessionId, extra.sessionName)],
         },
