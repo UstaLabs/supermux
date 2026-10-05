@@ -218,7 +218,7 @@ object Takeover {
     }
 
     fun carriedEnv(all: Map<String, String>): Map<String, String> =
-        all.filter { (k, v) -> k.startsWith("MUX_") && (k !in OWNED || (k == "MUX_WEB_PUBLIC_URL" && isRealPublicUrl(v))) }
+        all.filter { (k, v) -> k.startsWith("MUX_") && BrokerService.ENV_KEY.matches(k) && (k !in OWNED || (k == "MUX_WEB_PUBLIC_URL" && isRealPublicUrl(v))) }
 
     /** A tunnel or domain worth carrying: it parses, has a host, and isn't loopback. */
     private fun isRealPublicUrl(url: String): Boolean = urlHost(url) != null && !isLoopbackUrl(url)

@@ -16,7 +16,7 @@ class BrokerServiceTest {
         env = linkedMapOf(
             "MUX_WEB_PORT" to "9898",
             "MUX_MANAGED_BY" to "desktop",
-            "MUX_HOST_NAME" to "Ahmet's Mac & Co",
+            "MUX_HOST_NAME" to "Alex's Mac & Co",
             "PATH" to "/Users/a/.mux/state/desktop-assets/bin:/opt/homebrew/bin:/usr/bin:/bin",
         ),
         log = createTempDirectory().resolve("desktop-broker.log"),
@@ -27,7 +27,7 @@ class BrokerServiceTest {
         assertTrue("<string>/Users/a/.mux/state/desktop-assets/bin/supermux-broker</string>" in xml)
         assertFalse("supermux-broker </string>" in xml, "no trailing space in the program path")
         assertTrue("<key>MUX_MANAGED_BY</key>\n    <string>desktop</string>" in xml)
-        assertTrue("Ahmet's Mac &amp; Co" in xml)
+        assertTrue("Alex's Mac &amp; Co" in xml)
         assertTrue("<key>KeepAlive</key>\n  <true/>" in xml)
         assertTrue("<string>dev.supermux.host</string>" in xml)
     }
@@ -39,10 +39,10 @@ class BrokerServiceTest {
         assertTrue("<!-- $marker -->" in plist && "<key>MUX_MANAGED_BY</key>\n    <string>desktop</string>" in plist)
         val unit = BrokerService.systemdUnit(bare)
         assertTrue("Description=supermux broker ($marker)" in unit && "Environment=\"MUX_MANAGED_BY=desktop\"" in unit)
-        val xdg = BrokerService.xdgAutostart(bare)
-        assertTrue("# $marker" in xdg && "MUX_MANAGED_BY=desktop" in xdg)
-        val task = BrokerService.windowsTaskXml(bare)
-        assertTrue("<!-- $marker -->" in task && "MUX_MANAGED_BY" in task)
+        val xdg = BrokerService.xdgAutostart(bare, Path.of("/h/.config/supermux/broker.env"))
+        assertTrue("# $marker" in xdg && "export MUX_MANAGED_BY='desktop'" in BrokerService.xdgEnvFile(bare))
+        val task = BrokerService.windowsTaskXml(bare, winEnvFile)
+        assertTrue("<!-- $marker -->" in task && "MUX_MANAGED_BY=desktop\r\n" in BrokerService.windowsEnvFile(bare))
     }
 
     @Test fun specEnvCannotOverrideManagedBy() {
@@ -59,12 +59,15 @@ class BrokerServiceTest {
 
     private val printHost = listOf("launchctl", "print", "gui/501/dev.supermux.host")
 
+    private fun mode(p: Path) = java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(p))
+
     @Test fun macInstallWritesPlistAndBootstraps() {
         val home = createTempDirectory()
         val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, failing = setOf(printHost))
         val r = BrokerService.install(spec, env)
         assertTrue(r is BrokerService.Result.Installed)
         assertTrue(Files.exists(home.resolve("Library/LaunchAgents/dev.supermux.host.plist")))
+        assertEquals("rw-------", mode(home.resolve("Library/LaunchAgents/dev.supermux.host.plist")), "the env may hold tokens")
         assertEquals(listOf("launchctl", "bootout", "gui/501/dev.supermux.host"), env.ran[0])
         assertEquals(printHost, env.ran[1]) // gone: launchd dropped the old job
         assertEquals(listOf("launchctl", "enable", "gui/501/dev.supermux.host"), env.ran[2])
@@ -96,17 +99,22 @@ class BrokerServiceTest {
         val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         BrokerService.install(spec, env)
         assertTrue(Files.exists(home.resolve(".config/systemd/user/supermux-host.service")))
+        assertEquals("rw-------", mode(home.resolve(".config/systemd/user/supermux-host.service")), "the env may hold tokens")
         assertTrue(listOf("systemctl", "--user", "enable", "--now", "supermux-host") in env.ran)
     }
 
     private val winSpec = BrokerService.Spec(
         broker = Path.of("C:\\Users\\a\\.mux\\state\\desktop-assets\\bin\\supermux-broker.exe"),
-        env = linkedMapOf("MUX_HOST_NAME" to "Ahmet's & \"Win\"", "MUX_MANAGED_BY" to "desktop"),
+        env = linkedMapOf("MUX_HOST_NAME" to "Alex's & \"Win\"", "MUX_MANAGED_BY" to "desktop", "MUX_TELEGRAM_BOT_TOKEN" to "123:secret"),
         log = Path.of("C:\\Users\\a\\.mux\\state\\desktop-broker.log"),
     )
+    private val winEnvFile = Path.of("C:\\Users\\O'Neil & Co\\AppData\\Local\\Supermux\\broker.env")
+    /** The task XML a [winEnv] over [home] registers. */
+    private fun winXml(home: Path, s: BrokerService.Spec = winSpec) =
+        BrokerService.windowsTaskXml(s, home.resolve("AppData/Local").resolve(BrokerService.WINDOWS_ENV_FILE))
 
     @Test fun windowsTaskXmlIsPerUserLeastPrivilegeAndEscapes() {
-        val xml = BrokerService.windowsTaskXml(winSpec)
+        val xml = BrokerService.windowsTaskXml(winSpec, winEnvFile)
         assertTrue("<LogonTrigger>" in xml)
         assertTrue("<LogonType>InteractiveToken</LogonType>" in xml)
         assertTrue("<RunLevel>LeastPrivilege</RunLevel>" in xml)
@@ -116,12 +124,12 @@ class BrokerServiceTest {
         assertTrue("<Command>conhost.exe</Command>" in xml, "a headless conhost: no Windows Terminal window")
         assertTrue("<Arguments>--headless powershell.exe -NoLogo" in xml)
         assertTrue("\$env:MUX_WINDOWS_TASK = '1'" in xml, "the broker knows it runs under the loop")
-        assertTrue("\$env:MUX_MANAGED_BY = 'desktop'" in xml)
         assertTrue("'C:\\Users\\a\\.mux\\state\\desktop-assets\\bin\\supermux-broker.exe'" in xml, "PowerShell-quotes the broker")
         assertTrue("Out-File -Append -FilePath 'C:\\Users\\a\\.mux\\state\\desktop-broker.log'" in xml, "appends output to the log")
-        assertTrue("Ahmet&apos;s" !in xml && "&amp;" in xml, "XML-escapes ampersands")
-        assertTrue("'Ahmet''s" in xml, "doubles single quotes in PowerShell literals")
-        assertTrue("\\\"Win\\\"" in xml, "escapes double quotes for the Windows command line")
+        assertTrue("Get-Content -LiteralPath 'C:\\Users\\O''Neil &amp; Co\\AppData\\Local\\Supermux\\broker.env'" in xml,
+            "reads the env file (PowerShell-quoted, XML-escaped) before every start")
+        assertTrue("O&apos;Neil" !in xml && "&amp;" in xml, "XML-escapes ampersands")
+        for (v in listOf("123:secret", "Alex", "MUX_TELEGRAM_BOT_TOKEN", "MUX_HOST_NAME")) assertTrue(v !in xml, "no env in the definition: $v")
         assertTrue("<WorkingDirectory>C:\\Users\\a\\.mux\\state\\desktop-assets\\bin</WorkingDirectory>" in xml)
     }
 
@@ -132,6 +140,9 @@ class BrokerServiceTest {
         val taskXml = env.localAppData.resolve("Supermux/supermux-host-task.xml")
         assertEquals(taskXml, installed.path)
         assertTrue("<LogonTrigger>" in Files.readString(taskXml, Charsets.UTF_16))
+        val envFile = env.localAppData.resolve("Supermux/broker.env")
+        assertEquals("MUX_HOST_NAME=Alex's & \"Win\"\r\nMUX_MANAGED_BY=desktop\r\nMUX_TELEGRAM_BOT_TOKEN=123:secret\r\n", Files.readString(envFile))
+        assertEquals("rw-------", mode(envFile))
         assertTrue(env.ran.any {
             it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") &&
                 it.last().contains("/Create") && it.last().contains(taskXml.toString())
@@ -158,11 +169,11 @@ class BrokerServiceTest {
 
     @Test fun plistAndTaskXmlAreWellFormedWithNastyValues() {
         parse(BrokerService.launchdPlist(nasty))
-        parse(BrokerService.windowsTaskXml(nasty))
+        parse(BrokerService.windowsTaskXml(nasty, winEnvFile))
     }
 
     @Test fun windowsTaskXmlHasHiddenSupervisionLoopAndCurlyQuoteDoubled() {
-        val xml = BrokerService.windowsTaskXml(winSpec.copy(env = linkedMapOf("MUX_HOST_NAME" to "Ahmet\u2019s")))
+        val xml = BrokerService.windowsTaskXml(winSpec, Path.of("C:\\Users\\Alex\u2019s\\broker.env"))
         parse(xml)
         assertTrue("-WindowStyle Hidden" in xml)
         assertTrue("while (\$true)" in xml)
@@ -170,7 +181,7 @@ class BrokerServiceTest {
         assertTrue("-Filter ('ProcessId=' + \$PID)" in xml && "\$_.ToString()" in xml, "no double quotes of its own in the script")
         assertTrue("\$null = \$supermuxHost.Handle" in xml, "the parent's handle is pinned against pid reuse")
         assertTrue("Out-File -Append" in xml)
-        assertTrue("'Ahmet\u2019\u2019s'" in xml, "curly apostrophe doubled in the PowerShell literal")
+        assertTrue("'C:\\Users\\Alex\u2019\u2019s\\broker.env'" in xml, "curly apostrophe doubled in the PowerShell literal")
     }
 
     @Test fun systemdEscapesDollarInExecStartAndPercentInLog() {
@@ -230,16 +241,28 @@ class BrokerServiceTest {
         assertFalse(r.enabled)
         val desktop = home.resolve(".config/autostart/supermux-host.desktop")
         assertTrue(Files.exists(desktop))
+        val envFile = home.resolve(".config/supermux/broker.env")
+        assertEquals("rw-------", mode(envFile), "the env may hold tokens")
+        assertTrue("export MUX_HOST_NAME='Alex'\\''s Mac & Co'" in Files.readString(envFile))
+        val entry = Files.readString(desktop)
+        assertTrue("Alex" !in entry && "9898" !in entry, "no env value in the autostart's argv")
         val unit = home.resolve(".config/systemd/user/supermux-host.service")
         Files.createDirectories(unit.parent); Files.writeString(unit, "x")
         BrokerService.remove(env)
         assertFalse(Files.exists(desktop))
         assertFalse(Files.exists(unit))
+        assertFalse(Files.exists(envFile))
     }
 
-    @Test fun xdgExecQuotesReservedCharacters() {
-        val d = BrokerService.xdgAutostart(spec.copy(env = linkedMapOf("A" to "x\$y%z")))
-        assertTrue("\"A=x\\\\\$y%%z\"" in d, d)
+    @Test fun xdgExecSourcesTheEnvFileAndQuotesForBothLayers() {
+        val d = BrokerService.xdgAutostart(spec.copy(broker = Path.of("/opt/it's \$x%/broker")), Path.of("/h/.config/supermux/broker.env"))
+        val exec = d.lines().single { it.startsWith("Exec=") }
+        // Desktop Entry: inside "…", `$` and `\` are backslashed, then every `\` doubled and `%` doubled.
+        assertEquals(
+            "Exec=/bin/sh -c \". '/h/.config/supermux/broker.env' && exec '/opt/it'\\\\\\\\''s \\\\\$x%%/broker'\"",
+            exec,
+        )
+        assertEquals("export A='x\$y%z'\n", BrokerService.xdgEnvFile(spec.copy(env = linkedMapOf("A" to "x\$y%z"))).lines().first() + "\n")
     }
 
     @Test fun aDeclinedUacPromptIsAFailureNotASuccess() {
@@ -356,10 +379,14 @@ class BrokerServiceTest {
         env.neverKilled(400); env.neverKilled(401)
     }
 
+    /** A changed definition: a broker at another path. */
+    private val oldBroker = winSpec.copy(broker = Path.of("C:\\Program Files\\supermux\\supermux-broker.exe"))
+
     private fun elevatedCalls(env: FakeOsEnv) = env.ran.filter { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") }
 
     @Test fun windowsReinstallOfTheSameDefinitionRestartsWithoutUac() {
-        val env = winEnv(registered = BrokerService.windowsTaskXml(winSpec))
+        val home = createTempDirectory()
+        val env = winEnv(home, registered = winXml(home))
         assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec, env))
         env.ran.clear()
         val again = assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec, env))
@@ -371,7 +398,8 @@ class BrokerServiceTest {
     }
 
     @Test fun windowsInstallAfterTheCallerStoppedTheServiceDoesNotStopItAgain() {
-        val env = winEnv(registered = BrokerService.windowsTaskXml(winSpec))
+        val home = createTempDirectory()
+        val env = winEnv(home, registered = winXml(home))
         BrokerService.install(winSpec, env)
         env.ran.clear()
         assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec, env, alreadyStopped = true))
@@ -384,12 +412,12 @@ class BrokerServiceTest {
         // still runs the old one: that is a change, so it must ask again.
         val home = createTempDirectory()
         BrokerService.install(winSpec, winEnv(home, registered = null))
-        val old = BrokerService.windowsTaskXml(winSpec.copy(env = mapOf("MUX_WEB_PORT" to "8787")))
+        val old = winXml(home, oldBroker)
         val env = winEnv(home, registered = old)
         BrokerService.install(winSpec, env)
         assertEquals(1, elevatedCalls(env).size)
         // schtasks escapes differently from us: the comparison is on the unescaped values.
-        val ours = BrokerService.windowsTaskXml(winSpec)
+        val ours = winXml(home)
         assertTrue(BrokerService.sameTaskAction(ours.replace("\"", "&quot;").replace("'", "&apos;"), ours))
         assertFalse(BrokerService.sameTaskAction(old, ours))
         assertFalse(BrokerService.sameTaskAction(null, ours))
@@ -399,7 +427,7 @@ class BrokerServiceTest {
         val env = winEnv()
         BrokerService.install(winSpec, env)
         env.ran.clear()
-        assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec.copy(env = mapOf("MUX_WEB_PORT" to "8787")), env))
+        assertIs<BrokerService.Result.Installed>(BrokerService.install(oldBroker, env))
         val elevated = elevatedCalls(env)
         assertEquals(1, elevated.size)
         assertTrue(env.ran.indexOf(killBroker) in 0 until env.ran.indexOf(elevated[0]), "re-registering must not leave the old loop running")
@@ -409,7 +437,7 @@ class BrokerServiceTest {
         val home = createTempDirectory()
         BrokerService.install(winSpec, winEnv(home))
         val env = winEnv(home, failIf = { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") })
-        val r = assertIs<BrokerService.Result.Failed>(BrokerService.install(winSpec.copy(env = mapOf("MUX_WEB_PORT" to "8787")), env))
+        val r = assertIs<BrokerService.Result.Failed>(BrokerService.install(oldBroker, env))
         assertTrue(r.previousStillRunning)
         assertEquals(BrokerService.WINDOWS_UPDATE_DECLINED, r.message)
         assertEquals(1, elevatedCalls(env).size)
@@ -446,7 +474,7 @@ class BrokerServiceTest {
     }
 
     @Test fun windowsTaskReplacesALingeringInstanceOnRun() {
-        assertTrue("<MultipleInstancesPolicy>StopExisting</MultipleInstancesPolicy>" in BrokerService.windowsTaskXml(winSpec))
+        assertTrue("<MultipleInstancesPolicy>StopExisting</MultipleInstancesPolicy>" in BrokerService.windowsTaskXml(winSpec, winEnvFile))
     }
 
     @Test fun windowsRemoveFailsWhenTheElevatedBatchFails() {
@@ -488,6 +516,22 @@ class BrokerServiceTest {
     @Test fun specRejectsLineBreaks() {
         assertFailsWith<IllegalArgumentException> { spec.copy(env = mapOf("A" to "x\ny")) }
         assertFailsWith<IllegalArgumentException> { spec.copy(env = mapOf("A\r" to "x")) }
+    }
+
+    @Test fun specRejectsKeysAShellOrPowerShellCannotTakeAsIs() {
+        for (k in listOf("mux_lower", "A-B", "A B", "A=B", "\$(x)", "")) {
+            assertFailsWith<IllegalArgumentException>(k) { spec.copy(env = mapOf(k to "x")) }
+        }
+    }
+
+    @Test fun windowsAnEnvOnlyChangeRewritesTheEnvFileWithoutUac() {
+        val home = createTempDirectory()
+        val env = winEnv(home, registered = winXml(home))
+        val changed = winSpec.copy(env = winSpec.env + ("MUX_RELAY_DOMAIN" to ""))
+        assertIs<BrokerService.Result.Installed>(BrokerService.install(changed, env))
+        assertEquals(emptyList(), elevatedCalls(env), "the definition didn't change")
+        assertTrue("MUX_RELAY_DOMAIN=\r\n" in Files.readString(env.localAppData.resolve("Supermux/broker.env")))
+        assertTrue(run in env.ran)
     }
 
     @Test fun removeOnMacBootsOutAndDeletes() {

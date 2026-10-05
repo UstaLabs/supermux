@@ -2,6 +2,8 @@ package dev.supermux.desktop.host
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFilePermissions
 
 /**
  * "Keep running in the background" (spec D2): the OS service manager runs THE BROKER — launchd
@@ -15,7 +17,12 @@ object BrokerService {
     const val XDG_AUTOSTART_FILE = "supermux-host.desktop"
     const val WINDOWS_TASK_NAME = "Supermux Host"
     const val WINDOWS_BROKER_EXE = "supermux-broker.exe"
+    /** Written by app versions before the env moved out of the task; deleted on install / remove (it held the env). */
     const val WINDOWS_TASK_XML = "Supermux/supermux-host-task.xml"
+    /** Under `%LOCALAPPDATA%` (only the user, SYSTEM and Administrators can read it): the task loop's env. */
+    const val WINDOWS_ENV_FILE = "Supermux/broker.env"
+    /** The XDG autostart's env, sourced by its `Exec` line (0600): the values never appear in an argv. */
+    const val XDG_ENV_FILE = ".config/supermux/broker.env"
     /** ERROR_CANCELLED: what the elevated batch exits with when the UAC prompt is declined. */
     internal const val UAC_DECLINED_EXIT = 1223
 
@@ -25,10 +32,14 @@ object BrokerService {
     /** Set in the Scheduled Task broker's env: it runs under the task's restart loop. */
     const val WINDOWS_TASK_ENV = "MUX_WINDOWS_TASK"
 
+    /** An env key every definition can carry as-is: a shell, PowerShell and systemd name. */
+    val ENV_KEY = Regex("[A-Z0-9_]+")
+
     data class Spec(val broker: Path, val env: Map<String, String>, val log: Path) {
         init {
-            fun bad(x: String) = x.contains('\n') || x.contains('\r')
+            fun bad(x: String) = x.contains('\n') || x.contains('\r') || x.contains('\u0000')
             require(env.none { (k, v) -> bad(k) || bad(v) }) { "env must not contain line breaks" }
+            require(env.keys.all { ENV_KEY.matches(it) }) { "env keys must be [A-Z0-9_]+" }
             require(!bad(broker.toString()) && !bad(log.toString())) { "paths must not contain line breaks" }
         }
     }
@@ -144,18 +155,34 @@ WantedBy=default.target
 """
     }
 
-    fun xdgAutostart(spec: Spec): String {
-        val envArgs = withManaged(spec.env).entries.joinToString(" ") { (k, v) -> xdgQuote("$k=$v") }
+    /** POSIX shell single-quoting: the value is taken literally. */
+    private fun shQuote(s: String) = "'" + s.replace("'", "'\\''") + "'"
+
+    /**
+     * The XDG autostart entry. Its env lives in [envFile] (0600, [xdgEnvFile]), which the `Exec`
+     * line sources: an autostart entry's argv is visible to every user (`ps`), the env's values
+     * (tokens a takeover carried) must not be.
+     */
+    fun xdgAutostart(spec: Spec, envFile: Path): String {
+        val script = ". ${shQuote(envFile.toString())} && exec ${shQuote(spec.broker.toString())}"
         return """[Desktop Entry]
 # $MANAGED_MARKER
 Type=Application
 Name=supermux
 Comment=Keep supermux running in the background
-Exec=env $envArgs ${xdgQuote(spec.broker.toString())}
+Exec=/bin/sh -c ${xdgQuote(script)}
 X-GNOME-Autostart-enabled=true
 Terminal=false
 """
     }
+
+    /** [xdgAutostart]'s env file: one `export KEY='value'` per line. */
+    fun xdgEnvFile(spec: Spec): String =
+        withManaged(spec.env).entries.joinToString("") { (k, v) -> "export $k=${shQuote(v)}\n" }
+
+    /** The Windows task loop's env file: one `KEY=value` per line, read by [windowsTaskXml]'s loop. */
+    fun windowsEnvFile(spec: Spec): String =
+        withManaged(spec.env).entries.joinToString("") { (k, v) -> "$k=$v\r\n" }
 
     /**
      * Windows Task Scheduler 1.4 XML for the current interactive user.
@@ -168,18 +195,23 @@ Terminal=false
      * Ending the task (`schtasks /End`) only terminates conhost, so the loop remembers its parent
      * and stops once the broker exits after conhost is gone; otherwise it would respawn the broker.
      * `MUX_WINDOWS_TASK=1` tells the broker it runs under this loop (`/system/restart` = exit).
+     *
+     * The env is NOT in the definition: the loop reads [envFile] ([windowsEnvFile], under the user's
+     * private `%LOCALAPPDATA%`) before every start of the broker. A registered task's XML can be
+     * read back by administrators and backup tools; the env's tokens stay in the user's profile.
+     * So an env change (relay on/off) changes no definition and needs no UAC prompt.
      */
-    fun windowsTaskXml(spec: Spec): String {
-        val sets = (withManaged(spec.env) + (WINDOWS_TASK_ENV to "1")).entries
-            .joinToString("; ") { (k, v) -> "\$env:$k = ${powershellLiteral(v)}" }
+    fun windowsTaskXml(spec: Spec, envFile: Path): String {
         // The parent (the task's conhost) is looked up once and its handle opened (`.Handle`), so
         // HasExited stays about THAT process even if its pid is reused later. If WMI can't answer
         // (null), the loop just never stops on its own; stopping the task then kills it by pid.
         // No double quotes anywhere: the script travels inside one quoted -Command argument.
-        val script = "\$PSDefaultParameterValues['Out-File:Encoding']='utf8'; $sets; " +
+        val loadEnv = "Get-Content -LiteralPath ${powershellLiteral(envFile.toString())} -Encoding UTF8 -ErrorAction SilentlyContinue | " +
+            "ForEach-Object { \$i = \$_.IndexOf('='); if (\$i -gt 0) { [Environment]::SetEnvironmentVariable(\$_.Substring(0, \$i), \$_.Substring(\$i + 1)) } }"
+        val script = "\$PSDefaultParameterValues['Out-File:Encoding']='utf8'; \$env:$WINDOWS_TASK_ENV = '1'; " +
             "\$supermuxHost = Get-Process -Id (Get-CimInstance Win32_Process -Filter ('ProcessId=' + \$PID)).ParentProcessId -ErrorAction SilentlyContinue; " +
             "if (\$supermuxHost) { \$null = \$supermuxHost.Handle }; " +
-            "while (\$true) { & ${powershellLiteral(spec.broker.toString())} 2>&1 | ForEach-Object { \$_.ToString() } | " +
+            "while (\$true) { $loadEnv; & ${powershellLiteral(spec.broker.toString())} 2>&1 | ForEach-Object { \$_.ToString() } | " +
             "Out-File -Append -FilePath ${powershellLiteral(spec.log.toString())}; " +
             "if (\$supermuxHost -and \$supermuxHost.HasExited) { break }; Start-Sleep -Seconds 5 }"
         val arguments = listOf(
@@ -297,12 +329,41 @@ Terminal=false
     /** The XDG autostart fallback file (Linux without systemd --user). */
     fun xdgAutostartPath(env: OsEnv): Path = env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE")
 
+    /** The XDG autostart's env file ([xdgEnvFile]). */
+    fun xdgEnvPath(env: OsEnv): Path = env.home.resolve(XDG_ENV_FILE)
+
+    /** The Windows task loop's env file ([windowsEnvFile]). */
+    fun windowsEnvPath(env: OsEnv): Path = env.localAppData.resolve(WINDOWS_ENV_FILE)
+
+    /**
+     * Write [text] to [file] readable by its owner only (0600 where the file system has POSIX
+     * permissions; elsewhere the parent's ACL, `%LOCALAPPDATA%`'s being the user's own). The file is
+     * created private and then moved over the old one, so it is never readable by others, not even
+     * for a moment, and a crash never leaves it half-written.
+     */
+    internal fun writePrivate(file: Path, text: String, charset: java.nio.charset.Charset = Charsets.UTF_8) {
+        val dir = file.parent
+        Files.createDirectories(dir)
+        val posix = "posix" in file.fileSystem.supportedFileAttributeViews()
+        val tmp = if (posix) {
+            Files.createTempFile(dir, ".${file.fileName}", ".tmp", PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
+        } else {
+            Files.createTempFile(dir, ".${file.fileName}", ".tmp")
+        }
+        try {
+            Files.writeString(tmp, text, charset)
+            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } finally {
+            Files.deleteIfExists(tmp)
+        }
+    }
+
     private fun installLaunchd(spec: Spec, env: OsEnv): Result {
         val plist = env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist")
         return runCatching {
             Files.createDirectories(plist.parent)
             spec.log.parent?.let { Files.createDirectories(it) }
-            Files.writeString(plist, launchdPlist(spec))
+            writePrivate(plist, launchdPlist(spec))
             if (env.hasCommand("launchctl") && env.uid != null) {
                 val domain = "gui/${env.uid}"
                 env.runResult(listOf("launchctl", "bootout", "$domain/$LAUNCHD_LABEL")) // ignore: first install has none
@@ -360,7 +421,7 @@ Terminal=false
         return runCatching {
             Files.createDirectories(unit.parent)
             spec.log.parent?.let { Files.createDirectories(it) }
-            Files.writeString(unit, systemdUnit(spec))
+            writePrivate(unit, systemdUnit(spec))
             env.run(listOf("systemctl", "--user", "daemon-reload"))
             val enabled = env.run(listOf("systemctl", "--user", "enable", "--now", SYSTEMD_NAME))
             // enable --now is a no-op for an already-running unit; restart applies a new env/binary.
@@ -373,9 +434,10 @@ Terminal=false
 
     private fun installXdgAutostart(spec: Spec, env: OsEnv): Result {
         val file = env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE")
+        val envFile = xdgEnvPath(env)
         return runCatching {
-            Files.createDirectories(file.parent)
-            Files.writeString(file, xdgAutostart(spec))
+            writePrivate(envFile, xdgEnvFile(spec))
+            writePrivate(file, xdgAutostart(spec, envFile))
             Result.Installed(file, enabled = false) // only starts at next login
         }.getOrElse { Result.Failed("xdg autostart install failed: ${it.message}") }
     }
@@ -391,6 +453,7 @@ Terminal=false
             val a = Files.deleteIfExists(unit)
             Files.deleteIfExists(env.home.resolve(".config/systemd/user/default.target.wants/$SYSTEMD_UNIT"))
             val b = Files.deleteIfExists(autostart)
+            Files.deleteIfExists(xdgEnvPath(env))
             Result.Removed(when { a -> unit; b -> autostart; else -> null })
         }.getOrElse { Result.Failed("systemd remove failed: ${it.message}") }
     }
@@ -515,10 +578,13 @@ Terminal=false
 
     private fun installWindowsTask(spec: Spec, env: OsEnv, alreadyStopped: Boolean): Result {
         val taskXml = env.localAppData.resolve(WINDOWS_TASK_XML)
-        val content = "\uFEFF" + windowsTaskXml(spec)
+        val envFile = windowsEnvPath(env)
+        val content = "\uFEFF" + windowsTaskXml(spec, envFile)
         val run = listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME)
         return runCatching {
             Files.createDirectories(taskXml.parent)
+            // The loop reads its env from here on every (re)start: write it before anything runs.
+            writePrivate(envFile, windowsEnvFile(spec))
             val wasInstalled = isInstalled(env)
             // Compare with what is REGISTERED, not with our file: the file can say one thing while
             // the task still runs another (a prompt declined after the file was written).
@@ -559,6 +625,7 @@ Terminal=false
         return runCatching {
             if (!isInstalled(env)) {
                 Files.deleteIfExists(taskXml)
+                Files.deleteIfExists(windowsEnvPath(env))
                 return Result.Removed(null)
             }
             // /End first: the task's PowerShell loop would otherwise respawn the broker ~5 s after taskkill.
@@ -573,6 +640,7 @@ Terminal=false
             // the killed one is still being torn down fails with a sharing violation.
             stopWindowsTask(env)
             val existed = Files.deleteIfExists(taskXml)
+            Files.deleteIfExists(windowsEnvPath(env))
             Result.Removed(if (existed) taskXml else null)
         }.getOrElse { Result.Failed("Windows Scheduled Task remove failed: ${it.message}") }
     }
