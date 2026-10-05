@@ -20,6 +20,7 @@ package dev.supermux.desktop.shell
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -29,7 +30,10 @@ import com.jetbrains.JBR
 import java.awt.Frame
 import java.awt.Toolkit
 import java.awt.Window
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.event.MouseAdapter
+import java.awt.event.WindowAdapter
 import java.awt.event.MouseEvent
 import java.awt.event.WindowEvent
 import java.awt.event.WindowStateListener
@@ -51,7 +55,7 @@ object LinuxWindowChrome {
     /** Set to 1 / true to keep the system title bar on Linux. */
     const val OPT_OUT_ENV = "SUPERMUX_SYSTEM_TITLEBAR"
 
-    /** The X11 WM_CLASS; matches the launcher's `StartupWMClass` (packaging/linux/supermux.desktop). */
+    /** The X11 WM_CLASS; matches the `StartupWMClass` that `addStartupWmClassToDebs` (build.gradle.kts) puts in the .deb's launcher entry. */
     const val WM_CLASS = "supermux"
 
     /**
@@ -92,13 +96,18 @@ object LinuxWindowChrome {
      */
     fun detect(linux: Boolean): X11MoveResize? {
         if (!linux) return null
+        val optOut = System.getenv(OPT_OUT_ENV)
+        // Opted out: decide on the gate alone and never touch the X11 internals.
+        if (!shouldEngage(linux, optOut, windowMoveSupported = true, nativeResize = true)) {
+            println("[LinuxWindowChrome] system title bar ($OPT_OUT_ENV=$optOut)")
+            return null
+        }
         val moveResize = X11MoveResize.load()
         val move = runCatching { JBR.isWindowMoveSupported() }.getOrDefault(false)
-        val engage = shouldEngage(linux, System.getenv(OPT_OUT_ENV), move, moveResize != null)
+        val engage = shouldEngage(linux, optOut, move, moveResize != null)
         println(
             if (engage) "[LinuxWindowChrome] custom chrome on (undecorated, WM move/resize)"
-            else "[LinuxWindowChrome] system title bar (windowMove=$move nativeResize=${moveResize != null} " +
-                "optOut=${System.getenv(OPT_OUT_ENV)})",
+            else "[LinuxWindowChrome] system title bar (windowMove=$move nativeResize=${moveResize != null})",
         )
         return moveResize.takeIf { engage }
     }
@@ -152,6 +161,12 @@ class LinuxWindowChromeInstall(
     val target: WindowControlTarget,
     val maximised: Boolean,
     val startResize: (WmMoveResizeDirection) -> Unit,
+    /**
+     * Bumped whenever the window is hidden, iconified or deactivated. The pointer leaves without
+     * Compose seeing an exit then (close to the tray from the close button), so the buttons key
+     * their hover state on it — see [LinuxWindowControls].
+     */
+    val pointerEpoch: Int = 0,
 )
 
 /**
@@ -163,14 +178,32 @@ fun rememberLinuxWindowChrome(frame: Frame, moveResize: X11MoveResize): LinuxWin
     val regions = remember(frame) { MacChromeRegions() }
     val target = remember(frame) { FrameControlTarget(frame) }
     var maximised by remember(frame) { mutableStateOf(WindowControlActions.isMaximised(frame.extendedState)) }
+    var pointerEpoch by remember(frame) { mutableIntStateOf(0) }
     DisposableEffect(frame) {
-        val stateListener = WindowStateListener { maximised = WindowControlActions.isMaximised(it.newState) }
+        val stateListener = WindowStateListener {
+            maximised = WindowControlActions.isMaximised(it.newState)
+            if (it.newState and Frame.ICONIFIED != 0) pointerEpoch++
+        }
         frame.addWindowStateListener(stateListener)
+        val focusListener = object : WindowAdapter() {
+            override fun windowDeactivated(e: WindowEvent) {
+                pointerEpoch++
+            }
+        }
+        frame.addWindowListener(focusListener)
+        val hideListener = object : ComponentAdapter() {
+            override fun componentHidden(e: ComponentEvent) {
+                pointerEpoch++
+            }
+        }
+        frame.addComponentListener(hideListener)
         val mouse = BandDragListener(frame, regions, moveResize, target)
         frame.addMouseListener(mouse)
         frame.addMouseMotionListener(mouse)
         onDispose {
             frame.removeWindowStateListener(stateListener)
+            frame.removeWindowListener(focusListener)
+            frame.removeComponentListener(hideListener)
             frame.removeMouseListener(mouse)
             frame.removeMouseMotionListener(mouse)
         }
@@ -180,8 +213,33 @@ fun rememberLinuxWindowChrome(frame: Frame, moveResize: X11MoveResize): LinuxWin
         target = target,
         maximised = maximised,
         startResize = { moveResize.start(frame, it) },
+        pointerEpoch = pointerEpoch,
     )
 }
+
+/** What a press on the window does to the band. */
+enum class BandPress { Ignore, ToggleMaximise, ArmDrag }
+
+/**
+ * The band's response to a press at [yPx] (content px) with AWT [button] / [clickCount]: only the
+ * primary button, only inside the band ([LinuxTitleBarHeight] at this monitor's [scale]) and only
+ * on a drag region ([inDragRegion]). A double-click maximises / restores; a single press arms a
+ * move that starts once the pointer passes [dragPastSlop].
+ */
+fun bandPressAction(button: Int, clickCount: Int, yPx: Float, scale: Double, inDragRegion: Boolean): BandPress = when {
+    button != MouseEvent.BUTTON1 -> BandPress.Ignore
+    yPx >= LinuxTitleBarHeight.value * scale -> BandPress.Ignore
+    !inDragRegion -> BandPress.Ignore
+    clickCount == 2 -> BandPress.ToggleMaximise
+    else -> BandPress.ArmDrag
+}
+
+/** Pointer travel (AWT points) after which an armed press becomes a window move. */
+const val BAND_DRAG_SLOP = 4
+
+/** True once the pointer has left the [slop] box around the press. */
+fun dragPastSlop(fromX: Int, fromY: Int, x: Int, y: Int, slop: Int = BAND_DRAG_SLOP): Boolean =
+    abs(x - fromX) >= slop || abs(y - fromY) >= slop
 
 /**
  * Drag / double-click on the top band. The band's drag regions are empty chrome (no Compose
@@ -195,34 +253,26 @@ private class BandDragListener(
     private val moveResize: X11MoveResize,
     private val target: WindowControlTarget,
 ) : MouseAdapter() {
-    private var pressAt: Offset? = null
-
-    // ComposeWindow hands listeners to its content panel, so these are content-relative AWT
-    // points; Compose regions are in px, so scale by this monitor's transform.
-    private fun px(e: MouseEvent): Offset {
-        val t = window.graphicsConfiguration?.defaultTransform
-        return Offset((e.x * (t?.scaleX ?: 1.0)).toFloat(), (e.y * (t?.scaleY ?: 1.0)).toFloat())
-    }
-
-    private fun inBand(e: MouseEvent): Boolean {
-        val scale = window.graphicsConfiguration?.defaultTransform?.scaleY ?: 1.0
-        val p = px(e)
-        return p.y < LinuxTitleBarHeight.value * scale && regions.allowsNativeDrag(p)
-    }
+    private var pressAt: java.awt.Point? = null
 
     override fun mousePressed(e: MouseEvent) {
         pressAt = null
-        if (e.button != MouseEvent.BUTTON1 || !inBand(e)) return
-        if (e.clickCount == 2) {
-            WindowControlActions.toggleMaximise(target)
-            return
+        // ComposeWindow hands listeners to its content panel, so these are content-relative AWT
+        // points; Compose regions are in px, so scale by this monitor's transform.
+        val t = window.graphicsConfiguration?.defaultTransform
+        val sx = t?.scaleX ?: 1.0
+        val sy = t?.scaleY ?: 1.0
+        val p = Offset((e.x * sx).toFloat(), (e.y * sy).toFloat())
+        when (bandPressAction(e.button, e.clickCount, p.y, sy, regions.allowsNativeDrag(p))) {
+            BandPress.ToggleMaximise -> WindowControlActions.toggleMaximise(target)
+            BandPress.ArmDrag -> pressAt = e.point
+            BandPress.Ignore -> Unit
         }
-        pressAt = Offset(e.x.toFloat(), e.y.toFloat())
     }
 
     override fun mouseDragged(e: MouseEvent) {
         val from = pressAt ?: return
-        if (abs(e.x - from.x) < DRAG_SLOP && abs(e.y - from.y) < DRAG_SLOP) return
+        if (!dragPastSlop(from.x, from.y, e.x, e.y)) return
         pressAt = null
         val moved = runCatching {
             JBR.getWindowMove()?.startMovingTogetherWithMouse(window, MouseEvent.BUTTON1) != null
@@ -232,9 +282,5 @@ private class BandDragListener(
 
     override fun mouseReleased(e: MouseEvent) {
         pressAt = null
-    }
-
-    private companion object {
-        const val DRAG_SLOP = 4
     }
 }

@@ -152,6 +152,14 @@ import dev.supermux.desktop.shell.LinuxWindowChromeOverlay
 import dev.supermux.desktop.shell.LocalWindowChromeInsets
 import dev.supermux.desktop.shell.MainMenuEntry
 import dev.supermux.desktop.shell.MainMenuGroup
+import dev.supermux.desktop.shell.MainMenuState
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import dev.supermux.desktop.shell.MenuShortcut
 import dev.supermux.desktop.shell.chromeInsets
 import dev.supermux.desktop.shell.rememberLinuxWindowChrome
@@ -823,7 +831,13 @@ fun main() {
             )
         }
 
+        // Linux custom chrome: the main menu lives behind the ☰ button, and F10 / Alt+F/E/V open it.
+        val mainMenuState = remember { MainMenuState() }
         Window(
+            onPreviewKeyEvent = { e ->
+                e.type == KeyEventType.KeyDown &&
+                    mainMenuState.onWindowKey(e.key, e.isAltPressed, e.isCtrlPressed, e.isShiftPressed, e.isMetaPressed)
+            },
             // Close hides to the tray (spec D3); without a tray there is nowhere to hide, so it quits.
             onCloseRequest = { if (trayAvailable) windowVisible = false else requestQuit() },
             visible = windowVisible,
@@ -1926,6 +1940,7 @@ fun main() {
                                     )
                                     LinuxSidebarChrome(
                                         menu = mainMenu,
+                                        menuState = mainMenuState,
                                         collapsed = collapsed,
                                         onCollapse = { ui.sidebarCollapsed = true },
                                         modifier = Modifier.align(Alignment.TopStart).zIndex(30f),

@@ -30,7 +30,7 @@ enum class ChromeOs {
 /**
  * Room the window controls take inside the top band of the content.
  *
- * @property start width kept clear at the top-left (macOS traffic lights)
+ * @property start width kept clear at the top-left
  * @property end width kept clear at the top-right (our Linux window buttons)
  * @property band height of the band the controls sit in; content below it is never covered
  */
@@ -42,14 +42,15 @@ data class ChromeInsets(val start: Dp, val end: Dp, val band: Dp) {
 }
 
 /**
- * The insets for [os]. [customChrome] says whether our own chrome is drawn over the content
- * (always on macOS; on Linux only when [LinuxWindowChrome] engaged — otherwise the system frame
- * draws its title bar outside the content and nothing needs to move).
+ * The insets for [os]. [customChrome] says whether our own chrome is drawn over the content (on
+ * Linux only when [LinuxWindowChrome] engaged — otherwise the system frame draws its title bar
+ * outside the content and nothing needs to move).
  */
 fun chromeInsets(os: ChromeOs, customChrome: Boolean): ChromeInsets = when {
-    !customChrome -> ChromeInsets.None
-    os == ChromeOs.MacOs -> ChromeInsets(start = MacTrafficLightsWidth, end = 0.dp, band = MacTitleBarHeight)
-    os == ChromeOs.Linux -> ChromeInsets(start = 0.dp, end = LinuxWindowControlsWidth, band = LinuxTitleBarHeight)
+    customChrome && os == ChromeOs.Linux ->
+        ChromeInsets(start = 0.dp, end = LinuxWindowControlsWidth, band = LinuxTitleBarHeight)
+    // macOS keeps its own traffic-light inset (LocalMacTrafficLightsInset, live from JBR); the rest
+    // keep the system frame.
     else -> ChromeInsets.None
 }
 

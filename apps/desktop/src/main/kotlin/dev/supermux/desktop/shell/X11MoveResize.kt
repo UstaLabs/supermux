@@ -18,6 +18,15 @@ import java.awt.Toolkit
 import java.awt.Window
 import java.lang.reflect.Field
 import java.lang.reflect.Method
+import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * The five data longs of a `_NET_WM_MOVERESIZE` ClientMessage (EWMH): the pointer's root position
+ * (device px), the direction, the button (1 = primary), and the source indication (1 = a normal
+ * application).
+ */
+fun moveResizeMessageData(rootX: Int, rootY: Int, direction: WmMoveResizeDirection): LongArray =
+    longArrayOf(rootX.toLong(), rootY.toLong(), direction.code, 1L, 1L)
 
 /** `_NET_WM_MOVERESIZE` directions (EWMH). */
 enum class WmMoveResizeDirection(val code: Long) {
@@ -55,11 +64,11 @@ class X11MoveResize private constructor(
      * is still down. False when the request could not be sent; nothing has changed then.
      */
     fun start(window: Window, direction: WmMoveResizeDirection): Boolean = runCatching {
-        val peer = getPeer.invoke(componentAccessor, window) ?: return false
-        val topLevel = getParentTopLevel.invoke(peer) ?: return false
+        val peer = getPeer.invoke(componentAccessor, window) ?: return failed("no peer for the window")
+        val topLevel = getParentTopLevel.invoke(peer) ?: return failed("no top-level peer")
         val xid = getWindowId.invoke(topLevel) as Long
         // Root-window coordinates of the press, in device pixels — what the WM expects.
-        val at = lastPressLocation.invoke(null) as Point? ?: return false
+        val at = lastPressLocation.invoke(null) as Point? ?: return failed("no button press recorded")
         setGrab.invoke(topLevel, false)
         awtLock.invoke(null)
         try {
@@ -69,11 +78,7 @@ class X11MoveResize private constructor(
                 setWindow.invoke(event, xid)
                 setFormat.invoke(event, 32)
                 setMessageType.invoke(event, moveResizeAtom)
-                setData.invoke(event, 0, at.x.toLong())
-                setData.invoke(event, 1, at.y.toLong())
-                setData.invoke(event, 2, direction.code)
-                setData.invoke(event, 3, 1L) // button 1
-                setData.invoke(event, 4, 1L) // source indication: a normal application
+                moveResizeMessageData(at.x, at.y, direction).forEachIndexed { i, v -> setData.invoke(event, i, v) }
                 val display = getDisplay.invoke(null) as Long
                 ungrabPointer.invoke(null, display, 0L)
                 ungrabKeyboard.invoke(null, display, 0L)
@@ -93,9 +98,14 @@ class X11MoveResize private constructor(
             awtUnlock.invoke(null)
         }
         true
-    }.getOrElse {
-        println("[LinuxWindowChrome] _NET_WM_MOVERESIZE failed: $it")
-        false
+    }.getOrElse { failed(it.toString()) }
+
+    private val warned = AtomicBoolean(false)
+
+    /** False, logging the first failure only: a broken path would otherwise log on every press. */
+    private fun failed(why: String): Boolean {
+        if (warned.compareAndSet(false, true)) println("[LinuxWindowChrome] _NET_WM_MOVERESIZE not sent: $why")
+        return false
     }
 
     companion object {

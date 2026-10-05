@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.clickable
@@ -42,6 +43,7 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -59,6 +61,8 @@ import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Constraints
@@ -83,6 +87,15 @@ fun windowButtonBackground(cs: ColorScheme, state: WindowButtonState): Color = w
 /** The glyph colour on a window button. */
 fun windowButtonGlyph(cs: ColorScheme): Color = cs.onSurface
 
+/** The keyboard focus ring around a window button. */
+fun windowButtonFocusRing(cs: ColorScheme): Color = cs.primary
+
+/** What a window button currently shows, exposed in semantics so tests can read it. */
+data class WindowButtonVisual(val state: WindowButtonState, val focusRing: Boolean)
+
+val WindowButtonVisualKey = SemanticsPropertyKey<WindowButtonVisual>("WindowButtonVisual")
+var SemanticsPropertyReceiver.windowButtonVisual by WindowButtonVisualKey
+
 enum class WindowButtonKind(val testTag: String, val label: String) {
     Minimise("linux_window_minimise", "Minimise"),
     Maximise("linux_window_maximise", "Maximise"),
@@ -102,6 +115,7 @@ fun LinuxWindowControls(
     onToggleMaximise: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    pointerEpoch: Int = 0,
 ) {
     Row(
         modifier
@@ -112,18 +126,24 @@ fun LinuxWindowControls(
         horizontalArrangement = Arrangement.spacedBy(LinuxWindowButtonGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        WindowButton(WindowButtonKind.Minimise, onMinimise)
-        WindowButton(if (maximised) WindowButtonKind.Restore else WindowButtonKind.Maximise, onToggleMaximise)
-        WindowButton(WindowButtonKind.Close, onClose)
+        WindowButton(WindowButtonKind.Minimise, onMinimise, pointerEpoch)
+        WindowButton(if (maximised) WindowButtonKind.Restore else WindowButtonKind.Maximise, onToggleMaximise, pointerEpoch)
+        WindowButton(WindowButtonKind.Close, onClose, pointerEpoch)
     }
 }
 
+/**
+ * One round button. [pointerEpoch] changes when the window is hidden, iconified or deactivated: a
+ * fresh interaction source then drops a hover whose exit Compose never saw (the pointer left with
+ * the window), so a reopened window does not show a stale hover.
+ */
 @Composable
-private fun WindowButton(kind: WindowButtonKind, onClick: () -> Unit) {
+private fun WindowButton(kind: WindowButtonKind, onClick: () -> Unit, pointerEpoch: Int) {
     val cs = MaterialTheme.colorScheme
-    val interaction = remember { MutableInteractionSource() }
+    val interaction = remember(pointerEpoch) { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
+    val focused by interaction.collectIsFocusedAsState()
     val state = when {
         pressed -> WindowButtonState.Pressed
         hovered -> WindowButtonState.Hovered
@@ -134,11 +154,15 @@ private fun WindowButton(kind: WindowButtonKind, onClick: () -> Unit) {
         Modifier
             .size(LinuxWindowButtonSize)
             .macTitleBarNoDragRegion("linux-window-${kind.name}")
+            .then(if (focused) Modifier.border(2.dp, windowButtonFocusRing(cs), CircleShape) else Modifier)
             .clip(CircleShape)
             .background(windowButtonBackground(cs, state))
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = kind.label }
+            .semantics {
+                contentDescription = kind.label
+                windowButtonVisual = WindowButtonVisual(state, focusRing = focused)
+            }
             .testTag(kind.testTag),
         contentAlignment = Alignment.Center,
     ) {
@@ -190,6 +214,7 @@ fun BoxScope.LinuxWindowChromeOverlay(install: LinuxWindowChromeInstall) {
         onToggleMaximise = { WindowControlActions.toggleMaximise(install.target) },
         onClose = { WindowControlActions.close(install.target) },
         modifier = Modifier.align(Alignment.TopEnd),
+        pointerEpoch = install.pointerEpoch,
     )
 }
 
@@ -201,8 +226,12 @@ private fun BoxScope.ResizeHandles(start: (WmMoveResizeDirection) -> Unit) {
             .pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(cursor)))
             .pointerInput(direction) {
                 awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false).consume()
-                    start(direction)
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    // The WM resizes with the primary button only (the request names button 1).
+                    if (currentEvent.buttons.isPrimaryPressed) {
+                        down.consume()
+                        start(direction)
+                    }
                 }
             }
             .testTag("linux_resize_${direction.name}"),
