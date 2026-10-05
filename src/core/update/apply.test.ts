@@ -22,6 +22,9 @@ import {
   restartViaLaunchd,
   restartViaSystemd,
   restartViaWindowsTask,
+  captureWindowsTaskFlag,
+  windowsRestartExit,
+  type ExitHooks,
   rollback,
   systemdUnitFromCgroup,
   type UpdateApplyError,
@@ -842,16 +845,57 @@ void _typecheck
 // ── restartViaWindowsTask: the Scheduled Task loop respawns an exiting broker ─────
 
 describe("restartViaWindowsTask", () => {
-  test("returns false outside the Scheduled Task (no MUX_WINDOWS_TASK)", () => {
+  test("false when this process isn't the broker under the task", () => {
     const scheduled: number[] = []
-    expect(restartViaWindowsTask({ env: {}, schedule: (_fn, ms) => scheduled.push(ms) })).toBe(false)
-    expect(restartViaWindowsTask({ env: { MUX_WINDOWS_TASK: "0" }, schedule: (_fn, ms) => scheduled.push(ms) })).toBe(false)
+    expect(restartViaWindowsTask({ underTask: false, schedule: (_fn, ms) => scheduled.push(ms) })).toBe(false)
     expect(scheduled).toEqual([])
   })
 
-  test("under the task: schedules a graceful exit after the delay and returns true", () => {
+  test("the module default is false until the broker captures the flag (a CLI never does)", () => {
+    expect(restartViaWindowsTask({ schedule: () => { throw new Error("must not schedule") } })).toBe(false)
+  })
+
+  test("under the task: schedules the exit after the delay and returns true", () => {
     const scheduled: number[] = []
-    expect(restartViaWindowsTask({ env: { MUX_WINDOWS_TASK: "1" }, schedule: (_fn, ms) => scheduled.push(ms), delayMs: 250 })).toBe(true)
+    expect(restartViaWindowsTask({ underTask: true, schedule: (_fn, ms) => scheduled.push(ms), delayMs: 250 })).toBe(true)
     expect(scheduled).toEqual([250])
+  })
+
+  test("the scheduled callback emits SIGTERM, then arms a 10 s hard exit", () => {
+    const calls: string[] = []
+    let deadline: (() => void) | undefined
+    const hooks: ExitHooks = {
+      emitSigterm: () => { calls.push("sigterm"); return true },
+      exit: (code) => calls.push(`exit ${code}`),
+      later: (fn, ms) => { calls.push(`later ${ms}`); deadline = fn },
+    }
+    let scheduled: (() => void) | undefined
+    restartViaWindowsTask({ underTask: true, schedule: (fn) => { scheduled = fn }, hooks })
+    expect(calls).toEqual([])
+    scheduled!()
+    expect(calls).toEqual(["later 10000", "sigterm"])
+    deadline!() // graceful shutdown hung
+    expect(calls).toEqual(["later 10000", "sigterm", "exit 0"])
+  })
+
+  test("with no shutdown listener it exits at once", () => {
+    const calls: string[] = []
+    windowsRestartExit({ emitSigterm: () => false, exit: (c) => calls.push(`exit ${c}`), later: () => {} })
+    expect(calls).toEqual(["exit 0"])
+  })
+})
+
+describe("captureWindowsTaskFlag", () => {
+  test("reads MUX_WINDOWS_TASK once and removes it so children don't inherit it", () => {
+    const env: Record<string, string | undefined> = { MUX_WINDOWS_TASK: "1", PATH: "x" }
+    expect(captureWindowsTaskFlag(env)).toBe(true)
+    expect(env).toEqual({ PATH: "x" })
+    let scheduled = 0
+    expect(restartViaWindowsTask({ schedule: () => { scheduled++ } })).toBe(true)
+    expect(scheduled).toBe(1)
+    // A process without the flag (a CLI) clears it again.
+    expect(captureWindowsTaskFlag({})).toBe(false)
+    expect(restartViaWindowsTask({ schedule: () => { scheduled++ } })).toBe(false)
+    expect(scheduled).toBe(1)
   })
 })

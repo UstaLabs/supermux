@@ -637,23 +637,63 @@ export function restartViaLaunchd(opts: { label?: string }): boolean {
 }
 
 /**
+ * Set once, by the broker at boot ([captureWindowsTaskFlag]): this process runs under the desktop
+ * app's "Supermux Host" Scheduled Task loop. Module state rather than the env so that only the
+ * broker itself has it: a CLI (`supermux update`) or anything else the broker spawns never does.
+ */
+let underWindowsTask = false
+
+/**
+ * Broker boot only. Reads `MUX_WINDOWS_TASK=1` (set by the task's loop) into module state and
+ * removes it from [env], so the broker's children (agents, shims, a `supermux` CLI an agent runs)
+ * don't inherit it and think they can restart by exiting.
+ */
+export function captureWindowsTaskFlag(env: Record<string, string | undefined> = process.env): boolean {
+  underWindowsTask = env.MUX_WINDOWS_TASK === "1"
+  delete env.MUX_WINDOWS_TASK
+  return underWindowsTask
+}
+
+/** Hooks for [restartViaWindowsTask]'s scheduled exit (tests inject them). */
+export interface ExitHooks {
+  /** Run the graceful-shutdown listeners; false when there are none. */
+  emitSigterm: () => boolean
+  exit: (code: number) => void
+  /** Schedule [fn]; the returned timer must not keep the process alive (unref'd). */
+  later: (fn: () => void, ms: number) => void
+}
+
+const realExitHooks: ExitHooks = {
+  emitSigterm: () => process.emit("SIGTERM" as any),
+  exit: (code) => process.exit(code),
+  later: (fn, ms) => { setTimeout(fn, ms).unref?.() },
+}
+
+/** Graceful shutdown can hang (a stuck stop()): exit anyway after this long. */
+export const WINDOWS_RESTART_EXIT_DEADLINE_MS = 10_000
+
+/** What [restartViaWindowsTask] schedules: shut down gracefully, with a hard exit as the deadline. */
+export function windowsRestartExit(hooks: ExitHooks = realExitHooks): void {
+  hooks.later(() => hooks.exit(0), WINDOWS_RESTART_EXIT_DEADLINE_MS)
+  // The graceful-shutdown listener ends with process.exit(0); with none, exit directly.
+  if (!hooks.emitSigterm()) hooks.exit(0)
+}
+
+/**
  * Windows analogue: the desktop app's "Supermux Host" Scheduled Task runs the broker inside a
- * PowerShell loop that starts it again ~5 s after it exits, and marks the broker's env with
- * MUX_WINDOWS_TASK=1. Under that loop a restart is just a clean exit: shut down gracefully (the
- * SIGTERM handlers) after [delayMs] so the HTTP answer goes out first. False when not under it.
+ * PowerShell loop that starts it again ~5 s after it exits. Under that loop a restart is just a
+ * clean exit after [delayMs], so the HTTP answer goes out first. False when this process isn't
+ * the broker under that loop (see [captureWindowsTaskFlag]).
  */
 export function restartViaWindowsTask(opts: {
-  env?: Record<string, string | undefined>
+  underTask?: boolean
   schedule?: (fn: () => void, ms: number) => unknown
   delayMs?: number
+  hooks?: ExitHooks
 } = {}): boolean {
-  const env = opts.env ?? process.env
-  if (env.MUX_WINDOWS_TASK !== "1") return false
+  if (!(opts.underTask ?? underWindowsTask)) return false
   const schedule = opts.schedule ?? ((fn, ms) => setTimeout(fn, ms))
-  schedule(() => {
-    // The graceful-shutdown listener ends with process.exit(0); with none, exit directly.
-    if (!process.emit("SIGTERM" as any)) process.exit(0)
-  }, opts.delayMs ?? 1_000)
+  schedule(() => windowsRestartExit(opts.hooks), opts.delayMs ?? 1_000)
   return true
 }
 

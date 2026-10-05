@@ -75,6 +75,7 @@ import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
 import { BUILD_VERSION, BUILD_COMMIT, versionString } from "./shared/build-info"
+import { captureWindowsTaskFlag } from "./core/update/apply"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
 import { NullRelayProvider } from "./core/relay/provider"
@@ -177,6 +178,9 @@ import type { OwnerRow } from "./core/worktree/inventory"
 import { deriveName, ensureUnique } from "./core/session-manager/naming"
 
 const log = makeLogger("main")
+// Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
+// nothing this broker spawns inherits it (see restartViaWindowsTask).
+if (captureWindowsTaskFlag()) log.info("windows_host_task", {})
 const relayLog = makeLogger("core/relay/frp-provider")
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
