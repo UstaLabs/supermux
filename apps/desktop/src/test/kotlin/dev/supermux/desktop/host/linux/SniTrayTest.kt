@@ -20,7 +20,7 @@ class SniTrayTest {
         var name: String? = null
         val registered = mutableListOf<String>()
         val signals = mutableListOf<SniSignal>()
-        val notified = mutableListOf<Pair<String, String>>()
+        val notified = mutableListOf<DesktopNotification>()
         var ownerCb: ((Boolean) -> Unit)? = null
         var closed = false
         var failRegister = false
@@ -38,7 +38,7 @@ class SniTrayTest {
         override fun hostRegistered() = host
         override fun watchHostRegistered(cb: () -> Unit) = Unit
         override fun emit(signal: SniSignal) { signals += signal }
-        override fun notify(title: String, body: String) { notified += title to body }
+        override fun notify(n: DesktopNotification) { notified += n }
         override fun close() { closed = true }
     }
 
@@ -62,9 +62,24 @@ class SniTrayTest {
         val bus = FakeBus(watcher = true)
         val t = tray { bus }
         t.start()
+        t.update(items, "tip")
         flush()
         assertEquals("org.kde.StatusNotifierItem-42-1", bus.name)
         assertEquals(setOf("/StatusNotifierItem", "/MenuBar"), bus.published.keys)
+        assertEquals(listOf("org.kde.StatusNotifierItem-42-1"), bus.registered)
+        assertEquals(SniStatus.REGISTERED, t.status.value)
+    }
+
+    @Test fun registrationWaitsForTheFirstMenu() {
+        // GNOME's extension never refetches a menu it first saw empty while closed: no rows, no item.
+        val bus = FakeBus(watcher = true)
+        val t = tray { bus }
+        t.start()
+        flush()
+        assertTrue(bus.registered.isEmpty())
+        assertEquals(SniStatus.STARTING, t.status.value)
+        t.update(items, "tip")
+        flush()
         assertEquals(listOf("org.kde.StatusNotifierItem-42-1"), bus.registered)
         assertEquals(SniStatus.REGISTERED, t.status.value)
     }
@@ -73,6 +88,7 @@ class SniTrayTest {
         val bus = FakeBus(watcher = false)
         val t = tray { bus }
         t.start()
+        t.update(items, "tip")
         flush()
         assertEquals(SniStatus.UNSUPPORTED, t.status.value)
         assertTrue(bus.registered.isEmpty())
@@ -92,6 +108,7 @@ class SniTrayTest {
     @Test fun aWatcherWithoutAHostIsUnsupported() {
         val t = tray { FakeBus(watcher = true, host = false) }
         t.start()
+        t.update(items, "tip")
         flush()
         assertEquals(SniStatus.UNSUPPORTED, t.status.value)
     }
@@ -100,6 +117,7 @@ class SniTrayTest {
         val bus = FakeBus(watcher = true).apply { failRegister = true }
         val t = tray { bus }
         t.start()
+        t.update(items, "tip")
         flush()
         assertEquals(SniStatus.UNSUPPORTED, t.status.value)
     }
@@ -120,17 +138,28 @@ class SniTrayTest {
         t.start()
         t.update(items, "one")
         flush()
-        assertEquals(listOf(SniSignal.NewToolTip, SniSignal.LayoutUpdated(2)), bus.signals)
+        // The first rows go out with the registration itself (the host reads them then).
+        assertTrue(bus.signals.isEmpty())
+        assertEquals(1, bus.registered.size)
 
-        bus.signals.clear()
         t.update(items, "one")
         flush()
         assertTrue(bus.signals.isEmpty(), "nothing changed, nothing sent")
 
-        t.update(items.map { if (it is TrayItem.Checkbox) it.copy(checked = true) else it }, "one")
+        t.update(items.dropLast(1), "two")
         flush()
-        assertEquals(SniSignal.LayoutUpdated(3), bus.signals.last())
+        assertEquals(listOf(SniSignal.NewToolTip, SniSignal.LayoutUpdated(3)), bus.signals)
+        bus.signals.clear()
+        t.update(items, "two")
+        flush()
+        assertEquals(listOf<SniSignal>(SniSignal.LayoutUpdated(4)), bus.signals)
+        bus.signals.clear()
+
+        t.update(items.map { if (it is TrayItem.Checkbox) it.copy(checked = true) else it }, "two")
+        flush()
+        assertEquals(2, bus.signals.size)
         assertTrue(bus.signals.first() is SniSignal.ItemsPropertiesUpdated)
+        assertEquals(SniSignal.LayoutUpdated(5), bus.signals.last())
     }
 
     @Test fun clicksGoThroughTheDispatcherOnTheUiThread() {
@@ -163,9 +192,33 @@ class SniTrayTest {
         val bus = FakeBus(watcher = true)
         val t = tray { bus }
         t.start()
-        t.notify("supermux", "hello")
+        t.update(items, "tip")
+        flush()
+        t.notificationIdentity = DesktopNotification.Identity("supermux-supermux", "/opt/supermux/lib/supermux.png")
+        t.notify("supermux", "a <b> & c")
         t.close()
-        assertEquals(listOf("supermux" to "hello"), bus.notified)
+        assertEquals(
+            listOf(DesktopNotification("supermux", "a &lt;b&gt; &amp; c", "/opt/supermux/lib/supermux.png", "supermux-supermux")),
+            bus.notified,
+        )
+        assertTrue(bus.closed)
+        assertTrue(!t.busUp)
+    }
+
+    @Test fun closeCutsTheRegisterRetriesShort() {
+        // A watcher that keeps refusing: the tray retries (1 s apart) — close must not wait them out.
+        val bus = FakeBus(watcher = false).apply { failRegister = true }
+        val t = tray { bus }
+        t.start()
+        t.update(items, "tip")
+        flush()
+        bus.watcher = true
+        bus.ownerCb!!(true) // queues the retry loop on the tray thread
+        Thread.sleep(100)
+        val started = System.nanoTime()
+        t.close()
+        val tookMs = (System.nanoTime() - started) / 1_000_000
+        assertTrue(tookMs < 900, "close took $tookMs ms")
         assertTrue(bus.closed)
     }
 

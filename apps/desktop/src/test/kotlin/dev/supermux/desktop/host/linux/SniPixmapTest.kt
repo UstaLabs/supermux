@@ -36,9 +36,9 @@ class SniPixmapTest {
     @Test fun iconsComeAtEverySize() {
         val src = BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB)
         val icons = SniPixmap.icons(src)
-        assertEquals(listOf(22, 32, 48), icons.map { it.width })
-        assertEquals(listOf(22, 32, 48), icons.map { it.height })
-        assertEquals(listOf(22 * 22 * 4, 32 * 32 * 4, 48 * 48 * 4), icons.map { it.argb.size })
+        assertEquals(listOf(16, 22, 32, 48, 64), icons.map { it.width })
+        assertEquals(listOf(16, 22, 32, 48, 64), icons.map { it.height })
+        assertEquals(listOf(16, 22, 32, 48, 64).map { it * it * 4 }, icons.map { it.argb.size })
     }
 
     @Test fun theColourTrayIconLoads() {

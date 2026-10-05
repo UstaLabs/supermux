@@ -8,19 +8,18 @@ package dev.supermux.desktop.notify
 import androidx.compose.ui.window.Notification
 import dev.supermux.ui.platform.NotificationManager
 import androidx.compose.ui.window.TrayState
-import dev.supermux.desktop.host.linux.SniStatus
 import dev.supermux.desktop.host.linux.SniTray
 
 /**
- * [sniTray] (Linux): while the StatusNotifierItem tray is up there is no AWT tray icon to raise a
- * balloon from, so the toast goes to `org.freedesktop.Notifications` on the same bus instead.
+ * [sniTray] (Linux): whenever its session bus is up — tray registered or not — the toast goes to
+ * `org.freedesktop.Notifications` on that bus; AWT's balloon needs an AWT tray icon.
  */
 class TrayNotificationManager(
     private val trayState: TrayState,
     private val sniTray: SniTray? = null,
 ) : NotificationManager {
     override fun notify(sessionId: String, title: String, message: String) {
-        if (sniTray != null && sniTray.status.value == SniStatus.REGISTERED) {
+        if (sniTray != null && sniTray.busUp) {
             sniTray.notify(title, message)
             return
         }

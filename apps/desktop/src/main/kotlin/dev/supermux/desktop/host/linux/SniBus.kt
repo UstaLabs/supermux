@@ -5,6 +5,7 @@ import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
 import org.freedesktop.dbus.interfaces.DBus
 import org.freedesktop.dbus.interfaces.DBusInterface
 import org.freedesktop.dbus.interfaces.Properties
+import org.freedesktop.dbus.matchrules.DBusMatchRuleBuilder
 import org.freedesktop.dbus.types.UInt32
 import org.freedesktop.dbus.types.Variant
 import java.nio.file.Files
@@ -45,10 +46,52 @@ interface SniBus : AutoCloseable {
     fun emit(signal: SniSignal)
 
     /** A desktop notification through `org.freedesktop.Notifications`. */
-    fun notify(title: String, body: String)
+    fun notify(n: DesktopNotification)
 
     /** Release the name and close the connection. */
     override fun close()
+}
+
+/** One `org.freedesktop.Notifications.Notify` call, already escaped. */
+data class DesktopNotification(
+    val summary: String,
+    val body: String,
+    val appIcon: String,
+    val desktopEntry: String,
+) {
+    /** Who sends it: the .desktop id (no suffix) the shell attributes it to, and an icon file. */
+    data class Identity(val desktopEntry: String, val appIcon: String)
+
+    companion object {
+        /**
+         * The .desktop jpackage's deb installs (`/opt/supermux/lib/supermux-supermux.desktop`,
+         * registered through xdg-desktop-menu under that name).
+         */
+        const val DESKTOP_ENTRY = "supermux-supermux"
+
+        /**
+         * Pure: escaped for the body, which servers may render as markup (`&`, `<`, `>`); the
+         * summary is plain text per the spec.
+         */
+        fun escapeBody(text: String): String =
+            text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        fun of(title: String, message: String, id: Identity): DesktopNotification =
+            DesktopNotification(title, escapeBody(message), id.appIcon, id.desktopEntry)
+
+        /**
+         * The installed app's identity: the icon jpackage puts beside the runtime
+         * (`<java.home>/../supermux.png`) when it is there ([exists]), else none.
+         */
+        fun identity(
+            javaHome: String? = System.getProperty("java.home"),
+            exists: (Path) -> Boolean = Files::exists,
+        ): Identity {
+            val icon = javaHome?.let { runCatching { Path.of(it).parent?.resolve("supermux.png") }.getOrNull() }
+                ?.takeIf(exists)
+            return Identity(DESKTOP_ENTRY, icon?.toString() ?: "")
+        }
+    }
 }
 
 object SessionBus {
@@ -87,7 +130,13 @@ class DbusJavaSniBus private constructor(private val conn: DBusConnection) : Sni
     override fun hasOwner(name: String): Boolean = dbus().NameHasOwner(name)
 
     override fun watchOwner(name: String, cb: (owned: Boolean) -> Unit) {
-        handlers += conn.addSigHandler(DBus.NameOwnerChanged::class.java) { s ->
+        // arg0 = the name: the bus delivers only that name's changes, not every client's churn.
+        val rule = DBusMatchRuleBuilder.create()
+            .withType(DBus.NameOwnerChanged::class.java)
+            .withSender(DBUS_NAME)
+            .withArg0123(0, name)
+            .build()
+        handlers += conn.addSigHandler<DBus.NameOwnerChanged>(rule) { s ->
             if (s.name == name) cb(s.newOwner.isNotEmpty())
         }
     }
@@ -122,9 +171,10 @@ class DbusJavaSniBus private constructor(private val conn: DBusConnection) : Sni
         )
     }
 
-    override fun notify(title: String, body: String) {
+    override fun notify(n: DesktopNotification) {
+        val hints = if (n.desktopEntry.isEmpty()) emptyMap() else mapOf<String, Variant<*>>("desktop-entry" to Variant(n.desktopEntry))
         conn.getRemoteObject(NOTIFY_NAME, NOTIFY_PATH, FreedesktopNotifications::class.java)
-            .Notify("supermux", UInt32(0), "", title, body, emptyList(), emptyMap(), -1)
+            .Notify("supermux", UInt32(0), n.appIcon, n.summary, n.body, emptyList(), hints, -1)
     }
 
     override fun close() {

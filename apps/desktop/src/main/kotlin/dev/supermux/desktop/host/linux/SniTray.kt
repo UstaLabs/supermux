@@ -6,6 +6,7 @@ import dev.supermux.desktop.host.TrayItem
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -63,6 +64,23 @@ class SniTray(
     private var bus: SniBus? = null
     private var closed = false
 
+    /** Connected, but the first [update] hasn't come yet: registration waits for it. */
+    private var awaitingMenu = false
+
+    /**
+     * Set by [close] from any thread, OUTSIDE the tray thread's queue: the register-retry loop
+     * checks it and its wait ([closeSignal]) wakes at once, so close never waits out a retry.
+     */
+    @Volatile private var closing = false
+    private val closeSignal = CountDownLatch(1)
+
+    /** A session bus is connected and our objects are on it: notifications can go out. */
+    @Volatile var busUp: Boolean = false
+        private set
+
+    /** What [notify] sends as; see [DesktopNotification.identity]. */
+    @Volatile var notificationIdentity: DesktopNotification.Identity = DesktopNotification.identity()
+
     private fun log(msg: String) = System.err.println("supermux tray (SNI): $msg")
 
     /** Run [block] on the tray thread; a failure is logged, never thrown. */
@@ -74,7 +92,7 @@ class SniTray(
 
     /** Connect, export, take the name and register with the watcher (asynchronously). */
     fun start() = onBus {
-        if (closed || bus != null) return@onBus
+        if (closing || closed || bus != null) return@onBus
         item = item.copy(icons = runCatching(icons).getOrDefault(emptyList()))
         val b = try {
             busFactory()
@@ -98,22 +116,38 @@ class SniTray(
             return@onBus
         }
         bus = b
+        busUp = true
         // A watcher that appears later (the extension enabled, the shell restarted) gets us then;
         // one that goes away leaves no tray.
         runCatching { b.watchOwner(DbusJavaSniBus.WATCHER_NAME) { owned -> onBus { watcherChanged(owned) } } }
             .onFailure { log("can't watch the watcher: ${it.message}") }
         runCatching { b.watchHostRegistered { onBus { if (bus != null && _status.value != SniStatus.REGISTERED) register() } } }
+        registerIfWatcher()
+    }
+
+    /**
+     * Register when there is a watcher — but never with an empty menu. GNOME's AppIndicator
+     * extension fetches the layout at registration and, while its menu is closed, only FLAGS a
+     * later `LayoutUpdated`; a click opens the menu only when it already has items. An item
+     * registered before the first [update] would show an icon whose menu never opens.
+     */
+    private fun registerIfWatcher() {
+        val b = bus ?: return
+        if (menu.snapshot.entries.isEmpty()) {
+            awaitingMenu = true
+            return
+        }
         val present = runCatching { b.hasOwner(DbusJavaSniBus.WATCHER_NAME) }.getOrDefault(false)
         if (present) register() else unsupported("no StatusNotifierWatcher on the session bus")
     }
 
     private fun watcherChanged(owned: Boolean) {
-        if (closed || bus == null) return
+        if (closing || closed || bus == null) return
         if (!owned) return unsupported("the StatusNotifierWatcher went away")
         // A watcher that has just started may not take items (or have its host) yet: a few tries.
         for (attempt in 0 until REGISTER_TRIES) {
-            if (attempt > 0) Thread.sleep(RETRY_MS)
-            if (closed || bus == null) return
+            if (attempt > 0 && closeSignal.await(RETRY_MS, TimeUnit.MILLISECONDS)) return
+            if (closing || closed || bus == null || awaitingMenu) return
             register()
             if (_status.value == SniStatus.REGISTERED) return
         }
@@ -126,6 +160,10 @@ class SniTray(
 
     private fun register() {
         val b = bus ?: return
+        if (menu.snapshot.entries.isEmpty()) {
+            awaitingMenu = true
+            return
+        }
         try {
             b.registerItem(busName)
         } catch (t: Throwable) {
@@ -146,6 +184,12 @@ class SniTray(
         val tooltipChanged = tooltip != item.tooltip
         if (tooltipChanged) item = item.copy(tooltip = tooltip)
         val b = bus ?: return@onBus
+        if (awaitingMenu && menu.snapshot.entries.isNotEmpty()) {
+            // The first rows: now the item can go to the watcher (it reads them at once).
+            awaitingMenu = false
+            registerIfWatcher()
+            return@onBus
+        }
         if (tooltipChanged) b.emit(SniSignal.NewToolTip)
         when (change) {
             MenuChange.None -> Unit
@@ -157,8 +201,10 @@ class SniTray(
         }
     }
 
-    /** A desktop notification; dropped when there is no bus. */
-    fun notify(title: String, body: String) = onBus { bus?.notify(title, body) }
+    /** A desktop notification through `org.freedesktop.Notifications`; dropped when there is no bus. */
+    fun notify(title: String, body: String) = onBus {
+        bus?.notify(DesktopNotification.of(title, body, notificationIdentity))
+    }
 
     private fun activate() = ui { runCatching { onActivate?.invoke() } }
 
@@ -169,17 +215,21 @@ class SniTray(
 
     /** Release the name and close the connection; waits briefly so the icon goes away with the app. */
     fun close() {
+        closing = true
+        busUp = false
+        closeSignal.countDown()
         onBus {
             closed = true
             bus?.close()
             bus = null
         }
         executor.shutdown()
-        runCatching { executor.awaitTermination(2, TimeUnit.SECONDS) }
+        runCatching { executor.awaitTermination(CLOSE_WAIT_MS, TimeUnit.MILLISECONDS) }
     }
 
     private companion object {
         const val REGISTER_TRIES = 3
         const val RETRY_MS = 1_000L
+        const val CLOSE_WAIT_MS = 2_000L
     }
 }

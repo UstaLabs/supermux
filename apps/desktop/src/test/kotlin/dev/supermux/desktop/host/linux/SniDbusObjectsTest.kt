@@ -4,11 +4,13 @@ import dev.supermux.desktop.host.TrayAction
 import dev.supermux.desktop.host.TrayItem
 import dev.supermux.desktop.host.TrayToggle
 import org.freedesktop.dbus.DBusPath
+import org.freedesktop.dbus.exceptions.DBusExecutionException
 import org.freedesktop.dbus.types.UInt32
 import org.freedesktop.dbus.types.Variant
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -51,6 +53,7 @@ class SniDbusObjectsTest {
         val one = m.GetLayout(10, -1, emptyList()).second
         assertEquals(10, one.id)
         assertEquals("Open supermux", one.props["label"]?.value)
+        assertFailsWith<DBusExecutionException> { m.GetLayout(999, -1, emptyList()) }
     }
 
     @Test fun propertiesAndGroups() {
@@ -98,6 +101,15 @@ class SniDbusObjectsTest {
         var n = 0
         SniItemObject({ SniItemState() }, { n++ }).Activate(0, 0)
         assertEquals(1, n)
+    }
+
+    @Test fun notificationsAreEscapedAndCarryTheAppIdentity() {
+        assertEquals("1 &lt; 2 &amp;&amp; 3 &gt; 2", DesktopNotification.escapeBody("1 < 2 && 3 > 2"))
+        val n = DesktopNotification.of("a <title>", "x<y", DesktopNotification.Identity("supermux-supermux", "/i.png"))
+        assertEquals(DesktopNotification("a <title>", "x&lt;y", "/i.png", "supermux-supermux"), n)
+        val installed = DesktopNotification.identity("/opt/supermux/lib/runtime") { it == Path.of("/opt/supermux/lib/supermux.png") }
+        assertEquals(DesktopNotification.Identity("supermux-supermux", "/opt/supermux/lib/supermux.png"), installed)
+        assertEquals("", DesktopNotification.identity("/usr/lib/jvm/x") { false }.appIcon)
     }
 
     @Test fun sessionBusAddress() {

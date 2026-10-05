@@ -67,6 +67,11 @@ class MenuEventStruct(
 ) : Struct()
 
 /**
+ * ⚠️ dbus-java 5.2.2's introspection XML lists a Tuple's out args twice (`GetLayout` introspects as
+ * `u(ia{sv}av)u(ia{sv}av)`, `AboutToShowGroup` as `aiaiaiai`). Only the XML is wrong: the replies
+ * on the wire carry exactly `u(ia{sv}av)` / `aiai` (SniBusProtocolTest checks them). GNOME's
+ * AppIndicator extension and KDE use their own interface definitions, not our introspection.
+ *
  * Two out args (`GetLayout`'s `u(ia{sv}av)`, `AboutToShowGroup`'s `aiai`). Generic on purpose:
  * dbus-java reads a Tuple's signature from the method's parameterized return type.
  */
@@ -133,16 +138,8 @@ interface FreedesktopNotifications : DBusInterface {
     ): UInt32
 }
 
-/** A plain Kotlin value (String, Boolean, Int, UInt32) as a variant. */
-internal fun variantOf(v: Any): Variant<*> = when (v) {
-    is String -> Variant(v)
-    is Boolean -> Variant(v)
-    is Int -> Variant(v)
-    else -> Variant(v)
-}
-
 private fun propsVariants(props: Map<String, Any>, names: List<String>): Map<String, Variant<*>> =
-    props.filterKeys { names.isEmpty() || it in names }.mapValues { variantOf(it.value) }
+    props.filterKeys { names.isEmpty() || it in names }.mapValues { Variant(it.value) }
 
 /** Read-only `org.freedesktop.DBus.Properties` over [props] for [iface]. */
 private class ReadOnlyProps(private val iface: String, private val props: () -> Map<String, Variant<*>>) {
@@ -250,7 +247,7 @@ class DbusMenuObject(
     override fun GetProperty(id: Int, name: String): Variant<*> {
         val props = if (id == MenuIds.ROOT) ROOT_PROPS else menu.snapshot.byId(id)?.props
         val v = props?.get(name) ?: throw DBusExecutionException("No property $name on item $id")
-        return variantOf(v)
+        return Variant(v)
     }
 
     override fun Event(id: Int, eventId: String, data: Variant<*>, timestamp: UInt32) {
@@ -282,11 +279,11 @@ class DbusMenuObject(
 
         /**
          * Pure: the `(ia{sv}av)` node for [parentId] in [snap]. The root carries the rows as children
-         * unless [depth] is 0; rows have no children. An unknown id answers with an empty root.
+         * unless [depth] is 0; rows have no children. An unknown id is an error.
          */
         fun layout(snap: MenuState.Snapshot, parentId: Int, depth: Int, names: List<String>): MenuLayoutStruct {
             if (parentId != MenuIds.ROOT) {
-                val e = snap.byId(parentId) ?: return MenuLayoutStruct(MenuIds.ROOT, propsVariants(ROOT_PROPS, names), emptyList())
+                val e = snap.byId(parentId) ?: throw DBusExecutionException("No such menu item: $parentId")
                 return MenuLayoutStruct(e.id, propsVariants(e.props, names), emptyList())
             }
             val children = if (depth == 0) {

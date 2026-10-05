@@ -9,7 +9,7 @@ class SniIcon(val width: Int, val height: Int, val argb: ByteArray)
 
 object SniPixmap {
     /** The sizes offered in `IconPixmap`; the host picks the closest to its panel. */
-    val SIZES = listOf(22, 32, 48)
+    val SIZES = listOf(16, 22, 32, 48, 64)
 
     /** Pure: [img]'s pixels as ARGB32 big-endian bytes (A, R, G, B per pixel). */
     fun argb32(img: BufferedImage): ByteArray {
