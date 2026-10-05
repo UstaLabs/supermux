@@ -167,6 +167,7 @@ class TakeoverTest {
         assertEquals(listOf(listOf("systemctl", "--user", "disable", "--now", "supermux.service"),
             listOf("systemctl", "--user", "is-active", "supermux.service")), stopCmds)
         assertTrue(Files.exists(state.resolve("takeover-backup/pending.json")))
+        assertEquals("rw-------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(state.resolve("takeover-backup/pending.json"))), "it holds the carried env")
         env.ran.clear()
         assertTrue(Takeover.rollback(prepared, env))
         assertEquals(listOf("systemctl", "--user", "enable", "--now", "supermux.service"), env.ran.last())

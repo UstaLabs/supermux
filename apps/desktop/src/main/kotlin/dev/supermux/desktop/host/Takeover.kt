@@ -254,7 +254,8 @@ object Takeover {
             val relays = envs.mapNotNull { it["MUX_RELAY_DOMAIN"] }
             val oldRelay = if (relays.isEmpty()) null else relays.any { it.isNotEmpty() }
             val prepared = Prepared(stateDir.toString(), ones, carried, oldRelay)
-            Files.writeString(journal(stateDir), json.encodeToString(prepared))
+            // The journal holds the carried env (maybe tokens): readable by the user only.
+            BrokerService.writePrivate(journal(stateDir), json.encodeToString(prepared))
 
             for (old in olds) {
                 val stopped = stop(old, env)
