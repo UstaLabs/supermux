@@ -28,6 +28,9 @@ skie = "0.10.14"
 zxingEmbedded = "4.3.0"
 zxingCore = "3.4.1"
 datastore = "1.1.1"
+# Linux desktop tray (StatusNotifierItem + dbusmenu over D-Bus). 5.x dials the session bus over JDK 16+
+# unix sockets (`dbus-java-transport-native-unixsocket`): pure Java, no JNI, no native libs.
+dbusJava = "5.2.2"
 firebaseBom = "33.7.0"
 # 4.5.0, not 4.4.2: the older plugin uses the variant API AGP 9 removed.
 googleServices = "4.5.0"
@@ -103,6 +106,8 @@ zxing-core = { module = "com.google.zxing:core", version.ref = "zxingCore" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
 firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
+dbus-java-core = { module = "com.github.hypfvieh:dbus-java-core", version.ref = "dbusJava" }
+dbus-java-transport-native-unixsocket = { module = "com.github.hypfvieh:dbus-java-transport-native-unixsocket", version.ref = "dbusJava" }
 coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
 jbr-api = { module = "org.jetbrains.runtime:jbr-api", version.ref = "jbrApi" }
 # GFM markdown parser (multiplatform). Used by the Android + desktop chat renderers; iOS uses its

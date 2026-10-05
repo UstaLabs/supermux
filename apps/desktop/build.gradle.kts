@@ -38,6 +38,9 @@ dependencies {
     implementation(libs.ktor.client.websockets)
     // macOS chrome: JBR custom-title-bar API (MacWindowChrome.kt). Safe no-op facade on non-JBR JVMs.
     implementation(libs.jbr.api)
+    // Linux tray: StatusNotifierItem + dbusmenu (host/linux/SniTray.kt). Only ever dialled on Linux.
+    implementation(libs.dbus.java.core)
+    implementation(libs.dbus.java.transport.native.unixsocket)
     // (LazyList reorder is :ui's own ui/session/DragReorder.kt since cluster F2 — one
     //  implementation for both hosts, gesture branched on LocalInputMode.)
     // (composemediaplayer moved to :ui commonMain in cluster D1 — it comes in transitively with
@@ -271,6 +274,11 @@ compose.desktop {
             // Moot while the whole JBR image is the runtime (see the afterEvaluate block below), but
             // kept so a fallback to Compose's jlink step can't ship a runtime missing a module.
             includeAllModules = true
+            // Named anyway for the same fallback: dbus-java (the Linux tray) needs jdk.security.auth
+            // (its EXTERNAL auth reads the uid), jdk.net (unix-socket peer options) and java.xml
+            // (introspection); its socket transport finds itself through ServiceLoader, which jdeps
+            // can't see either.
+            modules("jdk.security.auth", "jdk.net", "java.xml")
             linux {
                 debMaintainer = "supermux"
                 menuGroup = "Development"
