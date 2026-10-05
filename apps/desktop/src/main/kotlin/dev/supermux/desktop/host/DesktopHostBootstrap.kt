@@ -19,7 +19,7 @@ import java.nio.file.Path
 import java.time.Duration
 
 /**
- * Production wiring for the first-run [HostWizard] (Plan 3 Task 3): starts/adopts the local broker via
+ * Production wiring for the first-run [HostWizard]: starts/adopts the local broker via
  * the [HostSupervisor], bootstraps a local device token, mints the phone claim, and builds a
  * [HostWizardModel]. All network work is best-effort (never throws); the pieces are runtime-gated (a
  * live local broker) and so are verified via the supervisor's unit tests + the wizard's unit/Compose tests, not

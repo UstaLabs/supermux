@@ -16,7 +16,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Proofs for the first-run host wizard (Plan 3 Task 3): the pure payload builder round-trips through
+ * Proofs for the first-run host wizard: the pure payload builder round-trips through
  * the phone's [PairingPayload.parse], and [HostWizardContent] renders the spec §6 copy, a
  * CHECKED-by-default keep-alive box, the relay-disclosure line, and the QR — in-process, no display.
  */

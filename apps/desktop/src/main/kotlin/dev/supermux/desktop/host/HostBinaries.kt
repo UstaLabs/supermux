@@ -11,7 +11,7 @@ import java.nio.file.attribute.PosixFilePermissions
  * Resolves the host helper binaries the desktop-as-host needs — the bundled Bun **broker**, a
  * static **tmux** (Linux/macOS) or **sessiond** (Windows), **frpc** (all platforms) and the
  * **zmx bundle** (Linux/macOS) — for BOTH a dev checkout and a packaged app image, then
- * materializes them to a per-user dir on first use (Plan 3 Task 5 / spec §6, D7, D11).
+ * materializes them to a per-user dir on first use (spec §6, D7, D11).
  *
  * ### The broker: one binary, the canonical compile path
  * The bundled broker is the SAME `supermux` single-file binary [scripts/build-binary.sh] compiles

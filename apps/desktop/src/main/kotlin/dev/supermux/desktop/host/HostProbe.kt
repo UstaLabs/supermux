@@ -60,7 +60,7 @@ sealed interface HostPlan {
     data object NotHosting : HostPlan
     data object Start : HostPlan
     data object MovePort : HostPlan
-    /** The port is busy (maybe a broker still starting). The supervisor (Task 8) retries for up to 30 s before treating it as [MovePort]. */
+    /** The port is busy (maybe a broker still starting). The supervisor retries for up to 30 s before treating it as [MovePort]. */
     data object Wait : HostPlan
     data object UseOwn : HostPlan
     data object UpdateOwn : HostPlan

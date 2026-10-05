@@ -14,7 +14,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Pure path/name/policy proofs for [HostBinaries] (Plan 3 Task 5) plus a real materialize
+ * Pure path/name/policy proofs for [HostBinaries] plus a real materialize
  * round-trip on a temp dir. No display, no broker, no packaged image — the dev-vs-packaged
  * branch is driven by an injected `resourcesDir` / `$PATH` lookup so it runs anywhere.
  */

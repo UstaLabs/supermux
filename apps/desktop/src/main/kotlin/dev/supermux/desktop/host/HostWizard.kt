@@ -49,7 +49,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * First-run desktop-as-host wizard (Plan 3 Task 3 / spec §6, D6 choice A). Makes THIS computer a
+ * First-run desktop-as-host wizard (spec §6, D6 choice A). Makes THIS computer a
  * host: the [HostSupervisor] brings up/adopts the local broker, the wizard mints a one-time claim from
  * it, builds a v1 [PairingPayload] (hostId from the supervisor, `relayUrl` when hosting-remote), and
  * renders it as a scannable QR next to the spec §6 copy, a CHECKED-by-default keep-alive box, and the
