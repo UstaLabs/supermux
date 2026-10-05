@@ -19,6 +19,7 @@ package dev.supermux.desktop.shell
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -38,6 +39,7 @@ import java.awt.event.MouseEvent
 import java.awt.event.WindowEvent
 import java.awt.event.WindowStateListener
 import kotlin.math.abs
+import kotlinx.coroutines.delay
 
 /** Height of the Linux top band: the pane tab strip's height, so the band IS the strip row. */
 val LinuxTitleBarHeight = 32.dp
@@ -179,6 +181,22 @@ fun rememberLinuxWindowChrome(frame: Frame, moveResize: X11MoveResize): LinuxWin
     val target = remember(frame) { FrameControlTarget(frame) }
     var maximised by remember(frame) { mutableStateOf(WindowControlActions.isMaximised(frame.extendedState)) }
     var pointerEpoch by remember(frame) { mutableIntStateOf(0) }
+    var shownCount by remember(frame) { mutableIntStateOf(0) }
+    // GNOME (mutter, XWayland) keeps an UNDECORATED window that is re-mapped while maximised
+    // invisible and click-through — reopening from the tray showed nothing, while the X window was
+    // mapped and viewable. Reproduced with a bare Swing JFrame, so it is not Compose's; a decorated
+    // frame is fine, and so is an undecorated one that is not maximised. Restoring and maximising
+    // again once it is mapped brings it back (a brief flicker, only on this path).
+    LaunchedEffect(frame, shownCount) {
+        if (shownCount == 0) return@LaunchedEffect
+        delay(REMAP_SETTLE_MS)
+        val state = frame.extendedState
+        if (!WindowControlActions.isMaximised(state)) return@LaunchedEffect
+        frame.extendedState = state and Frame.MAXIMIZED_BOTH.inv()
+        delay(REMAP_SETTLE_MS)
+        frame.extendedState = state or Frame.MAXIMIZED_BOTH
+        println("[LinuxWindowChrome] re-maximised after the re-map (mutter keeps it hidden otherwise)")
+    }
     DisposableEffect(frame) {
         val stateListener = WindowStateListener {
             maximised = WindowControlActions.isMaximised(it.newState)
@@ -192,8 +210,16 @@ fun rememberLinuxWindowChrome(frame: Frame, moveResize: X11MoveResize): LinuxWin
         }
         frame.addWindowListener(focusListener)
         val hideListener = object : ComponentAdapter() {
+            private var hiddenBefore = false
+
             override fun componentHidden(e: ComponentEvent) {
+                hiddenBefore = true
                 pointerEpoch++
+            }
+
+            // Only a RE-show: the first show at launch maps a fresh window, which is fine.
+            override fun componentShown(e: ComponentEvent) {
+                if (hiddenBefore) shownCount++
             }
         }
         frame.addComponentListener(hideListener)
@@ -216,6 +242,9 @@ fun rememberLinuxWindowChrome(frame: Frame, moveResize: X11MoveResize): LinuxWin
         pointerEpoch = pointerEpoch,
     )
 }
+
+/** Wait for mutter between the steps of the maximised re-map workaround in [rememberLinuxWindowChrome]. */
+private const val REMAP_SETTLE_MS = 250L
 
 /** What a press on the window does to the band. */
 enum class BandPress { Ignore, ToggleMaximise, ArmDrag }

@@ -4,6 +4,7 @@
 // dropdown, the way IntelliJ's new UI and VS Code's custom title bar do on Linux.
 package dev.supermux.desktop.shell
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -36,6 +38,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -243,7 +247,7 @@ fun MainMenuButton(menu: List<MainMenuGroup>, state: MainMenuState, modifier: Mo
                         .testTag("main_menu_item")
                     first = false
                     when (entry) {
-                        is MainMenuEntry.Action -> DropdownMenuItem(
+                        is MainMenuEntry.Action -> MainMenuRow(
                             text = { Text(entry.label) },
                             trailingIcon = entry.shortcut?.let { s ->
                                 { Text(s.label, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant) }
@@ -254,7 +258,7 @@ fun MainMenuButton(menu: List<MainMenuGroup>, state: MainMenuState, modifier: Mo
                             },
                             modifier = itemModifier,
                         )
-                        is MainMenuEntry.Toggle -> DropdownMenuItem(
+                        is MainMenuEntry.Toggle -> MainMenuRow(
                             text = { Text(entry.label) },
                             leadingIcon = if (entry.checked) {
                                 { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
@@ -274,6 +278,33 @@ fun MainMenuButton(menu: List<MainMenuGroup>, state: MainMenuState, modifier: Mo
             }
         }
     }
+}
+
+/**
+ * A row's background: Material's focus state layer is too faint to find on a dark menu, so the
+ * keyboard-focused row gets a clear highlight of its own.
+ */
+fun mainMenuRowBackground(cs: ColorScheme, focused: Boolean): Color =
+    if (focused) cs.onSurface.copy(alpha = 0.14f) else Color.Transparent
+
+@Composable
+private fun MainMenuRow(
+    text: @Composable () -> Unit,
+    onClick: () -> Unit,
+    modifier: Modifier,
+    leadingIcon: (@Composable () -> Unit)? = null,
+    trailingIcon: (@Composable () -> Unit)? = null,
+) {
+    var focused by remember { mutableStateOf(false) }
+    DropdownMenuItem(
+        text = text,
+        onClick = onClick,
+        leadingIcon = leadingIcon,
+        trailingIcon = trailingIcon,
+        modifier = modifier
+            .onFocusChanged { focused = it.hasFocus }
+            .background(mainMenuRowBackground(MaterialTheme.colorScheme, focused)),
+    )
 }
 
 /**

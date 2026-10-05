@@ -458,6 +458,14 @@ class LinuxWindowChromeTest {
     }
 
     @Test
+    fun theKeyboardFocusedMenuRowIsHighlighted() {
+        for (cs in listOf(lightColorScheme(), darkColorScheme())) {
+            assertEquals(androidx.compose.ui.graphics.Color.Transparent, mainMenuRowBackground(cs, focused = false))
+            assertEquals(cs.onSurface.copy(alpha = 0.14f), mainMenuRowBackground(cs, focused = true))
+        }
+    }
+
+    @Test
     fun theShortcutsDoNothingWithoutAnAttachedMenu() {
         val state = MainMenuState()
         assertFalse(state.onWindowKey(Key.F10, alt = false, ctrl = false, shift = false, meta = false))
