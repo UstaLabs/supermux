@@ -14,7 +14,7 @@ import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
 import {
-  contextDrops, contextFingerprint, isContextEmpty, isEmptyContext, isHostEntry, mergeContexts, noContextCapabilities, normalizeContext, normalizeContextUpdate, normalizePolicy,
+  contextDrops, contextFingerprint, isContextEmpty, isEmptyContext, isHostEntry, joinInstructions, mergeContexts, noContextCapabilities, normalizeContext, normalizeContextUpdate, normalizePolicy,
   resolveContext, sameContext, unsupportedError, withoutInstructions, type HostResolver,
 } from "./context/index.js"
 import { isHostMcpServer } from "./mcp/brand.js"
@@ -242,6 +242,13 @@ export class Core {
     }),
     resume: (id: string, options?: ResumeOptions): Promise<Session> => this.resume(id, options, "manual"),
     /**
+     * True while the core itself is replacing the session's agent process (a context or
+     * host-tool reload, an account limit switch, a token refresh): the old `Session` closes and
+     * `live(id)` returns the new one once it is open. A host can tell this apart from an agent
+     * that died.
+     */
+    reopening: (id: string): boolean => this.switching.has(id),
+    /**
      * `session.updateContext` by id. For a session that is not open it only updates the record
      * (every applicable change is `reload`: the next launch applies it); an open session is
      * updated like `session.updateContext`.
@@ -406,8 +413,11 @@ export class Core {
     let patch: SessionConfiguration | undefined
     let requestedAccount: string | undefined
     let requestedContext: SessionContext | undefined
+    let adoptInstructions: string[] | undefined
     try {
       if (options && options.context !== undefined) requestedContext = this.adoptHosts(normalizeContextUpdate(options.context))
+      if (options && options.adoptInstructions !== undefined) adoptInstructions = normalizeContext({ instructions: options.adoptInstructions }, "options.adoptInstructions")!.instructions as string[] | undefined
+      if (adoptInstructions !== undefined && !Array.isArray(adoptInstructions)) adoptInstructions = [adoptInstructions]
       if (options && options.configuration !== undefined) {
         const snapshot = structuredClone({ configuration: options.configuration })
         assertConfiguration(snapshot.configuration)
@@ -472,11 +482,22 @@ export class Core {
         ? mergeConfiguration(record.configuration ?? {}, requestedPatch)
         : record.configuration
       // The session's own instructions stay as given at creation (launches use createdInstructions).
-      const ownContext = requestedContext !== undefined ? keepInstructions(record.context, requestedContext) : record.context
+      let ownContext = requestedContext !== undefined ? keepInstructions(record.context, requestedContext) : record.context
+      // A record from before instructions were snapshotted takes the host's current ones, once.
+      let adopted: { createdInstructions: string } | undefined
+      if (adoptInstructions !== undefined && record.createdInstructions === undefined && record.context === undefined) {
+        const joined = joinInstructions(mergeContexts(this.defaultContext, { instructions: adoptInstructions }).instructions)
+        const driver = this.driver(record.agent)
+        if (joined !== undefined && (driver.context?.capabilities ?? noContextCapabilities()).instructions.support !== "unsupported") {
+          adopted = { createdInstructions: joined }
+          ownContext = { instructions: [...adoptInstructions], ...(ownContext ?? {}) }
+        }
+      }
       const { context: _previous, ...rest } = record
       const session = await this.openSession({
         ...rest, configuration, ...(switchFrom !== undefined ? { account: requestedAccount } : {}),
         ...(ownContext !== undefined ? { context: ownContext } : {}),
+        ...(adopted ?? {}),
       }, record.agentSessionId, undefined, original)
       if (reason === "refresh") this.events.emit({ type: "account.refreshed", sessionId: id, account: requestedAccount! })
       else if (switchFrom !== undefined && reason !== "context") this.events.emit({ type: "account.switched", sessionId: id, from: switchFrom, to: requestedAccount!, reason })

@@ -1,10 +1,12 @@
 import { createCore, Core } from "../core.js"
 import { CoreError, asError } from "../errors.js"
 import { requireAgentsCloseMode, requireCloseMode, type CloseMode, type CoreLimits, type DriverContext, type SessionConfiguration } from "../types.js"
-import type { AgentDriver } from "../types.js"
+import type { AgentDriver, ResumeOptions } from "../types.js"
 import type { Session } from "../session.js"
 import type { AccountsOptions } from "../accounts/types.js"
 import { systemAccountId } from "../accounts/registry.js"
+import { normalizeContext, withoutInstructions } from "../context/index.js"
+import type { ContextPolicy, DriverContextSupport, SessionContext } from "../context/types.js"
 
 export type HostRegistration = {
   id: string
@@ -20,6 +22,15 @@ export type HostRegistration = {
    * receives the effective account here (the record's when absent).
    */
   account?: string
+  /**
+   * The session's context (see API.md "Session context"); `prepare` may return one instead. On a
+   * new session it is the create context (instructions snapshotted). On an existing session its
+   * skills / plugins / MCP servers replace the session's own (`resume(id, { context })`) and its
+   * instructions are used only for a record created before instructions were snapshotted
+   * (`adoptInstructions`); otherwise the creation snapshot stays. Never passed to the driver
+   * factory: the core applies it through the driver (`HostOptions.context`).
+   */
+  context?: SessionContext
 }
 
 export type HostStartOptions = {
@@ -47,9 +58,17 @@ export type HostOptions = {
   /** Runs after admission and before the driver opens (credential/config/home
    * writes). May return an env patch that replaces the registration's env for
    * this and later opens. */
-  prepare?: (registration: HostRegistration) => Promise<void | { env?: Record<string, string>; args?: string[] }>
+  prepare?: (registration: HostRegistration) => Promise<void | { env?: Record<string, string>; args?: string[]; context?: SessionContext }>
   /** Passed to the Core (e.g. one shared `registry` + `usage` for every agent's host). */
   accounts?: AccountsOptions
+  /**
+   * What the drivers this host builds apply of a session context (`AgentDriver.context`, as a
+   * createCore driver declares it; e.g. `CLAUDE_CONTEXT`). Absent: none, and a registration with a
+   * context fails (or degrades under `contextPolicy: "warn"`).
+   */
+  context?: DriverContextSupport
+  /** The Core's default context policy (`createCore({ contextPolicy })`). Default "error". */
+  contextPolicy?: ContextPolicy
 }
 
 export type Host = {
@@ -73,6 +92,17 @@ function cloneRegistration(registration: HostRegistration): HostRegistration {
     args: registration.args ? [...registration.args] : undefined,
     extra: registration.extra ? { ...registration.extra } : undefined,
     ...(registration.account !== undefined ? { account: registration.account } : {}),
+    ...(registration.context !== undefined ? { context: cloneContext(registration.context) } : {}),
+  }
+}
+
+/** A context copy that keeps host MCP server objects (code) as they are. */
+function cloneContext(context: SessionContext): SessionContext {
+  return {
+    ...(context.instructions !== undefined ? { instructions: Array.isArray(context.instructions) ? [...context.instructions] : context.instructions } : {}),
+    ...(context.skills ? { skills: [...context.skills] } : {}),
+    ...(context.plugins ? { plugins: [...context.plugins] } : {}),
+    ...(context.mcpServers ? { mcpServers: [...context.mcpServers] } : {}),
   }
 }
 
@@ -120,6 +150,7 @@ class HostImpl implements Host {
   private readonly agent: string
   private readonly driverFactory: HostOptions["driver"]
   private readonly prepare?: HostOptions["prepare"]
+  private readonly driverContext?: DriverContextSupport
   private readonly handles = new Map<string, HostHandleImpl>()
   private readonly slots = new Map<string, OwnedSlot>()
   private readonly tokens = new Map<string, symbol>()
@@ -134,16 +165,18 @@ class HostImpl implements Host {
     this.agent = options.agent
     this.driverFactory = options.driver
     this.prepare = options.prepare
+    if (options.context !== undefined) this.driverContext = options.context
     this.core = createCore({
       stateDirectory: options.stateDirectory,
       agents: [this.createHostDriver()],
       limits: options.limits,
       ...(options.accounts !== undefined ? { accounts: options.accounts } : {}),
+      ...(options.contextPolicy !== undefined ? { contextPolicy: options.contextPolicy } : {}),
     })
-    // A Core-internal reopen (limit switch, token refresh) replaces the live Session: keep the
-    // ready handle pointing at the new one.
+    // A Core-internal reopen (limit switch, token refresh, context or host-tool reload) replaces
+    // the live Session: keep the ready handle pointing at the new one.
     this.core.subscribe((event) => {
-      if (event.type !== "account.switched" && event.type !== "account.refreshed") return
+      if (event.type !== "account.switched" && event.type !== "account.refreshed" && event.type !== "session.resumed") return
       const handle = this.handles.get(event.sessionId)
       const slot = this.slots.get(event.sessionId)
       if (!handle || slot?.state !== "ready" || slot.handle !== handle || this.closing) return
@@ -298,6 +331,7 @@ class HostImpl implements Host {
         const patch = await this.prepare(prepared)
         if (patch && patch.env) handle.registration.env = { ...patch.env }
         if (patch && patch.args) handle.registration.args = [...patch.args]
+        if (patch && patch.context) handle.registration.context = cloneContext(patch.context)
       }
       this.attachStarting(handle, token)
       const session = await this.openSession(handle, options)
@@ -313,11 +347,16 @@ class HostImpl implements Host {
   private async openSession(handle: HostHandleImpl, options: HostStartOptions): Promise<Session> {
     const configuration = options.configuration
     const account = handle.registration.account
+    const context = handle.registration.context !== undefined ? normalizeContext(cloneContext(handle.registration.context)) : undefined
     const existing = await this.core.sessions.get(handle.id)
     const resumeOptions = (switchTo: string | undefined) => {
-      const out: { configuration?: SessionConfiguration; account?: string } = {}
+      const out: ResumeOptions = {}
       if (configuration !== undefined) out.configuration = configuration
       if (switchTo !== undefined) out.account = switchTo
+      if (context !== undefined) {
+        out.context = withoutInstructions(context)!
+        if (context.instructions !== undefined) out.adoptInstructions = context.instructions
+      }
       return Object.keys(out).length ? out : undefined
     }
     const system = systemAccountId(this.agent)
@@ -341,6 +380,7 @@ class HostImpl implements Host {
       cwd: options.cwd,
       configuration,
       ...(account !== undefined && account !== system ? { account } : {}),
+      ...(context !== undefined ? { context } : {}),
     })
   }
 
@@ -446,10 +486,13 @@ class HostImpl implements Host {
     const id = this.agent
     return {
       id,
+      ...(this.driverContext !== undefined ? { context: this.driverContext } : {}),
       open: async (ctx) => {
         const handle = this.handles.get(ctx.sessionId)
         if (!handle) throw new CoreError("session_not_found", `No registered context for session ${ctx.sessionId}`)
-        const driver = await this.driverFactory(cloneRegistration(handle.registration), ctx)
+        // The context is the core's to apply (through DriverContext.sessionContext), not the factory's.
+        const { context: _context, ...registration } = cloneRegistration(handle.registration)
+        const driver = await this.driverFactory(registration, ctx)
         return driver.open(ctx)
       },
     }

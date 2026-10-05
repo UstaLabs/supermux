@@ -382,7 +382,13 @@ export type CreateOptions = { agent: string; cwd: string; id: string; authProfil
 /** Optional resume overrides. `configuration: undefined` is omitted (no-options resume). `{}` is an explicit no-op patch. */
 /** `account` switches the session to another account of the same agent (a live session is shut down and reopened). */
 /** `context` replaces the session's own skills/plugins/MCP servers for this and later launches (a live idle session is relaunched); instructions are fixed at creation. */
-export type ResumeOptions = { configuration?: SessionConfiguration; account?: string; context?: SessionContextUpdate }
+/**
+ * `adoptInstructions`: for a record created before instructions were snapshotted (no
+ * `createdInstructions` and no own context, e.g. a host's pre-context sessions), these become the
+ * session's instructions on this launch and are fixed from then on, exactly as if they had been
+ * given at creation. Ignored for every other record.
+ */
+export type ResumeOptions = { configuration?: SessionConfiguration; account?: string; context?: SessionContextUpdate; adoptInstructions?: string | string[] }
 
 /** Metadata-only registration of an existing native conversation. Native history is checked later by resume. */
 export type AdoptOptions = {
