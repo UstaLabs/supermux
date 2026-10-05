@@ -100,6 +100,13 @@ fun rememberWindowsWindowChrome(window: ComposeWindow, dark: Boolean): WindowsWi
         // component, and on Windows the title-bar band's events aren't routed there — the hit test
         // was never updated, so the whole band (the ☰ and toggle buttons too) acted as caption.
         // JBR contract (as on macOS): update the hit test on every mouse event but EXITED/WHEEL.
+        // SUPERMUX_CHROME_DEBUG=1: log the hit-test inputs to %TEMP%\supermux-chrome.log.
+        val debug = if (System.getenv("SUPERMUX_CHROME_DEBUG") == "1") {
+            java.io.File(System.getProperty("java.io.tmpdir"), "supermux-chrome.log")
+        } else {
+            null
+        }
+        var debugLines = 0
         val listener = java.awt.event.AWTEventListener { ev ->
             val e = ev as? MouseEvent ?: return@AWTEventListener
             if (e.id == MouseEvent.MOUSE_EXITED || e.id == MouseEvent.MOUSE_WHEEL) return@AWTEventListener
@@ -109,7 +116,21 @@ fun rememberWindowsWindowChrome(window: ComposeWindow, dark: Boolean): WindowsWi
             // Root-pane AWT points → Compose px with this monitor's transform.
             val t = window.graphicsConfiguration?.defaultTransform
             val p = Offset((pt.x * (t?.scaleX ?: 1.0)).toFloat(), (pt.y * (t?.scaleY ?: 1.0)).toFloat())
-            bar.forceHitTest(!regions.allowsNativeDrag(p))
+            val client = !regions.allowsNativeDrag(p)
+            bar.forceHitTest(client)
+            // JBR delivers the title band's events to the ComposeWindowPanel itself, not to the Skia
+            // layer under the pointer that Compose listens on: the ☰ and sidebar buttons never saw
+            // a click. Hand client events on to the component that is really there.
+            if (client && e.id != MouseEvent.MOUSE_ENTERED) {
+                val target = javax.swing.SwingUtilities.getDeepestComponentAt(src, e.x, e.y)
+                if (target != null && target !== src) {
+                    target.dispatchEvent(javax.swing.SwingUtilities.convertMouseEvent(src, e, target))
+                    e.consume()
+                }
+            }
+            if (debug != null && debugLines++ < 400) {
+                runCatching { debug.appendText("${e.id} ${src.javaClass.name} (${pt.x},${pt.y}) client=$client\n") }
+            }
         }
         val toolkit = java.awt.Toolkit.getDefaultToolkit()
         toolkit.addAWTEventListener(listener, java.awt.AWTEvent.MOUSE_EVENT_MASK or java.awt.AWTEvent.MOUSE_MOTION_EVENT_MASK)
