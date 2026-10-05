@@ -163,10 +163,20 @@ bun scripts/generate-static-manifest.ts
 
 # Compile. --define statically replaces the build-info env reads; IS_COMPILED is
 # auto-detected at runtime (entry path under /$bunfs/).
-bun build --compile --minify src/cli.ts \
-  --target="$BUN_TARGET" \
-  --define "process.env.SUPERMUX_BUILD_VERSION=\"$VERSION\"" \
-  --define "process.env.SUPERMUX_BUILD_COMMIT=\"$COMMIT\"" \
-  --outfile "$OUT"
+if [ "$TARGET" = "windows-x64" ]; then
+  # The exe's version info says supermux, not Bun (Windows Firewall prompt, Task Manager).
+  . "$ROOT/scripts/lib/windows-exe-meta.sh"
+  bun_compile_windows "supermux broker" "$VERSION" --compile --minify src/cli.ts \
+    --target="$BUN_TARGET" \
+    --define "process.env.SUPERMUX_BUILD_VERSION=\"$VERSION\"" \
+    --define "process.env.SUPERMUX_BUILD_COMMIT=\"$COMMIT\"" \
+    --outfile "$OUT"
+else
+  bun build --compile --minify src/cli.ts \
+    --target="$BUN_TARGET" \
+    --define "process.env.SUPERMUX_BUILD_VERSION=\"$VERSION\"" \
+    --define "process.env.SUPERMUX_BUILD_COMMIT=\"$COMMIT\"" \
+    --outfile "$OUT"
+fi
 
 echo "built: $OUT ($VERSION $COMMIT)"
