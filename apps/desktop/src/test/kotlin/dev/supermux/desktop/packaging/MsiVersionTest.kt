@@ -7,13 +7,14 @@ import kotlin.test.assertTrue
 
 class MsiVersionTest {
     @Test fun mapsReleasesAndPrereleases() {
-        assertEquals("1.5.999", MsiVersion.of("1.5.0"))
-        assertEquals("1.5.2999", MsiVersion.of("1.5.2"))
-        assertEquals("0.12.3", MsiVersion.of("0.12.0-alpha.3"))
-        assertEquals("0.12.302", MsiVersion.of("0.12.0-beta.2"))
-        assertEquals("0.12.601", MsiVersion.of("0.12.0-rc.1"))
-        assertEquals("1.99.18", MsiVersion.of("1.99.0-test.18"))
-        assertEquals("0.0.0", MsiVersion.of("0.0.0-dryrun"))
+        assertEquals("2.5.99", MsiVersion.of("1.5.0"))
+        assertEquals("2.5.299", MsiVersion.of("1.5.2"))
+        assertEquals("1.11.3699", MsiVersion.of("0.11.36"))
+        assertEquals("1.12.3", MsiVersion.of("0.12.0-alpha.3"))
+        assertEquals("1.12.32", MsiVersion.of("0.12.0-beta.2"))
+        assertEquals("1.12.61", MsiVersion.of("0.12.0-rc.1"))
+        assertEquals("2.99.18", MsiVersion.of("1.99.0-test.18"))
+        assertEquals("1.0.0", MsiVersion.of("0.0.0-dryrun"))
         assertEquals("0.0.1", MsiVersion.of("dev"))
     }
 
@@ -31,10 +32,15 @@ class MsiVersionTest {
         }
     }
 
+    @Test fun everyReleaseIsAboveTheOld1_0_0Msis() {
+        // Every MSI before this said 1.0.0: a release must upgrade them, not be refused as older.
+        for (v in listOf("0.11.36", "0.12.0-alpha.1", "0.12.0")) assertTrue(cmp.compare(msiOrder(v), listOf(1, 0, 0)) > 0, v)
+    }
+
     @Test fun refusesWhatMsiCannotHold() {
-        assertFailsWith<IllegalArgumentException> { MsiVersion.of("256.0.0") }
-        assertFailsWith<IllegalArgumentException> { MsiVersion.of("1.0.66") }
-        assertFailsWith<IllegalArgumentException> { MsiVersion.of("1.0.0-alpha.300") }
+        assertFailsWith<IllegalArgumentException> { MsiVersion.of("255.0.0") }
+        assertFailsWith<IllegalArgumentException> { MsiVersion.of("1.0.656") }
+        assertFailsWith<IllegalArgumentException> { MsiVersion.of("1.0.0-alpha.30") }
         assertFailsWith<IllegalArgumentException> { MsiVersion.of("v1.0") }
     }
 }

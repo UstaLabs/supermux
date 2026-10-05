@@ -310,10 +310,11 @@ compose.desktop {
                 iconFile.set(project.file("icons/supermux.ico"))
                 // The MSI must carry the real version (MsiVersion, packaging/src) and a FIXED upgrade
                 // code, or Windows Installer refuses a newer MSI over an older one ("another version
-                // of this product is already installed") instead of upgrading in place. Never change
-                // this UUID: it is what ties every supermux MSI to the installed product.
+                // of this product is already installed") instead of upgrading in place. The UUID is
+                // the one jpackage derived for every MSI shipped so far (read from them), so those
+                // installs upgrade too. Never change it.
                 packageVersion = MsiVersion.of(supermuxVersion)
-                upgradeUuid = "e7a02ada-a37b-41e2-877c-2092afe87013"
+                upgradeUuid = "23d5bb8e-2d6e-3d2d-bab2-e2341eac2771"
             }
             // macOS DMG. The app name + bundle id differ from the retired native SwiftUI client
             // (`Supermux.app` / `dev.supermux.app`) and are KEPT that way for update continuity:
