@@ -149,7 +149,11 @@ class BrokerServiceTest {
         assertEquals(BrokerService.WINDOWS_TASK_PATH, installed.path)
         assertFalse(Files.exists(stale), "no definition file left in the user's profile")
         val script = elevatedCalls(env).single().last()
-        assertTrue("Register-ScheduledTask -TaskName ''Supermux Host'' -Xml" in script, script)
+        assertTrue("RegisterTask(''Supermux Host'', \$xml, 6, \$null, \$null, 3)" in script, script)
+        assertTrue("Register-ScheduledTask" !in script && "Import-Module" !in script, "no cmdlet: no module auto-load")
+        assertTrue("\$env:PSModulePath = \$PSHOME + ''\\Modules''" in script, "only the system's modules")
+        assertTrue("-FilePath (\$env:SystemRoot + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')" in script, script)
+        assertTrue(elevatedCalls(env).single().first().endsWith("\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"))
         assertEquals(winXml(home), carriedXml(script), "the elevated process registers exactly our definition")
         assertTrue("/XML" !in script && "AppData" !in script.substringBefore("FromBase64String"),
             "no user-writable file between the prompt and the registration")
@@ -168,7 +172,7 @@ class BrokerServiceTest {
         val removed = assertIs<BrokerService.Result.Removed>(BrokerService.remove(env))
         assertEquals(BrokerService.WINDOWS_TASK_PATH, removed.path)
         assertFalse(Files.exists(env.localAppData.resolve("Supermux/broker-env.ps1")))
-        assertTrue(env.ran.any { it.firstOrNull() == "powershell.exe" && it.last().contains("/Delete") })
+        assertTrue(env.ran.any { it.firstOrNull()?.endsWith("powershell.exe") == true && it.last().contains("/Delete") })
     }
 
     private fun parse(xml: String) {
@@ -293,13 +297,13 @@ class BrokerServiceTest {
         val elevated = elevatedCalls(env)
         assertEquals(1, elevated.size)
         val s = elevated[0].last()
-        assertTrue("Register-ScheduledTask" in s && "/Run" in s && s.indexOf("Register-ScheduledTask") < s.indexOf("/Run"))
+        assertTrue("RegisterTask(" in s && ".Run(" in s && s.indexOf("RegisterTask(") < s.indexOf(".Run("))
     }
 
     @Test fun theRegisterScriptFailsOnARegistrationErrorAndCanSkipTheStart() {
         val s = BrokerService.registerTaskScript("<Task/>", start = false)
         assertTrue("\$ErrorActionPreference = 'Stop'" in s && "catch { exit 1 }" in s, s)
-        assertTrue("/Run" !in s && s.endsWith("exit 0"))
+        assertTrue(".Run(" !in s && s.endsWith("exit 0"))
         assertEquals("<Task/>", carriedXml(s))
     }
 
@@ -422,7 +426,7 @@ class BrokerServiceTest {
     /** A changed definition: a broker at another path. */
     private val oldBroker = winSpec.copy(broker = Path.of("C:\\Program Files\\supermux\\supermux-broker.exe"))
 
-    private fun elevatedCalls(env: FakeOsEnv) = env.ran.filter { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") }
+    private fun elevatedCalls(env: FakeOsEnv) = env.ran.filter { it.firstOrNull()?.endsWith("powershell.exe") == true && it.last().contains("-Verb RunAs") }
 
     @Test fun windowsReinstallOfTheSameDefinitionRestartsWithoutUac() {
         val home = createTempDirectory()
@@ -476,7 +480,7 @@ class BrokerServiceTest {
     @Test fun windowsDeclinedUacOnAChangedDefinitionStartsThePreviousOneAgain() {
         val home = createTempDirectory()
         BrokerService.install(winSpec, winEnv(home))
-        val env = winEnv(home, failIf = { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") })
+        val env = winEnv(home, failIf = { it.firstOrNull()?.endsWith("powershell.exe") == true && it.last().contains("-Verb RunAs") })
         val r = assertIs<BrokerService.Result.Failed>(BrokerService.install(oldBroker, env))
         assertTrue(r.previousStillRunning)
         assertEquals(BrokerService.WINDOWS_UPDATE_DECLINED, r.message)
@@ -488,7 +492,7 @@ class BrokerServiceTest {
         val q = listOf("schtasks", "/Query", "/TN", "Supermux Host")
         val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory(),
             scripted = mapOf(q to listOf(OsEnv.RunResult(1, "", "not found"))),
-            failIf = { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") })
+            failIf = { it.firstOrNull()?.endsWith("powershell.exe") == true && it.last().contains("-Verb RunAs") })
         val r = assertIs<BrokerService.Result.Failed>(BrokerService.install(winSpec, env))
         assertFalse(r.previousStillRunning)
         assertTrue(run !in env.ran)
@@ -521,7 +525,7 @@ class BrokerServiceTest {
         val installEnv = winEnv(home)
         BrokerService.install(winSpec, installEnv)
         val envFile = installEnv.localAppData.resolve("Supermux/broker-env.ps1")
-        val env = winEnv(home, failIf = { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") })
+        val env = winEnv(home, failIf = { it.firstOrNull()?.endsWith("powershell.exe") == true && it.last().contains("-Verb RunAs") })
         assertIs<BrokerService.Result.Failed>(BrokerService.remove(env))
         assertTrue(env.ran.none { it.firstOrNull() == "taskkill" })
         assertTrue(Files.exists(envFile), "the still-registered task still needs its env")
@@ -549,7 +553,7 @@ class BrokerServiceTest {
             scripted = mapOf(q to listOf(OsEnv.RunResult(1, "", "not found"))))
         val r = assertIs<BrokerService.Result.Removed>(BrokerService.remove(env))
         assertEquals(null, r.path)
-        assertTrue(env.ran.none { it.firstOrNull() == "powershell.exe" })
+        assertTrue(env.ran.none { it.firstOrNull()?.endsWith("powershell.exe") == true })
     }
 
     @Test fun specRejectsLineBreaks() {
@@ -661,18 +665,19 @@ class BrokerServiceTest {
         val r = assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec, env))
         assertTrue(r.nextLogin)
         val script = elevatedCalls(base).single().last()
-        assertTrue("Register-ScheduledTask" in script && "/Run" !in script, script)
+        assertTrue("RegisterTask(" in script && ".Run(" !in script, script)
         assertTrue(run !in base.ran && base.ran.none { it.firstOrNull() == "taskkill" })
         assertFalse(BrokerService.restart(env))
         base.ran.clear()
         BrokerService.remove(env)
         val removal = elevatedCalls(base).single().last()
         assertTrue("/Delete" in removal && "/End" !in removal, removal)
+        assertTrue("System32\\schtasks.exe" in removal && "PSModulePath" in removal, removal)
     }
 
     @Test fun windowsDeclinedUacOverThe100TaskDoesNotRunTheOldApp() {
         val home = createTempDirectory()
-        val env = winEnv(home, registered = LegacyKeepAlive.taskXml, failIf = { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") })
+        val env = winEnv(home, registered = LegacyKeepAlive.taskXml, failIf = { it.firstOrNull()?.endsWith("powershell.exe") == true && it.last().contains("-Verb RunAs") })
         val r = assertIs<BrokerService.Result.Failed>(BrokerService.install(winSpec, env))
         assertFalse(r.previousStillRunning, "the old task runs the app, not a broker")
         assertTrue(run !in env.ran)

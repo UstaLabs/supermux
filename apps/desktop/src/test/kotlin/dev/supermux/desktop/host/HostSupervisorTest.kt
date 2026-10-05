@@ -1398,7 +1398,7 @@ class HostSupervisorTest {
     }
 
     @Test fun windowsUpdateWithUacDeclinedKeepsThePreviousTaskRunningWithoutASecondPrompt() = runTest {
-        val elevated = { argv: List<String> -> argv.firstOrNull() == "powershell.exe" && argv.last().contains("-Verb RunAs") }
+        val elevated = { argv: List<String> -> argv.firstOrNull()?.endsWith("powershell.exe") == true && argv.last().contains("-Verb RunAs") }
         // Our task is registered (schtasks /Query answers) with an older definition; nothing else runs.
         val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true), failIf = elevated, captures = noProcesses)
         h.probeFn = { h.desktop(build = "1.4.0 (old)") } // the old broker, running again after /Run
@@ -1412,7 +1412,7 @@ class HostSupervisorTest {
     }
 
     private val noProcesses = mapOf(BrokerService.listWindowsProcessesArgv() to "")
-    private val elevatedCall = { argv: List<String> -> argv.firstOrNull() == "powershell.exe" && argv.last().contains("-Verb RunAs") }
+    private val elevatedCall = { argv: List<String> -> argv.firstOrNull()?.endsWith("powershell.exe") == true && argv.last().contains("-Verb RunAs") }
 
     @Test fun windowsUpdateWhoseBrokerWontStopChangesNothing() = runTest {
         // The process listing fails: the old broker may still run, so no new loop may start.

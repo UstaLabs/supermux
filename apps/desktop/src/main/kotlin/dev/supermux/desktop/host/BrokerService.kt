@@ -711,11 +711,25 @@ Terminal=false
         val b64 = java.util.Base64.getEncoder().encodeToString(xml.toByteArray(Charsets.UTF_8))
         check(BASE64.matches(b64))
         val name = powershellLiteral(WINDOWS_TASK_NAME)
-        val register = "\$ErrorActionPreference = 'Stop'; " +
-            "try { \$xml = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$b64')); " +
-            "Register-ScheduledTask -TaskName $name -Xml \$xml -Force | Out-Null } catch { exit 1 }"
-        return if (start) "$register; & schtasks.exe /Run /TN $name; exit \$LASTEXITCODE" else "$register; exit 0"
+        // Task Scheduler's COM API through plain .NET: no cmdlet, so no module is auto-loaded. A
+        // module (ScheduledTasks) would be looked up on PSModulePath, whose first entry is the
+        // user's own Documents folder: a module planted there would run elevated.
+        // RegisterTask(path, xml, TASK_CREATE_OR_UPDATE = 6, user, password, TASK_LOGON_INTERACTIVE_TOKEN = 3)
+        val run = if (start) " \$null = \$task.Run(\$null);" else ""
+        return "$ELEVATED_PRELUDE try { \$xml = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$b64')); " +
+            "\$svc = [Activator]::CreateInstance([Type]::GetTypeFromProgID('Schedule.Service')); \$svc.Connect(); " +
+            "\$task = \$svc.GetFolder('\\').RegisterTask($name, \$xml, 6, \$null, \$null, 3);$run } catch { exit 1 }; exit 0"
     }
+
+    /**
+     * First in every elevated script: stop on errors, and let module auto-loading see the system's
+     * modules only (never the user-writable Documents\WindowsPowerShell\Modules).
+     */
+    private const val SYSTEM_MODULES_ONLY = "\$env:PSModulePath = \$PSHOME + '\\Modules';"
+    private const val ELEVATED_PRELUDE = "\$ErrorActionPreference = 'Stop'; $SYSTEM_MODULES_ONLY"
+
+    /** schtasks by its System32 path: a bare name is looked up on the (user-influenced) PATH. */
+    private const val SCHTASKS = "(\$env:SystemRoot + '\\System32\\schtasks.exe')"
 
     private fun removeWindowsTask(env: OsEnv, asJob: Boolean): Result {
         val taskXml = env.localAppData.resolve(WINDOWS_TASK_XML)
@@ -746,11 +760,16 @@ Terminal=false
     }
 
     /** Every schtasks call in one script; it exits with the first non-zero exit code. */
-    private fun schtasksScript(calls: List<List<String>>): String = calls.joinToString("; ") { args ->
-        val call = "& schtasks.exe ${args.joinToString(" ") { powershellLiteral(it) }}"
+    private fun schtasksScript(calls: List<List<String>>): String = "$SYSTEM_MODULES_ONLY " + calls.joinToString("; ") { args ->
+        val call = "& $SCHTASKS ${args.joinToString(" ") { powershellLiteral(it) }}"
         // /End fails when the task is not running, which is fine: keep going to the next call.
         if (args.firstOrNull() == "/End") call else "$call; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }"
     }
+
+    /** Windows PowerShell by its System32 path, never whatever `powershell.exe` the search path finds first. */
+    val WINDOWS_POWERSHELL: String =
+        (System.getenv("SystemRoot")?.takeIf { it.isNotBlank() }?.trimEnd('\\') ?: "C:\\Windows") +
+            "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
 
     /**
      * Windows 11 denies even current-user Task Scheduler registration to a non-elevated process.
@@ -764,12 +783,13 @@ Terminal=false
         // then null and `exit $null.ExitCode` exits 0, reporting a success that never happened
         // (the task looked installed and no broker ran). Stop on it and exit 1223 (ERROR_CANCELLED).
         val script =
-            "try { \$process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ErrorAction Stop " +
+            "try { \$process = Start-Process -FilePath (\$env:SystemRoot + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe') " +
+                "-Verb RunAs -Wait -PassThru -ErrorAction Stop " +
                 "-ArgumentList ${powershellLiteral(innerArgs)} } catch { exit $UAC_DECLINED_EXIT }; " +
                 "if (-not \$process) { exit $UAC_DECLINED_EXIT }; exit \$process.ExitCode"
         return env.runResult(
             listOf(
-                "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                WINDOWS_POWERSHELL, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                 "-Command", script,
             ),
             OsEnv.PROMPT_TIMEOUT_MS,
