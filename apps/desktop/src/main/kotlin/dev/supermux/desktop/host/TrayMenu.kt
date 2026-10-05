@@ -203,15 +203,17 @@ fun MenuScope.HostingTrayMenu(
     model: TrayModel,
     background: Boolean,
     power: TrayPower,
-    onAction: (TrayAction) -> Unit,
-    onToggle: (TrayToggle, Boolean) -> Unit,
+    dispatcher: TrayDispatcher,
 ) {
     for (item in trayMenuItems(model, background, power)) {
         when (item) {
             is TrayItem.Header -> Item(item.text, enabled = false, onClick = {})
-            is TrayItem.Action -> Item(item.label, enabled = item.enabled, onClick = { onAction(item.id) })
+            is TrayItem.Action -> Item(item.label, enabled = item.enabled, onClick = { dispatcher.onAction(item.id) })
             is TrayItem.Checkbox ->
-                CheckboxItem(item.label, checked = item.checked, enabled = item.enabled, onCheckedChange = { onToggle(item.id, it) })
+                CheckboxItem(
+                    item.label, checked = item.checked, enabled = item.enabled,
+                    onCheckedChange = { dispatcher.onToggle(item.id, it) },
+                )
             TrayItem.Separator -> Separator()
         }
     }

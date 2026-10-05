@@ -8,9 +8,22 @@ package dev.supermux.desktop.notify
 import androidx.compose.ui.window.Notification
 import dev.supermux.ui.platform.NotificationManager
 import androidx.compose.ui.window.TrayState
+import dev.supermux.desktop.host.linux.SniStatus
+import dev.supermux.desktop.host.linux.SniTray
 
-class TrayNotificationManager(private val trayState: TrayState) : NotificationManager {
+/**
+ * [sniTray] (Linux): while the StatusNotifierItem tray is up there is no AWT tray icon to raise a
+ * balloon from, so the toast goes to `org.freedesktop.Notifications` on the same bus instead.
+ */
+class TrayNotificationManager(
+    private val trayState: TrayState,
+    private val sniTray: SniTray? = null,
+) : NotificationManager {
     override fun notify(sessionId: String, title: String, message: String) {
+        if (sniTray != null && sniTray.status.value == SniStatus.REGISTERED) {
+            sniTray.notify(title, message)
+            return
+        }
         // sessionId isn't carried by Compose's Notification (title/message/type only, confirmed
         // via javap) — NotificationController is the one that remembers WHICH session this toast
         // was for (lastNotifiedSession), for the tray icon's best-effort click-to-focus.

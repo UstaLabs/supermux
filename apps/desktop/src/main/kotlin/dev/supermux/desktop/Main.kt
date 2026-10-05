@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
@@ -61,6 +62,11 @@ import dev.supermux.desktop.host.FleetFacts
 import dev.supermux.desktop.host.HostingDialogs
 import dev.supermux.desktop.host.HostingStatus
 import dev.supermux.desktop.host.HostingTrayMenu
+import dev.supermux.desktop.host.TrayDispatcher
+import dev.supermux.desktop.host.trayMenuItems
+import dev.supermux.desktop.host.linux.SniStatus
+import dev.supermux.desktop.host.linux.SniTray
+import dev.supermux.desktop.platform.isLinuxOs
 import dev.supermux.desktop.host.QuitAction
 import dev.supermux.desktop.host.TrayAction
 import dev.supermux.desktop.host.TrayModel
@@ -73,6 +79,7 @@ import dev.supermux.desktop.host.syncThisComputerRecord
 import dev.supermux.desktop.host.TrayIcons
 import dev.supermux.desktop.host.openFile
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.MutableStateFlow
 import java.awt.Desktop
 import java.awt.desktop.AppReopenedListener
 import javax.swing.SwingUtilities
@@ -390,6 +397,10 @@ fun main() {
     // A macOS system quit (Cmd-Q, Dock ▸ Quit, logout/restart/shutdown) waits on this answer: it is
     // cancelled only when the user cancels the confirm, and performed once the app has exited.
     val systemQuit = AtomicReference<QuitResponse?>(null)
+    // Linux: the tray is a StatusNotifierItem over D-Bus (GNOME's AppIndicator extension, KDE, XFCE,
+    // Cinnamon …) — AWT's XEmbed tray is unsupported on stock GNOME. Registration is async and on its
+    // own thread; `sniTray.status` says when there is a tray to hide into. Never on macOS/Windows.
+    val sniTray = if (isLinuxOs()) SniTray().also { it.start() } else null
 
     try {
         application {
@@ -411,6 +422,21 @@ fun main() {
             }
         }
         val trayState = rememberTrayState()
+        val sniStatus by remember { sniTray?.status ?: MutableStateFlow(SniStatus.UNSUPPORTED) }.collectAsState()
+        // AWT's tray only where the SNI tray can't be had: decided ONCE, from SNI's first answer
+        // (no session bus, or no watcher at launch), so an XEmbed-only panel still gets one. Never
+        // switched to later: a watcher going away (GNOME's AppIndicator extension disabled) can
+        // take its XEmbed tray with it, and AWT's TrayIcon then throws inside composition.
+        var awtFallback by remember { mutableStateOf<Boolean?>(if (sniTray == null) true else null) }
+        LaunchedEffect(sniStatus) {
+            if (awtFallback == null && sniStatus != SniStatus.STARTING) {
+                awtFallback = sniStatus != SniStatus.REGISTERED && isTraySupported
+            }
+        }
+        val useAwtTray = isTraySupported && awtFallback == true
+        // Is there a tray to hide into (close → hide) and to notify from? Async on Linux: the SNI
+        // tray counts only once a watcher has taken it.
+        val trayAvailable = useAwtTray || sniStatus == SniStatus.REGISTERED
         // Published once pairing completes (below, inside Window's content) so the tray icon's
         // click handler can select a session on the live ShellUiState. null before pairing
         // and after unpair, when there is no shell to select into — the click handler
@@ -490,7 +516,7 @@ fun main() {
             val action = QuitAction.of(
                 hostingStatus, fleetFacts.localSessions, supervisor.quitStopsBroker,
                 // No tray, no notification: never mark it shown there.
-                noticeShown = noticeShown || !isTraySupported,
+                noticeShown = noticeShown || !trayAvailable,
                 keepsAwake = keepsAwake,
             )
             when (action) {
@@ -519,7 +545,7 @@ fun main() {
         var lastNotifiedError by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(backgroundError) {
             val e = backgroundError
-            if (e != null && e != lastNotifiedError && isTraySupported) {
+            if (e != null && e != lastNotifiedError && trayAvailable) {
                 lastNotifiedError = e
                 DesktopNotifications.notify("", BackgroundQuitNotice.TITLE, e)
             }
@@ -690,57 +716,78 @@ fun main() {
         // Cluster G1: the tray manager is installed INTO the `Platform.notifications` seam, so the
         // shell's notification controller and any shared caller raise the same toast.
         val notificationController = remember {
-            DesktopNotifications.install(TrayNotificationManager(trayState))
+            DesktopNotifications.install(TrayNotificationManager(trayState, sniTray))
             NotificationController(DesktopNotifications)
         }
 
-        if (isTraySupported) {
+        // Both trays (AWT and Linux SNI) render the same rows and run the same handlers.
+        val trayDispatcher = TrayDispatcher(
+            action = { action ->
+                when (action) {
+                    TrayAction.OPEN -> showWindow()
+                    TrayAction.SHOW_LOG -> openFile(supervisor.logFile)
+                    TrayAction.RESTART -> hostScope.launch(Dispatchers.Default) {
+                        if (supervisor.status.value is HostingStatus.CantStart) supervisor.ensure() else supervisor.restart()
+                    }
+                    TrayAction.QUIT -> requestQuit()
+                }
+            },
+            toggle = { toggle, on ->
+                hostScope.launch(Dispatchers.Default) {
+                    when (toggle) {
+                        TrayToggle.BACKGROUND -> supervisor.setBackground(on)
+                        TrayToggle.KEEP_AWAKE -> keepAwakeControls.setEnabled(on)
+                        TrayToggle.LID_CLOSED -> keepAwakeControls.setLidClosed(on)
+                    }
+                }
+            },
+        )
+        val trayPowerShown = if (quitting) TrayPower.NONE else trayPower
+        fun onTrayIconClick() {
+            windowVisible = true
+            // Best-effort "bring the app forward": un-minimizing is portable; actually
+            // RAISING the window above others is window-manager-dependent (especially
+            // under a bare Xvfb with no WM) and not attempted further. Compose's
+            // Notification carries no per-toast click callback/id (confirmed via javap)
+            // — only the tray ICON has one (this onAction) — so a click can only jump to
+            // the LAST-notified session, not necessarily the specific toast the user
+            // meant if several stacked up. See this plan's Goal, scoping decision 3.
+            windowState.isMinimized = false
+            notificationController.lastNotifiedSession?.let { sid -> pairedUi?.selectedId = sid }
+        }
+        if (sniTray != null) {
+            // The handlers close over this composition's values: hand the tray the current ones.
+            SideEffect {
+                sniTray.dispatcher = trayDispatcher
+                sniTray.onActivate = { onTrayIconClick() }
+            }
+            val sniItems = trayMenuItems(trayModel, hostingPrefs.background, trayPowerShown)
+            LaunchedEffect(sniItems, trayModel.header) { sniTray.update(sniItems, trayModel.header) }
+        }
+        // The tray went away while the window was hidden in it (the AppIndicator extension was
+        // disabled, the tray host died): bring the window back, or the app would be unreachable.
+        LaunchedEffect(trayAvailable) {
+            if (!trayAvailable && !windowVisible && !quitting) showWindow()
+        }
+
+        if (useAwtTray) {
             // macOS: a black + alpha template drawn 1:1 at 22 and 44 px (see TrayIcons); elsewhere colour.
             val trayIcon = if (isMacOs()) remember { TrayIcons.painter(mac = true) } else painterResource(TrayIcons.COLOUR)
             Tray(
                 icon = trayIcon,
                 state = trayState,
                 tooltip = trayModel.header,
-                onAction = {
-                    windowVisible = true
-                    // Best-effort "bring the app forward": un-minimizing is portable; actually
-                    // RAISING the window above others is window-manager-dependent (especially
-                    // under a bare Xvfb with no WM) and not attempted further. Compose's
-                    // Notification carries no per-toast click callback/id (confirmed via javap)
-                    // — only the tray ICON has one (this onAction) — so a click can only jump to
-                    // the LAST-notified session, not necessarily the specific toast the user
-                    // meant if several stacked up. See this plan's Goal, scoping decision 3.
-                    windowState.isMinimized = false
-                    notificationController.lastNotifiedSession?.let { sid -> pairedUi?.selectedId = sid }
-                },
+                onAction = { onTrayIconClick() },
                 menu = {
                     HostingTrayMenu(
                         model = trayModel,
                         background = hostingPrefs.background,
-                        power = if (quitting) TrayPower.NONE else trayPower,
-                        onAction = { action ->
-                            when (action) {
-                                TrayAction.OPEN -> showWindow()
-                                TrayAction.SHOW_LOG -> openFile(supervisor.logFile)
-                                TrayAction.RESTART -> hostScope.launch(Dispatchers.Default) {
-                                    if (supervisor.status.value is HostingStatus.CantStart) supervisor.ensure() else supervisor.restart()
-                                }
-                                TrayAction.QUIT -> requestQuit()
-                            }
-                        },
-                        onToggle = { toggle, on ->
-                            hostScope.launch(Dispatchers.Default) {
-                                when (toggle) {
-                                    TrayToggle.BACKGROUND -> supervisor.setBackground(on)
-                                    TrayToggle.KEEP_AWAKE -> keepAwakeControls.setEnabled(on)
-                                    TrayToggle.LID_CLOSED -> keepAwakeControls.setLidClosed(on)
-                                }
-                            }
-                        },
+                        power = trayPowerShown,
+                        dispatcher = trayDispatcher,
                     )
                 },
             )
-        } else {
+        } else if (sniTray == null) {
             // Expected under a bare Xvfb with no tray-hosting panel — see this plan's Ground
             // rules. Desktop notifications are simply disabled; nothing else degrades.
             println(
@@ -751,7 +798,7 @@ fun main() {
 
         Window(
             // Close hides to the tray (spec D3); without a tray there is nowhere to hide, so it quits.
-            onCloseRequest = { if (isTraySupported) windowVisible = false else requestQuit() },
+            onCloseRequest = { if (trayAvailable) windowVisible = false else requestQuit() },
             visible = windowVisible,
             // Empty on macOS: with the transparent/full-size-content title bar below, a non-empty
             // title still paints centred over our own UI on runtimes that ignore
@@ -2012,6 +2059,8 @@ fun main() {
         }
         }
     } finally {
+        // Release the tray's bus name first, so the icon leaves with the window.
+        runCatching { sniTray?.close() }
         runCatching { DesktopHostBootstrap.quitIfStarted() }
         // Read-aloud is a process singleton (see SharedDesktopTts) and owns a child `say`/`ffplay`
         // process; release it here so a quit mid-sentence does not outlive the window.
