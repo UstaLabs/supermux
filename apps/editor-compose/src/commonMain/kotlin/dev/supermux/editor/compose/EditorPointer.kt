@@ -261,6 +261,7 @@ internal class EditorPointer(private val c: EditorController, private val scope:
         if (change.type == PointerType.Mouse && !change.pressed && drag == null) {
             if (event.type == PointerEventType.Exit) c.hover.exit() else c.hover.move(change.position)
             c.updateModLink(if (event.type == PointerEventType.Exit) null else change.position, event.keyboardModifiers.isMod())
+            if (event.type != PointerEventType.Exit) c.updateOverText(change.position)
         }
         val h = handleDrag
         if (h != null) {
