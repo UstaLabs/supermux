@@ -133,28 +133,37 @@ class BrokerServiceTest {
         assertTrue("<WorkingDirectory>C:\\Users\\a\\.mux\\state\\desktop-assets\\bin</WorkingDirectory>" in xml)
     }
 
-    @Test fun windowsInstallWritesXmlAndCreatesTheTaskElevated() {
+    /** The XML an elevated register script carries (base64 inside the command line). */
+    private fun carriedXml(script: String): String {
+        val b64 = Regex("FromBase64String\\('+([A-Za-z0-9+/=]+)'+\\)").find(script)!!.groupValues[1]
+        return String(java.util.Base64.getDecoder().decode(b64), Charsets.UTF_8)
+    }
+
+    @Test fun windowsInstallRegistersTheTaskElevatedFromXmlInsideTheCommand() {
         val home = createTempDirectory()
         val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home)
+        val stale = env.localAppData.resolve("Supermux/supermux-host-task.xml")
+        Files.createDirectories(stale.parent); Files.writeString(stale, "an older version's copy, env included")
         val installed = assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec, env))
-        val taskXml = env.localAppData.resolve("Supermux/supermux-host-task.xml")
-        assertEquals(taskXml, installed.path)
-        assertTrue("<LogonTrigger>" in Files.readString(taskXml, Charsets.UTF_16))
+        assertEquals(BrokerService.WINDOWS_TASK_PATH, installed.path)
+        assertFalse(Files.exists(stale), "no definition file left in the user's profile")
+        val script = elevatedCalls(env).single().last()
+        assertTrue("Register-ScheduledTask -TaskName ''Supermux Host'' -Xml" in script, script)
+        assertEquals(winXml(home), carriedXml(script), "the elevated process registers exactly our definition")
+        assertTrue("/XML" !in script && "AppData" !in script.substringBefore("FromBase64String"),
+            "no user-writable file between the prompt and the registration")
         val envFile = env.localAppData.resolve("Supermux/broker.env")
         assertEquals("MUX_HOST_NAME=Alex's & \"Win\"\r\nMUX_MANAGED_BY=desktop\r\nMUX_TELEGRAM_BOT_TOKEN=123:secret\r\n", Files.readString(envFile))
         assertEquals("rw-------", mode(envFile))
-        assertTrue(env.ran.any {
-            it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") &&
-                it.last().contains("/Create") && it.last().contains(taskXml.toString())
-        })
     }
 
-    @Test fun windowsRemoveDeletesTheTaskAndXml() {
+    @Test fun windowsRemoveDeletesTheTaskAndItsEnvFile() {
         val home = createTempDirectory()
         val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home)
         BrokerService.install(winSpec, env)
         val removed = assertIs<BrokerService.Result.Removed>(BrokerService.remove(env))
-        assertFalse(Files.exists(removed.path!!))
+        assertEquals(BrokerService.WINDOWS_TASK_PATH, removed.path)
+        assertFalse(Files.exists(env.localAppData.resolve("Supermux/broker.env")))
         assertTrue(env.ran.any { it.firstOrNull() == "powershell.exe" && it.last().contains("/Delete") })
     }
 
@@ -274,12 +283,20 @@ class BrokerServiceTest {
         assertTrue("-ErrorAction Stop" in script && "catch { exit 1223 }" in script && "if (-not \$process) { exit 1223 }" in script, script)
     }
 
-    @Test fun windowsInstallIsOneElevatedCallWithCreateAndRun() {
+    @Test fun windowsInstallIsOneElevatedCallWithRegisterAndRun() {
         val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory())
         BrokerService.install(winSpec, env)
         val elevated = elevatedCalls(env)
         assertEquals(1, elevated.size)
-        assertTrue("/Create" in elevated[0].last() && "/Run" in elevated[0].last())
+        val s = elevated[0].last()
+        assertTrue("Register-ScheduledTask" in s && "/Run" in s && s.indexOf("Register-ScheduledTask") < s.indexOf("/Run"))
+    }
+
+    @Test fun theRegisterScriptFailsOnARegistrationErrorAndCanSkipTheStart() {
+        val s = BrokerService.registerTaskScript("<Task/>", start = false)
+        assertTrue("\$ErrorActionPreference = 'Stop'" in s && "catch { exit 1 }" in s, s)
+        assertTrue("/Run" !in s && s.endsWith("exit 0"))
+        assertEquals("<Task/>", carriedXml(s))
     }
 
     // ── Windows: stopping the task's broker by pid, never the agents' shims ──────────────────
@@ -442,7 +459,6 @@ class BrokerServiceTest {
         assertEquals(BrokerService.WINDOWS_UPDATE_DECLINED, r.message)
         assertEquals(1, elevatedCalls(env).size)
         assertTrue(env.ran.indexOf(elevatedCalls(env)[0]) < env.ran.lastIndexOf(run), "the old definition's broker runs again")
-        assertFalse(Files.exists(env.localAppData.resolve("Supermux/supermux-host-task.xml")), "the file must not claim the new definition")
     }
 
     @Test fun windowsDeclinedUacOnAFirstInstallIsAPlainFailure() {
@@ -481,11 +497,11 @@ class BrokerServiceTest {
         val home = createTempDirectory()
         val installEnv = winEnv(home)
         BrokerService.install(winSpec, installEnv)
-        val taskXml = installEnv.localAppData.resolve("Supermux/supermux-host-task.xml")
+        val envFile = installEnv.localAppData.resolve("Supermux/broker.env")
         val env = winEnv(home, failIf = { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") })
         assertIs<BrokerService.Result.Failed>(BrokerService.remove(env))
         assertTrue(env.ran.none { it.firstOrNull() == "taskkill" })
-        assertTrue(Files.exists(taskXml))
+        assertTrue(Files.exists(envFile), "the still-registered task still needs its env")
     }
 
     @Test fun windowsRestartStopsTheLoopAndBrokerThenRunsWithoutElevation() {

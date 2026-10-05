@@ -576,86 +576,97 @@ Terminal=false
         return left.none(::alive)
     }
 
+    /** What [Result.Installed] / [Result.Removed] name for the Windows task: it has no file of ours. */
+    val WINDOWS_TASK_PATH: Path = Path.of("Task Scheduler", WINDOWS_TASK_NAME)
+
     private fun installWindowsTask(spec: Spec, env: OsEnv, alreadyStopped: Boolean): Result {
-        val taskXml = env.localAppData.resolve(WINDOWS_TASK_XML)
         val envFile = windowsEnvPath(env)
-        val content = "\uFEFF" + windowsTaskXml(spec, envFile)
+        val xml = windowsTaskXml(spec, envFile)
         val run = listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME)
         return runCatching {
-            Files.createDirectories(taskXml.parent)
             // The loop reads its env from here on every (re)start: write it before anything runs.
             writePrivate(envFile, windowsEnvFile(spec))
+            // An older version kept a copy of the definition, env included, next to it.
+            Files.deleteIfExists(env.localAppData.resolve(WINDOWS_TASK_XML))
             val wasInstalled = isInstalled(env)
-            // Compare with what is REGISTERED, not with our file: the file can say one thing while
-            // the task still runs another (a prompt declined after the file was written).
-            val unchanged = wasInstalled && sameTaskAction(env.runCapture(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME, "/XML")), content)
+            // Compare with what is REGISTERED: that is what runs.
+            val unchanged = wasInstalled && sameTaskAction(env.runCapture(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME, "/XML")), xml)
             // A running instance must not keep the old loop (and broker) alive past re-registration,
             // and an unchanged one restarts with the (maybe new) broker binary.
             if (wasInstalled && !alreadyStopped) stopWindowsTask(env)
             if (unchanged && wasInstalled) {
-                // The registered task already says exactly this (an app update with the same env, a
+                // The registered task already says exactly this (an app update, an env change, a
                 // restart): no UAC prompt, just start it again.
-                if (env.run(run)) return Result.Installed(taskXml, true)
+                if (env.run(run)) return Result.Installed(WINDOWS_TASK_PATH, true)
             }
-            Files.writeString(taskXml, content, Charsets.UTF_16LE)
-            // ONE elevated invocation (one UAC prompt): create the task, then start it now.
-            val ok = runElevatedSchtasksBatch(
-                env,
-                listOf(
-                    listOf("/Create", "/TN", WINDOWS_TASK_NAME, "/XML", taskXml.toString(), "/F"),
-                    listOf("/Run", "/TN", WINDOWS_TASK_NAME),
-                ),
-            )
+            // ONE elevated invocation (one UAC prompt): register the task, then start it now.
+            val ok = runElevated(env, registerTaskScript(xml, start = true))
             if (!ok) {
-                // The file must not claim a definition that was never registered (the next install
-                // would skip the prompt and run the old one).
-                Files.deleteIfExists(taskXml)
                 // Declined UAC on a CHANGED definition: we stopped the old broker above, so start the
                 // old definition again (no elevation) rather than leave nothing running.
                 if (wasInstalled && env.run(run)) {
                     return Result.Failed(WINDOWS_UPDATE_DECLINED, previousStillRunning = true)
                 }
-                Result.Failed("Windows Scheduled Task install failed (elevation declined or schtasks error)")
-            } else Result.Installed(taskXml, true)
+                Result.Failed("Windows Scheduled Task install failed (elevation declined or Task Scheduler error)")
+            } else Result.Installed(WINDOWS_TASK_PATH, true)
         }.getOrElse { Result.Failed("Windows Scheduled Task install failed: ${it.message}") }
+    }
+
+    private val BASE64 = Regex("[A-Za-z0-9+/=]+")
+
+    /**
+     * The elevated script that registers [xml] as our task (and, with [start], runs it). The XML
+     * travels base64-encoded INSIDE the elevated command line and is decoded in the elevated
+     * process's memory: there is no file in between that the user's own (unelevated, maybe
+     * malicious) processes could swap after the user said yes to the prompt.
+     */
+    internal fun registerTaskScript(xml: String, start: Boolean): String {
+        val b64 = java.util.Base64.getEncoder().encodeToString(xml.toByteArray(Charsets.UTF_8))
+        check(BASE64.matches(b64))
+        val name = powershellLiteral(WINDOWS_TASK_NAME)
+        val register = "\$ErrorActionPreference = 'Stop'; " +
+            "try { \$xml = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$b64')); " +
+            "Register-ScheduledTask -TaskName $name -Xml \$xml -Force | Out-Null } catch { exit 1 }"
+        return if (start) "$register; & schtasks.exe /Run /TN $name; exit \$LASTEXITCODE" else "$register; exit 0"
     }
 
     private fun removeWindowsTask(env: OsEnv): Result {
         val taskXml = env.localAppData.resolve(WINDOWS_TASK_XML)
         return runCatching {
+            Files.deleteIfExists(taskXml)
             if (!isInstalled(env)) {
-                Files.deleteIfExists(taskXml)
                 Files.deleteIfExists(windowsEnvPath(env))
                 return Result.Removed(null)
             }
             // /End first: the task's PowerShell loop would otherwise respawn the broker ~5 s after taskkill.
-            val ended = runElevatedSchtasksBatch(env, listOf(
+            val ended = runElevated(env, schtasksScript(listOf(
                 listOf("/End", "/TN", WINDOWS_TASK_NAME),
                 listOf("/Delete", "/TN", WINDOWS_TASK_NAME, "/F"),
-            ))
+            )))
             // Declined UAC or a failed /Delete leaves the task registered; its loop would respawn the broker.
             if (!ended) return Result.Failed("Windows Scheduled Task remove failed: the elevated /End + /Delete did not succeed")
             // /End only terminates the task's own process (the headless conhost): stop its loop too,
             // then the broker, and wait until the broker is really gone. Starting the same .exe while
             // the killed one is still being torn down fails with a sharing violation.
             stopWindowsTask(env)
-            val existed = Files.deleteIfExists(taskXml)
             Files.deleteIfExists(windowsEnvPath(env))
-            Result.Removed(if (existed) taskXml else null)
+            Result.Removed(WINDOWS_TASK_PATH)
         }.getOrElse { Result.Failed("Windows Scheduled Task remove failed: ${it.message}") }
+    }
+
+    /** Every schtasks call in one script; it exits with the first non-zero exit code. */
+    private fun schtasksScript(calls: List<List<String>>): String = calls.joinToString("; ") { args ->
+        val call = "& schtasks.exe ${args.joinToString(" ") { powershellLiteral(it) }}"
+        // /End fails when the task is not running, which is fine: keep going to the next call.
+        if (args.firstOrNull() == "/End") call else "$call; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }"
     }
 
     /**
      * Windows 11 denies even current-user Task Scheduler registration to a non-elevated process.
-     * Elevate once (one UAC prompt) and run every schtasks call inside that elevated PowerShell;
-     * false if any exit code is non-zero. The registered task itself stays InteractiveToken/LeastPrivilege.
+     * Elevate once (one UAC prompt) and run [inner] (PowerShell) in that elevated process; false if
+     * it exits non-zero. The registered task itself stays InteractiveToken/LeastPrivilege.
      */
-    private fun runElevatedSchtasksBatch(env: OsEnv, calls: List<List<String>>): Boolean {
-        val inner = calls.joinToString("; ") { args ->
-            val call = "& schtasks.exe ${args.joinToString(" ") { powershellLiteral(it) }}"
-            // /End fails when the task is not running, which is fine: keep going to the next call.
-            if (args.firstOrNull() == "/End") call else "$call; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }"
-        }
+    private fun runElevated(env: OsEnv, inner: String): Boolean {
         val innerArgs = listOf("-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsArgument(inner))
             .joinToString(" ")
         // A declined UAC prompt makes Start-Process fail with a NON-terminating error: $process is
