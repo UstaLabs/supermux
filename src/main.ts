@@ -721,9 +721,6 @@ const channels: Record<string, Channel> = {
 const sessionManager = new SessionManager(registry, {
   getWebChannel: () => webChannel,
   getAgentRpc: () => agentRpc,
-  // Component-internal: the claude shim leg of SessionManager.deliver. Every
-  // other sender in this file goes through deliverInbound → sessionManager.deliver.
-  socket: { sendInbound: (session_id, payload) => server.sendInbound(session_id, payload) },
   inbound: {
     // Re-broadcast the session's CURRENT agent_state on a successful hand-off so
     // clients clear their local "Sending…" bubble even when the turn-start
@@ -2755,18 +2752,6 @@ const server = await startSocketServer({
     if (adapterLivenessSource(session_id)) return
     applyConnectionStatus(session_id, connected, last_pong_at)
   },
-  // Safety net: a queued inbound that can't reach a live channel shim within the
-  // grace window means the session crashed / never came up. Tell the user in the
-  // chat that sent it, instead of silently dropping the message.
-  onUndeliverable: (session_id, payload) => {
-    const chat_id = payload.meta?.chat_id
-    if (!chat_id) return
-    const name = registry.get(session_id)?.name ?? session_id
-    const text = `⚠️ Couldn't deliver your message to "${name}" — it didn't come up (it may have crashed). Please try again.`
-    // Through the same path as a reply, so it lands on whatever channel the
-    // session is talking on — and is recorded in the transcript.
-    void notifySession(session_id, text)
-  },
   handler: {
     onRegister: (m) => sessionManager.handleRegister(m),
     onOutbound: (m) => sessionManager.handleOutbound(m),
@@ -2775,8 +2760,7 @@ const server = await startSocketServer({
 })
 
 // Thin alias over THE inbound funnel (SessionManager.deliver): adapter.send for
-// codex/cursor/opencode/grok, the shim socket for claude, message_id dedupe,
-// and the "Sending…" reconcile broadcast. Kept as a local function so the many
+// every agent, message_id dedupe, and the "Sending…" reconcile broadcast. Kept as a local function so the many
 // existing call sites read unchanged.
 function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
   return sessionManager.deliver(sessionId, text, meta)
@@ -2826,7 +2810,7 @@ async function submitReview(sessionId: string): Promise<{ ok: boolean; delivered
     log.error("review_submit_append_failed", { session: s.name, err: err?.message ?? String(err) })
   }
   // Deliver the full review to the agent as a normal user turn (same path as a web
-  // message): adapter.send for codex/cursor/opencode; server.sendInbound for claude.
+  // message): adapter.send for every agent.
   // chat_id "web" so the agent's reply routes back to the visible web chat.
   const meta = { channel: "web", chat_id: "web", message_id: messageId }
   const r = await deliverInbound(s.id, text, meta)

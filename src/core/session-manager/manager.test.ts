@@ -570,22 +570,19 @@ describe("SessionManager applyConfig", () => {
 
 function managerForDeliver(): {
   m: SessionManager
-  socketSends: Array<{ id: string; payload: { content: string; meta: Record<string, string> } }>
   delivered: string[]
   targets: Array<{ id: string; chat_id?: string }>
 } {
   const db = openDb(":memory:")
   runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
-  const socketSends: Array<{ id: string; payload: { content: string; meta: Record<string, string> } }> = []
   const delivered: string[] = []
   const targets: Array<{ id: string; chat_id?: string }> = []
   const ports = fakePorts(db)
-  ports.socket = { sendInbound: async (id, payload) => { socketSends.push({ id, payload }) } }
   ports.inbound = {
     onDelivered: (id) => delivered.push(id),
     onTarget: (id, chat_id) => targets.push({ id, chat_id }),
   }
-  return { m: new SessionManager(new Registry(db), ports), socketSends, delivered, targets }
+  return { m: new SessionManager(new Registry(db), ports), delivered, targets }
 }
 
 function mockSendAdapter(sent: Array<{ text: string; meta: any }>): CoreAdapter {
@@ -593,32 +590,25 @@ function mockSendAdapter(sent: Array<{ text: string; meta: any }>): CoreAdapter 
 }
 
 describe("SessionManager.deliver", () => {
-  test("codex session with a registered adapter gets adapter.send — never the claude socket", async () => {
-    const { m, socketSends, delivered } = managerForDeliver()
+  test("codex session with a registered adapter gets adapter.send", async () => {
+    const { m, delivered } = managerForDeliver()
     const s = m.registry.register({ name: "cx", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
     const sent: Array<{ text: string; meta: any }> = []
     m.registerRuntime(s.id, { kind: "codex", adapter: mockSendAdapter(sent), handle: {} as CodexSpawnHandle })
     const r = await m.deliver(s.id, "hello", { chat_id: "web" })
     expect(r.ok).toBe(true)
     expect(sent).toEqual([{ text: "hello", meta: { chat_id: "web" } }])
-    expect(socketSends.length).toBe(0)
     expect(delivered).toEqual([s.id])
   })
 
-  test("claude session without an adapter falls back to the shim socket", async () => {
-    const { m, socketSends } = managerForDeliver()
-    const s = m.registry.register({ name: "cl", workdir: "/tmp", pid: 0, agent: "claude", connected: false })
-    const r = await m.deliver(s.id, "hi", { chat_id: "web" })
-    expect(r.ok).toBe(true)
-    expect(socketSends).toEqual([{ id: s.id, payload: { content: "hi", meta: { chat_id: "web" } } }])
-  })
-
-  test("codex session without an adapter reports adapter_not_ready — no silent socket queue", async () => {
-    const { m, socketSends } = managerForDeliver()
-    const s = m.registry.register({ name: "cx2", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
-    const r = await m.deliver(s.id, "hi", {})
-    expect(r).toEqual({ ok: false, reason: "adapter_not_ready" })
-    expect(socketSends.length).toBe(0)
+  test("a session without an adapter reports adapter_not_ready — Claude too (no shim-socket fallback since C3b)", async () => {
+    const { m, delivered } = managerForDeliver()
+    for (const [name, agent] of [["cl", "claude"], ["cx2", "codex"]] as const) {
+      const s = m.registry.register({ name, workdir: "/tmp", pid: 0, agent, connected: false })
+      expect(await m.deliver(s.id, "hi", { chat_id: "web" })).toEqual({ ok: false, reason: "adapter_not_ready" })
+    }
+    expect(await m.deliver("no-such-row", "hi", {})).toEqual({ ok: false, reason: "adapter_not_ready" })
+    expect(delivered).toEqual([])
   })
 
   test("duplicate message_id is deduped but still reconciles the sender", async () => {

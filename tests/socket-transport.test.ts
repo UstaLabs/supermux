@@ -47,68 +47,6 @@ test("shim connects through an explicit local endpoint", async () => {
   await client.close()
 })
 
-test("broker delivers inbound; shim receives via callback", async () => {
-  let receivedInbound: any = null
-  const handler = {
-    onRegister: async () => ({ name: "n", session_id: "sess-2" }),
-    onOutbound: async () => ({ ok: true }),
-    onOrchestration: async () => ({ ok: false, error: "denied" }),
-  }
-  server = await startSocketServer({ socketsDir: dir, handler })
-  await server.bind("sess-2")
-
-  const client = await connectShim({
-    socketsDir: dir, sessionId: "sess-2", workdir: "/tmp/foo", pid: process.pid,
-    channelOnly: true,
-    onInbound: (msg) => { receivedInbound = msg },
-  })
-
-  // Broker sends an inbound to that session
-  await server.sendInbound("sess-2", { content: "hi", meta: { chat_id: "c1" } })
-
-  await new Promise(r => setTimeout(r, 50)) // let it propagate
-  expect(receivedInbound).toEqual({ content: "hi", meta: { chat_id: "c1" } })
-  await client.close()
-})
-
-test("sendInbound reaches ALL connections for one session (tools + channel shims)", async () => {
-  // A Claude session runs TWO shim processes on the same session_id: one loaded
-  // as a tools MCP server (~/.claude.json), one as a channel provider
-  // (--dangerously-load-development-channels). Both connect to the same socket
-  // and register. Only the channel shim surfaces inbound to Claude, but the
-  // broker can't tell them apart — so it MUST deliver to BOTH. The old code kept
-  // only the last registrant in `conns`, so inbound went to one shim and was
-  // silently dropped whenever the tools shim won the (racy) registration order.
-  const handler = {
-    onRegister: async () => ({ name: "n", session_id: "sess-multi" }),
-    onOutbound: async () => ({ ok: true }),
-    onOrchestration: async () => ({ ok: false, error: "denied" }),
-  }
-  server = await startSocketServer({ socketsDir: dir, handler })
-  await server.bind("sess-multi")
-
-  const a: string[] = []
-  const b: string[] = []
-  const c1 = await connectShim({
-    socketsDir: dir, sessionId: "sess-multi", workdir: "/tmp", pid: 1,
-    channelOnly: true,
-    onInbound: (p) => a.push(p.content),
-  })
-  const c2 = await connectShim({
-    socketsDir: dir, sessionId: "sess-multi", workdir: "/tmp", pid: 2,
-    channelOnly: true,
-    onInbound: (p) => b.push(p.content),
-  })
-
-  await server.sendInbound("sess-multi", { content: "hi", meta: {} })
-  await new Promise(r => setTimeout(r, 100))
-
-  expect(a).toContain("hi")
-  expect(b).toContain("hi")
-
-  await c1.close(); await c2.close()
-}, 5000)
-
 test("shim outbound call awaits broker result", async () => {
   const handler = {
     onRegister: async () => ({ name: "n", session_id: "sess-3" }),
@@ -184,63 +122,6 @@ test("broker fires onStatusChange(true) the moment a shim REGISTERS, not waiting
   await client.close()
 }, 5000)
 
-test("sendInbound during disconnect queues, flushes on reconnect", async () => {
-  server = await startSocketServer({
-    socketsDir: dir,
-    handler: {
-      onRegister: async () => ({ name: "auto", session_id: "sess-q" }),
-      onOutbound: async () => ({ ok: true }),
-      onOrchestration: async () => ({ ok: false, error: "denied" }),
-    },
-  })
-  await server.bind("sess-q")
-
-  // 1. Send when no shim is connected — should queue, not throw.
-  await server.sendInbound("sess-q", { content: "queued", meta: {} })
-
-  // 2. Now connect a shim — it should receive the queued message.
-  const received: string[] = []
-  const client = await connectShim({
-    socketsDir: dir, sessionId: "sess-q", workdir: "/tmp", pid: 1,
-    channelOnly: true,
-    onInbound: (p) => received.push(p.content),
-  })
-  await new Promise(r => setTimeout(r, 200))
-  expect(received).toContain("queued")
-  await client.close()
-}, 5000)
-
-test("queue drops oldest when cap exceeded", async () => {
-  server = await startSocketServer({
-    socketsDir: dir,
-    handler: {
-      onRegister: async () => ({ name: "auto", session_id: "sess-cap" }),
-      onOutbound: async () => ({ ok: true }),
-      onOrchestration: async () => ({ ok: false, error: "denied" }),
-    },
-  })
-  await server.bind("sess-cap")
-
-  // Fire 25 messages with no shim connected — only the last 20 should survive.
-  for (let i = 0; i < 25; i++) {
-    await server.sendInbound("sess-cap", { content: `m${i}`, meta: {} })
-  }
-
-  const received: string[] = []
-  const client = await connectShim({
-    socketsDir: dir, sessionId: "sess-cap", workdir: "/tmp", pid: 1,
-    channelOnly: true,
-    onInbound: (p) => received.push(p.content),
-  })
-  await new Promise(r => setTimeout(r, 300))
-  expect(received).not.toContain("m0")
-  expect(received).not.toContain("m4")
-  expect(received).toContain("m5")
-  expect(received).toContain("m24")
-  expect(received.length).toBe(20)
-  await client.close()
-}, 5000)
-
 test("reconnect with existing requested_name returns existing assignment, no duplicate", async () => {
   // Simulate the production onRegister logic: track sessions in a registry-ish map,
   // and on reconnect with same requested_name, return the existing entry.
@@ -280,8 +161,8 @@ test("reconnect with existing requested_name returns existing assignment, no dup
 }, 5000)
 
 test("shim reconnects with backoff after broker close", async () => {
-  const onRegister = async (msg: any) => ({ name: "auto-name", session_id: "sess-rec" })
-  let onInboundCount = 0
+  let registers = 0
+  const onRegister = async (msg: any) => { registers++; return { name: "auto-name", session_id: "sess-rec" } }
   server = await startSocketServer({ socketsDir: dir, handler: {
     onRegister,
     onOutbound: async () => ({ ok: true }),
@@ -291,8 +172,6 @@ test("shim reconnects with backoff after broker close", async () => {
 
   const client = await connectShim({
     socketsDir: dir, sessionId: "sess-rec", workdir: "/tmp/x", pid: 9,
-    channelOnly: true,
-    onInbound: () => { onInboundCount++ },
   })
   expect(client.assignedName).toBe("auto-name")
 
@@ -313,10 +192,9 @@ test("shim reconnects with backoff after broker close", async () => {
   // 4. Give the reconnect loop a beat to land + re-register
   await new Promise(r => setTimeout(r, 4000))
 
-  // 5. The broker can now reach the shim again — sendInbound should not throw
-  await server.sendInbound("sess-rec", { content: "after-reconnect", meta: {} })
-  await new Promise(r => setTimeout(r, 200))
-  expect(onInboundCount).toBeGreaterThanOrEqual(1)
+  // 5. The shim re-registered with the new broker and its calls work again.
+  expect(registers).toBeGreaterThanOrEqual(2)
+  expect(await client.callOutbound({ name: "reply", args: { text: "after-reconnect" } })).toEqual({ ok: true })
 
   await client.close()
 }, 10_000)  // generous timeout — backoff + reconnect takes ~5s
@@ -422,49 +300,3 @@ test("orchestration single-flight: DIFFERENT args are NOT deduped", async () => 
   expect(calls).toBe(2)
   await a.close()
 })
-
-test("sendInbound to a session that never gets a channel shim fires onUndeliverable after the grace", async () => {
-  // The silent-drop safety net: if a queued message can't be handed to a live
-  // channel shim within the grace window (the session crashed / never came up),
-  // the broker is told via onUndeliverable so it can surface "couldn't deliver".
-  const undeliverable: Array<{ sid: string; content: string; chat: string | undefined }> = []
-  server = await startSocketServer({
-    socketsDir: dir,
-    deliveryGraceMs: 60,
-    onUndeliverable: (sid, payload) => undeliverable.push({ sid, content: payload.content, chat: payload.meta?.chat_id }),
-    handler: {
-      onRegister: async () => ({ name: "n", session_id: "sess-undel" }),
-      onOutbound: async () => ({ ok: true }),
-      onOrchestration: async () => ({ ok: false, error: "denied" }),
-    },
-  })
-  await server.bind("sess-undel")
-  await server.sendInbound("sess-undel", { content: "ping", meta: { chat_id: "web" } })
-  await new Promise(r => setTimeout(r, 180))
-  expect(undeliverable).toEqual([{ sid: "sess-undel", content: "ping", chat: "web" }])
-}, 5000)
-
-test("onUndeliverable does NOT fire when a channel shim connects before the grace (delivered)", async () => {
-  const undeliverable: string[] = []
-  server = await startSocketServer({
-    socketsDir: dir,
-    deliveryGraceMs: 300,
-    onUndeliverable: (sid) => undeliverable.push(sid),
-    handler: {
-      onRegister: async () => ({ name: "n", session_id: "sess-undel2" }),
-      onOutbound: async () => ({ ok: true }),
-      onOrchestration: async () => ({ ok: false, error: "denied" }),
-    },
-  })
-  await server.bind("sess-undel2")
-  await server.sendInbound("sess-undel2", { content: "hi", meta: {} })   // queues
-  const received: string[] = []
-  const client = await connectShim({
-    socketsDir: dir, sessionId: "sess-undel2", workdir: "/tmp", pid: 1,
-    channelOnly: true, onInbound: (p) => received.push(p.content),
-  })
-  await new Promise(r => setTimeout(r, 450))   // well past the grace
-  expect(received).toContain("hi")             // flushed to the shim
-  expect(undeliverable).toEqual([])            // timer cleared on flush — no false alarm
-  await client.close()
-}, 5000)

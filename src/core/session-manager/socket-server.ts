@@ -17,12 +17,14 @@ export type ServerHandler = {
   onOrchestration: (msg: SessionFrame<OrchestrationFrame>) => Promise<OpResult>
 }
 
+/**
+ * The per-session socket the EXTERNAL mux-shim talks to (tool calls in, results out, liveness).
+ * Outbound-only since C3b: inbound user turns reach every core session through its adapter, so
+ * the tmux-era inbound queue / channel delivery is gone (a `channel_only` register is accepted and
+ * treated like any other connection).
+ */
 export type SocketServer = {
   bind: (session_id: string) => Promise<void>
-  // claude shim transport — go through SessionManager.deliver. Only the
-  // SessionManager component / inbound-delivery may call this directly; for any
-  // non-claude session the frame just queues and expires (inbound_undeliverable).
-  sendInbound: (session_id: string, payload: { content: string; meta: Record<string, string> }) => Promise<void>
   close: () => Promise<void>
 }
 
@@ -30,28 +32,15 @@ export async function startSocketServer(opts: {
   socketsDir: string
   handler: ServerHandler
   onStatusChange?: (session_id: string, connected: boolean, last_pong_at?: number) => void
-  // Fired when a queued inbound can't be handed to a live channel shim within
-  // deliveryGraceMs (the session crashed / never came up). Lets the broker
-  // surface "couldn't deliver" to the user instead of silently dropping it.
-  onUndeliverable?: (session_id: string, payload: { content: string; meta: Record<string, string> }) => void
-  deliveryGraceMs?: number
 }): Promise<SocketServer> {
   const usesFilesystem = usesFilesystemEndpoint()
   if (usesFilesystem) {
     mkdirSync(opts.socketsDir, { recursive: true, mode: 0o700 })
   }
-  // A single Claude session has MORE THAN ONE shim connection on the same
-  // session_id: Claude loads mux-shim both as a tools MCP server
-  // (~/.claude.json) and as a channel provider
-  // (--dangerously-load-development-channels). Only the channel one surfaces
-  // inbound to Claude, but they register identically so the broker can't tell
-  // them apart — so we track ALL connections per session and deliver inbound to
-  // every live one. (Keying a single Socket here used to drop inbound whenever
-  // the tools shim won the racy registration order.)
+  // A session can have MORE THAN ONE shim connection on the same session_id (an external-mode
+  // Claude session also starts the zero-tools `mux-channel` copy from ~/.claude.json), so every
+  // connection is tracked and the session is disconnected only when the last one closes.
   const conns = new Map<string, Set<Socket>>()
-  // Inbound must reach the mux-channel shim only; the tools shim shares the
-  // session socket but does not surface channel notifications to Claude.
-  const channelConns = new Map<string, Set<Socket>>()
   const servers = new Map<string, Server>()
   const lastPong = new Map<string, number>()
   const STALE_AFTER_MS = 45_000
@@ -69,89 +58,11 @@ export async function startSocketServer(opts: {
   // shared handler (SessionManager.orchestration), so it covers this socket and the host MCP
   // server alike. Each call_id still gets its own reply.
 
-  // Live = present, not destroyed, still writable. Writing to a destroyed socket
-  // returns false silently and the frame is lost, so we filter first and fall
-  // back to the queue when nothing is live.
+  // Live = present, not destroyed, still writable (a write to a destroyed socket is lost silently).
   function liveConns(session_id: string): Socket[] {
     const set = conns.get(session_id)
     if (!set) return []
     return [...set].filter(s => s.writable && !s.destroyed)
-  }
-
-  const QUEUE_CAP = 20
-  const QUEUE_DROP_AFTER_MS = 5 * 60 * 1000
-
-  type Queued = { content: string; meta: Record<string, string>; ts: number }
-  const queues = new Map<string, Queued[]>()
-  const queueStart = new Map<string, number>()
-  const DELIVERY_GRACE_MS = opts.deliveryGraceMs ?? 15_000
-  const deliveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
-
-  // If a queued message isn't flushed to a live channel shim within the grace
-  // window, the session didn't come up — notify the broker (which tells the user)
-  // and drop the now-undeliverable queue (a re-send is the recovery).
-  function scheduleUndeliverable(session_id: string): void {
-    if (!opts.onUndeliverable || deliveryTimers.has(session_id)) return
-    const t = setTimeout(() => {
-      deliveryTimers.delete(session_id)
-      const q = queues.get(session_id)
-      if (!q || q.length === 0) return  // already flushed/delivered
-      const sample = q[q.length - 1]!
-      queues.delete(session_id)
-      queueStart.delete(session_id)
-      log.warn("inbound_undeliverable", { session_id, dropped: q.length, preview: sample.content.slice(0, 60) })
-      opts.onUndeliverable!(session_id, { content: sample.content, meta: sample.meta })
-    }, DELIVERY_GRACE_MS)
-    t.unref?.()
-    deliveryTimers.set(session_id, t)
-  }
-
-  function clearDeliveryTimer(session_id: string): void {
-    const t = deliveryTimers.get(session_id)
-    if (t) { clearTimeout(t); deliveryTimers.delete(session_id) }
-  }
-
-  function enqueueInbound(session_id: string, payload: Queued): "queued" | "dropped" | "expired" {
-    if (!queues.has(session_id)) {
-      queues.set(session_id, [])
-      queueStart.set(session_id, Date.now())
-    }
-    if (Date.now() - (queueStart.get(session_id) ?? 0) > QUEUE_DROP_AFTER_MS) {
-      queues.set(session_id, [])
-      queueStart.set(session_id, Date.now())
-      return "expired"
-    }
-    const q = queues.get(session_id)!
-    if (q.length >= QUEUE_CAP) q.shift()  // drop oldest
-    q.push(payload)
-    return "queued"
-  }
-
-  function inboundTargets(session_id: string): Socket[] {
-    const channel = channelConns.get(session_id)
-    if (!channel?.size) return []
-    return [...channel].filter(s => s.writable && !s.destroyed)
-  }
-
-  function flushQueue(session_id: string) {
-    const q = queues.get(session_id)
-    if (!q || q.length === 0) return
-    const live = inboundTargets(session_id)
-    if (live.length === 0) return
-    log.info("inbound_queue_flush", {
-      session_id,
-      queued: q.length,
-      channel_conns: channelConns.get(session_id)?.size ?? 0,
-      total_conns: liveConns(session_id).length,
-      preview: q[0]?.content.slice(0, 60),
-    })
-    for (const p of q) {
-      const frame = encodeFrame({ kind: "inbound", content: p.content, meta: p.meta })
-      for (const conn of live) conn.write(frame)
-    }
-    queues.delete(session_id)
-    queueStart.delete(session_id)
-    clearDeliveryTimer(session_id)  // delivered — cancel the undeliverable alarm
   }
 
   async function bindOne(session_id: string): Promise<void> {
@@ -166,20 +77,6 @@ export async function startSocketServer(opts: {
       })
     })
     servers.set(session_id, s)
-  }
-
-  function trackChannelConn(session_id: string, socket: Socket, channel_only: boolean) {
-    if (!channel_only) return
-    let set = channelConns.get(session_id)
-    if (!set) { set = new Set(); channelConns.set(session_id, set) }
-    set.add(socket)
-  }
-
-  function untrackChannelConn(session_id: string, socket: Socket) {
-    const set = channelConns.get(session_id)
-    if (!set) return
-    set.delete(socket)
-    if (set.size === 0) channelConns.delete(session_id)
   }
 
   function handleConnection(session_id: string, socket: Socket) {
@@ -214,10 +111,6 @@ export async function startSocketServer(opts: {
           }
           socket.write(encodeFrame({ kind: "registered", display_name: reply.name, session_id: reply.session_id }))
           // Liveness (lastPong + onStatusChange) is handled by markAlive above.
-          if (m.channel_only) {
-            trackChannelConn(session_id, socket, true)
-            flushQueue(session_id)
-          }
         } else if (m.kind === "outbound" || m.kind === "orchestration") {
           // Mirror-log the shim-side timing so we can correlate even when the
           // shim is running an old build without its own instrumentation. If
@@ -254,7 +147,6 @@ export async function startSocketServer(opts: {
       }
     })
     socket.on("close", () => {
-      untrackChannelConn(session_id, socket)
       const set = conns.get(session_id)
       let remaining = 0
       if (set) {
@@ -262,17 +154,14 @@ export async function startSocketServer(opts: {
         remaining = set.size
         if (remaining === 0) conns.delete(session_id)
       }
-      // Only report disconnected when the LAST connection for the session is
-      // gone — otherwise closing the tools shim would falsely mark a session
-      // (still live on its channel shim) as disconnected.
+      // Only report disconnected when the LAST connection for the session is gone.
       if (remaining === 0) opts.onStatusChange?.(session_id, false)
     })
     socket.on("error", (e) => log.warn("socket_error", { session_id, err: e.message }))
   }
 
   // Broker side does not pre-bind: a session_id is bound when broker spawns
-  // that session. Outer code calls `bind(session_id)` before launching claude.
-  // For the test, we eagerly bind on first send.
+  // that session. Outer code calls `bind(session_id)` before launching the agent.
   async function ensureBound(session_id: string): Promise<void> {
     if (!servers.has(session_id)) await bindOne(session_id)
   }
@@ -295,27 +184,7 @@ export async function startSocketServer(opts: {
     async bind(session_id) {
       await ensureBound(session_id)
     },
-    async sendInbound(session_id, payload) {
-      await ensureBound(session_id)
-      const live = inboundTargets(session_id)
-      if (live.length === 0) {
-        // No channel shim yet (tools may be connected but cannot deliver inbound).
-        const qResult = enqueueInbound(session_id, { ...payload, ts: Date.now() })
-        log.info("inbound_queued", {
-          session_id,
-          result: qResult,
-          depth: queues.get(session_id)?.length ?? 0,
-          preview: payload.content.slice(0, 60),
-        })
-        scheduleUndeliverable(session_id)
-        return
-      }
-      const frame = encodeFrame({ kind: "inbound", ...payload })
-      for (const conn of live) conn.write(frame)
-    },
     async close() {
-      for (const t of deliveryTimers.values()) clearTimeout(t)
-      deliveryTimers.clear()
       for (const set of conns.values()) for (const s of set) s.destroy()
       for (const srv of servers.values()) await new Promise<void>(r => srv.close(() => r()))
       conns.clear()

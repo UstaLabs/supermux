@@ -68,12 +68,6 @@ export type SessionManagerPorts = {
   getWebChannel: () => { broadcastToAll(frame: object): void } | undefined
   /** `let agentRpc` in main.ts is assigned after construction — deref lazily, never capture. */
   getAgentRpc: () => { settle(requestId: string, data: unknown): void; fail(requestId: string, error: string): void }
-  /** The socket server is constructed WITH these handlers, so it is late-bound too.
-   *  sendInbound is the claude shim transport — component-internal. Every other
-   *  sender goes through SessionManager.deliver, the one kind-aware door. */
-  socket: {
-    sendInbound(session_id: string, payload: { content: string; meta: Record<string, string> }): Promise<void>
-  }
   /** Collaborators of the deliver() funnel. */
   inbound: {
     /** Fired after a successful hand-off (incl. an idempotent re-send) so the
@@ -203,12 +197,8 @@ export class SessionManager {
   }
 
   /**
-   * THE one inbound door. Routes a user turn to the session's agent by KIND:
-   * adapter.send() for adapter-driven agents (codex/cursor/opencode/grok), the
-   * claude shim socket otherwise. Every broker-side sender (channels, curator,
-   * soul-setup, agent-rpc, reviews) must call this — never the raw socket
-   * sendInbound, which is claude-only transport and silently queues-then-drops
-   * frames for every other kind.
+   * THE one inbound door: adapter.send() for every agent (all run through supermux-core). Every
+   * broker-side sender (channels, curator, soul-setup, agent-rpc, reviews) must call this.
    */
   deliver(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
     // Record where this session is talking, for the reply that comes back. This
@@ -217,12 +207,6 @@ export class SessionManager {
     this.ports.inbound.onTarget?.(sessionId, meta?.chat_id)
     return deliverInbound({
       getAdapter: (id) => this.runtimes.get(id)?.adapter,
-      isClaude: (id) => {
-        const s = this.registry.get(id)
-        // No row → preserve the historical claude default (`agent ?? "claude"`).
-        return s ? isPersistentRuntimeSession(s) : true
-      },
-      sendInboundSocket: (id, payload) => this.ports.socket.sendInbound(id, payload),
       seen: this.recentInbound,
       onDelivered: (id) => this.ports.inbound.onDelivered?.(id),
     }, sessionId, text, meta)

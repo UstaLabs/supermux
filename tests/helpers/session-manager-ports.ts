@@ -25,7 +25,6 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
   return {
     getWebChannel: () => (seams.frames ? { broadcastToAll: (frame: object) => { seams.frames!.push(frame) } } : undefined),
     getAgentRpc: () => ({ settle: () => {}, fail: () => {} }),
-    socket: { sendInbound: async () => {} },
     inbound: {},
     backend: { runtimeTargetIdOf: async () => null, kill: async () => {} },
     cleanup: {

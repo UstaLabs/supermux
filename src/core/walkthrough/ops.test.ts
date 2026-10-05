@@ -21,7 +21,6 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
   return {
     getWebChannel: () => ({ broadcastToAll: (f: object) => { frames.push(f) } }),
     getAgentRpc: () => ({ settle: () => {}, fail: () => {} }),
-    socket: { sendInbound: async () => {} },
     inbound: {},
     backend: { runtimeTargetIdOf: async () => null, kill: async () => {} },
     cleanup: {
