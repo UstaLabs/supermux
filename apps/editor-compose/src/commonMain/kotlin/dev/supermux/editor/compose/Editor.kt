@@ -347,7 +347,13 @@ fun Editor(
             // INSIDE the scrollables: this node sees the Main pass first and consumes what is a
             // selection (mouse presses and drags), leaving a finger's drag to scroll.
             .pointerInput(pointer) { pointer.handle(this) }
-            .then(if (controller.modLink != null) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier)
+            .pointerHoverIcon(
+                when {
+                    controller.modLink != null -> PointerIcon.Hand
+                    controller.overText -> PointerIcon.Text
+                    else -> PointerIcon.Default
+                },
+            )
             .editorMagnifier { controller.magnifierAt }
             .onGloballyPositioned { controller.coordinates = it },
     ) {
@@ -669,6 +675,14 @@ internal class EditorController(
 
     /** The word under the mouse while Mod is held and a [modClickFacet] handler exists: underlined, a hand pointer. */
     var modLink: IntRange? by mutableStateOf(null)
+
+    /** The mouse is over the text (an I-beam), not the gutter, a block widget or a tooltip (the arrow). */
+    var overText by mutableStateOf(true)
+
+    /** The mouse moved to [p] with no button down: over the text, or not. A drag keeps the I-beam it began with. */
+    fun updateOverText(p: androidx.compose.ui.geometry.Offset) {
+        overText = p.x >= gutterWidth && !tooltipAt(p) && frame?.widgets?.any { it.rect.contains(p) } != true
+    }
 
     /** Mod is down, as the key events say (reset on blur: its release may go elsewhere). */
     private var modKeyHeld = false
