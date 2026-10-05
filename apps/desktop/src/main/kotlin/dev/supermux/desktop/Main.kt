@@ -63,6 +63,7 @@ import dev.supermux.desktop.host.HostingDialogs
 import dev.supermux.desktop.host.HostingStatus
 import dev.supermux.desktop.host.HostingTrayMenu
 import dev.supermux.desktop.host.TrayDispatcher
+import dev.supermux.desktop.host.trayChoice
 import dev.supermux.desktop.host.trayMenuItems
 import dev.supermux.desktop.host.linux.SniStatus
 import dev.supermux.desktop.host.linux.SniTray
@@ -391,16 +392,27 @@ fun main() {
     // No surprise hosting on upgrade: decide the first hosting.json from the fleet BEFORE the
     // supervisor is built (and so before its first ensure()).
     DesktopHostBootstrap.seedHostingPrefs(hostStore.list())
-    // Every exit path stops a child broker: the window's quit, the finally below, and this hook
-    // (a signal, System.exit, or macOS performQuit). quit() is idempotent and never takes the lock.
-    Runtime.getRuntime().addShutdownHook(Thread({ DesktopHostBootstrap.quitIfStarted() }, "supermux-host-quit"))
-    // A macOS system quit (Cmd-Q, Dock ▸ Quit, logout/restart/shutdown) waits on this answer: it is
-    // cancelled only when the user cancels the confirm, and performed once the app has exited.
-    val systemQuit = AtomicReference<QuitResponse?>(null)
     // Linux: the tray is a StatusNotifierItem over D-Bus (GNOME's AppIndicator extension, KDE, XFCE,
     // Cinnamon …) — AWT's XEmbed tray is unsupported on stock GNOME. Registration is async and on its
     // own thread; `sniTray.status` says when there is a tray to hide into. Never on macOS/Windows.
     val sniTray = if (isLinuxOs()) SniTray().also { it.start() } else null
+    // The process-exit cleanup, run by the `finally` below on a normal return from main AND by this
+    // hook — a signal, System.exit (which skips the `finally`), or macOS performQuit. Every step is
+    // idempotent: the tray close (bounded: SniTray.close waits at most 2 s, so the hook can't hang
+    // the exit), the child broker (quit() never takes the lock) and read-aloud's child process.
+    fun exitCleanup() {
+        // The tray's bus name first, so the icon leaves with the window.
+        runCatching { sniTray?.close() }
+        runCatching { DesktopHostBootstrap.quitIfStarted() }
+        // Read-aloud is a process singleton (see SharedDesktopTts) and owns a child `say`/`ffplay`
+        // process; release it here so a quit mid-sentence does not outlive the window.
+        runCatching { MessageTts.stop(SharedDesktopTts) }
+        runCatching { SharedDesktopTts.shutdown() }
+    }
+    Runtime.getRuntime().addShutdownHook(Thread({ exitCleanup() }, "supermux-exit-cleanup"))
+    // A macOS system quit (Cmd-Q, Dock ▸ Quit, logout/restart/shutdown) waits on this answer: it is
+    // cancelled only when the user cancels the confirm, and performed once the app has exited.
+    val systemQuit = AtomicReference<QuitResponse?>(null)
 
     try {
         application {
@@ -422,21 +434,20 @@ fun main() {
             }
         }
         val trayState = rememberTrayState()
-        val sniStatus by remember { sniTray?.status ?: MutableStateFlow(SniStatus.UNSUPPORTED) }.collectAsState()
-        // AWT's tray only where the SNI tray can't be had: decided ONCE, from SNI's first answer
-        // (no session bus, or no watcher at launch), so an XEmbed-only panel still gets one. Never
-        // switched to later: a watcher going away (GNOME's AppIndicator extension disabled) can
-        // take its XEmbed tray with it, and AWT's TrayIcon then throws inside composition.
-        var awtFallback by remember { mutableStateOf<Boolean?>(if (sniTray == null) true else null) }
-        LaunchedEffect(sniStatus) {
-            if (awtFallback == null && sniStatus != SniStatus.STARTING) {
-                awtFallback = sniStatus != SniStatus.REGISTERED && isTraySupported
-            }
-        }
-        val useAwtTray = isTraySupported && awtFallback == true
-        // Is there a tray to hide into (close → hide) and to notify from? Async on Linux: the SNI
-        // tray counts only once a watcher has taken it.
-        val trayAvailable = useAwtTray || sniStatus == SniStatus.REGISTERED
+        val sniStatus by remember { sniTray?.status ?: MutableStateFlow(SniStatus.FAILED) }.collectAsState()
+        // One tray at most (trayChoice): SNI once registered, else AWT where SNI's first answer
+        // allowed it. The latch is kept across recompositions; see trayChoice for why.
+        var awtLatch by remember { mutableStateOf<Boolean?>(null) }
+        val trayPick = trayChoice(sniStatus, awtLatch, isTraySupported)
+        SideEffect { if (trayPick.latch != awtLatch) awtLatch = trayPick.latch }
+        val useAwtTray = trayPick.useAwt
+        // Is there a tray to hide into (close → hide)? Async on Linux: the SNI tray counts only once
+        // a watcher has taken it.
+        val trayAvailable = trayPick.trayAvailable
+        // Can a notification be shown? The AWT tray raises its own; with a session bus up (SNI tray
+        // or not) org.freedesktop.Notifications does.
+        // (FAILED = no bus; STARTING = not connected yet.)
+        val canNotify = trayAvailable || sniStatus == SniStatus.REGISTERED || sniStatus == SniStatus.UNSUPPORTED
         // Published once pairing completes (below, inside Window's content) so the tray icon's
         // click handler can select a session on the live ShellUiState. null before pairing
         // and after unpair, when there is no shell to select into — the click handler
@@ -515,8 +526,8 @@ fun main() {
             }.getOrDefault(true)
             val action = QuitAction.of(
                 hostingStatus, fleetFacts.localSessions, supervisor.quitStopsBroker,
-                // No tray, no notification: never mark it shown there.
-                noticeShown = noticeShown || !trayAvailable,
+                // Nothing to show it with: never mark it shown there.
+                noticeShown = noticeShown || !canNotify,
                 keepsAwake = keepsAwake,
             )
             when (action) {
@@ -541,11 +552,11 @@ fun main() {
             if (hostingStatus is HostingStatus.AskTakeover || hostingStatus is HostingStatus.AskDowngrade) showWindow()
         }
         // A background-service failure is said once per distinct message, as a notification
-        // (Settings ▸ Hosting shows it too). No tray, no notification.
+        // (Settings ▸ Hosting shows it too). Nothing to show it with, no notification.
         var lastNotifiedError by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(backgroundError) {
             val e = backgroundError
-            if (e != null && e != lastNotifiedError && trayAvailable) {
+            if (e != null && e != lastNotifiedError && canNotify) {
                 lastNotifiedError = e
                 DesktopNotifications.notify("", BackgroundQuitNotice.TITLE, e)
             }
@@ -2059,13 +2070,7 @@ fun main() {
         }
         }
     } finally {
-        // Release the tray's bus name first, so the icon leaves with the window.
-        runCatching { sniTray?.close() }
-        runCatching { DesktopHostBootstrap.quitIfStarted() }
-        // Read-aloud is a process singleton (see SharedDesktopTts) and owns a child `say`/`ffplay`
-        // process; release it here so a quit mid-sentence does not outlive the window.
-        runCatching { MessageTts.stop(SharedDesktopTts) }
-        runCatching { SharedDesktopTts.shutdown() }
+        exitCleanup()
         // The app has exited: let a pending macOS system quit (logout, shutdown) carry on.
         systemQuit.getAndSet(null)?.let { r -> runCatching { r.performQuit() } }
     }
