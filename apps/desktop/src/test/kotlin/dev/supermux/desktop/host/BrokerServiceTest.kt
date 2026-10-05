@@ -277,8 +277,21 @@ class BrokerServiceTest {
     private val killLoop = listOf("taskkill", "/F", "/PID", "200")
     private val killBroker = listOf("taskkill", "/F", "/PID", "300")
     private val run = listOf("schtasks", "/Run", "/TN", "Supermux Host")
-    private fun winEnv(home: Path = createTempDirectory(), procs: String? = taskProcs, failIf: (List<String>) -> Boolean = { false }) =
-        FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home, captures = procs?.let { mapOf(listing to it) } ?: emptyMap(), failIf = failIf)
+    private val queryXml = listOf("schtasks", "/Query", "/TN", "Supermux Host", "/XML")
+    /** [registered]: the task definition `schtasks /Query /XML` reports (null: none). */
+    private fun winEnv(
+        home: Path = createTempDirectory(),
+        procs: String? = taskProcs,
+        failIf: (List<String>) -> Boolean = { false },
+        registered: String? = null,
+    ) = FakeOsEnv(
+        os = OsEnv.Os.WINDOWS, home = home,
+        captures = buildMap {
+            procs?.let { put(listing, it) }
+            registered?.let { put(queryXml, it) }
+        },
+        failIf = failIf,
+    )
     private fun FakeOsEnv.neverKilledByImage() = assertTrue(ran.none { it.firstOrNull() == "taskkill" && "/IM" in it }, "a /IM kill takes the agents' shims too")
     private fun FakeOsEnv.neverKilled(pid: Long) = assertTrue(ran.none { it.firstOrNull() == "taskkill" && pid.toString() in it })
 
@@ -346,7 +359,7 @@ class BrokerServiceTest {
     private fun elevatedCalls(env: FakeOsEnv) = env.ran.filter { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") }
 
     @Test fun windowsReinstallOfTheSameDefinitionRestartsWithoutUac() {
-        val env = winEnv()
+        val env = winEnv(registered = BrokerService.windowsTaskXml(winSpec))
         assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec, env))
         env.ran.clear()
         val again = assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec, env))
@@ -358,12 +371,28 @@ class BrokerServiceTest {
     }
 
     @Test fun windowsInstallAfterTheCallerStoppedTheServiceDoesNotStopItAgain() {
-        val env = winEnv()
+        val env = winEnv(registered = BrokerService.windowsTaskXml(winSpec))
         BrokerService.install(winSpec, env)
         env.ran.clear()
         assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec, env, alreadyStopped = true))
         assertTrue(listing !in env.ran && env.ran.none { it.firstOrNull() == "taskkill" })
         assertTrue(run in env.ran)
+    }
+
+    @Test fun theRegisteredDefinitionDecidesNotOurFile() {
+        // Our file says the new definition (a prompt was declined after it was written); the task
+        // still runs the old one: that is a change, so it must ask again.
+        val home = createTempDirectory()
+        BrokerService.install(winSpec, winEnv(home, registered = null))
+        val old = BrokerService.windowsTaskXml(winSpec.copy(env = mapOf("MUX_WEB_PORT" to "8787")))
+        val env = winEnv(home, registered = old)
+        BrokerService.install(winSpec, env)
+        assertEquals(1, elevatedCalls(env).size)
+        // schtasks escapes differently from us: the comparison is on the unescaped values.
+        val ours = BrokerService.windowsTaskXml(winSpec)
+        assertTrue(BrokerService.sameTaskAction(ours.replace("\"", "&quot;").replace("'", "&apos;"), ours))
+        assertFalse(BrokerService.sameTaskAction(old, ours))
+        assertFalse(BrokerService.sameTaskAction(null, ours))
     }
 
     @Test fun windowsChangedDefinitionStopsTheOldBrokerThenElevatesOnce() {

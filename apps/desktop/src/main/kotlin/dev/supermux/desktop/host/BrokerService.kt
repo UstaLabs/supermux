@@ -417,6 +417,19 @@ Terminal=false
         return awaitWindowsPidsGone(env, targets.brokers)
     }
 
+    /**
+     * Pure: does the registered task's XML ([registered], `schtasks /Query /XML`) run what [ours]
+     * says — same command, arguments, working directory and instance policy? Null: unknown (no).
+     */
+    fun sameTaskAction(registered: String?, ours: String): Boolean {
+        if (registered.isNullOrBlank()) return false
+        val tags = listOf("Command", "Arguments", "WorkingDirectory", "MultipleInstancesPolicy")
+        fun field(xml: String, tag: String): String? = Regex("<$tag>(.*?)</$tag>", RegexOption.DOT_MATCHES_ALL)
+            .find(xml)?.groupValues?.get(1)?.trim()
+            ?.replace("&lt;", "<")?.replace("&gt;", ">")?.replace("&quot;", "\"")?.replace("&apos;", "'")?.replace("&amp;", "&")
+        return tags.all { field(registered, it) == field(ours, it) }
+    }
+
     /** One `Win32_Process` row: what [windowsTaskTargets] decides on. */
     data class WinProcess(val pid: Long, val parentPid: Long, val name: String, val commandLine: String)
 
@@ -506,8 +519,10 @@ Terminal=false
         val run = listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME)
         return runCatching {
             Files.createDirectories(taskXml.parent)
-            val unchanged = runCatching { Files.readString(taskXml, Charsets.UTF_16LE) }.getOrNull() == content
             val wasInstalled = isInstalled(env)
+            // Compare with what is REGISTERED, not with our file: the file can say one thing while
+            // the task still runs another (a prompt declined after the file was written).
+            val unchanged = wasInstalled && sameTaskAction(env.runCapture(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME, "/XML")), content)
             // A running instance must not keep the old loop (and broker) alive past re-registration,
             // and an unchanged one restarts with the (maybe new) broker binary.
             if (wasInstalled && !alreadyStopped) stopWindowsTask(env)
