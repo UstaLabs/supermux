@@ -527,6 +527,30 @@ class HostSupervisorTest {
         assertTrue(h.children[0].isAlive)
     }
 
+    @Test fun linuxXdgBackgroundOffRemovesTheAutostart() = runTest {
+        val h = Harness(this, os = OsEnv.Os.LINUX, prefs = HostingPrefs(background = true), commands = emptySet())
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        val autostart = h.home.resolve(".config/autostart/supermux-host.desktop")
+        assertTrue(Files.exists(autostart))
+        h.sup.setBackground(false)
+        assertFalse(Files.exists(autostart), "it would start a broker at the next login")
+        assertFalse(Files.exists(h.home.resolve(".config/supermux/broker.env")))
+        assertFalse(h.saved.background)
+        assertEquals(running, h.sup.status.value)
+        assertTrue(h.sup.quitStopsBroker, "now an ordinary child")
+    }
+
+    @Test fun linuxXdgHostingOffRemovesTheAutostart() = runTest {
+        val h = Harness(this, os = OsEnv.Os.LINUX, prefs = HostingPrefs(background = true), commands = emptySet())
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        h.sup.setHosting(false)
+        assertFalse(Files.exists(h.home.resolve(".config/autostart/supermux-host.desktop")))
+        assertEquals(HostingStatus.NotHosting, h.sup.status.value)
+        assertTrue(h.children.none { it.isAlive })
+    }
+
     @Test fun failedInstallFallsBackToAChildAndSaysSo() = runTest {
         val home = createTempDirectory("sup-home")
         val bootstrap = listOf("launchctl", "bootstrap", "gui/501", home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString())

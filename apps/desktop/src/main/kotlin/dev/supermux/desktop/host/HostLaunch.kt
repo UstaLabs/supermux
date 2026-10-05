@@ -135,6 +135,19 @@ internal suspend fun HostSupervisor.removeServiceLocked(port: Int): String? {
 }
 
 /**
+ * Turning background (or hosting) off: remove every definition of ours that would start a broker at
+ * the next login — the service, or the Linux XDG autostart. The XDG stand-in broker is our (detached)
+ * child, stopped by the caller, so its removal doesn't wait for the port. Null when done, else why not.
+ */
+internal suspend fun HostSupervisor.removeOurDefinitionsLocked(port: Int): String? {
+    if (ourServiceInstalled()) return removeServiceLocked(port)
+    if (!withContext(io) { BrokerService.isOursInstalled(osEnv) }) return null
+    val r = withContext(io) { BrokerService.remove(osEnv) }
+    log("autostart remove: ${r.describe()}")
+    return (r as? BrokerService.Result.Failed)?.let { "Couldn't remove the login autostart: ${it.message}" }
+}
+
+/**
  * Windows: stop our task's broker in place (no elevation) and wait for it to let go of [port].
  * False when it didn't stop: then nothing may be (re)installed or started next to it.
  */

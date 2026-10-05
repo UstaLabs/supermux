@@ -263,13 +263,11 @@ class HostSupervisor(
                 _backgroundError.value = null
                 if (mode == Mode.CHILD && !childDetached && child?.isAlive == true) return@withLock
                 stopWatch()
-                if (ourServiceInstalled()) {
-                    removeServiceLocked(p.port)?.let { why ->
-                        // Still registered (e.g. UAC declined): it would respawn next to a child.
-                        savePrefsNow(p.copy(background = true))
-                        cantStart(why)
-                        return@withLock
-                    }
+                removeOurDefinitionsLocked(p.port)?.let { why ->
+                    // Still registered (e.g. UAC declined): it would respawn next to a child.
+                    savePrefsNow(p.copy(background = true))
+                    cantStart(why)
+                    return@withLock
                 }
                 stopChildLocked()
                 _status.value = HostingStatus.Starting
@@ -294,14 +292,12 @@ class HostSupervisor(
             stopWatch()
             mode = null
             if (was != Mode.READ_ONLY) {
-                if (ourServiceInstalled()) {
-                    removeServiceLocked(p.port)?.let { why ->
-                        // Still registered (e.g. UAC declined) or its broker still running: we are
-                        // still hosting, so say so rather than claim "off".
-                        savePrefsNow(p.copy(hosting = true))
-                        cantStart(why)
-                        return@withLock
-                    }
+                removeOurDefinitionsLocked(p.port)?.let { why ->
+                    // Still registered (e.g. UAC declined) or its broker still running: we are
+                    // still hosting, so say so rather than claim "off".
+                    savePrefsNow(p.copy(hosting = true))
+                    cantStart(why)
+                    return@withLock
                 }
                 stopChildLocked()
                 // A broker of ours we could neither re-parent nor stop is still hosting.
