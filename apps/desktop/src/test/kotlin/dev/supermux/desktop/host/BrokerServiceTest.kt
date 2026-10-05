@@ -42,7 +42,7 @@ class BrokerServiceTest {
         val xdg = BrokerService.xdgAutostart(bare, Path.of("/h/.config/supermux/broker.env"))
         assertTrue("# $marker" in xdg && "export MUX_MANAGED_BY='desktop'" in BrokerService.xdgEnvFile(bare))
         val task = BrokerService.windowsTaskXml(bare, winEnvFile)
-        assertTrue("<!-- $marker -->" in task && "MUX_MANAGED_BY=desktop\r\n" in BrokerService.windowsEnvFile(bare))
+        assertTrue("<!-- $marker -->" in task && "\$env:MUX_MANAGED_BY = 'desktop'\r\n" in BrokerService.windowsEnvFile(bare))
     }
 
     @Test fun specEnvCannotOverrideManagedBy() {
@@ -108,7 +108,7 @@ class BrokerServiceTest {
         env = linkedMapOf("MUX_HOST_NAME" to "Alex's & \"Win\"", "MUX_MANAGED_BY" to "desktop", "MUX_TELEGRAM_BOT_TOKEN" to "123:secret"),
         log = Path.of("C:\\Users\\a\\.mux\\state\\desktop-broker.log"),
     )
-    private val winEnvFile = Path.of("C:\\Users\\O'Neil & Co\\AppData\\Local\\Supermux\\broker.env")
+    private val winEnvFile = Path.of("C:\\Users\\O'Neil & Co\\AppData\\Local\\Supermux\\broker-env.ps1")
     /** The task XML a [winEnv] over [home] registers. */
     private fun winXml(home: Path, s: BrokerService.Spec = winSpec) =
         BrokerService.windowsTaskXml(s, home.resolve("AppData/Local").resolve(BrokerService.WINDOWS_ENV_FILE))
@@ -126,8 +126,9 @@ class BrokerServiceTest {
         assertTrue("\$env:MUX_WINDOWS_TASK = '1'" in xml, "the broker knows it runs under the loop")
         assertTrue("'C:\\Users\\a\\.mux\\state\\desktop-assets\\bin\\supermux-broker.exe'" in xml, "PowerShell-quotes the broker")
         assertTrue("Out-File -Append -FilePath 'C:\\Users\\a\\.mux\\state\\desktop-broker.log'" in xml, "appends output to the log")
-        assertTrue("Get-Content -LiteralPath 'C:\\Users\\O''Neil &amp; Co\\AppData\\Local\\Supermux\\broker.env'" in xml,
-            "reads the env file (PowerShell-quoted, XML-escaped) before every start")
+        assertTrue("if (Test-Path -LiteralPath 'C:\\Users\\O''Neil &amp; Co\\AppData\\Local\\Supermux\\broker-env.ps1') { . 'C:\\Users\\O''Neil &amp; Co\\AppData\\Local\\Supermux\\broker-env.ps1' }" in xml,
+            "dot-sources the env file (PowerShell-quoted, XML-escaped) before every start")
+        assertTrue("IndexOf" !in xml && "Get-Content" !in xml, "Windows refuses to launch a task command that parses a KEY=value file")
         assertTrue("O&apos;Neil" !in xml && "&amp;" in xml, "XML-escapes ampersands")
         for (v in listOf("123:secret", "Alex", "MUX_TELEGRAM_BOT_TOKEN", "MUX_HOST_NAME")) assertTrue(v !in xml, "no env in the definition: $v")
         assertTrue("<WorkingDirectory>C:\\Users\\a\\.mux\\state\\desktop-assets\\bin</WorkingDirectory>" in xml)
@@ -152,8 +153,11 @@ class BrokerServiceTest {
         assertEquals(winXml(home), carriedXml(script), "the elevated process registers exactly our definition")
         assertTrue("/XML" !in script && "AppData" !in script.substringBefore("FromBase64String"),
             "no user-writable file between the prompt and the registration")
-        val envFile = env.localAppData.resolve("Supermux/broker.env")
-        assertEquals("MUX_HOST_NAME=Alex's & \"Win\"\r\nMUX_MANAGED_BY=desktop\r\nMUX_TELEGRAM_BOT_TOKEN=123:secret\r\n", Files.readString(envFile))
+        val envFile = env.localAppData.resolve("Supermux/broker-env.ps1")
+        assertEquals(
+            "\uFEFF\$env:MUX_HOST_NAME = 'Alex''s & \"Win\"'\r\n\$env:MUX_MANAGED_BY = 'desktop'\r\n\$env:MUX_TELEGRAM_BOT_TOKEN = '123:secret'\r\n",
+            Files.readString(envFile),
+        )
         assertEquals("rw-------", mode(envFile))
     }
 
@@ -163,7 +167,7 @@ class BrokerServiceTest {
         BrokerService.install(winSpec, env)
         val removed = assertIs<BrokerService.Result.Removed>(BrokerService.remove(env))
         assertEquals(BrokerService.WINDOWS_TASK_PATH, removed.path)
-        assertFalse(Files.exists(env.localAppData.resolve("Supermux/broker.env")))
+        assertFalse(Files.exists(env.localAppData.resolve("Supermux/broker-env.ps1")))
         assertTrue(env.ran.any { it.firstOrNull() == "powershell.exe" && it.last().contains("/Delete") })
     }
 
@@ -516,7 +520,7 @@ class BrokerServiceTest {
         val home = createTempDirectory()
         val installEnv = winEnv(home)
         BrokerService.install(winSpec, installEnv)
-        val envFile = installEnv.localAppData.resolve("Supermux/broker.env")
+        val envFile = installEnv.localAppData.resolve("Supermux/broker-env.ps1")
         val env = winEnv(home, failIf = { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") })
         assertIs<BrokerService.Result.Failed>(BrokerService.remove(env))
         assertTrue(env.ran.none { it.firstOrNull() == "taskkill" })
@@ -565,7 +569,7 @@ class BrokerServiceTest {
         val changed = winSpec.copy(env = winSpec.env + ("MUX_RELAY_DOMAIN" to ""))
         assertIs<BrokerService.Result.Installed>(BrokerService.install(changed, env))
         assertEquals(emptyList(), elevatedCalls(env), "the definition didn't change")
-        assertTrue("MUX_RELAY_DOMAIN=\r\n" in Files.readString(env.localAppData.resolve("Supermux/broker.env")))
+        assertTrue("\$env:MUX_RELAY_DOMAIN = ''\r\n" in Files.readString(env.localAppData.resolve("Supermux/broker-env.ps1")))
         assertTrue(run in env.ran)
     }
 

@@ -19,8 +19,13 @@ object BrokerService {
     const val WINDOWS_BROKER_EXE = "supermux-broker.exe"
     /** Written by app versions before the env moved out of the task; deleted on install / remove (it held the env). */
     const val WINDOWS_TASK_XML = "Supermux/supermux-host-task.xml"
-    /** Under `%LOCALAPPDATA%` (only the user, SYSTEM and Administrators can read it): the task loop's env. */
-    const val WINDOWS_ENV_FILE = "Supermux/broker.env"
+    /**
+     * Under `%LOCALAPPDATA%` (only the user, SYSTEM and Administrators can read it): the task loop's
+     * env, a script of `$env:KEY = '…'` lines the loop dot-sources. Not a KEY=value file parsed in the
+     * task's command line: Windows refuses to start a task whose PowerShell command parses one
+     * (`Get-Content … | ForEach-Object { $_.IndexOf('=') … }` ends in 0x80070005 at launch).
+     */
+    const val WINDOWS_ENV_FILE = "Supermux/broker-env.ps1"
     /** The XDG autostart's env, sourced by its `Exec` line (0600): the values never appear in an argv. */
     const val XDG_ENV_FILE = ".config/supermux/broker.env"
     /** ERROR_CANCELLED: what the elevated batch exits with when the UAC prompt is declined. */
@@ -188,9 +193,9 @@ Terminal=false
     fun xdgEnvFile(spec: Spec): String =
         withManaged(spec.env).entries.joinToString("") { (k, v) -> "export $k=${shQuote(v)}\n" }
 
-    /** The Windows task loop's env file: one `KEY=value` per line, read by [windowsTaskXml]'s loop. */
+    /** The Windows task loop's env file: one `$env:KEY = '…'` per line, dot-sourced by [windowsTaskXml]'s loop. */
     fun windowsEnvFile(spec: Spec): String =
-        withManaged(spec.env).entries.joinToString("") { (k, v) -> "$k=$v\r\n" }
+        withManaged(spec.env).entries.joinToString("") { (k, v) -> "\$env:$k = ${powershellLiteral(v)}\r\n" }
 
     /**
      * Windows Task Scheduler 1.4 XML for the current interactive user.
@@ -214,8 +219,8 @@ Terminal=false
         // HasExited stays about THAT process even if its pid is reused later. If WMI can't answer
         // (null), the loop just never stops on its own; stopping the task then kills it by pid.
         // No double quotes anywhere: the script travels inside one quoted -Command argument.
-        val loadEnv = "Get-Content -LiteralPath ${powershellLiteral(envFile.toString())} -Encoding UTF8 -ErrorAction SilentlyContinue | " +
-            "ForEach-Object { \$i = \$_.IndexOf('='); if (\$i -gt 0) { [Environment]::SetEnvironmentVariable(\$_.Substring(0, \$i), \$_.Substring(\$i + 1)) } }"
+        val env = powershellLiteral(envFile.toString())
+        val loadEnv = "if (Test-Path -LiteralPath $env) { . $env }"
         val script = "\$PSDefaultParameterValues['Out-File:Encoding']='utf8'; \$env:$WINDOWS_TASK_ENV = '1'; " +
             "\$supermuxHost = Get-Process -Id (Get-CimInstance Win32_Process -Filter ('ProcessId=' + \$PID)).ParentProcessId -ErrorAction SilentlyContinue; " +
             "if (\$supermuxHost) { \$null = \$supermuxHost.Handle }; " +
@@ -650,7 +655,8 @@ Terminal=false
         val run = listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME)
         return runCatching {
             // The loop reads its env from here on every (re)start: write it before anything runs.
-            writePrivate(envFile, windowsEnvFile(spec))
+            // With a BOM: Windows PowerShell reads a BOM-less script in the ANSI code page.
+            writePrivate(envFile, "\uFEFF" + windowsEnvFile(spec))
             // An older version kept a copy of the definition, env included, next to it.
             Files.deleteIfExists(env.localAppData.resolve(WINDOWS_TASK_XML))
             val wasInstalled = isInstalled(env)
