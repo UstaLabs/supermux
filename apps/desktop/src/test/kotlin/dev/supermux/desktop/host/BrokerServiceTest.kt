@@ -279,7 +279,47 @@ class BrokerServiceTest {
         assertTrue(env.ran.indexOf(loop) in 0 until env.ran.indexOf(kill), "the loop goes first, or it respawns the broker")
         assertEquals(3, env.ran.count { it == tasklist }, "polls until the broker is gone")
         assertTrue(env.ran.lastIndexOf(tasklist) > env.ran.indexOf(kill))
-        assertTrue("MUX_WINDOWS_TASK" in loop.last() && "\$PID" in loop.last() && '"' !in loop.last())
+        assertTrue("MUX_MANAGED_BY" in loop.last() && "\$PID" in loop.last() && '"' !in loop.last())
+    }
+
+    private fun elevatedCalls(env: FakeOsEnv) = env.ran.filter { it.firstOrNull() == "powershell.exe" && it.last().contains("-Verb RunAs") }
+
+    @Test fun windowsReinstallOfTheSameDefinitionRestartsWithoutUac() {
+        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory())
+        assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec, env))
+        env.ran.clear()
+        val again = assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec, env))
+        assertTrue(again.enabled)
+        assertEquals(emptyList(), elevatedCalls(env), "an app update with the same task definition needs no UAC prompt")
+        val kill = listOf("taskkill", "/F", "/IM", "supermux-broker.exe")
+        val run = listOf("schtasks", "/Run", "/TN", "Supermux Host")
+        assertTrue(env.ran.indexOf(BrokerService.stopWindowsTaskLoopArgv()) in 0 until env.ran.indexOf(kill))
+        assertTrue(env.ran.indexOf(kill) < env.ran.indexOf(run), "the old broker is gone before the task starts again")
+    }
+
+    @Test fun windowsChangedDefinitionStopsTheOldBrokerThenElevatesOnce() {
+        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory())
+        BrokerService.install(winSpec, env)
+        env.ran.clear()
+        assertIs<BrokerService.Result.Installed>(BrokerService.install(winSpec.copy(env = mapOf("MUX_WEB_PORT" to "8787")), env))
+        val elevated = elevatedCalls(env)
+        assertEquals(1, elevated.size)
+        val kill = listOf("taskkill", "/F", "/IM", "supermux-broker.exe")
+        assertTrue(env.ran.indexOf(kill) in 0 until env.ran.indexOf(elevated[0]), "re-registering must not leave the old loop running")
+    }
+
+    @Test fun stopIsWindowsOnly() {
+        val mac = FakeOsEnv(os = OsEnv.Os.MAC, home = createTempDirectory(), uid = 501)
+        assertFalse(BrokerService.stop(mac))
+        assertEquals(emptyList(), mac.ran)
+        val win = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory())
+        assertTrue(BrokerService.stop(win))
+        assertTrue(listOf("taskkill", "/F", "/IM", "supermux-broker.exe") in win.ran)
+        assertTrue(win.ran.none { it.firstOrNull() == "schtasks" }, "stop leaves the task registered and not started")
+    }
+
+    @Test fun windowsTaskReplacesALingeringInstanceOnRun() {
+        assertTrue("<MultipleInstancesPolicy>StopExisting</MultipleInstancesPolicy>" in BrokerService.windowsTaskXml(winSpec))
     }
 
     @Test fun windowsRemoveFailsWhenTheElevatedBatchFails() {
@@ -294,13 +334,14 @@ class BrokerServiceTest {
         assertTrue(Files.exists(taskXml))
     }
 
-    @Test fun windowsRestartIsTaskkillThenRunWithoutElevation() {
+    @Test fun windowsRestartStopsTheLoopAndBrokerThenRunsWithoutElevation() {
         val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory())
         assertTrue(BrokerService.restart(env))
-        assertEquals(
-            listOf(listOf("taskkill", "/F", "/IM", "supermux-broker.exe"), listOf("schtasks", "/Run", "/TN", "Supermux Host")),
-            env.ran,
-        )
+        val kill = listOf("taskkill", "/F", "/IM", "supermux-broker.exe")
+        val run = listOf("schtasks", "/Run", "/TN", "Supermux Host")
+        assertTrue(env.ran.indexOf(BrokerService.stopWindowsTaskLoopArgv()) in 0 until env.ran.indexOf(kill))
+        assertTrue(env.ran.indexOf(kill) < env.ran.indexOf(run))
+        assertTrue(env.ran.none { it.last().contains("-Verb RunAs") })
     }
 
     @Test fun windowsRestartStartsAnEndedTaskEvenWithNoBrokerToKill() {

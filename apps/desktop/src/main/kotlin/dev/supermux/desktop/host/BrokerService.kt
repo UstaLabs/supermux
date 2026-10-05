@@ -197,7 +197,7 @@ Terminal=false
     </Principal>
   </Principals>
   <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <MultipleInstancesPolicy>StopExisting</MultipleInstancesPolicy>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <StartWhenAvailable>true</StartWhenAvailable>
@@ -237,11 +237,10 @@ Terminal=false
     fun restart(env: OsEnv = SystemOsEnv): Boolean = when (env.os) {
         OsEnv.Os.MAC -> env.uid != null && env.run(listOf("launchctl", "kickstart", "-k", "gui/${env.uid}/$LAUNCHD_LABEL"))
         OsEnv.Os.LINUX -> env.run(listOf("systemctl", "--user", "restart", SYSTEMD_NAME))
-        // The task's loop respawns the broker ~5 s after it dies; no elevation needed. When the
-        // loop itself is gone (the task was ended), /Run starts it again; while it runs, /Run is a
-        // no-op (MultipleInstancesPolicy IgnoreNew).
+        // Stop the loop and its broker, then start the task afresh; no elevation needed. /Run also
+        // brings back a task whose loop died, and (StopExisting) replaces a lingering instance.
         OsEnv.Os.WINDOWS -> {
-            env.run(listOf("taskkill", "/F", "/IM", WINDOWS_BROKER_EXE))
+            stopWindowsTask(env)
             env.run(listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME))
         }
         OsEnv.Os.OTHER -> false
@@ -376,11 +375,35 @@ Terminal=false
         }.getOrElse { Result.Failed("systemd remove failed: ${it.message}") }
     }
 
+    /**
+     * Windows: stop OUR running broker without elevation — the task's loop, then the broker — and
+     * wait until the broker process is gone, so its .exe can be replaced. The task stays registered;
+     * [install] or `schtasks /Run` starts it again. No-op elsewhere (false).
+     */
+    fun stop(env: OsEnv = SystemOsEnv): Boolean = env.os == OsEnv.Os.WINDOWS && stopWindowsTask(env)
+
+    private fun stopWindowsTask(env: OsEnv): Boolean {
+        // The loop first, or it starts the broker again ~5 s after the kill.
+        env.run(stopWindowsTaskLoopArgv())
+        env.run(listOf("taskkill", "/F", "/IM", WINDOWS_BROKER_EXE))
+        return awaitWindowsBrokerGone(env)
+    }
+
     private fun installWindowsTask(spec: Spec, env: OsEnv): Result {
         val taskXml = env.localAppData.resolve(WINDOWS_TASK_XML)
+        val content = "\uFEFF" + windowsTaskXml(spec)
         return runCatching {
             Files.createDirectories(taskXml.parent)
-            Files.writeString(taskXml, "\uFEFF" + windowsTaskXml(spec), Charsets.UTF_16LE)
+            val unchanged = runCatching { Files.readString(taskXml, Charsets.UTF_16LE) }.getOrNull() == content
+            if (unchanged && isInstalled(env)) {
+                // The registered task already says exactly this (an app update with the same env, a
+                // restart): no UAC prompt, just restart it — the broker binary may be new.
+                stopWindowsTask(env)
+                if (env.run(listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME))) return Result.Installed(taskXml, true)
+            }
+            // A running instance must not keep the old loop (and broker) alive past re-registration.
+            if (isInstalled(env)) stopWindowsTask(env)
+            Files.writeString(taskXml, content, Charsets.UTF_16LE)
             // ONE elevated invocation (one UAC prompt): create the task, then start it now.
             val ok = runElevatedSchtasksBatch(
                 env,
@@ -413,9 +436,7 @@ Terminal=false
             // /End only terminates the task's own process (the headless conhost): stop its loop too,
             // then the broker, and wait until the broker is really gone. Starting the same .exe while
             // the killed one is still being torn down fails with a sharing violation.
-            env.run(stopWindowsTaskLoopArgv())
-            env.run(listOf("taskkill", "/F", "/IM", WINDOWS_BROKER_EXE))
-            awaitWindowsBrokerGone(env)
+            stopWindowsTask(env)
             val existed = Files.deleteIfExists(taskXml)
             Result.Removed(if (existed) taskXml else null)
         }.getOrElse { Result.Failed("Windows Scheduled Task remove failed: ${it.message}") }
@@ -423,12 +444,13 @@ Terminal=false
 
     /**
      * PowerShell that stops the task's restart loop: the powershell.exe whose command line sets
-     * [WINDOWS_TASK_ENV] (never itself). No double quotes: Java does not escape them on Windows.
+     * `MUX_MANAGED_BY` (every version of the loop does; never itself). No double quotes: Java does
+     * not escape them on Windows.
      */
     internal fun stopWindowsTaskLoopArgv(): List<String> = listOf(
         "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
         "Get-CimInstance Win32_Process | Where-Object { \$_.Name -eq 'powershell.exe' -and \$_.ProcessId -ne \$PID -and " +
-            "\$_.CommandLine -like '*$WINDOWS_TASK_ENV*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }",
+            "\$_.CommandLine -like '*MUX_MANAGED_BY*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }",
     )
 
     /** Poll `tasklist` until no [WINDOWS_BROKER_EXE] runs, up to 20 × 500 ms. True once it's gone. */

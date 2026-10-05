@@ -121,6 +121,13 @@ internal suspend fun HostSupervisor.removeServiceLocked(port: Int): String? {
     return null
 }
 
+/** Windows: stop our task's broker in place (no elevation) and wait for it to let go of [port]. */
+internal suspend fun HostSupervisor.stopWindowsServiceLocked(port: Int) {
+    val stopped = withContext(io) { BrokerService.stop(osEnv) }
+    log("service stop: ${if (stopped) "the broker is gone" else "the broker is still running"}")
+    if (!awaitPortFree(port)) log("port $port still answers ${timing.portFreeMs / 1000} s after stopping the service")
+}
+
 /** True once nothing answers on [port]; false after [timeoutMs]. */
 internal suspend fun HostSupervisor.awaitPortFree(port: Int, timeoutMs: Long = timing.portFreeMs): Boolean {
     val deadline = now() + timeoutMs

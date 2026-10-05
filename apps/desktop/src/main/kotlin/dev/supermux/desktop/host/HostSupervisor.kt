@@ -565,7 +565,9 @@ class HostSupervisor(
         }
         if (ourServiceInstalled()) {
             // Our service: restart it the way it runs, whatever prefs.background says.
-            if (windows) removeServiceLocked(prefs0.port)?.let { afterLaunch(prefs0, it); return } // re-creating the task doesn't restart it
+            // Windows can't replace a running .exe: stop the task's broker first (no elevation; the
+            // install below restarts the task, and only asks for UAC when its definition changed).
+            if (windows) stopWindowsServiceLocked(prefs0.port)
             val bins = binaries()
             if (lastCopyFailed && !windows) return keepRunning(prefs0, Mode.SERVICE)
             afterLaunch(prefs0, launchLocked(prefs0.copy(background = true), bins, carriedStore.load(), allowChildFallback = true))
@@ -667,10 +669,10 @@ class HostSupervisor(
         stopWatch()
         retries.reset()
         _status.value = HostingStatus.Starting
+        if (mode == Mode.SERVICE && osEnv.os == OsEnv.Os.WINDOWS) stopWindowsServiceLocked(p.port)
         val bins = binaries()
         val why = if (mode == Mode.SERVICE) {
-            (if (osEnv.os == OsEnv.Os.WINDOWS) removeServiceLocked(p.port) else null)
-                ?: launchLocked(p.copy(background = true), bins, carriedStore.load(), allowChildFallback = true)
+            launchLocked(p.copy(background = true), bins, carriedStore.load(), allowChildFallback = true)
         } else {
             val detached = childDetached
             stopChildLocked()
