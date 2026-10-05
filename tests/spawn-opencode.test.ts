@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, readFileSync } from "fs"
+import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { STATE_DIR } from "../src/shared/paths"
@@ -54,9 +54,9 @@ test("opencode spawn threads ONE uuid through registry, socket bind, and the shi
   expect(registry.resolveName(result.name)?.agent).toBe("opencode")
   expect(boundIds).toEqual([result.session_id])
 
-  const cfgPath = join(STATE_DIR, "agents", "opencode", result.name, "config", "opencode", "opencode.json")
-  const cfg = JSON.parse(readFileSync(cfgPath, "utf8"))
-  expect(cfg.mcp["mux-shim"].environment.MUX_SESSION_ID).toBe(result.session_id)
+  // C3: mux-shim is a session-context server (ACP mcpServers), not in the session opencode.json.
+  const shim = fakeOc.opens[0]!.sessionContext!.mcpServers.find((server) => server.name === "mux-shim")!
+  expect(shim.env.MUX_SESSION_ID).toBe(result.session_id)
 })
 
 test("opencode spawn succeeds without auth — free tier, not fail-closed", async () => {
