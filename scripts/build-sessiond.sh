@@ -1,9 +1,10 @@
 #!/bin/sh
 # Build the persistent Windows ConPTY owner as one Bun executable.
-# usage: scripts/build-sessiond.sh <outfile>
+# usage: scripts/build-sessiond.sh <outfile> [version]
 set -eu
 
-OUT="${1:?usage: build-sessiond.sh <outfile>}"
+OUT="${1:?usage: build-sessiond.sh <outfile> [version]}"
+VERSION="${2:-dev}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
@@ -18,7 +19,11 @@ case "${SUPERMUX_TARGET:-}" in
   *) echo "unsupported SUPERMUX_TARGET '$SUPERMUX_TARGET'" >&2; exit 2 ;;
 esac
 
-if [ -n "$BUN_TARGET" ]; then
+if [ "${SUPERMUX_TARGET:-}" = "windows-x64" ]; then
+  # The exe's version info says supermux, not Bun (Task Manager, firewall prompts).
+  . "$ROOT/scripts/lib/windows-exe-meta.sh"
+  bun_compile_windows "supermux terminal host" "$VERSION" --compile --minify src/core/sessiond/main.ts --target="$BUN_TARGET" --outfile "$OUT"
+elif [ -n "$BUN_TARGET" ]; then
   bun build --compile --minify src/core/sessiond/main.ts --target="$BUN_TARGET" --outfile "$OUT"
 else
   bun build --compile --minify src/core/sessiond/main.ts --outfile "$OUT"

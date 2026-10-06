@@ -49,9 +49,9 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * First-run desktop-as-host wizard (Plan 3 Task 3 / spec §6, D6 choice A). Makes THIS computer a
- * host: the [BrokerSidecar] brings up/adopts the local broker, the wizard mints a one-time claim from
- * it, builds a v1 [PairingPayload] (hostId from the sidecar, `relayUrl` when hosting-remote), and
+ * First-run desktop-as-host wizard (spec §6, D6 choice A). Makes THIS computer a
+ * host: the [HostSupervisor] brings up/adopts the local broker, the wizard mints a one-time claim from
+ * it, builds a v1 [PairingPayload] (hostId from the supervisor, `relayUrl` when hosting-remote), and
  * renders it as a scannable QR next to the spec §6 copy, a CHECKED-by-default keep-alive box, and the
  * relay-disclosure line.
  *
@@ -92,7 +92,7 @@ fun encodePairingPayload(payload: PairingPayload): String = json.encodeToString(
 // ── UI state ─────────────────────────────────────────────────────────────────────
 
 sealed interface HostWizardUiState {
-    /** Sidecar coming up / claim minting. */
+    /** The local broker coming up / claim minting. */
     data object Preparing : HostWizardUiState
     /** Ready to show the QR. [relayEnabled] switches the disclosure copy. */
     data class Ready(val payloadJson: String, val qr: ImageBitmap, val relayEnabled: Boolean) : HostWizardUiState
@@ -102,9 +102,9 @@ sealed interface HostWizardUiState {
 // ── Stateful model (async claim + QR + keep-alive) ─────────────────────────────────
 
 /**
- * Drives the wizard: awaits the sidecar's hostId, mints a claim ([mintClaim]), builds + encodes the
+ * Drives the wizard: awaits the supervisor's hostId, mints a claim ([mintClaim]), builds + encodes the
  * payload, renders the QR ([qrOf]), and on finish auto-pairs "This computer" into the fleet
- * ([onPairThisComputer]) and installs/skips the login keep-alive ([onInstallKeepAlive]) per the box.
+ * ([onPairThisComputer]) and turns the background keep-alive (OS service that keeps the broker running after quit/sign-out) on or off ([onInstallKeepAlive]) per the box.
  */
 class HostWizardModel(
     private val scope: CoroutineScope,
@@ -121,6 +121,13 @@ class HostWizardModel(
     val state: StateFlow<HostWizardUiState> = _state.asStateFlow()
 
     private var claim: HostClaim? = null
+
+    /**
+     * The local broker's device token this wizard minted (or reused), once [prepare] got that far.
+     * Before Done nothing may be stored as "This computer" yet, so the wizard's own actions on the
+     * local broker (Install git…) authenticate with this.
+     */
+    val localToken: String? get() = claim?.localToken?.takeIf { it.isNotBlank() }
     private var hostId: String? = null
     private var directUrl: String? = null
 
@@ -149,7 +156,7 @@ class HostWizardModel(
         }
     }
 
-    /** Finish: auto-pair "This computer" and install (or skip) the login keep-alive per [keepAlive]. */
+    /** Finish: auto-pair "This computer" and enable (or skip) the background keep-alive service per [keepAlive]. */
     fun finish(keepAlive: Boolean) {
         val c = claim; val id = hostId
         if (c != null && id != null) onPairThisComputer(c.localToken, directUrl, id)
@@ -161,15 +168,16 @@ class HostWizardModel(
 
 /** Spec §6 copy — kept as constants so the UI test asserts the exact strings. */
 const val HOST_WIZARD_HEADLINE = "This computer is ready to host your agents. Scan the QR with your phone."
-const val HOST_WIZARD_KEEPALIVE_LABEL = "Keep this computer available when the app is closed and after I sign in"
+const val HOST_WIZARD_KEEPALIVE_LABEL = "Keep running in the background"
+const val HOST_WIZARD_KEEPALIVE_HELP = "Your agents stay reachable after you quit, sign out or restart."
 private const val RELAY_ON_DISCLOSURE =
-    "Remote access is on through relay.supermux.dev. Connections are encrypted in transit; relay traffic is not end-to-end encrypted yet."
+    "Remote access is on through relay.supermux.dev."
 private const val RELAY_OFF_DISCLOSURE =
     "Your phone reaches this computer directly on your local network. Turn on remote access later to reach it from anywhere through the supermux relay."
 
 /**
  * Pure render of the wizard for a resolved [state]. Stateless so the Compose test drives it with a
- * ready payload (no sidecar/broker). [keepAlive] is hoisted (CHECKED by default at the call site).
+ * ready payload (no supervisor/broker). [keepAlive] is hoisted (CHECKED by default at the call site).
  */
 @Composable
 fun HostWizardContent(
@@ -179,6 +187,9 @@ fun HostWizardContent(
     onFinish: () -> Unit,
     onConnectInstead: () -> Unit,
     onRetry: () -> Unit = {},
+    /** The local broker's `requirements.git`: under the QR, "This computer needs git…" while missing. */
+    gitRequirement: dev.supermux.net.GitRequirement? = null,
+    onInstallGit: suspend () -> Boolean = { false },
 ) {
     val cs = MaterialTheme.colorScheme
     Scaffold(containerColor = cs.surfaceContainerHigh) { padding ->
@@ -239,6 +250,11 @@ fun HostWizardContent(
                             .padding(12.dp)
                             .testTag("host_wizard_qr"),
                     )
+                    // Pairing works without git, but agents won't: say so before the user leaves.
+                    dev.supermux.ui.host.GitRequirementBanner(
+                        requirement = gitRequirement,
+                        onInstall = onInstallGit,
+                    )
 
                     // CHECKED-by-default keep-alive box (spec §6 / D6).
                     Row(
@@ -253,12 +269,18 @@ fun HostWizardContent(
                             onCheckedChange = onKeepAliveChange,
                             modifier = Modifier.testTag("host_wizard_keepalive_checkbox"),
                         )
-                        Text(
-                            HOST_WIZARD_KEEPALIVE_LABEL,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = cs.onSurface,
-                            modifier = Modifier.weight(1f),
-                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                HOST_WIZARD_KEEPALIVE_LABEL,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = cs.onSurface,
+                            )
+                            Text(
+                                HOST_WIZARD_KEEPALIVE_HELP,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = cs.onSurfaceVariant,
+                            )
+                        }
                     }
 
                     Text(
@@ -291,6 +313,8 @@ fun HostWizard(
     model: HostWizardModel,
     onDone: () -> Unit,
     onConnectInstead: () -> Unit,
+    gitRequirement: dev.supermux.net.GitRequirement? = null,
+    onInstallGit: suspend () -> Boolean = { false },
 ) {
     val state by model.state.collectAsState()
     var keepAlive by remember { mutableStateOf(true) } // CHECKED by default (spec §6 / D6)
@@ -302,5 +326,7 @@ fun HostWizard(
         onFinish = { model.finish(keepAlive); onDone() },
         onConnectInstead = onConnectInstead,
         onRetry = { model.prepare() },
+        gitRequirement = gitRequirement,
+        onInstallGit = onInstallGit,
     )
 }

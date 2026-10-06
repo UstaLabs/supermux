@@ -23,7 +23,7 @@ export function makeRealCursorRunner(opts: {
       const platform = opts.platform ?? process.platform
       const shouldResolve = !opts.spawn || opts.platform !== undefined || opts.fileExists !== undefined
       const command = shouldResolve
-        ? (resolveCommand(["cursor-agent", "agent"], env, platform, { fileExists: opts.fileExists }) ?? "cursor-agent")
+        ? (resolveCommand(["cursor-agent"], env, platform, { fileExists: opts.fileExists }) ?? "cursor-agent")
         : "cursor-agent"
       const child = spawnCommand(command, args, {
         platform, fileExists: opts.fileExists, spawn: (opts.spawn ?? defaultSpawn) as never,

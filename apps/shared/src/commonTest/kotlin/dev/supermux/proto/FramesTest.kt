@@ -104,6 +104,27 @@ class FramesTest {
         assertEquals("Fix Session Renaming 🎉", f.newName)
     }
 
+    @Test fun parses_host_requirements() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"host_requirements","requirements":{"git":{"ok":false,"install":"winget","hint":"Install Git for Windows with winget"}}}""",
+        )
+        assertTrue(f is ServerFrame.HostRequirementsChanged)
+        val git = (f as ServerFrame.HostRequirementsChanged).requirements.git
+        assertEquals(false, git.ok)
+        assertEquals("winget", git.install)
+        assertTrue(git.installable)
+        assertTrue(f.requirements.gitMissing)
+    }
+
+    @Test fun parses_keep_awake() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"keep_awake","keepAwake":{"enabled":true,"onBattery":true,"active":true,"supported":true}}""",
+        )
+        assertTrue(f is ServerFrame.KeepAwakeChanged)
+        val s = (f as ServerFrame.KeepAwakeChanged).keepAwake
+        assertEquals(dev.supermux.net.KeepAwakeState(enabled = true, onBattery = true, active = true, supported = true), s)
+    }
+
     @Test fun parses_sessions_reordered() {
         val f = json.decodeFromString<ServerFrame>(
             """{"type":"sessions_reordered","orderedIds":["b","a","c"]}""",

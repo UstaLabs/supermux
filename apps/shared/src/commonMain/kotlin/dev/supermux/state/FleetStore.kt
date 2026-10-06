@@ -13,6 +13,8 @@ import dev.supermux.host.isLegacyHostDisplayName
 import dev.supermux.host.mergeSessions
 import dev.supermux.host.previousHostClearSessionId
 import dev.supermux.net.AgentModelsResponse
+import dev.supermux.net.HostRequirements
+import dev.supermux.net.InstallGitResult
 import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
@@ -189,6 +191,13 @@ class FleetStore(
     /** Live [HostStore]s, republished whenever [conns] changes — the driver for the folds below. */
     private val hostApps = MutableStateFlow<List<HostStore>>(emptyList())
 
+    /**
+     * The same connection set as [hostApps], with each app's record id captured IN THE SAME
+     * snapshot of [conns]. A per-record fold keyed off this cannot lose a host across a
+     * connection swap (a lookup of the id after the fact could race the swap and come back null).
+     */
+    private val hostAppsByRecord = MutableStateFlow<List<Pair<String, HostStore>>>(emptyList())
+
     // ── Snapshot-then-publish ────────────────────────────────────────────────────────────────
     // Assigning a `MutableStateFlow` RESUMES its collectors inline, on the assigning thread. A
     // collector can take a lock of its own on the way — Compose's frame dispatcher does — while the
@@ -209,6 +218,7 @@ class FleetStore(
         var workspaceHost: Map<String, String>? = null
         var hostViews: List<HostView>? = null
         var apps: List<HostStore>? = null
+        var appsByRecord: List<Pair<String, HostStore>>? = null
         /** Nullable value → a flag, so "publish null usage" is distinguishable from "not staged". */
         var usageStaged: Boolean = false
         var usage: UsageResponse? = null
@@ -219,6 +229,7 @@ class FleetStore(
     private fun Publication.emit() {
         activeHost.let { if (activeHostStaged) _activeHost.value = it }
         apps?.let { hostApps.value = it }
+        appsByRecord?.let { hostAppsByRecord.value = it }
         sessions?.let { _sessions.value = it }
         sessionHost?.let { _sessionHost.value = it }
         messages?.let { _messages.value = it }
@@ -247,6 +258,7 @@ class FleetStore(
     /** Stage the live app list. Callers hold [lock]. */
     private fun stageApps(pub: Publication) {
         pub.apps = conns.values.map { it.app }
+        pub.appsByRecord = conns.entries.map { it.key to it.value.app }
         // The active host's usage snapshot is keyed on the connection set too (E6).
         stageUsage(pub)
     }
@@ -432,6 +444,40 @@ class FleetStore(
         }
             .distinctUntilChanged()
             .stateIn(fleetScope, SharingStarted.Eagerly, emptySet())
+
+    /**
+     * The ACTIVE host's requirements ([HostStore.hostRequirements]) for the launcher's "needs git"
+     * banner. Keyed on the live [HostStore] like [activeAgentModels]; null until that host spoke.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeHostRequirements: StateFlow<HostRequirements?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.hostRequirements ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /**
+     * Every connected host's requirements by record id ([HostStore.hostRequirements]); a host that
+     * has not sent them (or an older broker) is absent. Drives the session list's banner.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Suppress("UNCHECKED_CAST")
+    val hostRequirements: StateFlow<Map<String, HostRequirements>> =
+        hostAppsByRecord.flatMapLatest { pairs ->
+            if (pairs.isEmpty()) {
+                flowOf(emptyMap())
+            } else {
+                combine(pairs.map { (id, app) -> app.hostRequirements.map { r -> r?.let { id to it } } as Flow<Any?> }) { row ->
+                    (row.toList() as List<Pair<String, HostRequirements>?>).filterNotNull().toMap()
+                }
+            }
+        }
+            .distinctUntilChanged()
+            .stateIn(fleetScope, SharingStarted.Eagerly, emptyMap())
+
+    /** `POST /system/install-git` on [recordId]'s host (the active host when null). Null: not connected or failed. */
+    suspend fun installGit(recordId: String? = null): InstallGitResult? =
+        (if (recordId == null) activeApp() else appForRecord(recordId))?.installGit()
 
     // Agent replies merged across every host, for AppShell's NotificationController. Same
     // replay-0 + bounded-DROP_OLDEST shape as HostStore.agentReplies.
@@ -981,6 +1027,12 @@ class FleetStore(
         onHostsChanged()
         publishing { stageAll(it) }
     }
+
+    /**
+     * Re-read [store] after something outside the fleet wrote to it (desktop's hosting wizard pairs
+     * "This computer" straight into the store): dials new records, drops removed ones.
+     */
+    fun refreshFromStore() = onHostsChanged()
 
     private fun onHostsChanged() {
         sync(store.list())

@@ -51,6 +51,9 @@ export type SupervisorOpts = {
    *  (the old half-filled-bag bug). */
   sessionManager?: SessionManagerLike
   reapInternalWorkers?: () => Promise<void>
+  /** True while this computer has no usable git (`core/git/requirement`): a dead PA is left
+   *  listed instead of respawned every poll, and comes back on the first poll after git appears. */
+  agentsBlocked?: () => boolean
 }
 
 /** The slice of SessionManager the supervisor needs (type-only, avoids a
@@ -187,11 +190,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       return
     } else {
       // Supervise existing PAs: respawn any whose process is dead.
+      const blocked = opts.agentsBlocked?.() === true
       for (const pa of pas) {
         if (isPersistentRuntimeSession(pa)) {
           const targetId = await runtimeTargetId(pa)
           if (targetId && await sessionBackend.livePid(targetId) !== null) continue
         } else if (isProcessAlive(pa.pid)) continue
+        if (blocked) continue
         try {
           await respawnPA(pa)
         } catch (err) {

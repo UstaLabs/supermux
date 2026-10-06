@@ -241,6 +241,8 @@ fun SessionListScreen(
     standalone: Boolean = false,
     topBarShown: Boolean = false,
     footer: (@Composable () -> Unit)? = null,
+    /** Host notices under the new-session card (e.g. "This computer needs git to run agents"). */
+    banner: (@Composable () -> Unit)? = null,
     tabDragState: PaneDragController? = null,
     /**
      * Optional scroll state. The phone disposes this screen while a chat is open, so its host
@@ -262,6 +264,8 @@ fun SessionListScreen(
     val showRowHostBadge = multiHost && hostFilter == null
     val hostByRecord = remember(hosts) { hosts.associateBy { it.recordId } }
     val offlineIds = remember(hosts) { hosts.filter { !it.online }.map { it.recordId }.toSet() }
+    // The only host can't be reached: the multi-host offline groups don't apply, so say it here.
+    val unreachableSingleHost = if (multiHost) null else hosts.singleOrNull()?.takeIf { !it.online }
 
     val names = remember(sessions, sessionNames) {
         if (sessionNames.isNotEmpty()) sessionNames else sessions.associate { it.id to it.name }
@@ -1255,6 +1259,11 @@ fun SessionListScreen(
             }
         }
         NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
+        banner?.let { b ->
+            Column(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.xs)) { b() }
+        }
+        // Single host (no offline groups then): its can't-reach state, with the same first hint.
+        unreachableSingleHost?.let { h -> SingleHostOfflineNotice(h) }
         SessionsSectionHeader(
             title = if (useWorkspaces) "Workspaces" else "Sessions",
             groupByProject = groupByProject,
@@ -1530,35 +1539,88 @@ private fun QuietSettledToggle(
     )
 }
 
-/** Greyed group header for an offline/unreachable host (spec §5): dot + name + last-seen. */
+/** Copy for a host the app can't reach. */
+object OfflineHostCopy {
+    /** The first thing to check (spec "Keep the computer awake while hosting"): a sleeping or logged-out computer. */
+    const val AWAKE_HINT = "Is the computer awake and logged in?"
+}
+
+/**
+ * Greyed group header for an offline/unreachable host (spec §5): dot + name + last-seen, then a
+ * quiet first hint — the usual reason is a computer that is asleep or not logged in.
+ */
 @Composable
 private fun OfflineHostHeader(host: HostView) {
     val cs = MaterialTheme.colorScheme
     val lastSeen = formatLastSeen(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)
-    Row(
+    Column(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
             .testTag("offline_host_${host.recordId}"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        HostDot(host.colorIndex, size = 8.dp)
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            HostDot(host.colorIndex, size = 8.dp)
+            Text(
+                host.displayLabel,
+                color = cs.onSurfaceVariant,
+                fontFamily = MonoFontFamily,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "· offline" + if (lastSeen.isNotEmpty()) " · seen $lastSeen" else "",
+                color = cs.onSurfaceVariant.copy(alpha = 0.6f),
+                fontFamily = MonoFontFamily,
+                fontSize = 10.sp,
+                maxLines = 1,
+            )
+        }
         Text(
-            host.displayLabel,
-            color = cs.onSurfaceVariant,
-            fontFamily = MonoFontFamily,
+            OfflineHostCopy.AWAKE_HINT,
+            color = cs.onSurfaceVariant.copy(alpha = 0.6f),
             fontSize = 11.sp,
+            maxLines = 2,
+            modifier = Modifier.padding(start = 14.dp).testTag("offline_host_hint_${host.recordId}"),
+        )
+    }
+}
+
+/** The single paired host can't be reached: "Can't reach <name>", then the awake hint. */
+@Composable
+private fun SingleHostOfflineNotice(host: HostView) {
+    val cs = MaterialTheme.colorScheme
+    val lastSeen = formatLastSeen(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Space.md, vertical = Space.xs)
+            .clip(RoundedCornerShape(Space.sm))
+            .background(cs.surfaceContainerHighest)
+            .padding(horizontal = Space.md, vertical = Space.sm)
+            .testTag("offline_single_host"),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            "Can't reach ${host.displayLabel}" + if (lastSeen.isNotEmpty()) " · seen $lastSeen" else "",
+            color = cs.onSurface,
+            fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         Text(
-            "· offline" + if (lastSeen.isNotEmpty()) " · seen $lastSeen" else "",
-            color = cs.onSurfaceVariant.copy(alpha = 0.6f),
-            fontFamily = MonoFontFamily,
-            fontSize = 10.sp,
-            maxLines = 1,
+            OfflineHostCopy.AWAKE_HINT,
+            color = cs.onSurfaceVariant,
+            fontSize = 12.sp,
+            modifier = Modifier.testTag("offline_single_host_hint"),
         )
     }
 }

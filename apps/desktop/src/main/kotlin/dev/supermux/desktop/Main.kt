@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
@@ -39,7 +40,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
@@ -56,6 +56,35 @@ import dev.supermux.desktop.platform.installMacTrackpadMagnify
 import dev.supermux.desktop.platform.prunePasteCache
 import dev.supermux.desktop.platform.isMacOs
 import dev.supermux.desktop.host.DesktopHostBootstrap
+import dev.supermux.desktop.host.BackgroundQuitNotice
+import dev.supermux.desktop.host.FleetFacts
+import dev.supermux.desktop.host.HostingDialogs
+import dev.supermux.desktop.host.HostingStatus
+import dev.supermux.desktop.host.HostingTrayMenu
+import dev.supermux.desktop.host.TrayDispatcher
+import dev.supermux.desktop.host.trayChoice
+import dev.supermux.desktop.host.trayMenuItems
+import dev.supermux.desktop.host.linux.SniStatus
+import dev.supermux.desktop.host.linux.SniTray
+import dev.supermux.desktop.platform.isLinuxOs
+import dev.supermux.desktop.platform.isWindowsOs
+import dev.supermux.desktop.host.QuitAction
+import dev.supermux.desktop.host.TrayAction
+import dev.supermux.desktop.host.TrayModel
+import dev.supermux.desktop.host.TrayPower
+import dev.supermux.desktop.host.TrayToggle
+import java.awt.desktop.QuitResponse
+import java.util.concurrent.atomic.AtomicReference
+import dev.supermux.desktop.host.hostingFacts
+import dev.supermux.desktop.host.syncThisComputerRecord
+import dev.supermux.desktop.host.TrayIcons
+import dev.supermux.desktop.host.openFile
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.MutableStateFlow
+import java.awt.Desktop
+import java.awt.desktop.AppReopenedListener
+import javax.swing.SwingUtilities
 import dev.supermux.desktop.host.DesktopHostStores
 import dev.supermux.desktop.settings.DesktopSettingsStore
 import dev.supermux.state.FleetStore
@@ -86,6 +115,10 @@ import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.windows.tearOutTabLive
 import dev.supermux.ui.shell.windows.tearOutCanvasLive
 import dev.supermux.desktop.settings.DesktopSettingsExtra
+import dev.supermux.desktop.settings.LocalHostSupervisor
+import dev.supermux.desktop.settings.LocalHostingFleet
+import dev.supermux.desktop.settings.LocalHostingSessions
+import dev.supermux.desktop.settings.LocalPairedHostStore
 import dev.supermux.desktop.settings.DesktopSettingsSection
 import dev.supermux.ui.prefs.seedLauncher
 import dev.supermux.ui.prefs.seedCollapsedProjectPaths
@@ -112,6 +145,30 @@ import dev.supermux.ui.shell.windows.extraWindowTitle
 import dev.supermux.desktop.shell.LocalMacWindowChrome
 import dev.supermux.desktop.shell.MacTrafficLightsWidth
 import dev.supermux.desktop.shell.rememberMacWindowChrome
+import dev.supermux.desktop.shell.ChromeOs
+import dev.supermux.desktop.shell.DesktopMenuBar
+import dev.supermux.desktop.shell.LinuxSidebarChrome
+import dev.supermux.desktop.shell.LinuxTitleBarHeight
+import dev.supermux.desktop.shell.LinuxWindowChrome
+import dev.supermux.desktop.shell.LinuxWindowChromeOverlay
+import dev.supermux.desktop.shell.LocalWindowChromeInsets
+import dev.supermux.desktop.shell.MainMenuEntry
+import dev.supermux.desktop.shell.MainMenuGroup
+import dev.supermux.desktop.shell.MainMenuState
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import dev.supermux.desktop.shell.MenuShortcut
+import dev.supermux.desktop.shell.chromeInsets
+import dev.supermux.desktop.shell.rememberLinuxWindowChrome
+import dev.supermux.desktop.shell.rememberWindowsWindowChrome
+import androidx.compose.ui.graphics.luminance
+import dev.supermux.desktop.shell.WindowsTitleBarHeight
+import dev.supermux.desktop.shell.WindowsCaptionButtonsFallbackWidth
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.windows.WindowBounds
@@ -320,6 +377,14 @@ fun main() {
     // never OpenGL — so it is a no-op on Linux by construction. Still marked
     // experimental by JetBrains.
     System.setProperty("compose.interop.blending", "true")
+    // macOS menu bar: the tray icon is a template image the OS tints for a light or dark bar. Read
+    // once, when AWT's tray first loads, so it is set before anything touches AWT (also a jvmArg).
+    if (isMacOs()) System.setProperty(TrayIcons.TEMPLATE_PROPERTY, "true")
+    // Linux: name the X11 windows "supermux" before the first one exists (the dock groups them with
+    // the launcher), then decide once whether the window draws its own chrome — it is created
+    // undecorated or not (LinuxWindowChrome.kt).
+    if (isLinuxOs()) LinuxWindowChrome.setWmClass()
+    val linuxMoveResize = LinuxWindowChrome.detect(isLinuxOs())
 
     val store = DesktopTokenStore()
     // Reclaim aged clipboard-paste PNGs under <config>/paste-cache/ (app-owned; never /tmp).
@@ -354,6 +419,30 @@ fun main() {
     val hostStore = DesktopHostStores.store()
     runCatching { DesktopHostStores.migrateFromLegacyIfNeeded(hostStore, store) }
         .onFailure { println("[Main] legacy→fleet migration failed (falling through): $it") }
+    // No surprise hosting on upgrade: decide the first hosting.json from the fleet BEFORE the
+    // supervisor is built (and so before its first ensure()).
+    DesktopHostBootstrap.seedHostingPrefs(hostStore.list())
+    // Linux: the tray is a StatusNotifierItem over D-Bus (GNOME's AppIndicator extension, KDE, XFCE,
+    // Cinnamon …) — AWT's XEmbed tray is unsupported on stock GNOME. Registration is async and on its
+    // own thread; `sniTray.status` says when there is a tray to hide into. Never on macOS/Windows.
+    val sniTray = if (isLinuxOs()) SniTray().also { it.start() } else null
+    // The process-exit cleanup, run by the `finally` below on a normal return from main AND by this
+    // hook — a signal, System.exit (which skips the `finally`), or macOS performQuit. Every step is
+    // idempotent: the tray close (bounded: SniTray.close waits at most 2 s, so the hook can't hang
+    // the exit), the child broker (quit() never takes the lock) and read-aloud's child process.
+    fun exitCleanup() {
+        // The tray's bus name first, so the icon leaves with the window.
+        runCatching { sniTray?.close() }
+        runCatching { DesktopHostBootstrap.quitIfStarted() }
+        // Read-aloud is a process singleton (see SharedDesktopTts) and owns a child `say`/`ffplay`
+        // process; release it here so a quit mid-sentence does not outlive the window.
+        runCatching { MessageTts.stop(SharedDesktopTts) }
+        runCatching { SharedDesktopTts.shutdown() }
+    }
+    Runtime.getRuntime().addShutdownHook(Thread({ exitCleanup() }, "supermux-exit-cleanup"))
+    // A macOS system quit (Cmd-Q, Dock ▸ Quit, logout/restart/shutdown) waits on this answer: it is
+    // cancelled only when the user cancels the confirm, and performed once the app has exited.
+    val systemQuit = AtomicReference<QuitResponse?>(null)
 
     try {
         application {
@@ -364,7 +453,17 @@ fun main() {
         // receiver is FrameWindowScope). windowState is hoisted alongside it — a plain val, not
         // receiver-bound — purely so the tray icon's click handler can un-minimize the SAME
         // WindowState instance passed to Window below.
-        val windowState = rememberWindowState(width = 1440.dp, height = 900.dp)
+        // 1440×900, or ~90% of a smaller screen, centred (InitialWindow.kt).
+        val initialWindow = remember { dev.supermux.desktop.platform.initialWindow(dev.supermux.desktop.platform.usableScreenBounds()) }
+        val windowState = rememberWindowState(
+            width = initialWindow.width.dp,
+            height = initialWindow.height.dp,
+            position = if (initialWindow.x != null && initialWindow.y != null) {
+                WindowPosition(initialWindow.x.dp, initialWindow.y.dp)
+            } else {
+                WindowPosition.PlatformDefault
+            },
+        )
         var shuttingDown by remember { mutableStateOf(false) }
         LaunchedEffect(shuttingDown) {
             if (shuttingDown) {
@@ -375,11 +474,159 @@ fun main() {
             }
         }
         val trayState = rememberTrayState()
+        val sniStatus by remember { sniTray?.status ?: MutableStateFlow(SniStatus.FAILED) }.collectAsState()
+        // One tray at most (trayChoice): SNI once registered, else AWT where SNI's first answer
+        // allowed it. The latch is kept across recompositions; see trayChoice for why.
+        var awtLatch by remember { mutableStateOf<Boolean?>(null) }
+        val trayPick = trayChoice(sniStatus, awtLatch, isTraySupported)
+        SideEffect { if (trayPick.latch != awtLatch) awtLatch = trayPick.latch }
+        val useAwtTray = trayPick.useAwt
+        // Is there a tray to hide into (close → hide)? Async on Linux: the SNI tray counts only once
+        // a watcher has taken it.
+        val trayAvailable = trayPick.trayAvailable
+        // Can a notification be shown? The AWT tray raises its own; with a session bus up (SNI tray
+        // or not) org.freedesktop.Notifications does.
+        // (FAILED = no bus; STARTING = not connected yet.)
+        val canNotify = trayAvailable || sniStatus == SniStatus.REGISTERED || sniStatus == SniStatus.UNSUPPORTED
         // Published once pairing completes (below, inside Window's content) so the tray icon's
         // click handler can select a session on the live ShellUiState. null before pairing
         // and after unpair, when there is no shell to select into — the click handler
         // no-ops in that case (see onAction below).
         var pairedUi by remember { mutableStateOf<ShellUiState?>(null) }
+        // Same, for the fleet: the tray reads this computer's session count and the remote host.
+        var pairedFleet by remember { mutableStateOf<FleetStore?>(null) }
+
+        // ── Hosting lifecycle (spec: HostSupervisor, Tray, D3) ──
+        // The supervisor starts, updates or adopts the local broker on EVERY launch, paired or not.
+        // The wizard's own ensure() is serialised with this one by the supervisor.
+        val hostScope = rememberCoroutineScope()
+        val supervisor = remember { DesktopHostBootstrap.supervisor() }
+        val hostsNatively = remember { DesktopHostBootstrap.isNativeHostPlatform() }
+        LaunchedEffect(Unit) { if (hostsNatively) supervisor.ensure() }
+        // "This computer"'s paired record follows the supervisor's port (a moved port or a takeover
+        // onto another one), and a record a previous run left on an old port is fixed at launch.
+        LaunchedEffect(Unit) {
+            if (hostsNatively) syncThisComputerRecord(supervisor, hostStore) { pairedFleet?.refreshFromStore() }
+        }
+        val hostingStatus by supervisor.status.collectAsState()
+        val hostingPrefs by supervisor.prefs.collectAsState()
+        val backgroundError by supervisor.backgroundError.collectAsState()
+        // "Keep this computer awake" + "Even with the lid closed": host computer only (tray + Settings).
+        val keepAwakeControls = remember { DesktopHostBootstrap.keepAwake() }
+        LaunchedEffect(Unit) {
+            if (hostsNatively) {
+                keepAwakeControls.hosts = { hostStore.list() }
+                keepAwakeControls.start()
+            }
+        }
+        val keepAwakeState by keepAwakeControls.keepAwake.collectAsState()
+        val hasBattery by keepAwakeControls.hasBattery.collectAsState()
+        val lidStatus by keepAwakeControls.lid.collectAsState()
+        val trayPower = TrayPower.of(keepAwakeState, keepAwakeControls.isMac, hasBattery, lidStatus)
+        val fleetFacts by remember(pairedFleet) {
+            pairedFleet?.hostingFacts(supervisor.hostId, supervisor.prefs.map { it.port }) ?: flowOf(FleetFacts.EMPTY)
+        }.collectAsState(FleetFacts.EMPTY)
+        var windowVisible by remember { mutableStateOf(true) }
+        var confirmQuit by remember { mutableStateOf<String?>(null) }
+        var quitting by remember { mutableStateOf(false) }
+        val trayModel = if (quitting) {
+            TrayModel.QUITTING
+        } else {
+            TrayModel.of(
+                hostingStatus, hostingPrefs, fleetFacts.localSessions, fleetFacts.remoteName, fleetFacts.remoteReachable,
+            )
+        }
+        fun showWindow() {
+            windowVisible = true
+            windowState.isMinimized = false
+        }
+        // supervisor.quit() can block for the child's stop grace, so it runs off the UI thread.
+        fun quitNow(lingerMs: Long = 0) {
+            if (quitting) return
+            quitting = true
+            hostScope.launch {
+                withContext(Dispatchers.IO) { supervisor.quit() }
+                // Give a just-posted notification a moment before the tray icon goes away.
+                delay(lingerMs)
+                shuttingDown = true
+            }
+        }
+        // The in-app updater's Windows MSI quits the app so msiexec can replace its files.
+        DisposableEffect(Unit) {
+            val updater = dev.supermux.desktop.update.DesktopAppUpdater.shared
+            updater.onQuitForInstaller = { javax.swing.SwingUtilities.invokeLater { quitNow() } }
+            onDispose { updater.onQuitForInstaller = null }
+        }
+        fun cancelQuit() {
+            confirmQuit = null
+            systemQuit.getAndSet(null)?.let { r -> runCatching { r.cancelQuit() } }
+        }
+        fun requestQuit() {
+            if (quitting) return
+            if (!hostsNatively) return quitNow()
+            val keepsAwake = QuitAction.keepsAwake(hostingPrefs.background, keepAwakeState)
+            val noticeKey = BackgroundQuitNotice.keyFor(keepsAwake)
+            // In-memory read: DesktopSettingsStore holds its map in an eager StateFlow.
+            val noticeShown = runCatching {
+                runBlocking { desktopDeps.settings.string(noticeKey).first() } != null
+            }.getOrDefault(true)
+            val action = QuitAction.of(
+                hostingStatus, fleetFacts.localSessions, supervisor.quitStopsBroker,
+                // Nothing to show it with: never mark it shown there.
+                noticeShown = noticeShown || !canNotify,
+                keepsAwake = keepsAwake,
+            )
+            when (action) {
+                is QuitAction.Confirm -> {
+                    showWindow()
+                    confirmQuit = action.text
+                }
+                is QuitAction.Now -> {
+                    val notice = action.notice
+                    if (notice != null) {
+                        DesktopNotifications.notify("", BackgroundQuitNotice.TITLE, notice)
+                        hostScope.launch(Dispatchers.IO) {
+                            runCatching { desktopDeps.settings.putString(noticeKey, "1") }
+                        }
+                    }
+                    quitNow(lingerMs = if (notice != null) 1_500 else 0)
+                }
+            }
+        }
+        // A takeover/downgrade question needs the window, even when it is hidden in the tray.
+        LaunchedEffect(hostingStatus) {
+            if (hostingStatus is HostingStatus.AskTakeover || hostingStatus is HostingStatus.AskDowngrade) showWindow()
+        }
+        // A background-service failure is said once per distinct message, as a notification
+        // (Settings ▸ Hosting shows it too). Nothing to show it with, no notification.
+        var lastNotifiedError by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(backgroundError) {
+            val e = backgroundError
+            if (e != null && e != lastNotifiedError && canNotify) {
+                lastNotifiedError = e
+                DesktopNotifications.notify("", BackgroundQuitNotice.TITLE, e)
+            }
+        }
+        // macOS: Cmd-Q / Dock ▸ Quit / logout take the same path as the tray's Quit, and clicking the
+        // Dock icon while hidden in the tray brings the window back.
+        DisposableEffect(Unit) {
+            val desktop = runCatching { if (Desktop.isDesktopSupported()) Desktop.getDesktop() else null }.getOrNull()
+            val quitHandled = desktop != null && desktop.isSupported(Desktop.Action.APP_QUIT_HANDLER)
+            if (quitHandled) {
+                desktop.setQuitHandler { _, response ->
+                    // Held until the user cancels (cancelQuit) or the app has exited (performQuit).
+                    systemQuit.getAndSet(response)?.let { old -> runCatching { old.cancelQuit() } }
+                    SwingUtilities.invokeLater { requestQuit() }
+                }
+            }
+            val reopen = AppReopenedListener { SwingUtilities.invokeLater { showWindow() } }
+            val reopenHandled = desktop != null && desktop.isSupported(Desktop.Action.APP_EVENT_REOPENED)
+            if (reopenHandled) desktop.addAppEventListener(reopen)
+            onDispose {
+                if (quitHandled) runCatching { desktop.setQuitHandler(null) }
+                if (reopenHandled) runCatching { desktop.removeAppEventListener(reopen) }
+            }
+        }
         val uiStore = remember { ShellStateStore() }
         val persistedUi = remember { uiStore.load() }
         // Appearance is NOT in ui-state.json any more (cluster E7): it lives in the shared settings
@@ -526,28 +773,84 @@ fun main() {
         // Cluster G1: the tray manager is installed INTO the `Platform.notifications` seam, so the
         // shell's notification controller and any shared caller raise the same toast.
         val notificationController = remember {
-            DesktopNotifications.install(TrayNotificationManager(trayState))
+            DesktopNotifications.install(TrayNotificationManager(trayState, sniTray))
             NotificationController(DesktopNotifications)
         }
 
-        if (isTraySupported) {
+        // Both trays (AWT and Linux SNI) render the same rows and run the same handlers.
+        val trayDispatcher = TrayDispatcher(
+            action = { action ->
+                when (action) {
+                    TrayAction.OPEN -> showWindow()
+                    TrayAction.SHOW_LOG -> openFile(supervisor.logFile)
+                    TrayAction.RESTART -> hostScope.launch(Dispatchers.Default) {
+                        if (supervisor.status.value is HostingStatus.CantStart) supervisor.ensure() else supervisor.restart()
+                    }
+                    TrayAction.QUIT -> requestQuit()
+                }
+            },
+            toggle = { toggle, on ->
+                hostScope.launch(Dispatchers.Default) {
+                    when (toggle) {
+                        TrayToggle.BACKGROUND -> supervisor.setBackground(on)
+                        TrayToggle.KEEP_AWAKE -> keepAwakeControls.setEnabled(on)
+                        TrayToggle.LID_CLOSED -> keepAwakeControls.setLidClosed(on)
+                    }
+                }
+            },
+        )
+        val trayPowerShown = if (quitting) TrayPower.NONE else trayPower
+        fun onTrayIconClick() {
+            windowVisible = true
+            // Best-effort "bring the app forward": un-minimizing is portable; actually
+            // RAISING the window above others is window-manager-dependent (especially
+            // under a bare Xvfb with no WM) and not attempted further. Compose's
+            // Notification carries no per-toast click callback/id (confirmed via javap)
+            // — only the tray ICON has one (this onAction) — so a click can only jump to
+            // the LAST-notified session, not necessarily the specific toast the user
+            // meant if several stacked up. See this plan's Goal, scoping decision 3.
+            windowState.isMinimized = false
+            notificationController.lastNotifiedSession?.let { sid -> pairedUi?.selectedId = sid }
+        }
+        if (sniTray != null) {
+            // The handlers close over this composition's values: hand the tray the current ones.
+            SideEffect {
+                sniTray.dispatcher = trayDispatcher
+                sniTray.onActivate = { onTrayIconClick() }
+            }
+            val sniItems = trayMenuItems(trayModel, hostingPrefs.background, trayPowerShown)
+            LaunchedEffect(sniItems, trayModel.header) { sniTray.update(sniItems, trayModel.header) }
+        }
+        // The tray went away while the window was hidden in it (the AppIndicator extension was
+        // disabled, the tray host died): bring the window back, or the app would be unreachable.
+        LaunchedEffect(trayAvailable) {
+            if (!trayAvailable && !windowVisible && !quitting) showWindow()
+        }
+
+        if (useAwtTray) {
+            // macOS: a black + alpha template drawn 1:1 at 22 and 44 px (see TrayIcons). Windows: the
+            // same black glyph on a light taskbar, where the white colour icon is invisible; else colour.
+            val trayIcon = when {
+                isMacOs() -> remember { TrayIcons.painter(mac = true) }
+                isWindowsOs() -> remember { TrayIcons.painter(mac = false, darkGlyph = TrayIcons.darkGlyph(mac = false, windows = true)) }
+                else -> painterResource(TrayIcons.COLOUR)
+            }
             Tray(
-                icon = painterResource("supermux-tray.png"),
+                icon = trayIcon,
                 state = trayState,
-                tooltip = "supermux",
-                onAction = {
-                    // Best-effort "bring the app forward": un-minimizing is portable; actually
-                    // RAISING the window above others is window-manager-dependent (especially
-                    // under a bare Xvfb with no WM) and not attempted further. Compose's
-                    // Notification carries no per-toast click callback/id (confirmed via javap)
-                    // — only the tray ICON has one (this onAction) — so a click can only jump to
-                    // the LAST-notified session, not necessarily the specific toast the user
-                    // meant if several stacked up. See this plan's Goal, scoping decision 3.
-                    windowState.isMinimized = false
-                    notificationController.lastNotifiedSession?.let { sid -> pairedUi?.selectedId = sid }
+                tooltip = trayModel.header,
+                onAction = { onTrayIconClick() },
+                menu = {
+                    HostingTrayMenu(
+                        model = trayModel,
+                        background = hostingPrefs.background,
+                        power = trayPowerShown,
+                        dispatcher = trayDispatcher,
+                        dot = !isWindowsOs(),
+                    )
                 },
             )
-        } else {
+        } else if (sniTray == null) {
             // Expected under a bare Xvfb with no tray-hosting panel — see this plan's Ground
             // rules. Desktop notifications are simply disabled; nothing else degrades.
             println(
@@ -556,14 +859,26 @@ fun main() {
             )
         }
 
+        // Linux custom chrome: the main menu lives behind the ☰ button, and F10 / Alt+F/E/V open it.
+        val mainMenuState = remember { MainMenuState() }
         Window(
-            onCloseRequest = { shuttingDown = true },
+            onPreviewKeyEvent = { e ->
+                e.type == KeyEventType.KeyDown &&
+                    mainMenuState.onWindowKey(e.key, e.isAltPressed, e.isCtrlPressed, e.isShiftPressed, e.isMetaPressed)
+            },
+            // Close hides to the tray (spec D3); without a tray there is nowhere to hide, so it quits.
+            onCloseRequest = { if (trayAvailable) windowVisible = false else requestQuit() },
+            visible = windowVisible,
             // Empty on macOS: with the transparent/full-size-content title bar below, a non-empty
             // title still paints centred over our own UI on runtimes that ignore
-            // `apple.awt.windowTitleVisible`. Other platforms keep the normal caption text.
+            // `apple.awt.windowTitleVisible`. Other platforms keep the normal caption text — on
+            // Linux even with the custom chrome: an undecorated window has no title bar to paint
+            // it in, and GNOME's overview and Alt+Tab caption the window with it.
             title = if (isMacOs()) "" else "supermux",
             icon = painterResource("supermux-icon.png"),
             state = windowState,
+            // Linux custom chrome: no system frame; our band, buttons and edge handles replace it.
+            undecorated = linuxMoveResize != null,
         ) {
             if (shuttingDown) return@Window
 
@@ -579,6 +894,12 @@ fun main() {
             // inset under the traffic lights for the sidebar toggle (see MacChrome.kt).
             // No-ops off macOS, but gated anyway to keep it obvious.
             val macChrome = if (isMacOs()) rememberMacWindowChrome(window) else null
+            val linuxChrome = linuxMoveResize?.let { rememberLinuxWindowChrome(window, it) }
+            // Windows: JBR custom title bar, content edge to edge, Windows' own caption buttons
+            // kept (WindowsWindowChrome.kt). Null: the normal frame and menu bar.
+            val windowsChrome = if (isWindowsOs()) rememberWindowsWindowChrome(window, dark = true) else null
+            // The band's drag regions under the custom chrome (Linux or Windows).
+            val bandRegions = linuxChrome?.regions ?: windowsChrome?.regions
             if (isMacOs()) LaunchedEffect(window) { installMacTrackpadMagnify(window.rootPane) }
             if (isMacOs() && macChrome?.titleBar == null) {
                 LaunchedEffect(window) {
@@ -609,17 +930,18 @@ fun main() {
             // New Session keeps its conventional Ctrl+N accelerator too — it and the in-app shortcut
             // both just flip `ui.launcherOpen`, which is idempotent, so a double-fire (menu action +
             // the key event still bubbling to shellShortcuts) is harmless.
-            if (paired) {
-                MenuBar {
-                    Menu("File", mnemonic = 'F') {
-                        Item("New Session", shortcut = KeyShortcut(Key.N, ctrl = true)) {
-                            ui.openLauncher()
-                        }
-                        Item("Move workspace to New Window") {
-                            // Through the seam (cluster G1); AppShell binds the live registry into it.
-                            DesktopWindowHostController.tearOutCanvas()
-                        }
-                        Item("Move group to New Window") {
+            // One menu, two renderings (DesktopMainMenu.kt): the native menu bar, or — under the
+            // Linux custom chrome, which has no system frame to hang a menu bar in — the main-menu
+            // button in the sidebar band.
+            val mainMenu = listOf(
+                MainMenuGroup(
+                    "File",
+                    'F',
+                    listOf(
+                        MainMenuEntry.Action("New Session", MenuShortcut(Key.N, ctrl = true)) { ui.openLauncher() },
+                        // Through the seam (cluster G1); AppShell binds the live registry into it.
+                        MainMenuEntry.Action("Move workspace to New Window") { DesktopWindowHostController.tearOutCanvas() },
+                        MainMenuEntry.Action("Move group to New Window") {
                             val bind = ui.panesBind
                             if (bind != null) {
                                 val tree = bind.ws.layoutSync.tree
@@ -629,52 +951,50 @@ fun main() {
                                     tearOutGroupLive(desktopWindows.registry, tree, gid, bind.current.id)
                                 }
                             }
-                        }
-                        Item("Archived…") {
-                            ui.openArchived()
-                        }
-                        Item("Displays…") {
-                            ui.openDisplays()
-                        }
-                        Item("Usage…") {
-                            ui.openUsage()
-                        }
-                        Item("Settings…") {
-                            ui.openSettings()
-                        }
+                        },
+                        MainMenuEntry.Action("Archived…") { ui.openArchived() },
+                        MainMenuEntry.Action("Displays…") { ui.openDisplays() },
+                        MainMenuEntry.Action("Usage…") { ui.openUsage() },
+                        MainMenuEntry.Action("Settings…") { ui.openSettings() },
                         // Existing items keep working — they open the Settings hub focused on
                         // that section (same overlay as Settings…, not a separate stack).
-                        Item("Editor / LSP…") {
-                            ui.openLspSettings()
-                        }
-                        Item("Personal Assistants…") {
-                            ui.openPersonalAssistants()
-                        }
-                        Item("Check for Updates…") {
-                            ui.openAppUpdate()
-                        }
-                        Separator()
-                        Item("Unpair…") { showUnpairConfirm = true }
-                    }
-                    Menu("Edit", mnemonic = 'E') {
+                        MainMenuEntry.Action("Editor / LSP…") { ui.openLspSettings() },
+                        MainMenuEntry.Action("Personal Assistants…") { ui.openPersonalAssistants() },
+                        MainMenuEntry.Action("Check for Updates…") { ui.openAppUpdate() },
+                        MainMenuEntry.Separator,
+                        MainMenuEntry.Action("Unpair…") { showUnpairConfirm = true },
+                    ),
+                ),
+                MainMenuGroup(
+                    "Edit",
+                    'E',
+                    listOf(
                         // Same paste-image path as Ctrl/Cmd+V / right-click in the composer.
                         // The accelerator exists only while a chat composer has the focus: a
                         // window-wide Ctrl+V would steal every paste from the code editor (M5 B2).
-                        Item("Paste image", shortcut = pasteImageShortcut(dev.supermux.ui.chat.ChatInputFocus.focused)) {
-                            ui.requestPasteImage()
-                        }
-                    }
-                    Menu("View", mnemonic = 'V') {
+                        MainMenuEntry.Action(
+                            "Paste image",
+                            // The same Ctrl+V as pasteImageShortcut, as menu data.
+                            pasteImageShortcut(dev.supermux.ui.chat.ChatInputFocus.focused)
+                                ?.let { MenuShortcut(Key.V, ctrl = true) },
+                        ) { ui.requestPasteImage() },
+                    ),
+                ),
+                MainMenuGroup(
+                    "View",
+                    'V',
+                    listOf(
                         // Only the sidebar is left: Editor/Terminal/Display were toggles for the
                         // old shell's four fixed panes. A workspace has no fixed panes — views are
                         // created, split and closed on its own layout tree, from the tab strip's
                         // "+" — so there is nothing here to check on or off.
-                        CheckboxItem("Show Sidebar", checked = !ui.sidebarCollapsed) {
+                        MainMenuEntry.Toggle("Show Sidebar", checked = !ui.sidebarCollapsed) {
                             ui.sidebarCollapsed = !ui.sidebarCollapsed
-                        }
-                    }
-                }
-            }
+                        },
+                    ),
+                ),
+            )
+            if (paired && linuxChrome == null && windowsChrome == null) DesktopMenuBar(mainMenu)
 
             // Appearance lives on [ui] so the sidebar toggle, theme, and ui-state.json share one source.
             ProvideDesktopAdaptiveLocals {
@@ -682,12 +1002,37 @@ fun main() {
               // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
               // places the sidebar toggle next to them and pads only the sidebar body under that
               // band — no full-window dead strip across the title bar.
+              // Linux custom chrome: the band's drag regions and the controls' room, for the whole
+              // window (the wizard too). Neither is provided on macOS here — its shell-level
+              // provider below is unchanged.
+              // Windows: the native caption buttons follow the app theme (light or dark).
+              windowsChrome?.let { wc ->
+                  val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+                  LaunchedEffect(wc, dark) { wc.setDark(dark) }
+              }
+              CompositionLocalProvider(
+                  LocalMacWindowChrome provides bandRegions,
+                  LocalWindowChromeInsets provides chromeInsets(
+                      ChromeOs.of(),
+                      customChrome = linuxChrome != null || windowsChrome != null,
+                      windowsCaptionButtons = windowsChrome?.captionButtonsWidth ?: WindowsCaptionButtonsFallbackWidth,
+                  ),
+              ) {
               Box(
                   Modifier
                       .fillMaxSize()
                       .background(MaterialTheme.colorScheme.background),
               ) {
                 if (!paired) {
+                    // No sidebar band or tab strip before pairing: the whole top band drags.
+                    if (bandRegions != null) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(LinuxTitleBarHeight)
+                                .macTitleBarDragRegion("onboarding-band"),
+                        )
+                    }
                     val scope = rememberCoroutineScope()
                     // First-run choice (spec §6 / D6 choice A): on every native-host desktop platform
                     // the default first run is the desktop-as-host wizard — this computer becomes a host,
@@ -697,20 +1042,26 @@ fun main() {
                     val showHostWizard = DesktopHostBootstrap.isNativeHostPlatform() && !connectInstead
 
                     if (showHostWizard) {
-                        // The sidecar spawns OR adopts the local broker (adopt = read-only probe of an
-                        // already-running :9898 broker; it never stops a broker it didn't start). NOT
-                        // stopped on dispose — a freshly-spawned managed broker must keep hosting after
-                        // the wizard closes (the login keep-alive agent owns its persistence).
-                        val sidecar = remember { DesktopHostBootstrap.sidecar() }
-                        val model = remember { DesktopHostBootstrap.buildModel(scope, hostStore, sidecar) }
+                        // The app-wide supervisor (started at launch, above). NOT stopped on dispose —
+                        // the broker keeps hosting after the wizard closes.
+                        val model = remember { DesktopHostBootstrap.buildModel(scope, hostStore, supervisor) }
+                        val gitRequirement by supervisor.gitRequirement.collectAsState()
                         HostWizard(
                             model = model,
+                            gitRequirement = gitRequirement,
+                            onInstallGit = {
+                                // Before Done "This computer" may not be stored yet: the wizard's own token works.
+                                dev.supermux.desktop.settings.installGitOnThisComputer(supervisor, hostStore, model.localToken)
+                            },
                             onDone = {
                                 // The model auto-paired "This computer" into the fleet store; reflect it.
                                 paired = hostStore.list().isNotEmpty()
                                 if (!paired) connectInstead = true // bootstrap failed → fall back to onboarding
                             },
-                            onConnectInstead = { connectInstead = true },
+                            onConnectInstead = {
+                                connectInstead = true
+                                hostScope.launch(Dispatchers.Default) { supervisor.setHosting(false) }
+                            },
                         )
                     } else {
                         val pairing = remember {
@@ -744,6 +1095,11 @@ fun main() {
                         )
                     }
                     DisposableEffect(Unit) { onDispose { fleet.close() } }
+                    // Published up to the tray (session count, the remote host's name/reachability).
+                    DisposableEffect(fleet) {
+                        pairedFleet = fleet
+                        onDispose { pairedFleet = null }
+                    }
                     // The active host's app backs the single-host headless hooks below and is
                     // AppShell's fallback; AppShell itself routes through `fleet`. Non-null
                     // because `paired` ⟹ the store holds a host ⟹ FleetStore opened its connection.
@@ -1584,7 +1940,13 @@ fun main() {
                     // modifiers inside AppShell resolve it via LocalMacWindowChrome; overlays and
                     // onboarding have no chrome in the title-bar band. Null provider = no-op.
                     CompositionLocalProvider(
-                        LocalMacWindowChrome provides macChrome?.regions,
+                        // Settings ▸ Hosting reads the app-wide supervisor (null where the app does not host).
+                        LocalHostSupervisor provides supervisor.takeIf { hostsNatively },
+                        dev.supermux.desktop.settings.LocalKeepAwakeControls provides keepAwakeControls.takeIf { hostsNatively },
+                        LocalPairedHostStore provides hostStore,
+                        LocalHostingFleet provides fleet,
+                        LocalHostingSessions provides fleetFacts.localSessions,
+                        LocalMacWindowChrome provides (macChrome?.regions ?: bandRegions),
                         LocalMacTrafficLightsInset provides (
                             macChrome?.trafficLightsInset ?: MacTrafficLightsWidth
                         ),
@@ -1602,8 +1964,33 @@ fun main() {
                             // macOS: no full-window dead strip under the transparent title bar.
                             // Detail content runs to the top edge; only the sidebar body is padded
                             // under the traffic-light band.
-                            sidebarTopPad = if (isMacOs()) MacTitleBarHeight else 0.dp,
+                            // Linux custom chrome: the same band, one tab strip tall, holding the
+                            // main menu and the sidebar toggle.
+                            sidebarTopPad = when {
+                                isMacOs() -> MacTitleBarHeight
+                                linuxChrome != null -> LinuxTitleBarHeight
+                                windowsChrome != null -> WindowsTitleBarHeight
+                                else -> 0.dp
+                            },
                             sidebarChrome = { sidebarWidth, collapsed ->
+                                // Linux and Windows custom chrome: the ☰ main menu and the sidebar
+                                // toggle in the band (no system menu bar there).
+                                if (bandRegions != null && !isMacOs()) {
+                                    Box(
+                                        Modifier
+                                            .align(Alignment.TopStart)
+                                            .width(if (collapsed) 64.dp else sidebarWidth)
+                                            .height(LinuxTitleBarHeight)
+                                            .macTitleBarDragRegion("sidebar-band"),
+                                    )
+                                    LinuxSidebarChrome(
+                                        menu = mainMenu,
+                                        menuState = mainMenuState,
+                                        collapsed = collapsed,
+                                        onCollapse = { ui.sidebarCollapsed = true },
+                                        modifier = Modifier.align(Alignment.TopStart).zIndex(30f),
+                                    )
+                                }
                                 if (isMacOs() && !collapsed) {
                                     // Native window-drag handle: the empty sidebar band under the
                                     // traffic lights. Layout-only Box (draws nothing, no pointer
@@ -1681,7 +2068,20 @@ fun main() {
                         )
                     }
                 }
+                // Last, so the buttons and edge handles sit over every screen.
+                linuxChrome?.let { LinuxWindowChromeOverlay(it) }
               }
+              // Hosting questions and the quit confirm, over the wizard AND the shell: the wizard's
+              // own ensure() waits on a takeover answer too.
+              HostingDialogs(
+                  status = hostingStatus,
+                  confirmQuit = confirmQuit,
+                  onTakeover = { supervisor.answerTakeover(it) },
+                  onDowngrade = { supervisor.answerDowngrade(it) },
+                  onQuit = { confirmQuit = null; quitNow() },
+                  onCancelQuit = { cancelQuit() },
+              )
+              } // CompositionLocalProvider (Linux chrome)
             }
             } // ProvideDesktopAdaptiveLocals
 
@@ -1790,10 +2190,9 @@ fun main() {
         }
         }
     } finally {
-        // Read-aloud is a process singleton (see SharedDesktopTts) and owns a child `say`/`ffplay`
-        // process; release it here so a quit mid-sentence does not outlive the window.
-        runCatching { MessageTts.stop(SharedDesktopTts) }
-        runCatching { SharedDesktopTts.shutdown() }
+        exitCleanup()
+        // The app has exited: let a pending macOS system quit (logout, shutdown) carry on.
+        systemQuit.getAndSet(null)?.let { r -> runCatching { r.performQuit() } }
     }
 }
 

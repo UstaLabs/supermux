@@ -109,3 +109,19 @@ test("a dead worker is evicted and respawned on the next call", async () => {
   await tick(); h.rpc.settle("req-2", { a: 2 }); await p2
   expect(h.spawnCount).toBe(2)                     // respawned because the first was dead
 })
+
+test("sleep is not idle: shiftIdle moves the baseline so a worker used just before a sleep survives the wake", async () => {
+  let t = 1000
+  const killed: string[] = []
+  const h = harness({ now: () => t, killWorker: async (id) => { killed.push(id) } })
+  const p = h.rpc.callAgent({ key: "w", taskType: "t", payload: {} })
+  await tick(); h.rpc.settle("req-1", {}); await p
+  t += 60_000            // used a minute ago …
+  t += 3_600_000         // … then the computer slept an hour
+  h.rpc.shiftIdle(3_600_000)
+  await h.rpc.reapIdle(600_000)
+  expect(killed).toEqual([])
+  t += 600_000           // ten more awake minutes do make it idle
+  await h.rpc.reapIdle(600_000)
+  expect(killed).toEqual(["sess-w-1"])
+})

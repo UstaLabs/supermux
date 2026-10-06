@@ -1,9 +1,12 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 import org.jetbrains.compose.reload.gradle.ComposeHotRun
+import dev.supermux.desktop.packaging.DebLauncherEntry
+import dev.supermux.desktop.packaging.MsiVersion
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.util.Collections
 import java.util.zip.CRC32
@@ -38,6 +41,9 @@ dependencies {
     implementation(libs.ktor.client.websockets)
     // macOS chrome: JBR custom-title-bar API (MacWindowChrome.kt). Safe no-op facade on non-JBR JVMs.
     implementation(libs.jbr.api)
+    // Linux tray: StatusNotifierItem + dbusmenu (host/linux/SniTray.kt). Only ever dialled on Linux.
+    implementation(libs.dbus.java.core)
+    implementation(libs.dbus.java.transport.native.unixsocket)
     // (LazyList reorder is :ui's own ui/session/DragReorder.kt since cluster F2 — one
     //  implementation for both hosts, gesture branched on LocalInputMode.)
     // (composemediaplayer moved to :ui commonMain in cluster D1 — it comes in transitively with
@@ -57,6 +63,9 @@ dependencies {
 }
 
 kotlin { jvmToolchain(17) }
+
+// The .deb launcher-entry edit (packaging/src, compiled into buildSrc for the build) is tested here.
+sourceSets["test"].java.srcDir("packaging/src")
 
 // The app's own version, baked in so the updater knows what it is running — and which release
 // channel it follows (a prerelease like 0.12.0-alpha.1 follows channels.alpha). CI passes the tag
@@ -87,7 +96,23 @@ val macBuildHost = hostOs.let { it.contains("mac") || it.contains("darwin") }
 // A trackpad pinch reaches Java on macOS only through com.apple.eawt.event (MacTrackpadMagnify.kt),
 // a package java.desktop keeps unexported. macOS-only: elsewhere the package does not exist and the
 // JVM would warn about the flag.
-val macJvmArgs = if (macBuildHost) listOf("--add-exports=java.desktop/com.apple.eawt.event=ALL-UNNAMED") else emptyList()
+// apple.awt.enableTemplateImages: the tray icon is a macOS template image (JDK-8252015); main() sets
+// it too, this makes sure it is there before any AWT class loads.
+val macJvmArgs = if (macBuildHost) {
+    listOf("--add-exports=java.desktop/com.apple.eawt.event=ALL-UNNAMED", "-Dapple.awt.enableTemplateImages=true")
+} else {
+    emptyList()
+}
+
+// Linux custom window chrome (shell/LinuxWindowChrome.kt): the WM_CLASS name and the
+// `_NET_WM_MOVERESIZE` edge resize reach AWT's X11 internals, which java.desktop does not open.
+// Without these the app simply keeps the system title bar.
+val linuxBuildHost = hostOs.contains("linux")
+val linuxJvmArgs = if (linuxBuildHost) {
+    listOf("--add-opens=java.desktop/sun.awt=ALL-UNNAMED", "--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED")
+} else {
+    emptyList()
+}
 
 // The app runs on — and ships with — a pinned JetBrains Runtime (plain JBR, no JCEF since the M5
 // native-editor cutover). A JBR is what makes MacWindowChrome's custom title bar and its drag
@@ -200,14 +225,14 @@ tasks.withType<ComposeHotRun>().configureEach {
     mainClass.set("dev.supermux.desktop.MainKt")
     dependsOn(prepareJbrRuntime)
     javaLauncher.set(jbrLauncher)
-    jvmArgs(macJvmArgs)
+    jvmArgs(macJvmArgs + linuxJvmArgs)
 }
 
 // The normal Compose run task uses the same JBR as packaged builds.
 tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
     dependsOn(prepareJbrRuntime)
     javaLauncher.set(jbrLauncher)
-    jvmArgs(macJvmArgs)
+    jvmArgs(macJvmArgs + linuxJvmArgs)
 }
 
 // Never launch a real system browser from unit/UI tests (Agent OAuth, timeline links, etc.).
@@ -232,7 +257,7 @@ tasks.register<JavaExec>("previewWorkspaceList") {
 compose.desktop {
     application {
         mainClass = "dev.supermux.desktop.MainKt"
-        jvmArgs += macJvmArgs
+        jvmArgs += macJvmArgs + linuxJvmArgs
         nativeDistributions {
             // Host-scoped: jpackage can only ever build the formats of the OS it runs on, AND on
             // macOS Compose eagerly creates a `notarize<Format>` task per declared format —
@@ -265,6 +290,11 @@ compose.desktop {
             // Moot while the whole JBR image is the runtime (see the afterEvaluate block below), but
             // kept so a fallback to Compose's jlink step can't ship a runtime missing a module.
             includeAllModules = true
+            // Named anyway for the same fallback: dbus-java (the Linux tray) needs jdk.security.auth
+            // (its EXTERNAL auth reads the uid), jdk.net (unix-socket peer options) and java.xml
+            // (introspection); its socket transport finds itself through ServiceLoader, which jdeps
+            // can't see either.
+            modules("jdk.security.auth", "jdk.net", "java.xml")
             linux {
                 debMaintainer = "supermux"
                 menuGroup = "Development"
@@ -278,6 +308,13 @@ compose.desktop {
             }
             windows {
                 iconFile.set(project.file("icons/supermux.ico"))
+                // The MSI must carry the real version (MsiVersion, packaging/src) and a FIXED upgrade
+                // code, or Windows Installer refuses a newer MSI over an older one ("another version
+                // of this product is already installed") instead of upgrading in place. The UUID is
+                // the one jpackage derived for every MSI shipped so far (read from them), so those
+                // installs upgrade too. Never change it.
+                packageVersion = MsiVersion.of(supermuxVersion)
+                upgradeUuid = "23d5bb8e-2d6e-3d2d-bab2-e2341eac2771"
             }
             // macOS DMG. The app name + bundle id differ from the retired native SwiftUI client
             // (`Supermux.app` / `dev.supermux.app`) and are KEPT that way for update continuity:
@@ -295,10 +332,15 @@ compose.desktop {
                 // Without a usage string macOS never shows the mic prompt: TCC silently denies the app
                 // and javax.sound hands back a line of ALL-ZERO samples (not an error) — the broker
                 // then gets silence and the STT model invents a sentence from nothing.
+                // NSAppSleepDisabled: no App Nap. A hidden app (window closed to the menu bar) would
+                // otherwise be throttled, and the lid helper's lease touch (every 15 s) and the
+                // supervisor's watch loop must keep their timing.
                 infoPlist {
                     extraKeysRawXml = """
                         <key>NSMicrophoneUsageDescription</key>
                         <string>Supermux uses the microphone for voice dictation.</string>
+                        <key>NSAppSleepDisabled</key>
+                        <true/>
                     """.trimIndent()
                 }
                 // Signing is OPT-IN so unsigned local/CI dry-run builds keep working untouched:
@@ -417,6 +459,64 @@ fun rewritePackagedNativeDigests(appDir: File): List<File> {
     return changed
 }
 
+/**
+ * Adds `StartupWMClass=supermux` to the launcher entry inside each .deb in [debDir].
+ *
+ * The app names its X11 windows "supermux" (WM_CLASS, shell/LinuxWindowChrome.kt), but jpackage's
+ * entry is `supermux-supermux.desktop` with no StartupWMClass, so GNOME cannot tie the window to
+ * the launcher and the dock shows a second, anonymous icon. jpackage would take an overriding
+ * template from `--resource-dir`, but Compose always passes its own (cleared and refilled inside
+ * the task action, and jpackage keeps the last value of a repeated option), so the entry is fixed
+ * in the built package instead: unpack, edit (DebLauncherEntry, packaging/src), rebuild
+ * root-owned. Fails the build when the entry is missing or still lacks the line.
+ */
+fun addStartupWmClassToDebs(debDir: File) {
+    fun run(vararg argv: String) {
+        val proc = ProcessBuilder(*argv).redirectErrorStream(true).start()
+        val out = proc.inputStream.bufferedReader().readText()
+        if (proc.waitFor() != 0) throw GradleException("${argv.joinToString(" ")} failed: $out")
+    }
+    val debs = debDir.listFiles().orEmpty().filter { it.isFile && it.name.endsWith(".deb") }
+    if (debs.isEmpty()) throw GradleException("addStartupWmClassToDebs: no .deb in $debDir")
+    for (deb in debs) {
+        val work = Files.createTempDirectory("deb-wmclass").toFile()
+        try {
+            // dpkg-deb -b packs the root dir's own mode into the package's "./" entry, and dpkg
+            // applies it to / on install: a 0700 temp dir would lock everyone else out of /.
+            Files.setPosixFilePermissions(work.toPath(), PosixFilePermissions.fromString("rwxr-xr-x"))
+            run("dpkg-deb", "-R", deb.absolutePath, work.absolutePath)
+            val entries = work.walkTopDown()
+                .filter { it.isFile && it.name.endsWith(".desktop") && !it.path.contains("/DEBIAN/") }
+                .toList()
+            if (entries.isEmpty()) {
+                throw GradleException("addStartupWmClassToDebs: ${deb.name} has no .desktop launcher entry to add StartupWMClass to")
+            }
+            var changed = false
+            for (entry in entries) {
+                val before = entry.readText()
+                val after = DebLauncherEntry.withStartupWmClass(before, "supermux")
+                if (after == before) continue
+                entry.writeText(after)
+                changed = true
+                val rel = entry.relativeTo(work).invariantSeparatorsPath
+                // Keep DEBIAN/md5sums (when jpackage wrote one) true to the edited file.
+                val sums = File(work, "DEBIAN/md5sums")
+                if (sums.isFile) {
+                    val md5 = MessageDigest.getInstance("MD5").digest(entry.readBytes()).joinToString("") { "%02x".format(it) }
+                    sums.writeText(DebLauncherEntry.withMd5(sums.readText(), rel, md5))
+                }
+                logger.lifecycle("deb: StartupWMClass=supermux added to ${deb.name}!/$rel")
+            }
+            if (entries.none { DebLauncherEntry.hasStartupWmClass(it.readText()) }) {
+                throw GradleException("addStartupWmClassToDebs: no launcher entry in ${deb.name} has StartupWMClass")
+            }
+            if (changed) run("dpkg-deb", "--root-owner-group", "-b", work.absolutePath, deb.absolutePath)
+        } finally {
+            work.deleteRecursively()
+        }
+    }
+}
+
 // Compose configures its jpackage task inputs after the nativeDistributions DSL is evaluated. Apply
 // the verified JBR home afterward so its late default cannot restore a jlink runtime built from the
 // build JDK (which is not a JBR: MacWindowChrome's title bar would silently fall back). The build JDK
@@ -426,6 +526,10 @@ afterEvaluate {
         dependsOn(prepareJbrRuntime)
         runtimeImage.set(jbrHome)
         runtimeImage.finalizeValue()
+        // The .deb's launcher entry gets StartupWMClass (see addStartupWmClassToDebs).
+        if (targetFormat == TargetFormat.Deb) {
+            doLast { addStartupWmClassToDebs(destinationDir.get().asFile) }
+        }
     }
     tasks.named<AbstractJPackageTask>("createDistributable") {
         doLast {

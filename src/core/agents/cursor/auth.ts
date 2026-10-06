@@ -123,7 +123,7 @@ export async function resolveCursorAuth(opts: {
  * stdout; NO_OPEN_BROWSER stops it from opening one on the broker host. */
 export function loginSpawnCommand(): LoginSpawnCommand {
   const env = { ...process.env } as Record<string, string>
-  const cmd = resolveCommand(["cursor-agent", "agent"], env, process.platform) ?? "cursor-agent"
+  const cmd = resolveCommand(["cursor-agent"], env, process.platform) ?? "cursor-agent"
   env.NO_OPEN_BROWSER = "1"
   return { cmd, args: ["login"], env }
 }

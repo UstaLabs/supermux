@@ -16,11 +16,17 @@ import {
   applyUpdate,
   archAssetKeyFor,
   assetKeyFor,
+  launchdLabelFromXpc,
   resolveAndApply,
   restartService,
   restartViaLaunchd,
   restartViaSystemd,
+  restartViaWindowsTask,
+  captureWindowsTaskFlag,
+  windowsRestartExit,
+  type ExitHooks,
   rollback,
+  systemdUnitFromCgroup,
   type UpdateApplyError,
 } from "./apply"
 import type { FetchLike } from "./checker"
@@ -739,6 +745,44 @@ describe("restartViaLaunchd", () => {
     process.env.XPC_SERVICE_NAME = "0"
     expect(restartViaLaunchd({})).toBe(false)
   })
+
+  test("returns false for a GUI app's XPC name (a broker spawned by the desktop app)", () => {
+    process.env.XPC_SERVICE_NAME = "application.dev.supermux.desktop.120069.120203"
+    expect(restartViaLaunchd({})).toBe(false)
+  })
+})
+
+describe("launchdLabelFromXpc", () => {
+  test("a LaunchAgent's XPC_SERVICE_NAME is its label", () => {
+    expect(launchdLabelFromXpc("dev.supermux.host")).toBe("dev.supermux.host")
+    expect(launchdLabelFromXpc("dev.supermux.broker")).toBe("dev.supermux.broker")
+  })
+
+  test("not launchd-managed: unset, '0', or a LaunchServices app instance", () => {
+    expect(launchdLabelFromXpc(undefined)).toBeNull()
+    expect(launchdLabelFromXpc("")).toBeNull()
+    expect(launchdLabelFromXpc("0")).toBeNull()
+    expect(launchdLabelFromXpc("application.dev.supermux.desktop.120069.120203")).toBeNull()
+  })
+})
+
+describe("systemdUnitFromCgroup", () => {
+  test("reads the user unit the broker actually runs under", () => {
+    expect(
+      systemdUnitFromCgroup("0::/user.slice/user-1000.slice/user@1000.service/app.slice/mux.service\n"),
+    ).toBe("mux.service")
+    expect(
+      systemdUnitFromCgroup("0::/user.slice/user-1000.slice/user@1000.service/app.slice/supermux.service"),
+    ).toBe("supermux.service")
+  })
+
+  test("null outside a service unit (a login scope, a container, no cgroup)", () => {
+    expect(systemdUnitFromCgroup("0::/user.slice/user-1000.slice/session-3.scope")).toBeNull()
+    expect(systemdUnitFromCgroup("0::/")).toBeNull()
+    expect(systemdUnitFromCgroup("")).toBeNull()
+    // The user manager itself is not the broker's unit.
+    expect(systemdUnitFromCgroup("0::/user.slice/user-1000.slice/user@1000.service/init.scope")).toBeNull()
+  })
 })
 
 describe("restartService", () => {
@@ -797,3 +841,61 @@ describe("restartViaSystemd", () => {
 // keep an unused-import guard happy: reference the type so tsc sees it used.
 const _typecheck: UpdateApplyError | null = null
 void _typecheck
+
+// ── restartViaWindowsTask: the Scheduled Task loop respawns an exiting broker ─────
+
+describe("restartViaWindowsTask", () => {
+  test("false when this process isn't the broker under the task", () => {
+    const scheduled: number[] = []
+    expect(restartViaWindowsTask({ underTask: false, schedule: (_fn, ms) => scheduled.push(ms) })).toBe(false)
+    expect(scheduled).toEqual([])
+  })
+
+  test("the module default is false until the broker captures the flag (a CLI never does)", () => {
+    expect(restartViaWindowsTask({ schedule: () => { throw new Error("must not schedule") } })).toBe(false)
+  })
+
+  test("under the task: schedules the exit after the delay and returns true", () => {
+    const scheduled: number[] = []
+    expect(restartViaWindowsTask({ underTask: true, schedule: (_fn, ms) => scheduled.push(ms), delayMs: 250 })).toBe(true)
+    expect(scheduled).toEqual([250])
+  })
+
+  test("the scheduled callback emits SIGTERM, then arms a 10 s hard exit", () => {
+    const calls: string[] = []
+    let deadline: (() => void) | undefined
+    const hooks: ExitHooks = {
+      emitSigterm: () => { calls.push("sigterm"); return true },
+      exit: (code) => calls.push(`exit ${code}`),
+      later: (fn, ms) => { calls.push(`later ${ms}`); deadline = fn },
+    }
+    let scheduled: (() => void) | undefined
+    restartViaWindowsTask({ underTask: true, schedule: (fn) => { scheduled = fn }, hooks })
+    expect(calls).toEqual([])
+    scheduled!()
+    expect(calls).toEqual(["later 10000", "sigterm"])
+    deadline!() // graceful shutdown hung
+    expect(calls).toEqual(["later 10000", "sigterm", "exit 0"])
+  })
+
+  test("with no shutdown listener it exits at once", () => {
+    const calls: string[] = []
+    windowsRestartExit({ emitSigterm: () => false, exit: (c) => calls.push(`exit ${c}`), later: () => {} })
+    expect(calls).toEqual(["exit 0"])
+  })
+})
+
+describe("captureWindowsTaskFlag", () => {
+  test("reads MUX_WINDOWS_TASK once and removes it so children don't inherit it", () => {
+    const env: Record<string, string | undefined> = { MUX_WINDOWS_TASK: "1", PATH: "x" }
+    expect(captureWindowsTaskFlag(env)).toBe(true)
+    expect(env).toEqual({ PATH: "x" })
+    let scheduled = 0
+    expect(restartViaWindowsTask({ schedule: () => { scheduled++ } })).toBe(true)
+    expect(scheduled).toBe(1)
+    // A process without the flag (a CLI) clears it again.
+    expect(captureWindowsTaskFlag({})).toBe(false)
+    expect(restartViaWindowsTask({ schedule: () => { scheduled++ } })).toBe(false)
+    expect(scheduled).toBe(1)
+  })
+})

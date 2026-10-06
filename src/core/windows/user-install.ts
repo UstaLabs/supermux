@@ -1,0 +1,257 @@
+// Per-user installs on Windows without an installer program, so without a UAC prompt: download
+// over HTTPS, verify, unpack into a staging dir beside the target, swap it into place by rename,
+// and put a dir on the user PATH in the registry (once). MinGit (core/git/mingit.ts) and the agent
+// CLIs that publish no PowerShell installer (core/agents/install-builtin.ts) share these pieces.
+//
+// Everything that touches the machine is a parameter, so the callers' tests run on any OS.
+import { createHash } from "crypto"
+import { execFile } from "child_process"
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "fs"
+import { win32 as winPath } from "path"
+import { findEscape, isInUse } from "../agents/archive-guard"
+
+/** The file operations a per-user install needs. Paths are Windows paths. */
+export interface UserInstallFs {
+  exists: (p: string) => boolean
+  mkdir: (p: string) => void
+  write: (p: string, b: Uint8Array) => void
+  rename: (from: string, to: string) => void
+  remove: (p: string) => void
+  /** The first unpacked entry escaping [dir] (zip-slip, a symlink out), or null. Real fs only. */
+  contained?: (dir: string) => string | null
+}
+
+export const realUserInstallFs: UserInstallFs = {
+  exists: (p) => existsSync(p),
+  mkdir: (p) => { mkdirSync(p, { recursive: true }) },
+  write: (p, b) => writeFileSync(p, b),
+  rename: (from, to) => renameSync(from, to),
+  remove: (p) => rmSync(p, { recursive: true, force: true }),
+  contained: (dir) => findEscape(dir),
+}
+
+export function sha256Hex(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex")
+}
+
+/**
+ * Pure: [current] (a `;`-separated PATH, maybe null) with [dir] appended, or null when it is
+ * already there (case-insensitive, trailing backslash ignored, %VARS% compared as written and
+ * expanded with [env]).
+ */
+export function pathWithDir(current: string | null, dir: string, env: Record<string, string | undefined> = {}): string | null {
+  const norm = (d: string) => {
+    const expanded = d.replace(/%([^%]+)%/g, (whole, name: string) => {
+      const key = Object.keys(env).find((k) => k.toLowerCase() === name.toLowerCase())
+      return key ? env[key] ?? whole : whole
+    })
+    return expanded.trim().replace(/[\\/]+$/, "").toLowerCase()
+  }
+  const parts = (current ?? "").split(";").filter((p) => p.trim() !== "")
+  if (parts.some((p) => norm(p) === norm(dir))) return null
+  return [...parts, dir].join(";")
+}
+
+/** Reads and writes the user's raw (unexpanded) registry PATH. */
+export interface UserPathStore {
+  /** The user's raw registry PATH, null when unset. */
+  readUserPath: () => Promise<string | null>
+  /** Write the user's registry PATH (and tell running programs about it). */
+  writeUserPath: (value: string) => Promise<void>
+}
+
+/** U+FFFD in a PATH we read means it was decoded wrongly: writing it back would make the damage permanent. */
+export function assertCleanPath(value: string | null): void {
+  if (value?.includes("\uFFFD")) {
+    throw new Error("the user PATH couldn't be read without damage (U+FFFD); not changing it")
+  }
+}
+
+// Every read-modify-write of the user PATH in this process goes through one queue (MinGit, the
+// builtin agent installers, claude's .local\bin): two at once would each write back the PATH they
+// read, and the later one would drop the earlier one's dir.
+let userPathQueue: Promise<unknown> = Promise.resolve()
+
+function withUserPathLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = userPathQueue.then(fn, fn)
+  userPathQueue = run.catch(() => {})
+  return run
+}
+
+/**
+ * Add [dir] to the user's registry PATH unless it is already there. True when it wrote. Serialised
+ * with every other add in this process; right before the write it reads again and merges, so a
+ * change another program made meanwhile is kept.
+ */
+export function addToUserPath(store: UserPathStore, dir: string, env: Record<string, string | undefined> = process.env): Promise<boolean> {
+  return withUserPathLock(async () => {
+    const first = await store.readUserPath()
+    assertCleanPath(first)
+    if (pathWithDir(first, dir, env) === null) return false
+    const current = await store.readUserPath()
+    assertCleanPath(current)
+    const next = pathWithDir(current, dir, env)
+    if (next === null) return false
+    await store.writeUserPath(next)
+    return true
+  })
+}
+
+export class StageError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "StageError"
+  }
+}
+
+/**
+ * Unpack [zipBytes] into a fresh staging dir beside [root], check it with [verify] (a message
+ * means "refuse"), then swap it into place by rename: a crash leaves either the old tree or the
+ * new one, never half of one. The zip and the staging dir never outlive the call. Throws
+ * [StageError] when anything fails; [root] is then untouched.
+ */
+export async function stageZipInto(opts: {
+  root: string
+  zipBytes: Uint8Array
+  /** Basenames beside [root]: `<stagingPrefix>.tmp-<stamp>`, `<stagingPrefix>.old-<stamp>`, `<zipPrefix>-<stamp>.zip`. */
+  stagingPrefix: string
+  zipPrefix: string
+  extract: (zip: string, dest: string) => Promise<void>
+  /** Inspect the unpacked staging dir: a message refuses the archive. */
+  verify: (staging: string) => string | null
+  fs: UserInstallFs
+  stamp: string
+  /** What runs from [root], for "Close running <name> sessions" when Windows holds it open. */
+  inUseName?: string
+}): Promise<void> {
+  const { fs, root, stamp } = opts
+  const parent = winPath.dirname(root)
+  const staging = winPath.join(parent, `${opts.stagingPrefix}.tmp-${stamp}`)
+  const zip = winPath.join(parent, `${opts.zipPrefix}-${stamp}.zip`)
+  try {
+    fs.mkdir(staging)
+    fs.write(zip, opts.zipBytes)
+    await opts.extract(zip, staging)
+    const escape = fs.contained?.(staging)
+    if (escape) throw new Error(`the archive reaches outside its folder (${escape}); refusing it`)
+    const refusal = opts.verify(staging)
+    if (refusal) throw new Error(refusal)
+    try {
+      if (fs.exists(root)) {
+        const old = winPath.join(parent, `${opts.stagingPrefix}.old-${stamp}`)
+        fs.rename(root, old)
+        try {
+          fs.rename(staging, root)
+        } catch (err) {
+          try { fs.rename(old, root) } catch {} // put the previous install back
+          throw err
+        }
+        try { fs.remove(old) } catch {}
+      } else {
+        fs.rename(staging, root)
+      }
+    } catch (err) {
+      if (opts.inUseName && isInUse(err)) throw new Error(`${opts.inUseName} is in use. Close running ${opts.inUseName} sessions and try again.`)
+      throw err
+    }
+  } catch (err) {
+    try { fs.remove(staging) } catch {}
+    throw new StageError(err instanceof Error ? err.message : String(err))
+  } finally {
+    try { fs.remove(zip) } catch {}
+  }
+}
+
+/** GET [url] (redirects followed) as bytes; throws on a non-2xx answer. */
+export async function downloadBytes(url: string, fetchFn: typeof fetch = fetch, init: RequestInit = {}): Promise<Uint8Array> {
+  const res = await fetchFn(url, { redirect: "follow", ...init })
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`)
+  return new Uint8Array(await res.arrayBuffer())
+}
+
+// ── the real Windows pieces ─────────────────────────────────────────────────────────────────
+
+/** Windows PowerShell 5.1 by its fixed path (no PATH lookup, so nothing on PATH can stand in). */
+export function windowsPowerShellPath(env: Record<string, string | undefined> = process.env): string {
+  const key = Object.keys(env).find((k) => k.toLowerCase() === "systemroot")
+  const root = (key && env[key]) || "C:\\Windows"
+  return winPath.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+}
+
+export function powershell(script: string, extraEnv: Record<string, string> = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      windowsPowerShellPath(),
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+      { timeout: 5 * 60_000, windowsHide: true, env: { ...process.env, ...extraEnv }, maxBuffer: 1 << 20 },
+      (err, stdout, stderr) => (err ? reject(new Error(String(stderr || err))) : resolve(String(stdout))),
+    )
+  })
+}
+
+/** Paths go through the environment, never into the script text: no quoting to get wrong. */
+const EXTRACT = "Expand-Archive -LiteralPath $env:MUX_UNZIP_ZIP -DestinationPath $env:MUX_UNZIP_DEST -Force"
+
+/** Unzip [zip] into [dest] with Expand-Archive. */
+export async function extractZip(zip: string, dest: string): Promise<void> {
+  await powershell(EXTRACT, { MUX_UNZIP_ZIP: zip, MUX_UNZIP_DEST: dest })
+}
+
+/** UTF-16LE text as base64: how strings cross the PowerShell boundary (pure ASCII both ways). */
+export function toUtf16Base64(s: string): string {
+  return Buffer.from(s, "utf16le").toString("base64")
+}
+
+export function fromUtf16Base64(b64: string): string {
+  return Buffer.from(b64.trim(), "base64").toString("utf16le")
+}
+
+// Windows PowerShell 5.1 writes a pipe in the OEM code page, so `C:\Users\Hüseyin` came back as
+// U+FFFD and was written back damaged. Values cross as base64 of UTF-16LE (ASCII) instead.
+// The raw value (DoNotExpandEnvironmentNames) so %USERPROFILE%-style entries stay variables, and
+// written back as REG_EXPAND_SZ. Environment.SetEnvironmentVariable would write REG_SZ and break
+// them. WM_SETTINGCHANGE "Environment" makes Explorer (new terminals) pick the change up.
+const REGISTRY_ROOTS = {
+  user: "[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')",
+  machine: "[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')",
+} as const
+
+/** A PowerShell script printing the raw `Path` of [scope] as base64 UTF-16LE (nothing when unset). */
+export function readPathScript(scope: keyof typeof REGISTRY_ROOTS): string {
+  return `$k = ${REGISTRY_ROOTS[scope]}; ` +
+    "if ($k) { $v = $k.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); " +
+    "if ($v) { [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($v))) } }"
+}
+const WRITE_USER_PATH =
+  "$v = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($env:MUX_NEW_USER_PATH_B64)); " +
+  "$k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment'); " +
+  "$k.SetValue('Path', $v, [Microsoft.Win32.RegistryValueKind]::ExpandString); $k.Close(); " +
+  "Add-Type -Namespace MuxEnv -Name Native -MemberDefinition '[DllImport(\"user32.dll\", CharSet = CharSet.Unicode)] public static extern System.IntPtr SendMessageTimeout(System.IntPtr h, uint m, System.UIntPtr w, string l, uint f, uint t, out System.UIntPtr r);'; " +
+  "$r = [System.UIntPtr]::Zero; [void][MuxEnv.Native]::SendMessageTimeout([System.IntPtr]0xffff, 0x1A, [System.UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$r)"
+
+export type PowerShellRunner = (script: string, extraEnv?: Record<string, string>) => Promise<string>
+
+/** A raw registry `Path` read through [run]; null when unset. */
+export async function readRegistryPathVia(run: PowerShellRunner, scope: keyof typeof REGISTRY_ROOTS): Promise<string | null> {
+  const out = (await run(readPathScript(scope))).trim()
+  return out ? fromUtf16Base64(out) : null
+}
+
+/** The user registry PATH through [run] (PowerShell), with every value crossing as base64 UTF-16LE. */
+export function powershellUserPathStore(run: PowerShellRunner): UserPathStore {
+  return {
+    readUserPath: () => readRegistryPathVia(run, "user"),
+    writeUserPath: async (value) => {
+      assertCleanPath(value)
+      await run(WRITE_USER_PATH, { MUX_NEW_USER_PATH_B64: toUtf16Base64(value) })
+    },
+  }
+}
+
+/** The real user registry PATH for this Windows user. */
+export const realUserPathStore: UserPathStore = powershellUserPathStore(powershell)
+
+/** `%LOCALAPPDATA%`, or its default under the profile. */
+export function localAppData(env: Record<string, string | undefined> = process.env): string {
+  return env.LOCALAPPDATA ?? winPath.join(env.USERPROFILE ?? "C:\\", "AppData", "Local")
+}

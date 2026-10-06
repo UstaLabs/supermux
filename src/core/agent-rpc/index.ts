@@ -34,6 +34,8 @@ export interface AgentRpc {
   settle: (requestId: string, data: unknown) => void
   fail: (requestId: string, error: string) => void
   reapIdle: (maxIdleMs: number) => Promise<void>
+  /** The computer slept [sleptMs]: that time is not idleness, so move every idle baseline forward. */
+  shiftIdle: (sleptMs: number) => void
 }
 
 export function createAgentRpc(deps: AgentRpcDeps): AgentRpc {
@@ -117,6 +119,10 @@ export function createAgentRpc(deps: AgentRpcDeps): AgentRpc {
       for (const w of [...workers.values()]) {
         if (!w.busy && w.queue.length === 0 && w.lastUsedAt < cutoff) await recycle(w)
       }
+    },
+    shiftIdle(sleptMs) {
+      if (!(sleptMs > 0)) return
+      for (const w of workers.values()) w.lastUsedAt += sleptMs
     },
   }
 }

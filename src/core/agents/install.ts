@@ -1,23 +1,125 @@
 // Installs an agent CLI on the broker host, headlessly. Each agent has its own
-// official installer; we run it through `bash -lc` with NO TTY (stdin ignored)
-// and a forced non-interactive env so `curl|bash` / npm installers take their
-// non-interactive branch and can never hang waiting for a prompt. Dependency-
-// injected (spawn + isInstalled) so it unit-tests without real installs.
+// official installer, per OS:
+//   • macOS / Linux: the vendor's `curl … | bash` script through `bash -lc`.
+//   • Windows: the vendor's PowerShell script (`irm … | iex`) through Windows
+//     PowerShell 5.1 by its fixed path — there is no bash on a fresh Windows.
+//   • "builtin": the vendor publishes no Windows script (OpenCode, Grok), so the
+//     broker downloads, verifies and unpacks the release itself (install-builtin.ts).
+// Every recipe is per user: no admin rights (no sudo, no UAC), no node, no git.
+// Scripts run with NO TTY (stdin ignored) and a forced non-interactive env so they
+// take their non-interactive branch and can never hang waiting for a prompt.
+// Dependency-injected (spawn + builtin deps + isInstalled) so it unit-tests
+// without real installs.
 import { spawn as defaultSpawn, type ChildProcess } from "child_process"
 import { homedir } from "os"
-import type { AgentKind } from "../../shared/agents"
+import { agentDisplayName, type AgentKind } from "../../shared/agents"
 import { makeLogger } from "../../shared/log"
-import { withNodeBinDirs } from "./bin-dirs"
+import { addToUserPath, windowsPowerShellPath } from "../windows/user-install"
+import { agentBinDirs, withAgentBinDirs, withNodeBinDirs } from "./bin-dirs"
+import { BUILTIN_INSTALLERS, realBuiltinDeps, type BuiltinInstallDeps } from "./install-builtin"
+import { LINUX_BUILTIN_INSTALLERS, realLinuxBuiltinDeps, type LinuxBuiltinDeps } from "./install-builtin-linux"
+import { resolveCommand } from "../process/launcher"
+import { linkIntoLocalBin, realLinkFs, type LinkFs } from "./local-bin"
 
 const log = makeLogger("agents/install")
 
-/** Official, non-interactive installer per agent. */
-export const INSTALL_RECIPES: Record<AgentKind, string> = {
-  claude: "curl -fsSL https://claude.ai/install.sh | bash",
-  codex: "npm install -g @openai/codex",
-  cursor: "curl https://cursor.com/install -fsS | bash",
-  opencode: "curl -fsSL https://opencode.ai/install | bash",
-  grok: "curl -fsSL https://x.ai/cli/install.sh | bash",
+export type InstallShell = "bash" | "powershell" | "builtin"
+/** How to install one agent on one OS. For "builtin", [script] names a BUILTIN_INSTALLERS entry. */
+export interface InstallRecipe {
+  shell: InstallShell
+  script: string
+  /** Windows: a dir (may use %VARS%) to put on the user PATH after a successful install, for a
+   * vendor installer that leaves it to the user. */
+  userPathDir?: string
+}
+export type InstallOs = "posix" | "win32"
+
+/** Official, non-interactive, per-user installer per agent and OS. `null` = can't be installed there. */
+export const INSTALL_RECIPES: Record<InstallOs, Record<AgentKind, InstallRecipe | null>> = {
+  posix: {
+    claude: { shell: "bash", script: "curl -fsSL --proto '=https' --proto-redir '=https' https://claude.ai/install.sh | bash" },
+    // The standalone installer verifies its own SHA-256 and needs no node. Without
+    // CODEX_NON_INTERACTIVE it may read /dev/tty for a confirmation.
+    codex: { shell: "bash", script: "curl -fsSL --proto '=https' --proto-redir '=https' https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh" },
+    cursor: { shell: "bash", script: "curl -fsS --proto '=https' --proto-redir '=https' https://cursor.com/install | bash" },
+    // ~/.opencode/bin is on the broker's PATH (bin-dirs.ts); don't let it edit rc files.
+    opencode: { shell: "bash", script: "curl -fsSL --proto '=https' --proto-redir '=https' https://opencode.ai/install | bash -s -- --no-modify-path" },
+    grok: { shell: "bash", script: "curl -fsSL --proto '=https' --proto-redir '=https' https://x.ai/cli/install.sh | bash" },
+  },
+  win32: {
+    // claude's installer only TELLS the user to add %USERPROFILE%\.local\bin to PATH by hand.
+    claude: { shell: "powershell", script: "irm https://claude.ai/install.ps1 | iex", userPathDir: "%USERPROFILE%\\.local\\bin" },
+    codex: { shell: "powershell", script: "$env:CODEX_NON_INTERACTIVE='1'; irm https://chatgpt.com/codex/install.ps1 | iex" },
+    cursor: { shell: "powershell", script: "irm 'https://cursor.com/install?win32=true' | iex" },
+    opencode: { shell: "builtin", script: "opencode-windows" },
+    grok: { shell: "builtin", script: "grok-windows" },
+  },
+}
+
+const OS_NAMES: Partial<Record<NodeJS.Platform, string>> = { win32: "Windows", darwin: "macOS", linux: "Linux" }
+
+/**
+ * macOS/Linux without curl (Ubuntu Desktop ships wget, not curl). The claude, codex and grok
+ * scripts download with curl OR wget, so only fetching the script changes. The cursor and
+ * OpenCode scripts call curl themselves, so on Linux the broker installs those two itself
+ * (install-builtin-linux.ts).
+ */
+export const NO_CURL_RECIPES: Record<AgentKind, { wget?: string; linuxBuiltin?: string }> = {
+  claude: { wget: "wget --https-only --no-verbose -O- https://claude.ai/install.sh | bash" },
+  codex: { wget: "wget --https-only --no-verbose -O- https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh" },
+  cursor: { linuxBuiltin: "cursor-linux" },
+  opencode: { linuxBuiltin: "opencode-linux" },
+  grok: { wget: "wget --https-only --no-verbose -O- https://x.ai/cli/install.sh | bash" },
+}
+
+/**
+ * The recipe for [kind] on [platform], or why there is none (a message for the user).
+ * [hasCommand] answers "is <name> on PATH?" (macOS/Linux: curl, wget); without it curl is assumed.
+ */
+export function installRecipeFor(
+  kind: AgentKind,
+  platform: NodeJS.Platform,
+  hasCommand: (name: string) => boolean = () => true,
+): InstallRecipe | { unsupported: string } {
+  const os: InstallOs | null = platform === "win32" ? "win32" : platform === "darwin" || platform === "linux" ? "posix" : null
+  const recipe = os ? INSTALL_RECIPES[os][kind] : null
+  if (!recipe) {
+    return { unsupported: `${agentDisplayName(kind)} can't be installed from supermux on ${OS_NAMES[platform] ?? platform}: not supported on this OS.` }
+  }
+  if (os !== "posix" || hasCommand("curl")) return recipe
+  const alt = NO_CURL_RECIPES[kind]
+  if (alt.linuxBuiltin && platform === "linux") return { shell: "builtin", script: alt.linuxBuiltin }
+  if (alt.wget && hasCommand("wget")) return { shell: "bash", script: alt.wget }
+  return { unsupported: `${agentDisplayName(kind)}'s installer needs curl${alt.wget ? " or wget" : ""}, and this computer has neither. Install curl (e.g. sudo apt install curl), then try again.` }
+}
+
+/** Stops a Windows PowerShell 5.1 script from crawling: its progress bar slows Invoke-WebRequest
+ * many times over, and an older default may still lack TLS 1.2. */
+export const POWERSHELL_PREAMBLE =
+  "$ProgressPreference = 'SilentlyContinue'; " +
+  "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; "
+
+/** The exact program + argv a recipe runs (no shell in between). Not for "builtin". */
+export function installCommand(recipe: InstallRecipe, env: Record<string, string | undefined>): { cmd: string; args: string[] } {
+  if (recipe.shell === "powershell") {
+    return {
+      cmd: windowsPowerShellPath(env),
+      args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", POWERSHELL_PREAMBLE + recipe.script],
+    }
+  }
+  // pipefail: a download that fails in `curl … | bash` must fail the job with ITS code. Without
+  // it bash runs the empty script, exits 0, and "curl: command not found" reads as success.
+  return { cmd: "bash", args: ["-lc", `set -o pipefail; ${recipe.script}`] }
+}
+
+/**
+ * macOS/Linux: a CLI whose install dir is on no PATH but the broker's (OpenCode's ~/.opencode/bin:
+ * `--no-modify-path`, or the builtin) also gets a link in ~/.local/bin — on PATH in a stock Ubuntu
+ * login and where claude/codex/cursor already live — so it works in the user's own terminals.
+ * No rc file is edited. Paths are relative to the home dir.
+ */
+export const LOCAL_BIN_LINKS: Partial<Record<AgentKind, { name: string; target: string }>> = {
+  opencode: { name: "opencode", target: ".opencode/bin/opencode" },
 }
 
 export type InstallState = "running" | "done" | "failed"
@@ -25,6 +127,8 @@ export interface InstallJob {
   state: InstallState
   log: string
   exitCode: number | null
+  /** Why it failed, in a sentence (unsupported OS, the installer couldn't start, a refused download, …). */
+  error?: string
 }
 
 // Narrow seam for tests (Node's `spawn` is heavily overloaded; the fake only
@@ -32,69 +136,245 @@ export interface InstallJob {
 export type InstallSpawnFn = (
   cmd: string,
   args: string[],
-  opts: { env: Record<string, string>; stdio: ("pipe" | "ignore" | "inherit")[] },
+  opts: { env: Record<string, string>; stdio: ("pipe" | "ignore" | "inherit")[]; windowsHide?: boolean; detached?: boolean },
 ) => ChildProcess
 
 export interface InstallDeps {
   spawn?: InstallSpawnFn
   /** Re-probe whether the agent's binary is on PATH (after the installer ran). */
   isInstalled: (kind: AgentKind) => boolean
-  /** Home dir for resolving node version-manager paths. Defaults to homedir(). */
+  /** Home dir for resolving per-user bin dirs. Defaults to homedir(). */
   home?: string
+  /** Defaults to process.platform. */
+  platform?: NodeJS.Platform
+  /** The environment installers start from. Defaults to process.env. */
+  env?: Record<string, string | undefined>
+  /** The builtin installers' machine access (fetch, fs, registry, …). Defaults to the real ones. */
+  builtin?: Omit<BuiltinInstallDeps, "log">
+  /** The same for the Linux builtins (curl missing). Defaults to the real ones. */
+  linuxBuiltin?: Omit<LinuxBuiltinDeps, "log">
+  /** Is <name> on the installers' PATH? Defaults to a lookup on [env]'s PATH. */
+  hasCommand?: (name: string) => boolean
+  /** The whole install's budget; past it a script's process tree is killed and the job fails
+   * "timed out", freeing the agent's one-job slot. Defaults to [INSTALL_DEADLINE_MS]. */
+  deadlineMs?: number
+  /** Kill an installer and everything it started. Defaults to [killProcessTree]. */
+  killTree?: (child: ChildProcess, platform: NodeJS.Platform) => void
+  /** macOS/Linux: the ~/.local/bin links ([LOCAL_BIN_LINKS]). Defaults to the real file system. */
+  linkFs?: LinkFs
+  /** Runs once the installer ended, before `isInstalled`: e.g. pick up the registry PATH it changed. */
+  refreshPath?: () => Promise<unknown>
   /** Called once an install settles (done OR failed) — the set of installed agents may have moved. */
   onSettled?: (kind: AgentKind, job: InstallJob) => void
 }
 
 const MAX_LOG = 64 * 1024 // keep the tail bounded; installers can be chatty
+export const INSTALL_DEADLINE_MS = 15 * 60_000
 
 /**
- * Start a non-interactive install for `kind`. Returns a live `job` (mutated in
- * place as the child runs — the caller stores it and polls it) plus a `done`
- * promise that resolves once the install settles. Throws if `kind` has no recipe.
+ * Kill [child] and its descendants. macOS/Linux: the installer runs in its own process group
+ * (spawned detached), so the whole group goes. Windows: `taskkill /T /F`.
  */
-export function startInstall(kind: AgentKind, deps: InstallDeps): { job: InstallJob; done: Promise<void> } {
-  const recipe = INSTALL_RECIPES[kind]
-  if (!recipe) throw new Error(`no install recipe for agent: ${kind}`)
+export function killProcessTree(child: ChildProcess, platform: NodeJS.Platform): void {
+  const pid = child.pid
+  if (!pid) return
+  try {
+    if (platform === "win32") {
+      const kill = defaultSpawn("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true })
+      kill.on("error", () => {})
+    } else {
+      process.kill(-pid, "SIGKILL")
+    }
+  } catch {
+    try { child.kill("SIGKILL") } catch {}
+  }
+}
+const EXIT_OUTPUT_GRACE_MS = 2_000
 
-  const spawnFn = deps.spawn ?? (defaultSpawn as unknown as InstallSpawnFn)
-  const env: Record<string, string> = {
-    ...(process.env as Record<string, string>),
+/** Set PATH on [env] under the key it already uses (Windows keys are case-insensitive: `Path`). */
+function setPath(env: Record<string, string>, value: string, platform: NodeJS.Platform): void {
+  const key = platform === "win32" ? Object.keys(env).find((k) => k.toLowerCase() === "path") ?? "Path" : "PATH"
+  env[key] = value
+}
+
+function getPath(env: Record<string, string>, platform: NodeJS.Platform): string | undefined {
+  if (platform !== "win32") return env.PATH
+  const key = Object.keys(env).find((k) => k.toLowerCase() === "path")
+  return key ? env[key] : undefined
+}
+
+function withoutDirs(path: string | undefined, drop: string[]): string {
+  const gone = new Set(drop.map((d) => d.replace(/\/+$/, "")))
+  return (path ?? "").split(":").filter((d) => d && !gone.has(d.replace(/\/+$/, ""))).join(":")
+}
+
+/** The installer's environment: the broker's, forced non-interactive; agent bin dirs on PATH on Windows only (see below). */
+export function installEnv(base: Record<string, string | undefined>, home: string, platform: NodeJS.Platform): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const [k, v] of Object.entries(base)) if (typeof v === "string") env[k] = v
+  Object.assign(env, {
     // Force non-interactive across the common installer ecosystems.
     CI: "1",
     NONINTERACTIVE: "1",
     DEBIAN_FRONTEND: "noninteractive",
     npm_config_yes: "true",
-  }
-  env.PATH = withNodeBinDirs(env.PATH, deps.home ?? homedir())
+    CODEX_NON_INTERACTIVE: "1",
+  })
+  // macOS/Linux: hide the agent bin dirs the broker put on its own PATH at boot. The vendor
+  // scripts decide from PATH whether to set PATH up for the user's shells (codex adds a block to
+  // ~/.zprofile, claude prints the line to add); seeing the broker's PATH they did nothing, and
+  // on a Mac — where ~/.local/bin is on no default PATH — claude and codex then ran in supermux
+  // but not in Terminal. Windows installers read the registry PATH instead, so it keeps them.
+  const path = platform === "win32"
+    ? withAgentBinDirs(withNodeBinDirs(getPath(env, platform), home, platform), home, platform, env)
+    : withoutDirs(withNodeBinDirs(getPath(env, platform), home, platform), agentBinDirs(home, platform, env))
+  setPath(env, path, platform)
+  return env
+}
 
+/**
+ * Start a non-interactive install for `kind`. Returns a live `job` (mutated in
+ * place as the installer runs — the caller stores it and polls it) plus a `done`
+ * promise that resolves once the install settles. Never throws: an OS without a
+ * recipe gives an already-failed job that says so.
+ */
+export function startInstall(kind: AgentKind, deps: InstallDeps): { job: InstallJob; done: Promise<void> } {
+  const platform = deps.platform ?? process.platform
   const job: InstallJob = { state: "running", log: "", exitCode: null }
-  // stdio[0] = "ignore" → the installer's stdin is NOT a TTY.
-  const child = spawnFn("bash", ["-lc", recipe], { env, stdio: ["ignore", "pipe", "pipe"] })
-
   const append = (chunk: unknown) => {
     job.log += String(chunk)
     if (job.log.length > MAX_LOG) job.log = job.log.slice(-MAX_LOG)
   }
-  child.stdout?.on("data", append)
-  child.stderr?.on("data", append)
 
+  const baseEnv = deps.env ?? process.env
+  const home = deps.home ?? homedir()
+  const hasCommand = deps.hasCommand ?? ((name: string) => resolveCommand([name], installEnv(baseEnv, home, platform), platform) !== null)
+  const recipe = installRecipeFor(kind, platform, hasCommand)
+  if ("unsupported" in recipe) {
+    job.state = "failed"
+    job.error = recipe.unsupported
+    append(`${recipe.unsupported}\n`)
+    log.info("agent_install_unsupported", { kind, platform })
+    return { job, done: Promise.resolve() }
+  }
+
+  let settled = false
+  let deadline: ReturnType<typeof setTimeout> | undefined
+  let running: ChildProcess | undefined
   const done = new Promise<void>((resolve) => {
-    const finish = (code: number | null) => {
+    const finish = async (code: number | null, error?: string) => {
+      if (settled) return
+      settled = true
+      if (deadline) clearTimeout(deadline)
       job.exitCode = code
+      if (code === 0 && recipe.userPathDir && platform === "win32") {
+        const machine = deps.builtin ?? realBuiltinDeps(deps.env ?? process.env)
+        try {
+          const wrote = await addToUserPath(machine, recipe.userPathDir, machine.env)
+          if (wrote) append(`Added ${recipe.userPathDir} to your PATH.\n`)
+        } catch (err) {
+          append(`Couldn't add ${recipe.userPathDir} to your PATH: ${err instanceof Error ? err.message : String(err)}\n`)
+        }
+      }
+      const localLink = LOCAL_BIN_LINKS[kind]
+      if (code === 0 && localLink && platform !== "win32") {
+        try {
+          const line = linkIntoLocalBin(home, localLink, deps.linkFs ?? realLinkFs)
+          if (line) append(`${line}\n`)
+        } catch (err) {
+          append(`Couldn't link ${localLink.name} into ~/.local/bin: ${err instanceof Error ? err.message : String(err)}\n`)
+        }
+      }
+      try {
+        await deps.refreshPath?.()
+      } catch (err) {
+        log.warn("agent_install_refresh_path_failed", { kind, err: String(err) })
+      }
       // "done" only if the installer succeeded AND the binary is actually on
       // PATH now — a 0 exit that produced no usable binary is still a failure.
-      job.state = code === 0 && deps.isInstalled(kind) ? "done" : "failed"
-      log.info("agent_install_finished", { kind, state: job.state, exitCode: code })
+      const installed = code === 0 && deps.isInstalled(kind)
+      job.state = installed ? "done" : "failed"
+      // A non-zero exit speaks for itself (the client shows the code and the log tail).
+      if (!installed) {
+        const reason = error ?? (code === 0
+          ? `The installer finished, but supermux can't find the ${agentDisplayName(kind)} CLI on this computer.`
+          : undefined)
+        if (reason) job.error = reason
+      }
+      log.info("agent_install_finished", { kind, state: job.state, exitCode: code, shell: recipe.shell })
       resolve()
     }
+
+    const budget = deps.deadlineMs ?? INSTALL_DEADLINE_MS
+    deadline = setTimeout(() => {
+      const message = `The installer didn't finish within ${Math.round(budget / 60_000)} minutes and was stopped.`
+      append(`\n${message}\n`)
+      if (running) (deps.killTree ?? killProcessTree)(running, platform)
+      void finish(null, message)
+    }, budget)
+    ;(deadline as { unref?: () => void }).unref?.()
+
+    if (recipe.shell === "builtin") {
+      const line = (l: string) => append(`${l}\n`)
+      const windows = BUILTIN_INSTALLERS[recipe.script]
+      const linux = LINUX_BUILTIN_INSTALLERS[recipe.script]
+      const run = windows
+        ? () => windows({ ...(deps.builtin ?? realBuiltinDeps(baseEnv)), log: line })
+        : linux
+          ? () => linux({ ...(deps.linuxBuiltin ?? realLinuxBuiltinDeps(home)), log: line })
+          : null
+      if (!run) {
+        void finish(null, `no builtin installer named ${recipe.script}`)
+        return
+      }
+      run().then(
+        () => finish(0),
+        (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err)
+          append(`${message}\n`)
+          void finish(1, message)
+        },
+      )
+      return
+    }
+
+    const env = installEnv(baseEnv, home, platform)
+    const { cmd, args } = installCommand(recipe, env)
+    const spawnFn = deps.spawn ?? (defaultSpawn as unknown as InstallSpawnFn)
+    let child: ChildProcess
+    try {
+      // stdio[0] = "ignore" → the installer's stdin is NOT a TTY.
+      // detached on macOS/Linux: its own process group, so a timeout kills everything it started.
+      child = spawnFn(cmd, args, { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, ...(platform === "win32" ? {} : { detached: true }) })
+      running = child
+    } catch (err) {
+      const message = `couldn't start ${cmd}: ${err instanceof Error ? err.message : String(err)}`
+      append(`${message}\n`)
+      void finish(null, message)
+      return
+    }
+    // Attached synchronously, before anything else: an unhandled `error` (ENOENT
+    // for a missing shell) would take the whole broker down.
     child.on("error", (err: Error) => {
-      append(`\n${err.message}`)
-      finish(null)
+      const message = `couldn't start ${cmd}: ${err.message}`
+      append(`\n${message}\n`)
+      void finish(null, message)
     })
-    child.on("exit", (code) => finish(code))
+    // `exit` can come before the last output: wait for `close` (all output read),
+    // but not forever — a background process the installer left behind may hold
+    // the pipes open.
+    child.on("exit", (code) => {
+      const timer = setTimeout(() => { void finish(code) }, EXIT_OUTPUT_GRACE_MS)
+      child.once("close", () => {
+        clearTimeout(timer)
+        void finish(code)
+      })
+    })
+    child.stdout?.on("data", append)
+    child.stderr?.on("data", append)
   })
 
-  log.info("agent_install_started", { kind })
+  log.info("agent_install_started", { kind, shell: recipe.shell })
   return { job, done }
 }
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { environmentMdContent, frpcPath, materializeAsset } from "./runtime-assets"
+import { environmentMdContent, frpcAssetName, frpcPath, materializeAsset } from "./runtime-assets"
 import { readEnvironmentMd } from "./agents/environment"
 
 describe("materializeAsset", () => {
@@ -61,4 +61,12 @@ test("frpcPath honors an explicit helper path", () => {
     if (previous === undefined) delete process.env.MUX_FRPC_PATH
     else process.env.MUX_FRPC_PATH = previous
   }
+})
+
+describe("frpcAssetName", () => {
+  test("Windows gets an .exe it can run; elsewhere the bare name", () => {
+    expect(frpcAssetName("win32")).toBe("frpc.exe")
+    expect(frpcAssetName("linux")).toBe("frpc")
+    expect(frpcAssetName("darwin")).toBe("frpc")
+  })
 })

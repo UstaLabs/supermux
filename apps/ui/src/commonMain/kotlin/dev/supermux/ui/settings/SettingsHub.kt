@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Groups
@@ -101,6 +102,9 @@ import dev.supermux.ui.widgets.rememberIosBackSwipe
  * `LocalPlatform.current.caps`, so a machine that cannot do the thing never shows the row.
  */
 enum class SettingsExtra(val label: String, val desc: String) {
+    /** Run and supervise the broker on this computer. Gated on `Caps.localBroker`. */
+    Hosting("Hosting", "Run agents on this computer and keep them running"),
+
     /** Theme / Material You / text scale. Gated on `Caps.appearanceControls`. */
     Appearance("Appearance", "Theme, Material You, and text size"),
 
@@ -165,6 +169,7 @@ fun SettingsHub(
     val extras = remember(caps) {
         SettingsExtra.entries.filter {
             when (it) {
+                SettingsExtra.Hosting -> caps.localBroker
                 SettingsExtra.Appearance -> caps.appearanceControls
                 SettingsExtra.AppUpdate -> caps.appUpdate
             }
@@ -647,6 +652,7 @@ private fun SettingsSection.icon(): ImageVector = when (this) {
 }
 
 private fun SettingsExtra.icon(): ImageVector = when (this) {
+    SettingsExtra.Hosting -> Icons.Filled.Computer
     SettingsExtra.Appearance -> Icons.Filled.Palette
     SettingsExtra.AppUpdate -> Icons.Filled.SystemUpdate
 }

@@ -44,10 +44,31 @@ object DesktopUpdateSource {
 
     /** Hand a downloaded installer to the OS. Public since G1: [DesktopAppUpdater] splits the old
      *  download-and-open into the two halves the shared `AppUpdater` seam exposes. */
-    fun openInstaller(file: File) {
+    /**
+     * Windows MSI: run `msiexec /i` ourselves and quit the app, which the caller must then do.
+     * Windows Installer can only replace the app's files (an in-place MajorUpgrade) once this
+     * process has let go of them; opening the .msi with the shell would leave the app running and
+     * the installer asking to close it or to reboot. Null elsewhere: the OS opens the installer.
+     * msiexec is named by its full System32 path ([systemRoot], `%SystemRoot%`): a bare name is
+     * looked up in the app's directory and the PATH first.
+     */
+    fun windowsInstallerArgv(osName: String?, file: File, systemRoot: String? = System.getenv("SystemRoot")): List<String>? =
+        if (osName?.lowercase(Locale.US)?.startsWith("windows") == true && file.name.endsWith(".msi", ignoreCase = true)) {
+            val root = systemRoot?.takeIf { it.isNotBlank() }?.trimEnd('\\', '/') ?: "C:\\Windows"
+            listOf("$root\\System32\\msiexec.exe", "/i", file.absolutePath)
+        } else {
+            null
+        }
+
+    /** Hand a downloaded installer to the OS. True when the app must now quit (Windows MSI). */
+    fun openInstaller(file: File): Boolean {
+        windowsInstallerArgv(System.getProperty("os.name"), file)?.let { argv ->
+            ProcessBuilder(argv).start()
+            return true
+        }
         if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
             Desktop.getDesktop().open(file)
-            return
+            return false
         }
         val os = System.getProperty("os.name")?.lowercase(Locale.US).orEmpty()
         val cmd = when {
@@ -56,6 +77,7 @@ object DesktopUpdateSource {
             else -> arrayOf("xdg-open", file.absolutePath)
         }
         ProcessBuilder(*cmd).inheritIO().start()
+        return false
     }
 
     fun openUrl(url: String) {
