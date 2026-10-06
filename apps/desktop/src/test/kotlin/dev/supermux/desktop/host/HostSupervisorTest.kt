@@ -3,6 +3,7 @@ package dev.supermux.desktop.host
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -72,6 +73,10 @@ private class Harness(
     val table = FakeProcessTable()
     var baseEnv: Map<String, String> = mapOf("HOME" to home.toString())
     var packaged = true
+    /** The launch-time read of the bundled build, and the background re-read. */
+    var bundledFn: suspend () -> String? = { BUNDLED }
+    var lateBundledFn: suspend () -> String? = { BUNDLED }
+    var lateReads = 0
     /** Runs inside startChild, before the child is returned (e.g. to cancel the caller). */
     var onStart: () -> Unit = {}
     /** The next children start already dead (they never become healthy). */
@@ -87,7 +92,8 @@ private class Harness(
         osEnv = env,
         materialize = { events += "materialize"; bins },
         packaged = { packaged },
-        bundledBuild = { BUNDLED },
+        bundledBuild = { bundledFn() },
+        lateBundledBuild = { lateReads++; lateBundledFn() },
         startChild = { l ->
             events += "startChild"
             launches += l
@@ -1064,6 +1070,68 @@ class HostSupervisorTest {
         h.sup.ensure()
         assertEquals(1, h.env.ran.count { it.getOrNull(1) == "bootstrap" })
         assertEquals(running, h.sup.status.value)
+    }
+
+    // ── a bundled build that is only known late (a slow first read) ──
+
+    private fun slowFirstRead(ts: TestScope, late: suspend () -> String?): Harness {
+        val h = Harness(ts, prefs = HostingPrefs(background = true))
+        h.writeOurPlist()
+        h.bundledFn = { null } // the 15 s read gave up (Defender's first scan, a slow disk)
+        h.lateBundledFn = late
+        h.probeFn = { if (h.bootstrapped()) h.desktop() else h.desktop(build = "1.4.0 (old)") }
+        return h
+    }
+
+    @Test fun unknownAtLaunchThenABackgroundReadOfANewerBuildUpdatesExactlyOnce() = runTest {
+        val h = slowFirstRead(this) { delay(40_000); BUNDLED }
+        h.sup.ensure()
+        // The launch stays fast: the running broker is kept, nothing reinstalled yet.
+        assertFalse(h.bootstrapped())
+        assertEquals(running, h.sup.status.value)
+        assertTrue(h.logs().any { it == "plan: UseOwn (bundled unknown)" }, h.logs().toString())
+        assertTrue(h.logs().any { it.startsWith("bundled build unknown at launch; reading it in the background") }, h.logs().toString())
+        advanceTimeBy(41_000)
+        runCurrent()
+        assertEquals(1, h.env.ran.count { it.getOrNull(1) == "bootstrap" })
+        val l = h.logs()
+        assertTrue(l.any { it == "background read: bundled $BUNDLED after 40.0 s (running 1.4.0 (old))" }, l.toString())
+        assertTrue(l.any { it == "update (after the background read): 1.4.0 (old) -> $BUNDLED" }, l.toString())
+        assertEquals(running, h.sup.status.value)
+        // Another launch decision on this launch never updates again.
+        h.sup.ensure()
+        advanceTimeBy(200_000)
+        assertEquals(1, h.env.ran.count { it.getOrNull(1) == "bootstrap" })
+        assertEquals(1, h.lateReads)
+    }
+
+    @Test fun aBackgroundReadOfTheRunningBuildChangesNothing() = runTest {
+        val h = slowFirstRead(this) { delay(20_000); "1.4.0 (old)" }
+        h.sup.ensure()
+        advanceTimeBy(21_000)
+        runCurrent()
+        assertFalse(h.bootstrapped())
+        assertTrue(h.logs().any { it == "background read: plan UseOwn; nothing to update" }, h.logs().toString())
+        assertEquals(running, h.sup.status.value)
+    }
+
+    @Test fun aBackgroundReadThatStillFailsLeavesTheUpdateForTheNextLaunch() = runTest {
+        val h = slowFirstRead(this) { delay(180_000); null }
+        h.sup.ensure()
+        advanceTimeBy(181_000)
+        runCurrent()
+        assertFalse(h.bootstrapped())
+        assertTrue(h.logs().any { it.startsWith("background read: bundled build still unknown after 180.0 s") }, h.logs().toString())
+        assertEquals(running, h.sup.status.value)
+    }
+
+    @Test fun aKnownBundledBuildAtLaunchStartsNoBackgroundRead() = runTest {
+        val h = Harness(this, prefs = HostingPrefs(background = true))
+        h.writeOurPlist()
+        h.probeFn = { h.desktop() }
+        h.sup.ensure()
+        advanceTimeBy(200_000)
+        assertEquals(0, h.lateReads)
     }
 
     // ── orphan ──

@@ -48,6 +48,13 @@ class HostSupervisor(
     internal val packaged: () -> Boolean = { HostBinaries.isPackaged() },
     /** The bundled broker's build ("1.5.0 (abc)"), or null in a dev checkout / on failure. */
     private val bundledBuild: suspend () -> String? = { BrokerVersion.defaultBundledBuild(stateDir) },
+    /**
+     * The same read with a long budget, run in the background when [bundledBuild] gave up at launch
+     * (a first run of a freshly installed broker can outlast its 15 s cap): see [lateBundledRead].
+     */
+    private val lateBundledBuild: suspend () -> String? = {
+        BrokerVersion.defaultBundledBuild(stateDir, BrokerVersion.LATE_READ_BUDGET_MS)
+    },
     internal val startChild: (ChildLaunch) -> ChildHandle = ::defaultStartChild,
     internal val processes: ProcessTable = SystemProcessTable,
     /** The app's own environment; the child gets it minus [isInheritedServiceKey], plus [brokerEnv]. */
@@ -183,6 +190,8 @@ class HostSupervisor(
     private var bundled: String? = null
     /** An update restart ran on this launch: never restart for an update again (it would loop). */
     private var updateTried = false
+    /** The background read of the bundled build (at most one per launch). */
+    @Volatile private var lateReadJob: Job? = null
     internal var lastHealthyBuild: String? = null
         set(v) { field = v; _build.value = v }
 
@@ -511,6 +520,9 @@ class HostSupervisor(
             HostPlan.UseOwn -> {
                 _build.value = (found as HostProbeResult.Supermux).build
                 useOwnLocked(prefs, found.hostId)
+                if (bundled == null && !updateTried && found.managedBy == "desktop" && found.mode == "binary" && packaged()) {
+                    lateBundledRead(found.build)
+                }
             }
             HostPlan.UpdateOwn -> {
                 log("update: ${(found as? HostProbeResult.Supermux)?.build ?: "unknown"} -> ${bundled ?: "unknown"}")
@@ -535,6 +547,48 @@ class HostSupervisor(
             HostPlan.Wait -> Unit // unreachable: turned into MovePort above
         }
         return null
+    }
+
+    /**
+     * The bundled build was unknown at launch, so the launch kept the running broker (UseOwn). Read
+     * it again in the background with a long budget; when it turns out to differ from what runs,
+     * apply the update once, on this launch, under [lock] — the same UpdateOwn path a launch takes.
+     */
+    private fun lateBundledRead(running: String?) {
+        if (lateReadJob?.isActive == true) return
+        log("bundled build unknown at launch; reading it in the background (up to ${BrokerVersion.LATE_READ_BUDGET_MS / 1000} s)")
+        val started = now()
+        lateReadJob = scope.launch {
+            val b = runCatching { withContext(io) { lateBundledBuild() } }.getOrNull()
+            val secs = (now() - started) / 1000.0
+            if (b == null) {
+                log("background read: bundled build still unknown after $secs s; the update waits for the next launch")
+                return@launch
+            }
+            log("background read: bundled $b after $secs s (running ${running ?: "unknown"})")
+            guarded("late update") {
+                lock.withLock {
+                    val prefs = _prefs.value
+                    if (quitting || !prefs.hosting || pending != null) return@withLock
+                    bundled = b
+                    if (updateTried) {
+                        log("already restarted for an update on this launch; keeping the running build")
+                        return@withLock
+                    }
+                    val found = probe(prefs.port)
+                    val plan = decideHost(found, prefs, b, stateDir.toString())
+                    if (plan != HostPlan.UpdateOwn) {
+                        log("background read: plan $plan; nothing to update")
+                        return@withLock
+                    }
+                    log("update (after the background read): ${(found as? HostProbeResult.Supermux)?.build ?: "unknown"} -> $b")
+                    stopWatch()
+                    retries.reset()
+                    _status.value = HostingStatus.Starting
+                    updateOwnLocked(prefs)
+                }
+            }
+        }
     }
 
     private fun ask(q: Question): Pending {

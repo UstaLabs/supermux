@@ -56,8 +56,11 @@ object BrokerVersion {
 
     private val BUILD_LINE = Regex("""^\S+ \([^)]+\)$""")
 
-    /** `<broker> version` → "1.5.0 (abc1234)", or null. Blocking; call off the main thread. */
-    fun readBundledBuild(broker: Path?): String? {
+    /**
+     * `<broker> version` → "1.5.0 (abc1234)", or null. Blocking; call off the main thread. A child
+     * still running after [killAfterMs] is killed.
+     */
+    fun readBundledBuild(broker: Path?, killAfterMs: Long = 10_000): String? {
         if (broker == null) return null
         var p: Process? = null
         var watchdog: Thread? = null
@@ -69,7 +72,7 @@ object BrokerVersion {
             val proc = p
             watchdog = Thread({
                 try {
-                    if (!proc.waitFor(10, TimeUnit.SECONDS)) proc.destroyForcibly()
+                    if (!proc.waitFor(killAfterMs, TimeUnit.MILLISECONDS)) proc.destroyForcibly()
                 } catch (_: InterruptedException) {
                 }
             }, "broker-version-watchdog").apply { isDaemon = true; start() }
@@ -83,7 +86,7 @@ object BrokerVersion {
                     n += r
                 }
             }
-            if (!p.waitFor(10, TimeUnit.SECONDS) || p.exitValue() != 0) return null
+            if (!p.waitFor(killAfterMs, TimeUnit.MILLISECONDS) || p.exitValue() != 0) return null
             String(buf, 0, n, Charsets.UTF_8).lineSequence().map { it.trim() }.lastOrNull { it.isNotEmpty() }
                 ?.takeIf { BUILD_LINE.matches(it) }
         } catch (_: Exception) {
@@ -97,21 +100,33 @@ object BrokerVersion {
     /**
      * The bundled broker's build, read from the app image without touching the running copy
      * (Windows can't overwrite a running .exe). If packaging dropped the exec bit, a probe copy
-     * under `desktop-assets/probe` is used. Blocking work runs on IO with a 15 s cap; the
-     * reader itself kills a hung child after 10 s.
+     * under `desktop-assets/probe` is used. Blocking work runs on IO within [budgetMs] (15 s at
+     * launch); the reader itself kills a hung child 5 s before that.
+     *
+     * The first run of a freshly installed 160 MB exe can take longer than 15 s (Windows Defender's
+     * first scan; a slow disk): the supervisor then reads again in the background with
+     * [LATE_READ_BUDGET_MS]. `SUPERMUX_DEBUG=1` plus `SUPERMUX_DEBUG_BUNDLED_READ_DELAY_MS=<ms>`
+     * delays every read, to reproduce that on demand.
      */
-    suspend fun defaultBundledBuild(stateDir: Path): String? = withContext(Dispatchers.IO) {
+    suspend fun defaultBundledBuild(stateDir: Path, budgetMs: Long = 15_000): String? = withContext(Dispatchers.IO) {
         val res = HostBinaries.resourcesDir() ?: return@withContext null
         val os = HostBinaries.detectOs()
         val name = HostBinaries.fileName(HostBinaries.Binary.Broker, os)
         val src = res.resolve(name)
         if (!Files.exists(src)) return@withContext null
-        withTimeoutOrNull(15_000) {
+        withTimeoutOrNull(budgetMs) {
+            debugReadDelayMs()?.let { kotlinx.coroutines.delay(it) }
             runInterruptible {
                 val exe = if (os == HostBinaries.Os.WINDOWS || Files.isExecutable(src)) src
                 else HostBinaries.materialize(src, stateDir.resolve("desktop-assets/probe"), name, executable = true)
-                BrokerVersion.readBundledBuild(exe)
+                BrokerVersion.readBundledBuild(exe, killAfterMs = (budgetMs - 5_000).coerceAtLeast(1_000))
             }
         }
     }
+
+    /** How long the background re-read may take (its child is killed 5 s before). */
+    const val LATE_READ_BUDGET_MS = 180_000L
+
+    private fun debugReadDelayMs(): Long? =
+        if (System.getenv("SUPERMUX_DEBUG") == "1") System.getenv("SUPERMUX_DEBUG_BUNDLED_READ_DELAY_MS")?.toLongOrNull() else null
 }
