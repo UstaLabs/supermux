@@ -2,7 +2,7 @@ import { expect, test, describe } from "bun:test"
 import { EventEmitter } from "events"
 import type { ChildProcess } from "child_process"
 import {
-  INSTALL_RECIPES, POWERSHELL_PREAMBLE, createInstallManager, installCommand, installRecipeFor, startInstall,
+  INSTALL_RECIPES, LOCAL_BIN_LINKS, linkIntoLocalBin, type LinkFs, POWERSHELL_PREAMBLE, createInstallManager, installCommand, installRecipeFor, startInstall,
   type InstallDeps,
 } from "./install"
 import { AGENT_KINDS } from "../../shared/agents"
@@ -346,6 +346,87 @@ describe("Windows user PATH after an installer that leaves it to the user (claud
     end(child, 0)
     await done
     expect(m.writes).toEqual([])
+  })
+})
+
+describe("~/.local/bin/opencode link (macOS/Linux)", () => {
+  const T = "/home/u/.opencode/bin/opencode"
+  const L = "/home/u/.local/bin/opencode"
+  function memFs(entries: Record<string, { link?: string; file?: true }> = {}) {
+    const e = new Map(Object.entries(entries))
+    e.set(T, { file: true })
+    const ops: string[] = []
+    const fs: LinkFs = {
+      kind: (p) => { const x = e.get(p); return !x ? "missing" : x.link !== undefined ? "symlink" : "other" },
+      exists: (p) => { const x = e.get(p); return !!x && (x.link === undefined || e.has(x.link)) },
+      readlink: (p) => e.get(p)!.link!,
+      mkdir: (p) => { ops.push(`mkdir ${p}`) },
+      unlink: (p) => { ops.push(`unlink ${p}`); e.delete(p) },
+      symlink: (t, p) => { ops.push(`symlink ${p} -> ${t}`); e.set(p, { link: t }) },
+    }
+    return { fs, e, ops }
+  }
+  const link = LOCAL_BIN_LINKS.opencode!
+
+  test("fresh: mkdir -p ~/.local/bin and link it", () => {
+    const m = memFs()
+    expect(linkIntoLocalBin("/home/u", link, m.fs)).toContain("Linked")
+    expect(m.ops).toEqual(["mkdir /home/u/.local/bin", `symlink ${L} -> ${T}`])
+  })
+
+  test("already linked: nothing to do", () => {
+    const m = memFs({ [L]: { link: T } })
+    expect(linkIntoLocalBin("/home/u", link, m.fs)).toBeNull()
+    expect(m.ops).toEqual([])
+  })
+
+  test("a link of ours (into ~/.opencode/bin, or dangling) is replaced", () => {
+    const m = memFs({ [L]: { link: "/home/u/.opencode/bin/opencode-old" } })
+    expect(linkIntoLocalBin("/home/u", link, m.fs)).toContain("Linked")
+    expect(m.ops).toEqual([`unlink ${L}`, "mkdir /home/u/.local/bin", `symlink ${L} -> ${T}`])
+    const d = memFs({ [L]: { link: "/gone/opencode" } })
+    expect(linkIntoLocalBin("/home/u", link, d.fs)).toContain("Linked")
+  })
+
+  test("someone else's file or live symlink is left alone and logged", () => {
+    const f = memFs({ [L]: { file: true } })
+    expect(linkIntoLocalBin("/home/u", link, f.fs)).toContain("in the way")
+    expect(f.ops).toEqual([])
+    const s2 = memFs({ "/opt/oc/opencode": { file: true }, [L]: { link: "/opt/oc/opencode" } })
+    expect(linkIntoLocalBin("/home/u", link, s2.fs)).toContain("already points to /opt/oc/opencode")
+    expect(s2.ops).toEqual([])
+  })
+
+  test("no target (the install didn't put it there): no link", () => {
+    const m = memFs()
+    m.e.delete(T)
+    expect(linkIntoLocalBin("/home/u", link, m.fs)).toBeNull()
+  })
+
+  test("startInstall links after a successful opencode install only, never on Windows", async () => {
+    for (const [platform, code, want] of [["linux", 0, true], ["darwin", 0, true], ["linux", 1, false], ["win32", 0, false]] as const) {
+      const m = memFs()
+      const child = fakeChild()
+      const { done } = startInstall("opencode", {
+        platform, home: "/home/u", env: platform === "win32" ? WIN_ENV : { PATH: "/usr/bin" }, hasCommand: () => true, linkFs: m.fs,
+        builtin: { env: WIN_ENV, arch: "x64", fetch: (async () => new Response("x", { status: 500 })) as unknown as typeof fetch, sha256: () => "",
+          extract: async () => {}, fs: { exists: () => false, mkdir: () => {}, write: () => {}, rename: () => {}, remove: () => {} },
+          readUserPath: async () => null, writeUserPath: async () => {} },
+        spawn: () => child, isInstalled: () => true,
+      })
+      end(child, code)
+      await done
+      expect(m.ops.some((o) => o.startsWith("symlink"))).toBe(want)
+    }
+  })
+
+  test("other agents get no link", async () => {
+    const m = memFs()
+    const child = fakeChild()
+    const { done } = startInstall("claude", { platform: "linux", home: "/home/u", env: { PATH: "/usr/bin" }, hasCommand: () => true, linkFs: m.fs, spawn: () => child, isInstalled: () => true })
+    end(child, 0)
+    await done
+    expect(m.ops).toEqual([])
   })
 })
 

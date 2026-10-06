@@ -11,6 +11,8 @@
 // Dependency-injected (spawn + builtin deps + isInstalled) so it unit-tests
 // without real installs.
 import { spawn as defaultSpawn, type ChildProcess } from "child_process"
+import { existsSync, lstatSync, mkdirSync, readlinkSync, symlinkSync, unlinkSync } from "fs"
+import { posix } from "path"
 import { homedir } from "os"
 import { agentDisplayName, type AgentKind } from "../../shared/agents"
 import { makeLogger } from "../../shared/log"
@@ -111,6 +113,67 @@ export function installCommand(recipe: InstallRecipe, env: Record<string, string
   return { cmd: "bash", args: ["-lc", `set -o pipefail; ${recipe.script}`] }
 }
 
+/**
+ * macOS/Linux: a CLI whose install dir is on no PATH but the broker's (OpenCode's ~/.opencode/bin:
+ * `--no-modify-path`, or the builtin) also gets a link in ~/.local/bin — on PATH in a stock Ubuntu
+ * login and where claude/codex/cursor already live — so it works in the user's own terminals.
+ * No rc file is edited. Paths are relative to the home dir.
+ */
+export const LOCAL_BIN_LINKS: Partial<Record<AgentKind, { name: string; target: string }>> = {
+  opencode: { name: "opencode", target: ".opencode/bin/opencode" },
+}
+
+/** The file operations [linkIntoLocalBin] needs. */
+export interface LinkFs {
+  /** What is at [p] (not following a symlink). */
+  kind: (p: string) => "missing" | "symlink" | "other"
+  exists: (p: string) => boolean
+  readlink: (p: string) => string
+  mkdir: (p: string) => void
+  unlink: (p: string) => void
+  symlink: (target: string, path: string) => void
+}
+
+export const realLinkFs: LinkFs = {
+  kind: (p) => {
+    try {
+      return lstatSync(p).isSymbolicLink() ? "symlink" : "other"
+    } catch {
+      return "missing"
+    }
+  },
+  exists: (p) => existsSync(p),
+  readlink: (p) => readlinkSync(p),
+  mkdir: (p) => { mkdirSync(p, { recursive: true }) },
+  unlink: (p) => unlinkSync(p),
+  symlink: (target, path) => symlinkSync(target, path),
+}
+
+/**
+ * Link `~/.local/bin/<name>` → `~/<target>`. Replaces a symlink of ours (one already pointing into
+ * the target's dir, or dangling); never touches a file or someone else's symlink — it says so
+ * instead. Returns the line for the install log, or null when there is nothing to say.
+ */
+export function linkIntoLocalBin(home: string, link: { name: string; target: string }, fs: LinkFs): string | null {
+  const target = posix.join(home, link.target)
+  if (!fs.exists(target)) return null
+  const dir = posix.join(home, ".local", "bin")
+  const path = posix.join(dir, link.name)
+  const what = fs.kind(path)
+  if (what === "other") return `Not linking ${path}: a file someone else put there is in the way (${link.name} still runs in supermux).`
+  if (what === "symlink") {
+    const current = fs.readlink(path)
+    const resolved = current.startsWith("/") ? current : posix.join(dir, current)
+    if (resolved === target) return null
+    const ours = posix.dirname(resolved) === posix.dirname(target) || !fs.exists(path)
+    if (!ours) return `Not linking ${path}: it already points to ${current} (${link.name} still runs in supermux).`
+    fs.unlink(path)
+  }
+  fs.mkdir(dir)
+  fs.symlink(target, path)
+  return `Linked ${path} -> ${target}, so ${link.name} also works in your own terminals.`
+}
+
 export type InstallState = "running" | "done" | "failed"
 export interface InstallJob {
   state: InstallState
@@ -144,6 +207,8 @@ export interface InstallDeps {
   linuxBuiltin?: Omit<LinuxBuiltinDeps, "log">
   /** Is <name> on the installers' PATH? Defaults to a lookup on [env]'s PATH. */
   hasCommand?: (name: string) => boolean
+  /** macOS/Linux: the ~/.local/bin links ([LOCAL_BIN_LINKS]). Defaults to the real file system. */
+  linkFs?: LinkFs
   /** Runs once the installer ended, before `isInstalled`: e.g. pick up the registry PATH it changed. */
   refreshPath?: () => Promise<unknown>
   /** Called once an install settles (done OR failed) — the set of installed agents may have moved. */
@@ -221,6 +286,15 @@ export function startInstall(kind: AgentKind, deps: InstallDeps): { job: Install
           if (wrote) append(`Added ${recipe.userPathDir} to your PATH.\n`)
         } catch (err) {
           append(`Couldn't add ${recipe.userPathDir} to your PATH: ${err instanceof Error ? err.message : String(err)}\n`)
+        }
+      }
+      const localLink = LOCAL_BIN_LINKS[kind]
+      if (code === 0 && localLink && platform !== "win32") {
+        try {
+          const line = linkIntoLocalBin(home, localLink, deps.linkFs ?? realLinkFs)
+          if (line) append(`${line}\n`)
+        } catch (err) {
+          append(`Couldn't link ${localLink.name} into ~/.local/bin: ${err instanceof Error ? err.message : String(err)}\n`)
         }
       }
       try {
