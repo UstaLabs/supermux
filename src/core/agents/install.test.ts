@@ -71,6 +71,61 @@ describe("recipe selection", () => {
   })
 })
 
+describe("no curl (Ubuntu Desktop ships wget, not curl)", () => {
+  const only = (...have: string[]) => (name: string) => have.includes(name)
+
+  test("Linux with wget: claude/codex/grok fetch their script with wget; cursor/opencode are builtin", () => {
+    expect(installRecipeFor("claude", "linux", only("wget"))).toEqual({ shell: "bash", script: "wget --no-verbose -O- https://claude.ai/install.sh | bash" })
+    expect(installRecipeFor("codex", "linux", only("wget"))).toEqual({
+      shell: "bash",
+      script: "wget --no-verbose -O- https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
+    })
+    expect(installRecipeFor("grok", "linux", only("wget"))).toEqual({ shell: "bash", script: "wget --no-verbose -O- https://x.ai/cli/install.sh | bash" })
+    expect(installRecipeFor("cursor", "linux", only("wget"))).toEqual({ shell: "builtin", script: "cursor-linux" })
+    expect(installRecipeFor("opencode", "linux", only("wget"))).toEqual({ shell: "builtin", script: "opencode-linux" })
+  })
+
+  test("with curl nothing changes", () => {
+    for (const kind of AGENT_KINDS) expect(installRecipeFor(kind, "linux", only("curl", "wget"))).toEqual(INSTALL_RECIPES.posix[kind]!)
+  })
+
+  test("neither curl nor wget: the builtins still work, the others say what to install", () => {
+    expect(installRecipeFor("opencode", "linux", only())).toEqual({ shell: "builtin", script: "opencode-linux" })
+    const r = installRecipeFor("claude", "linux", only())
+    expect(r).toEqual({ unsupported: expect.stringContaining("needs curl or wget") })
+    // macOS always has curl; if it were gone, cursor has no builtin there
+    expect(installRecipeFor("cursor", "darwin", only())).toEqual({ unsupported: expect.stringContaining("needs curl") })
+  })
+
+  test("Windows never asks about curl", () => {
+    expect(installRecipeFor("claude", "win32", only())).toEqual(INSTALL_RECIPES.win32.claude!)
+  })
+
+  test("startInstall probes curl on the installer PATH and runs the Linux builtin without spawning", async () => {
+    const asked: string[] = []
+    let spawned = false
+    const { job, done } = startInstall("opencode", {
+      platform: "linux",
+      home: "/home/u",
+      hasCommand: (n) => { asked.push(n); return false },
+      linuxBuiltin: {
+        home: "/home/u", arch: "x64",
+        fetch: (async () => new Response("down", { status: 502 })) as unknown as typeof fetch,
+        sha256: () => "", untar: async () => {}, hasAvx2: () => true, isMusl: () => false,
+        fs: { exists: () => false, mkdir: () => {}, write: () => {}, rename: () => {}, remove: () => {}, chmod: () => {}, symlink: () => {} },
+      },
+      spawn: () => { spawned = true; return fakeChild() },
+      isInstalled: () => false,
+    })
+    await done
+    expect(asked).toContain("curl")
+    expect(spawned).toBe(false)
+    expect(job.state).toBe("failed")
+    expect(job.log).toContain("curl isn't installed")
+    expect(job.log).toContain("HTTP 502")
+  })
+})
+
 describe("the command line", () => {
   test("PowerShell: the pinned System32 path, no profile, non-interactive, bypass, -Command <preamble+script>", () => {
     const recipe = INSTALL_RECIPES.win32.claude!
@@ -108,7 +163,7 @@ describe("the command line", () => {
       captured = { cmd, args, opts }
       return fakeChild()
     }
-    startInstall("opencode", { spawn, isInstalled: () => true, platform: "linux", env: { PATH: "/usr/bin" }, home: "/home/u" })
+    startInstall("opencode", { spawn, isInstalled: () => true, platform: "linux", env: { PATH: "/usr/bin" }, home: "/home/u", hasCommand: () => true })
     expect(captured.cmd).toBe("bash")
     expect(captured.args).toEqual(["-lc", INSTALL_RECIPES.posix.opencode!.script])
     expect(captured.opts.stdio[0]).toBe("ignore")
@@ -120,7 +175,7 @@ describe("the command line", () => {
 })
 
 describe("job lifecycle", () => {
-  const linux: Partial<InstallDeps> = { platform: "linux", env: { PATH: "/usr/bin" }, home: "/home/u" }
+  const linux: Partial<InstallDeps> = { platform: "linux", env: { PATH: "/usr/bin" }, home: "/home/u", hasCommand: () => true }
 
   test("done when the installer exits 0 and the binary is now detected", async () => {
     const child = fakeChild()
@@ -287,7 +342,7 @@ describe("Windows user PATH after an installer that leaves it to the user (claud
   test("macOS/Linux never touch a registry", async () => {
     const m = machine(null)
     const child = fakeChild()
-    const { done } = startInstall("claude", { platform: "darwin", env: { PATH: "/usr/bin" }, home: "/Users/u", builtin: m.builtin, spawn: () => child, isInstalled: () => true })
+    const { done } = startInstall("claude", { platform: "darwin", env: { PATH: "/usr/bin" }, home: "/Users/u", hasCommand: () => true, builtin: m.builtin, spawn: () => child, isInstalled: () => true })
     end(child, 0)
     await done
     expect(m.writes).toEqual([])
@@ -295,14 +350,14 @@ describe("Windows user PATH after an installer that leaves it to the user (claud
 })
 
 test("manager: get returns undefined before any start", () => {
-  const mgr = createInstallManager({ spawn: () => fakeChild(), isInstalled: () => true, platform: "linux" })
+  const mgr = createInstallManager({ spawn: () => fakeChild(), isInstalled: () => true, platform: "linux", hasCommand: () => true })
   expect(mgr.get("codex")).toBeUndefined()
 })
 
 test("manager: no double-start while running, restartable after it finishes", async () => {
   const children = [fakeChild(), fakeChild()]
   let i = 0
-  const mgr = createInstallManager({ spawn: () => children[i++]!, isInstalled: () => true, platform: "linux" })
+  const mgr = createInstallManager({ spawn: () => children[i++]!, isInstalled: () => true, platform: "linux", hasCommand: () => true })
 
   const first = mgr.start("opencode")
   expect(first.alreadyRunning).toBe(false)

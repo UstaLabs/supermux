@@ -17,6 +17,8 @@ import { makeLogger } from "../../shared/log"
 import { addToUserPath, windowsPowerShellPath } from "../windows/user-install"
 import { withAgentBinDirs, withNodeBinDirs } from "./bin-dirs"
 import { BUILTIN_INSTALLERS, realBuiltinDeps, type BuiltinInstallDeps } from "./install-builtin"
+import { LINUX_BUILTIN_INSTALLERS, realLinuxBuiltinDeps, type LinuxBuiltinDeps } from "./install-builtin-linux"
+import { resolveCommand } from "../process/launcher"
 
 const log = makeLogger("agents/install")
 
@@ -55,12 +57,39 @@ export const INSTALL_RECIPES: Record<InstallOs, Record<AgentKind, InstallRecipe 
 
 const OS_NAMES: Partial<Record<NodeJS.Platform, string>> = { win32: "Windows", darwin: "macOS", linux: "Linux" }
 
-/** The recipe for [kind] on [platform], or why there is none (a message for the user). */
-export function installRecipeFor(kind: AgentKind, platform: NodeJS.Platform): InstallRecipe | { unsupported: string } {
+/**
+ * macOS/Linux without curl (Ubuntu Desktop ships wget, not curl). The claude, codex and grok
+ * scripts download with curl OR wget, so only fetching the script changes. The cursor and
+ * OpenCode scripts call curl themselves, so on Linux the broker installs those two itself
+ * (install-builtin-linux.ts).
+ */
+export const NO_CURL_RECIPES: Record<AgentKind, { wget?: string; linuxBuiltin?: string }> = {
+  claude: { wget: "wget --no-verbose -O- https://claude.ai/install.sh | bash" },
+  codex: { wget: "wget --no-verbose -O- https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh" },
+  cursor: { linuxBuiltin: "cursor-linux" },
+  opencode: { linuxBuiltin: "opencode-linux" },
+  grok: { wget: "wget --no-verbose -O- https://x.ai/cli/install.sh | bash" },
+}
+
+/**
+ * The recipe for [kind] on [platform], or why there is none (a message for the user).
+ * [hasCommand] answers "is <name> on PATH?" (macOS/Linux: curl, wget); without it curl is assumed.
+ */
+export function installRecipeFor(
+  kind: AgentKind,
+  platform: NodeJS.Platform,
+  hasCommand: (name: string) => boolean = () => true,
+): InstallRecipe | { unsupported: string } {
   const os: InstallOs | null = platform === "win32" ? "win32" : platform === "darwin" || platform === "linux" ? "posix" : null
   const recipe = os ? INSTALL_RECIPES[os][kind] : null
-  if (recipe) return recipe
-  return { unsupported: `${agentDisplayName(kind)} can't be installed from supermux on ${OS_NAMES[platform] ?? platform}: not supported on this OS.` }
+  if (!recipe) {
+    return { unsupported: `${agentDisplayName(kind)} can't be installed from supermux on ${OS_NAMES[platform] ?? platform}: not supported on this OS.` }
+  }
+  if (os !== "posix" || hasCommand("curl")) return recipe
+  const alt = NO_CURL_RECIPES[kind]
+  if (alt.linuxBuiltin && platform === "linux") return { shell: "builtin", script: alt.linuxBuiltin }
+  if (alt.wget && hasCommand("wget")) return { shell: "bash", script: alt.wget }
+  return { unsupported: `${agentDisplayName(kind)}'s installer needs curl${alt.wget ? " or wget" : ""}, and this computer has neither. Install curl (e.g. sudo apt install curl), then try again.` }
 }
 
 /** Stops a Windows PowerShell 5.1 script from crawling: its progress bar slows Invoke-WebRequest
@@ -109,6 +138,10 @@ export interface InstallDeps {
   env?: Record<string, string | undefined>
   /** The builtin installers' machine access (fetch, fs, registry, …). Defaults to the real ones. */
   builtin?: Omit<BuiltinInstallDeps, "log">
+  /** The same for the Linux builtins (curl missing). Defaults to the real ones. */
+  linuxBuiltin?: Omit<LinuxBuiltinDeps, "log">
+  /** Is <name> on the installers' PATH? Defaults to a lookup on [env]'s PATH. */
+  hasCommand?: (name: string) => boolean
   /** Runs once the installer ended, before `isInstalled`: e.g. pick up the registry PATH it changed. */
   refreshPath?: () => Promise<unknown>
   /** Called once an install settles (done OR failed) — the set of installed agents may have moved. */
@@ -161,7 +194,10 @@ export function startInstall(kind: AgentKind, deps: InstallDeps): { job: Install
     if (job.log.length > MAX_LOG) job.log = job.log.slice(-MAX_LOG)
   }
 
-  const recipe = installRecipeFor(kind, platform)
+  const baseEnv = deps.env ?? process.env
+  const home = deps.home ?? homedir()
+  const hasCommand = deps.hasCommand ?? ((name: string) => resolveCommand([name], installEnv(baseEnv, home, platform), platform) !== null)
+  const recipe = installRecipeFor(kind, platform, hasCommand)
   if ("unsupported" in recipe) {
     job.state = "failed"
     job.error = recipe.unsupported
@@ -206,13 +242,19 @@ export function startInstall(kind: AgentKind, deps: InstallDeps): { job: Install
     }
 
     if (recipe.shell === "builtin") {
-      const run = BUILTIN_INSTALLERS[recipe.script]
+      const line = (l: string) => append(`${l}\n`)
+      const windows = BUILTIN_INSTALLERS[recipe.script]
+      const linux = LINUX_BUILTIN_INSTALLERS[recipe.script]
+      const run = windows
+        ? () => windows({ ...(deps.builtin ?? realBuiltinDeps(baseEnv)), log: line })
+        : linux
+          ? () => linux({ ...(deps.linuxBuiltin ?? realLinuxBuiltinDeps(home)), log: line })
+          : null
       if (!run) {
         void finish(null, `no builtin installer named ${recipe.script}`)
         return
       }
-      const machine = deps.builtin ?? realBuiltinDeps(deps.env ?? process.env)
-      run({ ...machine, log: (line) => append(`${line}\n`) }).then(
+      run().then(
         () => finish(0),
         (err: unknown) => {
           const message = err instanceof Error ? err.message : String(err)
@@ -223,7 +265,7 @@ export function startInstall(kind: AgentKind, deps: InstallDeps): { job: Install
       return
     }
 
-    const env = installEnv(deps.env ?? process.env, deps.home ?? homedir(), platform)
+    const env = installEnv(baseEnv, home, platform)
     const { cmd, args } = installCommand(recipe, env)
     const spawnFn = deps.spawn ?? (defaultSpawn as unknown as InstallSpawnFn)
     let child: ChildProcess
