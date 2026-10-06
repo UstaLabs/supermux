@@ -119,7 +119,7 @@ export async function discoverCursorModels(opts?: {
   run?: (cmd: string) => Promise<string>
 }): Promise<ModelInfo[]> {
   try {
-    const raw = opts?.run ? await opts.run("cursor-agent --list-models") : await runCli(["cursor-agent", "agent"], ["--list-models"])
+    const raw = opts?.run ? await opts.run("cursor-agent --list-models") : await runCli(["cursor-agent"], ["--list-models"])
     const models: ModelInfo[] = []
     for (const line of raw.split("\n")) {
       const m = line.match(/^(\S+)\s+-\s+(.+)$/)

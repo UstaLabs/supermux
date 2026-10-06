@@ -39,10 +39,13 @@ export interface DetectPaths {
 
 const ALL_KINDS: readonly AgentKind[] = AGENT_KINDS
 
+// Cursor is `cursor-agent` only. Its installers also make an `agent` alias, but so does Grok's
+// (~/.grok/bin/agent, %USERPROFILE%\.grok\bin\agent.exe): with Grok installed and Cursor not,
+// `agent` is Grok, and cursor would read as installed and spawn Grok.
 const BINARIES: Record<AgentKind, readonly string[]> = {
   claude: ["claude"],
   codex: ["codex"],
-  cursor: ["cursor-agent", "agent"],
+  cursor: ["cursor-agent"],
   opencode: ["opencode"],
   grok: ["grok"],
 }

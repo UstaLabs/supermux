@@ -16,7 +16,7 @@ export type RunFn = (argv: string[], cwd: string, timeoutMs: number) => Promise<
 async function spawnOneShot(argv: string[], cwd: string, timeoutMs: number): Promise<{ code: number; out: string }> {
   const env = { ...process.env }
   const requested = argv[0] ?? "cursor-agent"
-  const names = requested === "cursor-agent" ? ["cursor-agent", "agent"] : [requested]
+  const names = [requested]
   const command = resolveCommand(names, env, process.platform) ?? requested
   return await new Promise((resolve) => {
     const proc = spawnCommand(command, argv.slice(1), { cwd, env, stdio: ["ignore", "pipe", "ignore"] })

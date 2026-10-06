@@ -24,7 +24,7 @@ export type WorkspaceTerminalReadiness =
 const AGENT_CLIS = [
   { label: "claude", names: ["claude"] },
   { label: "codex", names: ["codex"] },
-  { label: "cursor-agent", names: ["cursor-agent", "agent"] },
+  { label: "cursor-agent", names: ["cursor-agent"] },
   { label: "opencode", names: ["opencode"] },
   { label: "grok", names: ["grok"] },
 ] as const
