@@ -23,6 +23,7 @@ class BrokerServiceTest {
     )
 
     @Test fun plistRunsTheBrokerAsItsOwnArgvElement() {
+        assumePosixHost()
         val xml = BrokerService.launchdPlist(spec)
         assertTrue("<string>/Users/a/.mux/state/desktop-assets/bin/supermux-broker</string>" in xml)
         assertFalse("supermux-broker </string>" in xml, "no trailing space in the program path")
@@ -51,6 +52,7 @@ class BrokerServiceTest {
     }
 
     @Test fun systemdUnitQuotesEnvAndExecsTheBroker() {
+        assumePosixHost()
         val unit = BrokerService.systemdUnit(spec)
         assertTrue("ExecStart=\"/Users/a/.mux/state/desktop-assets/bin/supermux-broker\"" in unit)
         assertTrue("Environment=\"MUX_MANAGED_BY=desktop\"" in unit)
@@ -62,6 +64,7 @@ class BrokerServiceTest {
     private fun mode(p: Path) = java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(p))
 
     @Test fun macInstallWritesPlistAndBootstraps() {
+        assumePosixHost()
         val home = createTempDirectory()
         val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, failing = setOf(printHost))
         val r = BrokerService.install(spec, env)
@@ -95,6 +98,7 @@ class BrokerServiceTest {
     }
 
     @Test fun linuxInstallEnablesTheUserUnit() {
+        assumePosixHost()
         val home = createTempDirectory()
         val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         BrokerService.install(spec, env)
@@ -162,7 +166,7 @@ class BrokerServiceTest {
             "\uFEFF\$env:MUX_HOST_NAME = 'Alex''s & \"Win\"'\r\n\$env:MUX_MANAGED_BY = 'desktop'\r\n\$env:MUX_TELEGRAM_BOT_TOKEN = '123:secret'\r\n",
             Files.readString(envFile),
         )
-        assertEquals("rw-------", mode(envFile))
+        if (posixHost) assertEquals("rw-------", mode(envFile)) // no POSIX modes on a real Windows host
     }
 
     @Test fun windowsRemoveDeletesTheTaskAndItsEnvFile() {
@@ -202,6 +206,7 @@ class BrokerServiceTest {
     }
 
     @Test fun systemdEscapesDollarInExecStartAndPercentInLog() {
+        assumePosixHost()
         val unit = BrokerService.systemdUnit(spec.copy(broker = Path.of("/opt/a\$b/broker"), log = Path.of("/tmp/100%/x.log")))
         assertTrue("ExecStart=\"/opt/a\$\$b/broker\"" in unit)
         assertTrue("StandardOutput=append:/tmp/100%%/x.log" in unit)
@@ -252,6 +257,7 @@ class BrokerServiceTest {
     }
 
     @Test fun linuxXdgFallbackIsNotEnabledAndRemoveCleansUp() {
+        assumePosixHost()
         val home = createTempDirectory()
         val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = null)
         val r = assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env))
@@ -272,6 +278,7 @@ class BrokerServiceTest {
     }
 
     @Test fun xdgExecSourcesTheEnvFileAndQuotesForBothLayers() {
+        assumePosixHost()
         val d = BrokerService.xdgAutostart(spec.copy(broker = Path.of("/opt/it's \$x%/broker")), Path.of("/h/.config/supermux/broker.env"))
         val exec = d.lines().single { it.startsWith("Exec=") }
         // Desktop Entry: inside "…", `$` and `\` are backslashed, then every `\` doubled and `%` doubled.
@@ -613,6 +620,7 @@ class BrokerServiceTest {
     }
 
     @Test fun macInstallAsThe100JobWritesTheNewPlistAndBootsNothingOut() {
+        assumePosixHost()
         val home = createTempDirectory()
         val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist")
         Files.createDirectories(plist.parent); Files.writeString(plist, LegacyKeepAlive.plist)

@@ -444,6 +444,7 @@ class HostSupervisorTest {
 
     // 11
     @Test fun brokerEnvPutsCarriedUnderOurs() {
+        assumePosixHost()
         val bins = HostBinaries.SidecarBinaries(
             brokerPath = Path.of("/s/bin/supermux-broker"), binDir = Path.of("/s/bin"),
             sessiondPath = null, frpcPath = null, tmuxPath = null, zmxDir = Path.of("/s/zmx"),
@@ -857,6 +858,7 @@ class HostSupervisorTest {
     }
 
     @Test fun backgroundOffWhenTheServiceCantBeRemovedStartsNoChild() = runTest {
+        assumePosixHost()
         val h = Harness(this, prefs = HostingPrefs(background = true))
         h.probeFn = { if (h.bootstrapped()) h.desktop() else HostProbeResult.PortFree }
         h.sup.ensure()

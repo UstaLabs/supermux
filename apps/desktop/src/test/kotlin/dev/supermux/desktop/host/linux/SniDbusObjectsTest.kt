@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host.linux
 
+import dev.supermux.desktop.host.assumePosixHost
 import dev.supermux.desktop.host.TrayAction
 import dev.supermux.desktop.host.TrayItem
 import dev.supermux.desktop.host.TrayToggle
@@ -104,6 +105,7 @@ class SniDbusObjectsTest {
     }
 
     @Test fun notificationsAreEscapedAndCarryTheAppIdentity() {
+        assumePosixHost()
         assertEquals("1 &lt; 2 &amp;&amp; 3 &gt; 2", DesktopNotification.escapeBody("1 < 2 && 3 > 2"))
         val n = DesktopNotification.of("a <title>", "x<y", DesktopNotification.Identity("supermux-supermux", "/i.png"))
         assertEquals(DesktopNotification("a <title>", "x&lt;y", "/i.png", "supermux-supermux"), n)
@@ -113,6 +115,7 @@ class SniDbusObjectsTest {
     }
 
     @Test fun sessionBusAddress() {
+        assumePosixHost()
         val none: (Path) -> Boolean = { false }
         val some: (Path) -> Boolean = { true }
         assertEquals(
