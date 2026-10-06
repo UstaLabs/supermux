@@ -4,7 +4,7 @@
 // walkthrough / LSP / review wiring — re-expressed over the [ShellActions] holder (G1) so it names
 // no store. Android's `workspace/AndroidViewHost.kt` is folded in as the Compact/Touch branch: the
 // only thing it did differently was the CHAT view's chrome (a phone pane has none, a tablet pane
-// has its own [ChatViewHeader] plus a keep-alive Chat⇄Native pair), which is now
+// has its own [ChatViewHeader]), which is now
 // [ChatHeaderMode]. Everything Android lacked — walkthrough state, the review endpoints, the
 // per-session LSP routing, the `display` pending hint — it gains by adoption.
 //
@@ -77,8 +77,6 @@ import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.toEditorPath
-import dev.supermux.ui.widgets.KeepAlivePanel
-import dev.supermux.ui.widgets.keepAlivePanel
 import kotlinx.coroutines.launch
 
 /** Journey + desktop-parity tags for the workspace chat pane. */
@@ -93,8 +91,8 @@ object WorkspaceChatPaneTestIds {
  * Not a platform switch — a SHAPE switch, and both hosts can ask for any of the three:
  *  - [PANEL] — the chat panel's own one-line header, with the links + overflow SLOTS filled by
  *    [SessionLinksMenu] / [OverflowMenu]. Desktop's shape.
- *  - [BAR] — a separate [ChatViewHeader] above a header-less panel, with the Chat⇄Native pair kept
- *    alive side by side. Android's tablet-workspace shape.
+ *  - [BAR] — a separate [ChatViewHeader] above a header-less panel. Android's tablet-workspace
+ *    shape.
  *  - [NONE] — no chrome at all: the host above draws it (Android's phone tab strip, whose trailing
  *    slot holds [PhoneTabChatOverflow]).
  */
@@ -187,19 +185,6 @@ fun ViewHost(
             LocalPlatform.current.terminalView()
                 .TerminalView(connect = connect, modifier = mod, active = true, onExit = null)
         },
-    /**
-     * The agent's raw PTY, drawn behind a chat view's Chat⇄Native pill. Same test-seam reason as
-     * [workspaceTerminalContent].
-     */
-    chatNativeContent: @Composable (connect: () -> TerminalClient, active: Boolean, onExit: () -> Unit) -> Unit =
-        { connect, active, onExit ->
-            LocalPlatform.current.terminalView().TerminalView(
-                connect = connect,
-                modifier = Modifier.fillMaxSize(),
-                active = active,
-                onExit = onExit,
-            )
-        },
     /** Off-by-default headless hook (SM_LINKS_MENU): the session whose links menu to force-open. */
     forceLinksMenuFor: String? = null,
     onForceLinksMenuConsumed: () -> Unit = {},
@@ -231,7 +216,6 @@ fun ViewHost(
                 onSelectSession = onSelectSession,
                 onOpenFile = onOpenFile,
                 onOpenWalkthrough = { stepId -> onOpenWalkthrough(sessionId, stepId) },
-                nativeContent = chatNativeContent,
                 forceLinksMenu = forceLinksMenuFor == sessionId,
                 onForceLinksMenuConsumed = onForceLinksMenuConsumed,
                 externalAttach = externalAttach?.takeIf { it.first == sessionId }?.second,
@@ -326,7 +310,7 @@ fun ViewHost(
 /**
  * Chat adapter. [headerMode] picks the chrome:
  *  - PANEL: the panel's own header, with the links/overflow slots filled.
- *  - BAR:   a [ChatViewHeader] above a header-less panel, and the native PTY kept alive beside it.
+ *  - BAR:   a [ChatViewHeader] above a header-less panel.
  *  - NONE:  a bare panel.
  */
 @Composable
@@ -341,7 +325,6 @@ private fun ChatViewPane(
     onSelectSession: (String) -> Unit,
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
     onOpenWalkthrough: (stepId: String?) -> Unit,
-    nativeContent: @Composable (connect: () -> TerminalClient, active: Boolean, onExit: () -> Unit) -> Unit,
     forceLinksMenu: Boolean,
     onForceLinksMenuConsumed: () -> Unit,
     externalAttach: ComposerExternalAttach?,
@@ -446,13 +429,6 @@ private fun ChatViewPane(
                         showManagementRows = false,
                     )
                 },
-                // key(sessionId) so a view rebound to another session never reuses the previous
-                // session's agent PTY: a terminal surface's `remember { connect() }` is unkeyed.
-                nativeContent = { onExit ->
-                    key(sessionId) {
-                        nativeContent({ actions.connectAgentTerminal(sessionId).orFail(sessionId) }, true, onExit)
-                    }
-                },
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
                 externalDictate = externalDictate,
@@ -466,7 +442,6 @@ private fun ChatViewPane(
     }
 
     // ── Touch branches: the panel draws no header of its own ──────────────────────────────────
-    var nativeView by remember(sessionId) { mutableStateOf(false) }
     // The panel's scroll-to-hide on a short view; the BAR shape tucks its own header away with it.
     var chromeHidden by remember(sessionId) { mutableStateOf(false) }
     val body: @Composable (Modifier) -> Unit = { paneMod ->
@@ -478,7 +453,6 @@ private fun ChatViewPane(
                 draft = drafts[sessionId] ?: "",
                 onDraftChange = { drafts[sessionId] = it },
                 showHeader = false,
-                active = !nativeView,
                 onOpenWalkthrough = onOpenWalkthrough,
                 onRequestMute = { actions.setMute(sessionId, !(session.mute ?: false)) },
                 externalAttach = externalAttach,
@@ -503,9 +477,8 @@ private fun ChatViewPane(
     // about which proxies a session has.
     LaunchedEffect(sessionId, session.name, acts) { sessionLinks = acts.loadProxies() }
     val gitOp = rememberGitOpRunner(sessionId, actions)
-    // Native is not the transcript: the header comes back whenever it is showing.
     val headerFraction by animateFloatAsState(
-        targetValue = if (chromeHidden && !nativeView) 0f else 1f,
+        targetValue = if (chromeHidden) 0f else 1f,
         animationSpec = tween(200),
         label = "chatBarHeader",
     )
@@ -514,8 +487,6 @@ private fun ChatViewPane(
             modifier = Modifier.collapseVertically({ headerFraction }, slideUp = true),
             session = session,
             working = state.agent?.working == true,
-            nativeView = nativeView,
-            onSetNative = { nativeView = it },
             sessionLinks = sessionLinks,
             finish = finish,
             onGitOp = gitOp,
@@ -536,31 +507,7 @@ private fun ChatViewPane(
             loadContinueReasoning = { agent, model -> actions.launcherReasoning(agent, model) },
             onContinued = onSelectSession,
         )
-        Box(Modifier.weight(1f).fillMaxSize()) {
-            // The two halves hide by DIFFERENT mechanisms, and that asymmetry is deliberate.
-            //
-            // The native half below IS a terminal on every host that has one, and a terminal is a
-            // platform view its compositor draws outside the Compose layer (UIKit interop on iOS, a
-            // heavyweight SwingPanel on desktop). Alpha does not hide either, so it needs
-            // [KeepAlivePanel]'s layout-level hide (0×0 on both) or it paints over the chat half.
-            //
-            // This half is pure Compose — `body` here passes NO `nativeContent` to ChatPanel, so
-            // there is no interop inside it — and it must NOT use the same hide. On desktop
-            // KeepAlivePanel means `size(0.dp)`, and a 0×0 layout pass takes the transcript's
-            // LazyListState with it: a hidden-then-shown chat came back scrolled to the top. Alpha
-            // keeps it MEASURED at full size, so a tab round-trip preserves the scroll position.
-            body(Modifier.keepAlivePanel(visible = !nativeView))
-            if (session.agent == "claude") {
-                KeepAlivePanel(visible = nativeView) {
-                    key(sessionId) {
-                        nativeContent(
-                            { actions.connectAgentTerminal(sessionId).orFail(sessionId) },
-                            nativeView,
-                        ) { nativeView = false }
-                    }
-                }
-            }
-        }
+        Box(Modifier.weight(1f).fillMaxSize()) { body(Modifier) }
     }
 }
 
