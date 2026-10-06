@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Public
@@ -624,6 +625,7 @@ private fun Target.label(): String = when (this) {
 /** One-line "what is behind this row", from Android's index. */
 internal fun SettingsSection.desc(): String = when (this) {
     SettingsSection.Agents -> "CLI authorization and API-key fallback"
+    SettingsSection.Accounts -> "Extra logins per agent and auto-switch"
     SettingsSection.Devices -> "Paired phones, tablets and desktops"
     SettingsSection.System -> "Broker update, restart and status"
     SettingsSection.GitHosting -> "GitHub & GitLab connections"
@@ -639,6 +641,7 @@ internal fun SettingsSection.desc(): String = when (this) {
 /** Material icons stand in for Android's `R.drawable` index icons (no resources in `:ui`). */
 private fun SettingsSection.icon(): ImageVector = when (this) {
     SettingsSection.Agents -> Icons.Filled.SmartToy
+    SettingsSection.Accounts -> Icons.Filled.ManageAccounts
     SettingsSection.Devices -> Icons.Filled.Devices
     SettingsSection.System -> Icons.Filled.Dns
     SettingsSection.GitHosting -> Icons.Filled.Hub

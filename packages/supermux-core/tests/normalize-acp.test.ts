@@ -1,0 +1,143 @@
+import { describe, expect, test } from "bun:test"
+import { createAcpNormalizer } from "../src/acp/normalize.js"
+import type { AgentUpdate } from "../src/types.js"
+
+const acp = (sessionUpdate: string, rest: Record<string, unknown> = {}, replay?: boolean): AgentUpdate => ({
+  protocol: "acp",
+  value: { sessionUpdate, ...rest },
+  ...(replay ? { replay: true } : {}),
+})
+
+describe("acp normalizer", () => {
+  test("agent_message_chunk delta and flush", () => {
+    const n = createAcpNormalizer()
+    expect(n(acp("agent_message_chunk", { messageId: "m", content: { type: "text", text: "Hi" } }))[0]).toMatchObject({ kind: "assistant-delta", messageId: "m", text: "Hi" })
+    n(acp("agent_message_chunk", { messageId: "m", content: { type: "text", text: "!" } }))
+    expect(n.flush()).toEqual([{ kind: "assistant-message", messageId: "m", text: "Hi!" }])
+  })
+
+  test("agent_thought_chunk delta and flush", () => {
+    const n = createAcpNormalizer()
+    n(acp("agent_thought_chunk", { messageId: "r", content: { type: "text", text: "hmm" } }))
+    expect(n.flush()[0]).toMatchObject({ kind: "reasoning", reasoningId: "r", redacted: false, text: "hmm" })
+  })
+
+  test("tool_call and tool_call_update with diff and terminal", () => {
+    const n = createAcpNormalizer()
+    const started = n(acp("tool_call", { toolCallId: "t1", title: "Edit", name: "edit", kind: "edit", status: "in_progress", locations: [{ path: "a.ts" }], rawInput: { p: 1 } }))
+    expect(started[0]).toMatchObject({ kind: "tool-call", callId: "t1", phase: "started", category: "edit" })
+    const updated = n(acp("tool_call_update", {
+      toolCallId: "t1",
+      title: "Edit",
+      status: "completed",
+      content: [
+        { type: "diff", path: "a.ts", diff: "-a\n+b" },
+        { type: "terminal", output: "ok" },
+      ],
+    }))
+    expect(updated.map(e => e.kind)).toEqual(["tool-call", "file-diff", "command-output"])
+  })
+
+  test("tool_call keeps title as name, description and grok content output", () => {
+    const n = createAcpNormalizer({ vendor: "grok" })
+    const started = n(acp("tool_call", {
+      toolCallId: "g1",
+      title: "bash",
+      rawInput: { command: "ls -la", description: "List project root contents" },
+    }))
+    expect(started[0]).toMatchObject({
+      kind: "tool-call",
+      tool: "bash",
+      description: "List project root contents",
+      input: { command: "ls -la", description: "List project root contents" },
+    })
+    const done = n(acp("tool_call_update", {
+      toolCallId: "g1",
+      status: "completed",
+      content: [{ type: "content", content: { type: "text", text: "file1\nfile2" } }],
+    }))
+    expect(done[0]).toMatchObject({ kind: "tool-call", tool: "bash", phase: "completed", output: "file1\nfile2" })
+    expect(done.some(e => e.kind === "command-output" && e.delta === "file1\nfile2")).toBe(true)
+  })
+
+  test("search kind also emits web-search", () => {
+    const n = createAcpNormalizer()
+    const out = n(acp("tool_call", { toolCallId: "s", title: "q", name: "search", kind: "search", status: "completed" }))
+    expect(out.some(e => e.kind === "web-search")).toBe(true)
+  })
+
+  test("plan, commands, mode, session-info, usage, compaction", () => {
+    const n = createAcpNormalizer()
+    expect(n(acp("plan", { entries: [{ content: "x", status: "pending", priority: "high" }] }))[0]).toMatchObject({ kind: "plan", entries: [{ content: "x", status: "pending", priority: "high" }] })
+    expect(n(acp("available_commands_update", { availableCommands: [{ name: "foo", description: "d" }] }))[0]).toMatchObject({ kind: "commands-update", commands: [{ name: "foo", description: "d" }] })
+    expect(n(acp("current_mode_update", { currentModeId: "ask" }))[0]).toMatchObject({ kind: "mode-update", modeId: "ask" })
+    expect(n(acp("config_option_update", { configOptions: [{ id: "model", value: "grok" }] }))[0]).toMatchObject({ kind: "mode-update", model: "grok" })
+    expect(n(acp("session_info_update", { title: "T" }))[0]).toMatchObject({ kind: "session-info", title: "T" })
+    expect(n(acp("usage_update", { used: 1, size: 2, cost: { amount: 0.1, currency: "USD" } }))[0]).toMatchObject({ kind: "usage", context: { used: 1, size: 2 }, cost: { amount: 0.1, currency: "USD" } })
+    expect(n(acp("compaction_update", { compactionId: "c", status: "completed", summary: [{ type: "text", text: "sum" }] }))[0]).toMatchObject({ kind: "compaction", status: "completed", summary: "sum" })
+    expect(n(acp("compaction_summary_chunk", { compactionId: "c", content: { type: "text", text: "ch" } }))[0]).toMatchObject({ kind: "compaction", status: "in_progress" })
+  })
+
+  test("plan_removed and plan_update", () => {
+    const n = createAcpNormalizer()
+    expect(n(acp("plan_removed"))[0]).toMatchObject({ kind: "plan", entries: [] })
+    expect(n(acp("plan_update", { entries: [{ content: "y", status: "completed" }] }))[0]).toMatchObject({ kind: "plan" })
+  })
+
+  test("turn_completed and user_message_chunk ignored", () => {
+    const n = createAcpNormalizer()
+    expect(n(acp("turn_completed"))).toEqual([])
+    expect(n(acp("user_message_chunk", { content: { type: "text", text: "u" } }))).toEqual([])
+  })
+
+  test("unknown sessionUpdate ignored", () => {
+    const n = createAcpNormalizer()
+    expect(n(acp("not_a_real_kind"))).toEqual([])
+  })
+
+  test("session/request_permission native frame", () => {
+    const n = createAcpNormalizer()
+    const out = n({ protocol: "native", value: { method: "session/request_permission", params: { toolCall: { toolCallId: "t" }, options: [{ optionId: "allow_once", kind: "allow_once", name: "Allow" }] } } })
+    expect(out).toEqual([])
+  })
+
+  test("grok vendor wrapper unwraps inner update; turn_completed still ignored", () => {
+    const n = createAcpNormalizer({ vendor: "grok" })
+    const wrapped: AgentUpdate = {
+      protocol: "native",
+      value: { method: "_x.ai/session_notification", params: { update: { sessionUpdate: "agent_message_chunk", messageId: "m", content: { type: "text", text: "x" } } } },
+    }
+    expect(n(wrapped)[0]).toMatchObject({ kind: "assistant-delta", text: "x" })
+    expect(n({ protocol: "native", value: { method: "_x.ai/session_notification", params: { update: { sessionUpdate: "turn_completed" } } } })).toEqual([])
+    expect(createAcpNormalizer()(wrapped)).toEqual([])
+  })
+
+  test("replay flag is not interpreted by mapper (bodies still emitted)", () => {
+    const n = createAcpNormalizer()
+    expect(n(acp("available_commands_update", { availableCommands: [{ name: "a", description: "" }] }, true))[0].kind).toBe("commands-update")
+  })
+})
+
+test("a turn that produced nothing but usage flushes as a warning, a turn with content does not", () => {
+  const n = createAcpNormalizer()
+  n({ protocol: "acp", value: { sessionUpdate: "usage_update", used: 0, size: 1_000_000 } as never })
+  const empty = n.flush()
+  expect(empty).toHaveLength(1)
+  expect(empty[0]).toMatchObject({ kind: "warning", source: "acp" })
+  n({ protocol: "acp", value: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" } } as never })
+  const full = n.flush()
+  expect(full.some(b => b.kind === "warning")).toBe(false)
+  expect(full.some(b => b.kind === "assistant-message")).toBe(true)
+})
+
+test("OpenCode stderr log lines: the session.processor error becomes an error event, the llm line does not", () => {
+  const n = createAcpNormalizer()
+  const llm = 'ERROR 2026-09-22T07:57:16 +5128ms service=llm providerID=opencode-go modelID=deepseek-v4-flash session.id=ses_1 small=false agent=build mode=primary error={"error":{"name":"AI_APICallError","url":"https://x"}}'
+  const proc = 'ERROR 2026-09-22T07:57:16 +8ms service=session.processor session.id=ses_1 messageID=msg_1 error=Upstream request failed: This Go model requires Global regions. Select Global in your workspace\'s Privacy settings to use it. stack=AI_APICallError: Upstream request failed'
+  expect(n({ protocol: "native", value: { method: "stderr", params: { line: llm } } })).toEqual([])
+  expect(n({ protocol: "native", value: { method: "stderr", params: { line: "INFO service=x" } } })).toEqual([])
+  expect(n({ protocol: "native", value: { method: "stderr", params: { line: proc } } })).toEqual([
+    { kind: "error", message: "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it.", errorType: "provider", recoverable: false },
+  ])
+  expect(n.flush().some(b => b.kind === "warning")).toBe(false)
+})

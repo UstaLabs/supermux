@@ -47,6 +47,14 @@ export type SessionRecord = {
   session_branch?: string
   finish_job?: FinishJob
   self_renamed?: boolean
+  /** Opt-in permission prompts (legacy; unused after 033). */
+  prompts: boolean
+  /** Catalog id from permission-modes.ts; undefined/null = agent default. */
+  permissionMode?: string | null
+  /** Account id (supermux-core accounts); undefined = the agent's system account. */
+  account?: string
+  /** 1 = Core-backed worker (no tmux/hooks/tailer). */
+  core: boolean
   user_status: UserStatus
   sort_order: number
   draft_payload?: DraftPayload
@@ -83,6 +91,10 @@ export type SessionRow = {
   session_branch: string | null
   finish_job: string | null
   self_renamed: number
+  prompts: number
+  permission_mode: string | null
+  account?: string | null
+  core: number
   user_status?: string
   sort_order?: number
   draft_payload?: string | null
@@ -126,12 +138,16 @@ export function rowToRecord(row: SessionRow): SessionRecord {
     session_branch: row.session_branch ?? undefined,
     finish_job: row.finish_job ? JSON.parse(row.finish_job) : undefined,
     self_renamed: row.self_renamed === 1,
+    prompts: row.prompts === 1,
+    permissionMode: row.permission_mode ?? undefined,
+    account: row.account ?? undefined,
+    core: row.core === 1,
     user_status: (row.user_status as UserStatus) ?? "in_progress",
     sort_order: row.sort_order ?? 0,
     draft_payload: row.draft_payload ? JSON.parse(row.draft_payload) : undefined,
   }
 }
 
-export function isPersistentRuntimeSession(session: Pick<SessionRecord, "agent">): boolean {
-  return session.agent === AgentKind.Claude
+export function isPersistentRuntimeSession(session: Pick<SessionRecord, "agent"> & { core?: boolean }): boolean {
+  return session.agent === AgentKind.Claude && !session.core
 }

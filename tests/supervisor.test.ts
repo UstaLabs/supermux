@@ -8,40 +8,22 @@ import { createSupervisor } from "../src/core/session-manager/supervisor"
 import { AgentKind } from "../src/shared/agents"
 import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
+import { fakeCodexHost } from "./helpers/fake-codex-host"
 
 // Codex PA spawns go through the real spawnPA path; its collaborators are
 // swapped via bun module mocks (there are no injection seams). mock.module is
 // process-global: capture the real modules and restore them in afterAll.
-const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
-const realCodexSpawn = { ...(await import("../src/core/agents/codex/spawn")) }
-const realCodexAdapter = { ...(await import("../src/core/agents/codex/adapter")) }
+const realCodexCoreHost = { ...(await import("../src/core/agents/codex/core-host-provider")) }
 
-mock.module("../src/core/agents/codex/auth", () => ({
-  ...realCodexAuth,
-  resolveCodexAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
-}))
-mock.module("../src/core/agents/codex/spawn", () => ({
-  ...realCodexSpawn,
-  spawnCodexAppServer: () => ({
-    pid: 123,
-    client: { request: async () => ({}) } as any,
-    child: null as any,
-    kill: () => {},
-    onExit: () => {},
-  }),
-}))
-mock.module("../src/core/agents/codex/adapter", () => ({
-  ...realCodexAdapter,
-  CodexAdapter: class {
-    constructor(_opts: any) {}
-    async start() {}
-  },
+let fake = fakeCodexHost()
+
+mock.module("../src/core/agents/codex/core-host-provider", () => ({
+  ...realCodexCoreHost,
+  getCodexCoreHost: () => fake.host,
 }))
 
 afterAll(() => {
-  mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
-  mock.module("../src/core/agents/codex/spawn", () => realCodexSpawn)
-  mock.module("../src/core/agents/codex/adapter", () => realCodexAdapter)
+  mock.module("../src/core/agents/codex/core-host-provider", () => realCodexCoreHost)
 })
 
 let tmpDir: string, db: ReturnType<typeof openDb>
@@ -49,8 +31,10 @@ beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "amux-sup-"))
   db = openDb(join(tmpDir, "t.sqlite3"))
   runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
+  fake = fakeCodexHost()
 })
-afterEach(() => {
+afterEach(async () => {
+  await fake.close()
   setSessionBackendForTests()
   try { db.close() } catch {}
   rmSync(tmpDir, { recursive: true, force: true })
@@ -125,7 +109,7 @@ test("ensurePersonalAssistants respawns dead non-Claude PA", async () => {
   await expect(supervisor.ensurePersonalAssistants()).resolves.toBeUndefined()
   const pa = registry.get(paId)
   expect(pa?.status).toBe("active")
-  expect(pa?.pid).toBe(123)
+  expect(pa?.pid).toBe(0)
 })
 
 test("ensurePersonalAssistants leaves a dead PA listed while git is missing, and respawns it after", async () => {
@@ -148,18 +132,35 @@ test("ensurePersonalAssistants leaves a dead PA listed while git is missing, and
   expect(registry.get(paId)?.pid).toBe(999998)
   blocked = false
   await supervisor.ensurePersonalAssistants()
-  expect(registry.get(paId)?.pid).toBe(123)
+  // Respawned through supermux-core on this branch: a Core PA's row carries pid 0 (see the test above).
+  expect(registry.get(paId)?.status).toBe("active")
+  expect(registry.get(paId)?.pid).toBe(0)
 })
 
 test("bootstrapPA forwards model and reasoningLevel to registry", async () => {
+  const { createClaudeCoreHost } = await import("../src/core/agents/claude/core-host")
+  const dir = mkdtempSync(join(tmpdir(), "mux-claude-sup-"))
+  const host = createClaudeCoreHost({
+    stateDirectory: dir,
+    driverFactory: () => ({
+      id: "claude",
+      async open(ctx) {
+        return {
+          agentSessionId: ctx.resumeId ?? "n1",
+          capabilities: { resume: true, steer: false, fork: false, detach: true, configure: false, history: false },
+          async prompt() { return { stopReason: "end_turn" } },
+          async interrupt() {},
+          async close() {},
+        }
+      },
+    }),
+  })
   const registry = new Registry(db)
-  setSessionBackendForTests({
-    create: async (opts: Parameters<SessionBackend["create"]>[0]) => ({ id: "w1", name: opts.name, pid: 123, alive: true }),
-    capture: async () => "Listening for channel messages",
-  } as unknown as SessionBackend)
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
+    sessionManager: { registerSpawnedAdapter: () => {} },
+    claudeHost: host,
   })
 
   let captured: any
@@ -174,32 +175,51 @@ test("bootstrapPA forwards model and reasoningLevel to registry", async () => {
     model: "claude-opus-4",
     reasoningLevel: "high",
   })
+  supervisor.stop()
+  await host.close({ agents: "shutdown" }).catch(() => {})
+  rmSync(dir, { recursive: true, force: true })
 
   expect(captured.model).toBe("claude-opus-4")
   expect(captured.reasoningLevel).toBe("high")
+  expect(captured.core).toBe(true)
+  expect(captured.pid).toBe(0)
 })
 
-test("bootstrapPA creates Claude through the session backend", async () => {
+test("bootstrapPA creates Claude as a Core session", async () => {
+  const { createClaudeCoreHost } = await import("../src/core/agents/claude/core-host")
+  const dir = mkdtempSync(join(tmpdir(), "mux-claude-sup2-"))
+  const host = createClaudeCoreHost({
+    stateDirectory: dir,
+    driverFactory: () => ({
+      id: "claude",
+      async open(ctx) {
+        return {
+          agentSessionId: ctx.resumeId ?? "n1",
+          capabilities: { resume: true, steer: false, fork: false, detach: true, configure: false, history: false },
+          async prompt() { return { stopReason: "end_turn" } },
+          async interrupt() {},
+          async close() {},
+        }
+      },
+    }),
+  })
   const registry = new Registry(db)
-  let createOpts: Parameters<SessionBackend["create"]>[0] | undefined
-  setSessionBackendForTests({
-    create: async (opts: Parameters<SessionBackend["create"]>[0]) => {
-      createOpts = opts
-      return { id: "opaque-target", name: opts.name, pid: 31337, alive: true }
-    },
-    capture: async () => "Listening for channel messages",
-  } as unknown as SessionBackend)
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
+    sessionManager: { registerSpawnedAdapter: () => {} },
+    claudeHost: host,
   })
 
   await supervisor.bootstrapPA("native-pa", { agent: AgentKind.Claude })
   supervisor.stop()
+  await host.close({ agents: "shutdown" }).catch(() => {})
+  rmSync(dir, { recursive: true, force: true })
 
-  expect(createOpts?.argv[0]).toBe("claude")
-  expect(createOpts?.env.MUX_DISPLAY_NAME).toBe("native-pa")
-  expect(registry.resolveName("native-pa")?.tmux_window_id).toBe("opaque-target")
+  const pa = registry.resolveName("native-pa")
+  expect(pa?.core).toBe(true)
+  expect(pa?.pid).toBe(0)
+  expect(pa?.tmux_window_id).toBeUndefined()
 })
 
 test("reconcile invokes the internal-worker reaper each tick", async () => {

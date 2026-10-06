@@ -3,97 +3,9 @@ import { join } from "path"
 import { openDb, runMigrations, type Db } from "../storage/db"
 import { Registry } from "./registry"
 import { SessionManager, type SessionManagerPorts } from "./manager"
-import type { CodexAdapter } from "../agents/codex/adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
-import type { ClaudeCodeAdapter } from "../agents/claude"
-import { CursorAdapter, type CursorRunner } from "../agents/cursor/adapter"
-import { OpenCodeAdapter, type OpenCodeClientLike } from "../agents/opencode/adapter"
-import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
-import { GrokAdapter } from "../agents/grok/adapter"
-import type { GrokRunner } from "../agents/grok/runner"
-import type { AgentPhase } from "./agent-state-store"
-import type { FileStore } from "../files/store"
-import { ReviewStore } from "../review/store"
-import { WalkthroughStore } from "../walkthrough/store"
-
-/** Seams for the applyConfig frame tests; everything else stays inert. */
-type PortSeams = {
-  /** agent-state phase reported for every session (queue-when-busy path). */
-  phase?: AgentPhase
-  /** model cache lookup (reasoning-level validation). */
-  lookupModels?: SessionManagerPorts["config"]["lookupModels"]
-  /** collects notifyAgentError calls as "type:message". */
-  agentErrors?: string[]
-  /** collects webChannel broadcast frames. */
-  frames?: object[]
-}
-
-/** Minimal inert ports: the runtime-store tests never cross into a port. */
-function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
-  return {
-    getWebChannel: () => (seams.frames ? { broadcastToAll: (frame: object) => { seams.frames!.push(frame) } } : undefined),
-    getAgentRpc: () => ({ settle: () => {}, fail: () => {} }),
-    socket: { sendInbound: async () => {} },
-    inbound: {},
-    backend: { runtimeTargetIdOf: async () => null, kill: async () => {} },
-    cleanup: {
-      terminals: { killAllForSession: async () => {} },
-      stopClaudeTailer: () => {},
-      releaseDraftAttachments: () => {},
-      syncGitStatus: () => {},
-    },
-    displays: {
-      killAllForSession: async () => {},
-      start: async () => { throw new Error("unused in tests") },
-      get: () => undefined,
-      stop: async () => {},
-    },
-    agentState: { applyEvent: () => {}, clear: () => {}, get: () => ({ phase: seams.phase ?? "idle", since: 0 }) },
-    bgTasks: { clear: () => {} },
-    commands: { remove: () => {}, refresh: async () => {} },
-    config: { lookupModels: seams.lookupModels ?? (() => []) },
-    register: {
-      interruptClaudePane: async () => {},
-      notifyAgentError: async (_id, _name, errorType, message) => { seams.agentErrors?.push(`${errorType}:${message}`) },
-      ensureClaudeTailer: () => {},
-      maybeAutoSendSoulSetup: async () => {},
-    },
-    outbound: {
-      onAssistantMessage: async () => ({ ok: true as const, delivered: 1 }),
-      getChannel: () => undefined,
-      telegramApi: undefined,
-    },
-    orchestration: {
-      spawnSession: async () => { throw new Error("unused in tests") },
-      refreshTelegramMenu: async () => {},
-      wsDto: () => undefined,
-      exposedProxyLinksBaseUrl: () => undefined,
-      proxyWsPayload: () => ({}),
-      proxyLiveness: { getStatus: () => "unknown", refresh: async () => {} },
-      postBrokerInbound: () => {},
-    },
-    stores: {
-      fileStore: {} as unknown as FileStore,
-      messageLog: { get: () => [], update: () => false, addReaction: () => false, findByChannelMessageId: () => undefined },
-      searchStore: { searchKnowledge: () => [], searchSessions: () => [] },
-      db,
-      reviewStore: new ReviewStore(db),
-      walkthroughStore: new WalkthroughStore(db),
-    },
-    resume: {
-      bind: async () => {},
-      ensureSessionWorktree: async () => {},
-      sessionEffort: () => undefined,
-      resolveAttachment: async () => { throw new Error("unused in tests") },
-      wireAdapterEvents: () => {},
-      sessionBackend: {
-        list: async () => [],
-        create: async () => { throw new Error("unused in tests") },
-      } as unknown as import("../runtime/session-backend").SessionBackend,
-      tmuxSession: "mux-test",
-    },
-  }
-}
+import type { CoreAdapter } from "../agents/core-bridge/core-adapter"
+import { fakePorts, type PortSeams } from "../../../tests/helpers/session-manager-ports"
 
 function manager(seams: PortSeams = {}): SessionManager {
   const db = openDb(":memory:")
@@ -159,7 +71,7 @@ describe("SessionManager while git is missing", () => {
     g.registry.register({ id: "c1", name: "cur", workdir: "/tmp", pid: 0, agent: "cursor" })
     expect(g.m.heldForGit({ id: "c1" })).toBe(true) // no adapter: suspended / deferred at boot
     expect(g.m.heldForGit({ id: "c1", user_status: "draft" })).toBe(false)
-    g.m.registerCursorRuntime("c1", { fake: true } as unknown as CursorAdapter)
+    g.m.registerCursorRuntime("c1", { fake: true } as unknown as CoreAdapter)
     expect(g.m.heldForGit({ id: "c1" })).toBe(false) // already live: keeps working
     g.state.reqs = { git: { ok: true, install: "manual", hint: "Install git" } }
     g.registry.register({ id: "c2", name: "cur2", workdir: "/tmp", pid: 0, agent: "cursor" })
@@ -186,7 +98,7 @@ describe("SessionManager while git is missing", () => {
 describe("SessionManager runtime store", () => {
   test("registerClaudeRuntime stores the runtime; adapterFor returns its adapter", () => {
     const m = manager()
-    const adapter = { fake: true } as unknown as ClaudeCodeAdapter
+    const adapter = { fake: true } as unknown as CoreAdapter
     m.registerClaudeRuntime("s1", adapter)
     expect(m.adapterFor("s1")).toBe(adapter)
     expect(m.runtimes.get("s1")?.kind).toBe("claude")
@@ -194,7 +106,7 @@ describe("SessionManager runtime store", () => {
 
   test("deleteRuntime removes it; double delete is a no-op", () => {
     const m = manager()
-    m.registerClaudeRuntime("s1", { fake: true } as unknown as ClaudeCodeAdapter)
+    m.registerClaudeRuntime("s1", { fake: true } as unknown as CoreAdapter)
     m.deleteRuntime("s1")
     expect(m.adapterFor("s1")).toBeUndefined()
     m.deleteRuntime("s1") // must not throw
@@ -208,7 +120,7 @@ describe("SessionManager runtime store", () => {
       kill: () => {},
       onExit: (cb: (code: number | null) => void) => { onExit = cb },
     } as unknown as CodexSpawnHandle
-    m.registerCodexRuntime("s2", "n", { fake: true } as unknown as CodexAdapter, handle)
+    m.registerCodexRuntime("s2", "n", { fake: true } as unknown as CoreAdapter, handle)
     expect(m.adapterFor("s2")).toBeDefined()
     onExit?.(0)
     expect(m.adapterFor("s2")).toBeUndefined()
@@ -217,24 +129,38 @@ describe("SessionManager runtime store", () => {
 
 // ── applyConfig: the model/effort entry (frame around the per-kind dialects) ─
 
-function cursorAdapter(model?: string): CursorAdapter {
-  return new CursorAdapter({
+function cursorAdapter(model?: string): CoreAdapter {
+  const adapter = {
+    kind: "cursor" as const,
     sessionName: "t",
     workdir: "/tmp",
-    runner: (async () => { throw new Error("no turns in this test") }) as unknown as CursorRunner,
-    persistSessionId: async () => {},
     model,
-  })
+    async setConfiguration(patch: { model?: string }) {
+      if ("model" in patch) adapter.model = patch.model
+    },
+    async start() {},
+    async resume() {},
+    async stop() {},
+    async send() {},
+    async interrupt() {},
+    on() { return adapter },
+    emit() { return false },
+  }
+  return adapter as unknown as CoreAdapter
 }
 
-function grokAdapter(model?: string): GrokAdapter {
-  return new GrokAdapter({
-    sessionName: "t",
-    workdir: "/tmp",
-    runner: (() => { throw new Error("no child in this test") }) as unknown as GrokRunner,
-    persistSessionId: async () => {},
+function grokAdapter(model?: string): CoreAdapter {
+  const adapter = {
+    kind: "grok" as const,
     model,
-  })
+    effort: undefined as string | undefined,
+    async setConfiguration(patch: { model?: string; effort?: string }) {
+      if ("model" in patch) this.model = patch.model
+      if ("effort" in patch) this.effort = patch.effort
+    },
+    async setEffort(e: string | undefined) { this.effort = e },
+  }
+  return adapter as unknown as CoreAdapter
 }
 
 describe("SessionManager applyConfig", () => {
@@ -257,24 +183,22 @@ describe("SessionManager applyConfig", () => {
     expect(frames).toContainEqual({ type: "session_state", session: "c1", model: "new-model" })
   })
 
-  test("opencode model switch goes through the typed adapter accessor", async () => {
+  test("opencode model switch goes through setConfiguration", async () => {
     const m = manager()
     m.registry.register({ id: "o1", name: "oc", workdir: "/tmp", pid: 0, agent: "opencode", model: "openai/gpt-5" })
-    const adapter = new OpenCodeAdapter({
-      sessionName: "oc",
-      workdir: "/tmp",
-      client: {} as unknown as OpenCodeClientLike,
-      persistSessionId: async () => {},
+    const adapter = {
       model: "openai/gpt-5",
-    })
-    const handle = { pid: 1, kill: () => {}, onExit: () => {} } as unknown as OpenCodeSpawnHandle
-    m.registerOpenCodeRuntime("o1", "oc", adapter, handle)
+      async setConfiguration(patch: { model?: string }) {
+        if (patch.model) this.model = patch.model
+      },
+    }
+    m.registerOpenCodeRuntime("o1", adapter as unknown as CoreAdapter)
     const r = await m.applyConfig("o1", { model: "anthropic/claude-sonnet-5" })
     expect(r).toEqual({ ok: true, status: "applied" })
     expect(adapter.model).toBe("anthropic/claude-sonnet-5")
   })
 
-  test("grok model switch pokes the live adapter and does NOT touch effort", async () => {
+  test("grok model switch goes through reapply and does NOT touch effort", async () => {
     const m = manager()
     m.registry.register({ id: "g1", name: "gk", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
     const adapter = grokAdapter("grok-4")
@@ -285,6 +209,17 @@ describe("SessionManager applyConfig", () => {
     expect(r).toEqual({ ok: true, status: "applied" })
     expect(adapter.model).toBe("grok-4-fast")
     expect(effortCalls).toEqual([])
+  })
+
+  test("grok model switch queues even with applyNow while busy", async () => {
+    const m = manager({ phase: "running" })
+    m.registry.register({ id: "g1q", name: "gkq", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const adapter = grokAdapter("grok-4")
+    m.registerGrokRuntime("g1q", adapter)
+    const r = await m.applyConfig("g1q", { model: "grok-4-fast", applyNow: true })
+    expect(r).toEqual({ ok: true, status: "queued" })
+    expect(m.registry.get("g1q")?.model).toBe("grok-4-fast")
+    expect(adapter.model).toBe("grok-4")
   })
 
   test("live-model kinds apply even with no runtime adapter (registry only)", async () => {
@@ -331,12 +266,11 @@ describe("SessionManager applyConfig", () => {
     await m.drainPendingReapply("k2", "running")
     expect(m.registry.get("k2")?.model).toBe("new-m")
 
-    // Idle → drain runs. No tmux window exists in tests, so the claude apply
-    // fails explicitly ("session window not found") → registry rolls back,
-    // clients get the corrected state, and the user is notified.
+    // Idle → drain runs. No Core adapter is registered in this test, so the
+    // claude apply fails explicitly → registry rolls back.
     await m.drainPendingReapply("k2", "idle")
     expect(m.registry.get("k2")?.model).toBe("old-m")
-    expect(agentErrors).toEqual(["config:Failed to apply model/effort change: session window not found"])
+    expect(agentErrors).toEqual(["config:Failed to apply model/effort change: claude adapter not found"])
     expect(frames).toContainEqual({ type: "session_state", session: "k2", model: "old-m", reasoningLevel: undefined })
 
     // The queue entry was consumed — a second idle transition is a no-op.
@@ -344,11 +278,11 @@ describe("SessionManager applyConfig", () => {
     expect(agentErrors).toHaveLength(1)
   })
 
-  test("an idle claude apply fails explicitly without a window and rolls back", async () => {
+  test("an idle claude apply fails explicitly without an adapter and rolls back", async () => {
     const m = manager()
     m.registry.register({ id: "k3", name: "cl3", workdir: "/tmp", pid: 1, agent: "claude", reasoningLevel: "low" })
     const r = await m.applyConfig("k3", { effort: "high" })
-    expect(r).toEqual({ ok: false, error: "session window not found" })
+    expect(r).toEqual({ ok: false, error: "claude adapter not found" })
     expect(m.registry.get("k3")?.reasoningLevel).toBe("low")
   })
 
@@ -358,6 +292,326 @@ describe("SessionManager applyConfig", () => {
     const r = await m.applyConfig("x1", { model: "new-m" })
     expect(r).toEqual({ ok: false, error: "codex session missing agent_home" })
     expect(m.registry.get("x1")?.model).toBe("old-m")
+  })
+
+  test("kill awaits core codex stop before dropping the runtime; a delayed stop is not faked", async () => {
+    const m = manager()
+    m.registry.register({ id: "cx", name: "cx", workdir: "/tmp", pid: 0, agent: "codex" })
+    let release!: () => void
+    const stopped = new Promise<void>((resolve) => { release = resolve })
+    let stopStarted = false
+    const adapter = {
+      kind: "codex",
+      sessionName: "cx",
+      workdir: "/tmp",
+      async stop() { stopStarted = true; await stopped },
+    }
+    m.registerCodexRuntime("cx", "cx", adapter as never)
+    const killP = m.kill("cx")
+    await Promise.resolve()
+    expect(stopStarted).toBe(true)
+    expect(m.adapterFor("cx")).toBeDefined()
+    release()
+    await killP
+    expect(m.adapterFor("cx")).toBeUndefined()
+  })
+
+  test("failed core codex stop retains the runtime handle", async () => {
+    const m = manager()
+    m.registry.register({ id: "cx2", name: "cx2", workdir: "/tmp", pid: 0, agent: "codex" })
+    const adapter = {
+      kind: "codex",
+      sessionName: "cx2",
+      workdir: "/tmp",
+      async stop() { throw new Error("stop failed") },
+    }
+    m.registerCodexRuntime("cx2", "cx2", adapter as never)
+    await expect(m.kill("cx2")).rejects.toThrow("stop failed")
+    expect(m.adapterFor("cx2")).toBe(adapter as never)
+  })
+
+  test("queued model+effort while busy then applied when idle; rollback on failure", async () => {
+    const agentErrors: string[] = []
+    const seams: PortSeams = {
+      phase: "running",
+      agentErrors,
+      lookupModels: () => [
+        { id: "gpt-5", reasoningLevels: [{ id: "low" }, { id: "high" }] } as never,
+        { id: "other", reasoningLevels: [{ id: "low" }, { id: "high" }] } as never,
+      ],
+      sessionEffort: (s) => s.reasoningLevel,
+    }
+    const m = manager(seams)
+    m.registry.register({ id: "cxq", name: "cxq", workdir: "/tmp", pid: 0, agent: "codex", model: "gpt-5", reasoningLevel: "low" })
+    const applied: { model?: string; effort?: string }[] = []
+    let failNext = false
+    const adapter = {
+      kind: "codex",
+      sessionName: "cxq",
+      workdir: "/tmp",
+      model: "gpt-5",
+      async setConfiguration(patch: { model?: string; effort?: string }) {
+        if (failNext) throw new Error("native configure failed")
+        applied.push({ ...patch })
+        if (patch.model) this.model = patch.model
+      },
+      async stop() {},
+    }
+    m.registerCodexRuntime("cxq", "cxq", adapter as never)
+    const queuedModel = await m.applyConfig("cxq", { model: "other", applyNow: true })
+    expect(queuedModel).toEqual({ ok: true, status: "queued" })
+    const queuedEffort = await m.applyConfig("cxq", { effort: "high", applyNow: true })
+    expect(queuedEffort).toEqual({ ok: true, status: "queued" })
+    expect(applied).toEqual([])
+    expect(m.registry.get("cxq")?.model).toBe("other")
+    expect(m.registry.get("cxq")?.reasoningLevel).toBe("high")
+
+    seams.phase = "idle"
+    await m.drainPendingReapply("cxq", "idle")
+    expect(applied.at(-1)).toEqual({ model: "other", effort: "high" })
+    expect(adapter.model).toBe("other")
+
+    failNext = true
+    const failed = await m.applyConfig("cxq", { model: "gpt-5" })
+    expect(failed.ok).toBe(false)
+    expect(m.registry.get("cxq")?.model).toBe("other")
+  })
+
+  test("kill awaits grok stop before dropping the runtime; a delayed stop is not faked", async () => {
+    const m = manager()
+    m.registry.register({ id: "gk", name: "gk", workdir: "/tmp", pid: 0, agent: "grok" })
+    let release!: () => void
+    const stopped = new Promise<void>((resolve) => { release = resolve })
+    let stopStarted = false
+    const adapter = grokAdapter()
+    adapter.stop = async () => { stopStarted = true; await stopped }
+    m.registerGrokRuntime("gk", adapter)
+    const killP = m.kill("gk")
+    await Promise.resolve()
+    expect(stopStarted).toBe(true)
+    expect(m.adapterFor("gk")).toBeDefined()
+    release()
+    await killP
+    expect(m.adapterFor("gk")).toBeUndefined()
+  })
+
+  test("failed grok stop retains the runtime handle", async () => {
+    const m = manager()
+    m.registry.register({ id: "gk2", name: "gk2", workdir: "/tmp", pid: 0, agent: "grok" })
+    const adapter = grokAdapter()
+    adapter.stop = async () => { throw new Error("stop failed") }
+    m.registerGrokRuntime("gk2", adapter)
+    await expect(m.kill("gk2")).rejects.toThrow("stop failed")
+    expect(m.adapterFor("gk2")).toBe(adapter)
+  })
+
+  test("typed busy drain keeps desired grok model and original rollback baseline", async () => {
+    const agentErrors: string[] = []
+    const frames: object[] = []
+    const m = manager({ phase: "idle", agentErrors, frames })
+    m.registry.register({ id: "gb", name: "gb", workdir: "/tmp", pid: 0, agent: "grok", model: "old-m" })
+    let busy = true
+    const adapter = {
+      kind: "grok",
+      sessionName: "gb",
+      workdir: "/tmp",
+      model: "old-m",
+      async setConfiguration() {
+        if (busy) {
+          const err = new Error("Session is busy") as Error & { code: string }
+          err.code = "session_busy"
+          throw err
+        }
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gb", adapter as never)
+    const queued = await m.applyConfig("gb", { model: "new-m" })
+    expect(queued).toEqual({ ok: true, status: "queued" })
+    expect(m.registry.get("gb")?.model).toBe("new-m")
+    expect(agentErrors).toEqual([])
+    expect(frames.filter((f: any) => f.type === "session_state" && f.model === "old-m")).toHaveLength(0)
+
+    await m.applyConfig("gb", { model: "newer-m" })
+    expect(m.registry.get("gb")?.model).toBe("newer-m")
+
+    busy = false
+    await m.drainPendingReapply("gb", "idle")
+    expect(m.registry.get("gb")?.model).toBe("newer-m")
+    expect(agentErrors).toEqual([])
+  })
+
+  test("serialized grok configure applies the latest desired model after an in-flight configure", async () => {
+    const m = manager()
+    m.registry.register({ id: "gs", name: "gs", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const applied: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    let held = false
+    const adapter = {
+      kind: "grok",
+      sessionName: "gs",
+      workdir: "/tmp",
+      async setConfiguration(patch: { model?: string }) {
+        if (patch.model) applied.push(patch.model)
+        if (!held) {
+          held = true
+          entered()
+          await gate
+        }
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gs", adapter as never)
+    const first = m.applyConfig("gs", { model: "grok-4-fast" })
+    await started
+    const second = m.applyConfig("gs", { model: "grok-4.5" })
+    expect(m.registry.get("gs")?.model).toBe("grok-4.5")
+    release()
+    const r1 = await first
+    const r2 = await second
+    expect(r1.ok).toBe(true)
+    expect(r2).toEqual({ ok: true, status: "applied" })
+    expect(applied.at(-1)).toBe("grok-4.5")
+    expect(m.registry.get("gs")?.model).toBe("grok-4.5")
+  })
+
+  test("failed in-flight grok configure does not overwrite a newer desired model", async () => {
+    const m = manager()
+    m.registry.register({ id: "gf2", name: "gf2", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const native: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    let first = true
+    const adapter = {
+      kind: "grok",
+      sessionName: "gf2",
+      workdir: "/tmp",
+      model: "grok-4",
+      async setConfiguration(patch: { model?: string }) {
+        if (patch.model) native.push(patch.model)
+        if (first) {
+          first = false
+          entered()
+          await gate
+          throw new Error("native configure failed")
+        }
+        if (patch.model) this.model = patch.model
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gf2", adapter as never)
+    const p1 = m.applyConfig("gf2", { model: "grok-4-fast" })
+    await started
+    const p2 = m.applyConfig("gf2", { model: "grok-4.5" })
+    expect(m.registry.get("gf2")?.model).toBe("grok-4.5")
+    release()
+    const r1 = await p1
+    const r2 = await p2
+    expect(r1.ok).toBe(false)
+    expect(r2).toEqual({ ok: true, status: "applied" })
+    expect(native.at(-1)).toBe("grok-4.5")
+    expect(adapter.model).toBe("grok-4.5")
+    expect(m.registry.get("gf2")?.model).toBe("grok-4.5")
+  })
+
+  test("successful in-flight grok configure preserves a newer pending revision until idle drain", async () => {
+    const seams: PortSeams = { phase: "idle" }
+    const m = manager(seams)
+    m.registry.register({ id: "gp", name: "gp", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const native: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    let held = false
+    const adapter = {
+      kind: "grok",
+      sessionName: "gp",
+      workdir: "/tmp",
+      model: "grok-4",
+      async setConfiguration(patch: { model?: string }) {
+        if (patch.model) {
+          native.push(patch.model)
+          this.model = patch.model
+        }
+        if (!held) {
+          held = true
+          entered()
+          await gate
+        }
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gp", adapter as never)
+    const first = m.applyConfig("gp", { model: "grok-4-fast" })
+    await started
+    seams.phase = "running"
+    const second = await m.applyConfig("gp", { model: "grok-4.5" })
+    expect(second).toEqual({ ok: true, status: "queued" })
+    expect(m.registry.get("gp")?.model).toBe("grok-4.5")
+    release()
+    const r1 = await first
+    expect(r1.ok).toBe(true)
+    expect(adapter.model).toBe("grok-4-fast")
+    expect(native).toEqual(["grok-4-fast"])
+    seams.phase = "idle"
+    await m.drainPendingReapply("gp", "idle")
+    expect(native.at(-1)).toBe("grok-4.5")
+    expect(adapter.model).toBe("grok-4.5")
+    expect(m.registry.get("gp")?.model).toBe("grok-4.5")
+  })
+
+  test("after a successful grok apply, a later failure rolls back to native M1 not original M0", async () => {
+    const m = manager()
+    m.registry.register({ id: "gb2", name: "gb2", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const native: string[] = []
+    let n = 0
+    const adapter = {
+      kind: "grok",
+      sessionName: "gb2",
+      workdir: "/tmp",
+      model: "grok-4",
+      async setConfiguration(patch: { model?: string }) {
+        n += 1
+        if (patch.model) native.push(patch.model)
+        if (n === 1) {
+          if (patch.model) this.model = patch.model
+          return
+        }
+        throw new Error("native configure failed")
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gb2", adapter as never)
+    const r1 = await m.applyConfig("gb2", { model: "grok-4-fast" })
+    expect(r1).toEqual({ ok: true, status: "applied" })
+    const r2 = await m.applyConfig("gb2", { model: "grok-4.5" })
+    expect(r2.ok).toBe(false)
+    expect(native).toEqual(["grok-4-fast", "grok-4.5"])
+    expect(adapter.model).toBe("grok-4-fast")
+    expect(m.registry.get("gb2")?.model).toBe("grok-4-fast")
+  })
+
+  test("genuine grok apply failure rolls back to the original olds", async () => {
+    const agentErrors: string[] = []
+    const m = manager({ phase: "idle", agentErrors })
+    m.registry.register({ id: "gf", name: "gf", workdir: "/tmp", pid: 0, agent: "grok", model: "old-m" })
+    const adapter = {
+      kind: "grok",
+      sessionName: "gf",
+      workdir: "/tmp",
+      async setConfiguration() { throw new Error("native configure failed") },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gf", adapter as never)
+    const r = await m.applyConfig("gf", { model: "new-m" })
+    expect(r).toEqual({ ok: false, error: "native configure failed" })
+    expect(m.registry.get("gf")?.model).toBe("old-m")
   })
 
   test("grok effort reapply without a live adapter fails with the exact error and rolls back", async () => {
@@ -377,55 +631,45 @@ describe("SessionManager applyConfig", () => {
 
 function managerForDeliver(): {
   m: SessionManager
-  socketSends: Array<{ id: string; payload: { content: string; meta: Record<string, string> } }>
   delivered: string[]
   targets: Array<{ id: string; chat_id?: string }>
 } {
   const db = openDb(":memory:")
   runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
-  const socketSends: Array<{ id: string; payload: { content: string; meta: Record<string, string> } }> = []
   const delivered: string[] = []
   const targets: Array<{ id: string; chat_id?: string }> = []
   const ports = fakePorts(db)
-  ports.socket = { sendInbound: async (id, payload) => { socketSends.push({ id, payload }) } }
   ports.inbound = {
     onDelivered: (id) => delivered.push(id),
     onTarget: (id, chat_id) => targets.push({ id, chat_id }),
   }
-  return { m: new SessionManager(new Registry(db), ports), socketSends, delivered, targets }
+  return { m: new SessionManager(new Registry(db), ports), delivered, targets }
 }
 
-function mockSendAdapter(sent: Array<{ text: string; meta: any }>): CodexAdapter {
-  return { send: async (text: string, meta: any) => { sent.push({ text, meta }) } } as unknown as CodexAdapter
+function mockSendAdapter(sent: Array<{ text: string; meta: any }>): CoreAdapter {
+  return { send: async (text: string, meta: any) => { sent.push({ text, meta }) } } as unknown as CoreAdapter
 }
 
 describe("SessionManager.deliver", () => {
-  test("codex session with a registered adapter gets adapter.send — never the claude socket", async () => {
-    const { m, socketSends, delivered } = managerForDeliver()
+  test("codex session with a registered adapter gets adapter.send", async () => {
+    const { m, delivered } = managerForDeliver()
     const s = m.registry.register({ name: "cx", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
     const sent: Array<{ text: string; meta: any }> = []
     m.registerRuntime(s.id, { kind: "codex", adapter: mockSendAdapter(sent), handle: {} as CodexSpawnHandle })
     const r = await m.deliver(s.id, "hello", { chat_id: "web" })
     expect(r.ok).toBe(true)
     expect(sent).toEqual([{ text: "hello", meta: { chat_id: "web" } }])
-    expect(socketSends.length).toBe(0)
     expect(delivered).toEqual([s.id])
   })
 
-  test("claude session without an adapter falls back to the shim socket", async () => {
-    const { m, socketSends } = managerForDeliver()
-    const s = m.registry.register({ name: "cl", workdir: "/tmp", pid: 0, agent: "claude", connected: false })
-    const r = await m.deliver(s.id, "hi", { chat_id: "web" })
-    expect(r.ok).toBe(true)
-    expect(socketSends).toEqual([{ id: s.id, payload: { content: "hi", meta: { chat_id: "web" } } }])
-  })
-
-  test("codex session without an adapter reports adapter_not_ready — no silent socket queue", async () => {
-    const { m, socketSends } = managerForDeliver()
-    const s = m.registry.register({ name: "cx2", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
-    const r = await m.deliver(s.id, "hi", {})
-    expect(r).toEqual({ ok: false, reason: "adapter_not_ready" })
-    expect(socketSends.length).toBe(0)
+  test("a session without an adapter reports adapter_not_ready — Claude too (no shim-socket fallback since C3b)", async () => {
+    const { m, delivered } = managerForDeliver()
+    for (const [name, agent] of [["cl", "claude"], ["cx2", "codex"]] as const) {
+      const s = m.registry.register({ name, workdir: "/tmp", pid: 0, agent, connected: false })
+      expect(await m.deliver(s.id, "hi", { chat_id: "web" })).toEqual({ ok: false, reason: "adapter_not_ready" })
+    }
+    expect(await m.deliver("no-such-row", "hi", {})).toEqual({ ok: false, reason: "adapter_not_ready" })
+    expect(delivered).toEqual([])
   })
 
   test("duplicate message_id is deduped but still reconciles the sender", async () => {
@@ -465,7 +709,7 @@ describe("SessionManager.handleOutbound reply", () => {
     }
     const m = new SessionManager(new Registry(db), ports)
     const s = m.registry.register({ name: "cl2", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
-    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as ClaudeCodeAdapter })
+    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as CoreAdapter })
     // A session on an older shim still sends chat_id; it must not reach the dispatcher.
     const r = await m.handleOutbound({ session_id: s.id, op: { name: "reply", args: { chat_id: "telegram:999", text: "hi" } } } as any)
     expect(r.ok).toBe(true)
@@ -552,7 +796,7 @@ describe("SessionManager.handleOutbound reply", () => {
     ports.outbound = { ...ports.outbound, onAssistantMessage: async (_id, ev) => { seen.push(ev); return { ok: true as const, delivered: 1 } } }
     const m = new SessionManager(new Registry(db), ports)
     const s = m.registry.register({ name: "cl3", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
-    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as ClaudeCodeAdapter })
+    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as CoreAdapter })
     const r = await m.handleOutbound({ session_id: s.id, op: { name: "reply", args: { text: "no destination" } } } as any)
     expect(r.ok).toBe(true)
     expect(seen).toEqual([{ text: "no destination", reply_to: undefined, files: undefined, format: undefined, keyboard: undefined }])
@@ -588,6 +832,30 @@ describe("SessionManager.isDeliverable / waitDeliverable", () => {
   test("unknown session id is never deliverable", () => {
     const { m } = managerForDeliver()
     expect(m.isDeliverable("nope")).toBe(false)
+  })
+})
+
+describe("onRegister already-known Core Claude row", () => {
+  test("does not spawn a phantom adapter or tailer", async () => {
+    const m = manager()
+    const s = m.registry.register({
+      name: "core-cl",
+      workdir: "/tmp",
+      pid: 0,
+      agent: "claude",
+      core: true,
+      id: "already",
+    })
+    const reply = await m.handleRegister({
+      session_id: s.id,
+      requested_name: "core-cl",
+      workdir: "/tmp",
+      pid: 9999,
+      agent_session_id: "native-from-shim",
+    } as never)
+    expect(reply).toEqual({ name: "core-cl", session_id: s.id })
+    expect(m.adapterFor(s.id)).toBeUndefined()
+    expect(m.registry.get(s.id)?.pid).toBe(0)
   })
 })
 

@@ -2,8 +2,35 @@ import { spawn as defaultSpawn, ChildProcess } from "child_process"
 import { mkdirSync, writeFileSync } from "fs"
 import { resolve } from "path"
 import { createOpencodeClient } from "@opencode-ai/sdk"
-import type { OpenCodeClientLike, OpenCodeCommandEntry } from "./adapter"
 import { awaitServerReady } from "./spawn-readiness"
+
+export type OpenCodeCommandEntry = {
+  name: string
+  description?: string
+  source?: string
+}
+
+export interface OpenCodeClientLike {
+  session: {
+    create(opts: {
+      body?: {
+        title?: string
+        permission?: Array<{ permission: string; pattern: string; action: string }>
+      }
+      query?: { directory?: string }
+    }): Promise<{ data?: { id?: string }; error?: unknown }>
+    update(opts: {
+      sessionID: string
+      permission?: Array<{ permission: string; pattern: string; action: string }>
+    }): Promise<{ data?: unknown; error?: unknown }>
+    prompt(opts: { path: { id: string }; body: { parts: Array<{ type: string; [k: string]: unknown }>; model?: { providerID: string; modelID: string } } }): Promise<{ data?: { parts?: unknown[] }; error?: unknown }>
+    abort(opts: { path: { id: string } }): Promise<unknown>
+  }
+  event: {
+    subscribe(): Promise<{ stream: AsyncIterable<unknown> }>
+  }
+  listCommands(workdir: string): Promise<OpenCodeCommandEntry[]>
+}
 import { makeLogger } from "../../../shared/log"
 import { resolveCommand, spawnCommand, type FileExists } from "../../process/launcher"
 

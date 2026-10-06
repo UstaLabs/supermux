@@ -1,5 +1,6 @@
 package dev.supermux.proto
 
+import dev.supermux.net.AccountDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishResult
 import dev.supermux.net.ReviewComment
@@ -26,6 +27,8 @@ data class SessionInfo(
     val model: String? = null,
     /** Thinking/effort level (claude/codex); carried on the snapshot + session_state. */
     val reasoningLevel: String? = null,
+    /** Catalog permission mode id for this session (resolved; never null on a current broker). */
+    val permissionMode: String? = null,
     val repo_root: String? = null,
     val role: String? = null,
     /** Worktree session's pinned branch (present only for worktree-backed sessions). */
@@ -46,6 +49,10 @@ data class SessionInfo(
     /** Launcher draft body when [userStatus] is draft. */
     @SerialName("draft_payload")
     val draftPayload: DraftPayload? = null,
+    /** Account id the session runs on (`<agent>:system` = the CLI's own login); null on an older broker. */
+    val account: String? = null,
+    /** Display label for [account]. */
+    val accountLabel: String? = null,
 )
 
 /** A finish job's outcome/state machine, broadcast on the `finish_job` WS frame and
@@ -85,6 +92,11 @@ data class LogEntry(
     val chat_id: String? = null,
     val message_id: String? = null,
     val attachments: List<Attachment>? = null,
+    /**
+     * Set on the user's line to one subagent ("↪ to <subagent>: <text>", the broker writes that
+     * text): which subagent it went to. Absent on every other entry and on an older broker.
+     */
+    val subagent_id: String? = null,
 )
 
 @Serializable
@@ -138,7 +150,87 @@ data class ActivityEvent(
     val truncated: Boolean? = null,
     /** Structured High-detail payload (bash/edit/write/generic). */
     val body: ActivityToolBody? = null,
+    /** Reasoning card: true when the model redacted the thought stream. */
+    val redacted: Boolean? = null,
+    /** Task card kind (shell / subagent / collab / …). */
+    val taskKind: String? = null,
+    /**
+     * Set on every row a SUBAGENT produced (its tool calls, results, reasoning): the row belongs
+     * under that subagent's card, not in the parent's timeline. Parent rows never carry it.
+     */
+    val subagentId: String? = null,
+    /** `subagent_message` rows: full text (<= 8000 chars; [title] is its first line). */
+    val text: String? = null,
+    /** `subagent_message` rows: "from" (the subagent said it) | "to" (sent to it). */
+    val direction: String? = null,
+    /** `subagent_message` rows with direction "to": "user" | "parent". */
+    val sender: String? = null,
 )
+
+/** A subagent's own counters, as far as the agent reports them (or the broker derives them). */
+@Serializable
+data class SubagentStats(
+    val toolCalls: Int? = null,
+    val tokens: Long? = null,
+    val durationMs: Long? = null,
+    val turns: Int? = null,
+)
+
+/**
+ * Latest view of one subagent (broker `SubagentStore`): snapshot `subagents` and the
+ * `subagent_update` frame, which always carries the FULL view (idempotent upsert by [id]).
+ *
+ * Linkage: [parentCallId] is the `callId` of the parent's tool row that spawned it (Claude
+ * Agent/Task, Grok spawn_subagent, OpenCode task, Cursor Task). Rows the subagent itself
+ * produced carry [ActivityEvent.subagentId] == [id].
+ */
+@Serializable
+data class Subagent(
+    val id: String,
+    val name: String? = null,
+    val description: String? = null,
+    val prompt: String? = null,
+    val background: Boolean? = null,
+    /** running | completed | failed | cancelled */
+    val status: String = "running",
+    /** Live one-liner ("Reading sub/secret.txt", "Bash: ls -la"). */
+    val activity: String? = null,
+    val stats: SubagentStats = SubagentStats(),
+    /** Final answer/summary; clipped to ~8k chars by the broker ([resultClipped]). */
+    val result: String? = null,
+    val resultClipped: Boolean? = null,
+    val model: String? = null,
+    /** direct | relay | none — whether (and how) the user can message it. */
+    val messaging: String? = null,
+    val parentCallId: String? = null,
+    val nativeId: String? = null,
+    /** Epoch millis. */
+    val startedAt: Long = 0,
+    val endedAt: Long? = null,
+    val lastActivityAt: Long = 0,
+    /** Who ended it (terminal statuses only): self | parent | client. */
+    val endedBy: String? = null,
+    /** Wire `canMessage`; null from an older broker (see [canMessage]). */
+    @SerialName("canMessage") val canMessageFlag: Boolean? = null,
+    /** Wire `canStop`; null from an older broker (see [canStop]). */
+    @SerialName("canStop") val canStopFlag: Boolean? = null,
+    /** native | derived — where the action flags come from. */
+    val actionsSource: String? = null,
+    val cannotMessageReason: String? = null,
+    val cannotStopReason: String? = null,
+    /** Monotonic count of the subagent's own reply messages; unread tracking is client-side. */
+    val replies: Int? = null,
+) {
+    val running: Boolean get() = status == "running"
+    /** Truthful: the broker's flag, else (older broker) `messaging` direct or relay. */
+    val canMessage: Boolean get() = canMessageFlag ?: (messaging == "direct" || messaging == "relay")
+    /** Truthful: the broker's flag, else (older broker) whether it is still running. */
+    val canStop: Boolean get() = canStopFlag ?: running
+    /** Replies not yet seen, given the reply count when its card was last opened. */
+    fun unreadReplies(seen: Int): Int = ((replies ?: 0) - seen).coerceAtLeast(0)
+    /** Short human label: description, else name, else the id's first 8 chars. */
+    val label: String get() = description?.takeIf { it.isNotBlank() } ?: name?.takeIf { it.isNotBlank() } ?: id.take(8)
+}
 
 @Serializable
 data class AgentStatus(
@@ -273,6 +365,14 @@ data class ProjectDto(
 data class WorktreeSizeDto(val id: String, val bytes: Long)
 
 @Serializable
+data class PermissionModeInfo(
+    val id: String,
+    val label: String,
+    val description: String,
+    val default: Boolean = false,
+)
+
+@Serializable
 sealed interface ServerFrame {
     @Serializable @SerialName("snapshot")
     data class Snapshot(
@@ -280,6 +380,8 @@ sealed interface ServerFrame {
         val logs: Map<String, List<LogEntry>> = emptyMap(),
         val activity: Map<String, List<ActivityEvent>> = emptyMap(),
         val bgTasks: Map<String, List<BgTask>> = emptyMap(),
+        /** Session id → its subagents (running + recent finished). Empty from an older broker. */
+        val subagents: Map<String, List<Subagent>> = emptyMap(),
         val agentState: Map<String, AgentStatus> = emptyMap(),
         val commands: Map<String, List<SlashCommand>> = emptyMap(),
         val commandsResolved: Map<String, Boolean> = emptyMap(),
@@ -304,6 +406,9 @@ sealed interface ServerFrame {
         val projects: List<ProjectDto> = emptyList(),
         /** workspaceId → projectId for active AND archived workspaces. Empty on older brokers. */
         val projectMembership: Map<String, String> = emptyMap(),
+        val requests: Map<String, List<PromptRequest>> = emptyMap(),
+        /** Catalog of permission modes per agent so clients do not hardcode labels. */
+        val permissionModes: Map<String, List<PermissionModeInfo>> = emptyMap(),
         /**
          * Sessions whose [logs] entry is only the newest few entries, because the `subscribe`
          * asked for a `logTail` and did not list them in `fullLogs`. Null from a broker that
@@ -427,7 +532,33 @@ sealed interface ServerFrame {
         val connected: Boolean? = null,
         val model: String? = null,
         val reasoningLevel: String? = null,
+        val permissionMode: String? = null,
+        /** The session switched account (manually or on a usage limit). */
+        val account: String? = null,
+        val accountLabel: String? = null,
     ) : ServerFrame
+
+    /** An account was added or removed: the cached GET /accounts is stale (no payload). */
+    @Serializable @SerialName("accounts_changed")
+    data object AccountsChanged : ServerFrame
+
+    /** Progress of a guided account login (POST /accounts/login); same shape as AccountLoginStateDto. */
+    @Serializable @SerialName("account_login_state")
+    data class AccountLoginState(
+        val loginId: String = "",
+        val agent: String = "",
+        val phase: String = "",
+        val url: String? = null,
+        val code: String? = null,
+        val needsCode: Boolean = false,
+        val error: String? = null,
+        val errorCode: String? = null,
+        val account: AccountDto? = null,
+    ) : ServerFrame
+
+    /** The accounts settings changed (PUT /settings/accounts). */
+    @Serializable @SerialName("accounts_settings")
+    data class AccountsSettings(val autoSwitch: Boolean = false) : ServerFrame
 
     @Serializable @SerialName("agent_state")
     data class AgentState(
@@ -483,6 +614,14 @@ sealed interface ServerFrame {
 
     @Serializable @SerialName("bg_tasks")
     data class BgTasks(val session: String, val tasks: List<BgTask> = emptyList()) : ServerFrame
+
+    /** One subagent changed; [subagent] is its full latest view (upsert by id). */
+    @Serializable @SerialName("subagent_update")
+    data class SubagentUpdate(val session: String, val subagent: Subagent) : ServerFrame
+
+    /** The session's subagent list was dropped (session archived/killed). */
+    @Serializable @SerialName("subagents_cleared")
+    data class SubagentsCleared(val session: String) : ServerFrame
 
     @Serializable @SerialName("commands_changed")
     data class CommandsChanged(
@@ -599,6 +738,68 @@ sealed interface ServerFrame {
         val ok: Boolean = false,
         val error: String? = null,
     ) : ServerFrame
+
+    @Serializable @SerialName("request_open")
+    data class RequestOpen(val session: String, val request: PromptRequest) : ServerFrame
+
+    @Serializable @SerialName("request_closed")
+    data class RequestClosed(
+        val session: String,
+        val requestId: String,
+        val outcome: String,
+        /** What was actually chosen ("Allow always", "Reject — too risky"); absent on an older broker. */
+        val answerLabel: String? = null,
+    ) : ServerFrame
+
+    /** Broker `{type:"error", reason}` — switch/respond failures surface here. */
+    @Serializable @SerialName("error")
+    data class Error(val reason: String = "") : ServerFrame
+}
+
+@Serializable
+data class PromptRequestOption(
+    val id: String,
+    val label: String,
+    val kind: String? = null,
+    /**
+     * Secondary text under a question option. Already on the wire: the broker's question body is
+     * the JSON-stringified question list and each option there carries the agent's `description`
+     * (AskUserQuestion sends one). Absent on permission options and on older brokers.
+     */
+    val description: String? = null,
+)
+
+@Serializable
+data class PromptRequest(
+    val requestId: String,
+    val kind: String,
+    val title: String = "",
+    val body: String = "",
+    val options: List<PromptRequestOption> = emptyList(),
+    val allowFreeText: Boolean = false,
+    val blocking: Boolean = true,
+    /** Set when a subagent (not the parent) is asking; see [Subagent.id]. */
+    val subagentId: String? = null,
+    val subagentName: String? = null,
+    val subagentDescription: String? = null,
+)
+
+/** One question inside a `kind=question` request. Broker JSON-stringifies the list into [PromptRequest.body]. */
+@Serializable
+data class PromptQuestion(
+    val id: String,
+    val prompt: String = "",
+    val header: String? = null,
+    val multiSelect: Boolean = false,
+    val allowFreeText: Boolean = false,
+    val options: List<PromptRequestOption> = emptyList(),
+)
+
+private val promptQuestionJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+fun PromptRequest.parsedQuestions(): List<PromptQuestion> {
+    if (kind != "question" || body.isBlank()) return emptyList()
+    return runCatching { promptQuestionJson.decodeFromString<List<PromptQuestion>>(body) }.getOrDefault(emptyList())
 }
 
 @Serializable
@@ -635,6 +836,16 @@ sealed interface ClientFrame {
         val session: String?,
         val visible: Boolean,
         val sessions: List<String>? = null,
+    ) : ClientFrame
+
+    @Serializable @SerialName("set_permission_mode")
+    data class SetPermissionMode(val session: String, val mode: String) : ClientFrame
+
+    @Serializable @SerialName("request_respond")
+    data class RequestRespond(
+        val session: String,
+        val requestId: String,
+        val answer: JsonObject,
     ) : ClientFrame
 
     @Serializable @SerialName("send")

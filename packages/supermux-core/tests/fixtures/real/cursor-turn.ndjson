@@ -1,0 +1,9 @@
+{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true},"authMethods":[]}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Read notes.txt and reply with just the number."}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","update":{"sessionUpdate":"tool_call","toolCallId":"call-1","title":"read","kind":"read","status":"pending","locations":[],"rawInput":{"path":"<path>/notes.txt"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-1","status":"completed","kind":"read","title":"notes.txt","content":[{"type":"content","content":{"type":"text","text":"42"}}],"rawInput":{"path":"<path>/notes.txt"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"The file contains 42."}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"42"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","update":{"sessionUpdate":"available_commands_update","availableCommands":[]}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","update":{"sessionUpdate":"session_info_update"}}}
+{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}

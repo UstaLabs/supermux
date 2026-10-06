@@ -69,7 +69,7 @@ export class Registry {
     return healSessionsWithoutWorkspace(this.db, this.workspaces, ensureProject)
   }
 
-  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean; connected?: boolean } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch">>): Session {
+  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean; connected?: boolean } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch" | "core" | "permissionMode" | "account">>): Session {
     if (this.sessions.takenNames().has(input.name)) {
       throw new Error(`session name already in use: ${input.name}`)
     }
@@ -94,6 +94,9 @@ export class Registry {
       repo_root: input.repo_root,
       base_branch: input.base_branch,
       session_branch: input.session_branch,
+      core: input.core,
+      permissionMode: input.permissionMode ?? undefined,
+      ...(input.account ? { account: input.account } : {}),
     })
     // Connected as soon as the shim joins. The claude spawn path registers the
     // row BEFORE the shim exists, so it passes connected:false; the socket
@@ -110,11 +113,13 @@ export class Registry {
     workdir: string
     model?: string
     reasoningLevel?: string
+    permissionMode?: string
     pid: number
     is_default?: boolean
     tmux_target?: string
     agent_home?: string
     base_commits?: Record<string, string>
+    core?: boolean
   }): Session {
     return this.register({
       id: input.id,
@@ -123,12 +128,14 @@ export class Registry {
       workdir: input.workdir,
       model: input.model,
       reasoningLevel: input.reasoningLevel,
+      permissionMode: input.permissionMode,
       pid: input.pid,
       role: "personal_assistant",
       is_default: input.is_default ?? false,
       tmux_target: input.tmux_target,
       agent_home: input.agent_home,
       base_commits: input.base_commits,
+      core: input.core,
     })
   }
 
@@ -204,6 +211,18 @@ export class Registry {
     const s = this.sessions.getById(id)
     if (!s) throw new Error(`no such session: ${id}`)
     this.sessions.setReasoningLevel(id, reasoningLevel)
+  }
+
+  setPrompts(id: string, prompts: boolean): void {
+    const s = this.sessions.getById(id)
+    if (!s) throw new Error(`no such session: ${id}`)
+    this.sessions.setPrompts(id, prompts)
+  }
+
+  setPermissionMode(id: string, mode: string | null): void {
+    const s = this.sessions.getById(id)
+    if (!s) throw new Error(`no such session: ${id}`)
+    this.sessions.setPermissionMode(id, mode)
   }
 
   listPAs(): Session[] {

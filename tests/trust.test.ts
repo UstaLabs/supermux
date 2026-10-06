@@ -2,8 +2,9 @@ import { test, expect, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { preAcceptTrust } from "../src/core/session-manager/trust"
-import { sendChannelConsentEnter } from "../src/core/session-manager/post-spawn-keys"
+import { preAcceptTrust, removeBrokerShimEntries } from "../src/core/session-manager/trust"
+import { shimSpawnSpec } from "../src/core/session-manager/shim-spawn"
+import { setMuxShimMode } from "../src/core/mux-tools/mode"
 
 let homeDir: string
 let origHome: string | undefined
@@ -14,6 +15,7 @@ beforeEach(() => {
   process.env.HOME = homeDir
 })
 afterEach(() => {
+  setMuxShimMode("external")
   process.env.HOME = origHome
   rmSync(homeDir, { recursive: true, force: true })
 })
@@ -106,114 +108,62 @@ test("does not leave a .tmp file behind on success", () => {
   expect(stragglers.length).toBe(0)
 })
 
-// sendChannelConsentEnter — polls the tmux pane for the consent prompt marker
-// ("Enter to confirm") then sends Enter to dismiss it.
+// ---- C3b "host" mode (scratch HOME only) ----
 
-test("sendChannelConsentEnter sends Enter when consent prompt is detected, then stops once it clears", async () => {
-  const calls: Array<{ target: string; keys: string[] }> = []
-  let captureCount = 0
-  await sendChannelConsentEnter("mux:ana", {
-    pollIntervalMs: 0,
-    maxWaitMs: 1000,
-    retryAfterMs: 0,
-    sendKeysFn: async (target, keys) => { calls.push({ target, keys }) },
-    capturePane: async () => {
-      captureCount++
-      // 1st capture shows the prompt; once we Enter, it clears to the working UI.
-      if (captureCount === 1) return "some text\nEnter to confirm\nmore text"
-      return "⏵⏵ bypass permissions on"
-    },
-  })
-  expect(calls).toHaveLength(1)
-  expect(calls[0]!.target).toBe("mux:ana")
-  expect(calls[0]!.keys).toContain("Enter")
-  expect(captureCount).toBeGreaterThanOrEqual(2)
+const ours = () => {
+  const spec = shimSpawnSpec()
+  return {
+    "mux-shim": { type: "stdio", command: spec.shimCommand, args: spec.shimArgs, env: {} },
+    "mux-channel": { type: "stdio", command: spec.shimCommand, args: spec.shimArgs, env: { MUX_CHANNEL_ONLY: "1" } },
+  }
+}
+
+test("host: preAcceptTrust trusts the workdir but writes no mux-shim / mux-channel entry", () => {
+  setMuxShimMode("host")
+  writeFileSync(`${homeDir}/.claude.json`, JSON.stringify({ projects: {} }))
+  preAcceptTrust("/home/u/foo")
+  const c = JSON.parse(readFileSync(`${homeDir}/.claude.json`, "utf8"))
+  expect(c.projects["/home/u/foo"].hasTrustDialogAccepted).toBe(true)
+  expect(c.mcpServers?.["mux-shim"]).toBeUndefined()
+  expect(c.mcpServers?.["mux-channel"]).toBeUndefined()
 })
 
-test("sendChannelConsentEnter re-sends Enter when the first keystrokes are dropped", async () => {
-  // Simulates the Ink input-handler race: the prompt stays up through the first
-  // few Enters (dropped), then clears once one finally lands.
-  const calls: string[][] = []
-  let captureCount = 0
-  await sendChannelConsentEnter("mux:ana", {
-    pollIntervalMs: 0,
-    maxWaitMs: 1000,
-    retryAfterMs: 0,
-    sendKeysFn: async (_target, keys) => { calls.push(keys) },
-    capturePane: async () => {
-      captureCount++
-      // prompt persists for 3 captures (Enters 1-2 dropped), then clears
-      return captureCount <= 3 ? "Enter to confirm" : "⏵⏵ bypass permissions on"
-    },
-  })
-  expect(calls.length).toBe(3)
-  expect(calls.every((k) => k.includes("Enter"))).toBe(true)
+test("host: removeBrokerShimEntries removes OUR two entries and keeps the user's other servers and keys", () => {
+  writeFileSync(`${homeDir}/.claude.json`, JSON.stringify({ theme: "light", projects: { "/p": { hasTrustDialogAccepted: true } }, mcpServers: { ...ours(), github: { type: "stdio", command: "gh-mcp", args: [], env: {} } } }))
+  expect(removeBrokerShimEntries()).toEqual(["mux-shim", "mux-channel"])
+  const c = JSON.parse(readFileSync(`${homeDir}/.claude.json`, "utf8"))
+  expect(Object.keys(c.mcpServers)).toEqual(["github"])
+  expect(c.theme).toBe("light")
+  expect(c.projects["/p"].hasTrustDialogAccepted).toBe(true)
+  expect(existsSync(`${homeDir}/.claude.json.tmp.${process.pid}`)).toBe(false)
+  // Once: a second run finds nothing and writes nothing.
+  const before = readFileSync(`${homeDir}/.claude.json`, "utf8")
+  expect(removeBrokerShimEntries()).toEqual([])
+  expect(readFileSync(`${homeDir}/.claude.json`, "utf8")).toBe(before)
 })
 
-test("sendChannelConsentEnter exits early if Claude already past consent", async () => {
-  const calls: Array<{ target: string; keys: string[] }> = []
-  await sendChannelConsentEnter("mux:ana", {
-    pollIntervalMs: 0,
-    maxWaitMs: 1000,
-    sendKeysFn: async (target, keys) => { calls.push({ target, keys }) },
-    capturePane: async () => "Listening for channel messages from: server:mux-shim",
-  })
-  expect(calls).toHaveLength(0)
+test("host: entries that are NOT our spawn spec stay (another broker's shim, a user server of that name)", () => {
+  const foreign = {
+    "mux-shim": { type: "stdio", command: "bun", args: ["run", "/elsewhere/src/shim/index.ts"], env: {} },
+    "mux-channel": { type: "stdio", command: shimSpawnSpec().shimCommand, args: shimSpawnSpec().shimArgs, env: {} }, // ours but without MUX_CHANNEL_ONLY: not the broker's entry
+  }
+  writeFileSync(`${homeDir}/.claude.json`, JSON.stringify({ mcpServers: foreign }))
+  const before = readFileSync(`${homeDir}/.claude.json`, "utf8")
+  expect(removeBrokerShimEntries()).toEqual([])
+  expect(readFileSync(`${homeDir}/.claude.json`, "utf8")).toBe(before)
 })
 
-test("sendChannelConsentEnter dismisses --resume menu before channel consent", async () => {
-  const calls: Array<{ target: string; keys: string[] }> = []
-  let captureCount = 0
-  await sendChannelConsentEnter("mux:ana", {
-    pollIntervalMs: 0,
-    maxWaitMs: 2000,
-    sendKeysFn: async (target, keys) => { calls.push({ target, keys }) },
-    capturePane: async () => {
-      captureCount++
-      if (captureCount === 1) {
-        return "Resuming the full session\n  ❯ 1. Resume from summary\nEnter to confirm · Esc to cancel"
-      }
-      if (captureCount === 2) return "Listening for channel messages from: server:mux-channel"
-      return ""
-    },
-  })
-  expect(calls).toHaveLength(1)
-  expect(calls[0]!.keys).toEqual(["2", "Enter"])
+test("host: removeBrokerShimEntries leaves a missing or malformed ~/.claude.json alone", () => {
+  expect(removeBrokerShimEntries()).toEqual([])
+  expect(existsSync(`${homeDir}/.claude.json`)).toBe(false)
+  writeFileSync(`${homeDir}/.claude.json`, "{not json")
+  expect(removeBrokerShimEntries()).toEqual([])
+  expect(readFileSync(`${homeDir}/.claude.json`, "utf8")).toBe("{not json")
 })
 
-test("sendChannelConsentEnter accepts the Bypass Permissions warning with Down+Enter, never a bare Enter", async () => {
-  // Some claude versions re-show the bypass warning (default "No, exit") when
-  // loading dev-channels; a bare Enter would QUIT claude. Must select option 2.
-  const calls: string[][] = []
-  let captureCount = 0
-  await sendChannelConsentEnter("mux:ana", {
-    pollIntervalMs: 0,
-    maxWaitMs: 2000,
-    retryAfterMs: 0,
-    keyDelayMs: 0,
-    sendKeysFn: async (_t, keys) => { calls.push(keys) },
-    capturePane: async () => {
-      captureCount++
-      // bypass warning (also shows "Enter to confirm") for 1 capture, then cleared
-      if (captureCount === 1) return "WARNING: Bypass Permissions mode\n  ❯ 1. No, exit\n    2. Yes, I accept\nEnter to confirm"
-      return "Listening for channel messages from: server:mux-channel"
-    },
-  })
-  const flat = calls.flat()
-  // Down moves to "2. Yes, I accept" BEFORE Enter confirms — Enter must never
-  // come first (that confirms the default "1. No, exit" and quits claude).
-  expect(flat).toContain("Down")
-  expect(flat).toContain("Enter")
-  expect(flat.indexOf("Down")).toBeLessThan(flat.indexOf("Enter"))
-})
-
-test("sendChannelConsentEnter times out gracefully if prompt never appears", async () => {
-  const calls: Array<{ target: string; keys: string[] }> = []
-  await sendChannelConsentEnter("mux:ana", {
-    pollIntervalMs: 10,
-    maxWaitMs: 50,
-    sendKeysFn: async (target, keys) => { calls.push({ target, keys }) },
-    capturePane: async () => "some other content",
-  })
-  expect(calls).toHaveLength(0)
+test("external (default): preAcceptTrust still writes both entries, as in C3a", () => {
+  writeFileSync(`${homeDir}/.claude.json`, JSON.stringify({ projects: {} }))
+  preAcceptTrust("/home/u/foo")
+  const c = JSON.parse(readFileSync(`${homeDir}/.claude.json`, "utf8"))
+  expect(c.mcpServers).toEqual(ours())
 })

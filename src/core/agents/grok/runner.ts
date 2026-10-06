@@ -1,5 +1,8 @@
 import { spawn as defaultSpawn, type ChildProcess } from "child_process"
-import type { AcpClient } from "./acp-client"
+export type AcpClient = {
+  feed: (chunk: string) => void
+  setWrite: (fn: (line: string) => void) => void
+}
 import { makeLogger } from "../../../shared/log"
 import { resolveCommand, spawnCommand, type FileExists } from "../../process/launcher"
 

@@ -8,6 +8,8 @@ package dev.supermux.desktop.settings
 
 import androidx.compose.runtime.Composable
 import dev.supermux.state.HostStore
+import dev.supermux.ui.accounts.AccountsSettingsScreen
+import dev.supermux.ui.accounts.rememberAccountsActions
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.settings.AgentSettingsScreen
 import dev.supermux.ui.settings.CuratorSettingsScreen
@@ -46,6 +48,11 @@ fun DesktopSettingsSection(
     when (section) {
         SettingsSection.Agents -> AgentSettingsScreen(
             actions = rememberAgentSettingsActions(host),
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
+        )
+        SettingsSection.Accounts -> AccountsSettingsScreen(
+            actions = rememberAccountsActions(host),
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )

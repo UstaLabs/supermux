@@ -162,7 +162,7 @@ const REPLY_FOR_STREAMED_AGENTS =
 const ALL = [...OUTBOUND_TOOLS, ...ORCHESTRATION_TOOLS]
 const OUTBOUND_NAMES = new Set(OUTBOUND_TOOLS.map(t => t.name))
 
-type ToolCallResult = { ok: boolean; value?: unknown; error?: string }
+export type ToolCallResult = { ok: boolean; value?: unknown; error?: string }
 type ToolCaller = {
   callOutbound: (op: ToolOperation) => Promise<ToolCallResult>
   callOrchestration: (op: ToolOperation) => Promise<ToolCallResult>
@@ -176,33 +176,41 @@ export function listTools(agentKind: AgentKind = AgentKind.Claude, rpcOnly = fal
   )
 }
 
-export async function callTool(params: { name: string; arguments?: Record<string, unknown> }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
-  if (rpcOnly) {
-    if (!RPC_NAMES.has(params.name)) {
-      return { isError: true, content: [{ type: "text", text: `tool ${params.name} not available on rpc worker` }] }
-    }
-    const opName = RPC_OP[params.name as keyof typeof RPC_OP]
-    const result = await shim.callOrchestration({ name: opName, args: params.arguments ?? {} })
-    if (!result.ok) return { isError: true, content: [{ type: "text", text: result.error ?? "unknown error" }] }
-    return { content: [{ type: "text", text: JSON.stringify(result.value ?? "ok") }] }
-  }
-  const allowed = new Set(listTools(agentKind).map(t => t.name))
-  if (!allowed.has(params.name)) {
-    return { isError: true, content: [{ type: "text", text: `tool ${params.name} not available for agent kind ${agentKind}` }] }
-  }
-  const args = params.arguments ?? {}
-  const isOutbound = OUTBOUND_NAMES.has(params.name)
-  const result = isOutbound
-    ? await shim.callOutbound({ name: params.name, args })
-    : await shim.callOrchestration({ name: params.name, args })
+export type ToolRoute = { kind: "outbound" | "orchestration"; op: string }
 
-  if (!result.ok) {
-    return { isError: true, content: [{ type: "text", text: result.error ?? "unknown error" }] }
-  }
-  if (params.name === "reply") {
+/**
+ * Which broker handler a tool call goes to, and under which op name (rpc tools map to
+ * rpc_resolve / rpc_reject). undefined: the tool is not offered (rpc-only vs full set). Shared by
+ * this shim and the broker's host MCP server (src/core/mux-tools/server.ts).
+ */
+export function toolRoute(name: string, rpcOnly = false): ToolRoute | undefined {
+  if (rpcOnly) return RPC_NAMES.has(name) ? { kind: "orchestration", op: RPC_OP[name as keyof typeof RPC_OP] } : undefined
+  if (!ALL.some(t => t.name === name)) return undefined
+  return { kind: OUTBOUND_NAMES.has(name) ? "outbound" : "orchestration", op: name }
+}
+
+/**
+ * A broker handler result as the MCP tool result the agent sees. The ONE mapping for both
+ * transports: ok:false → isError with the error text; reply → "sent" / "sent (id: …)"; anything
+ * else → JSON of the value ("ok" when there is none).
+ */
+export function toolResult(name: string, result: ToolCallResult, rpcOnly = false): { isError?: boolean; content: Array<{ type: "text"; text: string }> } {
+  if (!result.ok) return { isError: true, content: [{ type: "text", text: result.error ?? "unknown error" }] }
+  if (!rpcOnly && name === "reply") {
     const value = result.value
     const id = value && typeof value === "object" && "message_id" in value ? value.message_id : undefined
     return { content: [{ type: "text", text: id != null ? `sent (id: ${id})` : "sent" }] }
   }
   return { content: [{ type: "text", text: JSON.stringify(result.value ?? "ok") }] }
+}
+
+export async function callTool(params: { name: string; arguments?: Record<string, unknown> }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
+  const route = toolRoute(params.name, rpcOnly)
+  if (!route) {
+    const text = rpcOnly ? `tool ${params.name} not available on rpc worker` : `tool ${params.name} not available for agent kind ${agentKind}`
+    return { isError: true, content: [{ type: "text", text }] }
+  }
+  const op = { name: route.op, args: params.arguments ?? {} }
+  const result = route.kind === "outbound" ? await shim.callOutbound(op) : await shim.callOrchestration(op)
+  return toolResult(params.name, result, rpcOnly)
 }

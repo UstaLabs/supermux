@@ -152,6 +152,25 @@ class DesktopLauncherTest {
         assertEquals(true, req.worktree)
         assertEquals("main", req.baseBranch)
         assertEquals("high", req.reasoningLevel)
+        assertEquals(null, req.permissionMode)
+    }
+
+    @Test fun create_session_sends_permissionMode() = runBlocking {
+        val recorded = mutableListOf<Rec>()
+        val app = appRecording(recorded)
+        app.createSessionWithFirstMessage(
+            workdir = "~/proj",
+            agent = "claude",
+            model = null,
+            reasoningLevel = null,
+            text = "hi",
+            staged = emptyList(),
+            worktree = false,
+            baseBranch = null,
+            permissionMode = "ask",
+        )
+        val req = json.decodeFromString<SpawnRequest>(recorded.first { it.path == "/sessions" }.body)
+        assertEquals("ask", req.permissionMode)
     }
 
     @Test fun create_session_uploads_staged_files_before_spawn_and_hands_the_first_turn_to_the_broker() = runBlocking {

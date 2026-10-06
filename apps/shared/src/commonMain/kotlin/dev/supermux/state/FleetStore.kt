@@ -88,6 +88,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -293,6 +294,7 @@ class FleetStore(
     val activity: StateFlow<Map<String, List<ActivityEvent>>> = mergedMap { it.activity }
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> = mergedMap { it.agentErrors }
     val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> = mergedMap { it.bgTasks }
+    val subagents: StateFlow<Map<String, List<dev.supermux.proto.Subagent>>> = mergedMap { it.subagents }
     val commands: StateFlow<Map<String, List<SlashCommand>>> = mergedMap { it.commands }
     val commandsResolved: StateFlow<Map<String, Boolean>> = mergedMap { it.commandsResolved }
     val finishJobs: StateFlow<Map<String, FinishJobDto>> = mergedMap { it.finishJobs }
@@ -399,6 +401,33 @@ class FleetStore(
             .distinctUntilChanged()
             .flatMapLatest { app -> app?.agentModels ?: flowOf(null) }
             .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /**
+     * The ACTIVE host's accounts ([HostStore.accounts]) — null until a screen asked for them
+     * ([HostStore.ensureAccounts]) and the host answered. Keyed on the live [HostStore] like
+     * [activeAgentModels].
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAccounts: StateFlow<List<dev.supermux.net.AccountDto>?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.accounts ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /** The ACTIVE host's accounts auto-switch setting ([HostStore.accountsAutoSwitch]). */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAccountsAutoSwitch: StateFlow<Boolean?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.accountsAutoSwitch ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /** `account_login_state` frames from the ACTIVE host. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAccountLogins: Flow<dev.supermux.net.AccountLoginStateDto> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.accountLogins ?: emptyFlow() }
 
     /**
      * The ACTIVE host's project catalog for the launcher — empty until that host's catalog is
@@ -1234,6 +1263,17 @@ class FleetStore(
         appFor(id)?.switchModel(id, model) == true
     suspend fun switchReasoning(id: String, level: String): Boolean =
         appFor(id)?.switchReasoning(id, level) == true
+    fun setPermissionMode(id: String, mode: String) {
+        appFor(id)?.setPermissionMode(id, mode)
+    }
+    fun respondRequest(sessionId: String, requestId: String, answer: kotlinx.serialization.json.JsonObject) {
+        appFor(sessionId)?.respondRequest(sessionId, requestId, answer)
+    }
+    /** Routed to the session's owning host; `ok=false` (no error) when no host owns it. */
+    suspend fun messageSubagent(sessionId: String, subagentId: String, text: String): dev.supermux.net.SubagentActionResult =
+        appFor(sessionId)?.messageSubagent(sessionId, subagentId, text) ?: dev.supermux.net.SubagentActionResult(ok = false)
+    suspend fun stopSubagent(sessionId: String, subagentId: String): dev.supermux.net.SubagentActionResult =
+        appFor(sessionId)?.stopSubagent(sessionId, subagentId) ?: dev.supermux.net.SubagentActionResult(ok = false)
 
     /** Resume from archive on the owning host, then re-pull that host's archived list so the row
      *  leaves the Archived screen (the resume produces no session_removed frame).
@@ -1382,8 +1422,8 @@ class FleetStore(
         appForWorkspace(workspaceId)?.workspaceFsRefs(workspaceId)
 
     // Host-global (active host, or an explicit recordId where the caller knows it) ----------
-    fun spawn(workdir: String, name: String?, agent: String, model: String? = null) {
-        activeApp()?.spawn(workdir, name, agent, model)
+    fun spawn(workdir: String, name: String?, agent: String, model: String? = null, permissionMode: String? = null) {
+        activeApp()?.spawn(workdir, name, agent, model, permissionMode)
     }
     fun saveName(n: String) { activeApp()?.saveName(n) }
     fun revoke(n: String) { activeApp()?.revoke(n) }
@@ -1629,11 +1669,13 @@ class FleetStore(
         inheritFrom: String? = null,
         firstMessage: String? = null,
         hostRecordId: String? = null,
+        permissionMode: String? = null,
     ): String? {
         val app = spawnTarget(hostRecordId, workspaceId) ?: return null
         val newId = app.createSessionWithFirstMessage(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
             replaceDraftId, workspaceId, name, inheritFrom, firstMessage,
+            permissionMode = permissionMode,
         ) ?: return null
         return newId
     }
@@ -1658,12 +1700,14 @@ class FleetStore(
         firstMessage: String? = null,
         hostRecordId: String? = null,
         viewId: String? = null,
+        permissionMode: String? = null,
+        account: String? = null,
     ): String {
         val app = spawnTarget(hostRecordId, workspaceId)
             ?: throw IllegalStateException("No host connected")
         val newId = app.createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode, account,
         )
         return newId
     }

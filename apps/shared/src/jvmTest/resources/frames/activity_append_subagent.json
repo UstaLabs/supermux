@@ -1,0 +1,17 @@
+{
+  "type": "activity_append",
+  "session": "550e8400-e29b-41d4-a716-446655440000",
+  "event": {
+    "ts": "2026-09-28T10:00:02.000Z",
+    "kind": "tool",
+    "tool": "Bash",
+    "title": "Bash: ls -R",
+    "detail": "ls -R",
+    "description": "List all files and directories recursively",
+    "phase": "started",
+    "seq": 7,
+    "callId": "toolu_01NxaUmasXnbe4MZcYuoF3re",
+    "body": { "kind": "bash", "command": "ls -R" },
+    "subagentId": "af3c70a348a6a6b7a"
+  }
+}

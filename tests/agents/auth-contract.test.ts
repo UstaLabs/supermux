@@ -13,10 +13,8 @@ import { mkdtempSync, rmSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { resolveClaudeAuth } from "../../src/core/agents/claude/auth"
-import { resolveCodexAuth } from "../../src/core/agents/codex/auth"
-import { resolveCursorAuth } from "../../src/core/agents/cursor/auth"
+import { prepareCodexEnvironment, prepareGrokEnvironment, prepareCursorEnvironment } from "../../packages/supermux-core/src/environment/index.js"
 import { resolveOpenCodeAuth } from "../../src/core/agents/opencode/auth"
-import { resolveGrokAuth } from "../../src/core/agents/grok/auth"
 
 let userHome: string
 let sessionHome: string
@@ -34,12 +32,37 @@ afterEach(() => {
 function resolvers() {
   return {
     claude: () => resolveClaudeAuth({ home: userHome, platform: "linux", fileExists: () => false, runner: () => false }),
-    codex: () => resolveCodexAuth({ userCodexHome: userHome, sessionCodexHome: sessionHome }),
-    cursor: () => resolveCursorAuth({
-      userCursorDir: join(userHome, ".cursor"), userConfigDir: join(userHome, ".config"), sessionHome,
+    codex: () => prepareCodexEnvironment({
+      home: sessionHome,
+      workdir: sessionHome,
+      mcpServers: [],
+      skillsPaths: [],
+      instructions: null,
+      credentials: { apiKey: null, canonicalHome: userHome },
+      nativeMemory: false,
+    }),
+    cursor: () => prepareCursorEnvironment({
+      home: sessionHome,
+      workdir: sessionHome,
+      mcpServers: [],
+      skillsPaths: [],
+      instructions: null,
+      credentials: { apiKey: null, userCursorDir: join(userHome, ".cursor"), userConfigDir: join(userHome, ".config") },
+      sharedRuntime: null,
+      platform: process.platform,
     }),
     opencode: () => resolveOpenCodeAuth({ home: userHome, env: {}, fileExists: () => false, platform: "linux" }),
-    grok: () => resolveGrokAuth({ userGrokDir: join(userHome, ".grok"), sessionHome }),
+    grok: () => prepareGrokEnvironment({
+      home: sessionHome,
+      workdir: sessionHome,
+      mcpServers: [],
+      skillsPaths: [],
+      instructions: null,
+      credentials: { canonicalAuthPath: join(userHome, ".grok", "auth.json") },
+      autoUpdate: false,
+      importClaudeConfig: false,
+      platform: process.platform,
+    }),
   }
 }
 
@@ -68,7 +91,7 @@ describe("the normalized auth contract", () => {
         return
       }
       const result = await pending
-      expect(typeof result.mode).toBe("string")
+      expect(typeof ("credentials" in result ? result.credentials : result.mode)).toBe("string")
       expect(typeof result.env).toBe("object")
     })
   }

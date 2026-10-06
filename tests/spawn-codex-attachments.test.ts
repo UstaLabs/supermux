@@ -5,71 +5,34 @@ import { join } from "path"
 import { openDb, runMigrations } from "../src/core/storage/db"
 import { Registry } from "../src/core/session-manager/registry"
 import { spawnSession, type SpawnDeps } from "../src/core/session-manager/spawn-helper"
+import { fakeCodexHost } from "./helpers/fake-codex-host"
 
 // The codex collaborators are swapped via bun's module mocks (the production
 // spawn path has no injection seams). mock.module is process-global, so the
 // real modules are captured first and restored in afterAll — otherwise later
 // test files would see the fakes (same pattern as tests/spawn-opencode.test.ts).
-const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
-const realCodexSpawn = { ...(await import("../src/core/agents/codex/spawn")) }
-const realCodexAdapter = { ...(await import("../src/core/agents/codex/adapter")) }
-const realPlugins = { ...(await import("../src/core/plugins")) }
+const realCodexCoreHost = { ...(await import("../src/core/agents/codex/core-host-provider")) }
 
-const codexAdapterOpts: any[] = []
+let fake = fakeCodexHost()
 
-mock.module("../src/core/agents/codex/auth", () => ({
-  ...realCodexAuth,
-  resolveCodexAuth: async () => ({ mode: "oauth_copy", env: {} }),
-}))
-mock.module("../src/core/agents/codex/spawn", () => ({
-  ...realCodexSpawn,
-  spawnCodexAppServer: () => ({
-    pid: 123,
-    client: { request: async () => ({}), onNotification: () => {} },
-    onExit: () => {},
-  }),
-}))
-mock.module("../src/core/agents/codex/adapter", () => ({
-  ...realCodexAdapter,
-  CodexAdapter: class {
-    kind = "codex"
-    sessionName: string
-    workdir: string
-    constructor(opts: any) {
-      codexAdapterOpts.push(opts)
-      this.sessionName = opts.sessionName
-      this.workdir = opts.workdir
-    }
-    async start() {}
-    async resume() {}
-    async stop() {}
-    async send() {}
-    async interrupt() {}
-    on() {}
-    emit() {}
-  },
-}))
-mock.module("../src/core/plugins", () => ({
-  ...realPlugins,
-  codexPrepareSessionHome: async () => {},
-  codexSpawnArgs: () => ({ args: [], env: {} }),
+mock.module("../src/core/agents/codex/core-host-provider", () => ({
+  ...realCodexCoreHost,
+  getCodexCoreHost: () => fake.host,
 }))
 
 afterAll(() => {
-  mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
-  mock.module("../src/core/agents/codex/spawn", () => realCodexSpawn)
-  mock.module("../src/core/agents/codex/adapter", () => realCodexAdapter)
-  mock.module("../src/core/plugins", () => realPlugins)
+  mock.module("../src/core/agents/codex/core-host-provider", () => realCodexCoreHost)
 })
 
 let tmpDir: string
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "mux-spawn-codex-"))
-  codexAdapterOpts.length = 0
+  fake = fakeCodexHost()
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await fake.close()
   rmSync(tmpDir, { recursive: true, force: true })
 })
 
@@ -86,19 +49,21 @@ test("fresh codex spawn wires attachment resolver into registered adapter", asyn
   const db = openDb(join(tmpDir, "test.sqlite3"))
   runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
   const registry = new Registry(db)
-  const resolveAttachment = async (file_id: string) => `/uploads/${file_id}.png`
+  const resolveAttachment = async (file_id: string) => `/uploads/${file_id}.pdf`
+  let adapter: { send(text: string, meta: { attachment_file_id: string; attachment_name: string }): Promise<void> } | undefined
 
   await spawnSession(
     makeDeps(registry, {
       resolveAttachment,
-      registerAdapter: () => {},
+      registerAdapter: (_name, registered) => { adapter = registered as typeof adapter },
       onThreadId: () => {},
     } as Partial<SpawnDeps>),
     { workdir: tmpDir, requestedName: "codex-img", agent: "codex" },
   )
 
-  expect(codexAdapterOpts).toHaveLength(1)
-  expect(codexAdapterOpts[0]!.resolveAttachment).toBe(resolveAttachment)
+  // The resolver is wired end to end: the resolved path lands in the prompt.
+  await adapter!.send("look", { attachment_file_id: "f1", attachment_name: "doc.pdf" })
+  expect(fake.prompts.flat().join("\n")).toContain("doc.pdf (/uploads/f1.pdf)")
 })
 
 test("fresh codex spawn registers the same UUID used by the shim socket", async () => {

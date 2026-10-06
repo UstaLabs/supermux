@@ -14,8 +14,6 @@ export type ShimClientOpts = {
   requestedName?: string
   displayName?: string
   agentSessionId?: string
-  channelOnly?: boolean
-  onInbound?: (payload: { content: string; meta: Record<string, string> }) => void
 }
 
 export type ShimClient = {
@@ -53,9 +51,6 @@ export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
         }
         if (m.kind === "registered") {
           registered = { name: m.display_name, session_id: m.session_id }
-        } else if (m.kind === "inbound") {
-          log.debug("inbound", { content: m.content.slice(0, 80), meta_keys: Object.keys(m.meta) })
-          opts.onInbound?.({ content: m.content, meta: m.meta })
         } else if (m.kind === "result") {
           log.info("shim_call_response_received", { call_id: m.call_id, ok: m.ok, mono_ns: process.hrtime.bigint().toString() })
           const resolver = pending.get(m.call_id)
@@ -116,7 +111,6 @@ export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
           ...(opts.requestedName ? { requested_name: opts.requestedName } : {}),
           ...(opts.displayName ? { display_name: opts.displayName } : {}),
           ...(opts.agentSessionId ? { agent_session_id: opts.agentSessionId } : {}),
-          ...(opts.channelOnly || process.env.MUX_CHANNEL_ONLY === "1" ? { channel_only: true } : {}),
         }))
         log.info("reconnect_success", { attempt })
         return
@@ -137,7 +131,6 @@ export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
     ...(opts.requestedName ? { requested_name: opts.requestedName } : {}),
     ...(opts.displayName ? { display_name: opts.displayName } : {}),
     ...(opts.agentSessionId ? { agent_session_id: opts.agentSessionId } : {}),
-    ...(opts.channelOnly || process.env.MUX_CHANNEL_ONLY === "1" ? { channel_only: true } : {}),
   }))
 
   for (let i = 0; i < 100 && !registered; i++) await new Promise(r => setTimeout(r, 20))

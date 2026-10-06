@@ -1,73 +1,68 @@
-import { test, expect, mock, afterAll } from "bun:test"
-import { mkdtempSync } from "fs"
+import { afterEach, test, expect } from "bun:test"
+import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import type { OpenCodeClientLike } from "../agents/opencode/adapter"
-import type { spawnOpenCodeServer } from "../agents/opencode/spawn"
+import { resumeOpenCodeSession } from "../agents/opencode/session"
+import { createOpenCodeCoreHost, type OpenCodeCoreHost } from "../agents/opencode/core-host"
+import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../packages/supermux-core/src/index.js"
+import type { OpenCodeOptions } from "../../../packages/supermux-core/src/agents/index.js"
 
-// resumeOpenCodeSession spawns `opencode serve` through the real module — swap
-// it per test with mock.module (snapshot-capture the real exports; restore in
-// afterAll so later files see the real module).
-const realOpenCodeSpawn = { ...(await import("../agents/opencode/spawn")) }
-let currentSpawnServer: typeof spawnOpenCodeServer
-mock.module("../agents/opencode/spawn", () => ({
-  ...realOpenCodeSpawn,
-  spawnOpenCodeServer: (opts: Parameters<typeof spawnOpenCodeServer>[0]) => currentSpawnServer(opts),
-}))
-afterAll(() => {
-  mock.module("../agents/opencode/spawn", () => realOpenCodeSpawn)
+function fakeChildFactory(nativeId = "ses_new") {
+  const opens: DriverContext[] = []
+  const factory = (_opts: OpenCodeOptions, _overrides: SessionConfiguration): AgentDriver => ({
+    id: "opencode",
+    async open(ctx) {
+      opens.push(ctx)
+      const runtime: AgentRuntime = {
+        agentSessionId: ctx.resumeId ?? nativeId,
+        capabilities: { resume: true, steer: false, fork: false, detach: false, configure: false, history: false },
+        async prompt() { return { stopReason: "end_turn" } },
+        async interrupt() {},
+        async close() {},
+        async configure() {},
+        configuration: () => ({}),
+      }
+      return runtime
+    },
+  })
+  return { factory, opens }
+}
+
+const hosts: OpenCodeCoreHost[] = []
+const dirs: string[] = []
+afterEach(async () => {
+  for (const h of hosts.splice(0)) await h.close({ agents: "shutdown" }).catch(() => {})
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
-const { resumeOpenCodeSession } = await import("../agents/opencode/session")
-
-// A fake `opencode serve` handle: records prompt/create/abort calls so the test
-// can assert resume() (no create) vs start() (create) without a real server.
-function fakeServer() {
-  const createCalls: string[] = []
-  const promptIds: string[] = []
-  const client: OpenCodeClientLike = {
-    session: {
-      async create() { createCalls.push("create"); return { data: { id: "ses_new" } } },
-      async update() { return { data: {} } },
-      async prompt(o) { promptIds.push(o.path.id); return { data: { parts: [{ type: "text", text: "ok" }] } } },
-      async abort() { return true },
-    },
-    listCommands: async () => [],
-    event: { async subscribe() { return { stream: (async function* () {})() } } },
-  }
-  const spawnServer = async () => ({ pid: 4242, baseUrl: "http://127.0.0.1:0", client, child: {} as any, kill: () => {}, onExit: () => {} })
-  return { createCalls, promptIds, spawnServer: spawnServer as any }
-}
-
-function session(over: Partial<{ agent_session_id: string }> = {}) {
+test("resume without a persisted id starts a FRESH opencode session", async () => {
+  const child = fakeChildFactory("ses_new")
+  const dir = mkdtempSync(join(tmpdir(), "oc-core-"))
+  dirs.push(dir)
+  const host = createOpenCodeCoreHost({ stateDirectory: dir, driverFactory: child.factory })
+  hosts.push(host)
   const home = mkdtempSync(join(tmpdir(), "oc-resume-"))
-  return { id: "uuid-1", name: "demo", workdir: "/tmp", agent_home: home, ...over }
-}
-
-test("resume without a persisted id starts a FRESH opencode session (calls create)", async () => {
-  const fk = fakeServer()
-  currentSpawnServer = fk.spawnServer
+  dirs.push(home)
   let persisted: { name: string; sid: string } | undefined
-  const { adapter, handle } = await resumeOpenCodeSession(
-    { onOpenCodeSessionId: (name, sid) => { persisted = { name, sid } } },
-    session(),
+  await resumeOpenCodeSession(
+    { onOpenCodeSessionId: (name, sid) => { persisted = { name, sid } }, opencodeHost: host },
+    { id: "uuid-1", name: "demo", workdir: home, agent_home: home },
   )
-  expect(handle.pid).toBe(4242)
-  expect(fk.createCalls).toEqual(["create"]) // start() path
-  expect(persisted).toEqual({ name: "demo", sid: "ses_new" }) // id now persisted for next restart
-  // the rebuilt adapter is usable: a turn prompts the freshly-created session
-  await adapter.send("hi")
-  expect(fk.promptIds).toEqual(["ses_new"])
+  expect(child.opens[0]?.resumeId).toBeUndefined()
+  expect(persisted).toEqual({ name: "demo", sid: "ses_new" })
 })
 
 test("resume WITH a persisted id reuses it WITHOUT creating a new session", async () => {
-  const fk = fakeServer()
-  currentSpawnServer = fk.spawnServer
-  const { adapter } = await resumeOpenCodeSession(
-    {},
-    session({ agent_session_id: "ses_prior" }),
+  const child = fakeChildFactory()
+  const dir = mkdtempSync(join(tmpdir(), "oc-core-"))
+  dirs.push(dir)
+  const host = createOpenCodeCoreHost({ stateDirectory: dir, driverFactory: child.factory })
+  hosts.push(host)
+  const home = mkdtempSync(join(tmpdir(), "oc-resume-"))
+  dirs.push(home)
+  await resumeOpenCodeSession(
+    { opencodeHost: host },
+    { id: "uuid-1", name: "demo", workdir: home, agent_home: home, agent_session_id: "ses_prior" },
   )
-  expect(fk.createCalls).toEqual([]) // resume() path — no create
-  await adapter.send("hi")
-  expect(fk.promptIds).toEqual(["ses_prior"]) // prompts the resumed session id
+  expect(child.opens[0]?.resumeId).toBe("ses_prior")
 })

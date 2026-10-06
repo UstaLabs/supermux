@@ -164,7 +164,7 @@ class BrokerApiTest {
 
     @Test
     fun spawn_request_roundtrips() {
-        val req = SpawnRequest(workdir = "/home/user", name = "my-session", agent = "claude", model = "opus-4.8")
+        val req = SpawnRequest(workdir = "/home/user", name = "my-session", agent = "claude", model = "opus-4.8", permissionMode = "ask")
         val encoded = Json.encodeToString(SpawnRequest.serializer(), req)
         val decoded = json.decodeFromString<SpawnRequest>(encoded)
         assertEquals(req, decoded)

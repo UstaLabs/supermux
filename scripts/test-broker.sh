@@ -48,7 +48,10 @@ fail() {
 }
 
 mkdir -p "$FIXTURE_STATE" "$FIXTURE_WORKDIR" "$FIXTURE_DIR/stubbin"
-printf '#!/bin/sh\nexit 0\n' > "$FIXTURE_DIR/stubbin/claude"
+# `claude` on the fixture PATH is the library's stream-json fixture in echo mode:
+# Claude sessions are Core-backed, so the journey's reply comes from a real
+# driver round trip, not from a fake agent on the shim socket.
+printf '#!/bin/sh\nMODE=echo EXPECT_DEFAULT_DENY=0 exec bun "%s/packages/supermux-core/tests/fixtures/claude-agent.mjs" "$@"\n' "$REPO_ROOT" > "$FIXTURE_DIR/stubbin/claude"
 printf '#!/bin/sh\ncase "$1" in -V) echo "tmux 3.4";; esac\nexit 0\n' > "$FIXTURE_DIR/stubbin/tmux"
 chmod +x "$FIXTURE_DIR/stubbin/claude" "$FIXTURE_DIR/stubbin/tmux"
 
@@ -118,27 +121,9 @@ while [ "$i" -lt 120 ]; do
 done
 [ "$READY" = "1" ] || fail "broker did not become ready"
 
-MUX_SOCKETS_DIR="$FIXTURE_STATE/sockets" \
-MUX_TEST_SESSION_ID="00000000-0000-4000-8000-000000000001" \
-MUX_TEST_SESSION_NAME="test-journey" \
-MUX_TEST_WORKDIR="$FIXTURE_WORKDIR" \
-  bun scripts/test-agent.ts >"$AGENT_LOG" 2>&1 &
-AGENT_PID=$!
-
-AGENT_READY=""
-i=0
-while [ "$i" -lt 80 ]; do
-  if ! kill -0 "$AGENT_PID" 2>/dev/null; then
-    fail "fake agent exited during startup"
-  fi
-  if grep -q '"ready":true' "$AGENT_LOG" 2>/dev/null; then
-    AGENT_READY=1
-    break
-  fi
-  i=$((i + 1))
-  sleep 0.1
-done
-[ "$AGENT_READY" = "1" ] || fail "fake agent did not connect"
+# The seeded Claude row is Core-backed: the broker resumes it through the
+# library host on first use, and the fixture `claude` above answers every
+# prompt. No fake agent on the shim socket is needed anymore.
 
 BROWSER_BIN=""
 for candidate in google-chrome google-chrome-stable chromium chromium-browser; do

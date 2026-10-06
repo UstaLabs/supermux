@@ -1,115 +1,90 @@
+// The broker's plugin host after C3: the REGISTRY (~/.mux/plugins.json: which plugins are
+// installed, enabled, scoped to which CLI, overridden per session) and the selection of a
+// session's plugins. How each agent loads a plugin folder is supermux-core's job: a session's
+// selected plugin roots go into its SessionContext.plugins and the core maps them per agent
+// (Claude/Cursor/Grok --plugin-dir, Codex skills extraRoots + .mcp.json servers, OpenCode
+// skills.paths + .opencode/plugins). The per-CLI adapters and the Codex marketplace install
+// (`codex plugin add` into ~/.codex and every session CODEX_HOME) are gone.
+import { existsSync, readdirSync } from "fs"
+import { join } from "path"
 import { loadPluginsForSpawn, loadPluginsRegistry, savePluginsRegistry } from "./registry"
-import { makeLogger } from "../../shared/log"
 import { AgentKind } from "../../shared/agents"
-import { ClaudePluginAdapter } from "./adapters/claude"
+import { isActiveForCli, type CliScope, type Plugin } from "./types"
 
-const pluginLog = makeLogger("plugins/index")
-import { CursorPluginAdapter } from "./adapters/cursor"
-import { CodexPluginAdapter } from "./adapters/codex"
-import { OpenCodePluginAdapter } from "./adapters/opencode"
-import type { OpenCodeConfigEntries } from "./adapters/opencode"
-import { GrokPluginAdapter } from "./adapters/grok"
-import type { GrokConfigEntries } from "./adapters/grok"
-import type { SpawnArgs, Plugin, CliScope } from "./types"
-
-export type { Plugin, PluginAdapter, PluginsRegistry, SpawnArgs, CliScope } from "./types"
+export type { Plugin, PluginsRegistry, CliScope } from "./types"
 export { parsePluginsRegistry, loadPluginsRegistry, loadPluginsForSpawn } from "./registry"
-export { ClaudePluginAdapter } from "./adapters/claude"
-export { CursorPluginAdapter } from "./adapters/cursor"
-export { CodexPluginAdapter, CODEX_MARKETPLACE_NAME, agentsMarketplacePath } from "./adapters/codex"
-export { OpenCodePluginAdapter } from "./adapters/opencode"
-export type { OpenCodeConfigEntries } from "./adapters/opencode"
-export { GrokPluginAdapter } from "./adapters/grok"
-export type { GrokConfigEntries } from "./adapters/grok"
 
-const claudeAdapter = new ClaudePluginAdapter()
-const cursorAdapter = new CursorPluginAdapter()
-const codexAdapter = new CodexPluginAdapter()
-const opencodeAdapter = new OpenCodePluginAdapter()
-const grokAdapter = new GrokPluginAdapter()
+/** True when the plugin ships `skills/<name>/SKILL.md` trees. */
+export function hasSkillTrees(pluginDir: string): boolean {
+  const skillsDir = join(pluginDir, "skills")
+  if (!existsSync(skillsDir)) return false
+  for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
+    if (entry.isDirectory() && existsSync(join(skillsDir, entry.name, "SKILL.md"))) return true
+  }
+  return false
+}
 
-interface SpawnArgsOpts {
-  sessionName?: string
+/** Absolute paths to `.opencode/plugins/*.js` in a plugin tree. */
+export function listOpenCodePluginJs(pluginDir: string): string[] {
+  const dir = join(pluginDir, ".opencode", "plugins")
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).filter((f) => f.endsWith(".js")).map((f) => join(dir, f))
+}
+
+/**
+ * Whether a plugin has what the CLI can load (the rule the per-CLI adapters applied before C3,
+ * kept so a session gets exactly the plugins it got before): the CLI's manifest for Claude,
+ * Cursor and Codex; an OpenCode JS plugin or skill trees for OpenCode; skill trees for Grok.
+ */
+export function isPluginCompatible(cli: CliScope, plugin: Plugin): boolean {
+  switch (cli) {
+    case "claude": return existsSync(join(plugin.dir, ".claude-plugin", "plugin.json"))
+    case "cursor": return existsSync(join(plugin.dir, ".cursor-plugin", "plugin.json"))
+    case "codex": return existsSync(join(plugin.dir, ".codex-plugin", "plugin.json"))
+    case "opencode": return listOpenCodePluginJs(plugin.dir).length > 0 || hasSkillTrees(plugin.dir)
+    case "grok": return hasSkillTrees(plugin.dir)
+    default: return false
+  }
+}
+
+interface SessionPluginsOpts {
   file?: string
   pluginsDir?: string
   onError?: (msg: string) => void
 }
 
-function spawnArgsFor(adapter: { spawnArgs: (p: any, s: any) => SpawnArgs }, opts?: SpawnArgsOpts): SpawnArgs {
+/**
+ * The plugin roots a session of `cli` gets (its SessionContext.plugins): enabled, scoped to the
+ * CLI, not switched off for this session, compatible. Never throws: a missing / invalid
+ * plugins.json yields none (and `onError` gets the validation message).
+ */
+export function sessionPlugins(cli: CliScope, sessionName: string, opts?: SessionPluginsOpts): string[] {
   const { plugins, error } = loadPluginsForSpawn({ file: opts?.file, pluginsDir: opts?.pluginsDir })
   if (error) opts?.onError?.(error)
-  return adapter.spawnArgs(plugins, { name: opts?.sessionName ?? "" })
+  return plugins.filter((p) => isActiveForCli(p, cli, sessionName) && isPluginCompatible(cli, p)).map((p) => p.dir)
+}
+
+/** Slash-command discovery probes (claude / cursor read `--plugin-dir` pairs; the others take none). */
+export function pluginSpawnArgsForKind(kind: AgentKind, opts?: SessionPluginsOpts & { sessionName?: string }): string[] {
+  if (kind !== AgentKind.Claude && kind !== AgentKind.Cursor) return []
+  return sessionPlugins(kind, opts?.sessionName ?? "", opts).flatMap((dir) => ["--plugin-dir", dir])
+}
+
+/** Grok slash-command discovery: the skills folders of the session's plugins. */
+export function grokSkillsDirs(sessionName: string, opts?: SessionPluginsOpts): string[] {
+  return sessionPlugins(AgentKind.Grok, sessionName, opts).filter(hasSkillTrees).map((dir) => join(dir, "skills"))
+}
+
+/** OpenCode slash-command discovery: the session's plugins that ship an OpenCode JS plugin. */
+export function opencodePluginRoots(sessionName: string, opts?: SessionPluginsOpts): string[] {
+  return sessionPlugins(AgentKind.OpenCode, sessionName, opts).filter((dir) => listOpenCodePluginJs(dir).length > 0)
 }
 
 /**
- * Resolve the per-session plugin flags for a CLI spawn from the on-disk
- * registry. Never throws — a missing/invalid plugins.json yields no flags so
- * spawns are never broken. `onError` surfaces a validation message for logging.
- *
- *   - Claude/Cursor: `--plugin-dir <dir>` pairs.
- *   - Codex: `-c plugins."<name>@mux".enabled=true` pairs.
+ * Add `scope` to any enabled plugin compatible with that CLI. Idempotent; returns true when
+ * plugins.json was updated. Run at boot for registries written before the CLI was supported.
  */
-export function claudeSpawnArgs(opts?: SpawnArgsOpts): SpawnArgs {
-  return spawnArgsFor(claudeAdapter, opts)
-}
-
-export function cursorSpawnArgs(opts?: SpawnArgsOpts): SpawnArgs {
-  return spawnArgsFor(cursorAdapter, opts)
-}
-
-export function codexSpawnArgs(opts?: SpawnArgsOpts): SpawnArgs {
-  return spawnArgsFor(codexAdapter, opts)
-}
-
-/** Per-kind spawn flags for slash-command discovery probes.
- *  opencode gets plugins via opencode.json (configEntries), not flags;
- *  grok has no command provider, so no flags are ever consumed. */
-const pluginSpawnArgsByKind: Record<AgentKind, (opts?: SpawnArgsOpts) => string[]> = {
-  [AgentKind.Claude]: (opts) => claudeSpawnArgs(opts).args,
-  [AgentKind.Codex]: (opts) => codexSpawnArgs(opts).args,
-  [AgentKind.Cursor]: (opts) => cursorSpawnArgs(opts).args,
-  [AgentKind.OpenCode]: () => [],
-  [AgentKind.Grok]: () => [],
-}
-
-export function pluginSpawnArgsForKind(kind: AgentKind, opts?: SpawnArgsOpts): string[] {
-  // Defensive `?.`: preview kinds arrive from web requests as casts.
-  return pluginSpawnArgsByKind[kind]?.(opts) ?? []
-}
-
-/**
- * Resolve plugin + skills paths for an opencode session's opencode.json from the
- * on-disk registry. Never throws — a missing/invalid plugins.json yields empty
- * lists so spawns are never broken.
- */
-export function opencodeConfigEntries(opts?: SpawnArgsOpts): OpenCodeConfigEntries {
-  const { plugins, error } = loadPluginsForSpawn({ file: opts?.file, pluginsDir: opts?.pluginsDir })
-  if (error) opts?.onError?.(error)
-  return opencodeAdapter.configEntries(plugins, { name: opts?.sessionName ?? "" })
-}
-
-/**
- * Resolve skills paths for a grok session's private ~/.grok/config.toml from
- * the on-disk registry. Never throws — a missing/invalid plugins.json yields an
- * empty list so spawns are never broken.
- */
-export function grokConfigEntries(opts?: SpawnArgsOpts): GrokConfigEntries {
-  const { plugins, error } = loadPluginsForSpawn({ file: opts?.file, pluginsDir: opts?.pluginsDir })
-  if (error) opts?.onError?.(error)
-  return grokAdapter.configEntries(plugins, { name: opts?.sessionName ?? "" })
-}
-
-/**
- * Add `scope` to any enabled plugin the adapter reports compatible. Idempotent;
- * returns true when plugins.json was updated. Shared engine for the per-CLI
- * scope-migration helpers below (run at boot for registries written before the
- * CLI's adapter existed).
- */
-function ensurePluginScopes(
-  adapter: { isCompatible(plugin: Plugin): boolean },
-  scope: CliScope,
-  opts?: { file?: string; pluginsDir?: string },
-): boolean {
+function ensurePluginScopes(scope: CliScope, opts?: { file?: string; pluginsDir?: string }): boolean {
   const file = opts?.file
   const pluginsDir = opts?.pluginsDir
   let reg: ReturnType<typeof loadPluginsRegistry>
@@ -121,7 +96,7 @@ function ensurePluginScopes(
   let changed = false
   const plugins: Plugin[] = reg.plugins.map((p) => {
     if (!p.enabled || p.scopes.includes(scope)) return p
-    if (!adapter.isCompatible(p)) return p
+    if (!isPluginCompatible(scope, p)) return p
     changed = true
     return { ...p, scopes: [...p.scopes, scope] as CliScope[] }
   })
@@ -130,60 +105,12 @@ function ensurePluginScopes(
   return true
 }
 
-/**
- * Add `opencode` to scopes for any enabled plugin that ships an opencode-
- * compatible tree. Idempotent; returns true when plugins.json was updated.
- */
+/** Add `opencode` to scopes for any enabled plugin that ships an opencode-compatible tree. */
 export function ensureOpenCodePluginScopes(opts?: { file?: string; pluginsDir?: string }): boolean {
-  return ensurePluginScopes(opencodeAdapter, "opencode", opts)
+  return ensurePluginScopes("opencode", opts)
 }
 
-/**
- * Add `grok` to scopes for any enabled plugin that ships skill trees grok can
- * discover. Idempotent; returns true when plugins.json was updated.
- */
+/** Add `grok` to scopes for any enabled plugin that ships skill trees grok can discover. */
 export function ensureGrokPluginScopes(opts?: { file?: string; pluginsDir?: string }): boolean {
-  return ensurePluginScopes(grokAdapter, "grok", opts)
-}
-
-/**
- * Regenerate Codex's marketplace + install plugins from the registry. Run once
- * at broker boot (and on registry change). Never throws — logs and continues
- * so a bad registry or missing codex binary can't crash startup.
- */
-export async function codexPrepareGlobal(opts?: { file?: string; pluginsDir?: string; onError?: (msg: string) => void }): Promise<void> {
-  const { plugins, error } = loadPluginsForSpawn({ file: opts?.file, pluginsDir: opts?.pluginsDir })
-  if (error) opts?.onError?.(error)
-  try {
-    await codexAdapter.prepareGlobal(plugins)
-  } catch (err: any) {
-    opts?.onError?.(err?.message ?? String(err))
-  }
-}
-
-// Homes already prepared this broker lifetime — avoids re-running `codex plugin
-// add` on every spawn/resume of the same session.
-const preparedCodexHomes = new Set<string>()
-
-/**
- * Install the enabled codex plugins into a specific session's CODEX_HOME so the
- * session app-server can discover + natively use them. Idempotent + cached per
- * home; safe to call before every codex spawn. Never throws.
- */
-export async function codexPrepareSessionHome(
-  codexHome: string,
-  opts?: { file?: string; pluginsDir?: string; force?: boolean; onError?: (msg: string) => void },
-): Promise<void> {
-  if (!codexHome) return
-  if (!opts?.force && preparedCodexHomes.has(codexHome)) return
-  const { plugins, error } = loadPluginsForSpawn({ file: opts?.file, pluginsDir: opts?.pluginsDir })
-  if (error) opts?.onError?.(error)
-  try {
-    pluginLog.info("codex_prepare_home_start", { codexHome })
-    const ids = await codexAdapter.prepareSessionHome(plugins, codexHome)
-    pluginLog.info("codex_prepare_home_done", { codexHome, installed: ids })
-    preparedCodexHomes.add(codexHome)
-  } catch (err: any) {
-    opts?.onError?.(err?.message ?? String(err))
-  }
+  return ensurePluginScopes("grok", opts)
 }

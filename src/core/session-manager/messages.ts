@@ -27,6 +27,8 @@ export interface Message {
   /** True when this outbound entry is an agent-returned error, so clients can
    *  render it distinctly (icon/style) without the text being decorated. */
   error?: boolean
+  /** Set on the user's line to a subagent ("↪ to <subagent>: <text>"): which subagent it went to. */
+  subagent_id?: string
 }
 
 type AppendL  = (sessionId: string, entry: Message) => void
@@ -55,8 +57,8 @@ export class MessageStore {
 
   append(sessionId: string, entry: Message): void {
     this.db.prepare(`
-      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error)
-      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id)
+      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.id,
       sessionId,
@@ -71,6 +73,7 @@ export class MessageStore {
       entry.attachments ? JSON.stringify(entry.attachments) : null,
       entry.reactions ? JSON.stringify(entry.reactions) : null,
       entry.error ? 1 : 0,
+      entry.subagent_id ?? null,
     )
     // Bump ref_count for each attachment so the hourly GC sweep doesn't reap a
     // file that's still referenced by this row. fileStore is optional (tests
@@ -204,5 +207,6 @@ function rowToMessage(row: any): Message {
     attachments: row.attachments ? JSON.parse(row.attachments) : undefined,
     reactions: row.reactions ? JSON.parse(row.reactions) : undefined,
     error: row.error ? true : undefined,
+    subagent_id: row.subagent_id ?? undefined,
   }
 }

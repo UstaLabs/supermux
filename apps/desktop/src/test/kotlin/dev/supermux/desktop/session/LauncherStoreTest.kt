@@ -45,12 +45,13 @@ class LauncherStoreTest {
 
     @Test fun an_existing_file_still_decodes_every_prefs_field() {
         val store = storeWith(
-            """{"prefs":{"agent":"codex","models":{"codex":"gpt-5"},"reasoningLevels":{"codex":"high"}}}""",
+            """{"prefs":{"agent":"codex","models":{"codex":"gpt-5"},"reasoningLevels":{"codex":"high"},"permissionModes":{"codex":"on-request+workspace-write"}}}""",
         )
         val loaded = store.loadPrefs()
         assertEquals("codex", loaded.agent)
         assertEquals(mapOf("codex" to "gpt-5"), loaded.models)
         assertEquals(mapOf("codex" to "high"), loaded.reasoningLevels)
+        assertEquals(mapOf("codex" to "on-request+workspace-write"), loaded.permissionModes)
     }
 
     @Test fun an_existing_file_still_decodes_every_draft_field() {

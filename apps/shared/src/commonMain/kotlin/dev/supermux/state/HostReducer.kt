@@ -36,6 +36,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             activity = frame.activity + keptExtras(state.activity, frame),
             completeExtras = frame.partialExtras?.let { frame.logs.keys - it.toSet() } ?: frame.logs.keys,
             bgTasks = frame.bgTasks,
+            subagents = frame.subagents.mapValues { (_, list) -> list.sortedBy { it.startedAt } },
             agentState = frame.agentState,
             commands = frame.commands + keptExtras(state.commands, frame),
             commandsResolved = frame.commandsResolved + keptExtras(state.commandsResolved, frame),
@@ -43,6 +44,8 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             finishJobs = frame.sessions
                 .mapNotNull { s -> s.finish_job?.let { s.id to it } }
                 .toMap(),
+            requests = frame.requests,
+            permissionModes = frame.permissionModes,
             // A snapshot is a NEW broker connection: the broker disposed the old connection's
             // language servers with it (src/core/lsp/bridge.ts, one LspConnection per socket), so
             // every server this client had open is gone. Say so, and an editor's LSP client opens
@@ -89,6 +92,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         // session (a dead badge on a live agent) until the agent next changed state.
         val hadAgent = state.agentState.containsKey(frame.id) || state.agentErrors.containsKey(frame.id)
         if (state.sessions.none { it.id == frame.id } && !state.bgTasks.containsKey(frame.id) && !hadAgent &&
+            !state.subagents.containsKey(frame.id) &&
             frame.id !in state.completeLogs && frame.id !in state.completeExtras
         ) {
             state
@@ -96,8 +100,11 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             state.copy(
                 sessions = state.sessions.filterNot { s -> s.id == frame.id },
                 bgTasks = state.bgTasks - frame.id,
+                subagents = state.subagents - frame.id,
                 agentState = state.agentState - frame.id,
                 agentErrors = state.agentErrors - frame.id,
+                requests = state.requests - frame.id,
+                closedRequests = state.closedRequests - frame.id,
                 completeLogs = state.completeLogs - frame.id,
                 completeExtras = state.completeExtras - frame.id,
             )
@@ -169,17 +176,89 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         val pruned = if (frame.entry.direction.startsWith("in")) {
             prev.filterNot { it.id.startsWith("local-") && it.text == frame.entry.text }
         } else prev
-        state.copy(messages = state.messages + (frame.session to (pruned + frame.entry)))
+        // The transcript moved on, so the just-answered receipts have served their purpose;
+        // the "answered: …" line the close wrote is the record that stays.
+        state.copy(
+            messages = state.messages + (frame.session to (pruned + frame.entry)),
+            closedRequests = if (frame.session in state.closedRequests) {
+                state.closedRequests - frame.session
+            } else {
+                state.closedRequests
+            },
+        )
     }
     is ServerFrame.SessionRead -> {
         val next = advanceLastRead(state.lastRead[frame.session], frame.lastReadAt)
         if (state.lastRead[frame.session] == next) state
         else state.copy(lastRead = state.lastRead + (frame.session to next))
     }
+    is ServerFrame.SessionState -> state.copy(
+        sessions = state.sessions.map { s ->
+            if (s.id != frame.session) s
+            else s.copy(
+                mute = frame.mute ?: s.mute,
+                connected = frame.connected ?: s.connected,
+                model = frame.model ?: s.model,
+                reasoningLevel = frame.reasoningLevel ?: s.reasoningLevel,
+                permissionMode = frame.permissionMode ?: s.permissionMode,
+                account = frame.account ?: s.account,
+                accountLabel = frame.accountLabel ?: s.accountLabel,
+            )
+        },
+    )
     is ServerFrame.ActivityAppend -> state.copy(
         activity = state.activity + (frame.session to ((state.activity[frame.session] ?: emptyList()) + frame.event)),
     )
+    is ServerFrame.RequestOpen -> {
+        val prev = state.requests[frame.session] ?: emptyList()
+        if (prev.any { it.requestId == frame.request.requestId }) state
+        else state.copy(requests = state.requests + (frame.session to (prev + frame.request)))
+    }
+    is ServerFrame.RequestClosed -> {
+        val prev = state.requests[frame.session] ?: emptyList()
+        val closing = prev.find { it.requestId == frame.requestId }
+        val remaining = prev.filterNot { it.requestId == frame.requestId }
+        val line = requestClosedLine(frame.outcome, frame.answerLabel)
+        val entry = LogEntry(
+            id = "req-closed-${frame.requestId}",
+            ts = state.messages[frame.session]?.lastOrNull()?.ts
+                ?: state.activity[frame.session]?.lastOrNull()?.ts
+                ?: "9999-12-31T23:59:59Z",
+            direction = "outbound",
+            text = line,
+        )
+        val msgs = (state.messages[frame.session] ?: emptyList()) + entry
+        // The broker sends the label, not the option — recover the option by its own label so the
+        // receipt's tick/cross states the real outcome (a reject label may carry " — <note>").
+        val answered = frame.answerLabel?.let { label ->
+            closing?.options?.firstOrNull { it.label == label || label.startsWith("${it.label} — ") }
+        }
+        val receipt = ClosedRequest(
+            requestId = frame.requestId,
+            kind = closing?.kind ?: "permission",
+            title = closing?.title.orEmpty(),
+            outcome = frame.outcome,
+            answerLabel = frame.answerLabel,
+            answerKind = answered?.kind,
+        )
+        val receipts = ((state.closedRequests[frame.session] ?: emptyList()) + receipt)
+            .takeLast(CLOSED_REQUEST_RECEIPTS)
+        state.copy(
+            requests = if (remaining.isEmpty()) state.requests - frame.session
+            else state.requests + (frame.session to remaining),
+            messages = state.messages + (frame.session to msgs),
+            closedRequests = state.closedRequests + (frame.session to receipts),
+        )
+    }
+    is ServerFrame.Error -> state.copy(lastError = frame.reason.ifBlank { null })
     is ServerFrame.BgTasks -> state.copy(bgTasks = state.bgTasks + (frame.session to frame.tasks))
+    is ServerFrame.SubagentUpdate -> {
+        val prev = state.subagents[frame.session] ?: emptyList()
+        val next = (prev.filterNot { it.id == frame.subagent.id } + frame.subagent).sortedBy { it.startedAt }
+        state.copy(subagents = state.subagents + (frame.session to next))
+    }
+    is ServerFrame.SubagentsCleared ->
+        if (frame.session !in state.subagents) state else state.copy(subagents = state.subagents - frame.session)
     is ServerFrame.AgentState -> {
         val nextErrors = if (frame.state != "dead") state.agentErrors - frame.session else state.agentErrors
         state.copy(
@@ -235,6 +314,18 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         removedWorktreeIds = state.removedWorktreeIds + frame.ids,
     )
     else -> state
+}
+
+/**
+ * [answerLabel] is what the broker says was actually chosen. It used to be guessed from the
+ * request's first allow option, which reported "answered: Allow once" for a rejection; an old
+ * broker sends no label, and then the line says only "answered" rather than inventing one.
+ */
+internal fun requestClosedLine(outcome: String, answerLabel: String?): String = when (outcome) {
+    "answered" -> if (answerLabel.isNullOrBlank()) "answered" else "answered: $answerLabel"
+    "expired" -> "expired"
+    "cancelled" -> "cancelled"
+    else -> outcome
 }
 
 /** Patch each workspace's projectId from a full membership map; absent ids become unresolved. */

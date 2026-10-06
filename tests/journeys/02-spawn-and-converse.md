@@ -10,7 +10,7 @@ single link in it.
 ## Preconditions
 - Journey 01 complete: the client is paired and showing `session-list`.
 - A seeded session bound to a deterministic fake agent that replies
-  `Fixture reply: <prompt>` (`scripts/test-agent.ts`).
+  `Fixture reply: <prompt>` (the stream-json fixture `claude` on the test PATH, in echo mode).
 
 ## Steps
 1. Open the seeded session from the list.

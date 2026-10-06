@@ -69,6 +69,7 @@ jobs:
               - 'src/**'
               - 'tests/**'
               - 'scripts/**'
+              - 'packages/supermux-core/**'
               - 'package.json'
               - 'bunfig.toml'
               - 'tsconfig.json'
@@ -153,6 +154,21 @@ jobs:
       # compile fine and fail at runtime.
       - name: Typecheck
         run: bun run typecheck
+
+      # Core package: tsc + dist build, then Node 22 smoke of the built dist via
+      # examples/custom-driver.mjs (self-import of this workspace's dist, not a
+      # packed tarball consumer). bun test --isolate already discovers
+      # packages/supermux-core/tests — do not add a second core test run.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Typecheck core package
+        run: bun run typecheck:core
+      - name: Build core package
+        run: bun run build:core
+      - name: Node 22 consumer smoke
+        run: node examples/custom-driver.mjs
+        working-directory: packages/supermux-core
 
   # ── zmx: the POSIX workspace-terminal backend, against real processes ──────
   # The `ts` lane runs this backend's unit tests against a fake helper. This one

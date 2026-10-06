@@ -57,7 +57,7 @@ beforeEach(() => {
 })
 afterEach(async () => { await server?.close(); try { db.close() } catch {}; rmSync(dir, { recursive: true, force: true }) })
 
-test("two shims register; inbound routes to active; outbound is tagged for inactive", async () => {
+test("two shims register; inbound is classified to the active session; outbound is tagged for inactive", async () => {
   const registry = new Registry(db)
   const sentToTelegram: any[] = []
 
@@ -131,10 +131,8 @@ test("two shims register; inbound routes to active; outbound is tagged for inact
   await server.bind("ana")
   await server.bind("zoom")
 
-  const recvAna: any[] = []
-  const recvZoom: any[] = []
-  const ana  = await connectShim({ socketsDir: dir, sessionId: "ana",  workdir: "/h", pid: 1, requestedName: "ana",  channelOnly: true, onInbound: m => recvAna.push(m) })
-  const zoom = await connectShim({ socketsDir: dir, sessionId: "zoom", workdir: "/z", pid: 2, requestedName: "zoom", channelOnly: true, onInbound: m => recvZoom.push(m) })
+  const ana  = await connectShim({ socketsDir: dir, sessionId: "ana",  workdir: "/h", pid: 1, requestedName: "ana" })
+  const zoom = await connectShim({ socketsDir: dir, sessionId: "zoom", workdir: "/z", pid: 2, requestedName: "zoom" })
 
   const zoomId = registry.fuzzyResolve("zoom")!.id
   registry.setActive("chat-1", zoomId)
@@ -142,11 +140,7 @@ test("two shims register; inbound routes to active; outbound is tagged for inact
   // Inbound goes to active session
   const decision = classifyInbound({ chat_id: "chat-1", text: "hello", reply_to: undefined }, registry, () => undefined)
   expect(decision).toMatchObject({ kind: "session", name: "zoom", text: "hello", change_active: false, suspended: false })
-  await server.sendInbound("zoom", { content: "hello", meta: { chat_id: "chat-1" } })
-
-  await new Promise(r => setTimeout(r, 50))
-  expect(recvZoom).toHaveLength(1)
-  expect(recvAna).toHaveLength(0)
+  // (The turn itself reaches the agent through its adapter: SessionManager.deliver.)
 
   // Outbound from zoom (active) → no tag prefix, push
   const zoomUuid = registry.fuzzyResolve("zoom")!.id

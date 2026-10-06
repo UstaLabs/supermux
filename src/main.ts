@@ -1,4 +1,5 @@
 // src/main.ts
+import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
 import { WhatsAppChannel } from "./channels/whatsapp"
 import { WebChannel } from "./channels/web"
@@ -43,7 +44,23 @@ import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
 import { SessionManager } from "./core/session-manager/manager"
-import { buildClaudeSpawnSpec } from "./core/session-manager/spawn-command"
+import { closeGrokCoreHost, getGrokCoreHost } from "./core/agents/grok/core-host-provider"
+import { closeCodexCoreHost, getCodexCoreHost } from "./core/agents/codex/core-host-provider"
+import { closeOpenCodeCoreHost, getOpenCodeCoreHost } from "./core/agents/opencode/core-host-provider"
+import { closeCursorCoreHost, getCursorCoreHost } from "./core/agents/cursor/core-host-provider"
+import { closeClaudeCoreHost, getClaudeCoreHost } from "./core/agents/claude/core-host-provider"
+import {
+  AccountsApiError,
+  BrokerAccounts,
+  SETTINGS_KEY_ACCOUNTS,
+  isSystemAccount,
+  migrateSettingsCredentials,
+  parseAccountsSettings,
+  setAccountsAutoSwitchSource,
+  sharedAccounts,
+  toApiError,
+  type AccountAgent,
+} from "./core/accounts/broker-accounts"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
@@ -52,15 +69,18 @@ import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
-import { pluginSpawnArgsForKind, codexPrepareGlobal, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
+import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
 import { getUsageStore, isUsageProvider } from "./core/usage/store"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
-import { sendChannelConsentEnter } from "./core/session-manager/post-spawn-keys"
-import { preAcceptTrust, writeRpcWorkerMcpConfig } from "./core/session-manager/trust"
+import { resolvePermissionMode } from "./core/agents/permission-modes"
+import { writeRpcWorkerMcpConfig, removeBrokerShimEntries } from "./core/session-manager/trust"
+import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode } from "./core/mux-tools/mode"
+import { bindMuxTools } from "./core/mux-tools/server"
+import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
@@ -119,9 +139,7 @@ import { homedir, hostname } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
-import { ClaudeCodeAdapter } from "./core/agents/claude/index"
-import { writeClaudeHooksSettings, resolveInternalHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
-import type { AgentAdapter } from "./core/agents/types"
+import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
@@ -137,10 +155,10 @@ import { MacosScreenProvider } from "./core/display/providers/macos-screen"
 import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
 import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
-import { BackgroundTaskStore } from "./core/session-manager/background-task-store"
-import { TranscriptTailer } from "./core/agents/claude/transcript-tailer"
-import { BgTaskDetector } from "./core/agents/claude/bg-task-detector"
-import { claudeTranscriptPath } from "./core/agents/claude/transcript-path"
+import { BackgroundTaskStore, type BgTaskKind } from "./core/session-manager/background-task-store"
+import { SubagentStore } from "./core/session-manager/subagent-store"
+import { subagentActionError, type SubagentActionResult } from "./core/session-manager/subagent-action-error"
+
 import { normalizeToolName } from "./core/agents/tool-normalize"
 import { gcOrphanAgentHomes, reclaimCursorHomes } from "./core/agents/shared-runtime"
 import { CuratorScheduler } from "./core/curator/scheduler"
@@ -162,6 +180,8 @@ import { runInstallToCompletion } from "./core/lsp/install-sync"
 import { hydrateCredentialEnv, applyCredentialEnv } from "./core/settings/app-config"
 import { reverseProxySnippets } from "./core/settings/exposure"
 import { toActivityEvents } from "./core/agents/adapter-activity"
+import { isCoreBacked } from "./core/agents/core-bridge/activity-dispatch"
+import { CoreAdapter } from "./core/agents/core-bridge/core-adapter"
 import { LoginManager } from "./core/agents/login/manager"
 import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
@@ -424,6 +444,14 @@ const appConfigEnv = {
   MUX_WHATSAPP_WEBHOOK_SECRET: process.env.MUX_WHATSAPP_WEBHOOK_SECRET,
 }
 const appConfig = settings.getAppConfig(appConfigEnv)
+// C3b: how agents get the broker's own tools (mux-shim / mux-rpc): "external" (the shim process
+// over the session socket, C3a) or "host" (a host MCP server in this process, through the core's
+// bridge). Setting `muxShim` → env MUX_SHIM → "external"; fixed for this process.
+setMuxShimMode(resolveMuxShimMode(settings.get(SETTINGS_KEY_MUX_SHIM), process.env.MUX_SHIM))
+log.info("mux_shim_mode", { mode: muxShimMode() })
+// "host": the broker's own ~/.claude.json entries go, once, before any Claude launch (only when
+// they are this broker's shim spawn spec; see trust.ts).
+if (muxShimMode() === "host") removeBrokerShimEntries()
 // Inject stored agent credentials into the broker env (non-clobbering) so every
 // spawn path inherits them: claude's `bash -lc` pane inherits process.env; codex
 // reads OPENAI_API_KEY; cursor reads CURSOR_API_KEY. Empty store ⇒ sets nothing
@@ -438,6 +466,40 @@ if (appliedCreds.length) log.info("credentials_hydrated", { vars: appliedCreds }
 // and mislabel the auth mode as "stored_credential".
 const agentHasCredential = (kind: AgentKind): boolean =>
   hasStoredCredential(kind, settings.getAppConfig(appConfigEnv))
+
+// ── Accounts (slice A3a): one registry under STATE_DIR/accounts, shared by every agent's Core host.
+// No account added ⇒ every session runs on its agent's system account (the CLI's own login plus
+// the global credential env above), exactly as before.
+const accountsSettings = () => parseAccountsSettings(settings.get(SETTINGS_KEY_ACCOUNTS))
+setAccountsAutoSwitchSource(() => accountsSettings().autoSwitch)
+const brokerAccounts = new BrokerAccounts({
+  ...sharedAccounts(),
+  coreFor: (agent: AccountAgent) => {
+    if (agent === "claude") return getClaudeCoreHost().core
+    if (agent === "codex") return getCodexCoreHost().core
+    if (agent === "cursor") return getCursorCoreHost().core
+    if (agent === "grok") return getGrokCoreHost().core
+    return getOpenCodeCoreHost().core
+  },
+  broadcast: (frame) => webChannel?.broadcastToAll(frame),
+})
+// The stored agent credentials become selectable token/api_key accounts, once. Sessions that pick
+// no account keep the global env injection (hydrateCredentialEnv), so nothing changes for them.
+void (async () => {
+  if (!accountsSettings().settingsMigrated) {
+    try {
+      const created = await migrateSettingsCredentials(sharedAccounts().registry, appConfig)
+      settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), settingsMigrated: true })
+      if (created.length) log.info("accounts_settings_migrated", { ids: created })
+    } catch (err) { log.warn("accounts_settings_migration_failed", { err: String(err) }) }
+  }
+  await brokerAccounts.refreshLabels()
+})()
+/** `account` + `accountLabel` on every session frame (system account when none is set). */
+function sessionAccountFields(s: { agent?: string; account?: string | null }): { account: string; accountLabel: string } {
+  const account = s.account || `${s.agent ?? "claude"}:system`
+  return { account, accountLabel: brokerAccounts.label(account) }
+}
 /** Every agent kind's install/auth status — GET /agents/status and the /agents/models catalog. */
 const detectAgentStatuses = () => detectAllAgents(
   { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync, hasCredential: agentHasCredential },
@@ -529,6 +591,17 @@ messageLog.on("append", (sessionId: string, entry: any) => {
 const activityStore = new ActivityStore()
 const agentStateStore = new AgentStateStore()
 const bgTaskStore = new BackgroundTaskStore()
+// Survives broker restarts: subagent cards (views + each subagent's conversation) come back.
+const subagentStore = new SubagentStore({ file: join(STATE_DIR, "subagents.json") })
+subagentStore.load()
+// The conversation rows go back into the activity timeline so the cards render them again.
+for (const sessionId of subagentStore.sessionIds()) {
+  for (const row of subagentStore.messages(sessionId)) activityStore.append(sessionId, { ...row })
+}
+/** "Waiting · N background": open background tasks plus background subagents still running. */
+function bgOpenCount(sessionId: string): number {
+  return bgTaskStore.openCount(sessionId) + subagentStore.backgroundRunning(sessionId)
+}
 
 function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } | null {
   try {
@@ -564,44 +637,12 @@ function gitServiceSessions(): ServiceSession[] {
   }))
 }
 
-const tailers = new Map<string, TranscriptTailer>()  // keyed by session UUID
-const bgDetectors = new Map<string, BgTaskDetector>()  // keyed by session UUID
-
-function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string, seekToEnd = false): void {
-  const session = registry.get(sessionUuid)
-  if (!session || (session.agent ?? "claude") !== "claude") return
-  const claudeSid = session.agent_session_id
-  if (!claudeSid || tailers.has(sessionUuid)) return
-  const detector = new BgTaskDetector({
-    onOpen: (t) => bgTaskStore.upsertOpen(sessionUuid, t),
-    onClose: (c) => bgTaskStore.close(sessionUuid, c),
-    // Notification delivery = the harness waking claude; reflect it immediately
-    // (same transcript-as-signal channel as interrupt detection).
-    onWake: () => agentStateStore.applyEvent(sessionUuid, "turn-start"),
-  })
-  bgDetectors.set(sessionUuid, detector)
-  const tailer = new TranscriptTailer({
-    path: claudeTranscriptPath(workdir, claudeSid),
-    onLine: (line) => bgDetectors.get(sessionUuid)?.feedLine(line),
-    onEvent: (event) => {
-      // The transcript interrupt marker is the SOLE interrupt signal (no hook fires
-      // on ESC) — and it catches terminal-direct ESC too. It is state, not activity.
-      if (event.kind === "interrupt") { agentStateStore.applyEvent(sessionUuid, "interrupt"); return }
-      activityStore.append(sessionUuid, event)
-    },
-    workdir,
-    seekToEnd,
-  })
-  tailer.start()
-  tailers.set(sessionUuid, tailer)
-}
+function ensureClaudeTailer(_sessionUuid: string, _name: string, _workdir: string, _seekToEnd = false): void {}
 
 function stopClaudeTailer(sessionUuid: string): void {
-  tailers.get(sessionUuid)?.stop()
-  tailers.delete(sessionUuid)
-  bgDetectors.delete(sessionUuid)
   activityStore.clear(sessionUuid)
   bgTaskStore.clear(sessionUuid)
+  subagentStore.clear(sessionUuid)
 }
 
 const modelCache = new ModelCache()
@@ -772,21 +813,22 @@ const sessionManager = new SessionManager(registry, {
   hostRequirements: () => gitRequirement.requirements(),
   getWebChannel: () => webChannel,
   getAgentRpc: () => agentRpc,
-  // Component-internal: the claude shim leg of SessionManager.deliver. Every
-  // other sender in this file goes through deliverInbound → sessionManager.deliver.
-  socket: { sendInbound: (session_id, payload) => server.sendInbound(session_id, payload) },
   inbound: {
     // Re-broadcast the session's CURRENT agent_state on a successful hand-off so
     // clients clear their local "Sending…" bubble even when the turn-start
     // UserPromptSubmit hook is dropped (fire-and-forget curl) and the turn emits
     // no other state change. Mutates nothing — it just re-emits the same frame
     // the change-listener would send (keeps delivery a pure reflector).
-    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgTaskStore.openCount(id))),
+    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgOpenCount(id))),
     onTarget: (id, chat_id) => replyTargets.note(id, chat_id),
   },
   backend: {
     runtimeTargetIdOf,
     kill: (targetId) => sessionBackend.kill(targetId),
+    windowOwner: async (targetId) => {
+      const pid = await sessionBackend.livePid(targetId)
+      return pid ? paneSessionId(pid) : null
+    },
   },
   cleanup: {
     terminals: { killAllForSession: (name) => terminalManager.killAllForSession(name) },
@@ -802,7 +844,8 @@ const sessionManager = new SessionManager(registry, {
     stop: (id) => displayManager.stop(id),
   },
   agentState: agentStateStore,
-  bgTasks: bgTaskStore,
+  // Archiving clears both: an archived session can neither be "waiting" nor own live subagents.
+  bgTasks: { clear: (id: string) => { bgTaskStore.clear(id); subagentStore.clear(id) } },
   commands: {
     remove: (name) => commandRegistry.remove(name),
     refresh: (name) => commandRegistry.refresh(name),
@@ -841,6 +884,13 @@ const sessionManager = new SessionManager(registry, {
     sessionBackend,
     tmuxSession: TMUX_SESSION,
   },
+})
+// The broker's host MCP servers (mux-shim / mux-rpc, C3b) call the same shared handlers as the
+// external shim's socket. Bound in both modes: a record that names the host server can resume
+// after a flip back to "external" and still be served while it runs.
+bindMuxTools({
+  outbound: (sessionId, op) => sessionManager.outbound(sessionId, op),
+  orchestration: (sessionId, op) => sessionManager.orchestration(sessionId, op),
 })
 const runtimes = sessionManager.runtimes
 const soulSetupQueued = new Set<string>()
@@ -1053,6 +1103,33 @@ async function notifySession(sessionId: string, text: string): Promise<void> {
   if (!r.ok) log.warn("broker_notice_undelivered", { session: sessionId, err: r.error, text })
 }
 
+/** Persist a session's account (system ⇒ NULL) and push it to every client. */
+function applySessionAccount(sessionId: string, account: string): void {
+  const s = registry.get(sessionId)
+  if (!s) return
+  registry.sessions.setAccount(s.id, isSystemAccount(account) ? null : account)
+  webChannel?.broadcastToAll({ type: "session_state", session: s.id, ...sessionAccountFields({ agent: s.agent, account }) })
+}
+
+/** Manual account switch of a running session (Core resume { account }: shutdown + reopen). */
+async function setSessionAccount(sessionId: string, account: string): Promise<{ ok: true; session: string; account: string; accountLabel: string }> {
+  const s = registry.get(sessionId)
+  if (!s) throw new AccountsApiError(404, "session not found", "session_not_found")
+  const resolved = (await brokerAccounts.resolveSessionAccount(s.agent, account))!
+  const adapter = runtimes.get(s.id)?.adapter as (AgentAdapter & { setAccount?: (id: string) => Promise<void> }) | undefined
+  if (!adapter || typeof adapter.setAccount !== "function") {
+    throw new AccountsApiError(409, "the session is not running; start it first", "session_not_running")
+  }
+  try {
+    await adapter.setAccount(resolved)
+  } catch (err) {
+    throw toApiError(err)
+  }
+  // The adapter's "account" event already persisted a real switch; same-account is a no-op there.
+  applySessionAccount(s.id, resolved)
+  return { ok: true, session: s.id, ...sessionAccountFields({ agent: s.agent, account: resolved }) }
+}
+
 async function notifyAgentError(sessionId: string, sessionName: string, errorType: string, errorMessage: string): Promise<void> {
   // clear the live status (the turn ended in failure)
   agentStateStore.applyEvent(sessionId, "Stop")
@@ -1094,13 +1171,7 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
 // Claude's native "stop generating" key. The pane runs Claude as the foreground
 // process, so send-keys to its window reaches the REPL. Addressed strictly by
 // window id (healed from the registry) so a rename can't aim us at a stale name.
-async function interruptClaudePane(sessionId: string): Promise<void> {
-  const s = registry.get(sessionId)
-  if (!s || s.agent !== AgentKind.Claude) return
-  const wid = await runtimeTargetIdOf(s)
-  if (!wid) { log.warn("claude_interrupt_no_runtime_target", { sessionId }); return }
-  await sessionBackend.sendKeys(wid, ["Escape"])
-}
+async function interruptClaudePane(_sessionId: string): Promise<void> {}
 
 // The one funnel every Stop surface (web button, /stop command) routes through:
 // dispatch to the agent's own interrupt(). The broker does NOT flip the live
@@ -1180,6 +1251,82 @@ function finishReadinessById(sessionId: string): FinishReadiness | { error: stri
   return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction, prRequiresGreen: cfg.prRequiresGreen })
 }
 
+const TASK_KIND: Record<TaskEvent["taskKind"], BgTaskKind> = {
+  shell: "shell", workflow: "workflow", agent: "agent", subagent: "agent", collab: "agent", monitor: "task",
+}
+
+/** Core `task` bodies (Claude background Bash, workflows, monitors) feed the bg-task chips. */
+function applyTaskEvent(sessionId: string, ev: TaskEvent): void {
+  const ts = Date.now()
+  if (ev.phase === "started") {
+    bgTaskStore.upsertOpen(sessionId, { id: ev.taskId, kind: TASK_KIND[ev.taskKind] ?? "task", label: ev.label || ev.taskId, ts, ...(ev.parentCallId ? { callId: ev.parentCallId } : {}) })
+  } else if (ev.phase === "completed" || ev.phase === "failed" || ev.phase === "interrupted") {
+    bgTaskStore.close(sessionId, {
+      id: ev.taskId,
+      status: ev.phase === "completed" ? "completed" : "failed",
+      ts,
+      ...(ev.phase === "interrupted" ? { summary: "interrupted" } : {}),
+      ...(ev.parentCallId ? { callId: ev.parentCallId } : {}),
+    })
+  }
+  // "interacted" / "wake" move nothing the chips show.
+}
+
+
+
+/**
+ * POST /sessions/:id/subagents/:subagentId/message. The transcript gets ONE compact line in
+ * the user's own words — "↪ to <subagent>: <text>" — tagged with `subagent_id`; the relay
+ * boilerplate a Claude/Cursor parent receives is never logged.
+ */
+async function messageSubagent(id: string, subagentId: string, text: string): Promise<SubagentActionResult> {
+  const s = registry.get(id)
+  if (!s) return { ok: false, status: 404, error: "session not found" }
+  const adapter = sessionManager.adapterFor(s.id)
+  if (!adapter?.messageSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot message subagents` }
+  const known = subagentStore.find(s.id, subagentId)
+  // The agent itself said it cannot take a message now: say why, never pretend.
+  if (known?.canMessage === false) return { ok: false, status: 409, error: known.cannotMessageReason ?? "this subagent cannot take a message now" }
+  if (known?.messaging === "none") return { ok: false, status: 409, error: "this subagent does not accept messages" }
+  let via: "direct" | "relay"
+  let delivery: Promise<{ status: string }> | undefined
+  try {
+    ;({ via, delivery } = await adapter.messageSubagent(subagentId, text))
+  } catch (err) {
+    return subagentActionError(err)
+  }
+  const label = known?.description || known?.name || subagentId.slice(0, 8)
+  const messageId = `msg-${Date.now()}`
+  const logLine = () => {
+    try {
+      messageLog.append(s.id, {
+        id: `in:web:${messageId}`, ts: new Date().toISOString(), direction: "inbound", channel: "web", chat_id: "web",
+        message_id: messageId, text: `↪ to ${label}: ${text}`, subagent_id: subagentId,
+      })
+    } catch (err: any) { log.error("subagent_message_append_failed", { session: s.name, err: err?.message ?? String(err) }) }
+  }
+  // A relay is only "sent" once the parent forwarded it; a refusal (Claude: "was stopped by the
+  // user") is never logged as a sent message — the card's Message turns off with that reason.
+  if (via === "direct" || !delivery) logLine()
+  else void delivery.then((outcome) => { if (outcome.status === "delivered") logLine() }).catch(() => {})
+  return { ok: true, via }
+}
+
+async function stopSubagent(id: string, subagentId: string): Promise<SubagentActionResult> {
+  const s = registry.get(id)
+  if (!s) return { ok: false, status: 404, error: "session not found" }
+  const adapter = sessionManager.adapterFor(s.id)
+  if (!adapter?.stopSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot stop subagents` }
+  const known = subagentStore.find(s.id, subagentId)
+  if (known?.canStop === false) return { ok: false, status: 409, error: known.cannotStopReason ?? "this subagent cannot be stopped now" }
+  try {
+    await adapter.stopSubagent(subagentId)
+    return { ok: true }
+  } catch (err) {
+    return subagentActionError(err)
+  }
+}
+
 // Wire a codex/cursor adapter's structured events into the agent-agnostic
 // activity timeline + live status. (Claude uses its own transcript/hook path.)
 function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
@@ -1202,16 +1349,48 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     const now = Date.now()
     const session = registry.get(sessionId)
     const workdir = session?.workdir
-    try {
-      for (const a of toActivityEvents(adapter.kind, ev, now, workdir)) activityStore.append(sessionId, a)
-    } catch (err) { log.warn("adapter_tool_call_activity_failed", { err: String(err) }) }
+    if (!isCoreBacked(adapter)) {
+      try {
+        for (const a of toActivityEvents(adapter.kind, ev, now, workdir)) activityStore.append(sessionId, a)
+      } catch (err) { log.warn("adapter_tool_call_activity_failed", { err: String(err) }) }
+    }
     if (ev?.phase === "started") agentStateStore.applyEvent(sessionId, "PreToolUse", normalizeToolName(adapter.kind, ev.tool), now)
     else agentStateStore.applyEvent(sessionId, "PostToolUse", undefined, now)
   })
+  adapter.on("activity", (ev: any) => {
+    try {
+      for (const a of ev?.events ?? []) {
+        // A subagent's conversation is kept (and persisted) with its card as well.
+        if (a?.kind === "subagent_message" && typeof a.subagentId === "string") activityStore.append(sessionId, subagentStore.recordMessage(sessionId, a))
+        else activityStore.append(sessionId, a)
+      }
+    } catch (err) { log.warn("adapter_activity_append_failed", { err: String(err) }) }
+  })
+  adapter.on("subagent-snapshot", (ev: SubagentSnapshotEvent) => {
+    try { for (const snap of ev.subagents) subagentStore.applySnapshot(sessionId, snap) } catch (err) { log.warn("adapter_subagent_snapshot_failed", { err: String(err) }) }
+  })
+  adapter.on("subagent", (ev: SubagentEvent) => {
+    try { subagentStore.applyBody(sessionId, ev.body) } catch (err) { log.warn("adapter_subagent_failed", { err: String(err) }) }
+  })
+  adapter.on("subagent-activity", (ev: SubagentActivityEvent) => {
+    try { subagentStore.applyChildActivity(sessionId, ev.subagentId, ev.activity) } catch (err) { log.warn("adapter_subagent_activity_failed", { err: String(err) }) }
+  })
+  adapter.on("task", (ev: TaskEvent) => applyTaskEvent(sessionId, ev))
   adapter.on("turn-start", () => agentStateStore.applyEvent(sessionId, "turn-start"))
   adapter.on("turn-complete", () => {
     agentStateStore.applyEvent(sessionId, "Stop")
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
+  })
+  // Accounts: a switch (manual, or Core's limit auto-switch) is persisted, pushed to every client
+  // and said in the chat; an exhausted limit with no other account is said in the chat.
+  adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; account?: string }) => {
+    if (ev.event === "switched" && ev.to) {
+      applySessionAccount(sessionId, ev.to)
+      const why = ev.reason === "limit" ? "usage limit reached" : "switched manually"
+      void notifySession(sessionId, `Switched to ${brokerAccounts.label(ev.to)} — ${why}`)
+    } else if (ev.event === "exhausted") {
+      void notifySession(sessionId, `Usage limit reached on ${brokerAccounts.label(ev.account)} — no other ${adapter.kind} account is available`)
+    }
   })
   adapter.on("error", (ev: any) => {
     const session = registry.get(sessionId)
@@ -1220,6 +1399,55 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   // The agent pushed a fresh command/skill list (grok: ACP
   // available_commands_update) — recompute this session's slash commands. The
   // provider reads the adapter's cached list via resolveSession.
+  adapter.on("request-open", (ev: RequestOpenEvent) => {
+    const request = {
+      requestId: ev.requestId,
+      kind: ev.requestKind,
+      title: ev.title,
+      body: ev.body,
+      options: ev.options,
+      allowFreeText: ev.allowFreeText,
+      blocking: ev.blocking,
+      ...(ev.subagentId ? { subagentId: ev.subagentId } : {}),
+      ...(ev.subagentName ? { subagentName: ev.subagentName } : {}),
+      ...(ev.subagentDescription ? { subagentDescription: ev.subagentDescription } : {}),
+    }
+    webChannel?.broadcastToAll({ type: "request_open", session: sessionId, request })
+    const session = registry.get(sessionId)
+    const destination = resolveReplyTarget(sessionId)
+    const addressed = parseAddress(destination)
+    if (addressed?.channel === "telegram" && telegram) {
+      const labels = ev.options.map((o) => o.label)
+      const asker = ev.subagentId ? ` (subagent ${ev.subagentDescription ?? ev.subagentName ?? ev.subagentId})` : ""
+      const text = `${session?.name ?? sessionId}${asker}: ${ev.title}\n${ev.body}`
+      void telegram.send({
+        op: "reply",
+        chat_id: addressed.chatId,
+        text,
+        keyboard: labels,
+        disable_notification: false,
+      })
+    }
+  })
+  adapter.on("request-closed", (ev: { requestId: string; outcome: "answered" | "expired" | "cancelled"; answerLabel?: string }) => {
+    webChannel?.broadcastToAll({
+      type: "request_closed",
+      session: sessionId,
+      requestId: ev.requestId,
+      outcome: ev.outcome,
+      ...(ev.answerLabel ? { answerLabel: ev.answerLabel } : {}),
+    })
+    const destination = resolveReplyTarget(sessionId)
+    const addressed = parseAddress(destination)
+    if (addressed?.channel === "telegram" && telegram) {
+      void telegram.send({
+        op: "reply",
+        chat_id: addressed.chatId,
+        text: `answered: ${ev.answerLabel ?? ev.outcome}`,
+        disable_notification: true,
+      })
+    }
+  })
   adapter.on("commands-update", () => {
     const name = registry.get(sessionId)?.name
     if (name) {
@@ -1422,7 +1650,7 @@ function spawnLoginProc(kind: string) {
 // hook config at CLI startup, so rotating this per boot would silently 403 the
 // hooks of every session that outlives a restart, freezing their status at
 // "idle". Generated once, persisted next to the hooks file it's embedded in.
-const INTERNAL_SECRET = resolveInternalHookSecret(() => randomBytes(24).toString("hex"))
+const INTERNAL_SECRET = randomBytes(24).toString("hex")
 
 // In-app update checker. Kill switch MUX_UPDATE_CHECK=0 → no checker at all
 // (the web routes then report disabled). Otherwise it polls versions.json on a
@@ -1618,6 +1846,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         isDefault: s.is_default,
         model: s.model,
         reasoningLevel: s.reasoningLevel,
+        permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
+        ...sessionAccountFields(s),
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
@@ -1639,13 +1869,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionAgentState: (id) => {
       const s = registry.get(id)
       const st = s ? agentStateStore.get(s.id) : { phase: "idle" as const, since: 0 }
-      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st, bgTaskStore.openCount(s?.id ?? id))
+      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st, bgOpenCount(s?.id ?? id))
       return payload
     },
     getSessionBgTasks: (id) => {
       const s = registry.get(id)
       return s ? bgTaskStore.get(s.id) : []
     },
+    getSessionSubagents: (id) => {
+      const s = registry.get(id)
+      return s ? subagentStore.get(s.id) : []
+    },
+    messageSubagent: (id, subagentId, text) => messageSubagent(id, subagentId, text),
+    stopSubagent: (id, subagentId) => stopSubagent(id, subagentId),
     getSessionCommands: (id) => {
       const s = registry.get(id)
       return s ? commandRegistry.get(s.name) : []
@@ -1663,27 +1899,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         agentContext: agentModules[kind]?.commandContext?.({ sessionName: "__preview__", kindAdapters: () => adaptersOfKind(kind) }),
       })
     },
-    onAgentHook: (event, body) => {
-      const claudeSid = body?.session_id
-      if (typeof claudeSid !== "string") return
-      const s = registry.list().find((x) => x.agent_session_id === claudeSid)
-      if (!s) return
-      const adapter = runtimes.get(s.id)?.adapter
-      if (!(adapter instanceof ClaudeCodeAdapter)) return
-      if (event === "StopFailure") {
-        // Field shape isn't firmly documented — accept flat (error_type/error_message),
-        // nested (error_details/error.{type,message}), or reason/message.
-        const pick = (...vals: unknown[]) => vals.find((v) => typeof v === "string" && v) as string | undefined
-        const det = (body?.error_details ?? body?.error) as Record<string, unknown> | undefined
-        const errorType = pick(body?.error_type, det?.type, body?.reason) ?? "error"
-        const errorMessage = pick(body?.error_message, det?.message, body?.message) ?? "Agent turn failed"
-        adapter.ingestHook("StopFailure", { errorType, errorMessage })
-        return
-      }
-      const tool = typeof body?.tool_name === "string" ? body.tool_name : undefined
-      log.info("agent_hook", { session: s.name, event, tool })
-      adapter.ingestHook(event, { tool })
-    },
+    onAgentHook: (_event, _body) => {},
     setMute: (id, muted) => {
       const s = registry.get(id)
       if (s) registry.setMuted(s.id, muted)
@@ -1726,6 +1942,28 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (!s) return { ok: false, error: "session not found" }
       return switchSessionReasoningLevel(s.id, reasoningLevel, { applyNow })
     },
+    switchPermissionMode: async (id, mode) => {
+      const s = registry.get(id)
+      if (!s) return { ok: false, error: "session not found" }
+      return sessionManager.switchPermissionMode(s.id, mode)
+    },
+    getSessionRequests: (id) => {
+      const s = registry.get(id)
+      const adapter = s ? sessionManager.adapterFor(s.id) : undefined
+      return adapter?.openRequests?.() ?? []
+    },
+    respondRequest: async (sessionId, requestId, answer) => {
+      const s = registry.get(sessionId)
+      if (!s) return { ok: false, error: "session not found" }
+      const adapter = sessionManager.adapterFor(s.id)
+      if (!adapter?.respondRequest) return { ok: false, error: "session cannot answer requests" }
+      try {
+        await adapter.respondRequest(requestId, answer as import("./core/agents/types").RequestAnswerInput)
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
     getAgentModels: () => {
       const installed = detectAgentStatuses().filter((s) => s.installed).map((s) => s.kind as AgentKind)
       // An installed agent with nothing cached yet (boot discovery failed): retry in the
@@ -1757,6 +1995,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         agent: (args.agent as any) ?? "claude",
         model: args.model,
         reasoningLevel: args.reasoningLevel,
+        permissionMode: args.permissionMode,
+        account: args.account,
         worktree: args.worktree,
         baseBranch: args.baseBranch,
         inheritFromSessionId: args.inheritFrom,
@@ -1818,6 +2058,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             capabilities: sessionCapabilities(entry.agent),
             model: entry.model,
             reasoningLevel: sessionEffort(entry),
+
+            permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
+
+            ...sessionAccountFields(entry),
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
             finish_job: entry.finish_job,
@@ -1834,7 +2078,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         const first = args.firstMessage?.trim()
         if (args.firstAttachments?.length) {
           const messageId = `spawn-${Date.now()}`
-          await routeWebInbound({
+          // Same reason as below: do not hold the spawn response for the turn.
+          void routeWebInbound({
             channel: "web",
             chat_id: "web",
             message_id: messageId,
@@ -1844,12 +2089,14 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             text: first,
             target_session_id: entry.id,
             attachments: args.firstAttachments,
-          })
+          }).catch((err) => log.warn("spawn_first_message_failed", { id: entry.id, reason: String(err) }))
         } else if (first) {
-          const delivered = await deliverUserMessage(entry.id, first)
-          if (!delivered.ok) {
-            log.warn("spawn_first_message_failed", { id: entry.id, reason: delivered.reason })
-          }
+          // Core adapters resolve send() when the TURN completes; the launcher
+          // must navigate to the new chat as soon as the message is handed
+          // over, not after the agent's first reply, so this is not awaited.
+          void deliverUserMessage(entry.id, first).then((delivered) => {
+            if (!delivered.ok) log.warn("spawn_first_message_failed", { id: entry.id, reason: delivered.reason })
+          }, (err) => log.warn("spawn_first_message_failed", { id: entry.id, reason: String(err) }))
         }
       }
       return {
@@ -1859,6 +2106,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         agent: entry?.agent ?? "claude",
         model: entry?.model,
         reasoningLevel: entry ? sessionEffort(entry) : undefined,
+        permissionMode: entry?.permissionMode ?? undefined,
         repo_root: entry?.repo_root || undefined,
         session_branch: entry?.session_branch || undefined,
       }
@@ -1897,6 +2145,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           capabilities: sessionCapabilities(s.agent),
           model: s.model,
           reasoningLevel: sessionEffort(s),
+
+          permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
+
+          ...sessionAccountFields(s),
           repo_root: s.repo_root || undefined,
           session_branch: s.session_branch || undefined,
           finish_job: s.finish_job,
@@ -1953,6 +2205,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             capabilities: sessionCapabilities(entry.agent),
             model: entry.model,
             reasoningLevel: sessionEffort(entry),
+
+            permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
+
+            ...sessionAccountFields(entry),
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
             finish_job: entry.finish_job,
@@ -2261,6 +2517,24 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getAgentLogin: (kind) => loginManager.get(kind as any),
     cancelAgentLogin: (kind) => loginManager.cancel(kind as any),
     sendAgentLoginCode: (kind, code) => loginManager.sendCode(kind as any, code),
+    accounts: {
+      list: (agent) => brokerAccounts.list(agent),
+      add: (body) => brokerAccounts.add(body),
+      remove: (id, options) => brokerAccounts.remove(id, options),
+      startLogin: (body) => brokerAccounts.startLogin(body),
+      loginState: (loginId) => brokerAccounts.loginState(loginId),
+      submitCode: (loginId, code) => brokerAccounts.submitLoginCode(loginId, code),
+      cancelLogin: (loginId) => brokerAccounts.cancelLogin(loginId),
+      setSessionAccount: (sessionId, account) => setSessionAccount(sessionId, account),
+      getSettings: () => ({ autoSwitch: accountsSettings().autoSwitch }),
+      setSettings: (patch) => {
+        if (patch.autoSwitch !== undefined && typeof patch.autoSwitch !== "boolean") throw new AccountsApiError(400, "autoSwitch must be a boolean", "invalid_input")
+        if (typeof patch.autoSwitch === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), autoSwitch: patch.autoSwitch })
+        const next = { autoSwitch: accountsSettings().autoSwitch }
+        webChannel?.broadcastToAll({ type: "accounts_settings", ...next })
+        return next
+      },
+    },
     startAgentInstall: (kind) => installManager.start(kind as AgentKind),
     getAgentInstall: (kind) => installManager.get(kind as AgentKind),
     listOpenCodeProviders: () => listOpenCodeProviders(),
@@ -2476,10 +2750,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
   })
   channels.web = webChannel as Channel
-  writeClaudeHooksSettings(MUX_WEB_PORT, INTERNAL_SECRET)
   getUsageStore().on("updated", (snap) => webChannel?.broadcastToAll({ type: "usage_updated", usage: snap }))
-} else {
-  try { rmSync(CLAUDE_HOOKS_SETTINGS_PATH, { force: true }) } catch {}
 }
 void getUsageStore().seedFromLocal()
 
@@ -2543,34 +2814,58 @@ const resumeSuspendedSession = (session: Parameters<SessionManager["resumeSuspen
 
 const resumeFromArchive = (sessionId: string) => sessionManager.resumeFromArchive(sessionId)
 
+/**
+ * A session's "connected" edge (the UI dot, a crash → "dead"). Sources: the shim socket
+ * ("external" mode, and tmux-era Claude rows in both modes) or, in "host" mode, the adapter
+ * liveness sweep below (no shim connects for a core session any more).
+ */
+function applyConnectionStatus(session_id: string, connected: boolean, last_pong_at?: number): void {
+  // session_id is the UUID from the socket. NOTE: liveness can fire slightly
+  // ahead of registration (markAlive runs before onRegister completes) — that's
+  // safe here: "connected" is a no-op unless the session was "dead", and "dead"
+  // only applies to a registered, non-suspended session.
+  registry.sessions.setConnectionStatus(session_id, connected, last_pong_at)
+  const s = registry.get(session_id)
+  webChannel?.broadcastToAll({ type: "session_state", session: session_id, connected, model: s?.model })
+  if (connected) {
+    agentStateStore.applyEvent(session_id, "connected")          // revives a dead session; no-op otherwise
+  } else if (s && s.status !== "suspended") {
+    // A Core-backed session's liveness is the Core session, not the shim socket:
+    // a model/permission-mode change restarts the native process, whose shim
+    // drops and reconnects seconds later. Only a session with no live Core
+    // session behind it is dead.
+    const adapter = sessionManager.adapterFor(session_id)
+    const coreAlive = adapter instanceof CoreAdapter && adapter.isAlive()
+    if (coreAlive) return
+    agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
+    bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
+    subagentStore.abandonRunning(session_id)  // nor finish its subagents
+  }
+}
+
+/** "host" mode: core sessions take their connected edge from the adapter, not the socket. */
+const adapterLivenessSource = (session_id: string): boolean => {
+  if (muxShimMode() !== "host") return false
+  const s = registry.get(session_id)
+  return !!s && !isPersistentRuntimeSession(s)
+}
+if (muxShimMode() === "host") {
+  setInterval(() => {
+    sweepAdapterLiveness(
+      registry.list().filter((s) => !isPersistentRuntimeSession(s)),
+      (id) => { const a = sessionManager.adapterFor(id); return a instanceof CoreAdapter && a.isAlive() },
+      (id, connected) => applyConnectionStatus(id, connected),
+    )
+  }, 2_000).unref()
+}
+
 const server = await startSocketServer({
   socketsDir: SOCKETS_DIR,
   onStatusChange: (session_id, connected, last_pong_at) => {
-    // session_id is the UUID from the socket. NOTE: liveness can fire slightly
-    // ahead of registration (markAlive runs before onRegister completes) — that's
-    // safe here: "connected" is a no-op unless the session was "dead", and "dead"
-    // only applies to a registered, non-suspended session.
-    registry.sessions.setConnectionStatus(session_id, connected, last_pong_at)
-    const s = registry.get(session_id)
-    webChannel?.broadcastToAll({ type: "session_state", session: session_id, connected, model: s?.model })
-    if (connected) {
-      agentStateStore.applyEvent(session_id, "connected")          // revives a dead session; no-op otherwise
-    } else if (s && s.status !== "suspended") {
-      agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
-      bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
-    }
-  },
-  // Safety net: a queued inbound that can't reach a live channel shim within the
-  // grace window means the session crashed / never came up. Tell the user in the
-  // chat that sent it, instead of silently dropping the message.
-  onUndeliverable: (session_id, payload) => {
-    const chat_id = payload.meta?.chat_id
-    if (!chat_id) return
-    const name = registry.get(session_id)?.name ?? session_id
-    const text = `⚠️ Couldn't deliver your message to "${name}" — it didn't come up (it may have crashed). Please try again.`
-    // Through the same path as a reply, so it lands on whatever channel the
-    // session is talking on — and is recorded in the transcript.
-    void notifySession(session_id, text)
+    // In "host" mode a core session's connected state is the adapter's (sweep above); a shim
+    // that still connects (a leftover) must not flip it.
+    if (adapterLivenessSource(session_id)) return
+    applyConnectionStatus(session_id, connected, last_pong_at)
   },
   handler: {
     onRegister: (m) => sessionManager.handleRegister(m),
@@ -2580,8 +2875,7 @@ const server = await startSocketServer({
 })
 
 // Thin alias over THE inbound funnel (SessionManager.deliver): adapter.send for
-// codex/cursor/opencode/grok, the shim socket for claude, message_id dedupe,
-// and the "Sending…" reconcile broadcast. Kept as a local function so the many
+// every agent, message_id dedupe, and the "Sending…" reconcile broadcast. Kept as a local function so the many
 // existing call sites read unchanged.
 function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
   return sessionManager.deliver(sessionId, text, meta)
@@ -2631,7 +2925,7 @@ async function submitReview(sessionId: string): Promise<{ ok: boolean; delivered
     log.error("review_submit_append_failed", { session: s.name, err: err?.message ?? String(err) })
   }
   // Deliver the full review to the agent as a normal user turn (same path as a web
-  // message): adapter.send for codex/cursor/opencode; server.sendInbound for claude.
+  // message): adapter.send for every agent.
   // chat_id "web" so the agent's reply routes back to the visible web chat.
   const meta = { channel: "web", chat_id: "web", message_id: messageId }
   const r = await deliverInbound(s.id, text, meta)
@@ -2662,6 +2956,9 @@ async function spawnSession(args: {
   agent?: AgentKind
   model?: string
   reasoningLevel?: string
+  permissionMode?: string
+  /** Account id (validated here). Absent or the system account = today's login. */
+  account?: string
   worktree?: boolean
   baseBranch?: string
   /** When set (e.g. "continue in new conversation"), reuse that session's display-name base and worktree metadata instead of deriving a name from the workdir basename (often a uuid under ~/.mux/worktrees). */
@@ -2673,6 +2970,9 @@ async function spawnSession(args: {
   // first message, agent-rpc workers) gets the same error.
   assertAgentsAllowed()
   const agent = args.agent ?? AgentKind.Claude
+  // Before any worktree/name work: an unknown, foreign or unsupported account fails the request.
+  const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, args.account)
+  const account = isSystemAccount(requestedAccount) ? undefined : requestedAccount
   const inheritSrc = args.inheritFromSessionId
     ? registry.sessions.getById(args.inheritFromSessionId)
     : undefined
@@ -2729,17 +3029,21 @@ async function spawnSession(args: {
         const session = registry.resolveName(name)
         if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
       },
+      onClaudeSessionId: (name: string, sessionId: string) => {
+        const session = registry.resolveName(name)
+        if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
+      },
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
+    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
   )
   // Claude's row now exists synchronously (born in the spawn path). Wait for
   // the shim to CONNECT — proof the window survived and the agent came up —
   // while polling window liveness so an instant death fast-fails instead of
   // waiting out the full timeout.
   let registered = registry.get(r.session_id)
-  if (isPersistentRuntimeSession({ agent })) {
+  if (registered && isPersistentRuntimeSession(registered)) {
     registered = await waitForRegisteredSession({
       id: r.session_id,
       name: r.name,
@@ -2766,6 +3070,12 @@ async function spawnSession(args: {
       })
       await refreshTelegramMenu()
     }
+  } else if (registered?.core && !registered.internal) {
+    webChannel?.broadcastToAll({
+      type: "session_added",
+      session: { id: registered.id, name: registered.name, workdir: registered.workdir, mute: false, connected: true, agent: registered.agent, capabilities: sessionCapabilities(registered.agent), user_status: registered.user_status, sort_order: registered.sort_order, draft_payload: registered.draft_payload, ...sessionAccountFields(registered) },
+    })
+    await refreshTelegramMenu()
   }
   if (args.model && registered) {
     registry.sessions.setModel(registered.id, args.model)
@@ -2846,8 +3156,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
       messageLog,
       chat_id: msg.chat_id,
       fromSession: undefined,
-      spawnSession: async (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string) => {
-        const r = await spawnSession({ workdir, requestedName: name, agent, model, reasoningLevel })
+      spawnSession: async (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string, permissionMode?: string) => {
+        const r = await spawnSession({ workdir, requestedName: name, agent, model, reasoningLevel, permissionMode })
         // The row exists when spawnSession resolves (all agents) — flip the
         // chat's active session directly.
         registry.setActive(msg.chat_id, r.session_id)
@@ -2858,6 +3168,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       listModels: (agent: AgentKind) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
       switchModel: switchSessionModel,
       switchReasoningLevel: switchSessionReasoningLevel,
+      switchPermissionMode: (id: string, mode: string) => sessionManager.switchPermissionMode(id, mode),
       listReasoningLevels: (agent: AgentKind, model?: string) =>
         supportedReasoningLevels(agent, lookupModels(agent), model),
       resolveReasoningLevel: (sessionName: string) => {
@@ -2916,6 +3227,10 @@ ch.on("inbound", async (msg: InboundMessage) => {
               capabilities: sessionCapabilities(entry.agent),
               model: entry.model,
               reasoningLevel: sessionEffort(entry),
+
+              permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
+
+              ...sessionAccountFields(entry),
               repo_root: entry.repo_root || undefined,
               session_branch: entry.session_branch || undefined,
               finish_job: entry.finish_job,
@@ -2974,6 +3289,27 @@ ch.on("inbound", async (msg: InboundMessage) => {
     }
   }
 
+  const activeId = registry.getActive(msg.chat_id)
+  if (ch.name === "telegram" && activeId === session.id) {
+    const adapter = sessionManager.adapterFor(session.id)
+    const pending = adapter?.openRequests?.() ?? []
+    if (pending.length > 0) {
+      const open = pending[0]!
+      const { answerFromTelegramText } = await import("./core/agents/core-bridge/request-map")
+      const answer = answerFromTelegramText(open, decision.text)
+      if (answer && adapter?.respondRequest) {
+        try {
+          await adapter.respondRequest(open.requestId, answer)
+          const label = open.options.find((o) => o.id === ("optionId" in answer ? answer.optionId : undefined))?.label
+            ?? decision.text
+          await ch.send({ op: "reply", chat_id: msg.chat_id, text: `answered: ${label}`, disable_notification: true })
+        } catch (err) {
+          log.warn("request_respond_failed", { session: session.id, err: String(err) })
+        }
+        return
+      }
+    }
+  }
   log.debug("send_inbound.before", { session: session.name, text: decision.text.slice(0, 80) })
   // chat_id is namespaced ("telegram:<id>" / "whatsapp:<jid>"), so embedding it in
   // the entry id disambiguates the same message_id arriving in DM vs group.
@@ -3052,10 +3388,21 @@ activityStore.on("append", (sessionId: string, event) => {
 bgTaskStore.on("change", (sessionId: string) => {
   webChannel?.broadcastToAll({ type: "bg_tasks", session: sessionId, tasks: bgTaskStore.get(sessionId) })
   // waiting/bgOpen live on agent_state — re-derive whenever tasks move.
-  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgTaskStore.openCount(sessionId)))
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
+})
+subagentStore.on("change", (sessionId: string, subagent: { background?: boolean }) => {
+  webChannel?.broadcastToAll({ type: "subagent_update", session: sessionId, subagent })
+  // A background subagent starting or finishing moves the "waiting · N background" count.
+  if (subagent.background === true) {
+    webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
+  }
+})
+subagentStore.on("clear", (sessionId: string) => {
+  webChannel?.broadcastToAll({ type: "subagents_cleared", session: sessionId })
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
 })
 agentStateStore.on("change", (sessionId: string, state) => {
-  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state, bgTaskStore.openCount(sessionId)))
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state, bgOpenCount(sessionId)))
   // Deferred model/effort applies drain on the idle transition (the queue and
   // the rollback-on-failure live in the SessionManager). Fire and forget.
   void sessionManager.drainPendingReapply(sessionId, state.phase)
@@ -3267,11 +3614,9 @@ if (!settings.getAppConfig(appConfigEnv).onboarded &&
 await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor, sessionBackend })
 
 
-// Regenerate Codex's marketplace.json from the registry BEFORE resuming codex
-// sessions — resumeNonClaudeAdapters runs `codex plugin add` per session home,
-// which reads this marketplace; a stale/missing one (e.g. right after a rename)
-// makes those adds fail until the next boot. Awaited so the file is current
-// first. Never throws — logs and continues so plugin config can't block boot.
+// Sync the first-party plugin and the registry BEFORE resuming sessions: every session's plugins
+// reach its agent through its session context at launch (C3; no Codex marketplace install any
+// more). Never throws — logs and continues so plugin config can't block boot.
 if (!IS_TEST_BROKER) {
   try {
     if (ensureMuxCoreSkills()) {
@@ -3291,8 +3636,6 @@ if (!IS_TEST_BROKER) {
   } catch (err: any) {
     log.warn("mux_core_soul_skill_sync_failed", { err: err?.message ?? String(err) })
   }
-  await codexPrepareGlobal({ onError: (err) => log.warn("codex_prepare_global_failed", { err }) })
-    .catch((err) => log.warn("codex_prepare_global_failed", { err: String(err) }))
 }
 
 await sessionManager.resumeAtBoot()
@@ -3462,9 +3805,6 @@ async function gracefulShutdown(signal: string) {
     terminalManager.shutdown()
   } catch (err: any) { log.warn("terminal_shutdown_failed", { err: err?.message }) }
   try {
-    for (const t of tailers.values()) t.stop()
-  } catch (err: any) { log.warn("tailers_shutdown_failed", { err: err?.message }) }
-  try {
     await displayManager.stopAll()
   } catch (err: any) { log.warn("display_shutdown_failed", { err: err?.message }) }
   try {
@@ -3492,6 +3832,24 @@ async function gracefulShutdown(signal: string) {
   try {
     supervisor.stop()
   } catch (err: any) { log.warn("supervisor_stop_failed", { err: err?.message }) }
+  try {
+    brokerAccounts.close()
+  } catch (err: any) { log.warn("accounts_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeGrokCoreHost()
+  } catch (err: any) { log.warn("grok_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeCodexCoreHost()
+  } catch (err: any) { log.warn("codex_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeOpenCodeCoreHost()
+  } catch (err: any) { log.warn("opencode_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeCursorCoreHost()
+  } catch (err: any) { log.warn("cursor_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeClaudeCoreHost()
+  } catch (err: any) { log.warn("claude_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
     curatorScheduler?.stop()
   } catch (err: any) { log.warn("curator_scheduler_stop_failed", { err: err?.message }) }

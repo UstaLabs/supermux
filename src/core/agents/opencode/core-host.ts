@@ -1,0 +1,149 @@
+import { join } from "path"
+import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
+import { opencode, type OpenCodeOptions } from "../../../../packages/supermux-core/src/agents/index.js"
+import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
+import { prepareOpenCodeEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
+import { opencodeContext } from "../../../../packages/supermux-core/src/context/agents.js"
+import { openCodeInstructions } from "./preamble-writer"
+import { sessionPlugins } from "../../plugins"
+import { muxShimContextServer } from "../mux-shim-server"
+import { MUX_HOST_SERVERS } from "../../mux-tools/server"
+import { makeLogger } from "../../../shared/log"
+
+const log = makeLogger("agents/opencode/core-host")
+import { readGlobalProviderConfig } from "./provider-config"
+import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
+
+export type OpenCodeDriverFactory = (options: OpenCodeOptions, overrides: SessionConfiguration) => AgentDriver
+
+export type OpenCodeCoreHostOptions = {
+  stateDirectory: string
+  driverFactory?: OpenCodeDriverFactory
+  /** Test seam: production always uses the broker policy below. */
+  limits?: CoreLimits
+  /** The broker's shared account registry (production); tests may omit it. */
+  accounts?: AccountsOptions
+}
+
+export type OpenCodeCoreHost = Host
+
+export type OpenCodePrepareExtra = {
+  sessionHome: string
+  sessionName: string
+  sessionId: string
+  workdir: string
+  cwd: string
+  nativeSessionId?: string
+  model?: string
+  permissionMode?: string
+}
+
+function opencodeOpts(stateDirectory: string, env: Record<string, string>, model: string | undefined, permissions: OpenCodeOptions["permissions"]): OpenCodeOptions {
+  return {
+    id: "opencode",
+    command: "opencode",
+    env,
+    inheritEnv: true,
+    mcpServers: [],
+    permissions,
+    // A fresh session config dir makes OpenCode install its `plugin` entries
+    // before it answers `initialize` (measured ~55 s on this box); the old
+    // `opencode serve` path paid the same cost behind its readiness wait.
+    setupTimeoutMs: 120_000,
+    shutdownTimeoutMs: 2_000,
+    maxFrameBytes: 16 * 1024 * 1024,
+    maxOutstandingActivity: 256,
+    cancelRetryIntervalMs: 250,
+    cancelRetryTimeoutMs: 10_000,
+    keeper: {
+      stateDirectory,
+      limits: { parkedDeadlineMs: 120_000, journalMaxBytes: 64 * 1024 * 1024, connectTimeoutMs: 10_000 },
+    },
+    ...(model ? { model } : {}),
+  }
+}
+
+function asPrepareExtra(registration: HostRegistration): OpenCodePrepareExtra {
+  const extra = registration.extra
+  if (!extra) throw new Error("opencode host registration extra is required")
+  const sessionHome = extra.sessionHome
+  const sessionName = extra.sessionName
+  const sessionId = extra.sessionId
+  const workdir = extra.workdir
+  const cwd = extra.cwd
+  if (typeof sessionHome !== "string" || !sessionHome) throw new Error("opencode extra.sessionHome is required")
+  if (typeof sessionName !== "string" || !sessionName) throw new Error("opencode extra.sessionName is required")
+  if (typeof sessionId !== "string" || !sessionId) throw new Error("opencode extra.sessionId is required")
+  if (typeof workdir !== "string" || !workdir) throw new Error("opencode extra.workdir is required")
+  if (typeof cwd !== "string" || !cwd) throw new Error("opencode extra.cwd is required")
+  const native = extra.nativeSessionId
+  const model = extra.model
+  return {
+    sessionHome,
+    sessionName,
+    sessionId,
+    workdir,
+    cwd,
+    nativeSessionId: typeof native === "string" ? native : undefined,
+    model: typeof model === "string" ? model : undefined,
+    permissionMode: extraPermissionMode(extra, "opencode"),
+  }
+}
+
+export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCodeCoreHost {
+  if (!options.stateDirectory) throw new Error("stateDirectory is required")
+  const stateDirectory = options.stateDirectory
+  const factory = options.driverFactory
+  return createHost({
+    stateDirectory,
+    limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
+    agent: "opencode",
+    // Instructions and plugins go into a session OPENCODE_CONFIG, mux-shim into ACP mcpServers,
+    // applied by the core (C3). "warn": plugin parts OpenCode cannot map (hooks, commands,
+    // agents) are dropped with context.degraded instead of refusing the launch.
+    context: opencodeContext([]).support,
+    contextPolicy: "warn",
+    ...(options.accounts ? { accounts: options.accounts } : {}),
+    // The broker's host MCP servers (C3b), registered in BOTH mux-shim modes so a record that
+    // names one resumes after a flip back to "external" (see mux-tools/mode.ts).
+    mcpServers: MUX_HOST_SERVERS,
+    driver: (registration, ctx) => {
+      const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
+      const settings = driverSettingsFor("opencode", extraPermissionMode(registration.extra, "opencode"))
+      if (settings.initial.kind !== "acp") throw new Error("opencode driver settings mismatch")
+      const opts = opencodeOpts(stateDirectory, registration.env, extraModel ?? ctx.configuration?.model, settings.initial)
+      const overrides: SessionConfiguration = ctx.configuration ? { ...ctx.configuration } : {}
+      return factory ? factory(opts, overrides) : opencode(opts)
+    },
+    prepare: async (registration) => {
+      const extra = asPrepareExtra(registration)
+      const configHome = joinConfigHome(extra.sessionHome)
+      const prepared = await prepareOpenCodeEnvironment({
+        home: extra.sessionHome,
+        workdir: extra.workdir,
+        mcpServers: [],
+        skillsPaths: [],
+        pluginPaths: [],
+        permissions: (() => {
+          const settings = driverSettingsFor("opencode", extra.permissionMode ?? extraPermissionMode(registration.extra, "opencode"))
+          return settings.environmentPermissions ?? { edit: "ask", bash: "ask", webfetch: "ask" }
+        })(),
+        provider: readGlobalProviderConfig() ?? null,
+        instructions: null,
+        configHome,
+      })
+      return {
+        env: prepared.env,
+        context: {
+          instructions: openCodeInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
+          plugins: sessionPlugins("opencode", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
+          mcpServers: [muxShimContextServer("opencode", extra.sessionId, extra.sessionName)],
+        },
+      }
+    },
+  })
+}
+
+function joinConfigHome(sessionHome: string): string {
+  return join(sessionHome, "config")
+}

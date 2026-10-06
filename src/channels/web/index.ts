@@ -28,12 +28,13 @@ import type { KeepAwakeSettings } from "../../core/settings/keep-awake-config"
 import { parseKeepAwakeBody } from "../../core/settings/keep-awake-config"
 import { normalizeExistingWorkdir, uniqueKnownWorkdirs } from "../../core/session-manager/workdir-paths"
 import { worktreesRoot } from "../../core/worktree/manager"
-import { hooksFileUsesHookSecret } from "../../core/agents/claude/hooks-settings"
+
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
 import { listBranches, switchBranch } from "../../core/git/branches"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
+import { isPermissionMode, permissionCatalog } from "../../core/agents/permission-modes"
 import type { SlashCommand } from "../../core/slash-commands/types"
 import type { UpdateChecker } from "../../core/update/checker"
 import { detectUpdateMode } from "../../core/update/mode"
@@ -135,7 +136,7 @@ function hostOrigin(req: Request): string | undefined {
 /** Largest body PUT /fs/write accepts (the editor reads at most 1 MB). */
 const FS_WRITE_MAX_BYTES = 8 * 1024 * 1024
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
 // match what the store would have generated itself — it ends up in layout trees
@@ -237,6 +238,7 @@ export interface SessionSnapshot {
   role?: "personal_assistant" | "worker"
   isDefault?: boolean
   model?: string
+  permissionMode?: string
   session_branch?: string
   repo_root?: string
   git?: import("../../core/worktree/lite-status").GitLiteStatus
@@ -253,6 +255,21 @@ export interface ArchivedSessionSnapshot {
   repo_root?: string
 }
 
+/** Accounts over HTTP (GET/POST /accounts, /accounts/login…, POST /sessions/:id/account,
+ *  GET/PUT /settings/accounts). Broadcasts: accounts_changed, account_login_state, session_state. */
+export interface WebAccountsApi {
+  list(agent?: string): Promise<unknown[]>
+  add(body: Record<string, unknown>): Promise<unknown>
+  remove(id: string, options: { deleteHome?: boolean }): Promise<void>
+  startLogin(body: Record<string, unknown>): unknown
+  loginState(loginId: string): unknown | undefined
+  submitCode(loginId: string, code: string): void
+  cancelLogin(loginId: string): void
+  setSessionAccount(sessionId: string, account: string): Promise<unknown>
+  getSettings(): { autoSwitch: boolean }
+  setSettings(patch: Record<string, unknown>): { autoSwitch: boolean }
+}
+
 export interface WebChannelOpts {
   port: number
   devicesFile: string
@@ -267,6 +284,11 @@ export interface WebChannelOpts {
   getSessionLog: (name: string, limit?: number) => unknown[]
   getSessionActivity?: (name: string) => unknown[]
   getSessionBgTasks?: (name: string) => unknown[]
+  /** Latest view of each subagent of a session (snapshot `subagents`; live `subagent_update`). */
+  getSessionSubagents?: (id: string) => unknown[]
+  /** POST /sessions/:id/subagents/:subagentId/message and …/stop. */
+  messageSubagent?: (sessionId: string, subagentId: string, text: string) => Promise<{ ok: true; via?: "direct" | "relay" } | { ok: false; status: number; error: string }>
+  stopSubagent?: (sessionId: string, subagentId: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
   setMute: (name: string, muted: boolean) => void
   onSendFromWeb: (msg: InboundMessage) => void
   fileStore?: import("../../core/files/store").FileStore
@@ -288,6 +310,9 @@ export interface WebChannelOpts {
   /** GET /agents/models — every installed agent's models + reasoning in one answer (see core/models/agent-models). */
   getAgentModels?: () => { agents: import("../../core/models/agent-models").AgentModelsEntry[] }
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
+  switchPermissionMode?: (id: string, mode: string) => Promise<{ ok: true; status: "applied"; applied?: "now" | "next-turn" } | { ok: false; error: string }>
+  getSessionRequests?: (id: string) => unknown[]
+  respondRequest?: (sessionId: string, requestId: string, answer: unknown) => Promise<{ ok: true } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
   finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
@@ -302,7 +327,7 @@ export interface WebChannelOpts {
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
   verifySuggest?: (id: string) => { content: string; source: string } | undefined
   verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
-  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; device?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; repo_root?: string; session_branch?: string }>
+  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; device?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
   /** Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
@@ -429,6 +454,8 @@ export interface WebChannelOpts {
   getAgentLogin?: (kind: string) => import("../../core/agents/login/session").LoginState | undefined
   cancelAgentLogin?: (kind: string) => void
   sendAgentLoginCode?: (kind: string, code: string) => void
+  /** Accounts (slice A3a). Errors carry an HTTP `status` (and a core `code`). */
+  accounts?: WebAccountsApi
   startAgentInstall?: (kind: string) => { job: import("../../core/agents/install").InstallJob; alreadyRunning: boolean }
   getAgentInstall?: (kind: string) => import("../../core/agents/install").InstallJob | undefined
   listOpenCodeProviders?: () => Promise<import("../../core/agents/opencode/auth-ops").OpenCodeProviderInfo[]>
@@ -486,6 +513,8 @@ export class WebChannel implements Channel {
   private readonly mintDeviceToken?: (name: string) => { token: string; name: string }
   private readonly getRelayUrl?: () => string | undefined
   private inboundHandlers: Array<(m: InboundMessage) => void> = []
+  /** Fixture-only: last client WS frames of interest (`request_respond`, …). */
+  private lastClientFrames: unknown[] = []
   private wsConnections = new Set<{ ws: import("bun").ServerWebSocket<WSData>; deviceName: string }>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
   /** The host's single file-system service (spec 2026-09-27). */
@@ -1361,6 +1390,7 @@ export class WebChannel implements Channel {
       const logs: Record<string, unknown[]> = {}
       const activity: Record<string, unknown[]> = {}
       const bgTasks: Record<string, unknown[]> = {}
+      const subagents: Record<string, unknown[]> = {}
       const agentState: Record<string, unknown> = {}
       const commands: Record<string, unknown[]> = {}
       const commandsResolved: Record<string, boolean> = {}
@@ -1386,6 +1416,8 @@ export class WebChannel implements Channel {
           logs[sessionKey] = this.opts.getSessionLog(sessionKey)
         }
         bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
+        // Small and needed by the session list (running badges), so never trimmed.
+        subagents[sessionKey] = this.opts.getSessionSubagents?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
         if (trimExtras && !fullLogs.has(sessionKey)) {
           partialExtras.push(sessionKey)
@@ -1410,7 +1442,13 @@ export class WebChannel implements Channel {
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
+      const requests: Record<string, unknown[]> = {}
+      for (const s of sessions) {
+        const sessionKey = s.id ?? s.name
+        requests[sessionKey] = this.opts.getSessionRequests?.(sessionKey) ?? []
+      }
+      const permissionModes = permissionCatalog()
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, subagents, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
       // Right after the snapshot, so every (re)connect learns whether this computer can run agents.
       const requirements = this.opts.getHostRequirements?.()
       if (requirements) ws.send(JSON.stringify({ type: "host_requirements", requirements }))
@@ -1518,6 +1556,28 @@ export class WebChannel implements Channel {
       // user's other devices too (the sender's composer already cleared locally).
       this.opts.setDraft?.(frame.session, null)
       this.broadcastToOthers({ type: "draft_clear", session: frame.session }, ws)
+      return
+    }
+    if (frame.type === "set_permission_mode" && frame.session && typeof frame.mode === "string") {
+      if (!this.opts.switchPermissionMode) {
+        ws.send(JSON.stringify({ type: "error", reason: "permission mode not available" }))
+        return
+      }
+      const result = await this.opts.switchPermissionMode(frame.session, frame.mode)
+      if (!result.ok) ws.send(JSON.stringify({ type: "error", reason: result.error }))
+      else if (result.applied === "next-turn") {
+        ws.send(JSON.stringify({ type: "error", reason: "Applies from the next turn" }))
+      }
+      return
+    }
+    if (frame.type === "request_respond" && frame.session && frame.requestId) {
+      if (process.env.MUX_TEST_BROKER === "1") this.lastClientFrames.push(frame)
+      if (!this.opts.respondRequest) {
+        ws.send(JSON.stringify({ type: "error", reason: "requests not available" }))
+        return
+      }
+      const result = await this.opts.respondRequest(frame.session, frame.requestId, frame.answer)
+      if (!result.ok) ws.send(JSON.stringify({ type: "error", reason: result.error }))
       return
     }
     if (frame.type === "fs_sub" && typeof frame.path === "string") {
@@ -1968,6 +2028,21 @@ export class WebChannel implements Channel {
       if (res) return res
     }
 
+    if (process.env.MUX_TEST_BROKER === "1" && path === "/debug/inject-frame" && method === "POST") {
+      const authResult = this.requireAuth(req)
+      if (!authResult.ok) return new Response("unauthorized", { status: 401 })
+      let body: unknown
+      try { body = await req.json() } catch { return new Response("bad json", { status: 400 }) }
+      if (!body || typeof body !== "object") return new Response("bad json", { status: 400 })
+      this.broadcastToAll(body as Record<string, unknown>)
+      return new Response("ok", { status: 200 })
+    }
+    if (process.env.MUX_TEST_BROKER === "1" && path === "/debug/last-client-frames" && method === "GET") {
+      const authResult = this.requireAuth(req)
+      if (!authResult.ok) return new Response("unauthorized", { status: 401 })
+      return Response.json(this.lastClientFrames)
+    }
+
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {
       // Machine-to-machine (Claude hooks curl this from localhost). Gated by a
       // persistent secret embedded in the hook URL so a reachable web port can't
@@ -1979,8 +2054,7 @@ export class WebChannel implements Channel {
       // pre-restart session at "idle" for days before anyone could see why.
       if (this.opts.internalSecret) {
         const provided = url.searchParams.get("s")
-        const requiresSecret = hooksFileUsesHookSecret()
-        const mismatch = requiresSecret ? provided !== this.opts.internalSecret : Boolean(provided) && provided !== this.opts.internalSecret
+        const mismatch = provided !== this.opts.internalSecret
         if (mismatch) {
           log.warn("agent_hook_rejected", { path, hasSecret: provided !== null })
           return new Response("forbidden", { status: 403 })
@@ -2618,6 +2692,65 @@ export class WebChannel implements Channel {
       return this.json({ ok: true })
     }
 
+    // ── accounts (one registry for every agent; secrets go in, never out) ──
+    if (path === "/accounts" || path.startsWith("/accounts/") || path === "/settings/accounts" || path.match(/^\/sessions\/[^/]+\/account$/)) {
+      const api = this.opts.accounts
+      if (!api) return this.json({ error: "accounts unavailable" }, 503)
+      try {
+        if (method === "GET" && path === "/accounts") {
+          const agent = url.searchParams.get("agent") || undefined
+          return this.json({ accounts: await api.list(agent) })
+        }
+        if (method === "POST" && path === "/accounts") {
+          const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+          return this.json(await api.add(body))
+        }
+        if (method === "POST" && path === "/accounts/login") {
+          const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+          return this.json(api.startLogin(body))
+        }
+        const login = path.match(/^\/accounts\/login\/([^/]+)(?:\/(code|cancel))?$/)
+        if (login) {
+          const loginId = decodeURIComponent(login[1]!)
+          if (method === "GET" && !login[2]) {
+            const st = api.loginState(loginId)
+            return st ? this.json(st) : this.json({ error: "no such login" }, 404)
+          }
+          if (method === "POST" && login[2] === "code") {
+            const body = (await req.json().catch(() => ({}))) as { code?: unknown }
+            if (typeof body.code !== "string" || !body.code.trim()) return this.json({ error: "code required" }, 400)
+            api.submitCode(loginId, body.code)
+            return this.json({ ok: true })
+          }
+          if (method === "POST" && login[2] === "cancel") {
+            api.cancelLogin(loginId)
+            return this.json({ ok: true })
+          }
+        }
+        const one = path.match(/^\/accounts\/([^/]+)$/)
+        if (one && method === "DELETE") {
+          const deleteHome = url.searchParams.get("deleteHome")
+          await api.remove(decodeURIComponent(one[1]!), { deleteHome: deleteHome === "1" || deleteHome === "true" })
+          return this.json({ ok: true })
+        }
+        const sessionAccount = path.match(/^\/sessions\/([^/]+)\/account$/)
+        if (sessionAccount && method === "POST") {
+          const body = (await req.json().catch(() => ({}))) as { account?: unknown }
+          if (typeof body.account !== "string" || !body.account.trim()) return this.json({ error: "account required" }, 400)
+          return this.json(await api.setSessionAccount(decodeURIComponent(sessionAccount[1]!), body.account.trim()))
+        }
+        if (path === "/settings/accounts" && method === "GET") return this.json(api.getSettings())
+        if (path === "/settings/accounts" && method === "PUT") {
+          const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+          return this.json(api.setSettings(body))
+        }
+        return this.json({ error: "not found" }, 404)
+      } catch (err: any) {
+        const status = typeof err?.status === "number" ? err.status : 500
+        return this.json({ error: err?.message ?? String(err), ...(err?.code ? { code: err.code } : {}) }, status)
+      }
+    }
+
     // ── agent install (broker shells out to the agent's official installer) ──
     if (method === "POST" && path.match(/^\/agents\/[^/]+\/install$/)) {
       const kind = decodeURIComponent(path.split("/")[2]!)
@@ -2987,6 +3120,24 @@ export class WebChannel implements Channel {
       this.opts.markRead?.(id)   // advances last_read_at + broadcasts session_read (main.ts:1121)
       return this.json({ ok: true })
     }
+    {
+      const sub = method === "POST" ? path.match(/^\/sessions\/([^/]+)\/subagents\/([^/]+)\/(message|stop)$/) : null
+      if (sub) {
+        const id = decodeURIComponent(sub[1]!)
+        const subagentId = decodeURIComponent(sub[2]!)
+        if (sub[3] === "message") {
+          if (!this.opts.messageSubagent) return this.json({ error: "not configured" }, 503)
+          const body = await req.json().catch(() => ({})) as Record<string, unknown>
+          const text = typeof body.text === "string" ? body.text.trim() : ""
+          if (!text) return this.json({ error: "text required" }, 400)
+          const result = await this.opts.messageSubagent(id, subagentId, text)
+          return result.ok ? this.json(result) : this.json({ ok: false, error: result.error }, result.status)
+        }
+        if (!this.opts.stopSubagent) return this.json({ error: "not configured" }, 503)
+        const result = await this.opts.stopSubagent(id, subagentId)
+        return result.ok ? this.json(result) : this.json({ ok: false, error: result.error }, result.status)
+      }
+    }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/interrupt$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.interruptSession) return this.json({ error: "not configured" }, 503)
@@ -3334,6 +3485,15 @@ export class WebChannel implements Channel {
         const firstMessage = typeof body.firstMessage === "string" && body.firstMessage.trim()
           ? body.firstMessage
           : undefined
+        const permissionModeRaw = typeof body.permissionMode === "string" ? body.permissionMode.trim() : ""
+        let permissionMode: string | undefined
+        if (permissionModeRaw) {
+          const kind = agent ?? "claude"
+          if (!isPermissionMode(kind, permissionModeRaw)) {
+            return this.json({ error: "unknown permission mode" }, 400)
+          }
+          permissionMode = permissionModeRaw
+        }
         // The launcher uploads its staged files BEFORE the spawn and names them here, so
         // the broker owns the whole first turn (text + files). Same ownership rule as a
         // WS `send`: only this device's own web uploads.
@@ -3354,6 +3514,8 @@ export class WebChannel implements Channel {
           agent,
           model: body.model as string | undefined,
           reasoningLevel: body.reasoningLevel as string | undefined,
+          permissionMode,
+          account: typeof body.account === "string" && body.account.trim() ? body.account.trim() : undefined,
           worktree: body.worktree as boolean | undefined,
           baseBranch: body.baseBranch as string | undefined,
           inheritFrom,
@@ -3372,7 +3534,9 @@ export class WebChannel implements Channel {
           model: body.model as string | undefined,
           err: err?.message ?? String(err),
         })
-        return this.json({ error: err?.message ?? String(err) }, 500)
+        // A rejected account (unknown, another agent's, unsupported) is the caller's error.
+        const status = typeof err?.status === "number" ? err.status : 500
+        return this.json({ error: err?.message ?? String(err), ...(err?.code ? { code: err.code } : {}) }, status)
       }
     }
     if (method === "DELETE" && path.match(/^\/sessions\/[^/]+$/)) {

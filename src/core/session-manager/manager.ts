@@ -4,39 +4,32 @@ import { RecentInboundIds } from "./recent-inbound-ids"
 import { isPersistentRuntimeSession } from "./types"
 import type { Registry, ProxyEntry, Session } from "./registry"
 import type { AgentAdapter } from "../agents/types"
-import { ClaudeCodeAdapter } from "../agents/claude"
-import { CodexAdapter } from "../agents/codex/adapter"
+import { CoreAdapter } from "../agents/core-bridge/core-adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
-import { CursorAdapter } from "../agents/cursor/adapter"
-import { OpenCodeAdapter } from "../agents/opencode/adapter"
-import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
-import { GrokAdapter } from "../agents/grok/adapter"
 import { agents } from "../agents/registry"
 import type { ResumeCtx, ResumeRow } from "../agents/session-types"
 import { PendingReapply, shouldDeferReapply, changedSince, type PreChangeConfig } from "./pending-reapply"
 import { clampSessionReasoningLevel } from "../models/session-agent-settings"
 import { supportedReasoningLevels } from "../models/reasoning-levels"
 import type { ModelInfo } from "../models/discovery"
-import { buildClaudeSpawnSpec } from "./spawn-command"
-import { preAcceptTrust } from "./trust"
-import { sendChannelConsentEnter } from "./post-spawn-keys"
+import { claudeSessionHome } from "../agents/claude/core-host"
 import { ensureUnique, resolveSelfRename } from "./naming"
 import { randomBytes } from "crypto"
 import { resumedSessionPid } from "./resume-pid"
 import type { SessionBackend } from "../runtime/session-backend"
 import { AgentKind, isAgentKind } from "../../shared/agents"
-import { wireClaudeStateEvents } from "../agents/claude/state-projection"
-import { claudeTranscriptPath } from "../agents/claude/transcript-path"
+import { isPermissionMode } from "../agents/permission-modes"
+
 import { isDraftSession } from "./supervisor"
 import { transformOutbound, parseAddress } from "../routing"
 import { resolveDownloadAttachment, type DownloadableApi } from "./download"
 import { propagateSessionRename } from "../workspace/name"
-import { renderTranscript } from "../search/transcript-render"
+
 import { buildProxyPublicUrl } from "../../channels/web/proxy"
 import { listDevices } from "../display/scrcpy/adb"
 import { INBOX_DIR } from "../../shared/paths"
 import type { RegisterReply, OpResult } from "./socket-server"
-import type { RegisterFrame, OutboundFrame, OrchestrationFrame } from "../../shared/socket-frames"
+import type { RegisterFrame, OutboundFrame, OrchestrationFrame, ToolOperation } from "../../shared/socket-frames"
 import type { Channel, OutboundAction } from "../../channels/channel"
 import { GIT_REQUIRED_MESSAGE, type HostRequirements } from "../git/requirement"
 import type { FileStore } from "../files/store"
@@ -61,6 +54,8 @@ import { authorSteps, toWalkthroughDto, type ToolStepInput } from "../walkthroug
 const log = makeLogger("session-manager")
 
 const SOUL_SETUP_AUTO_SEND_DELAY_MS = 3_000
+/** How long a settled orchestration call's result is shared with identical calls. */
+export const ORCH_DEDUP_MS = 10_000
 
 /**
  * Narrow ports into the rest of the broker. Injected ONCE at construction —
@@ -77,12 +72,6 @@ export type SessionManagerPorts = {
   getWebChannel: () => { broadcastToAll(frame: object): void } | undefined
   /** `let agentRpc` in main.ts is assigned after construction — deref lazily, never capture. */
   getAgentRpc: () => { settle(requestId: string, data: unknown): void; fail(requestId: string, error: string): void }
-  /** The socket server is constructed WITH these handlers, so it is late-bound too.
-   *  sendInbound is the claude shim transport — component-internal. Every other
-   *  sender goes through SessionManager.deliver, the one kind-aware door. */
-  socket: {
-    sendInbound(session_id: string, payload: { content: string; meta: Record<string, string> }): Promise<void>
-  }
   /** Collaborators of the deliver() funnel. */
   inbound: {
     /** Fired after a successful hand-off (incl. an idempotent re-send) so the
@@ -99,6 +88,12 @@ export type SessionManagerPorts = {
     /** Heals a missing tmux_window_id via a name→id resolve; lives in main.ts because the resume paths use it too. */
     runtimeTargetIdOf(s: { id: string; name: string; tmux_window_id?: string }): Promise<string | null>
     kill(targetId: string): Promise<void>
+    /** The broker session id the window's agent was started for (its pane's MUX_SESSION_ID), or
+     *  null when there is no such window or it can't be read. When present, a stored window id is
+     *  only killed if it is this session's: tmux reuses ids after its server restarts, so a stale id
+     *  can address another session's window. Window NAMES don't work for this: a renamed session's
+     *  window keeps its old name. */
+    windowOwner?(targetId: string): Promise<string | null>
   }
   /** Per-session teardown collaborators (the kill/unregister ladder). */
   cleanup: {
@@ -173,6 +168,10 @@ export type SessionManagerPorts = {
   }
 }
 
+function isBusyApply(r: { ok: true } | { ok: false; busy?: true; error?: string }): r is { ok: false; busy: true } {
+  return r.ok === false && r.busy === true
+}
+
 /**
  * The component that owns per-session runtime state (Move 2 of the
  * session-consolidation spec). It grows stage by stage: it owns the ONE
@@ -188,9 +187,17 @@ export class SessionManager {
   readonly runtimes = new RuntimeRegistry()
   /** Sessions owing a deferred model/effort apply (marked mid-turn, drained on idle). */
   private readonly pendingReapply = new PendingReapply()
+  /** One-shot follow-up drain after a typed-busy apply while broker phase is idle. */
+  private readonly reapplyBusyFollowup = new Set<string>()
+  /** Serialize native reapply/configure per session so M2 waits for M1 to settle. */
+  private readonly reapplyTail = new Map<string, Promise<void>>()
   /** Dedupe window for inbound message_ids — owned here so deliver() is idempotent. */
   readonly recentInbound = new RecentInboundIds()
   private readonly ports: SessionManagerPorts
+  /** Orchestration single-flight (see orchestration()). */
+  private readonly orchInflight = new Map<string, Promise<OpResult>>()
+  /** resumeAtBoot's cap per session (env MUX_BOOT_RESUME_TIMEOUT_MS; tests set it directly). */
+  bootResumeTimeoutMs = bootResumeTimeoutMs(process.env.MUX_BOOT_RESUME_TIMEOUT_MS)
 
   constructor(registry: Registry, ports: SessionManagerPorts) {
     this.registry = registry
@@ -227,12 +234,8 @@ export class SessionManager {
   }
 
   /**
-   * THE one inbound door. Routes a user turn to the session's agent by KIND:
-   * adapter.send() for adapter-driven agents (codex/cursor/opencode/grok), the
-   * claude shim socket otherwise. Every broker-side sender (channels, curator,
-   * soul-setup, agent-rpc, reviews) must call this — never the raw socket
-   * sendInbound, which is claude-only transport and silently queues-then-drops
-   * frames for every other kind.
+   * THE one inbound door: adapter.send() for every agent (all run through supermux-core). Every
+   * broker-side sender (channels, curator, soul-setup, agent-rpc, reviews) must call this.
    */
   deliver(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
     // Record where this session is talking, for the reply that comes back. This
@@ -241,12 +244,6 @@ export class SessionManager {
     this.ports.inbound.onTarget?.(sessionId, meta?.chat_id)
     return deliverInbound({
       getAdapter: (id) => this.runtimes.get(id)?.adapter,
-      isClaude: (id) => {
-        const s = this.registry.get(id)
-        // No row → preserve the historical claude default (`agent ?? "claude"`).
-        return s ? isPersistentRuntimeSession(s) : true
-      },
-      sendInboundSocket: (id, payload) => this.ports.socket.sendInbound(id, payload),
       seen: this.recentInbound,
       onDelivered: (id) => this.ports.inbound.onDelivered?.(id),
     }, sessionId, text, meta)
@@ -284,34 +281,37 @@ export class SessionManager {
     this.runtimes.delete(sessionId)
   }
 
-  registerClaudeRuntime(sessionId: string, adapter: ClaudeCodeAdapter): void {
+  registerCoreRuntime(sessionId: string, name: string, adapter: CoreAdapter, handle?: CodexSpawnHandle): void {
+    const kind = adapter.kind
+    if (kind === AgentKind.Codex) this.registerCodexRuntime(sessionId, name, adapter, handle)
+    else if (kind === AgentKind.Cursor) this.registerCursorRuntime(sessionId, adapter)
+    else if (kind === AgentKind.OpenCode) this.registerOpenCodeRuntime(sessionId, adapter)
+    else if (kind === AgentKind.Grok) this.registerGrokRuntime(sessionId, adapter)
+    else this.registerClaudeRuntime(sessionId, adapter)
+  }
+
+  registerClaudeRuntime(sessionId: string, adapter: CoreAdapter): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Claude, adapter })
   }
 
-  registerCodexRuntime(sessionId: string, name: string, adapter: CodexAdapter, handle: CodexSpawnHandle): void {
+  registerCodexRuntime(sessionId: string, name: string, adapter: CoreAdapter, handle?: CodexSpawnHandle): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Codex, adapter, handle })
-    handle.onExit?.((code: number | null) => {
+    handle?.onExit?.((code: number | null) => {
       log.info("codex_app_server_exited", { name, code })
       this.deleteRuntime(sessionId)
     })
   }
 
-  registerCursorRuntime(sessionId: string, adapter: CursorAdapter): void {
+  registerCursorRuntime(sessionId: string, adapter: CoreAdapter): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Cursor, adapter })
   }
 
-  // grok's stdio child is owned by the adapter (no separate handle), so unlike
-  // opencode there's no handle.onExit to unregister on — adapter.stop() is the kill.
-  registerGrokRuntime(sessionId: string, adapter: GrokAdapter): void {
+  registerGrokRuntime(sessionId: string, adapter: CoreAdapter): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Grok, adapter })
   }
 
-  registerOpenCodeRuntime(sessionId: string, name: string, adapter: OpenCodeAdapter, handle: OpenCodeSpawnHandle): void {
-    this.registerRuntime(sessionId, { kind: AgentKind.OpenCode, adapter, handle })
-    handle.onExit?.((code: number | null) => {
-      log.info("opencode_serve_exited", { name, code })
-      this.deleteRuntime(sessionId)
-    })
+  registerOpenCodeRuntime(sessionId: string, adapter: CoreAdapter): void {
+    this.registerRuntime(sessionId, { kind: AgentKind.OpenCode, adapter })
   }
 
   async kill(id: string): Promise<void> {
@@ -340,22 +340,29 @@ export class SessionManager {
       }
     }
 
-    if (s.agent === "claude") {
+    if (s.agent === "claude" && s.core) {
+      const runtime = this.runtimes.get(s.id)
+      if (runtime?.kind === AgentKind.Claude) await runtime.adapter.stop()
+    } else if (s.agent === "claude") {
       const wid = await this.ports.backend.runtimeTargetIdOf(s)
       if (wid) await this.ports.backend.kill(wid)
       else log.warn("kill_session_no_runtime_target", { name: displayName })
     } else if (s.agent === "codex") {
       const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.Codex) runtime.handle.kill()
+      if (runtime?.kind === AgentKind.Codex) {
+        if (runtime.handle) runtime.handle.kill()
+        else await runtime.adapter.stop()
+      }
     } else if (s.agent === AgentKind.Cursor) {
       // No persistent process or tmux pane to kill.
     } else if (s.agent === "opencode") {
       const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.OpenCode) runtime.handle.kill()
+      if (runtime?.kind === AgentKind.OpenCode) await runtime.adapter.stop()
     } else if (s.agent === AgentKind.Grok) {
       // The `grok agent stdio` child is owned by the adapter, so stop() is the kill.
+      // Must finish before deleting the runtime / archiving / reclaiming the worktree.
       const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.Grok) void runtime.adapter.stop()
+      if (runtime?.kind === AgentKind.Grok) await runtime.adapter.stop()
     }
     this.deleteRuntime(s.id)
     this.ports.cleanup.stopClaudeTailer(s.id)   // also clears the session's background tasks
@@ -392,31 +399,22 @@ export class SessionManager {
     // reconnect look identical).
     const existing = this.registry.get(sessionUuid)
     if (existing) {
-      log.info("shim_attach", { name: existing.name, id: sessionUuid, old_pid: existing.pid, new_pid: msg.pid })
+      log.info("shim_attach", { name: existing.name, id: sessionUuid, old_pid: existing.pid, new_pid: msg.pid, core: existing.core })
+      if (existing.core) {
+        if (agentSessionId && !existing.agent_session_id) {
+          this.registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
+        }
+        if (existing.status === "suspended" && typeof msg.pid === "number") {
+          this.registry.sessions.activate(sessionUuid, msg.pid)
+        }
+        return { name: existing.name, session_id: sessionUuid }
+      }
       if (agentSessionId) {
         this.registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
-      }
-      // Rebuild adapter if missing (first connect, or after broker restart)
-      if (!this.runtimes.has(sessionUuid) && (existing.agent ?? "claude") === "claude") {
-        const adapter = new ClaudeCodeAdapter({
-          sessionName: existing.name,
-          workdir: existing.workdir,
-          sendInboundSocket: (payload) => this.ports.socket.sendInbound(sessionUuid, payload),
-          interruptSocket: () => this.ports.register.interruptClaudePane(sessionUuid),
-        })
-        this.registerClaudeRuntime(sessionUuid, adapter)
-        wireClaudeStateEvents(adapter, {
-          onState: (event, tool) => this.ports.agentState.applyEvent(sessionUuid, event, tool),
-          onError: (errorType, message) => {
-            const s = this.registry.get(sessionUuid)
-            void this.ports.register.notifyAgentError(sessionUuid, s?.name ?? sessionUuid, errorType, message)
-          },
-        })
       }
       if (existing.status === "suspended") {
         this.registry.sessions.activate(sessionUuid, msg.pid as number)
       }
-      this.ports.register.ensureClaudeTailer(sessionUuid, existing.name, existing.workdir, true)
       void this.ports.commands.refresh(existing.name)
       if (existing.role === "personal_assistant" && existing.is_default) {
         setTimeout(() => { void this.ports.register.maybeAutoSendSoulSetup(existing.id) }, SOUL_SETUP_AUTO_SEND_DELAY_MS)
@@ -432,8 +430,23 @@ export class SessionManager {
     throw new Error(`unknown session: ${sessionUuid} — the broker did not spawn this session`)
   }
 
-  async handleOutbound(msg: OutboundFrame & { session_id: string }): Promise<OpResult> {
-    const fromSession = msg.session_id
+  /** The external shim's socket path (`outbound` frame): the socket's bound session id is the caller. */
+  handleOutbound(msg: OutboundFrame & { session_id: string }): Promise<OpResult> {
+    return this.outbound(msg.session_id, msg.op)
+  }
+
+  /** The external shim's socket path (`orchestration` frame). */
+  handleOrchestration(msg: OrchestrationFrame & { session_id: string }): Promise<OpResult> {
+    return this.orchestration(msg.session_id, msg.op)
+  }
+
+  /**
+   * An outbound tool call (reply, react, edit_message, download_attachment) from session
+   * `fromSession`. Shared by the external shim's socket and the broker's host MCP server
+   * (src/core/mux-tools): the caller's identity is the socket's bound session id or the host
+   * server's ctx.sessionId, never anything the agent says.
+   */
+  async outbound(fromSession: string, op: ToolOperation): Promise<OpResult> {
     // fromSession is now UUID; adapters are keyed by UUID
     // Channel resolution lives in ONE place (core/routing/address). The local
     // copy this replaced turned the bare value `web` into `telegram:web`, so a
@@ -443,7 +456,6 @@ export class SessionManager {
       return a ? { channelName: a.channel, chat_id: a.chatId } : { channelName: "", chat_id: rawChatId }
     }
     try {
-      const op = msg.op
       if (op.name === "reply") {
         const adapter = this.runtimes.get(fromSession)?.adapter
         const files = optionalStringArrayArg(op.args, "files")
@@ -547,11 +559,33 @@ export class SessionManager {
     }
   }
 
-  async handleOrchestration(msg: OrchestrationFrame & { session_id: string }): Promise<OpResult> {
+  /**
+   * An orchestration tool call from session `fromSession`, shared by the external shim's socket and
+   * the host MCP server. Single-flight per session + op + args for ORCH_DEDUP_MS after it settles:
+   * a duplicate (an agent calling twice, or two copies of mux-shim attached to one agent) shares the
+   * first call's result instead of running again, so spawn_session never creates two sessions.
+   *
+   * Cancellation: the call is never aborted midway. A host-server call whose agent cancels it, or
+   * whose session is interrupted, gets "Cancelled" from the core while the handler here runs to the
+   * end (a mutation is applied completely, never half), and a retry within the window gets the
+   * same result instead of a second mutation.
+   */
+  orchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
+    const key = `${fromSession}|${op.name}|${JSON.stringify(op.args)}`
+    const inflight = this.orchInflight.get(key)
+    if (inflight) {
+      log.info("broker_call_deduped", { session_id: fromSession, op_name: op.name })
+      return inflight
+    }
+    const p = this.runOrchestration(fromSession, op).catch((err: unknown): OpResult => ({ ok: false, error: `handler threw: ${err instanceof Error ? err.message : String(err)}` }))
+    this.orchInflight.set(key, p)
+    void p.finally(() => { const t = setTimeout(() => { if (this.orchInflight.get(key) === p) this.orchInflight.delete(key) }, ORCH_DEDUP_MS); t.unref?.() })
+    return p
+  }
+
+  private async runOrchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
     // Permission check — fromSession is UUID
-    const fromSession = msg.session_id
     const s = this.registry.get(fromSession)  // Look up by UUID
-    const op = msg.op
     const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
@@ -667,13 +701,7 @@ export class SessionManager {
         const id = stringArg(op.args, "session_id")
         const row = this.ports.stores.db.query("SELECT workdir, agent, agent_session_id FROM sessions WHERE id = ? AND internal = 0").get(id) as { workdir: string; agent: string; agent_session_id: string | null } | null
         if (!row) return { ok: false, error: "no such session" }
-        if (row.agent !== "claude" || !row.agent_session_id) {
-          return { ok: true, value: { transcript: false, note: "no JSONL transcript for this agent; use the broker message history", messages: this.ports.stores.messageLog.get(id, 200) } }
-        }
-        const includeToolCalls = op.args?.include_tool_calls !== false
-        const grep = typeof op.args?.grep === "string" ? op.args.grep : undefined
-        const text = renderTranscript(claudeTranscriptPath(row.workdir, row.agent_session_id), { includeToolCalls, grep })
-        return { ok: true, value: { transcript: true, session_id: id, text } }
+        return { ok: true, value: { transcript: false, note: "no JSONL transcript for this agent; use the broker message history", messages: this.ports.stores.messageLog.get(id, 200) } }
       }
       case "expose_port": {
         if (!s) return { ok: false, error: "unknown session" }
@@ -854,14 +882,8 @@ export class SessionManager {
   registerSpawnedAdapter(name: string, adapter: AgentAdapter, handle?: unknown): void {
     const session = this.registry.resolveName(name)
     const sid = session?.id ?? name
-    if (adapter instanceof CodexAdapter) {
-      this.registerCodexRuntime(sid, name, adapter, handle as CodexSpawnHandle)
-    } else if (adapter instanceof CursorAdapter) {
-      this.registerCursorRuntime(sid, adapter)
-    } else if (adapter instanceof OpenCodeAdapter) {
-      this.registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
-    } else if (adapter instanceof GrokAdapter) {
-      this.registerGrokRuntime(sid, adapter)
+    if (adapter instanceof CoreAdapter) {
+      this.registerCoreRuntime(sid, name, adapter, handle as CodexSpawnHandle | undefined)
     }
     this.ports.resume.wireAdapterEvents(adapter, sid)
   }
@@ -889,6 +911,37 @@ export class SessionManager {
     return { ok: true, status: "applied" }
   }
 
+  async switchPermissionMode(
+    sessionId: string,
+    mode: string,
+  ): Promise<{ ok: true; status: "applied"; applied: "now" | "next-turn" } | { ok: false; error: string }> {
+    const session = this.registry.get(sessionId)
+    if (!session) return { ok: false, error: `no such session: ${sessionId}` }
+    if (!isPermissionMode(session.agent, mode)) return { ok: false, error: "unknown mode" }
+    const adapter = this.runtimes.get(session.id)?.adapter as
+      | { setPermissionMode?: (id: string) => Promise<{ applied: "now" | "next-turn" } | void> }
+      | undefined
+    let applied: "now" | "next-turn" = "now"
+    if (adapter?.setPermissionMode) {
+      try {
+        const result = await adapter.setPermissionMode(mode)
+        if (result && result.applied) applied = result.applied
+      } catch (err) {
+        const code = typeof err === "object" && err !== null && "code" in err ? String((err as { code: unknown }).code) : ""
+        if (code === "session_busy") return { ok: false, error: "session_busy" }
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+    this.registry.setPermissionMode(sessionId, mode)
+    this.ports.getWebChannel()?.broadcastToAll({
+      type: "session_state",
+      session: session.id,
+      permissionMode: mode,
+      applied,
+    })
+    return { ok: true, status: "applied", applied }
+  }
+
   private async switchModel(
     sessionId: string,
     newModel: string,
@@ -899,6 +952,7 @@ export class SessionManager {
 
     const oldModel = session.model
     const oldReasoningLevel = session.reasoningLevel
+    this.pendingReapply.bump(sessionId)
     this.registry.setModel(sessionId, newModel)
     if (session.reasoningLevel) {
       const clamped = clampSessionReasoningLevel({ ...session, model: newModel }, newModel, this.ports.config.lookupModels)
@@ -907,12 +961,12 @@ export class SessionManager {
       }
     }
 
-    // cursor, opencode and grok read their adapter's `model` field fresh on each
-    // turn (opencode re-parses it in send() via parseModel(); grok folds it into
-    // each session/prompt), so a model switch is a live in-process update —
-    // no process/serve restart, no config reapply. The typed set is each kind's
-    // applyConfig dialect; `changed` masks out the effort half.
-    if (session.agent === AgentKind.Cursor || session.agent === AgentKind.OpenCode || session.agent === AgentKind.Grok) {
+    // cursor and opencode read their adapter's `model` field fresh on each
+    // turn (opencode re-parses it in send() via parseModel()), so a model
+    // switch is a live in-process update. Grok native configure restarts the
+    // child and must wait until idle — even when applyNow is true — so it
+    // cannot kill an in-flight turn.
+    if (session.agent === AgentKind.Cursor || session.agent === AgentKind.OpenCode) {
       const adapter = this.runtimes.get(session.id)?.adapter
       if (adapter) {
         await agents[session.agent].applyConfig(
@@ -927,7 +981,10 @@ export class SessionManager {
 
     // Claude switches are typed into the TUI, which is only safe on an idle
     // composer — force queue-until-idle (user decision: never type mid-turn).
-    const effectiveApplyNow = session.agent === AgentKind.Claude ? false : applyNow ?? false
+    // Grok configure is likewise unsafe mid-turn.
+    const effectiveApplyNow = (session.agent === AgentKind.Claude || session.agent === AgentKind.Grok || session.agent === AgentKind.Codex)
+      ? false
+      : applyNow ?? false
     return this.applyOrDeferReapply(sessionId, { oldModel, oldReasoningLevel }, effectiveApplyNow)
   }
 
@@ -950,10 +1007,13 @@ export class SessionManager {
     }
 
     const oldReasoningLevel = session.reasoningLevel
+    this.pendingReapply.bump(sessionId)
     this.registry.setReasoningLevel(sessionId, newLevel)
 
-    // Same queue-until-idle rule as switchModel for claude (typed /effort).
-    const effectiveApplyNow = session.agent === AgentKind.Claude ? false : applyNow ?? false
+    // Same queue-until-idle rule as switchModel for claude and grok.
+    const effectiveApplyNow = (session.agent === AgentKind.Claude || session.agent === AgentKind.Grok || session.agent === AgentKind.Codex)
+      ? false
+      : applyNow ?? false
     return this.applyOrDeferReapply(sessionId, { oldModel: session.model, oldReasoningLevel }, effectiveApplyNow)
   }
 
@@ -966,18 +1026,49 @@ export class SessionManager {
     applyNow: boolean,
   ): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
     const phase = this.ports.agentState.get(sessionId).phase
+    this.pendingReapply.mark(sessionId, olds)
     if (shouldDeferReapply(phase, applyNow)) {
-      this.pendingReapply.mark(sessionId, olds)
       return { ok: true, status: "queued" }
     }
+    return this.enqueueReapply(sessionId, async () => this.runReapplyAttempt(sessionId, false))
+  }
+
+  /**
+   * Apply the registry's current desired config. Snapshot the desired revision
+   * so a stale failure cannot overwrite a newer request, and a stale success
+   * cannot take a newer pending entry.
+   */
+  private async runReapplyAttempt(
+    sessionId: string,
+    followup: boolean,
+  ): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
+    const attemptRevision = this.pendingReapply.currentRevision(sessionId)
+    const baseline = this.pendingReapply.peek(sessionId)
     const current = this.registry.get(sessionId)
-    const result = await this.reapplyAgentConfig(sessionId, current ? changedSince(olds, current) : undefined)
+    const attemptApplied: PreChangeConfig = { oldModel: current?.model, oldReasoningLevel: current?.reasoningLevel }
+    const result = await this.reapplyAgentConfig(
+      sessionId,
+      current && baseline ? changedSince(baseline, current) : undefined,
+    )
+    if (isBusyApply(result)) {
+      if (baseline) this.pendingReapply.mark(sessionId, baseline)
+      if (!followup) this.scheduleBusyFollowup(sessionId)
+      return { ok: true as const, status: "queued" as const }
+    }
     if (!result.ok) {
+      if (this.pendingReapply.currentRevision(sessionId) > attemptRevision) {
+        if (baseline) this.pendingReapply.mark(sessionId, baseline)
+        return { ok: false as const, error: result.error }
+      }
+      const olds = baseline ?? { oldModel: current?.model, oldReasoningLevel: current?.reasoningLevel }
       this.registry.setModel(sessionId, olds.oldModel)
       this.registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
-      return result
+      this.pendingReapply.takeIfCovered(sessionId, attemptRevision)
+      return { ok: false as const, error: result.error }
     }
-    return { ok: true, status: "applied" }
+    this.pendingReapply.advanceBaseline(sessionId, attemptApplied)
+    this.pendingReapply.takeIfCovered(sessionId, attemptRevision)
+    return { ok: true as const, status: "applied" as const }
   }
 
   /** Drain hook: called on every agent-state change (main.ts listener). When a
@@ -985,18 +1076,50 @@ export class SessionManager {
    *  rolls the registry back, tells the clients, and notifies the user. The
    *  returned promise is for tests — production fires and forgets. */
   drainPendingReapply(sessionId: string, phase: AgentPhase): Promise<void> {
-    if (phase !== "idle" || !this.pendingReapply.has(sessionId)) return Promise.resolve()
-    const olds = this.pendingReapply.take(sessionId)!
-    const drainSession = this.registry.get(sessionId)
-    return this.reapplyAgentConfig(sessionId, drainSession ? changedSince(olds, drainSession) : undefined).then((r) => {
-      if (!r.ok) {
-        this.registry.setModel(sessionId, olds.oldModel)
-        this.registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
-        const s = this.registry.get(sessionId)
-        this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: sessionId, model: s?.model, reasoningLevel: this.ports.resume.sessionEffort(s ?? {}) })
-        void this.ports.register.notifyAgentError(sessionId, s?.name ?? sessionId, "config", `Failed to apply model/effort change: ${r.error}`)
+    return this.enqueueReapply(sessionId, () => this.drainPendingReapplyInner(sessionId, phase, false))
+  }
+
+  private async drainPendingReapplyInner(sessionId: string, phase: AgentPhase, followup: boolean): Promise<void> {
+    if (phase !== "idle" || !this.pendingReapply.has(sessionId)) return
+    try {
+      let usedFollowup = followup
+      while (this.pendingReapply.has(sessionId)) {
+        const before = this.pendingReapply.currentRevision(sessionId)
+        const r = await this.runReapplyAttempt(sessionId, usedFollowup)
+        usedFollowup = true
+        if (r.ok && r.status === "queued") return
+        if (!r.ok && !this.pendingReapply.has(sessionId)) {
+          const s = this.registry.get(sessionId)
+          this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: sessionId, model: s?.model, reasoningLevel: this.ports.resume.sessionEffort(s ?? {}) })
+          void this.ports.register.notifyAgentError(sessionId, s?.name ?? sessionId, "config", `Failed to apply model/effort change: ${r.error}`)
+          return
+        }
+        if (this.pendingReapply.has(sessionId) && this.pendingReapply.currentRevision(sessionId) <= before) return
       }
-    }).catch((err) => log.warn("drain_reapply_failed", { sessionId, err: String(err) }))
+    } catch (err) {
+      log.warn("drain_reapply_failed", { sessionId, err: String(err) })
+    }
+  }
+
+  private enqueueReapply<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.reapplyTail.get(sessionId) ?? Promise.resolve()
+    const run = prev.then(fn, fn)
+    this.reapplyTail.set(sessionId, run.then(() => {}, () => {}))
+    return run
+  }
+
+  /** After a typed-busy apply, retry once when this settlement's chain finishes if the
+   *  broker is still idle. Tied to the serialized apply tail — not a recursive busy loop. */
+  private scheduleBusyFollowup(sessionId: string): void {
+    if (this.reapplyBusyFollowup.has(sessionId)) return
+    if (this.ports.agentState.get(sessionId).phase !== "idle") return
+    this.reapplyBusyFollowup.add(sessionId)
+    const prev = this.reapplyTail.get(sessionId) ?? Promise.resolve()
+    const follow = prev.then(async () => {
+      this.reapplyBusyFollowup.delete(sessionId)
+      await this.drainPendingReapplyInner(sessionId, this.ports.agentState.get(sessionId).phase, true)
+    })
+    this.reapplyTail.set(sessionId, follow.then(() => {}, () => {}))
   }
 
   /** Re-apply the session's stored model/effort to its LIVE runtime — the
@@ -1004,20 +1127,16 @@ export class SessionManager {
   private async reapplyAgentConfig(
     sessionId: string,
     changed?: { model: boolean; effort: boolean },
-  ): Promise<{ ok: true } | { ok: false; error: string }> {
+  ): Promise<{ ok: true } | { ok: false; busy: true } | { ok: false; error: string }> {
     const session = this.registry.get(sessionId)
     if (!session) return { ok: false, error: `no such session: ${sessionId}` }
 
     const effort = this.ports.resume.sessionEffort(session)
 
     if (session.agent === AgentKind.Claude) {
-      // Live switch: type /model and/or /effort into the running TUI — never a
-      // kill+respawn (user decision 2026-07-10). Failure is an explicit error;
-      // callers roll the registry back.
-      const wid = await this.ports.backend.runtimeTargetIdOf(session)
-      if (!wid) return { ok: false, error: "session window not found" }
+      const runtime = this.runtimes.get(session.id)
       const result = await agents.claude.applyConfig(
-        { ...this.resumeCtx(session.id), windowId: wid, backend: this.ports.resume.sessionBackend },
+        { ...this.resumeCtx(session.id), adapter: runtime?.adapter },
         session, session.name,
         { model: session.model, effort, changed },
       )
@@ -1032,25 +1151,18 @@ export class SessionManager {
     }
 
     if (session.agent === AgentKind.Codex) {
-      // Codex has no live setter: full kill + respawn of the app-server with
-      // the new flags. The dialect builds the fresh runtime; the swap and
-      // rewire happen HERE so callers never hold a half-dead adapter.
       try {
         const runtime = this.runtimes.get(session.id)
-        if (runtime?.kind === AgentKind.Codex) runtime.handle.kill()
-        this.deleteRuntime(session.id)
-
-        if (!session.agent_home) return { ok: false, error: "codex session missing agent_home" }
-
+        if (runtime?.kind !== AgentKind.Codex) {
+          if (!session.agent_home) return { ok: false, error: "codex session missing agent_home" }
+          return { ok: false, error: "codex session has no live adapter" }
+        }
         const result = await agents.codex.applyConfig(
-          this.resumeCtx(session.id),
-          { ...session, agent_home: session.agent_home },
-          session.name,
+          { ...this.resumeCtx(session.id), adapter: runtime.adapter },
+          session, session.name,
           { model: session.model, effort, changed },
         )
-        this.registerCodexRuntime(session.id, session.name, result.runtime.adapter, result.runtime.handle)
-        this.ports.resume.wireAdapterEvents(result.runtime.adapter, session.id)
-
+        if (!result.ok) return result
         this.ports.getWebChannel()?.broadcastToAll({
           type: "session_state",
           session: session.id,
@@ -1108,11 +1220,10 @@ export class SessionManager {
     return false
   }
 
-  private async resumeCodexArm(session: ResumeRow, name: string): Promise<CodexSpawnHandle> {
-    const { adapter, handle } = await agents.codex.resume(this.resumeCtx(session.id), session, name)
-    this.registerCodexRuntime(session.id, name, adapter, handle)
+  private async resumeCodexArm(session: ResumeRow, name: string): Promise<void> {
+    const { adapter } = await agents.codex.resume(this.resumeCtx(session.id), session, name)
+    this.registerCodexRuntime(session.id, name, adapter)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
-    return handle
   }
 
   private async resumeCursorArm(session: ResumeRow, name: string): Promise<void> {
@@ -1121,11 +1232,10 @@ export class SessionManager {
     this.ports.resume.wireAdapterEvents(adapter, session.id)
   }
 
-  private async resumeOpenCodeArm(session: ResumeRow, name: string): Promise<OpenCodeSpawnHandle> {
-    const { adapter, handle } = await agents.opencode.resume(this.resumeCtx(session.id), session, name)
-    this.registerOpenCodeRuntime(session.id, name, adapter, handle)
+  private async resumeOpenCodeArm(session: ResumeRow, name: string): Promise<void> {
+    const { adapter } = await agents.opencode.resume(this.resumeCtx(session.id), session, name)
+    this.registerOpenCodeRuntime(session.id, adapter)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
-    return handle
   }
 
   /** The dialect's narrow view of this component (see agents/session-types.ts):
@@ -1146,8 +1256,43 @@ export class SessionManager {
     this.ports.resume.wireAdapterEvents(adapter, session.id)
   }
 
+  private async resumeClaudeCoreArm(session: ResumeRow, name: string): Promise<void> {
+    const row = this.registry.get(session.id)
+    await this.retireTmuxWindow({ id: session.id, name, core: row?.core, tmux_window_id: row?.tmux_window_id })
+    const { adapter } = await agents.claude.resume!(this.resumeCtx(session.id), session, name)
+    this.registerClaudeRuntime(session.id, adapter)
+    this.ports.resume.wireAdapterEvents(adapter, session.id)
+  }
+
+  /** A tmux-era Claude row (core=0) may still have its interactive `claude`
+   *  running in the old window. Resuming the same claude session id through
+   *  Core while that process lives would put two writers on one conversation,
+   *  so the window is killed first; a Core row never has one. */
+  private async retireTmuxWindow(session: { id: string; name: string; core?: boolean; tmux_window_id?: string | null }): Promise<void> {
+    if (session.core) return
+    let wid: string | null = null
+    try { wid = await this.ports.backend.runtimeTargetIdOf({ id: session.id, name: session.name, tmux_window_id: session.tmux_window_id ?? undefined }) } catch { return }
+    if (!wid) return
+    if (this.ports.backend.windowOwner) {
+      let owner: string | null = null
+      try { owner = await this.ports.backend.windowOwner(wid) } catch { owner = null }
+      if (owner !== session.id) {
+        // Not provably this session's window (gone, unreadable, or a reused id): never kill it.
+        log.warn("claude_tmux_window_not_owned", { name: session.name, window: wid, owner })
+        if (owner !== null) this.registry.sessions.setTmuxWindowId(session.id, undefined)
+        return
+      }
+    }
+    try {
+      await this.ports.backend.kill(wid)
+      log.info("claude_tmux_window_retired", { name: session.name, window: wid })
+    } catch (err) {
+      log.warn("claude_tmux_window_retire_failed", { name: session.name, window: wid, err: String(err) })
+    }
+  }
+
   /** Suspended → live (lazy, triggered by the next inbound message). */
-  async resumeSuspended(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<boolean> {
+  async resumeSuspended(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null; core?: boolean }): Promise<boolean> {
     const { sessionBackend, tmuxSession } = this.ports.resume
     if (this.agentsBlocked()) {
       log.warn("resume_suspended_git_missing", { name: session.name, id: session.id })
@@ -1165,23 +1310,10 @@ export class SessionManager {
       await this.ports.resume.ensureSessionWorktree(session)
       if (session.agent === "claude") {
         await this.ports.resume.bind(session.id)
-        preAcceptTrust(session.workdir)
-        // Clear ONLY our own prior window, by id — never kill by name (a name
-        // can be shared with a sibling's live window).
-        if (session.tmux_window_id) await sessionBackend.kill(session.tmux_window_id).catch(() => {})
-        const windowName = ensureUnique(session.name, new Set((await sessionBackend.list(tmuxSession)).map(target => target.name)))
-        log.info("resume_suspended_claude", { name: session.name, window: windowName })
-        const effort = this.ports.resume.sessionEffort(session)
-        const spec = buildClaudeSpawnSpec({
-          name: session.name, model: session.model, effort, sessionId: session.id,
-          claudeSessionId: session.agent_session_id, resume: !!session.agent_session_id,
-          workdir: session.workdir,
-        })
-        const target = await sessionBackend.create({ group: tmuxSession, name: windowName, cwd: session.workdir, ...spec, cols: 80, rows: 24 })
-        this.registry.sessions.setTmuxWindowId(session.id, target.id)
-        resumedRuntimePid = target.pid
-        await sendChannelConsentEnter(target.id, { backend: sessionBackend })
-        await this.waitForConnected(session.id, 25_000)
+        const agentHome = session.agent_home || claudeSessionHome(session.name)
+        await this.resumeClaudeCoreArm({ ...session, agent_home: agentHome }, session.name)
+        this.registry.sessions.setCore(session.id, true)
+        this.registry.sessions.setAgentHome(session.id, agentHome)
       } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
         await this.ports.resume.bind(session.id)
         await this.resumeCodexArm({ ...session, agent_home: session.agent_home }, session.name)
@@ -1229,16 +1361,10 @@ export class SessionManager {
       await this.ports.resume.ensureSessionWorktree(session)
       if (session.agent === "claude") {
         await this.ports.resume.bind(sessionId)
-        const effort = this.ports.resume.sessionEffort(session)
-        const spec = buildClaudeSpawnSpec({
-          name, model: session.model, effort, sessionId,
-          claudeSessionId: session.agent_session_id, resume: !!session.agent_session_id,
-          workdir: session.workdir,
-        })
-        const target = await sessionBackend.create({ group: tmuxSession, name, cwd: session.workdir, ...spec, cols: 80, rows: 24 })
-        resumedRuntimeTargetId = target.id
-        resumedRuntimePid = target.pid
-        void sendChannelConsentEnter(target.id, { backend: sessionBackend })
+        const agentHome = session.agent_home || claudeSessionHome(name)
+        await this.resumeClaudeCoreArm({ ...session, agent_home: agentHome }, name)
+        this.registry.sessions.setCore(sessionId, true)
+        this.registry.sessions.setAgentHome(sessionId, agentHome)
       } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
         await this.ports.resume.bind(sessionId)
         await this.resumeCodexArm({ ...session, agent_home: session.agent_home }, name)
@@ -1284,9 +1410,15 @@ export class SessionManager {
     }
   }
 
-  /** Broker boot: rebuild the in-process adapters for non-claude sessions.
-   *  (Claude sessions are reconciled by the supervisor: surviving panes
-   *  reattach via the shim; dead ones suspend.) Failures log and continue. */
+  /** Broker boot: re-attach or relaunch every ACTIVE session (suspended ones wake on demand).
+   *  (reconcileOnStartup runs first: a tmux-era Claude row with a surviving pane stays active and is
+   *  moved to Core here; one with neither pid nor pane is suspended.) Failures log and continue.
+   *
+   *  Sequential (one agent launch at a time, as before), but each session gets at most
+   *  `bootResumeTimeoutMs`: a resume that never settles (2026-10-05: a Codex keeper lost in
+   *  setup hung `core.sessions.resume` and the web port never opened) is left running in the
+   *  background, logged `boot_resume_timeout`, and boot moves on. Its own ok/failed line is
+   *  still logged if it settles later. */
   async resumeAtBoot(): Promise<void> {
     // No git: leave every session listed (suspended rows stay suspended) and come back for them
     // when the requirement monitor finds git.
@@ -1296,67 +1428,108 @@ export class SessionManager {
       return
     }
     for (const s of this.registry.list()) {
-      if (s.agent === "codex") {
-        if (!s.agent_session_id || !s.agent_home) {
-          log.warn("codex_resume_skip", { name: s.name, reason: "missing agent_session_id or agent_home" })
-          continue
+      // Only sessions that were running: a suspended one stays asleep and resumes lazily on its
+      // next message (resumeSuspended), so boot never starts agents nobody is using.
+      if (s.status === "suspended") continue
+      // A draft has no conversation yet; its agent starts when it is first sent.
+      if (s.user_status === "draft") continue
+      const work = this.resumeOneAtBoot(s)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timedOut = await Promise.race([
+        work.then(() => false),
+        new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), this.bootResumeTimeoutMs) }),
+      ])
+      clearTimeout(timer)
+      if (timedOut) log.warn("boot_resume_timeout", { name: s.name, agent: s.agent, timeout_ms: this.bootResumeTimeoutMs })
+    }
+  }
+
+  /** One session of resumeAtBoot. Never rejects: every outcome is logged here. */
+  private async resumeOneAtBoot(s: ReturnType<Registry["list"]>[number]): Promise<void> {
+    if (s.agent === "claude") {
+      const agentHome = s.agent_home || claudeSessionHome(s.name)
+      try {
+        if (s.agent_session_id) {
+          await this.resumeClaudeCoreArm({ ...s, agent_home: agentHome }, s.name)
+        } else {
+          await this.resumeClaudeCoreArm({ ...s, agent_home: agentHome, agent_session_id: undefined }, s.name)
         }
-        try {
-          const handle = await this.resumeCodexArm({ ...s, agent_home: s.agent_home }, s.name)
-          if (s.status === "suspended") this.registry.sessions.activate(s.id, handle.pid ?? process.pid)
-          log.info("codex_resume_ok", { name: s.name, thread: s.agent_session_id })
-        } catch (err: any) {
-          log.warn("codex_resume_failed", { name: s.name, err: String(err) })
-        }
-      } else if (s.agent === "cursor") {
-        // Cursor sessions are per-turn — no persistent process. The adapter
-        // just needs agent_home (config + auth dir). agent_session_id may be
-        // absent if the session never received a first message yet; that's OK —
-        // initialSessionId=undefined means the first turn starts fresh.
-        if (!s.agent_home) {
-          log.warn("cursor_resume_skip", { name: s.name, reason: "missing agent_home" })
-          continue
-        }
-        try {
-          await this.resumeCursorArm({ ...s, agent_home: s.agent_home }, s.name)
-          if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
-          log.info("cursor_resume_ready", { name: s.name, session_id: s.agent_session_id ?? "(first turn pending)" })
-        } catch (err: any) {
-          log.warn("cursor_resume_failed", { name: s.name, err: String(err) })
-        }
-      } else if (s.agent === "opencode") {
-        // opencode's worker (in-process adapter + broker-child `opencode serve`)
-        // dies with the broker; without this respawn the row survives but the
-        // runtime is empty → inbound hits adapter_not_ready and never replies.
-        if (!s.agent_home) {
-          log.warn("opencode_resume_skip", { name: s.name, reason: "missing agent_home" })
-          continue
-        }
-        try {
-          const handle = await this.resumeOpenCodeArm({ ...s, agent_home: s.agent_home }, s.name)
-          if (s.status === "suspended") this.registry.sessions.activate(s.id, handle.pid ?? process.pid)
-          log.info("opencode_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
-        } catch (err: any) {
-          log.warn("opencode_resume_failed", { name: s.name, err: String(err) })
-        }
-      } else if (s.agent === AgentKind.Grok) {
-        // grok's worker (in-process adapter + `grok agent stdio` child) dies with
-        // the broker; same rationale as opencode. agent_home holds the private
-        // ~/.grok (config + credential path) the child needs.
-        if (!s.agent_home) {
-          log.warn("grok_resume_skip", { name: s.name, reason: "missing agent_home" })
-          continue
-        }
-        try {
-          await this.resumeGrokArm({ ...s, agent_home: s.agent_home }, s.name)
-          if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
-          log.info("grok_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
-        } catch (err: any) {
-          log.warn("grok_resume_failed", { name: s.name, err: String(err) })
-        }
+        this.registry.sessions.setCore(s.id, true)
+        this.registry.sessions.setAgentHome(s.id, agentHome)
+        if (s.status === "suspended") this.registry.sessions.activate(s.id, 0)
+        log.info("claude_core_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
+      } catch (err: any) {
+        log.warn("claude_core_resume_failed", { name: s.name, err: String(err) })
+      }
+    } else if (s.agent === "codex") {
+      if (!s.agent_session_id || !s.agent_home) {
+        log.warn("codex_resume_skip", { name: s.name, reason: "missing agent_session_id or agent_home" })
+        return
+      }
+      try {
+        await this.resumeCodexArm({ ...s, agent_home: s.agent_home }, s.name)
+        if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
+        log.info("codex_resume_ok", { name: s.name, thread: s.agent_session_id })
+      } catch (err: any) {
+        log.warn("codex_resume_failed", { name: s.name, err: String(err) })
+      }
+    } else if (s.agent === "cursor") {
+      // Cursor sessions are per-turn — no persistent process. The adapter
+      // just needs agent_home (config + auth dir). agent_session_id may be
+      // absent if the session never received a first message yet; that's OK —
+      // initialSessionId=undefined means the first turn starts fresh.
+      if (!s.agent_home) {
+        log.warn("cursor_resume_skip", { name: s.name, reason: "missing agent_home" })
+        return
+      }
+      try {
+        await this.resumeCursorArm({ ...s, agent_home: s.agent_home }, s.name)
+        if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
+        log.info("cursor_resume_ready", { name: s.name, session_id: s.agent_session_id ?? "(first turn pending)" })
+      } catch (err: any) {
+        log.warn("cursor_resume_failed", { name: s.name, err: String(err) })
+      }
+    } else if (s.agent === "opencode") {
+      // opencode's worker (in-process adapter + broker-child `opencode serve`)
+      // dies with the broker; without this respawn the row survives but the
+      // runtime is empty → inbound hits adapter_not_ready and never replies.
+      if (!s.agent_home) {
+        log.warn("opencode_resume_skip", { name: s.name, reason: "missing agent_home" })
+        return
+      }
+      try {
+        await this.resumeOpenCodeArm({ ...s, agent_home: s.agent_home }, s.name)
+        if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
+        log.info("opencode_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
+      } catch (err: any) {
+        log.warn("opencode_resume_failed", { name: s.name, err: String(err) })
+      }
+    } else if (s.agent === AgentKind.Grok) {
+      // grok's worker (in-process adapter + `grok agent stdio` child) dies with
+      // the broker; same rationale as opencode. agent_home holds the private
+      // ~/.grok (config + credential path) the child needs.
+      if (!s.agent_home) {
+        log.warn("grok_resume_skip", { name: s.name, reason: "missing agent_home" })
+        return
+      }
+      try {
+        await this.resumeGrokArm({ ...s, agent_home: s.agent_home }, s.name)
+        if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
+        log.info("grok_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
+      } catch (err: any) {
+        log.warn("grok_resume_failed", { name: s.name, err: String(err) })
       }
     }
   }
+}
+
+/** Longer than any healthy launch (Codex: `codex debug models` 15 s + keeper connect + setup
+ *  30 s + failed-start cleanup is about a minute), short enough that boot cannot stall. */
+export const BOOT_RESUME_TIMEOUT_MS = 90_000
+
+export function bootResumeTimeoutMs(env: string | undefined): number {
+  const value = Number(env)
+  return Number.isSafeInteger(value) && value > 0 ? value : BOOT_RESUME_TIMEOUT_MS
 }
 
 // ---- socket-op argument parsing (moved with the handlers from main.ts) ----

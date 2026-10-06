@@ -741,6 +741,8 @@ fun TimelineItemRow(
     onOpenFile: (FilePathRef) -> Unit = {},
     highDetail: Boolean = false,
     onOpenWalkthrough: () -> Unit = {},
+    /** Expansion + actions for subagent cards; null = local expansion, no actions (previews). */
+    subagentUi: SubagentUi? = null,
 ) {
     when (item) {
         is TimelineItem.Msg -> {
@@ -759,8 +761,19 @@ fun TimelineItemRow(
                     horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
                 ) {
                     if (!text.isNullOrBlank()) {
-                        if (isUser) {
+                        val toSubagent = item.entry.subagent_id
+                        if (isUser && toSubagent != null) {
+                            // A message to a subagent: a compact marker that opens its card.
+                            SubagentMarker(
+                                entryId = item.entry.id,
+                                text = text,
+                                name = subagentUi?.nameOf?.invoke(toSubagent),
+                                onOpen = subagentUi?.let { ui -> { ui.open(toSubagent) } },
+                            )
+                        } else if (isUser) {
                             UserMessage(text)
+                        } else if (dev.supermux.ui.accounts.isAccountNotice(text)) {
+                            dev.supermux.ui.accounts.AccountNoticeRow(text)
                         } else if (text.startsWith("📖 Walkthrough ready")) {
                             WalkthroughReadyCard(text, onOpenWalkthrough)
                         } else {
@@ -788,6 +801,119 @@ fun TimelineItemRow(
                 )
             }
         }
+        is TimelineItem.Activity -> {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = Space.xs),
+            ) {
+                ActivityKindCard(item.event)
+            }
+        }
+        is TimelineItem.SubagentCard -> {
+            val id = item.subagent.id
+            var localOpen by remember(id) { mutableStateOf(false) }
+            SubagentCard(
+                item = item,
+                expanded = subagentUi?.isExpanded?.invoke(id) ?: localOpen,
+                onToggle = { if (subagentUi != null) subagentUi.onToggle(id) else localOpen = !localOpen },
+                actions = subagentUi?.actions ?: SubagentActions(),
+                loadBytes = loadBytes,
+                onOpenFile = onOpenFile,
+                highDetail = highDetail,
+                unread = subagentUi?.unread?.invoke(item.subagent) ?: 0,
+            )
+        }
+    }
+}
+
+@Composable
+fun ActivityKindCard(event: ActivityEvent) {
+    when (event.kind) {
+        "reasoning" -> ReasoningCard(event)
+        "plan" -> PlanCard(event)
+        // Agent-kind tasks are subagents, which have their own card now (S3).
+        "task" -> if (!isAgentTask(event)) TaskCard(event)
+        else -> {}
+    }
+}
+
+/** `agent` / `subagent` / `collab` task rows (the broker writes "<kind> <phase>" in detail). */
+internal fun isAgentTask(event: ActivityEvent): Boolean {
+    val kind = event.taskKind ?: event.detail?.substringBefore(' ')
+    return kind == "agent" || kind == "subagent" || kind == "collab"
+}
+
+@Composable
+private fun ReasoningCard(event: ActivityEvent) {
+    val cs = MaterialTheme.colorScheme
+    val redacted = event.redacted == true || event.title?.contains("redacted", ignoreCase = true) == true
+    var expanded by remember { mutableStateOf(false) }
+    val canExpand = !redacted && !event.detail.isNullOrBlank()
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .testTag("activity-reasoning")
+            .clickable(enabled = canExpand) { expanded = !expanded }
+            .padding(vertical = 2.dp),
+    ) {
+        Text(
+            if (redacted) "Thinking (redacted)" else "Thinking…",
+            style = MaterialTheme.typography.labelMedium,
+            color = cs.onSurfaceVariant,
+        )
+        AnimatedVisibility(visible = expanded && canExpand) {
+            Text(
+                event.detail.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = cs.onSurfaceVariant,
+                modifier = Modifier.padding(top = Space.xs),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlanCard(event: ActivityEvent) {
+    val cs = MaterialTheme.colorScheme
+    val lines = event.detail.orEmpty().lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+    Column(Modifier.fillMaxWidth().testTag("activity-plan").padding(vertical = 2.dp)) {
+        Text(event.title ?: "Plan", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+        lines.forEachIndexed { i, line ->
+            val text = line.replace(Regex("^(pending|completed|in_progress|failed):\\s*"), "")
+            Text("${i + 1}. $text", style = MaterialTheme.typography.bodySmall, color = cs.onSurface)
+        }
+    }
+}
+
+@Composable
+private fun TaskCard(event: ActivityEvent) {
+    val cs = MaterialTheme.colorScheme
+    val status = when {
+        event.phase == "failed" || event.title.equals("error", ignoreCase = true) -> "failed"
+        event.phase == "started" -> "started"
+        else -> "completed"
+    }
+    val pillColor = when (status) {
+        "failed" -> cs.error
+        "started" -> cs.tertiary
+        else -> cs.primary
+    }
+    Row(
+        Modifier.fillMaxWidth().testTag("activity-task").padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+    ) {
+        Text(event.title ?: event.taskKind ?: "task", style = MaterialTheme.typography.labelMedium)
+        Text(
+            status,
+            style = MaterialTheme.typography.labelSmall,
+            color = pillColor,
+            modifier = Modifier
+                .clip(RoundedCornerShape(Radii.sm))
+                .background(pillColor.copy(alpha = 0.15f))
+                .padding(horizontal = Space.sm, vertical = 2.dp),
+        )
     }
 }
 

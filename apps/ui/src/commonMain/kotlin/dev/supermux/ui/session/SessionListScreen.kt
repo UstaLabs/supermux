@@ -187,6 +187,8 @@ fun SessionListScreen(
     /** Bare sessionId → ISO last_read_at (server + optimistic local marks). */
     lastRead: Map<String, String> = emptyMap(),
     agentState: Map<String, AgentStatus?> = emptyMap(),
+    /** session id → running subagents (only sessions with any); drives the "2 agents" tag. */
+    runningAgents: Map<String, Int> = emptyMap(),
     /** session id → display name for multi-agent child rows; defaults from [sessions]. */
     sessionNames: Map<String, String> = emptyMap(),
     /** session id → role; a `personal_assistant` primary pins its workspace. Defaults from [sessions]. */
@@ -636,6 +638,8 @@ fun SessionListScreen(
                         onMute(sid, !(primary?.mute ?: false))
                     },
                     onChildClick = { sid -> openChild(w.id, sid) },
+                    runningAgents = (listOfNotNull(model.primarySessionId) + model.children.map { it.sessionId })
+                        .distinct().sumOf { runningAgents[it] ?: 0 },
                 )
                 // A multi-agent workspace lists its chats inline underneath the row.
                 if (model.multiAgent) {
@@ -647,6 +651,7 @@ fun SessionListScreen(
                     ) {
                         for (child in model.children) {
                             WorkspaceChildRow(
+                                runningAgents = runningAgents[child.sessionId] ?: 0,
                                 name = names[child.sessionId] ?: child.sessionId,
                                 working = agentTyped[child.sessionId]?.working == true,
                                 unread = sessionListShowsUnread(
@@ -880,6 +885,7 @@ fun SessionListScreen(
                         lastReadAt = lastRead[s.id],
                         working = agentState[s.id]?.working == true,
                         bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                        runningAgents = runningAgents[s.id] ?: 0,
                         host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                         openSwipeRowId = openSwipeRowId,
                         onOpenSwipeRowChange = onOpenSwipeRowChange,
@@ -915,6 +921,7 @@ fun SessionListScreen(
                                 lastReadAt = lastRead[s.id],
                                 working = agentState[s.id]?.working == true,
                                 bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                                runningAgents = runningAgents[s.id] ?: 0,
                                 host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                 projectTag = projectLabel(s, effectiveHome),
                                 openSwipeRowId = openSwipeRowId,
@@ -942,6 +949,7 @@ fun SessionListScreen(
                                 lastReadAt = lastRead[s.id],
                                 working = agentState[s.id]?.working == true,
                                 bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                                runningAgents = runningAgents[s.id] ?: 0,
                                 host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                 projectTag = projectLabel(s, effectiveHome),
                                 isDragging = isDragging,
@@ -1006,6 +1014,7 @@ fun SessionListScreen(
                         lastReadAt = lastRead[s.id],
                         working = agentState[s.id]?.working == true,
                         bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                        runningAgents = runningAgents[s.id] ?: 0,
                         host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                         openSwipeRowId = openSwipeRowId,
                         onOpenSwipeRowChange = onOpenSwipeRowChange,
@@ -1030,6 +1039,7 @@ fun SessionListScreen(
                             lastReadAt = lastRead[s.id],
                             working = agentState[s.id]?.working == true,
                             bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                            runningAgents = runningAgents[s.id] ?: 0,
                             host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                             openSwipeRowId = openSwipeRowId,
                             onOpenSwipeRowChange = onOpenSwipeRowChange,
@@ -1451,7 +1461,7 @@ private fun ArchivedGroupLabel(label: String, trailing: (@Composable () -> Unit)
 
 /** Indented child session under a multi-agent workspace (desktop's sidebar). */
 @Composable
-private fun WorkspaceChildRow(name: String, working: Boolean, unread: Boolean, onClick: () -> Unit) {
+private fun WorkspaceChildRow(name: String, working: Boolean, unread: Boolean, onClick: () -> Unit, runningAgents: Int = 0) {
     val cs = MaterialTheme.colorScheme
     Row(
         Modifier
@@ -1472,6 +1482,7 @@ private fun WorkspaceChildRow(name: String, working: Boolean, unread: Boolean, o
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+        RunningAgentsTag(runningAgents, Modifier.padding(start = 8.dp))
     }
 }
 

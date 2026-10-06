@@ -26,8 +26,8 @@ registry.register({
   name: TEST_SESSION_NAME,
   agent: "claude",
   workdir,
-  tmux_target: `test:${TEST_SESSION_NAME}`,
   pid: 0,
+  core: true,
 })
 db.close()
 

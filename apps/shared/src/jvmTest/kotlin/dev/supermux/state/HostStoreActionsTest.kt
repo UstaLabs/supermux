@@ -110,9 +110,10 @@ class HostStoreActionsTest {
 
     @Test fun spawnPostsTrimmedWorkdir() = runBlocking {
         val f = fixture(httpScope())
-        f.store.spawn("  /tmp/proj  ", "  n  ", "claude")
+        f.store.spawn("  /tmp/proj  ", "  n  ", "claude", permissionMode = "ask")
         waitUntil { f.seen.any { it == "POST /sessions" } }
         assertTrue(f.bodies.any { it.contains("\"workdir\":\"/tmp/proj\"") }, f.bodies.toString())
+        assertTrue(f.bodies.any { it.contains("\"permissionMode\":\"ask\"") }, f.bodies.toString())
         f.store.close()
     }
 

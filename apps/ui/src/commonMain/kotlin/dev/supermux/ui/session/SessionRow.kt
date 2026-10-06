@@ -293,6 +293,8 @@ fun SessionRow(
     lastReadAt: String? = null,
     working: Boolean = false,
     bgOpen: Int = 0,
+    /** Running subagents — the "2 agents" tag. */
+    runningAgents: Int = 0,
     host: HostView? = null,
     projectTag: String? = null,
     modifier: Modifier = Modifier,
@@ -322,6 +324,7 @@ fun SessionRow(
         lastReadAt = lastReadAt,
         working = working,
         bgOpen = bgOpen,
+        runningAgents = runningAgents,
         host = host,
         projectTag = projectTag,
         modifier = modifier.then(dragModifier),
@@ -345,6 +348,7 @@ private fun PointerSessionRow(
     lastReadAt: String?,
     working: Boolean,
     bgOpen: Int,
+    runningAgents: Int,
     host: HostView?,
     projectTag: String?,
     modifier: Modifier,
@@ -439,6 +443,10 @@ private fun PointerSessionRow(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
+                        if (runningAgents > 0) {
+                            Spacer(Modifier.width(Space.sm))
+                            RunningAgentsTag(runningAgents)
+                        }
                         if (projectTag != null) {
                             Spacer(Modifier.width(Space.sm))
                             Text(

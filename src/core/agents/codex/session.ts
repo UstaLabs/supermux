@@ -1,21 +1,18 @@
 import { deriveName, ensureUnique } from "../../session-manager/naming"
-import { shimSpawnSpec } from "../../session-manager/shim-spawn"
-import { captureBaseCommits, HOME } from "../../session-manager/spawn-helper"
+import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
-import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigChange } from "../session-types"
+import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
 import type { CodexRpc } from "../../slash-commands/types"
-import { resolveCodexAuth } from "./auth"
-import { writeCodexConfig } from "./config-writer"
-import { writeCodexPreamble } from "./preamble-writer"
-import { spawnCodexAppServer, type CodexSpawnHandle } from "./spawn"
-import { CodexAdapter } from "./adapter"
-import { codexSpawnArgs, codexPrepareSessionHome } from "../../plugins"
+import { CoreAdapter, CODEX_CORE_PROFILE } from "../core-bridge/core-adapter"
+import { getCodexCoreHost } from "./core-host-provider"
+import { attachCodexRuntimeAdapter, BROKER_CODEX_ARGS, type CodexCoreHost, type CodexPrepareExtra } from "./core-host"
+import { resolveCommand } from "../../process/launcher"
 import { join } from "path"
-import { mkdirSync } from "fs"
 import { randomUUID } from "crypto"
-import { STATE_DIR, SOCKETS_DIR } from "../../../shared/paths"
+import { STATE_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
-import { home } from "../../../shared/home"
+import { resolvePermissionMode } from "../permission-modes"
+import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
 /** Slash-command discovery context: the live app-server JSON-RPC client.
  * A session uses its own adapter's client; a launcher preview (no session of
@@ -29,49 +26,135 @@ export function commandContext(ctx: CommandContextCtx): CodexRpc | undefined {
   return undefined
 }
 
+export type CodexSessionAdapter = CoreAdapter
+
+function resolveHost(explicit?: CodexCoreHost): CodexCoreHost {
+  return explicit ?? getCodexCoreHost()
+}
+
+function asError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err))
+}
+
+function isSessionBusy(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "session_busy"
+}
+
+/** The app-server args a broker Codex session registers (C3: the policy and the plugins are no
+ *  longer here: the core adds the session's policy per process, plugins ride the context). */
+export function brokerCodexArgs(_sessionName: string): string[] {
+  return [...BROKER_CODEX_ARGS]
+}
+
+function resolveCodexCommand(env: Record<string, string>): string {
+  return resolveCommand(["codex"], env, process.platform) ?? "codex"
+}
+
+function persistNativeId(
+  onThreadId: ((name: string, sid: string) => void) | undefined,
+  name: string,
+): (sid: string) => Promise<void> {
+  return async (sid) => { onThreadId?.(name, sid) }
+}
+
+function createBoundAdapter(opts: {
+  handle: HostHandle
+  reregister: (fields: { model?: string; permissionMode?: string }) => HostHandle
+  core: Core
+  id: string
+  sessionName: string
+  workdir: string
+  model?: string
+  effort?: string
+  permissionMode?: string
+  initialSessionId?: string
+  persistSessionId: (sid: string) => Promise<void>
+  resolveAttachment?: (file_id: string) => Promise<string>
+}): CoreAdapter {
+  const adapter = new CoreAdapter(CODEX_CORE_PROFILE, {
+    handle: opts.handle,
+    reregister: opts.reregister,
+    core: opts.core,
+    id: opts.id,
+    sessionName: opts.sessionName,
+    workdir: opts.workdir,
+    model: opts.model,
+    effort: opts.effort,
+    permissionMode: opts.permissionMode,
+    initialSessionId: opts.initialSessionId,
+    persistSessionId: opts.persistSessionId,
+    resolveAttachment: opts.resolveAttachment,
+  })
+  attachCodexRuntimeAdapter(opts.id, adapter)
+  return adapter
+}
+
+function prepareExtra(opts: {
+  id: string
+  sessionName: string
+  sessionHome: string
+  workdir: string
+  nativeSessionId?: string
+  permissionMode?: string
+}): CodexPrepareExtra {
+  return {
+    sessionHome: opts.sessionHome,
+    sessionName: opts.sessionName,
+    sessionId: opts.id,
+    workdir: opts.workdir,
+    cwd: opts.workdir,
+    nativeSessionId: opts.nativeSessionId,
+    permissionMode: opts.permissionMode,
+  }
+}
+
+/** Codex's worker is an in-process CoreAdapter driving app-server via a
+ * process-owned CodexCoreHost. Private-home writes (auth, config.toml, preamble)
+ * run in the host prepare hook, after admission. */
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const base = args.requestedName ?? deriveName(args.workdir)
-  // PA spawns keep the exact requested name (the row may already exist).
   const name = args.pa ? base : ensureUnique(base, deps.registry.takenNames())
   const id = args.id ?? randomUUID()
   if (!args.pa) deps.registry.reserveName(name)
+
+  const host = resolveHost(deps.codexHost)
+  const sessionHome = join(STATE_DIR, "agents", "codex", name)
+  const permissionMode = resolvePermissionMode(AgentKind.Codex, args.permissionMode)
+  const handle = host.register({
+    ...(args.account ? { account: args.account } : {}),
+    id,
+    env: {},
+    command: resolveCodexCommand({}),
+    args: brokerCodexArgs(name),
+    extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, permissionMode }),
+  })
+  let adapter: CoreAdapter | undefined
   try {
-    const sessionHome = join(STATE_DIR, "agents", "codex", name)
-    mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
-
-    const auth = await resolveCodexAuth({
-      apiKey: process.env.OPENAI_API_KEY,
-      userCodexHome: join(HOME, ".codex"),
-      sessionCodexHome: sessionHome,
-    })
-
-    writeCodexConfig({
-      codexHome: sessionHome,
-      ...shimSpawnSpec(),
-      sessionName: name,
-      socketsDir: SOCKETS_DIR,
-      sessionId: id,
-    })
-    writeCodexPreamble({ codexHome: sessionHome, sessionName: name, workdir: args.workdir })
-
     await deps.bind(id)
 
-    // Install enabled plugins into this session's CODEX_HOME so skills/list +
-    // native invocation see them (the `-c enabled` flag needs them installed).
-    await codexPrepareSessionHome(sessionHome)
-    const handle = spawnCodexAppServer({
-      codexHome: sessionHome,
+    adapter = createBoundAdapter({
+      handle,
+      reregister: (fields) => host.register({
+        id,
+        env: {},
+        command: resolveCodexCommand({}),
+        args: brokerCodexArgs(name),
+        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, permissionMode: fields.permissionMode }),
+      }),
+      core: host.core,
+      id,
+      sessionName: name,
       workdir: args.workdir,
-      authEnv: auth.env,
       model: args.model,
-      reasoningLevel: args.effort,
-      pluginConfigArgs: codexSpawnArgs({ sessionName: name }).args,
+      effort: args.effort,
+      persistSessionId: persistNativeId(deps.onThreadId, name),
+      resolveAttachment: deps.resolveAttachment,
+      permissionMode,
     })
 
-    // Register BEFORE adapter.start() so the persistThreadId callback
-    // (which does registry.resolveName(name)) can find the entry. Previously
-    // register was after start, so the callback saw undefined and the
-    // thread ID was silently lost — breaking resume on broker restart.
+    // Register BEFORE adapter.start(): start() completes the native handshake, which
+    // fires persistThreadId — that callback resolves the row by name, so the row
+    // must already exist or the thread id is lost (breaking resume).
     if (args.pa) {
       if (!args.pa.skipRegister) {
         deps.registry.registerPA({
@@ -81,10 +164,11 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
           workdir: args.workdir,
           model: args.model,
           reasoningLevel: args.reasoningLevel,
-          pid: handle.pid,
+          pid: 0,
           is_default: deps.registry.listPAs().length === 0,
           agent_home: sessionHome,
           base_commits: captureBaseCommits(args.workdir),
+          permissionMode,
         })
       }
     } else {
@@ -92,103 +176,140 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         id,
         name,
         workdir: args.workdir,
-        pid: handle.pid,
+        pid: 0,
         agent: AgentKind.Codex,
         agent_home: sessionHome,
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
-      } as any)
+        permissionMode,
+        account: args.account,
+      } as never)
     }
 
-    const adapter = new CodexAdapter({
-      sessionName: name,
-      workdir: args.workdir,
-      client: handle.client,
-      persistThreadId: async (threadId) => {
-        deps.onThreadId?.(name, threadId)
-      },
-      initialThreadId: undefined,
+    await adapter.start()
+  } catch (err) {
+    try {
+      if (adapter) await adapter.stop()
+      else await handle.stop({ mode: "shutdown" })
+    } catch {
+      // Failed stop leaves failed-cleanup on the host; the original error is the one to report.
+    }
+    // A failed spawn must not leave a dead row or a held name behind: the
+    // row was registered before start so the native-id callback could find
+    // it, and the reservation is what a retry needs back.
+    if (!args.pa) deps.registry.releaseName(name)
+    if (!args.pa?.skipRegister && deps.registry.get(id)) deps.registry.unregister(id)
+    throw err
+  }
+
+  deps.registerAdapter?.(name, adapter, { onExit: () => {} })
+
+  return { name, session_id: id, model: args.model, pid: 0 }
+}
+
+/** Rebuild a Codex session's adapter after a broker restart. Native history
+ * lives under the session-private home; resume adopts the existing broker id
+ * and native session id, then exact-resumes. A failed load does not mint a
+ * new conversation. Self-heals private config, credentials and preamble. */
+export async function resumeCodexSession(
+  deps: {
+    resolveAttachment?: (file_id: string) => Promise<string>
+    onThreadId?: (name: string, sid: string) => void
+    codexHost?: CodexCoreHost
+  },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string; permissionMode?: string },
+): Promise<{ adapter: CoreAdapter }> {
+  const host = resolveHost(deps.codexHost)
+  const sessionHome = session.agent_home
+  const initialSessionId = session.agent_session_id || undefined
+  const handle = host.register({
+    id: session.id,
+    env: {},
+    command: resolveCodexCommand({}),
+    args: brokerCodexArgs(session.name),
+    extra: prepareExtra({
+      id: session.id,
+      sessionName: session.name,
+      sessionHome,
+      workdir: session.workdir,
+      nativeSessionId: initialSessionId,
+      permissionMode: session.permissionMode ?? undefined,
+    }),
+  })
+  let adapter: CoreAdapter | undefined
+  try {
+    adapter = createBoundAdapter({
+      handle,
+      reregister: (fields) => host.register({
+        id: session.id,
+        env: {},
+        command: resolveCodexCommand({}),
+        args: brokerCodexArgs(session.name),
+        extra: prepareExtra({
+          id: session.id,
+          sessionName: session.name,
+          sessionHome,
+          workdir: session.workdir,
+          nativeSessionId: initialSessionId,
+          permissionMode: fields.permissionMode,
+        }),
+      }),
+      core: host.core,
+      id: session.id,
+      sessionName: session.name,
+      workdir: session.workdir,
+      model: session.model,
+      effort: session.effort,
+      permissionMode: session.permissionMode ?? undefined,
+      initialSessionId,
+      persistSessionId: persistNativeId(deps.onThreadId, session.name),
       resolveAttachment: deps.resolveAttachment,
     })
-
-    await adapter.start()
-
-    deps.registerAdapter?.(name, adapter, handle)
-
-    return { name, session_id: id, model: args.model, pid: handle.pid }
+    if (initialSessionId) await adapter.resume()
+    else await adapter.start()
+    return { adapter }
   } catch (err) {
+    try {
+      if (adapter) await adapter.stop()
+      else await handle.stop({ mode: "shutdown" })
+    } catch {
+      // Failed stop leaves failed-cleanup on the host; the original error is the one to report.
+    }
     throw err
   }
 }
 
-/** Dialect half of resume; the SessionManager registers + wires the result. */
-export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CodexAdapter; handle: CodexSpawnHandle }> {
-  const auth = await resolveCodexAuth({
-    apiKey: process.env.OPENAI_API_KEY,
-    userCodexHome: join(home(), ".codex"),
-    sessionCodexHome: session.agent_home,
-  })
-  await codexPrepareSessionHome(session.agent_home)
-  writeCodexPreamble({ codexHome: session.agent_home, sessionName: name, workdir: session.workdir })
-  const effort = ctx.sessionEffort(session)
-  const handle = spawnCodexAppServer({
-    codexHome: session.agent_home,
-    workdir: session.workdir,
-    authEnv: auth.env,
-    model: session.model,
-    reasoningLevel: effort,
-    pluginConfigArgs: codexSpawnArgs({ sessionName: name }).args,
-  })
-  const adapter = new CodexAdapter({
-    sessionName: name,
-    workdir: session.workdir,
-    client: handle.client,
-    persistThreadId: async () => {},
-    initialThreadId: session.agent_session_id,
-    resolveAttachment: ctx.resolveAttachment,
-  })
-  await adapter.resume()
-  return { adapter, handle }
-}
-
-/** Dialect half of a model/effort change: codex has no live setter, so this is
- * a FULL respawn of the app-server with the new flags (same flag set as
- * resume, minus the preamble rewrite). The SessionManager kills the old
- * runtime first and swaps in the returned one (state half), so callers never
- * hold a half-dead adapter. Reads the DESIRED config off the session row —
- * the component already persisted it. */
 export async function applyConfig(
   ctx: ApplyConfigCtx,
-  session: ResumeRow,
-  name: string,
-  _change: ApplyConfigChange,
-): Promise<{ ok: true; runtime: { adapter: CodexAdapter; handle: CodexSpawnHandle } }> {
-  const auth = await resolveCodexAuth({
-    apiKey: process.env.OPENAI_API_KEY,
-    userCodexHome: join(home(), ".codex"),
-    sessionCodexHome: session.agent_home,
-  })
-  await codexPrepareSessionHome(session.agent_home)
-  const handle = spawnCodexAppServer({
-    codexHome: session.agent_home,
-    workdir: session.workdir,
-    authEnv: auth.env,
-    model: session.model,
-    reasoningLevel: ctx.sessionEffort(session),
-    pluginConfigArgs: codexSpawnArgs({ sessionName: name }).args,
-  })
-  const adapter = new CodexAdapter({
-    sessionName: name,
-    workdir: session.workdir,
-    client: handle.client,
-    persistThreadId: async () => {},
-    initialThreadId: session.agent_session_id,
-    resolveAttachment: ctx.resolveAttachment,
-  })
-  if (session.agent_session_id) {
-    await adapter.resume()
-  } else {
-    await adapter.start()
+  _session: ApplyConfigRow,
+  _name: string,
+  change: ApplyConfigChange,
+): Promise<ApplyConfigResult> {
+  const adapter = ctx.adapter
+  const live = adapter && typeof (adapter as CoreAdapter).setConfiguration === "function"
+    ? adapter as CoreAdapter
+    : undefined
+  if (!live) return { ok: false, error: "codex session has no live adapter" }
+  const patch: { model?: string; effort?: string } = {}
+  if (change.changed?.model !== false && change.model) patch.model = change.model
+  if (change.changed?.effort !== false && "effort" in change) patch.effort = change.effort
+  if (!("model" in patch) && !("effort" in patch)) return { ok: true }
+  try {
+    await live.setConfiguration(patch)
+    return { ok: true }
+  } catch (err) {
+    if (isSessionBusy(err)) return { ok: false, busy: true }
+    return { ok: false, error: asError(err).message }
   }
-  return { ok: true, runtime: { adapter, handle } }
+}
+
+export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreAdapter }> {
+  return resumeCodexSession(
+    {
+      resolveAttachment: ctx.resolveAttachment,
+      onThreadId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
+      codexHost: ctx.codexHost,
+    },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), agent_session_id: session.agent_session_id, permissionMode: session.permissionMode ?? undefined },
+  )
 }

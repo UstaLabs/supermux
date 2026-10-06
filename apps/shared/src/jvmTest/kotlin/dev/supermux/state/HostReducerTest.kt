@@ -5,6 +5,8 @@ import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.PromptRequest
+import dev.supermux.proto.PromptRequestOption
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
@@ -237,6 +239,84 @@ class HostReducerTest {
         val b = reduceHostFrame(a, ServerFrame.DisplayAdded(d1b))
         assertEquals(1, b.displays.size)
         assertEquals("errored", b.displays.single().status)
+    }
+
+    private fun prompt(id: String = "r1", label: String = "Allow once") = PromptRequest(
+        requestId = id,
+        kind = "permission",
+        title = "Bash",
+        body = "ls",
+        options = listOf(
+            PromptRequestOption(id = "allow_once", label = label, kind = "allow_once"),
+            PromptRequestOption(id = "reject_once", label = "Reject", kind = "reject_once"),
+        ),
+    )
+
+    @Test fun snapshotSeedsRequests() {
+        val req = prompt()
+        val out = reduceHostFrame(
+            HostState(),
+            ServerFrame.Snapshot(requests = mapOf("s1" to listOf(req))),
+        )
+        assertEquals(listOf("r1"), out.requests["s1"]?.map { it.requestId })
+    }
+
+    @Test fun requestOpenAppendsAndDedupesByRequestId() {
+        val first = reduceHostFrame(HostState(), ServerFrame.RequestOpen("s1", prompt()))
+        assertEquals(1, first.requests["s1"]?.size)
+        val dup = reduceHostFrame(first, ServerFrame.RequestOpen("s1", prompt()))
+        assertEquals(1, dup.requests["s1"]?.size)
+        val second = reduceHostFrame(dup, ServerFrame.RequestOpen("s1", prompt("r2")))
+        assertEquals(listOf("r1", "r2"), second.requests["s1"]?.map { it.requestId })
+    }
+
+    @Test fun requestClosedRemovesAndRecordsAnsweredLine() {
+        val open = reduceHostFrame(HostState(), ServerFrame.RequestOpen("s1", prompt()))
+        val closed = reduceHostFrame(open, ServerFrame.RequestClosed("s1", "r1", "answered", "Allow always"))
+        assertEquals(null, closed.requests["s1"])
+        assertEquals("answered: Allow always", closed.messages["s1"]?.last()?.text)
+        assertEquals("Allow always", closed.closedRequests["s1"]?.single()?.answerLabel)
+    }
+
+    /** The bug this replaced: the line was guessed from the first allow option, so a
+     *  rejection still read "answered: Allow once". */
+    @Test fun requestClosedLineStatesTheRejection() {
+        val open = reduceHostFrame(HostState(), ServerFrame.RequestOpen("s1", prompt()))
+        val closed = reduceHostFrame(open, ServerFrame.RequestClosed("s1", "r1", "answered", "Reject once"))
+        assertEquals("answered: Reject once", closed.messages["s1"]?.last()?.text)
+    }
+
+    /** An old broker sends no label: say "answered", never a guess. */
+    @Test fun requestClosedWithoutLabelSaysOnlyAnswered() {
+        val open = reduceHostFrame(HostState(), ServerFrame.RequestOpen("s1", prompt()))
+        val closed = reduceHostFrame(open, ServerFrame.RequestClosed("s1", "r1", "answered"))
+        assertEquals("answered", closed.messages["s1"]?.last()?.text)
+    }
+
+    @Test fun closedRequestReceiptDropsWhenTheTranscriptMovesOn() {
+        val open = reduceHostFrame(HostState(), ServerFrame.RequestOpen("s1", prompt()))
+        val closed = reduceHostFrame(open, ServerFrame.RequestClosed("s1", "r1", "answered", "Allow once"))
+        assertEquals(1, closed.closedRequests["s1"]?.size)
+        val moved = reduceHostFrame(
+            closed,
+            ServerFrame.MessageAppend("s1", LogEntry(id = "m9", ts = "2024-01-01T00:00:00Z", direction = "outbound", text = "ok")),
+        )
+        assertEquals(null, moved.closedRequests["s1"])
+    }
+
+    @Test fun requestClosedExpiredAndCancelledLines() {
+        val open = reduceHostFrame(HostState(), ServerFrame.RequestOpen("s1", prompt()))
+        val expired = reduceHostFrame(open, ServerFrame.RequestClosed("s1", "r1", "expired"))
+        assertEquals("expired", expired.messages["s1"]?.last()?.text)
+        val open2 = reduceHostFrame(HostState(), ServerFrame.RequestOpen("s1", prompt()))
+        val cancelled = reduceHostFrame(open2, ServerFrame.RequestClosed("s1", "r1", "cancelled"))
+        assertEquals("cancelled", cancelled.messages["s1"]?.last()?.text)
+    }
+
+    @Test fun sessionStatePatchesPrompts() {
+        val s = HostState(sessions = listOf(sessionFixture("s1")))
+        val out = reduceHostFrame(s, ServerFrame.SessionState(session = "s1", permissionMode = "ask"))
+        assertEquals("ask", out.sessions.single().permissionMode)
     }
 
     @Test fun worktreeSizesMergeAndRemovedIdsAccumulate() {

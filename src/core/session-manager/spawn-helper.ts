@@ -4,11 +4,13 @@ import { preAcceptTrust } from "./trust"
 // erased at runtime. The dialect CODE lives in the agents/<kind>/session.ts
 // modules, dispatched through the agents map.
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
-import type { CodexAdapter } from "../agents/codex/adapter"
-import type { CursorAdapter } from "../agents/cursor/adapter"
+import type { CodexCoreHost } from "../agents/codex/core-host"
+import type { CursorCoreHost } from "../agents/cursor/core-host"
 import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
-import type { OpenCodeAdapter } from "../agents/opencode/adapter"
-import type { GrokAdapter } from "../agents/grok/adapter"
+import type { OpenCodeCoreHost } from "../agents/opencode/core-host"
+import type { GrokCoreHost } from "../agents/grok/core-host"
+import type { ClaudeCoreHost } from "../agents/claude/core-host"
+import type { CoreAdapter } from "../agents/core-bridge/core-adapter"
 // Dispatcher-only import: the per-agent session modules import types/helpers
 // back from this file, which is a benign cycle as long as neither side
 // dereferences the other at module-init time (functions + types only).
@@ -49,13 +51,19 @@ export type SpawnDeps = {
   resolveAttachment?: (file_id: string) => Promise<string>
   registerAdapter?: (
     name: string,
-    adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter | GrokAdapter,
+    adapter: CoreAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
+  grokHost?: GrokCoreHost
+  claudeHost?: ClaudeCoreHost
+  codexHost?: CodexCoreHost
+  opencodeHost?: OpenCodeCoreHost
+  cursorHost?: CursorCoreHost
   onThreadId?: (name: string, threadId: string) => void
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
   onGrokSessionId?: (name: string, sessionId: string) => void
+  onClaudeSessionId?: (name: string, sessionId: string) => void
 }
 
 export type SpawnArgs = {
@@ -65,6 +73,10 @@ export type SpawnArgs = {
   model?: string
   /** Explicit user override stored on the session. */
   reasoningLevel?: string
+  /** Catalog permission-mode id. Absent = the agent's catalog default. */
+  permissionMode?: string
+  /** Account id (validated by the caller). Absent = the agent's system account (today's login). */
+  account?: string
   /** Resolved CLI value (highest when unset). Passed by the broker caller. */
   effort?: string
   /** Mark the session as broker-internal (e.g. an agent-rpc worker) so it's
@@ -122,12 +134,18 @@ export async function spawnPA(opts: {
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
   onGrokSessionId?: (name: string, sessionId: string) => void
+  onClaudeSessionId?: (name: string, sessionId: string) => void
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
   registerAdapter?: (
     name: string,
-    adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter | GrokAdapter,
+    adapter: CoreAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
+  grokHost?: GrokCoreHost
+  claudeHost?: ClaudeCoreHost
+  codexHost?: CodexCoreHost
+  opencodeHost?: OpenCodeCoreHost
+  cursorHost?: CursorCoreHost
   resolveAttachment?: (file_id: string) => Promise<string>
   /** When provided, spawnPA skips registerPA (session already exists) and
    * updates the existing session's PID on completion. */
@@ -154,6 +172,10 @@ export async function spawnPA(opts: {
       tmuxSession: opts.tmuxSession,
       resolveAttachment: opts.resolveAttachment,
       registerAdapter: opts.registerAdapter,
+      grokHost: opts.grokHost,
+      codexHost: opts.codexHost,
+      opencodeHost: opts.opencodeHost,
+      cursorHost: opts.cursorHost,
       // PA thread-id persistence is keyed by the broker session id (the
       // supervisor writes setAgentSessionId directly); adapt codex's
       // name-keyed port to that contract.
@@ -161,6 +183,8 @@ export async function spawnPA(opts: {
       onCursorSessionId: opts.onCursorSessionId,
       onOpenCodeSessionId: opts.onOpenCodeSessionId,
       onGrokSessionId: opts.onGrokSessionId,
+      onClaudeSessionId: opts.onClaudeSessionId,
+      claudeHost: opts.claudeHost,
     },
     {
       workdir,
@@ -174,10 +198,8 @@ export async function spawnPA(opts: {
     },
   )
 
-  // A reused row keeps living (the fresh worker pid replaces the dead one);
-  // a fresh claude PA activates with its pane pid, exactly like before.
   if (skipRegister || agent === AgentKind.Claude) {
-    registry.sessions.activate(id, r.pid ?? process.pid)
+    registry.sessions.activate(id, r.pid ?? 0)
   }
   return { name: r.name, id: r.session_id }
 }

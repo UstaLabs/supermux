@@ -11,6 +11,7 @@ sealed interface UrlTarget {
 
 private val sectionSlugs = mapOf(
     SettingsSection.Agents to "agents",
+    SettingsSection.Accounts to "accounts",
     SettingsSection.Devices to "devices",
     SettingsSection.System to "system",
     SettingsSection.GitHosting to "git-hosting",

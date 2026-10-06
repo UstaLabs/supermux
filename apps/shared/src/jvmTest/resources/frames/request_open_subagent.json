@@ -1,0 +1,19 @@
+{
+  "type": "request_open",
+  "session": "s1",
+  "request": {
+    "requestId": "r7",
+    "kind": "permission",
+    "title": "Write",
+    "body": "Write /work/out.txt",
+    "options": [
+      { "id": "allow_once", "label": "Allow once", "kind": "allow_once" },
+      { "id": "reject_once", "label": "Reject", "kind": "reject_once" }
+    ],
+    "allowFreeText": false,
+    "blocking": true,
+    "subagentId": "a2b3c4",
+    "subagentName": "general-purpose",
+    "subagentDescription": "Write the report"
+  }
+}

@@ -187,6 +187,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -305,6 +306,10 @@ fun SupermuxApp(
     val archivedWorkspaces by fleet.archivedWorkspaces.collectAsState()
     val messages by fleet.messages.collectAsState()
     val agentState by fleet.agentState.collectAsState()
+    val subagentsBySession by fleet.subagents.collectAsState()
+    val runningAgents = remember(subagentsBySession) {
+        subagentsBySession.mapValues { dev.supermux.ui.chat.runningSubagentCount(it.value) }.filterValues { it > 0 }
+    }
     val lastRead by fleet.lastRead.collectAsState()
     val hostViews by fleet.hostViews.collectAsState()
     val sessionHost by fleet.sessionHost.collectAsState()
@@ -318,6 +323,7 @@ fun SupermuxApp(
 
     // The active host's app (host-global ops: spawn / archived / usage / settings).
     val hostApp = fleet.appForRecord(activeHostId) ?: fleet.activeApp()
+    val permissionCatalog by (hostApp?.permissionModes ?: flowOf(emptyMap())).collectAsState(emptyMap())
     val activeHostSessions = remember(sessions, sessionHost, hostViews, activeHostId) {
         if (hostViews.size >= 2 && activeHostId != null) {
             sessions.filter { sessionHost[it.id] == activeHostId }
@@ -570,6 +576,7 @@ fun SupermuxApp(
             onBack = onBack,
             lastBySession = lastBySession,
             actions = launcherActions,
+            permissionCatalog = permissionCatalog,
             loadPrefs = { uiPrefs.launcherPrefs.first() },
             onPrefsChange = { overlayScope.launch { uiPrefs.putLauncherPrefs(it) } },
             // A workspace tab keeps ITS OWN draft (just the text, in the tab's state) — never the
@@ -599,11 +606,11 @@ fun SupermuxApp(
             // doSubmit try/catch turns into the inline launcher_error text. The BROKER delivers
             // the first message (text + pre-uploaded files) with the spawn, so nothing about it
             // depends on this pane staying composed.
-            onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId ->
+            onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account ->
                 onCreated(
                     if (tab == null) {
                         launcherActions.createSessionWithFirstMessage(
-                            workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
+                            workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account,
                         )
                     } else {
                         // A workspace tab's composer: JOIN that workspace and fill this very tab.
@@ -612,6 +619,8 @@ fun SupermuxApp(
                             workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
                             workspaceId = tab.workspaceId,
                             viewId = tab.viewId,
+                            permissionMode = permissionMode,
+                            account = account,
                         )
                     },
                 )
@@ -756,6 +765,7 @@ fun SupermuxApp(
                                 lastBySession = lastBySession,
                                 lastRead = lastRead,
                                 agentState = agentState,
+                                runningAgents = runningAgents,
                                 onOpenSession = { _, sid -> ui.focusChatTab(sid) },
                                 actions = remember(listActions, workspaces) {
                                     listActions.withWorkspaceOps(

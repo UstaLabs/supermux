@@ -9,6 +9,8 @@ data class LauncherPrefs(
     val agent: String = "claude",
     val models: Map<String, String> = emptyMap(),
     val reasoningLevels: Map<String, String> = emptyMap(),
+    /** Last permission-mode id per agent. */
+    val permissionModes: Map<String, String> = emptyMap(),
     /**
      * Last location picked per persistent project, keyed by
      * [dev.supermux.workspace.projectLocationKey] (host + project id). A path that no longer

@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, unlinkSync } from 
 import { makeLogger } from "../../shared/log"
 import { home } from "../../shared/home"
 import { shimSpawnSpec } from "./shim-spawn"
+import { muxShimModeFor } from "../mux-tools/mode"
 
 const log = makeLogger("trust")
 
@@ -27,6 +28,68 @@ export function writeRpcWorkerMcpConfig(path: string): void {
     },
   }
   writeFileSync(path, JSON.stringify(config, null, 2))
+}
+
+type ShimEntry = { type: string; command: string; args: string[]; env: Record<string, string> }
+
+/** The two entries "external" mode writes into ~/.claude.json (this broker's shim spawn spec). */
+function brokerShimEntries(): Record<string, ShimEntry> {
+  const spec = shimSpawnSpec()
+  return {
+    [CLAUDE_SHIM_SERVER]: { type: "stdio", command: spec.shimCommand, args: spec.shimArgs, env: {} },
+    [CLAUDE_CHANNEL_SERVER]: { type: "stdio", command: spec.shimCommand, args: spec.shimArgs, env: { MUX_CHANNEL_ONLY: "1" } },
+  }
+}
+
+/** Is `cur` the entry this broker writes for `name` (same command, args and channel flag)? */
+function isBrokerEntry(name: string, cur: any, want: ShimEntry): boolean {
+  if (!cur || typeof cur !== "object") return false
+  return cur.command === want.command &&
+    Array.isArray(cur.args) && JSON.stringify(cur.args) === JSON.stringify(want.args) &&
+    (name === CLAUDE_CHANNEL_SERVER ? cur.env?.MUX_CHANNEL_ONLY === "1" : !cur.env?.MUX_CHANNEL_ONLY)
+}
+
+/**
+ * C3b "host" mode, once at boot (before any Claude launch): remove the broker's own `mux-shim` /
+ * `mux-channel` entries from ~/.claude.json, only when they are THIS broker's (its shim spawn
+ * spec, see isBrokerEntry). A user's server of that name, or another broker's (e.g. a second
+ * supermux install sharing the HOME), is left alone; so are every other server and key.
+ * Atomic (tmp + rename), writes nothing when there is nothing to remove, never throws.
+ * Returns the names removed.
+ */
+export function removeBrokerShimEntries(): string[] {
+  const path = `${home()}/.claude.json`
+  if (!existsSync(path)) return []
+  let config: any
+  try {
+    config = JSON.parse(readFileSync(path, "utf8"))
+  } catch (err) {
+    log.warn("malformed_claude_json_skipping_shim_cleanup", { path, err: String(err) })
+    return []
+  }
+  const servers = config?.mcpServers
+  if (!servers || typeof servers !== "object") return []
+  const removed: string[] = []
+  for (const [name, want] of Object.entries(brokerShimEntries())) {
+    if (isBrokerEntry(name, servers[name], want)) {
+      delete servers[name]
+      removed.push(name)
+    } else if (servers[name] !== undefined) {
+      log.warn("claude_json_foreign_shim_entry_kept", { name, command: String(servers[name]?.command ?? ""), args: JSON.stringify(servers[name]?.args ?? []) })
+    }
+  }
+  if (!removed.length) return []
+  const tmp = `${path}.tmp.${process.pid}`
+  try {
+    writeFileSync(tmp, JSON.stringify(config, null, 2))
+    renameSync(tmp, path)
+    log.info("claude_json_shim_entries_removed", { removed })
+    return removed
+  } catch (err) {
+    try { unlinkSync(tmp) } catch {}
+    log.error("claude_json_shim_cleanup_failed", { err: String(err) })
+    return []
+  }
 }
 
 // Atomically prepare ~/.claude.json before launching claude for `workdir`.
@@ -85,21 +148,15 @@ export function preAcceptTrust(workdir: string): void {
 
   // 2. Register the two shim MCP servers: tools (mux-shim) + channel-only
   //    (mux-channel, MUX_CHANNEL_ONLY=1). Only the tools one advertises tools.
-  config.mcpServers ??= {}
-  const spec = shimSpawnSpec()
-  const desired: Record<string, { type: string; command: string; args: string[]; env: Record<string, string> }> = {
-    [CLAUDE_SHIM_SERVER]: { type: "stdio", command: spec.shimCommand, args: spec.shimArgs, env: {} },
-    [CLAUDE_CHANNEL_SERVER]: { type: "stdio", command: spec.shimCommand, args: spec.shimArgs, env: { MUX_CHANNEL_ONLY: "1" } },
-  }
-  for (const [name, want] of Object.entries(desired)) {
-    const cur = config.mcpServers[name]
-    const wired =
-      cur && cur.command === want.command &&
-      Array.isArray(cur.args) && JSON.stringify(cur.args) === JSON.stringify(want.args) &&
-      (want.env.MUX_CHANNEL_ONLY ? cur.env?.MUX_CHANNEL_ONLY === "1" : !cur.env?.MUX_CHANNEL_ONLY)
-    if (!wired) {
-      config.mcpServers[name] = want
-      changed = true
+  //    C3b "host" mode: none; Claude gets mux-shim from its session context (the broker's host
+  //    server) and the entries are removed once at boot (removeBrokerShimEntries).
+  if (muxShimModeFor("claude") === "external") {
+    config.mcpServers ??= {}
+    for (const [name, want] of Object.entries(brokerShimEntries())) {
+      if (!isBrokerEntry(name, config.mcpServers[name], want)) {
+        config.mcpServers[name] = want
+        changed = true
+      }
     }
   }
 

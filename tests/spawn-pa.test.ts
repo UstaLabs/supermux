@@ -7,89 +7,40 @@ import { Registry } from "../src/core/session-manager/registry"
 import { spawnPA } from "../src/core/session-manager/spawn-helper"
 import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
+import { fakeCodexHost } from "./helpers/fake-codex-host"
+import { fakeOpenCodeHost } from "./helpers/fake-opencode-host"
+import { fakeCursorHost } from "./helpers/fake-cursor-host"
+import { fakeClaudeHost } from "./helpers/fake-claude-host"
 
 // Non-claude collaborators are swapped via bun module mocks (spawnPA has no
 // injection seams). mock.module is process-global: capture the real modules
 // first, restore them in afterAll so later test files see the real thing.
-const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
-const realCodexSpawn = { ...(await import("../src/core/agents/codex/spawn")) }
-const realCodexAdapter = { ...(await import("../src/core/agents/codex/adapter")) }
-const realCursorAuth = { ...(await import("../src/core/agents/cursor/auth")) }
-const realCursorSmoke = { ...(await import("../src/core/agents/cursor/smoke")) }
-const realCursorRunner = { ...(await import("../src/core/agents/cursor/runner")) }
-const realCursorAdapter = { ...(await import("../src/core/agents/cursor/adapter")) }
-const realOpenCodeSpawn = { ...(await import("../src/core/agents/opencode/spawn")) }
-const realOpenCodeAdapter = { ...(await import("../src/core/agents/opencode/adapter")) }
+const realCodexCoreHost = { ...(await import("../src/core/agents/codex/core-host-provider")) }
+const realCursorHost = { ...(await import("../src/core/agents/cursor/core-host-provider")) }
+const realOpenCodeHost = { ...(await import("../src/core/agents/opencode/core-host-provider")) }
 
-mock.module("../src/core/agents/codex/auth", () => ({
-  ...realCodexAuth,
-  resolveCodexAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
+let fake = fakeCodexHost()
+let fakeOc = fakeOpenCodeHost()
+let fakeCur = fakeCursorHost("cursor-session-id")
+let fakeCl = fakeClaudeHost()
+
+mock.module("../src/core/agents/codex/core-host-provider", () => ({
+  ...realCodexCoreHost,
+  getCodexCoreHost: () => fake.host,
 }))
-mock.module("../src/core/agents/codex/spawn", () => ({
-  ...realCodexSpawn,
-  spawnCodexAppServer: () => ({
-    pid: 123,
-    client: { request: async () => ({}) } as any,
-    child: null as any,
-    kill: () => {},
-    onExit: () => {},
-  }),
+mock.module("../src/core/agents/cursor/core-host-provider", () => ({
+  ...realCursorHost,
+  getCursorCoreHost: () => fakeCur.host,
 }))
-mock.module("../src/core/agents/codex/adapter", () => ({
-  ...realCodexAdapter,
-  CodexAdapter: class {
-    constructor(private opts: any) {}
-    async start() { await this.opts.persistThreadId("codex-thread-id") }
-  },
-}))
-mock.module("../src/core/agents/cursor/auth", () => ({
-  ...realCursorAuth,
-  resolveCursorAuth: async () => ({ mode: "api_key", env: { CURSOR_API_KEY: "test" } }),
-}))
-mock.module("../src/core/agents/cursor/smoke", () => ({
-  ...realCursorSmoke,
-  smokeCursorAgent: async () => {},
-}))
-mock.module("../src/core/agents/cursor/runner", () => ({
-  ...realCursorRunner,
-  makeRealCursorRunner: () => async () => {},
-}))
-mock.module("../src/core/agents/cursor/adapter", () => ({
-  ...realCursorAdapter,
-  CursorAdapter: class {
-    constructor(private opts: any) {}
-    async start() { await this.opts.persistSessionId("cursor-session-id") }
-  },
-}))
-mock.module("../src/core/agents/opencode/spawn", () => ({
-  ...realOpenCodeSpawn,
-  spawnOpenCodeServer: async () => ({
-    pid: 123,
-    baseUrl: "http://localhost:1234",
-    client: {} as any,
-    child: null as any,
-    kill: () => {},
-    onExit: () => {},
-  }),
-}))
-mock.module("../src/core/agents/opencode/adapter", () => ({
-  ...realOpenCodeAdapter,
-  OpenCodeAdapter: class {
-    constructor(private opts: any) {}
-    async start() { await this.opts.persistSessionId("opencode-sid") }
-  },
+mock.module("../src/core/agents/opencode/core-host-provider", () => ({
+  ...realOpenCodeHost,
+  getOpenCodeCoreHost: () => fakeOc.host,
 }))
 
 afterAll(() => {
-  mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
-  mock.module("../src/core/agents/codex/spawn", () => realCodexSpawn)
-  mock.module("../src/core/agents/codex/adapter", () => realCodexAdapter)
-  mock.module("../src/core/agents/cursor/auth", () => realCursorAuth)
-  mock.module("../src/core/agents/cursor/smoke", () => realCursorSmoke)
-  mock.module("../src/core/agents/cursor/runner", () => realCursorRunner)
-  mock.module("../src/core/agents/cursor/adapter", () => realCursorAdapter)
-  mock.module("../src/core/agents/opencode/spawn", () => realOpenCodeSpawn)
-  mock.module("../src/core/agents/opencode/adapter", () => realOpenCodeAdapter)
+  mock.module("../src/core/agents/codex/core-host-provider", () => realCodexCoreHost)
+  mock.module("../src/core/agents/cursor/core-host-provider", () => realCursorHost)
+  mock.module("../src/core/agents/opencode/core-host-provider", () => realOpenCodeHost)
 })
 
 let tmpDir: string
@@ -100,8 +51,19 @@ function makeRegistry(): Registry {
   return new Registry(db)
 }
 
-beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), "spawn-pa-")) })
-afterEach(() => {
+beforeEach(() => {
+  tmpDir = mkdtempSync(join(tmpdir(), "spawn-pa-"))
+  fake = fakeCodexHost()
+  fakeOc = fakeOpenCodeHost()
+  fakeCur = fakeCursorHost("cursor-session-id")
+  fakeCl = fakeClaudeHost()
+  process.env.CURSOR_API_KEY = process.env.CURSOR_API_KEY ?? "test-key"
+})
+afterEach(async () => {
+  await fake.close()
+  await fakeOc.close()
+  await fakeCur.close()
+  await fakeCl.close()
   setSessionBackendForTests()
   rmSync(tmpDir, { recursive: true, force: true })
 })
@@ -123,6 +85,7 @@ test("spawns a Claude PA and registers it as personal_assistant", async () => {
     workdir: join(tmpDir, "pa-workdir"),
     bind: async () => {},
     tmuxSession: "mux",
+    claudeHost: fakeCl.host,
   })
 
   expect(result.name).toBe("assistant")
@@ -145,6 +108,7 @@ test("second PA gets is_default false", async () => {
     workdir: join(tmpDir, "pa-1"),
     bind: async () => {},
     tmuxSession: "mux",
+    claudeHost: fakeCl.host,
   })
 
   setSessionBackendForTests(claudeBackend("w2"))
@@ -155,6 +119,7 @@ test("second PA gets is_default false", async () => {
     workdir: join(tmpDir, "pa-2"),
     bind: async () => {},
     tmuxSession: "mux",
+    claudeHost: fakeCl.host,
   })
 
   expect(result.name).toBe("helper")

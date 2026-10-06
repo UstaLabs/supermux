@@ -20,6 +20,9 @@ import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentModelsResponse
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
+import dev.supermux.net.AccountDto
+import dev.supermux.net.AccountLoginStateDto
+import dev.supermux.net.SessionAccountResult
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BlobText
@@ -240,12 +243,23 @@ class HostStore(
         _state.map { it.messages }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val activity: StateFlow<Map<String, List<ActivityEvent>>> =
         _state.map { it.activity }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    val requests: StateFlow<Map<String, List<dev.supermux.proto.PromptRequest>>> =
+        _state.map { it.requests }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    val closedRequests: StateFlow<Map<String, List<ClosedRequest>>> =
+        _state.map { it.closedRequests }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    val lastError: StateFlow<String?> =
+        _state.map { it.lastError }.stateIn(projectionScope, SharingStarted.Eagerly, null)
+    val permissionModes: StateFlow<Map<String, List<dev.supermux.proto.PermissionModeInfo>>> =
+        _state.map { it.permissionModes }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val agentState: StateFlow<Map<String, AgentStatus>> =
         _state.map { it.agentState }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> =
         _state.map { it.agentErrors }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> =
         _state.map { it.bgTasks }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    /** Session id → subagents (running + recent finished), ordered by start. */
+    val subagents: StateFlow<Map<String, List<dev.supermux.proto.Subagent>>> =
+        _state.map { it.subagents }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
     val pendingSend: StateFlow<Set<String>> = _pendingSend
     val commands: StateFlow<Map<String, List<SlashCommand>>> =
@@ -376,6 +390,21 @@ class HostStore(
     private val _onboarded = MutableStateFlow<Boolean?>(null)
     val onboarded: StateFlow<Boolean?> = _onboarded.asStateFlow()
 
+    // ── Accounts state (slice A3b) — the calls live with the other settings calls below.
+    private val _accounts = MutableStateFlow<List<AccountDto>?>(null)
+    /** Every agent's accounts (system first per agent), live once [ensureAccounts] ran. */
+    val accounts: StateFlow<List<AccountDto>?> = _accounts.asStateFlow()
+    private var accountsWanted = false
+    private var accountsJob: Job? = null
+
+    private val _accountsAutoSwitch = MutableStateFlow<Boolean?>(null)
+    /** GET/PUT /settings/accounts `autoSwitch`, kept current by `accounts_settings`. */
+    val accountsAutoSwitch: StateFlow<Boolean?> = _accountsAutoSwitch.asStateFlow()
+
+    private val _accountLogins = MutableSharedFlow<AccountLoginStateDto>(extraBufferCapacity = 32)
+    /** Every `account_login_state` frame (all logins; filter by `loginId`). */
+    val accountLogins: SharedFlow<AccountLoginStateDto> = _accountLogins.asSharedFlow()
+
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
 
@@ -450,6 +479,7 @@ class HostStore(
                 lastSentViewing = null
                 sendViewingIfChanged()
                 refreshAgentModels()
+                if (accountsWanted) refreshAccounts()
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
                 fileSystem.onReconnect()
             }
@@ -474,6 +504,9 @@ class HostStore(
             is ServerFrame.ReviewCommentFrame -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
             is ServerFrame.UsageUpdated -> _usage.value = frame.usage
+            ServerFrame.AccountsChanged -> if (accountsWanted) refreshAccounts()
+            is ServerFrame.AccountLoginState -> _accountLogins.tryEmit(frame.toDto())
+            is ServerFrame.AccountsSettings -> _accountsAutoSwitch.value = frame.autoSwitch
             is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements
             is ServerFrame.KeepAwakeChanged -> _keepAwake.value = frame.keepAwake
             else -> {}
@@ -668,7 +701,7 @@ class HostStore(
      * upload staged files, resolve spawn id). Android's launcher-picker `spawn` is this simpler
      * path, not a rename of createSessionWithFirstMessage.
      */
-    fun spawn(workdir: String, name: String?, agent: String, model: String? = null) {
+    fun spawn(workdir: String, name: String?, agent: String, model: String? = null, permissionMode: String? = null) {
         stateScope.launch {
             runApi("spawn") {
                 api.spawn(
@@ -677,6 +710,7 @@ class HostStore(
                         name = name?.trim()?.ifBlank { null },
                         agent = agent,
                         model = model?.ifBlank { null },
+                        permissionMode = permissionMode?.ifBlank { null },
                     ),
                 )
             }
@@ -1765,6 +1799,59 @@ class HostStore(
     suspend fun finishOpenCodeOAuth(providerId: String, method: Int, code: String): Boolean =
         runApi("finishOpenCodeOAuth") { api.finishOpenCodeOAuth(providerId, method, code); true } ?: false
 
+    // ── Accounts (slice A3b; HTTP + frames are A3a's) ────────────────────────────────────────
+    // Fetched lazily: nothing asks for GET /accounts until a screen does ([ensureAccounts]), and
+    // from then on every snapshot (reconnect) and `accounts_changed` refreshes it. Null = never
+    // loaded, or a broker older than the accounts routes.
+
+    /** Start following the accounts list (idempotent); the first call fetches it. */
+    fun ensureAccounts() {
+        if (accountsWanted) return
+        accountsWanted = true
+        refreshAccounts()
+    }
+
+    fun refreshAccounts() {
+        accountsJob?.cancel()
+        accountsJob = stateScope.launch {
+            runApi("accounts") { api.accounts() }?.let { _accounts.value = it }
+        }
+    }
+
+    /** One-shot GET /accounts (null on failure) — also seeds [accounts]. */
+    suspend fun loadAccounts(): List<AccountDto>? =
+        runApi("accounts") { api.accounts() }?.also { _accounts.value = it; accountsWanted = true }
+
+    suspend fun addAccount(agent: String, method: String, secret: String, label: String? = null): AccountResult<AccountDto> =
+        accountCall { api.addAccount(agent, method, secret, label) }.also { if (it is AccountResult.Ok) refreshAccounts() }
+
+    suspend fun removeAccount(id: String, deleteHome: Boolean = false): AccountResult<Unit> =
+        accountCall { api.removeAccount(id, deleteHome) }.also { if (it is AccountResult.Ok) refreshAccounts() }
+
+    suspend fun startAccountLogin(agent: String, loginAs: String? = null, label: String? = null): AccountResult<AccountLoginStateDto> =
+        accountCall { api.startAccountLogin(agent, loginAs = loginAs, label = label) }
+
+    suspend fun accountLoginState(loginId: String): AccountLoginStateDto? =
+        runApi("accountLoginState") { api.accountLoginState(loginId) }
+
+    suspend fun sendAccountLoginCode(loginId: String, code: String): AccountResult<Unit> =
+        accountCall { api.sendAccountLoginCode(loginId, code) }
+
+    suspend fun cancelAccountLogin(loginId: String): AccountResult<Unit> =
+        accountCall { api.cancelAccountLogin(loginId) }
+
+    /** POST /sessions/<id>/account. A 409 keeps its code (session_busy / session_not_running). */
+    suspend fun setSessionAccount(sessionId: String, account: String): AccountResult<SessionAccountResult> =
+        accountCall { api.setSessionAccount(sessionId, account) }
+
+    suspend fun loadAccountsAutoSwitch(): Boolean? =
+        runApi("accountsSettings") { api.accountsSettings().autoSwitch }?.also { _accountsAutoSwitch.value = it }
+
+    suspend fun setAccountsAutoSwitch(enabled: Boolean): AccountResult<Boolean> =
+        accountCall { api.setAccountsAutoSwitch(enabled).autoSwitch }.also {
+            if (it is AccountResult.Ok) _accountsAutoSwitch.value = it.value
+        }
+
     // ── Devices settings (desktop-parity Task 2) ───────────────────────────────────────────
     // Backs the Devices section of the Settings hub. Mirrors AppViewModel devices / addDevice /
     // revokeDevice (Android MoreScreens). All go through [runApi] and degrade to null/false.
@@ -2056,6 +2143,35 @@ class HostStore(
         return ok
     }
 
+    fun setPermissionMode(id: String, mode: String) {
+        patchSession(id) { it.copy(permissionMode = mode) }
+        stateScope.launch {
+            runApi("setPermissionMode") { sendFrame(ClientFrame.SetPermissionMode(id, mode)) }
+        }
+    }
+
+    fun respondRequest(sessionId: String, requestId: String, answer: kotlinx.serialization.json.JsonObject) {
+        stateScope.launch {
+            runApi("respondRequest") {
+                sendFrame(ClientFrame.RequestRespond(sessionId, requestId, answer))
+            }
+        }
+    }
+
+    /**
+     * Send [text] to one subagent. The broker answers `via` direct|relay, or `ok=false` with its
+     * reason (e.g. a Codex v2 child that refuses input); a transport failure is `ok=false` with
+     * no error. The transcript line ("↪ to …") arrives as a normal `message_append`.
+     */
+    suspend fun messageSubagent(sessionId: String, subagentId: String, text: String): dev.supermux.net.SubagentActionResult =
+        runApi("messageSubagent") { api.messageSubagent(sessionId, subagentId, text) }
+            ?: dev.supermux.net.SubagentActionResult(ok = false)
+
+    /** Stop one subagent without interrupting the parent's turn. Same result contract. */
+    suspend fun stopSubagent(sessionId: String, subagentId: String): dev.supermux.net.SubagentActionResult =
+        runApi("stopSubagent") { api.stopSubagent(sessionId, subagentId) }
+            ?: dev.supermux.net.SubagentActionResult(ok = false)
+
     /** Patch one session row in place (optimistic pill updates). No-op for an unknown id. */
     private fun patchSession(id: String, f: (SessionInfo) -> SessionInfo) {
         _state.update { st ->
@@ -2145,10 +2261,13 @@ class HostStore(
         inheritFrom: String? = null,
         firstMessage: String? = null,
         viewId: String? = null,
+        permissionMode: String? = null,
+        /** Account id for [agent] (GET /accounts); null = its system account. */
+        account: String? = null,
     ): String? = runApi("createSessionWithFirstMessage") {
         createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode, account,
         )
     }
 
@@ -2179,6 +2298,9 @@ class HostStore(
         firstMessage: String? = null,
         /** The pending chat tab in [workspaceId] this session fills (see [SpawnRequest.viewId]). */
         viewId: String? = null,
+        permissionMode: String? = null,
+        /** Account id for [agent] (GET /accounts); null = its system account. */
+        account: String? = null,
     ): String {
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
@@ -2204,6 +2326,8 @@ class HostStore(
                     worktree = worktree,
                     baseBranch = baseBranch?.ifBlank { null },
                     reasoningLevel = reasoningLevel?.ifBlank { null },
+                    permissionMode = permissionMode?.ifBlank { null },
+                    account = account?.ifBlank { null },
                     workspaceId = workspaceId,
                     viewId = viewId?.ifBlank { null },
                     inheritFrom = inheritFrom?.ifBlank { null },

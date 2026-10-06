@@ -125,10 +125,10 @@ RUN set -eu; \
 FROM oven/bun:1
 
 # ── 2. System dependencies ────────────────────────────────────────────────────
-# • tmux   — AGENT sessions only. Workspace terminals moved to zmx (stage 0b) and
-#            no longer touch tmux at all, but every agent session still runs inside
-#            one, and the Claude native-terminal retirement that would remove it
-#            from the product has not landed. Removing tmux here would break agents.
+# • tmux   — no longer runs agents (they run on Core) nor workspace terminals
+#            (those moved to zmx, stage 0b). It stays for legacy tmux-era agent
+#            windows the Core migration retires, and for the in-app Native view of
+#            any agent still on tmux. Do not drop it until that path is removed.
 # • bash, ncurses-term — what a workspace terminal actually needs to be usable: a
 #            login shell to run, and the terminfo entry for the TERM the broker
 #            hands the child. The daemon forces TERM=xterm-256color
@@ -185,8 +185,11 @@ WORKDIR /app
 # non-frozen on purpose: a user building from a tarball (no lock) must still get
 # a working `docker compose up` rather than "lockfile not found".
 COPY package.json bun.lock* ./
+# The broker source-imports packages/supermux-core; its manifest must be present
+# before install so Bun resolves the workspace (ACP SDK etc.).
+COPY packages/supermux-core/package.json ./packages/supermux-core/
 
-# Install root dependencies (non-frozen: the root lock may be absent)
+# Install root + workspace dependencies (non-frozen on purpose, see above)
 RUN bun install
 
 # Copy the rest of the source tree

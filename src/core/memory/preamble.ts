@@ -29,7 +29,7 @@ export function buildMemoryPreamble(role: AgentRole, name?: string, workdir?: st
 
   lines.push("# Shared Memory System", "")
 
-  if (role === "main") {
+  if (role === "main" || role === "personal_assistant") {
     lines.push(`You are ${named}the main agent (personal assistant).`)
   } else {
     lines.push(`You are ${named}a worker agent.`)
@@ -49,7 +49,7 @@ export function buildMemoryPreamble(role: AgentRole, name?: string, workdir?: st
       `\`domains/_inbox.md\` if unsure). Never edit \`*.digest.md\`.`
   )
 
-  if (role === "main") {
+  if (role === "main" || role === "personal_assistant") {
     const workdirSoul = workdir && existsSync(join(workdir, "soul.md"))
       ? readFileSync(join(workdir, "soul.md"), "utf8").trim()
       : ""
