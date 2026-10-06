@@ -165,7 +165,7 @@ describe("the command line", () => {
     }
     startInstall("opencode", { spawn, isInstalled: () => true, platform: "linux", env: { PATH: "/usr/bin" }, home: "/home/u", hasCommand: () => true })
     expect(captured.cmd).toBe("bash")
-    expect(captured.args).toEqual(["-lc", INSTALL_RECIPES.posix.opencode!.script])
+    expect(captured.args).toEqual(["-lc", `set -o pipefail; ${INSTALL_RECIPES.posix.opencode!.script}`])
     expect(captured.opts.stdio[0]).toBe("ignore")
     expect(captured.opts.env.CI).toBe("1")
     expect(captured.opts.env.NONINTERACTIVE).toBe("1")

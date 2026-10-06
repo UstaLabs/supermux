@@ -106,7 +106,9 @@ export function installCommand(recipe: InstallRecipe, env: Record<string, string
       args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", POWERSHELL_PREAMBLE + recipe.script],
     }
   }
-  return { cmd: "bash", args: ["-lc", recipe.script] }
+  // pipefail: a download that fails in `curl … | bash` must fail the job with ITS code. Without
+  // it bash runs the empty script, exits 0, and "curl: command not found" reads as success.
+  return { cmd: "bash", args: ["-lc", `set -o pipefail; ${recipe.script}`] }
 }
 
 export type InstallState = "running" | "done" | "failed"
