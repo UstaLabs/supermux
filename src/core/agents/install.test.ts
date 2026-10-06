@@ -163,14 +163,16 @@ describe("the command line", () => {
       captured = { cmd, args, opts }
       return fakeChild()
     }
-    startInstall("opencode", { spawn, isInstalled: () => true, platform: "linux", env: { PATH: "/usr/bin" }, home: "/home/u", hasCommand: () => true })
+    startInstall("opencode", { spawn, isInstalled: () => true, platform: "linux", env: { PATH: "/home/u/.local/bin:/home/u/.opencode/bin/:/usr/bin" }, home: "/home/u", hasCommand: () => true })
     expect(captured.cmd).toBe("bash")
     expect(captured.args).toEqual(["-lc", `set -o pipefail; ${INSTALL_RECIPES.posix.opencode!.script}`])
     expect(captured.opts.stdio[0]).toBe("ignore")
     expect(captured.opts.env.CI).toBe("1")
     expect(captured.opts.env.NONINTERACTIVE).toBe("1")
     expect(captured.opts.env.npm_config_yes).toBe("true")
-    expect(captured.opts.env.PATH.split(":")).toContain("/home/u/.local/bin")
+    // the broker's own agent dirs are hidden so the vendor script sets PATH up for the user
+    expect(captured.opts.env.PATH.split(":")).not.toContain("/home/u/.local/bin")
+    expect(captured.opts.env.PATH.split(":")).toContain("/usr/bin")
   })
 })
 

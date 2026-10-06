@@ -17,7 +17,7 @@ import { homedir } from "os"
 import { agentDisplayName, type AgentKind } from "../../shared/agents"
 import { makeLogger } from "../../shared/log"
 import { addToUserPath, windowsPowerShellPath } from "../windows/user-install"
-import { withAgentBinDirs, withNodeBinDirs } from "./bin-dirs"
+import { agentBinDirs, withAgentBinDirs, withNodeBinDirs } from "./bin-dirs"
 import { BUILTIN_INSTALLERS, realBuiltinDeps, type BuiltinInstallDeps } from "./install-builtin"
 import { LINUX_BUILTIN_INSTALLERS, realLinuxBuiltinDeps, type LinuxBuiltinDeps } from "./install-builtin-linux"
 import { resolveCommand } from "../process/launcher"
@@ -230,7 +230,12 @@ function getPath(env: Record<string, string>, platform: NodeJS.Platform): string
   return key ? env[key] : undefined
 }
 
-/** The installer's environment: the broker's, forced non-interactive, with the agent bin dirs on PATH. */
+function withoutDirs(path: string | undefined, drop: string[]): string {
+  const gone = new Set(drop.map((d) => d.replace(/\/+$/, "")))
+  return (path ?? "").split(":").filter((d) => d && !gone.has(d.replace(/\/+$/, ""))).join(":")
+}
+
+/** The installer's environment: the broker's, forced non-interactive; agent bin dirs on PATH on Windows only (see below). */
 export function installEnv(base: Record<string, string | undefined>, home: string, platform: NodeJS.Platform): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(base)) if (typeof v === "string") env[k] = v
@@ -242,7 +247,14 @@ export function installEnv(base: Record<string, string | undefined>, home: strin
     npm_config_yes: "true",
     CODEX_NON_INTERACTIVE: "1",
   })
-  const path = withAgentBinDirs(withNodeBinDirs(getPath(env, platform), home, platform), home, platform, env)
+  // macOS/Linux: hide the agent bin dirs the broker put on its own PATH at boot. The vendor
+  // scripts decide from PATH whether to set PATH up for the user's shells (codex adds a block to
+  // ~/.zprofile, claude prints the line to add); seeing the broker's PATH they did nothing, and
+  // on a Mac — where ~/.local/bin is on no default PATH — claude and codex then ran in supermux
+  // but not in Terminal. Windows installers read the registry PATH instead, so it keeps them.
+  const path = platform === "win32"
+    ? withAgentBinDirs(withNodeBinDirs(getPath(env, platform), home, platform), home, platform, env)
+    : withoutDirs(withNodeBinDirs(getPath(env, platform), home, platform), agentBinDirs(home, platform, env))
   setPath(env, path, platform)
   return env
 }
