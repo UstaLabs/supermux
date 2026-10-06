@@ -5,6 +5,12 @@ import {
   openCodeLinuxAsset, type LinuxBuiltinDeps,
 } from "./install-builtin-linux"
 
+/** A fetched Response knows its final URL (redirects included); a constructed one doesn't. */
+function withUrl(r: Response, url: string): Response {
+  if (!r.url) Object.defineProperty(r, "url", { value: url })
+  return r
+}
+
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex")
 
 /** An in-memory Linux home plus a scripted network. Directories are prefixes of file keys. */
@@ -21,7 +27,7 @@ function fakeLinux(routes: Record<string, () => Response>, opts: { unpack?: (des
     arch: opts.arch ?? "x64",
     fetch: (async (url: string) => {
       fetched.push(url)
-      return routes[url]?.() ?? new Response("nope", { status: 404 })
+      return withUrl(routes[url]?.() ?? new Response("nope", { status: 404 }), url)
     }) as unknown as typeof fetch,
     sha256: sha,
     untar: async (archive, dest, strip) => {

@@ -2,11 +2,12 @@ import { expect, test, describe } from "bun:test"
 import { EventEmitter } from "events"
 import type { ChildProcess } from "child_process"
 import {
-  INSTALL_RECIPES, LOCAL_BIN_LINKS, linkIntoLocalBin, type LinkFs, POWERSHELL_PREAMBLE, createInstallManager, installCommand, installRecipeFor, startInstall,
+  INSTALL_RECIPES, LOCAL_BIN_LINKS, POWERSHELL_PREAMBLE, createInstallManager, installCommand, installRecipeFor, startInstall,
   type InstallDeps,
 } from "./install"
 import { AGENT_KINDS } from "../../shared/agents"
 import type { BuiltinInstallDeps } from "./install-builtin"
+import { linkIntoLocalBin, type LinkFs } from "./local-bin"
 
 function fakeChild(): ChildProcess {
   const c = new EventEmitter() as any
@@ -38,7 +39,7 @@ describe("recipe selection", () => {
         expect("unsupported" in r).toBe(false)
         expect((r as any).shell).toBe("bash")
       }
-      expect(installRecipeFor("claude", platform)).toEqual({ shell: "bash", script: "curl -fsSL https://claude.ai/install.sh | bash" })
+      expect(installRecipeFor("claude", platform)).toEqual({ shell: "bash", script: "curl -fsSL --proto '=https' --proto-redir '=https' https://claude.ai/install.sh | bash" })
     }
   })
 
@@ -46,7 +47,7 @@ describe("recipe selection", () => {
     for (const os of ["posix", "win32"] as const) {
       for (const kind of AGENT_KINDS) expect(INSTALL_RECIPES[os][kind]?.script ?? "").not.toMatch(/\bnpm\b|\bnpx\b/)
     }
-    expect(INSTALL_RECIPES.posix.codex!.script).toBe("curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh")
+    expect(INSTALL_RECIPES.posix.codex!.script).toBe("curl -fsSL --proto '=https' --proto-redir '=https' https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh")
     expect(INSTALL_RECIPES.posix.opencode!.script).toContain("--no-modify-path")
   })
 
@@ -65,6 +66,18 @@ describe("recipe selection", () => {
     expect(installRecipeFor("grok", "win32")).toEqual({ shell: "builtin", script: "grok-windows" })
   })
 
+  test("every curl is HTTPS-only (redirects too), every wget --https-only", () => {
+    for (const kind of AGENT_KINDS) {
+      const script = INSTALL_RECIPES.posix[kind]!.script
+      expect(script).toContain("--proto '=https' --proto-redir '=https'")
+      expect(script).toMatch(/curl [^|]*https:\/\//)
+    }
+    for (const kind of ["claude", "codex", "grok"] as const) {
+      const r = installRecipeFor(kind, "linux", (n) => n === "wget") as { script: string }
+      expect(r.script).toContain("wget --https-only")
+    }
+  })
+
   test("an OS without recipes is a clear 'not supported', not an attempt", () => {
     const r = installRecipeFor("grok", "freebsd")
     expect(r).toEqual({ unsupported: expect.stringContaining("not supported") })
@@ -75,12 +88,12 @@ describe("no curl (Ubuntu Desktop ships wget, not curl)", () => {
   const only = (...have: string[]) => (name: string) => have.includes(name)
 
   test("Linux with wget: claude/codex/grok fetch their script with wget; cursor/opencode are builtin", () => {
-    expect(installRecipeFor("claude", "linux", only("wget"))).toEqual({ shell: "bash", script: "wget --no-verbose -O- https://claude.ai/install.sh | bash" })
+    expect(installRecipeFor("claude", "linux", only("wget"))).toEqual({ shell: "bash", script: "wget --https-only --no-verbose -O- https://claude.ai/install.sh | bash" })
     expect(installRecipeFor("codex", "linux", only("wget"))).toEqual({
       shell: "bash",
-      script: "wget --no-verbose -O- https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
+      script: "wget --https-only --no-verbose -O- https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
     })
-    expect(installRecipeFor("grok", "linux", only("wget"))).toEqual({ shell: "bash", script: "wget --no-verbose -O- https://x.ai/cli/install.sh | bash" })
+    expect(installRecipeFor("grok", "linux", only("wget"))).toEqual({ shell: "bash", script: "wget --https-only --no-verbose -O- https://x.ai/cli/install.sh | bash" })
     expect(installRecipeFor("cursor", "linux", only("wget"))).toEqual({ shell: "builtin", script: "cursor-linux" })
     expect(installRecipeFor("opencode", "linux", only("wget"))).toEqual({ shell: "builtin", script: "opencode-linux" })
   })
@@ -429,6 +442,47 @@ describe("~/.local/bin/opencode link (macOS/Linux)", () => {
     end(child, 0)
     await done
     expect(m.ops).toEqual([])
+  })
+})
+
+describe("the install deadline", () => {
+  test("a hung script is killed (whole tree) and the job fails as timed out; the slot frees", async () => {
+    const child = fakeChild()
+    const killed: Array<[number | undefined, string]> = []
+    const mgr = createInstallManager({
+      platform: "linux", env: { PATH: "/usr/bin" }, home: "/home/u", hasCommand: () => true,
+      spawn: () => child, isInstalled: () => false, deadlineMs: 20,
+      killTree: (c, p) => { killed.push([c.pid, p]) },
+    })
+    const first = mgr.start("codex")
+    await new Promise((r) => setTimeout(r, 40))
+    expect(first.job.state).toBe("failed")
+    expect(first.job.error).toContain("didn't finish within")
+    expect(killed).toEqual([[999, "linux"]])
+    // the late exit of the killed child changes nothing
+    end(child, 137)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(first.job.error).toContain("didn't finish within")
+    expect(mgr.start("codex").alreadyRunning).toBe(false)
+  })
+
+  test("macOS/Linux installers start in their own process group; Windows ones don't", () => {
+    const opts: any[] = []
+    const spawn = (_c: string, _a: string[], o: any) => { opts.push(o); return fakeChild() }
+    startInstall("claude", { platform: "linux", env: { PATH: "/usr/bin" }, home: "/home/u", hasCommand: () => true, spawn, isInstalled: () => true })
+    startInstall("claude", { platform: "win32", env: WIN_ENV, spawn, isInstalled: () => true })
+    expect(opts[0].detached).toBe(true)
+    expect(opts[1].detached).toBeUndefined()
+  })
+
+  test("a builtin past the deadline fails as timed out too", async () => {
+    const never = { env: WIN_ENV, arch: "x64", fetch: (() => new Promise(() => {})) as unknown as typeof fetch, sha256: () => "",
+      extract: async () => {}, fs: { exists: () => false, mkdir: () => {}, write: () => {}, rename: () => {}, remove: () => {} },
+      readUserPath: async () => null, writeUserPath: async () => {} }
+    const { job, done } = startInstall("grok", { platform: "win32", builtin: never, isInstalled: () => false, deadlineMs: 20 })
+    await done
+    expect(job.state).toBe("failed")
+    expect(job.error).toContain("didn't finish within")
   })
 })
 

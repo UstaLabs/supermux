@@ -16,6 +16,7 @@ import { execFile } from "child_process"
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "fs"
 import { posix } from "path"
 import { sha256Hex } from "../windows/user-install"
+import { METADATA_TIMEOUT_MS, OPENCODE_RELEASE_API, assertOpenCodeAssetUrl, httpsBytes, httpsGet } from "./download"
 
 export interface LinuxBuiltinDeps {
   home: string
@@ -46,17 +47,14 @@ export interface LinuxBuiltinDeps {
 export type LinuxBuiltinInstaller = (deps: LinuxBuiltinDeps) => Promise<void>
 
 export const CURSOR_INSTALL_SCRIPT = "https://cursor.com/install"
-export const OPENCODE_LATEST_RELEASE_API = "https://api.github.com/repos/anomalyco/opencode/releases/latest"
-const USER_AGENT = "supermux-agent-installer"
+export const OPENCODE_LATEST_RELEASE_API = OPENCODE_RELEASE_API
 
 function stampOf(deps: LinuxBuiltinDeps): string {
   return `${deps.pid ?? process.pid}-${deps.now?.() ?? Date.now()}`
 }
 
-async function get(deps: LinuxBuiltinDeps, url: string, accept?: string): Promise<Response> {
-  const res = await deps.fetch(url, { redirect: "follow", headers: { "User-Agent": USER_AGENT, ...(accept ? { Accept: accept } : {}) } })
-  if (!res.ok) throw new Error(`download failed: HTTP ${res.status} for ${url}`)
-  return res
+function get(deps: LinuxBuiltinDeps, url: string, accept?: string): Promise<Response> {
+  return httpsGet(deps.fetch, url, { timeoutMs: METADATA_TIMEOUT_MS, accept })
 }
 
 /** Cursor's current version, read from its install script. */
@@ -71,7 +69,7 @@ export const installCursorLinux: LinuxBuiltinInstaller = async (deps) => {
   if (!version) throw new Error(`couldn't find Cursor's version in ${CURSOR_INSTALL_SCRIPT}`)
   const url = `https://downloads.cursor.com/lab/${version}/linux/${arch}/agent-cli-package.tar.gz`
   deps.log(`Downloading Cursor ${version} (${url})...`)
-  const bytes = new Uint8Array(await (await get(deps, url)).arrayBuffer())
+  const bytes = await httpsBytes(deps.fetch, url)
   deps.log(`Cursor publishes no checksum (its own installer checks none): checked HTTPS only. SHA-256 ${deps.sha256(bytes)}.`)
 
   const versions = posix.join(deps.home, ".local", "share", "cursor-agent", "versions")
@@ -117,11 +115,12 @@ export const installOpenCodeLinux: LinuxBuiltinInstaller = async (deps) => {
   const release = (await (await get(deps, OPENCODE_LATEST_RELEASE_API, "application/vnd.github+json")).json()) as { tag_name?: string; assets?: ReleaseAsset[] }
   const asset = (release.assets ?? []).find((x) => x.name === assetName)
   if (!asset?.browser_download_url) throw new Error(`the OpenCode release ${release.tag_name ?? "?"} has no ${assetName}`)
+  assertOpenCodeAssetUrl(asset.browser_download_url)
   const expected = /^sha256:([0-9a-f]{64})$/i.exec(asset.digest ?? "")?.[1]?.toLowerCase()
   if (!expected) throw new Error(`GitHub lists no SHA-256 digest for ${assetName}; refusing to install an unverified download`)
 
   deps.log(`Downloading ${assetName} (${release.tag_name ?? "latest"})...`)
-  const bytes = new Uint8Array(await (await get(deps, asset.browser_download_url)).arrayBuffer())
+  const bytes = await httpsBytes(deps.fetch, asset.browser_download_url)
   const actual = deps.sha256(bytes).toLowerCase()
   if (actual !== expected) throw new Error(`checksum mismatch for ${assetName}: expected ${expected}, got ${actual}; nothing was installed`)
   deps.log(`SHA-256 verified (${actual}).`)

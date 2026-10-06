@@ -12,6 +12,9 @@
 // broker's own PATH already carries both dirs (bin-dirs.ts), so detection needs no restart.
 import { win32 as winPath } from "path"
 import {
+  METADATA_TIMEOUT_MS, OPENCODE_RELEASE_API, assertOpenCodeAssetUrl, httpsBytes, httpsGet,
+} from "./download"
+import {
   addToUserPath, extractZip, localAppData, realUserInstallFs, realUserPathStore, sha256Hex, stageZipInto,
   type UserInstallFs, type UserPathStore,
 } from "../windows/user-install"
@@ -34,12 +37,11 @@ export interface BuiltinInstallDeps extends UserPathStore {
 
 export type BuiltinInstaller = (deps: BuiltinInstallDeps) => Promise<void>
 
-export const OPENCODE_LATEST_RELEASE = "https://api.github.com/repos/anomalyco/opencode/releases/latest"
+export const OPENCODE_LATEST_RELEASE = OPENCODE_RELEASE_API
 export const GROK_STABLE_URL = "https://x.ai/cli/stable"
 /** A real grok.exe is tens of MB; an error page or a truncated download is far below this. */
 export const GROK_MIN_BYTES = 1024 * 1024
 
-const USER_AGENT = "supermux-agent-installer"
 
 function profile(env: Record<string, string | undefined>): string {
   return env.USERPROFILE ?? winPath.join("C:\\Users", env.USERNAME ?? "Default")
@@ -57,10 +59,8 @@ function stampOf(deps: BuiltinInstallDeps): string {
   return `${deps.pid ?? process.pid}-${deps.now?.() ?? Date.now()}`
 }
 
-async function getBytes(deps: BuiltinInstallDeps, url: string): Promise<Uint8Array> {
-  const res = await deps.fetch(url, { redirect: "follow", headers: { "User-Agent": USER_AGENT } })
-  if (!res.ok) throw new Error(`download failed: HTTP ${res.status} for ${url}`)
-  return new Uint8Array(await res.arrayBuffer())
+function getBytes(deps: BuiltinInstallDeps, url: string): Promise<Uint8Array> {
+  return httpsBytes(deps.fetch, url)
 }
 
 async function addDirToUserPath(deps: BuiltinInstallDeps, dir: string): Promise<void> {
@@ -74,14 +74,11 @@ interface ReleaseAsset { name?: string; browser_download_url?: string; digest?: 
 export const installOpenCodeWindows: BuiltinInstaller = async (deps) => {
   const assetName = `opencode-windows-${deps.arch === "arm64" ? "arm64" : "x64"}.zip`
   deps.log(`Looking up the latest OpenCode release (${OPENCODE_LATEST_RELEASE})…`)
-  const res = await deps.fetch(OPENCODE_LATEST_RELEASE, {
-    redirect: "follow",
-    headers: { Accept: "application/vnd.github+json", "User-Agent": USER_AGENT },
-  })
-  if (!res.ok) throw new Error(`couldn't read the latest OpenCode release: HTTP ${res.status}`)
+  const res = await httpsGet(deps.fetch, OPENCODE_LATEST_RELEASE, { timeoutMs: METADATA_TIMEOUT_MS, accept: "application/vnd.github+json" })
   const release = (await res.json()) as { tag_name?: string; assets?: ReleaseAsset[] }
   const asset = (release.assets ?? []).find((a) => a.name === assetName)
   if (!asset?.browser_download_url) throw new Error(`the OpenCode release ${release.tag_name ?? "?"} has no ${assetName}`)
+  assertOpenCodeAssetUrl(asset.browser_download_url)
   const expected = /^sha256:([0-9a-f]{64})$/i.exec(asset.digest ?? "")?.[1]?.toLowerCase()
   if (!expected) throw new Error(`GitHub lists no SHA-256 digest for ${assetName}; refusing to install an unverified download`)
 
@@ -108,8 +105,7 @@ export const installOpenCodeWindows: BuiltinInstaller = async (deps) => {
 
 /** Grok for Windows from x.ai's stable channel. No checksum exists upstream (see the header). */
 export const installGrokWindows: BuiltinInstaller = async (deps) => {
-  const res = await deps.fetch(GROK_STABLE_URL, { redirect: "follow", headers: { "User-Agent": USER_AGENT } })
-  if (!res.ok) throw new Error(`couldn't read the Grok version: HTTP ${res.status}`)
+  const res = await httpsGet(deps.fetch, GROK_STABLE_URL, { timeoutMs: METADATA_TIMEOUT_MS })
   const version = (await res.text()).trim()
   if (!/^\d+\.\d+\.\d+[0-9A-Za-z.+-]*$/.test(version)) throw new Error(`unexpected Grok version from ${GROK_STABLE_URL}: ${JSON.stringify(version.slice(0, 40))}`)
   const url = `https://x.ai/cli/grok-${version}-windows-${deps.arch === "arm64" ? "aarch64" : "x86_64"}.exe`

@@ -6,6 +6,12 @@ import {
 } from "./install-builtin"
 
 const ENV = { USERPROFILE: "C:\\Users\\t", LOCALAPPDATA: "C:\\Users\\t\\AppData\\Local" }
+/** A fetched Response knows its final URL (redirects included); a constructed one doesn't. */
+function withUrl(r: Response, url: string): Response {
+  if (!r.url) Object.defineProperty(r, "url", { value: url })
+  return r
+}
+
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex")
 
 /** An in-memory Windows (files are keys, dirs are prefixes) plus a scripted network. */
@@ -22,7 +28,7 @@ function fakeWindows(routes: Record<string, () => Response>, opts: { userPath?: 
     fetch: (async (url: string) => {
       fetched.push(url)
       const r = routes[url]
-      return r ? r() : new Response("not found", { status: 404 })
+      return withUrl(r ? r() : new Response("not found", { status: 404 }), url)
     }) as unknown as typeof fetch,
     sha256: sha,
     extract: async (_zip, dest) => {
@@ -54,7 +60,7 @@ function release(digest: string | null, name = "opencode-windows-x64.zip") {
   return () => Response.json({
     tag_name: "v1.18.34",
     assets: [
-      { name: "opencode-windows-arm64.zip", browser_download_url: "https://example.invalid/arm64.zip", digest: `sha256:${"0".repeat(64)}` },
+      { name: "opencode-windows-arm64.zip", browser_download_url: "https://github.com/anomalyco/opencode/releases/download/v1.18.34/opencode-windows-arm64.zip", digest: `sha256:${"0".repeat(64)}` },
       { name, browser_download_url: ZIP_URL, digest },
     ],
   })
@@ -98,7 +104,7 @@ describe("OpenCode on Windows", () => {
   test("arm64 picks the arm64 asset", async () => {
     const w = fakeWindows({ [OPENCODE_LATEST_RELEASE]: release(`sha256:${sha(ZIP)}`) }, { arch: "arm64" })
     await installOpenCodeWindows(w.deps).catch(() => {})
-    expect(w.fetched[1]).toBe("https://example.invalid/arm64.zip")
+    expect(w.fetched[1]).toBe("https://github.com/anomalyco/opencode/releases/download/v1.18.34/opencode-windows-arm64.zip")
   })
 
   test("the user PATH is not duplicated when the dir is already there (any case, trailing slash)", async () => {
