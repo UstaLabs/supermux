@@ -116,6 +116,8 @@ fun FleetSettingsSection(
 @Composable
 fun FleetSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
     when (extra) {
+        // Desktop-only: `Caps.localBroker` hides the row everywhere this renderer is used.
+        SettingsExtra.Hosting -> Unit
         SettingsExtra.Appearance -> AppearanceSettingsScreen(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,

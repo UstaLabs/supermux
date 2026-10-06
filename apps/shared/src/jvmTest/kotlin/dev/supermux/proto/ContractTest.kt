@@ -22,7 +22,7 @@ class ContractTest {
             "sessions_reordered", "session_read",
             "walkthrough_updated", "review_comment",
             "request_open", "request_closed", "error",
-            "worktree_sizes", "worktrees_removed", "agent_models_changed",
+            "worktree_sizes", "worktrees_removed", "agent_models_changed", "host_requirements", "keep_awake",
             "subagent_update", "subagents_cleared", "activity_append_subagent", "activity_append_subagent_message",
             "request_open_subagent", "message_append_subagent",
             "fs_dir", "fs_gone", "fs_err",
@@ -76,6 +76,8 @@ class ContractTest {
                 ServerFrame.AccountsChanged -> {}
                 is ServerFrame.AccountLoginState -> {}
                 is ServerFrame.AccountsSettings -> {}
+                is ServerFrame.HostRequirementsChanged -> {}
+                is ServerFrame.KeepAwakeChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
                 is ServerFrame.ReviewCommentFrame -> {}
                 is ServerFrame.RequestOpen -> {}
@@ -157,6 +159,13 @@ class ContractTest {
         kotlin.test.assertEquals("""{"type":"fs_sub","path":"/a","since":"x:1"}""", out)
         val un = json.encodeToString(ClientFrame.serializer(), ClientFrame.FsUnsub("/a"))
         kotlin.test.assertEquals("""{"type":"fs_unsub","path":"/a"}""", un)
+    }
+
+    @Test fun keep_awake_fixture_carries_the_denied_reason() {
+        val f = json.decodeFromString<ServerFrame>(load("keep_awake")) as ServerFrame.KeepAwakeChanged
+        kotlin.test.assertEquals(dev.supermux.net.KeepAwakeState.REASON_DENIED, f.keepAwake.reasonCode)
+        kotlin.test.assertEquals(false, f.keepAwake.active)
+        kotlin.test.assertEquals(true, f.keepAwake.retrying)
     }
 
     @Test fun fs_dir_carries_real() {

@@ -3,6 +3,7 @@
 // already checks). Pure + dependency-injected so it unit-tests without I/O;
 // main.ts wires the real hasBinary/existsSync probes. Credential paths mirror
 // the existing checks in usage/index.ts (claude), codex/auth.ts, cursor/auth.ts.
+import { realpathSync } from "fs"
 import { join, win32 } from "path"
 import { AGENT_KINDS, AgentKind } from "../../shared/agents"
 import { claudeIsAuthed, type AuthStatusRunner } from "./claude/auth"
@@ -19,6 +20,8 @@ export interface AgentStatus {
 
 export interface DetectProbes {
   hasBinary: (bin: string) => boolean
+  /** Where `bin` resolves on PATH, or null. Lets Cursor's `agent` alias reject Grok's `agent`. */
+  resolveBinary?: (bin: string) => string | null
   fileExists: (path: string) => boolean
   hasCredential?: (kind: AgentKind) => boolean
   /** Injected `claude auth status` runner; claude's module owns the default. */
@@ -39,6 +42,9 @@ export interface DetectPaths {
 
 const ALL_KINDS: readonly AgentKind[] = AGENT_KINDS
 
+// Cursor answers to `cursor-agent` and to its official `agent` alias (agent.cmd on Windows).
+// Grok's installer ALSO ships an `agent` (~/.grok/bin/agent, %USERPROFILE%\.grok\bin\agent.exe),
+// so an `agent` that resolves into a `.grok` folder is never Cursor — see isGrokAgentPath.
 const BINARIES: Record<AgentKind, readonly string[]> = {
   claude: ["claude"],
   codex: ["codex"],
@@ -120,7 +126,9 @@ export function hasStoredCredential(kind: AgentKind, config: StoredCredentialCon
 }
 
 export function detectAgent(kind: AgentKind, probes: DetectProbes, paths: DetectPaths): AgentStatus {
-  const installed = BINARIES[kind].some(probes.hasBinary)
+  const installed = BINARIES[kind].some((bin) =>
+    probes.hasBinary(bin) &&
+    !(kind === AgentKind.Cursor && bin === "agent" && isGrokAgentPath(probes.resolveBinary?.(bin) ?? null)))
   // `authed` means a real credential is present: the CLI's auth file exists (or a
   // stored credential is configured). opencode follows the SAME rule — its free
   // `opencode/*` tier runs with zero credentials, so a fresh install is `installed`
@@ -134,4 +142,16 @@ export function detectAgent(kind: AgentKind, probes: DetectProbes, paths: Detect
 
 export function detectAllAgents(probes: DetectProbes, paths: DetectPaths): AgentStatus[] {
   return ALL_KINDS.map((k) => detectAgent(k, probes, paths))
+}
+
+/**
+ * True when an `agent` executable belongs to Grok, not Cursor: its real path runs through a
+ * `.grok` directory (Grok installs to ~/.grok/bin and %USERPROFILE%\.grok\bin). Symlinks are
+ * followed, so ~/.local/bin/agent → ~/.grok/bin/agent counts as Grok too.
+ */
+export function isGrokAgentPath(path: string | null): boolean {
+  if (!path) return false
+  let real = path
+  try { real = realpathSync(path) } catch { /* keep the unresolved path */ }
+  return real.split(/[\\/]/).some((seg) => seg.toLowerCase() === ".grok")
 }

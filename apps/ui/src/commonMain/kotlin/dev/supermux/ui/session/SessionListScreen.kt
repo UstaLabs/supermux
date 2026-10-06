@@ -100,6 +100,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.PA_GROUP_KEY
 import dev.supermux.session.SectionKey
+import dev.supermux.session.SessionGroup
 import dev.supermux.session.buildTaskSections
 import dev.supermux.session.combinedTaskSessions
 import dev.supermux.session.groupSessions
@@ -242,6 +243,8 @@ fun SessionListScreen(
     standalone: Boolean = false,
     topBarShown: Boolean = false,
     footer: (@Composable () -> Unit)? = null,
+    /** Host notices under the new-session card (e.g. "This computer needs git to run agents"). */
+    banner: (@Composable () -> Unit)? = null,
     tabDragState: PaneDragController? = null,
     /**
      * Optional scroll state. The phone disposes this screen while a chat is open, so its host
@@ -263,6 +266,8 @@ fun SessionListScreen(
     val showRowHostBadge = multiHost && hostFilter == null
     val hostByRecord = remember(hosts) { hosts.associateBy { it.recordId } }
     val offlineIds = remember(hosts) { hosts.filter { !it.online }.map { it.recordId }.toSet() }
+    // The only host can't be reached: the multi-host offline groups don't apply, so say it here.
+    val unreachableSingleHost = if (multiHost) null else hosts.singleOrNull()?.takeIf { !it.online }
 
     val names = remember(sessions, sessionNames) {
         if (sessionNames.isNotEmpty()) sessionNames else sessions.associate { it.id to it.name }
@@ -678,6 +683,18 @@ fun SessionListScreen(
         }
     }
 
+    // Same rule as each row's own dot: sessionListShowsUnread. Shared by the project headers'
+    // unread counts and the offscreen unread pills.
+    fun sessionUnread(sid: String) = sessionListShowsUnread(
+        active = sid == activeId,
+        working = agentState[sid]?.working == true,
+        lastMessageTs = lastBySession[sid]?.ts,
+        lastReadAt = lastRead[sid],
+    )
+    // The open workspace is being read, even when its row has scrolled away.
+    fun workspaceUnread(w: WorkspaceDto) =
+        !(openWorkspaceByWorkspaceId && w.id == activeId) && w.chatSessionIds().any(::sessionUnread)
+
     fun LazyListScope.workspaceBody() {
         if (groups.isEmpty() && archivedWorkspaces.isEmpty() && mode == SessionListMode.Workspaces) {
             item(key = "empty_hint") {
@@ -769,7 +786,7 @@ fun SessionListScreen(
                 GroupHeaderRow {
                     PathGroupHeader(
                         g.label,
-                        ordered.size,
+                        unreadCount = ordered.count(::workspaceUnread),
                         collapsed = isCollapsed,
                         onToggle = {
                             openSwipeRowId = null
@@ -961,11 +978,6 @@ fun SessionListScreen(
         sessionGroups.forEach { g ->
             val isCollapsed = collapsedPaths.contains(g.workdir)
             val isPaGroup = g.workdir == PA_GROUP_KEY
-            val activeCount = if (isPaGroup) {
-                g.sessions.size
-            } else {
-                g.sections.filter { it.key != SectionKey.SETTLED }.sumOf { it.sessions.size }
-            }
             val openRows = if (isPaGroup) {
                 g.sessions
             } else {
@@ -980,7 +992,7 @@ fun SessionListScreen(
                 GroupHeaderRow {
                     PathGroupHeader(
                         label = g.label,
-                        count = activeCount,
+                        unreadCount = g.allSessions().count { sessionUnread(it.id) },
                         collapsed = isCollapsed,
                         onToggle = {
                             openSwipeRowId = null
@@ -1163,40 +1175,69 @@ fun SessionListScreen(
 
     // ── Offscreen unread pills ────────────────────────────────────────────────────────────────
     // Row keys of every unread row this list can emit (session rows use several key prefixes, one
-    // per section; workspace rows two). Same rule as each row's own dot: sessionListShowsUnread.
-    fun sessionUnread(sid: String) = sessionListShowsUnread(
-        active = sid == activeId,
-        working = agentState[sid]?.working == true,
-        lastMessageTs = lastBySession[sid]?.ts,
-        lastReadAt = lastRead[sid],
-    )
+    // per section; workspace rows two). A COLLAPSED project emits no rows, so its header stands in
+    // for them — the pill still counts it, and a tap expands it (see scrollToUnread).
     // Row key → dismissal token (key + newest unread message ts): a pill dismissed on this state
     // comes back once the row gets another message.
     val unreadRowTokens: Map<String, String> = remember(
         useWorkspaces, visibleWorkspaces, visibleSessions, lastBySession, lastRead, agentState, activeId,
+        groups, sessionGroups, collapsedPaths,
     ) {
         fun token(key: String, sids: List<String>) =
             "$key@" + sids.filter(::sessionUnread).maxOf { lastBySession[it]?.ts.orEmpty() }
         if (useWorkspaces) {
-            // The open workspace is being read, even when its row has scrolled away.
-            visibleWorkspaces
-                .filter { w -> !(openWorkspaceByWorkspaceId && w.id == activeId) }
-                .filter { w -> w.chatSessionIds().any(::sessionUnread) }
-                .flatMap { w ->
-                    listOf("ws:${w.id}", "flat:pa:${w.id}").map { it to token(it, w.chatSessionIds()) }
-                }
+            val rows = visibleWorkspaces.filter(::workspaceUnread).flatMap { w ->
+                listOf("ws:${w.id}", "flat:pa:${w.id}").map { it to token(it, w.chatSessionIds()) }
+            }
+            val headers = groups.filter { it.key in collapsedPaths }.mapNotNull { g ->
+                val sids = g.workspaces.filter(::workspaceUnread).flatMap { it.chatSessionIds() }
+                if (sids.isEmpty()) null else "h:${g.key}".let { it to token(it, sids) }
+            }
+            rows + headers
         } else {
-            visibleSessions.filter { sessionUnread(it.id) }.flatMap { s ->
+            val rows = visibleSessions.filter { sessionUnread(it.id) }.flatMap { s ->
                 UNREAD_SESSION_KEY_PREFIXES.map { p -> (p + s.id).let { it to token(it, listOf(s.id)) } }
             }
+            val headers = sessionGroups.filter { it.workdir in collapsedPaths }.mapNotNull { g ->
+                val sids = g.allSessions().map { it.id }.filter(::sessionUnread)
+                if (sids.isEmpty()) null else "group:header:${g.workdir}".let { it to token(it, sids) }
+            }
+            rows + headers
         }.toMap()
     }
     // Run the list's own DSL through a key recorder: item index of every unread row, including rows
     // far offscreen that the LazyColumn never laid out. Cheap (keys only, no row composes).
-    val unreadRows = LazyKeyRecorder().apply { body() }.keys
+    val listKeys = LazyKeyRecorder().apply { body() }.keys
+    val unreadRows = listKeys
         .withIndex().mapNotNull { (i, k) -> (k as? String)?.let(unreadRowTokens::get)?.let { UnreadRow(i, it) } }
+    // A collapsed project's header the pill asked to reveal: expanded first, then (once its rows
+    // are in the list) scrolled to its first unread row.
+    var revealHeaderKey by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(revealHeaderKey, unreadRows) {
+        val header = revealHeaderKey ?: return@LaunchedEffect
+        if (collapsedGroupOfHeader(header) in collapsedPaths) return@LaunchedEffect
+        val headerIndex = listKeys.indexOf(header)
+        if (headerIndex < 0) {
+            revealHeaderKey = null
+            return@LaunchedEffect
+        }
+        val nextHeader = listKeys.withIndex()
+            .firstOrNull { (i, k) -> i > headerIndex && (k as? String)?.let(::collapsedGroupOfHeader) != null }
+            ?.index ?: listKeys.size
+        val target = unreadRows.firstOrNull { it.index in (headerIndex + 1) until nextHeader }?.index
+        listState.animateScrollToCenter(target ?: headerIndex)
+        // Cleared only now: changing the key restarts this effect and would cancel the scroll.
+        revealHeaderKey = null
+    }
     // Scrolling reveals a row; it doesn't read it — only opening the chat advances last_read_at.
     fun scrollToUnread(index: Int) {
+        val group = (listKeys.getOrNull(index) as? String)?.let(::collapsedGroupOfHeader)
+        if (group != null && group in collapsedPaths) {
+            openSwipeRowId = null
+            setCollapsedPaths(collapsedPaths - group)
+            revealHeaderKey = listKeys[index] as String
+            return
+        }
         listScope.launch { listState.animateScrollToCenter(index) }
     }
 
@@ -1228,6 +1269,11 @@ fun SessionListScreen(
             }
         }
         NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
+        banner?.let { b ->
+            Column(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.xs)) { b() }
+        }
+        // Single host (no offline groups then): its can't-reach state, with the same first hint.
+        unreachableSingleHost?.let { h -> SingleHostOfflineNotice(h) }
         SessionsSectionHeader(
             title = if (useWorkspaces) "Workspaces" else "Sessions",
             groupByProject = groupByProject,
@@ -1504,35 +1550,88 @@ private fun QuietSettledToggle(
     )
 }
 
-/** Greyed group header for an offline/unreachable host (spec §5): dot + name + last-seen. */
+/** Copy for a host the app can't reach. */
+object OfflineHostCopy {
+    /** The first thing to check (spec "Keep the computer awake while hosting"): a sleeping or logged-out computer. */
+    const val AWAKE_HINT = "Is the computer awake and logged in?"
+}
+
+/**
+ * Greyed group header for an offline/unreachable host (spec §5): dot + name + last-seen, then a
+ * quiet first hint — the usual reason is a computer that is asleep or not logged in.
+ */
 @Composable
 private fun OfflineHostHeader(host: HostView) {
     val cs = MaterialTheme.colorScheme
     val lastSeen = formatLastSeen(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)
-    Row(
+    Column(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
             .testTag("offline_host_${host.recordId}"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        HostDot(host.colorIndex, size = 8.dp)
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            HostDot(host.colorIndex, size = 8.dp)
+            Text(
+                host.displayLabel,
+                color = cs.onSurfaceVariant,
+                fontFamily = MonoFontFamily,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "· offline" + if (lastSeen.isNotEmpty()) " · seen $lastSeen" else "",
+                color = cs.onSurfaceVariant.copy(alpha = 0.6f),
+                fontFamily = MonoFontFamily,
+                fontSize = 10.sp,
+                maxLines = 1,
+            )
+        }
         Text(
-            host.displayLabel,
-            color = cs.onSurfaceVariant,
-            fontFamily = MonoFontFamily,
+            OfflineHostCopy.AWAKE_HINT,
+            color = cs.onSurfaceVariant.copy(alpha = 0.6f),
             fontSize = 11.sp,
+            maxLines = 2,
+            modifier = Modifier.padding(start = 14.dp).testTag("offline_host_hint_${host.recordId}"),
+        )
+    }
+}
+
+/** The single paired host can't be reached: "Can't reach <name>", then the awake hint. */
+@Composable
+private fun SingleHostOfflineNotice(host: HostView) {
+    val cs = MaterialTheme.colorScheme
+    val lastSeen = formatLastSeen(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Space.md, vertical = Space.xs)
+            .clip(RoundedCornerShape(Space.sm))
+            .background(cs.surfaceContainerHighest)
+            .padding(horizontal = Space.md, vertical = Space.sm)
+            .testTag("offline_single_host"),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            "Can't reach ${host.displayLabel}" + if (lastSeen.isNotEmpty()) " · seen $lastSeen" else "",
+            color = cs.onSurface,
+            fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         Text(
-            "· offline" + if (lastSeen.isNotEmpty()) " · seen $lastSeen" else "",
-            color = cs.onSurfaceVariant.copy(alpha = 0.6f),
-            fontFamily = MonoFontFamily,
-            fontSize = 10.sp,
-            maxLines = 1,
+            OfflineHostCopy.AWAKE_HINT,
+            color = cs.onSurfaceVariant,
+            fontSize = 12.sp,
+            modifier = Modifier.testTag("offline_single_host_hint"),
         )
     }
 }
@@ -1723,5 +1822,13 @@ private fun FooterIcon(image: ImageVector, label: String, tag: String, onClick: 
  * Every key prefix a session row carries across the flat/grouped sections (PA pin, task, settled,
  * draft). Offline-host rows (`off:`) are left out: their chat can't be opened to read it anyway.
  */
+/** Every session a project group can show, across its task sections. */
+private fun SessionGroup.allSessions(): List<SessionInfo> =
+    (sessions + sections.flatMap { it.sessions }).distinctBy { it.id }
+
+/** The collapse key of a project-group header's lazy key (both list modes), or null. */
+private fun collapsedGroupOfHeader(key: String): String? =
+    key.removePrefix("h:").takeIf { it != key } ?: key.removePrefix("group:header:").takeIf { it != key }
+
 private val UNREAD_SESSION_KEY_PREFIXES =
     listOf("flat:pa:", "flat:", "task:", "group:pa:", "group:settled:", "f:draft:")

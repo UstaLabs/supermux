@@ -9,6 +9,8 @@ import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
+import { resolveCommand, type FileExists } from "../../process/launcher"
+import { isGrokAgentPath } from "../detect"
 
 import { smokeCursorAgent } from "./smoke"
 import { HOME } from "../../session-manager/spawn-helper"
@@ -50,6 +52,19 @@ export type CursorPrepareExtra = {
   permissionMode?: string
 }
 
+/** The Cursor CLI to launch: `cursor-agent` when it is on PATH, else Cursor's official `agent`
+ *  alias (agent.cmd on Windows), but never Grok's `agent` (both CLIs install one). Falls back to
+ *  the bare name so a missing CLI still fails with Cursor's own "not found". */
+export function cursorCommand(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform = process.platform,
+  fileExists?: FileExists,
+): string {
+  if (resolveCommand(["cursor-agent"], env, platform, { fileExists })) return "cursor-agent"
+  const alias = resolveCommand(["agent"], env, platform, { fileExists })
+  return alias && !isGrokAgentPath(alias) ? alias : "cursor-agent"
+}
+
 function cursorOpts(
   stateDirectory: string,
   env: Record<string, string>,
@@ -60,7 +75,7 @@ function cursorOpts(
   if (settings.initial.kind !== "acp") throw new Error("cursor driver settings mismatch")
   return {
     id: "cursor",
-    command: "cursor-agent",
+    command: cursorCommand({ ...process.env, ...env }),
     commandArgs: [],
     env,
     inheritEnv: true,

@@ -93,13 +93,15 @@ import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
-import { BUILD_VERSION, BUILD_COMMIT } from "./shared/build-info"
+import { BUILD_VERSION, BUILD_COMMIT, versionString } from "./shared/build-info"
+import { captureWindowsTaskFlag } from "./core/update/apply"
+import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
 import { NullRelayProvider } from "./core/relay/provider"
 import { FrpRelayProvider, parentBoundFrpcCommand } from "./core/relay/frp-provider"
 import { UpdateChecker } from "./core/update/checker"
-import { detectUpdateMode } from "./core/update/mode"
+import { detectInstallMode, detectUpdateMode } from "./core/update/mode"
 import { ReviewStore } from "./core/review/store"
 import { WalkthroughStore } from "./core/walkthrough/store"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "./core/walkthrough/author"
@@ -121,12 +123,17 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chm
 import { randomBytes, randomUUID } from "crypto"
 import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
-import { spawnCommand } from "./core/process/launcher"
+import { resolveCommand, spawnCommand } from "./core/process/launcher"
 import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/preflight"
 import { detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
 import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
-import { withAgentBinDirs } from "./core/agents/bin-dirs"
+import { refreshPathFromRegistry, withAgentBinDirs } from "./core/agents/bin-dirs"
+import {
+  GitInstaller, GitRequiredError, GitRequirementMonitor, GIT_REQUIRED_MESSAGE, bunWhich, readRegistryPath,
+  setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
+} from "./core/git/requirement"
+import { spawnSync as spawnSyncForGit } from "child_process"
 import { homedir, hostname } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
@@ -157,6 +164,8 @@ import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
 import { curatorPromptPath, frpcPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
+import { KeepAwake, batteryProbe, loginSessionProbe, spawnInhibitor } from "./core/power/keep-awake"
+import { WakeDetector, runWakeActions } from "./core/power/wake"
 import { SearchStore } from "./core/search/store"
 import { ForgeStore } from "./core/forge/store"
 import { ForgeService } from "./core/forge/service"
@@ -189,6 +198,9 @@ import type { OwnerRow } from "./core/worktree/inventory"
 import { deriveName, ensureUnique } from "./core/session-manager/naming"
 
 const log = makeLogger("main")
+// Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
+// nothing this broker spawns inherits it (see restartViaWindowsTask).
+if (captureWindowsTaskFlag()) log.info("windows_host_task", {})
 const relayLog = makeLogger("core/relay/frp-provider")
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -223,6 +235,67 @@ if (IS_TEST_BROKER) {
 // process never sourced. Put those dirs on PATH up front so both detection
 // (hasBinary) and spawning can see an agent the user installs at runtime.
 process.env.PATH = withAgentBinDirs(process.env.PATH, homedir())
+
+// Git is required to host agents. On a Mac without the Xcode Command Line Tools /usr/bin/git is
+// Apple's stub, which opens an install dialog on EVERY run: before anything spawns git, a failing
+// `git` goes ahead of it on PATH so the broker and every session it starts get a plain error. On
+// every OS a missing git refuses agent sessions and is re-checked every 10 s; once found, the shim
+// leaves PATH and everything unblocks (no restart).
+const gitRequirement = new GitRequirementMonitor({
+  platform: process.platform,
+  // Windows: the one-click install is MinGit, per user (core/git/mingit.ts).
+  minGit: process.platform === "win32",
+  which: bunWhich,
+  // Synchronous only for the boot check (before listen); every re-check is async.
+  runXcodeSelectSync: () => {
+    try {
+      return spawnSyncForGit("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 }).status ?? 1
+    } catch {
+      return 1
+    }
+  },
+  runXcodeSelect: xcodeSelectExit,
+  // Windows: an installer updates the registry Path, never ours — read it fresh on each re-check.
+  readRegistryPath,
+  stateDir: STATE_DIR,
+  env: process.env,
+  log: (event, data) => log.info(event, data),
+  // New tmux windows (claude sessions) inherit tmux's global env, not ours: drop the shim there too.
+  onPathChanged: (path) => setTmuxGlobalPath(path),
+})
+/** POST /system/install-git, debounced (60 s cooldown; a running winget blocks a second one). */
+const gitInstaller = new GitInstaller({
+  platform: process.platform,
+  requirement: () => gitRequirement.git,
+  hasWinget: () => bunWhich("winget", process.env.PATH ?? "") !== null,
+  spawn: (cmd) => {
+    log.info("install_git_started", { cmd: cmd[0] })
+    return spawnDetached(cmd, (event, data) => log.warn(event, data))
+  },
+  onStatus: (status) => gitRequirement.setInstallStatus(status),
+  installMinGit: process.platform === "win32"
+    ? async () => {
+        log.info("install_git_started", { cmd: "mingit" })
+        try {
+          const r = await installMinGit(realMinGitDeps())
+          log.info("install_git_mingit_done", { cmdDir: r.cmdDir })
+        } catch (err) {
+          log.warn("install_git_mingit_failed", { err: String(err) })
+          throw err
+        }
+      }
+    : undefined,
+  onInstalled: () => { void gitRequirement.recheck() },
+})
+{
+  const git = gitRequirement.start()
+  if (!git.ok) log.warn("preflight", { warning: "git is missing: agent sessions are refused until it is installed", install: git.install })
+}
+
+/** Throws [GitRequiredError] while this computer has no usable git. Every agent spawn calls it. */
+function assertAgentsAllowed(): void {
+  if (!gitRequirement.ok) throw new GitRequiredError(gitRequirement.requirements())
+}
 
 // Fail fast before any filesystem side-effects (state dirs, pid file, db).
 // The workspace-terminal probe is a packaging question (is the verified zmx
@@ -329,6 +402,23 @@ try {
 const reviewStore = new ReviewStore(db)
 const walkthroughStore = new WalkthroughStore(db)
 const settings = new SettingsStore(db)
+
+// "Keep this computer awake" while hosting (spec 2026-09-30-desktop-hosting-lifecycle-design): a
+// parent-bound inhibitor child, held while the setting is on (released on battery when "Also on
+// battery" is off). Default on for a desktop-managed broker; MUX_KEEP_AWAKE=1|0 overrides that.
+const keepAwakeLog = makeLogger("core/power/keep-awake")
+const keepAwake = new KeepAwake({
+  platform: process.platform,
+  spawn: spawnInhibitor,
+  which: (bin) => bunWhich(bin, process.env.PATH ?? ""),
+  onBattery: batteryProbe(process.platform),
+  // Linux: a denial at boot (no active session yet) is re-tried once loginctl shows one.
+  ...(process.platform === "linux" ? { sessionActive: loginSessionProbe(process.getuid?.()) } : {}),
+  log: (event, data) => keepAwakeLog.info(event, data),
+}, settings.getKeepAwake(process.env))
+keepAwake.start()
+// Wall-clock gap detection: after a sleep the relay, clients and idle timers are refreshed (below).
+const wakeDetector = new WakeDetector({ log: (event, data) => log.info(event, data) })
 const credentialHelperPath = join(STATE_DIR, "bin", "mux-credential")
 try { installCredentialLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, "..")) }
 catch (err) { log.error("forge_credential_launcher_failed", { err: String(err) }) }
@@ -411,7 +501,7 @@ function sessionAccountFields(s: { agent?: string; account?: string | null }): {
 }
 /** Every agent kind's install/auth status — GET /agents/status and the /agents/models catalog. */
 const detectAgentStatuses = () => detectAllAgents(
-  { hasBinary, fileExists: existsSync, hasCredential: agentHasCredential },
+  { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync, hasCredential: agentHasCredential },
   {
     home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
     appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
@@ -719,6 +809,7 @@ const channels: Record<string, Channel> = {
 // socket server, …) is deref'd lazily inside a closure — and webChannel/agentRpc
 // are `let`-assigned much later, so their thunks must never capture the value.
 const sessionManager = new SessionManager(registry, {
+  hostRequirements: () => gitRequirement.requirements(),
   getWebChannel: () => webChannel,
   getAgentRpc: () => agentRpc,
   inbound: {
@@ -1594,8 +1685,8 @@ const relayProvider = process.env.MUX_RELAY_DOMAIN
       relayBase: process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`,
       relayDomain: process.env.MUX_RELAY_DOMAIN,
       localPort: MUX_WEB_PORT ?? 9898,
-      getNonce: async () => {
-        const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`)
+      getNonce: async (signal) => {
+        const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`, { signal })
         return ((await r.json()) as { nonce: string }).nonce
       },
       activationGated: process.platform !== "win32",
@@ -1637,7 +1728,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // One install job per agent; "installed" is re-probed (binary on PATH) after
   // the installer exits. Referenced lazily by the startAgentInstall closures.
   const installManager = createInstallManager({
-    isInstalled: (kind) => detectAgent(kind, { hasBinary, fileExists: existsSync }, { home: homedir() }).installed,
+    isInstalled: (kind) => detectAgent(kind, { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }, { home: homedir() }).installed,
+    // Windows: an installer that set the user PATH (codex, cursor, …) changed only the registry —
+    // fold its dirs into ours so detection and new sessions/terminals see the agent, no restart.
+    refreshPath: async () => {
+      const added = await refreshPathFromRegistry(process.env, readRegistryPath)
+      if (added.length) log.info("agent_install_path_refreshed", { added })
+    },
     // A new agent joins the launcher's catalog: discover its models, then announce either way.
     onSettled: (kind) => {
       void refreshAgentModels(kind).finally(() => announceAgentModelsChanged([kind]))
@@ -1651,7 +1748,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       platform: hostPlatform,
       version: BUILD_VERSION,
       protocolVersion: 1,
+      build: versionString(),
+      mode: detectInstallMode(),
+      managedBy: process.env.MUX_MANAGED_BY || undefined,
+      stateDir: STATE_DIR,
+      // Kept for desktops that predate `requirements`.
+      gitAvailable: gitRequirement.ok,
+      requirements: gitRequirement.requirements(),
+      keepAwake: keepAwake.state(),
     }),
+    getHostRequirements: () => gitRequirement.requirements(),
+    installGit: () => gitInstaller.install(),
+    getKeepAwake: () => keepAwake.state(),
+    setKeepAwake: (patch) => keepAwake.update(settings.setKeepAwake(patch, process.env)),
     claimStore,
     // CSRF trusts this as a second allowed Origin for cookie browsers on the
     // hosted relay. Prefer the live online URL, but fall back to the
@@ -2046,6 +2155,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return { id: s.id, name: s.name, workdir: s.workdir, agent: s.agent }
     },
     spawnPA: async (args) => {
+      assertAgentsAllowed()
       const r = await spawnPA({
         registry,
         name: args.name,
@@ -2851,6 +2961,9 @@ async function spawnSession(args: {
   internal?: boolean
   rpcMcpConfig?: string
 }) {
+  // No git, no agents: refused here so every door (web, shim spawn_session, /spawn, drafts'
+  // first message, agent-rpc workers) gets the same error.
+  assertAgentsAllowed()
   const agent = args.agent ?? AgentKind.Claude
   // Before any worktree/name work: an unknown, foreign or unsupported account fails the request.
   const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, args.account)
@@ -3061,6 +3174,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       proxyPublicUrl: exposedProxyLinksBaseUrl(),
       resumeFromArchive: (id: string) => resumeFromArchive(id),
       spawnPA: async (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => {
+        assertAgentsAllowed()
         const workdir = join(home(), ".mux", "workspace", args.name)
         mkdirSync(workdir, { recursive: true })
         if (args.focus != null) {
@@ -3154,6 +3268,12 @@ ch.on("inbound", async (msg: InboundMessage) => {
     return
   }
 
+  // No git on this computer: an agent that is not already live cannot be started or resumed, so
+  // say why instead of "adapter disconnected / try /kill".
+  if (sessionManager.heldForGit(session)) {
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text: GIT_REQUIRED_MESSAGE, disable_notification: false })
+    return
+  }
   // Lazy resume: if the session is suspended, re-spawn it before delivering the message
   if (session.status === "suspended") {
     await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${session.name}"...`, disable_notification: true })
@@ -3342,6 +3462,13 @@ if (webChannel) {
     // resolveName(); the rest of the web path (hasSession/adapterSend) also
     // uses getById.
     const targetSession = msg.target_session_id ? registry.get(msg.target_session_id) : undefined
+    // No git on this computer: a session whose agent is not already live cannot be started or
+    // resumed. Surface it the way other web inbound failures do (agent_error toast + an error
+    // entry in the transcript), so the user sees it in the chat they typed into.
+    if (targetSession && sessionManager.heldForGit(targetSession)) {
+      void notifyAgentError(targetSession.id, targetSession.name, "Git required", GIT_REQUIRED_MESSAGE)
+      return
+    }
     if (targetSession?.status === "suspended") {
       await notifySession(targetSession.id, `Resuming session "${targetSession.name}"...`)
       const resumed = await resumeSuspendedSession(targetSession)
@@ -3416,7 +3543,7 @@ if (webChannel) {
         })
         // The draft row was restored just above, so the session exists again and
         // the notice has a home.
-        await notifySession(draftSnapshot.id, `Failed to start session "${draftSnapshot.name}".`)
+        await notifySession(draftSnapshot.id, sessionManager.agentsBlocked() ? GIT_REQUIRED_MESSAGE : `Failed to start session "${draftSnapshot.name}".`)
         return
       }
       inbound = { ...msg, target_session_id: started.id }
@@ -3465,7 +3592,10 @@ const supervisor = createSupervisor({
   // non-claude PAs derive from the component — the half-filled-bag bug
   // (adapters built then dropped) is structurally closed.
   sessionManager,
-  reapInternalWorkers: () => agentRpc.reapIdle(RPC_WORKER_IDLE_MS),
+  // check() first: if the computer just woke, the wake shifts the idle baselines before the reap
+  // judges them (this 30 s timer can fire before the wake detector's own tick).
+  reapInternalWorkers: () => { wakeDetector.check(); return agentRpc.reapIdle(RPC_WORKER_IDLE_MS) },
+  agentsBlocked: () => !gitRequirement.ok,
 })
 // Existing installs (any prior sessions, active/suspended/archived) are implicitly
 // onboarded and skip the wizard. Only a pristine instance
@@ -3504,6 +3634,36 @@ if (!IS_TEST_BROKER) {
 }
 
 await sessionManager.resumeAtBoot()
+// Git appearing (or its install action changing) reaches every client, and a boot that skipped
+// resuming agent sessions for lack of git resumes them now.
+gitRequirement.onChange((requirements) => {
+  webChannel?.broadcastToAll({ type: "host_requirements", requirements })
+  if (requirements.git.ok) {
+    void sessionManager.resumeDeferredBoot().catch((err) => log.warn("resume_deferred_boot_failed", { err: String(err) }))
+  }
+})
+// Keep-awake changes (toggled, released on battery, gave up) reach every client.
+keepAwake.onChange((state) => {
+  webChannel?.broadcastToAll({ type: "keep_awake", keepAwake: state })
+})
+// After a sleep (spec "Wake reconnect, sleep ≠ idle"): sleep is not idleness, the relay reconnects
+// now instead of after frpc's own timeouts, every client resubscribes for a fresh snapshot, and the
+// git requirement and the power source are re-checked.
+wakeDetector.onWake((sleptMs) => {
+  runWakeActions({
+    shiftIdle: (ms) => agentRpc.shiftIdle(ms),
+    refreshRelay: () => relayProvider.refreshAfterWake?.() ?? Promise.resolve(),
+    recheckGit: () => gitRequirement.recheck(),
+    refreshKeepAwake: () => keepAwake.refresh(),
+    broadcast: (frames) => { for (const f of frames) webChannel?.broadcastToAll(f) },
+    resyncClients: () => webChannel?.resyncClients("resync after wake") ?? 0,
+    log: (event, data) => log.info(event, data),
+  }, sleptMs, () => [
+    { type: "host_requirements", requirements: gitRequirement.requirements() },
+    { type: "keep_awake", keepAwake: keepAwake.state() },
+  ])
+})
+wakeDetector.start()
 // Housekeeping at boot is intentionally NON-DESTRUCTIVE: collapse every cursor
 // home's runtime to a symlink at the shared copy (safe, idempotent) and only
 // LOG any orphan-looking homes. Actual deletion lives solely in the explicit
@@ -3651,6 +3811,10 @@ async function gracefulShutdown(signal: string) {
   try {
     updateChecker?.stop()
   } catch (err: any) { log.warn("update_checker_stop_failed", { err: err?.message }) }
+  try {
+    wakeDetector.stop()
+    keepAwake.stop()
+  } catch (err: any) { log.warn("keep_awake_stop_failed", { err: err?.message ?? String(err) }) }
   try {
     await relayProvider.stop()
   } catch (err: any) { log.warn("relay_provider_stop_failed", { err: err?.message ?? String(err) }) }

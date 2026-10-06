@@ -34,6 +34,67 @@ describe("SessionManager resume frames", () => {
   })
 })
 
+describe("SessionManager while git is missing", () => {
+  const missing = { git: { ok: false, install: "manual" as const, hint: "Install git" } }
+
+  function gated() {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const state = { reqs: missing as { git: { ok: boolean; install: "manual"; hint: string } } }
+    const ports = fakePorts(db)
+    let worktreeCalls = 0
+    ports.hostRequirements = () => state.reqs
+    ports.resume.ensureSessionWorktree = async () => { worktreeCalls++ }
+    const registry = new Registry(db)
+    const m = new SessionManager(registry, ports)
+    return { m, registry, state, worktreeCalls: () => worktreeCalls }
+  }
+
+  test("a suspended session is not resumed (nothing touched)", async () => {
+    const g = gated()
+    expect(g.m.agentsBlocked()).toBe(true)
+    expect(await g.m.resumeSuspended({ id: "x", name: "n", agent: "claude", workdir: "/tmp" })).toBe(false)
+    expect(g.worktreeCalls()).toBe(0)
+  })
+
+  test("an archived session is refused with the git message", async () => {
+    const g = gated()
+    const s = g.registry.sessions.register({ name: "arch", agent: "cursor", workdir: "/tmp" } as any)
+    g.registry.unregister(s.id)
+    const r = await g.m.resumeFromArchive(s.id)
+    expect(r).toEqual({ ok: false, error: "This computer needs git to run agents. Install it, then try again." })
+    expect(g.worktreeCalls()).toBe(0)
+  })
+
+  test("heldForGit: a non-live, non-draft session is held; a live agent and a draft are not", () => {
+    const g = gated()
+    g.registry.register({ id: "c1", name: "cur", workdir: "/tmp", pid: 0, agent: "cursor" })
+    expect(g.m.heldForGit({ id: "c1" })).toBe(true) // no adapter: suspended / deferred at boot
+    expect(g.m.heldForGit({ id: "c1", user_status: "draft" })).toBe(false)
+    g.m.registerCursorRuntime("c1", { fake: true } as unknown as CoreAdapter)
+    expect(g.m.heldForGit({ id: "c1" })).toBe(false) // already live: keeps working
+    g.state.reqs = { git: { ok: true, install: "manual", hint: "Install git" } }
+    g.registry.register({ id: "c2", name: "cur2", workdir: "/tmp", pid: 0, agent: "cursor" })
+    expect(g.m.heldForGit({ id: "c2" })).toBe(false) // git present: the normal paths apply
+  })
+
+  test("boot resume is deferred, and runs once git appears", async () => {
+    const g = gated()
+    let boots = 0
+    const real = g.m.resumeAtBoot.bind(g.m)
+    g.m.resumeAtBoot = async () => { boots++; return real() }
+    await g.m.resumeAtBoot()
+    expect(boots).toBe(1)
+    await g.m.resumeDeferredBoot() // still missing: nothing
+    expect(boots).toBe(1)
+    g.state.reqs = { git: { ok: true, install: "manual", hint: "Install git" } }
+    await g.m.resumeDeferredBoot()
+    expect(boots).toBe(2)
+    await g.m.resumeDeferredBoot() // only once
+    expect(boots).toBe(2)
+  })
+})
+
 describe("SessionManager runtime store", () => {
   test("registerClaudeRuntime stores the runtime; adapterFor returns its adapter", () => {
     const m = manager()

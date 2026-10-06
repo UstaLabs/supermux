@@ -134,6 +134,11 @@ fun DesktopSettingsSection(
 @Composable
 fun DesktopSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
     when (extra) {
+        // The supervisor, host store and session count come in through `LocalHostSupervisor` & co.
+        SettingsExtra.Hosting -> DesktopHostingSettings(
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
+        )
         SettingsExtra.Appearance -> AppearanceSettingsScreen(
             // Desktop opens dark when nobody has chosen — the same fallback `Main.kt` applies.
             defaultAppearance = AppearanceMode.DARK,

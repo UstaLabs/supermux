@@ -94,13 +94,18 @@ export function zmxBundleDir(stateDir: string): string {
 
 /** Resolve the relay helper. Desktop packages provide frpc on PATH; standalone
  * compiled releases fall back to their verified embedded copy. */
-export function frpcPath(stateDir: string): string {
+export function frpcPath(stateDir: string, platform: NodeJS.Platform = process.platform): string {
   const configured = process.env.MUX_FRPC_PATH?.trim()
   if (configured) return configured
   const onPath = Bun.which("frpc")
   if (onPath) return onPath
   if (!IS_COMPILED) return "frpc"
-  return materializeAsset({ stateDir, name: "frpc", sourcePath: frpcEmbedded, executable: true })
+  return materializeAsset({ stateDir, name: frpcAssetName(platform), sourcePath: frpcEmbedded, executable: true })
+}
+
+/** The materialized relay helper's file name: Windows only runs a file with an executable extension. */
+export function frpcAssetName(platform: NodeJS.Platform): string {
+  return platform === "win32" ? "frpc.exe" : "frpc"
 }
 
 // knowledge-curator.md: the curator hands this path to a spawned claude session.

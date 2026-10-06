@@ -381,6 +381,15 @@ private fun SystemSettingsBody(
                         }
                     }
 
+                    if (s.mode == "managed") {
+                        Text(
+                            "Updated with the supermux app.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = cs.onSurfaceVariant,
+                            modifier = Modifier.testTag("system_update_managed"),
+                        )
+                    }
+
                     // Update broker — binary self-updater only. Source/docker can't
                     // self-update; hide while an update is in flight and once staged.
                     if (s.mode == "binary" &&

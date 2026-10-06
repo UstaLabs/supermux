@@ -3,6 +3,7 @@
 // it's fully unit-testable with no real network. The apply engine later reuses
 // this same instance to surface progress via setState() and to read the last
 // good manifest via latestManifest().
+import type { InstallMode } from "./mode"
 import {
   channelFor,
   compareVersions,
@@ -11,7 +12,7 @@ import {
   type VersionsJson,
 } from "./versions"
 
-export type UpdateMode = "binary" | "source" | "docker"
+export type UpdateMode = InstallMode | "managed"
 
 export type UpdateState =
   | "idle"

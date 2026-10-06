@@ -132,6 +132,28 @@ class FleetStoreTest {
         f.close()
     }
 
+    @Test fun refreshFromStorePicksUpARecordWrittenOutsideTheFleet() = runTest(UnconfinedTestDispatcher()) {
+        val s = store(PairedHost(recordId = "h1", displayName = "A", token = "t", relayUrl = "https://h-a.relay.supermux.dev"))
+        val f = fleet(s, this)
+        assertEquals(listOf("h1"), f.hostViews.value.map { it.recordId })
+        s.addOrUpdate(displayName = "This computer", token = "t2", directUrl = "http://127.0.0.1:9898", hostId = "hb")
+        f.refreshFromStore()
+        assertEquals(2, f.hostViews.value.size)
+        assertTrue(f.hostViews.value.any { it.hostId == "hb" })
+        f.close()
+    }
+
+    @Test fun refreshFromStoreRedialsARecordWhoseDirectUrlChanged() = runTest(UnconfinedTestDispatcher()) {
+        val s = store(PairedHost(recordId = "me", hostId = "hb", displayName = "Mac", token = "t", directUrl = "http://127.0.0.1:9898"))
+        val f = fleet(s, this)
+        assertEquals("http://127.0.0.1:9898", f.appForRecord("me")?.baseUrl)
+        s.addOrUpdate(displayName = "Mac", token = "t", directUrl = "http://127.0.0.1:8787", hostId = "hb")
+        f.refreshFromStore()
+        assertEquals("http://127.0.0.1:8787", f.appForRecord("me")?.baseUrl)
+        assertEquals(listOf("me"), f.hostViews.value.map { it.recordId })
+        f.close()
+    }
+
     /**
      * The browser host authenticates with an HttpOnly cookie, so its record carries NO bearer
      * token — `ambientAuth` says the transport already carries the credential. `sync` must dial it

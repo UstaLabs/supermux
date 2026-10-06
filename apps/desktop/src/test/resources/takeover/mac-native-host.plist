@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.supermux.host</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/alex/.mux/state/bin/supermux-broker</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MUX_WEB_PORT</key>
+    <string>9898</string>
+    <key>MUX_WEB_PUBLIC_URL</key>
+    <string>http://127.0.0.1:9898</string>
+    <key>MUX_STATE_DIR</key>
+    <string>/Users/alex/.mux/state</string>
+    <key>MUX_RELAY_DOMAIN</key>
+    <string>relay.supermux.dev</string>
+            <key>MUX_HOST_NAME</key>
+            <string>Alex’s MacBook Air</string>
+    <key>PATH</key>
+    <string>/Users/alex/.mux/state/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>StandardOutPath</key>
+  <string>/Users/alex/.mux/state/native-host-launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/alex/.mux/state/native-host-launchd.log</string>
+</dict>
+</plist>

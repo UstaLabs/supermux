@@ -317,10 +317,13 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
   }
 
   lc(["bootout", target])
+  // Enable BEFORE bootstrap: launchd refuses to bootstrap a label in its disabled-overrides
+  // database, and the desktop app's takeover deliberately disables the label it replaced. A
+  // later `supermux setup` must win over that, not fail silently.
+  lc(["enable", target])
   if (!lc(["bootstrap", domain, plistFile])) {
     println("launchctl bootstrap reported an error; attempting to start it anyway.")
   }
-  lc(["enable", target])
   lc(["kickstart", "-k", target])
 
   // 4. Give it a moment, then confirm it's loaded + running.
@@ -348,6 +351,11 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
  * but `bun` in source mode (use SETUP.md's manual unit for source installs).
  */
 function installService(flags: Flags, println: (s: string) => void): void {
+  if (process.platform === "win32") {
+    // No CLI service on Windows: the desktop app's "Supermux Host" Scheduled Task is the service.
+    println("Note: on Windows the supermux desktop app keeps the broker running in the background. Skipping service setup.")
+    return
+  }
   if (!IS_COMPILED && !flags.forceSourceUnit) {
     println(
       "Note: setup's service unit targets the compiled binary. This looks like a" +

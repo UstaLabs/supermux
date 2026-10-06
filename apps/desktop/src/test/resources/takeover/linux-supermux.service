@@ -1,0 +1,16 @@
+[Unit]
+Description=supermux broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/u/.local/bin/supermux
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=MUX_WHATSAPP_WEBHOOK_PORT=3001
+Environment="MUX_TELEGRAM_BOT_TOKEN=123:abc"
+
+[Install]
+WantedBy=default.target

@@ -46,7 +46,7 @@
 //   apply/rollback while the lock is held returns `busy`. A lock older than
 //   STALE_LOCK_MS is assumed to be from a crashed process: it's unlinked and the
 //   acquire is retried once.
-import { chmodSync, closeSync, existsSync, linkSync, openSync, renameSync, statSync, unlinkSync } from "fs"
+import { chmodSync, closeSync, existsSync, linkSync, openSync, readFileSync, renameSync, statSync, unlinkSync } from "fs"
 import { dirname, join } from "path"
 import { channelFor, isUpdateAvailable, parseVersionsJson, type VersionsJson } from "./versions"
 import type { FetchLike } from "./checker"
@@ -556,9 +556,30 @@ export function rollback(opts: { execPathOverride?: string }):
  * a "restart required" state). The actual spawn is intentionally NOT unit-tested
  * (no systemd in CI); the INVOCATION_ID gate is factored so the false path is.
  */
+/**
+ * The systemd unit this process runs in, read from its cgroup v2 path
+ * (`0::/user.slice/…/app.slice/mux.service` → "mux.service"). Null outside a
+ * `.service` (login scope, container, no cgroup). Lets a restart target the unit
+ * that actually runs us — installs name it `supermux.service` or `mux.service`.
+ */
+export function systemdUnitFromCgroup(cgroup: string): string | null {
+  const path = cgroup.split("\n").find((l) => l.startsWith("0::"))?.slice(3).trim()
+  const leaf = path?.split("/").pop() ?? ""
+  if (!leaf.endsWith(".service") || /^user@\d+\.service$/.test(leaf)) return null
+  return leaf
+}
+
+function ownSystemdUnit(): string | null {
+  try {
+    return systemdUnitFromCgroup(readFileSync("/proc/self/cgroup", "utf8"))
+  } catch {
+    return null
+  }
+}
+
 export function restartViaSystemd(opts: { unit?: string }): boolean {
   if (!process.env.INVOCATION_ID) return false
-  const unit = opts.unit ?? process.env.MUX_SERVICE_UNIT ?? "supermux"
+  const unit = opts.unit ?? process.env.MUX_SERVICE_UNIT ?? ownSystemdUnit() ?? "supermux"
   // Detached so it survives this process exiting; the `sleep 1` lets the current
   // process exit cleanly before systemctl restarts the unit. The unit name is
   // passed as an ARGV positional ("$1"), NOT interpolated into the script, so a
@@ -577,15 +598,27 @@ export function restartViaSystemd(opts: { unit?: string }): boolean {
 }
 
 /**
- * macOS launchd analogue of restartViaSystemd. A launchd-managed LaunchAgent has
- * XPC_SERVICE_NAME set to its label; a shell-launched process has it unset or
- * "0". Gate on that so we only kickstart when actually service-managed, then
- * schedule a detached `launchctl kickstart -k gui/<uid>/<label>` and return true.
+ * The launchd label from XPC_SERVICE_NAME, or null when not a launchd job. A
+ * LaunchAgent gets its label; a shell-launched process gets nothing or "0"; a
+ * GUI app (and so a broker the desktop app spawned) gets a LaunchServices
+ * instance name, `application.<bundle-id>.<n>.<n>`, which is not kickstartable.
+ */
+export function launchdLabelFromXpc(xpc: string | undefined): string | null {
+  if (!xpc || xpc === "0" || xpc.startsWith("application.")) return null
+  return xpc
+}
+
+/**
+ * macOS launchd analogue of restartViaSystemd. Gate on XPC_SERVICE_NAME so we
+ * only kickstart when actually service-managed, then schedule a detached
+ * `launchctl kickstart -k gui/<uid>/<label>` and return true. The label defaults
+ * to our own job's, since installs differ (`dev.supermux.broker` from
+ * `supermux setup`, `dev.supermux.host` from the native host).
  */
 export function restartViaLaunchd(opts: { label?: string }): boolean {
-  const xpc = process.env.XPC_SERVICE_NAME
-  if (!xpc || xpc === "0") return false
-  const label = opts.label ?? process.env.MUX_SERVICE_LABEL ?? "dev.supermux.broker"
+  const ownLabel = launchdLabelFromXpc(process.env.XPC_SERVICE_NAME)
+  if (!ownLabel) return false
+  const label = opts.label ?? process.env.MUX_SERVICE_LABEL ?? ownLabel
   const uid = typeof process.getuid === "function" ? process.getuid() : 0
   // Detached; `sleep 1` lets this process exit before the kickstart -k restart.
   // The label is passed as an ARGV positional ("$1"), never interpolated into the
@@ -604,11 +637,74 @@ export function restartViaLaunchd(opts: { label?: string }): boolean {
 }
 
 /**
- * Platform-dispatched broker restart: launchd on macOS, systemd elsewhere.
+ * Set once, by the broker at boot ([captureWindowsTaskFlag]): this process runs under the desktop
+ * app's "Supermux Host" Scheduled Task loop. Module state rather than the env so that only the
+ * broker itself has it: a CLI (`supermux update`) or anything else the broker spawns never does.
+ */
+let underWindowsTask = false
+
+/**
+ * Broker boot only. Reads `MUX_WINDOWS_TASK=1` (set by the task's loop) into module state and
+ * removes it from [env], so the broker's children (agents, shims, a `supermux` CLI an agent runs)
+ * don't inherit it and think they can restart by exiting.
+ */
+export function captureWindowsTaskFlag(env: Record<string, string | undefined> = process.env): boolean {
+  underWindowsTask = env.MUX_WINDOWS_TASK === "1"
+  delete env.MUX_WINDOWS_TASK
+  return underWindowsTask
+}
+
+/** Hooks for [restartViaWindowsTask]'s scheduled exit (tests inject them). */
+export interface ExitHooks {
+  /** Run the graceful-shutdown listeners; false when there are none. */
+  emitSigterm: () => boolean
+  exit: (code: number) => void
+  /** Schedule [fn]; the returned timer must not keep the process alive (unref'd). */
+  later: (fn: () => void, ms: number) => void
+}
+
+const realExitHooks: ExitHooks = {
+  emitSigterm: () => process.emit("SIGTERM" as any),
+  exit: (code) => process.exit(code),
+  later: (fn, ms) => { setTimeout(fn, ms).unref?.() },
+}
+
+/** Graceful shutdown can hang (a stuck stop()): exit anyway after this long. */
+export const WINDOWS_RESTART_EXIT_DEADLINE_MS = 10_000
+
+/** What [restartViaWindowsTask] schedules: shut down gracefully, with a hard exit as the deadline. */
+export function windowsRestartExit(hooks: ExitHooks = realExitHooks): void {
+  hooks.later(() => hooks.exit(0), WINDOWS_RESTART_EXIT_DEADLINE_MS)
+  // The graceful-shutdown listener ends with process.exit(0); with none, exit directly.
+  if (!hooks.emitSigterm()) hooks.exit(0)
+}
+
+/**
+ * Windows analogue: the desktop app's "Supermux Host" Scheduled Task runs the broker inside a
+ * PowerShell loop that starts it again ~5 s after it exits. Under that loop a restart is just a
+ * clean exit after [delayMs], so the HTTP answer goes out first. False when this process isn't
+ * the broker under that loop (see [captureWindowsTaskFlag]).
+ */
+export function restartViaWindowsTask(opts: {
+  underTask?: boolean
+  schedule?: (fn: () => void, ms: number) => unknown
+  delayMs?: number
+  hooks?: ExitHooks
+} = {}): boolean {
+  if (!(opts.underTask ?? underWindowsTask)) return false
+  const schedule = opts.schedule ?? ((fn, ms) => setTimeout(fn, ms))
+  schedule(() => windowsRestartExit(opts.hooks), opts.delayMs ?? 1_000)
+  return true
+}
+
+/**
+ * Platform-dispatched broker restart: launchd on macOS, the Scheduled Task loop on Windows,
+ * systemd elsewhere.
  * Returns true if a restart was scheduled (the service brings the new binary
  * back up), false if not service-managed (caller shows "restart required").
  */
 export function restartService(opts: { unit?: string; label?: string } = {}): boolean {
   if (process.platform === "darwin") return restartViaLaunchd({ label: opts.label })
+  if (process.platform === "win32") return restartViaWindowsTask()
   return restartViaSystemd({ unit: opts.unit })
 }

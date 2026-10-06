@@ -78,7 +78,7 @@ if [ "$TARGET" = "windows-x64" ]; then
     echo "[stage] sessiond: skipped (SUPERMUX_SKIP_BROKER=1)"
   else
     echo "[stage] sessiond: compiling via scripts/build-sessiond.sh"
-    SUPERMUX_TARGET="$TARGET" "$ROOT/scripts/build-sessiond.sh" "$DEST/mux-sessiond.exe"
+    SUPERMUX_TARGET="$TARGET" "$ROOT/scripts/build-sessiond.sh" "$DEST/mux-sessiond.exe" "$VERSION"
   fi
   if [ -f "$DEST/mux-sessiond.exe" ]; then chmod +x "$DEST/mux-sessiond.exe" 2>/dev/null || true; fi
 else

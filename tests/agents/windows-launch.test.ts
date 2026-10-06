@@ -6,6 +6,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { spawnOpenCodeServer } from "../../src/core/agents/opencode/spawn"
 import { makeRealGrokRunner } from "../../src/core/agents/grok/runner"
+import { cursorCommand } from "../../src/core/agents/cursor/core-host"
 
 function fakeChild(onSpawn?: (child: any) => void): any {
   const child = new EventEmitter() as any
@@ -17,6 +18,20 @@ function fakeChild(onSpawn?: (child: any) => void): any {
   onSpawn?.(child)
   return child
 }
+
+// Cursor runs on supermux-core now (the per-turn runner is gone); its command choice keeps dev's
+// rule: cursor-agent first, then Cursor's official `agent` alias, never Grok's agent.exe.
+test("Cursor prefers cursor-agent, then the official agent.cmd alias", () => {
+  const onlyAlias = (path: string) => path.toLowerCase() === "c:\\cursor\\agent.cmd"
+  expect(cursorCommand({ Path: "C:\\Cursor" }, "win32", onlyAlias).toLowerCase()).toBe("c:\\cursor\\agent.cmd")
+  const both = (path: string) => ["c:\\cursor\\agent.cmd", "c:\\cursor\\cursor-agent.cmd"].includes(path.toLowerCase())
+  expect(cursorCommand({ Path: "C:\\Cursor" }, "win32", both)).toBe("cursor-agent")
+})
+
+test("Cursor never launches Grok's agent.exe as its alias", () => {
+  const grokOnly = (path: string) => path.toLowerCase() === "c:\\users\\u\\.grok\\bin\\agent.exe"
+  expect(cursorCommand({ Path: "C:\\Users\\u\\.grok\\bin" }, "win32", grokOnly)).toBe("cursor-agent")
+})
 
 test("OpenCode runs a ps1 shim through PowerShell while preserving server argv", async () => {
   const calls: any[] = []

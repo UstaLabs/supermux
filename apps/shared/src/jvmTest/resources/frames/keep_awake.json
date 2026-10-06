@@ -1,0 +1,1 @@
+{"type":"keep_awake","keepAwake":{"enabled":true,"onBattery":true,"active":false,"supported":true,"reason":"This computer's desktop didn't allow supermux to keep it awake.","reasonCode":"denied","retrying":true,"hint":"Add a polkit rule that allows org.freedesktop.login1.inhibit-block-sleep for your user, or keep the supermux app open while hosting."}}

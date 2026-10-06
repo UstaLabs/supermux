@@ -22,9 +22,10 @@ test("tmux and workspace terminals are independent answers", () => {
   expect(bundleButNoTmux.warnings.some((m) => m.includes("tmux not found"))).toBe(true)
 })
 
-test("zero agent CLIs is fatal", () => {
+test("zero agent CLIs is a warning, not fatal", () => {
   const r = checkPreflight(present("tmux"))
-  expect(r.fatal.some((m) => m.toLowerCase().includes("agent cli"))).toBe(true)
+  expect(r.fatal).toHaveLength(0)
+  expect(r.warnings.some((m) => m.toLowerCase().includes("agent cli"))).toBe(true)
 })
 
 test("tmux + one agent CLI: no fatals, warns about the missing optional ones", () => {

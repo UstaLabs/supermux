@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import dev.supermux.net.AgentModelsResponse
+import dev.supermux.net.HostRequirements
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.ModelInfo
@@ -79,6 +80,13 @@ class LauncherActions(
      * to [launcherAgents] / [launcherModels] / [launcherReasoning] per call.
      */
     val agentModels: Flow<AgentModelsResponse?> = flowOf(null),
+    /**
+     * The target host's requirements (`host_requirements`), LIVE like [agentModels]: while its
+     * git is missing the launcher shows the "needs git" banner, because the spawn would be refused.
+     */
+    val hostRequirements: Flow<HostRequirements?> = flowOf(null),
+    /** `POST /system/install-git` on the target host; true when its installer started. */
+    val installGit: suspend () -> Boolean = { false },
     val launcherModels: suspend (agent: String) -> List<ModelInfo> = { emptyList() },
     val launcherReasoning: suspend (agent: String, model: String?) -> ReasoningResponse? = { _, _ -> null },
     /** `fetch=true` refreshes origin's remote-tracking refs (once per repo, on picker open). */
@@ -157,6 +165,8 @@ fun rememberLauncherActions(
             projectImage = { app.projectImageBytes(it) },
             validatePath = { app.validatePath(it) },
             agentModels = app.agentModels,
+            hostRequirements = app.hostRequirements,
+            installGit = { app.installGit()?.ok == true },
             launcherModels = { app.launcherModels(it) },
             launcherReasoning = { agent, model -> app.launcherReasoning(agent, model) },
             launcherRepoInfo = { workdir, fetch -> app.launcherRepoInfo(workdir, fetch) },
@@ -209,6 +219,8 @@ fun rememberLauncherActions(
             projectImage = { fleet.activeApp()?.projectImageBytes(it) },
             validatePath = { fleet.validatePath(it) },
             agentModels = fleet.activeAgentModels,
+            hostRequirements = fleet.activeHostRequirements,
+            installGit = { fleet.installGit()?.ok == true },
             launcherModels = { fleet.launcherModels(it) },
             launcherReasoning = { agent, model -> fleet.launcherReasoning(agent, model) },
             launcherRepoInfo = { workdir, fetch -> fleet.launcherRepoInfo(workdir, fetch) },

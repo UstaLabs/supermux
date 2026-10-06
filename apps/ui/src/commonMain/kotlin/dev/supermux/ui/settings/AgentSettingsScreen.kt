@@ -104,6 +104,17 @@ private val LOGIN_KINDS = setOf("claude", "codex", "cursor", "grok")
 internal fun isActiveLoginPhase(phase: String?): Boolean =
     phase == "starting" || phase == "awaiting_user"
 
+/** The failed-install headline: the exit code when there is one, then the broker's reason. */
+internal fun installFailureMessage(job: AgentInstallJob?): String {
+    val head = job?.exitCode?.let { "Installation failed (exit code $it)." } ?: "Installation failed."
+    val why = job?.error?.trim().orEmpty().replaceFirstChar { it.uppercase() }
+    return if (why.isEmpty()) head else "$head $why"
+}
+
+/** What the install log box shows: the last [lines] lines (an installer's error is at the end). */
+internal fun installLogTail(log: String, lines: Int = 20): String =
+    log.trimEnd().lines().takeLast(lines).joinToString("\n").takeLast(4_000)
+
 /** Install job states: idle (null) → running/pending → done | failed (error). */
 internal fun normalizeInstallState(state: String?): String = when (state?.lowercase()) {
     "running", "pending" -> "running"
@@ -844,18 +855,18 @@ private fun InstallSection(
                 when {
                     installRequestFailed -> "Couldn't start installation."
                     installTimedOut -> "Installation timed out — the broker may be unreachable."
-                    else -> "Installation failed."
+                    else -> installFailureMessage(install)
                 },
                 color = cs.error,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.testTag("agent_install_error_$kind"),
             )
         }
-        val log = install?.log.orEmpty()
+        val log = installLogTail(install?.log.orEmpty())
         if (log.isNotEmpty()) {
             SelectionContainer {
                 Text(
-                    log.takeLast(2_000),
+                    log,
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     fontFamily = MonoFontFamily,

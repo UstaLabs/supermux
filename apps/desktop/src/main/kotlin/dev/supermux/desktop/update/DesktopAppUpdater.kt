@@ -35,6 +35,9 @@ class DesktopAppUpdater(
     override val currentVersion: String = DESKTOP_APP_VERSION,
 ) : AppUpdater {
     private val state = MutableStateFlow(UpdateStatus())
+
+    /** Quits the app (set by Main.kt): the Windows MSI upgrade needs our files released. */
+    @Volatile var onQuitForInstaller: (() -> Unit)? = null
     override val status: StateFlow<UpdateStatus> = state.asStateFlow()
 
     /** Desktop packages carry no version CODE (that is Android's monotonic build counter). */
@@ -112,7 +115,9 @@ class DesktopAppUpdater(
     override suspend fun install(installer: DownloadedInstaller): String? = withContext(Dispatchers.IO) {
         state.value = state.value.copy(phase = UpdatePhase.Installing, error = null)
         try {
-            DesktopUpdateSource.openInstaller(File(installer.location))
+            val mustQuit = DesktopUpdateSource.openInstaller(File(installer.location))
+            // Windows: msiexec replaces the app's files only after this process is gone.
+            if (mustQuit) onQuitForInstaller?.invoke()
             // The OS installer is up; this process keeps running until it is replaced, so the page
             // must settle back to a usable state (the old `installing = false`) rather than stay
             // Installing with every CTA disabled.

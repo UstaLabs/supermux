@@ -13,6 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -71,6 +72,7 @@ import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.host.HostBadge
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalPanes
+import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -101,14 +103,15 @@ fun sessionRowContextLabels(
 /**
  * Project-group header.
  *
- * One row on every host: a colour-hashed letter tile, the path LEAF, a count and a rotating chevron.
+ * One row on every host: a colour-hashed letter tile, the path LEAF, a green dot + count of the
+ * group's unread sessions (hidden when none) and a rotating chevron.
  * A persistent project passes [fullLabel] (its name is not a path), may replace the tile with
  * [leading] (its image) and adds [trailing] (its overflow menu) before the chevron.
  */
 @Composable
 fun PathGroupHeader(
     label: String,
-    count: Int,
+    unreadCount: Int,
     collapsed: Boolean = false,
     onToggle: (() -> Unit)? = null,
     fullLabel: Boolean = false,
@@ -120,6 +123,7 @@ fun PathGroupHeader(
         targetValue = if (collapsed) -90f else 0f,
         label = "groupChevronRotation",
     )
+    val sem = LocalSemantics.current
     val leaf = groupHeaderLeaf(label, fullLabel)
     val clickable = if (onToggle != null) {
         Modifier
@@ -159,8 +163,18 @@ fun PathGroupHeader(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        if (count > 1) {
-            Text("$count", color = cs.onSurfaceVariant.copy(alpha = 0.55f), fontSize = 10.sp)
+        if (unreadCount > 0) {
+            // Unread sessions in the group — the rows' own green, so it reads as "N of those dots".
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                    .testTag("group_unread_count")
+                    .semantics { contentDescription = "$unreadCount unread" },
+            ) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(sem.success))
+                Text("$unreadCount", color = sem.success, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            }
         }
         trailing?.invoke()
         Icon(

@@ -27,6 +27,7 @@ import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.NO_CAPS
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -419,6 +420,32 @@ class SettingsHubTest {
         onNodeWithTag("settings_detail_back").performClick()
         waitForIdle()
         onNodeWithTag("settings_index").assertExists()
+    }
+
+    @Test fun the_hosting_row_is_shown_only_with_the_local_broker_cap() = runComposeUiTest {
+        var withBroker by mutableStateOf(false)
+        setPlatformContent(
+            platform = FakePlatform(caps = gatedCaps),
+            widthClass = WindowWidthClass.Expanded,
+        ) {
+            val caps = if (withBroker) gatedCaps.copy(localBroker = true) else gatedCaps
+            CompositionLocalProvider(LocalPlatform provides FakePlatform(caps = caps)) {
+                SettingsHub(
+                    section = SettingsSection.Agents,
+                    onSectionChange = {},
+                    onBack = {},
+                    extraContent = extraStub,
+                    content = sectionStub(),
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("settings_section_hosting").assertDoesNotExist()
+        withBroker = true
+        waitForIdle()
+        onNodeWithTag("settings_section_hosting").assertExists().performClick()
+        waitForIdle()
+        onNodeWithTag("extra_hosting").assertIsDisplayed()
     }
 
     @Test fun the_gated_rows_join_the_rail_on_a_wide_window_too() = runComposeUiTest {

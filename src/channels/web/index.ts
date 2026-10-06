@@ -22,6 +22,10 @@ import { encodeTouch, encodeKey, encodeText, TouchAction } from "../../core/disp
 import { redactAppConfig } from "../../core/settings/app-config"
 import { pairJsonResponse } from "./pair-json"
 import { buildHostBody } from "./host-route"
+import { TickGap } from "../../core/power/wake"
+import type { KeepAwakeState } from "../../core/power/keep-awake"
+import type { KeepAwakeSettings } from "../../core/settings/keep-awake-config"
+import { parseKeepAwakeBody } from "../../core/settings/keep-awake-config"
 import { normalizeExistingWorkdir, uniqueKnownWorkdirs } from "../../core/session-manager/workdir-paths"
 import { worktreesRoot } from "../../core/worktree/manager"
 
@@ -35,6 +39,7 @@ import type { SlashCommand } from "../../core/slash-commands/types"
 import type { UpdateChecker } from "../../core/update/checker"
 import { detectUpdateMode } from "../../core/update/mode"
 import { resolveAndApply, restartService } from "../../core/update/apply"
+import { GitRequiredError, gitRequiredBody, type HostRequirements, type InstallGitResponse } from "../../core/git/requirement"
 import { BUILD_COMMIT, BUILD_VERSION } from "../../shared/build-info"
 import { workspaceScope, parseScope } from "../../core/workspace/scope"
 import {
@@ -90,13 +95,25 @@ export const SERVE_IDLE_TIMEOUT_SECONDS = 255
 // as this user can simply read the device token out of the state dir, so the limiter was
 // never a boundary against it. The boundary that matters is remote traffic, which arrives
 // either directly (peer IP, header ignored) or via the proxy (bucketed per real client).
-export const DEFAULT_TRUSTED_PROXY_PEERS = ["127.0.0.1", "::1", "::ffff:127.0.0.1"]
+const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"])
+export const DEFAULT_TRUSTED_PROXY_PEERS = [...LOOPBACK_PEERS]
 
 // Resolved once per request at the single entry point, where Bun's `server` — and so the
 // real socket peer — is in scope. Without a peer fallback every direct client (the native
 // macOS app included) shared one "unknown" bucket, so any one client's auth failures
 // throttled every other client on the host.
 const rateLimitBucket = new WeakMap<Request, string>()
+
+// Set per request in classifyPeer: a loopback socket peer with NO proxy-declared client AND a
+// loopback Host header (a DNS-rebinding page reaches us from loopback but carries its own domain).
+// frpc (relay) and nginx forward from loopback but always add X-Forwarded-For, so relay traffic
+// never counts as local.
+const directLoopback = new WeakMap<Request, boolean>()
+/** The /ws heartbeat; a socket with no pong for 60 s is closed. */
+const HEARTBEAT_MS = 30_000
+/** Close code that asks a client to reconnect and resubscribe (a fresh snapshot), e.g. after a wake. */
+export const WS_CLOSE_RESYNC = 4000
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"])
 
 function clientIp(req: Request): string {
   return rateLimitBucket.get(req) ?? "unknown"
@@ -412,6 +429,14 @@ export interface WebChannelOpts {
   getSessionCreatedAt?: (name: string) => string | undefined
   listArchivedSessions?: () => ArchivedSessionSnapshot[]
   resumeFromArchive?: (id: string) => Promise<{ ok: boolean; name?: string; error?: string }>
+  /** What this computer still needs to run agents (git). Absent = no requirements checked. */
+  getHostRequirements?: () => HostRequirements
+  /** POST /system/install-git: start the OS's own git installer (never throws). */
+  installGit?: () => InstallGitResponse
+  /** "Keep this computer awake": the setting plus whether the inhibitor holds right now. */
+  getKeepAwake?: () => KeepAwakeState
+  /** Persist a new choice and apply it. Only reachable from a direct loopback caller. */
+  setKeepAwake?: (patch: Partial<KeepAwakeSettings>) => KeepAwakeState
   getDisplayPort?: (id: string) => number | undefined
   getScrcpy?: (id: string) => import("../../core/display/scrcpy/backend").ScrcpyInstance | undefined
   listDisplays?: () => import("../../core/display/types").DisplayStreamInfo[]
@@ -525,15 +550,21 @@ export class WebChannel implements Channel {
     if (event === "inbound") this.inboundHandlers.push(handler)
   }
 
-  /** Bucket this request by its real origin: the proxy-declared client when we trust the
-   *  peer to declare one, otherwise the socket peer itself. */
-  private resolveRateLimitBucket(req: Request, server: import("bun").Server<WSData>): void {
+  /** Classify this request's origin: (1) its rate-limit bucket — the proxy-declared client when
+   *  we trust the peer to declare one, otherwise the socket peer itself; (2) whether it is a
+   *  direct local caller (loopback peer, no forwarding headers, loopback Host), which /host uses
+   *  to decide whether to reveal local-only facts. */
+  private classifyPeer(req: Request, server: import("bun").Server<WSData>): void {
     const peer = server.requestIP(req)?.address ?? ""
     const trusted = this.opts.trustedProxyPeers ?? DEFAULT_TRUSTED_PROXY_PEERS
     const forwarded = trusted.includes(peer)
       ? (req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim())
       : undefined
     rateLimitBucket.set(req, forwarded || peer || "unknown")
+    const proxied = req.headers.has("x-forwarded-for") || req.headers.has("cf-connecting-ip")
+    let hostName = ""
+    try { hostName = new URL(`http://${req.headers.get("host") ?? ""}`).hostname } catch { /* malformed Host */ }
+    directLoopback.set(req, LOOPBACK_PEERS.has(peer) && !proxied && LOOPBACK_HOSTS.has(hostName))
   }
 
   private checkRateLimit(req: Request): boolean {
@@ -597,7 +628,7 @@ export class WebChannel implements Channel {
       this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
     }
     this.server = Bun.serve<WSData>(this.buildServeOptions())
-    this.heartbeatTimer = setInterval(() => this.pingAll(), 30_000)
+    this.heartbeatTimer = setInterval(() => this.pingAll(), HEARTBEAT_MS)
     log.info("web channel listening", { port: this.boundPort })
   }
 
@@ -721,9 +752,35 @@ export class WebChannel implements Channel {
     return { ok: true, value: { message_id: ctx.entry.id, clients: this.wsConnections.size } }
   }
 
+  /**
+   * 409 + the requirement object when this computer has no usable git, else null. Agent sessions
+   * (new, resumed, PAs) are refused; drafts, terminals, pairing, settings and files are not.
+   */
+  private gitRefusal(): Response | null {
+    const requirements = this.opts.getHostRequirements?.()
+    if (!requirements || requirements.git.ok) return null
+    return this.json(gitRequiredBody(requirements), 409)
+  }
+
   broadcastToAll(frame: object): void {
     const json = JSON.stringify(frame)
     for (const c of this.wsConnections) c.ws.send(json)
+  }
+
+  /**
+   * After a wake: every main `/ws` client reconnects and resubscribes, so it gets a fresh
+   * snapshot (plus host_requirements and keep_awake) through the normal path — with ITS current
+   * subscribe options, which a snapshot pushed from here could not know. Terminal and display
+   * sockets are left alone. Returns how many sockets were asked to resync.
+   */
+  resyncClients(reason = "resync"): number {
+    let n = 0
+    for (const c of [...this.wsConnections]) {
+      const d = c.ws.data
+      if (d.terminal || d.display || d.scrcpy) continue
+      try { c.ws.close(WS_CLOSE_RESYNC, reason); n++ } catch { /* already closing */ }
+    }
+    return n
   }
 
   /**
@@ -745,7 +802,7 @@ export class WebChannel implements Channel {
   }
 
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
-    this.resolveRateLimitBucket(req, server)
+    this.classifyPeer(req, server)
     const url = new URL(req.url)
     if (this.opts.proxyBaseDomain) {
       const host = req.headers.get("host") ?? ""
@@ -1298,8 +1355,19 @@ export class WebChannel implements Channel {
     ;(ws.data as any)._scrcpyClosed = true
   }
 
-  private pingAll(): void {
-    const now = Date.now()
+  /** Sleep is not silence: the heartbeat's own wall-clock gap check (see `pingAll`). */
+  private readonly heartbeatGap = new TickGap(HEARTBEAT_MS)
+
+  /** Exposed for tests: one heartbeat at [now]. */
+  pingAll(now = Date.now()): void {
+    // After a sleep, no client could have answered: move every pong baseline forward by the slept
+    // time instead of closing every socket on the first tick after the wake.
+    const slept = this.heartbeatGap.gap(now)
+    if (slept > 0) {
+      for (const c of this.wsConnections) {
+        c.ws.data.lastPongAt = (c.ws.data.lastPongAt ?? c.ws.data.openedAt) + slept
+      }
+    }
     for (const c of [...this.wsConnections]) {
       const lastPong = c.ws.data.lastPongAt ?? c.ws.data.openedAt
       if (now - lastPong > 60_000) {
@@ -1381,6 +1449,11 @@ export class WebChannel implements Channel {
       }
       const permissionModes = permissionCatalog()
       ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, subagents, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
+      // Right after the snapshot, so every (re)connect learns whether this computer can run agents.
+      const requirements = this.opts.getHostRequirements?.()
+      if (requirements) ws.send(JSON.stringify({ type: "host_requirements", requirements }))
+      const keepAwake = this.opts.getKeepAwake?.()
+      if (keepAwake) ws.send(JSON.stringify({ type: "keep_awake", keepAwake }))
       return
     }
     if (frame.type === "ping") {
@@ -1744,6 +1817,7 @@ export class WebChannel implements Channel {
   // Mode-specific instruction text shown when self-update isn't possible
   // (source/docker installs, or checks disabled). Mirrors the CLI's wording.
   private updateInstruction(mode: import("../../core/update/checker").UpdateMode): string {
+    if (mode === "managed") return "Updated with the supermux app."
     if (mode === "docker") return "Docker install — update with: docker compose pull && docker compose up -d"
     return "Source install — update via git (git pull && restart)."
   }
@@ -2301,7 +2375,7 @@ export class WebChannel implements Channel {
     if (method === "GET" && path === "/host") {
       const info = this.getHostInfo?.()
       if (!info) return this.json({ error: "host identity unavailable" }, 503)
-      return this.json(buildHostBody(info, this.requireAuth(req).ok))
+      return this.json(buildHostBody(info, this.requireAuth(req).ok, directLoopback.get(req) === true))
     }
     // Paired-status probe for the PWA (200 when the cookie is valid, else 401/429).
     // Under throttling this must NOT claim `paired: false` — the device may well be paired
@@ -2362,13 +2436,27 @@ export class WebChannel implements Channel {
     }
 
     // ── System: broker restart ──────────────────────────────────────────
+    // Only a service manager (systemd / launchd) can bring the broker back, so a
+    // broker that isn't under one — e.g. spawned by the desktop app — refuses
+    // rather than stopping for good.
     if (method === "POST" && path === "/system/restart") {
-      const cp = await import("child_process")
-      cp.spawn("systemctl", ["--user", "restart", "mux.service"], {
-        detached: true,
-        stdio: "ignore",
-      })
+      if (!restartService()) {
+        return this.json({ ok: false, error: "the broker is not running under a service manager, so it can't restart itself" }, 409)
+      }
       return this.json({ ok: true })
+    }
+
+    // ── System: one-click git install (spec "Git is required for hosting agents") ──
+    // macOS: Apple's `xcode-select --install` opens on THIS computer; Windows: winget. Linux and
+    // Windows without winget answer 400 {error:"manual", hint}. Same auth + CSRF as restart.
+    if (method === "POST" && path === "/system/install-git") {
+      if (!this.opts.installGit) return this.json({ error: "not configured" }, 503)
+      try {
+        const r = this.opts.installGit()
+        return this.json(r.body, r.status)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 500)
+      }
     }
 
     // ── Settings: nightly curator ───────────────────────────────────────────
@@ -2387,6 +2475,22 @@ export class WebChannel implements Channel {
       if (!this.opts.runCuratorNow) return this.json({ error: "curator unavailable" }, 503)
       void this.opts.runCuratorNow() // fire-and-forget; run.ts guards re-entrancy
       return this.json({ ok: true })
+    }
+
+    // ── Settings: keep this computer awake (spec "Keep the computer awake while hosting") ──
+    // Any authed caller may read it; only the host computer itself may change it — the decision
+    // is "controls on the host computer only", enforced here, not just by hiding the toggle.
+    if (method === "GET" && path === "/settings/keep-awake") {
+      const state = this.opts.getKeepAwake?.()
+      if (!state) return this.json({ error: "keep-awake unavailable" }, 503)
+      return this.json(state)
+    }
+    if (method === "PUT" && path === "/settings/keep-awake") {
+      if (directLoopback.get(req) !== true) return this.json({ error: "only on this computer" }, 403)
+      if (!this.opts.setKeepAwake) return this.json({ error: "keep-awake unavailable" }, 503)
+      const parsed = parseKeepAwakeBody(await req.json().catch(() => undefined))
+      if ("error" in parsed) return this.json(parsed, 400)
+      return this.json(this.opts.setKeepAwake(parsed))
     }
 
     // ── Forge: git connections + repo management ───────────────────────────
@@ -3365,6 +3469,9 @@ export class WebChannel implements Channel {
           })
           return this.json(draft)
         }
+        // Drafts have no agent process; everything else needs git on this computer.
+        const refused = this.gitRefusal()
+        if (refused) return refused
         const inheritFrom = typeof body.inheritFrom === "string" && body.inheritFrom.trim()
           ? body.inheritFrom.trim()
           : undefined
@@ -3420,6 +3527,7 @@ export class WebChannel implements Channel {
         })
         return this.json(result)
       } catch (err: any) {
+        if (err instanceof GitRequiredError) return this.json(gitRequiredBody(err.requirements), 409)
         log.warn("session_create_failed", {
           workdir: normalizedWorkdir,
           agent: body.agent as string | undefined,
@@ -3916,6 +4024,8 @@ export class WebChannel implements Channel {
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/resume$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.resumeFromArchive) return this.json({ error: "not configured" }, 503)
+      const refused = this.gitRefusal()
+      if (refused) return refused
       try {
         const result = await this.opts.resumeFromArchive(id)
         if (!result.ok) return this.json({ error: result.error }, 400)
@@ -3931,6 +4041,8 @@ export class WebChannel implements Channel {
       const name = body.name as string | undefined
       if (!name || !name.trim()) return this.json({ error: "name required" }, 400)
       if (!this.opts.spawnPA) return this.json({ error: "not configured" }, 503)
+      const refused = this.gitRefusal()
+      if (refused) return refused
       const agent = body.agent as AgentKind | undefined
       if (agent != null && !isAgentKind(agent)) {
         return this.json({ error: `unknown agent: ${String(agent)}` }, 400)
@@ -3955,6 +4067,7 @@ export class WebChannel implements Channel {
         })
         return this.json(result)
       } catch (err: any) {
+        if (err instanceof GitRequiredError) return this.json(gitRequiredBody(err.requirements), 409)
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
     }

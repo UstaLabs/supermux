@@ -11,7 +11,7 @@ export async function smokeCursorAgent(opts: { home: string; authEnv: Record<str
       HOME: opts.home,
       ...(process.platform === "win32" ? { USERPROFILE: opts.home } : {}),
     }
-    const command = resolveCommand(["cursor-agent", "agent"], env, process.platform) ?? "cursor-agent"
+    const command = resolveCommand(["cursor-agent"], env, process.platform) ?? "cursor-agent"
     const child = spawnCommand(command, ["--version"], { env, stdio: ["ignore", "pipe", "pipe"] })
     let out = ""
     child.stdout!.on("data", (c: Buffer) => { out += c.toString("utf8") })

@@ -26,9 +26,24 @@ test("GET /host is public and identity-only without auth", async () => {
     getHostInfo: () => ({ hostId: "h123", name: "box", platform: "linux", version: "0.11.0", protocolVersion: 1 }),
   })
   channel = made.channel; await channel.start()
-  const res = await fetch(`${base()}/host`)
+  // A remote caller: through the relay/proxy, so it carries X-Forwarded-For.
+  const res = await fetch(`${base()}/host`, { headers: { "x-forwarded-for": "203.0.113.9" } })
   expect(res.status).toBe(200)
   expect(await res.json()).toEqual({ hostId: "h123", name: "box", protocolVersion: 1 })
+})
+
+test("GET /host from a direct loopback caller also carries platform and version (and only the local fields that are set)", async () => {
+  const made = makeChannel({
+    getHostInfo: () => ({ hostId: "h123", name: "box", platform: "linux", version: "0.11.0", protocolVersion: 1 }),
+  })
+  channel = made.channel; await channel.start()
+  const res = await fetch(`${base()}/host`)
+  expect(res.status).toBe(200)
+  const body = await res.json() as Record<string, unknown>
+  expect(body).toEqual({ hostId: "h123", name: "box", protocolVersion: 1, platform: "linux", version: "0.11.0" })
+  expect(body).not.toHaveProperty("build")
+  expect(body).not.toHaveProperty("mode")
+  expect(body).not.toHaveProperty("stateDir")
 })
 
 test("POST /pair/claim mints a device token for a valid one-time secret, even with devices present", async () => {
