@@ -130,7 +130,6 @@ import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.effectiveChatDetail
 import dev.supermux.ui.formatLowWorkingStatus
 import dev.supermux.ui.prefs.LocalUiPrefs
-import dev.supermux.ui.shell.AgentViewToggle
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
@@ -138,8 +137,6 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.turnBoundaryMs
-import dev.supermux.ui.widgets.KeepAlivePanel
-import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.util.formatDuration
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -375,11 +372,6 @@ fun ChatPanel(
     finish: FinishBindings? = null,
     /** The ⋮ overflow (rename/mute/kill/continue) — the host owns it; cluster G moves it here. */
     headerActions: @Composable RowScope.() -> Unit = {},
-    /**
-     * The agent's raw ("Native") PTY. Non-null AND agent == claude shows the Chat⇄Native pill; the
-     * lambda receives an `onExit` to call when the PTY dies.
-     */
-    nativeContent: (@Composable (onExit: () -> Unit) -> Unit)? = null,
     /** Opens the workspace's singleton Changes pane in walkthrough mode. */
     onOpenWalkthrough: (stepId: String?) -> Unit = {},
     /**
@@ -564,12 +556,6 @@ fun ChatPanel(
         proxies = actions.loadProxies()
     }
 
-    val hasNative = nativeContent != null && session.agent == "claude"
-    var nativeView by remember(session.id) { mutableStateOf(false) }
-    var nativeOpened by remember(session.id) { mutableStateOf(false) }
-    LaunchedEffect(session.id, nativeView) { if (nativeView) nativeOpened = true }
-    val showNative = hasNative && nativeView
-
     val focusManager = LocalFocusManager.current
     val density = LocalDensity.current
     val emptySession = timelineItems.isEmpty() && !working
@@ -577,7 +563,7 @@ fun ChatPanel(
     // ── Scroll-to-hide chrome ──────────────────────────────────────────────────────────────────
     // Only on a NARROW view (phone-width, whatever the device): scrolling down tucks the header and
     // the composer away, scrolling up brings them back. Never on an empty session (the starters
-    // need the composer) or over the Native PTY, and never on a touch host while the composer has
+    // need the composer), and never on a touch host while the composer has
     // focus — the soft keyboard is up, you are typing. A pointer host keeps focus in the composer
     // while you read, so there focus does not pin it; typing into it brings it back instead.
     val chrome = remember(session.id, listState) {
@@ -587,7 +573,7 @@ fun ChatPanel(
     var panelWidth by remember { mutableStateOf(0.dp) }
     var composerFocused by remember(session.id) { mutableStateOf(false) }
     val narrowView = panelWidth > 0.dp && panelWidth < CHAT_CHROME_AUTO_HIDE_MAX_WIDTH
-    val autoHideAllowed = narrowView && !emptySession && !(composerFocused && !pointer) && !showNative
+    val autoHideAllowed = narrowView && !emptySession && !(composerFocused && !pointer)
     LaunchedEffect(autoHideAllowed) { if (!autoHideAllowed) chrome.show() }
     LaunchedEffect(draft) { chrome.show() }
     val chromeCollapsed = autoHideAllowed && chrome.hidden
@@ -625,7 +611,6 @@ fun ChatPanel(
             val headerWidth = maxWidth
             val showProject = headerWidth >= 560.dp
             val showStatusText = headerWidth >= 460.dp
-            val toggleIconOnly = headerWidth < 420.dp
             Row(
                 Modifier.fillMaxWidth().height(44.dp).padding(start = if (pointer) Space.lg else Space.md, end = Space.sm),
                 verticalAlignment = Alignment.CenterVertically,
@@ -692,16 +677,6 @@ fun ChatPanel(
                     narrow = headerWidth < 460.dp,
                 )
                 headerLinks(proxies, forceLinksMenu, onForceLinksMenuConsumed)
-                if (hasNative) {
-                    Spacer(Modifier.width(Space.xs))
-                    AgentViewToggle(
-                        nativeView = nativeView,
-                        onSetNative = { nativeView = it },
-                        modifier = Modifier.testTag("toggle_native"),
-                        iconOnly = toggleIconOnly,
-                    )
-                    Spacer(Modifier.width(Space.xs))
-                }
                 headerActions()
             }
             }
@@ -868,14 +843,12 @@ fun ChatPanel(
             }
         }
 
-        // Body: transcript + composer, or the agent's raw PTY over the top of them. The two are a
-        // keep-alive PAIR, not an if/else: Chat hides through `Modifier.keepAlivePanel` (draft and
-        // scroll survive a flip) while Native is heavyweight and only a 0×0 layout can hide it.
+        // Body: transcript + composer.
         Box(Modifier.fillMaxWidth().weight(1f)) {
             run {
                 // Docked composer under the transcript on every host; a tap on the transcript drops focus.
                 // A tap while the chrome is tucked away brings it back (the reading-app convention).
-                Column(Modifier.keepAlivePanel(visible = !showNative).testTag("chat_body").pointerInput(chrome) { detectTapGestures(onTap = { focusManager.clearFocus(); chrome.show() }) }) {
+                Column(Modifier.testTag("chat_body").pointerInput(chrome) { detectTapGestures(onTap = { focusManager.clearFocus(); chrome.show() }) }) {
                     Box(Modifier.fillMaxWidth().weight(1f).nestedScroll(chrome.connection), contentAlignment = Alignment.TopCenter) {
                         // With the composer tucked away the last row would sit on the window's edge; give
                         // it the breathing room the composer's own padding gave it.
@@ -937,13 +910,6 @@ fun ChatPanel(
                     }
                 }
 }
-            if (hasNative && nativeOpened) {
-                KeepAlivePanel(visible = showNative, modifier = Modifier.testTag("pane_native")) {
-                    // Agent PTY exited → drop the kept-alive panel so a later re-open builds a
-                    // fresh client, and fall back to the transcript.
-                    nativeContent?.invoke { nativeView = false; nativeOpened = false }
-                }
-            }
         }
     }
 }

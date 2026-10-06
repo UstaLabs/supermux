@@ -127,7 +127,6 @@ fun SessionChatFallback(
             connectTerminal = { terminalId -> vm.fleet.connectTerminal(session.id, terminalId) },
             listTerminals = { vm.fleet.listTerminals(session.id) },
             closeTerminal = { terminalId -> vm.fleet.closeTerminal(session.id, terminalId) },
-            connectAgentTerminal = { vm.fleet.connectAgentTerminal(session.id) },
             displayActions = displayActions,
             onOpenDisplays = onOpenDisplays,
             consumePendingFirst = { vm.fleet.consumePendingFirst(it) },
