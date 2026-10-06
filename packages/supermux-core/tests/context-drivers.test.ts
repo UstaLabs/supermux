@@ -89,7 +89,7 @@ const cwdless = <T>(value: T): T => JSON.parse(JSON.stringify(value).replaceAll(
 // context must stay exactly this.
 const NEW = [{ method: "session/new", params: { cwd: "<cwd>", mcpServers: [] } }]
 const BASELINE: Record<string, unknown> = {
-  claude: { argv: ["--print", "--output-format", "stream-json", "--verbose", "--input-format", "stream-json", "--await-initialize", "--tools", "", "--permission-prompts", "none", "--permission-mode", "dontAsk", "--session-id=<uuid>"], params: [] },
+  claude: { argv: ["--print", "--output-format", "stream-json", "--verbose", "--input-format", "stream-json", "--await-initialize", "--tools", "", "--permission-prompts", "none", "--permission-mode", "dontAsk", "--allow-dangerously-skip-permissions", "--session-id=<uuid>"], params: [] },
   // C3: the policy is per process (launch -c args), never config/batchWrite into CODEX_HOME.
   codex: { argv: ["-c", "sandbox_mode=\"read-only\"", "-c", "approval_policy=\"never\""], params: [], codexMethods: ["initialize", "initialized", "thread/start"], threadStart: { cwd: "<cwd>", approvalPolicy: "never", sandbox: "read-only" } },
   grok: { argv: ["agent", "--no-leader", "stdio"], params: NEW },

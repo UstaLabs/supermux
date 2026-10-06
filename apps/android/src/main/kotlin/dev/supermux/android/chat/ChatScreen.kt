@@ -143,7 +143,7 @@ import dev.supermux.ui.chat.FinishHeaderButton
 import dev.supermux.ui.chat.rememberContinueSheetState
 import dev.supermux.ui.prefs.LocalUiPrefs
 
-enum class SessionPanel { Chat, Native, Editor, Terminal, Display }
+enum class SessionPanel { Chat, Editor, Terminal, Display }
 
 @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalFoundationApi::class)
 @Composable
@@ -204,8 +204,6 @@ fun ChatScreen(
     connectTerminal: ((String) -> dev.supermux.net.TerminalClient)? = null,
     listTerminals: suspend () -> List<dev.supermux.net.TerminalSummary> = { emptyList() },
     closeTerminal: suspend (String) -> Unit = {},
-    // Native tab — terminal bound to the agent PTY with kind="agent"; iOS parity, claude-only.
-    connectAgentTerminal: (() -> dev.supermux.net.TerminalClient)? = null,
     /** Cluster G4: the whole Display seam in one holder; null = this shell has no display transport. */
     displayActions: dev.supermux.ui.display.DisplayActions? = null,
     onOpenDisplays: () -> Unit = {},
@@ -577,24 +575,15 @@ fun ChatScreen(
             )
         }
 
-        // Panel switcher: Chat / Native / Editor / Terminal / Display.
-        // Native (raw agent PTY) is gated on the session's agent being "claude" — iOS parity with
-        // the gate `(session.agent ?? "claude") == "claude"`. Android's session.agent is non-null.
-        val panels = remember(session.agent) {
-            SessionPanel.entries.filter { it != SessionPanel.Native || session.agent == "claude" }
-        }
-        // If the active panel was filtered out (e.g. Native hidden), fall back to Chat.
-        LaunchedEffect(panels) {
-            if (activePanel !in panels) activePanel = SessionPanel.Chat
-        }
+        // Panel switcher: Chat / Editor / Terminal / Display.
+        val panels = SessionPanel.entries
         PrimaryTabRow(
             selectedTabIndex = panels.indexOf(activePanel).coerceAtLeast(0),
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ) {
             panels.forEach { panel ->
                 val selected = activePanel == panel
-                val tag = if (panel == SessionPanel.Native) "tab_native"
-                          else "chat_tab_${panel.name.lowercase()}"
+                val tag = "chat_tab_${panel.name.lowercase()}"
                 Tab(
                     selected = selected,
                     onClick = { activePanel = panel },
@@ -673,25 +662,6 @@ fun ChatScreen(
                     onRequestKill = { showKillDialog = true },
                     modifier = Modifier.keepAlivePanel(activePanel == SessionPanel.Chat),
                 )
-            }
-            if (SessionPanel.Native in shownPanels) {
-                val cat = connectAgentTerminal
-                Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Native)) {
-                    if (cat != null) {
-                        // Cluster G1: through `Platform.terminalView()`, not termlib by name.
-                        LocalPlatform.current.terminalView().TerminalView(
-                            connect = cat,
-                            modifier = Modifier.fillMaxSize(),
-                            active = activePanel == SessionPanel.Native,
-                            // Agent PTY exited → fall back to Chat (iOS onExit: { tab = .chat }).
-                            onExit = { activePanel = SessionPanel.Chat },
-                        )
-                    } else {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Native terminal unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                        }
-                    }
-                }
             }
             if (SessionPanel.Editor in shownPanels) {
                 EditorPanel(

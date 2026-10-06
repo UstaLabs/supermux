@@ -115,6 +115,9 @@ function argv(options: ClaudeOptions, sessionId: string, resume: boolean) {
   const mode = options.permissions.permissionMode === 'default' ? undefined : options.permissions.permissionMode
   if (mode) flags.push('--permission-mode', mode)
   else if (options.permissionMode) flags.push('--permission-mode', options.permissionMode)
+  // Without it a runtime set_permission_mode → bypassPermissions fails with bypass_not_launched
+  // (verified on 2.1.291); it only makes bypass switchable, it does not enable it.
+  flags.push('--allow-dangerously-skip-permissions')
   if (options.allowedTools?.length) flags.push('--allowedTools', options.allowedTools.join(','))
   if (options.disallowedTools?.length) flags.push('--disallowedTools', options.disallowedTools.join(','))
   if (options.model) flags.push('--model', options.model)
