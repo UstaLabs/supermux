@@ -95,3 +95,15 @@ test("reconcileOnStartup always calls ensurePersonalAssistants", async () => {
   })
   expect(sup.ensurePACalls).toBe(1)
 })
+
+// A Core Claude row has no tmux pane and pid 0 (its agent lives under a keeper), so the
+// tmux-era "dead pid → suspended" rule must not touch it: it stays active and resumeAtBoot
+// re-attaches it. Only a tmux-era (core=0) Claude row with a dead pid and no pane is suspended.
+test("reconcileOnStartup leaves Core Claude sessions active", async () => {
+  const registry = new Registry(db)
+  registry.register({ id: "core-1", name: "corey", workdir: "/x", pid: 0, agent: "claude", core: true } as never)
+  registry.register({ id: "tmux-1", name: "tmuxy", workdir: "/y", pid: 200, agent: "claude", core: false } as never)
+  await reconcileOnStartup({ registry, bindSocket: async () => {}, supervisor: fakeSupervisor(), isAlive: () => false, livePanePid: async () => null })
+  expect(registry.resolveName("corey")?.status).toBe("active")
+  expect(registry.resolveName("tmuxy")?.status).toBe("suspended")
+})

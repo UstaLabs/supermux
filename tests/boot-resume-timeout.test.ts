@@ -67,3 +67,19 @@ test("the cap: MUX_BOOT_RESUME_TIMEOUT_MS when a positive integer, else the defa
   expect(bootResumeTimeoutMs("0")).toBe(BOOT_RESUME_TIMEOUT_MS)
   expect(bootResumeTimeoutMs("1500")).toBe(1500)
 })
+
+// Boot wakes only the sessions that were running. A suspended session stays asleep and resumes
+// lazily on its next message (resumeSuspended), as before Core: waking every suspended row at
+// boot would start dozens of idle agents (2026-10-06: 55 suspended Claude rows on the live host).
+test("resumeAtBoot leaves suspended sessions asleep and resumes the active ones", async () => {
+  const { registry, manager } = build()
+  const workdir = mkdtempSync(join(tmpDir, "wd-"))
+  registry.register({ id: "live-1", name: "live", workdir, pid: 0, agent: "claude", core: true, agent_session_id: "native-live" } as never)
+  registry.register({ id: "sleep-1", name: "sleep", workdir, pid: 0, agent: "claude", core: false, agent_session_id: "native-sleep" } as never)
+  registry.sessions.suspend("sleep-1")
+  await manager.resumeAtBoot()
+  expect(fake.opens.map((ctx) => ctx.resumeId)).toEqual(["native-live"])
+  expect(manager.adapterFor("live-1")).toBeDefined()
+  expect(manager.adapterFor("sleep-1")).toBeUndefined()
+  expect(registry.get("sleep-1")?.status).toBe("suspended")
+})

@@ -297,7 +297,9 @@ export async function reconcileOnStartup(deps: {
     // use pid=0 (no persistent process) and would survive isProcessAlive
     // by accident, but codex sessions use a real PID that's now dead.
     // A falsy `agent` on a legacy row means claude (the only kind that predates the field).
-    if (!isPersistentRuntimeSession({ agent: ((s as any).agent || AgentKind.Claude) as AgentKind })) continue
+    // Core Claude rows (core=1) are not persistent runtimes either: pid 0, no pane, their agent
+    // lives under a keeper. They keep their status and resumeAtBoot re-attaches the active ones.
+    if (!isPersistentRuntimeSession({ agent: ((s as any).agent || AgentKind.Claude) as AgentKind, core: s.core })) continue
     // The stored pid is dead, but a Claude pane survives in its OWN systemd scope
     // across a broker restart. After a restart the pid is unreliable (a dead
     // broker pid from a lazy-resume's `|| process.pid`, or pid=0 from a DB-only

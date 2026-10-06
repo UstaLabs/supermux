@@ -1360,9 +1360,9 @@ export class SessionManager {
     }
   }
 
-  /** Broker boot: rebuild the in-process adapters for non-claude sessions.
-   *  (Claude sessions are reconciled by the supervisor: surviving panes
-   *  reattach via the shim; dead ones suspend.) Failures log and continue.
+  /** Broker boot: re-attach or relaunch every ACTIVE session (suspended ones wake on demand).
+   *  (reconcileOnStartup runs first: a tmux-era Claude row with a surviving pane stays active and is
+   *  moved to Core here; one with neither pid nor pane is suspended.) Failures log and continue.
    *
    *  Sequential (one agent launch at a time, as before), but each session gets at most
    *  `bootResumeTimeoutMs`: a resume that never settles (2026-10-05: a Codex keeper lost in
@@ -1371,6 +1371,9 @@ export class SessionManager {
    *  still logged if it settles later. */
   async resumeAtBoot(): Promise<void> {
     for (const s of this.registry.list()) {
+      // Only sessions that were running: a suspended one stays asleep and resumes lazily on its
+      // next message (resumeSuspended), so boot never starts agents nobody is using.
+      if (s.status === "suspended") continue
       const work = this.resumeOneAtBoot(s)
       let timer: ReturnType<typeof setTimeout> | undefined
       const timedOut = await Promise.race([
