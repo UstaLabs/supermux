@@ -19,6 +19,7 @@
 import { execFile, spawn as nodeSpawn } from "child_process"
 import { delimiter, win32 as winPath } from "path"
 import { APPLE_GIT_STUB, applyCltGuard, noCltDir } from "./clt-guard"
+import { powershell, readRegistryPathVia } from "../windows/user-install"
 
 export type GitInstall = "xcode-select" | "mingit" | "winget" | "browser" | "manual"
 
@@ -67,28 +68,12 @@ export function bunWhich(bin: string, path: string): string | null {
 
 export type RegistryScope = "user" | "machine"
 
-const REGISTRY_KEYS: Record<RegistryScope, string> = {
-  user: "HKCU\\Environment",
-  machine: "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
-}
-
-/** The `Path` value out of `reg query <key> /v Path` output, or null. */
-export function parseRegQueryPath(out: string): string | null {
-  const m = out.match(/^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*?)\s*$/im)
-  return m?.[1] ? m[1] : null
-}
-
-/** The real registry reader: async `reg query`, 5 s cap, null on any failure. */
+/**
+ * The real registry reader: the raw value through PowerShell as base64 UTF-16LE (`reg query`
+ * prints in the OEM code page, which turned non-ASCII dirs into U+FFFD), null on any failure.
+ */
 export function readRegistryPath(scope: RegistryScope): Promise<string | null> {
-  return new Promise((resolve) => {
-    try {
-      execFile("reg", ["query", REGISTRY_KEYS[scope], "/v", "Path"], { timeout: 5_000, windowsHide: true }, (err, stdout) => {
-        resolve(err ? null : parseRegQueryPath(String(stdout)))
-      })
-    } catch {
-      resolve(null)
-    }
-  })
+  return readRegistryPathVia(powershell, scope).catch(() => null)
 }
 
 /** The real async `xcode-select -p`: its exit code, 1 on any failure (5 s cap). */

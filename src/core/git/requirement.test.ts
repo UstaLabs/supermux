@@ -7,7 +7,7 @@ import {
   GIT_HINT_DARWIN, GIT_HINT_LINUX, GIT_HINT_WINDOWS_BROWSER, GIT_REQUIRED_MESSAGE, GitInstaller, GitRequiredError,
   GitRequirementMonitor, type GitInstallStatus, INSTALL_COOLDOWN_MS, wingetFailure, OPEN_GIT_DOWNLOAD_PAGE, WINGET_INSTALL_GIT, WINGET_MAX_MS,
   XCODE_SELECT_INSTALL, checkGit, checkGitSync, expandWindowsVars, gitInstallFor, gitRequiredBody,
-  parseRegQueryPath, spawnDetached, type GitRequirement, type GitRequirementDeps, type RegistryScope,
+  spawnDetached, type GitRequirement, type GitRequirementDeps, type RegistryScope,
 } from "./requirement"
 
 let stateDir: string
@@ -120,13 +120,6 @@ test("our own shim dir is never looked at", () => {
   f.d.env.PATH = `${noCltDir(stateDir)}${delimiter}${BASE_PATH}`
   checkGitSync(f.d)
   expect(f.seenPaths.every((p) => !p.includes(noCltDir(stateDir)))).toBe(true)
-})
-
-test("reg query output parsing and %VAR% expansion", () => {
-  const out = "\r\nHKEY_CURRENT_USER\\Environment\r\n    Path    REG_EXPAND_SZ    %USERPROFILE%\\bin;C:\\x\r\n\r\n"
-  expect(parseRegQueryPath(out)).toBe("%USERPROFILE%\\bin;C:\\x")
-  expect(parseRegQueryPath("ERROR: The system was unable to find the specified registry key")).toBeNull()
-  expect(expandWindowsVars("%userprofile%\\bin;%NOPE%", { USERPROFILE: "C:\\Users\\a" })).toBe("C:\\Users\\a\\bin;%NOPE%")
 })
 
 // ── install action per OS ──────────────────────────────────────────────────────────────────
@@ -374,4 +367,8 @@ test("the monitor reports the install status in requirements.git while git is mi
   m.setInstallStatus({ installing: false, installError: "nope" })
   expect(m.git).toMatchObject({ ok: false, installing: false, installError: "nope" })
   expect(seen).toHaveLength(2)
+})
+
+test("%VAR% expansion", () => {
+  expect(expandWindowsVars("%userprofile%\\bin;%NOPE%", { USERPROFILE: "C:\\Users\\a" })).toBe("C:\\Users\\a\\bin;%NOPE%")
 })
