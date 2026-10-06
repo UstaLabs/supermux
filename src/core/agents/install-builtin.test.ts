@@ -15,7 +15,7 @@ function withUrl(r: Response, url: string): Response {
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex")
 
 /** An in-memory Windows (files are keys, dirs are prefixes) plus a scripted network. */
-function fakeWindows(routes: Record<string, () => Response>, opts: { userPath?: string | null; zipHasExe?: boolean; arch?: string } = {}) {
+function fakeWindows(routes: Record<string, () => Response>, opts: { userPath?: string | null; zipHasExe?: boolean; arch?: string; escape?: string; renameFails?: string } = {}) {
   const files = new Map<string, Uint8Array>()
   const fetched: string[] = []
   const writes: string[] = []
@@ -39,11 +39,13 @@ function fakeWindows(routes: Record<string, () => Response>, opts: { userPath?: 
       mkdir: () => {},
       write: (p, b) => { files.set(p, b) },
       rename: (from, to) => {
+        if (opts.renameFails && (from.endsWith(opts.renameFails) || to.endsWith(opts.renameFails))) throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" })
         for (const [f, b] of [...files]) {
           if (f === from || f.startsWith(from + "\\")) { files.delete(f); files.set(to + f.slice(from.length), b) }
         }
       },
       remove: (p) => { for (const f of [...files.keys()]) if (f === p || f.startsWith(p + "\\")) files.delete(f) },
+      contained: () => opts.escape ?? null,
     },
     readUserPath: async () => userPath,
     writeUserPath: async (v) => { writes.push(v); userPath = v },
@@ -101,6 +103,22 @@ describe("OpenCode on Windows", () => {
     expect(w.files.size).toBe(0)
   })
 
+  test("an archive reaching outside its folder (zip-slip) is refused", async () => {
+    const w = fakeWindows({ [OPENCODE_LATEST_RELEASE]: release(`sha256:${sha(ZIP)}`), [ZIP_URL]: () => new Response(ZIP) }, { escape: "..\\..\\evil.exe" })
+    const err = await installOpenCodeWindows(w.deps).catch((e) => e)
+    expect(String(err)).toContain("reaches outside its folder")
+    expect(w.files.size).toBe(0)
+  })
+
+  test("a running opencode.exe (EPERM on the swap): the old install stays, and the message says what to do", async () => {
+    const root = openCodeWindowsDir(ENV)
+    const w = fakeWindows({ [OPENCODE_LATEST_RELEASE]: release(`sha256:${sha(ZIP)}`), [ZIP_URL]: () => new Response(ZIP) }, { renameFails: "Programs\\opencode" })
+    w.files.set(`${root}\\opencode.exe`, new Uint8Array([5]))
+    const err = await installOpenCodeWindows(w.deps).catch((e) => e)
+    expect(String(err)).toContain("Close running OpenCode sessions and try again.")
+    expect(w.files.get(`${root}\\opencode.exe`)).toEqual(new Uint8Array([5]))
+  })
+
   test("arm64 picks the arm64 asset", async () => {
     const w = fakeWindows({ [OPENCODE_LATEST_RELEASE]: release(`sha256:${sha(ZIP)}`) }, { arch: "arm64" })
     await installOpenCodeWindows(w.deps).catch(() => {})
@@ -136,6 +154,12 @@ describe("Grok on Windows", () => {
     expect([...w.files.keys()].some((f) => f.includes(".tmp-"))).toBe(false)
     expect(w.writes).toEqual([`C:\\Tools;${dir}`])
     expect(w.lines.join("\n")).toContain("publishes no checksum")
+  })
+
+  test("a running grok.exe (EPERM): close running Grok sessions", async () => {
+    const w = fakeWindows({ [GROK_STABLE_URL]: () => new Response("1.0.46"), [GROK_URL]: () => new Response(exe(GROK_MIN_BYTES + 1)) }, { renameFails: "grok.exe" })
+    const err = await installGrokWindows(w.deps).catch((e) => e)
+    expect(String(err)).toContain("Close running Grok sessions and try again.")
   })
 
   test("arm64 downloads the aarch64 build", async () => {

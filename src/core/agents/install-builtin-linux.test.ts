@@ -14,7 +14,7 @@ function withUrl(r: Response, url: string): Response {
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex")
 
 /** An in-memory Linux home plus a scripted network. Directories are prefixes of file keys. */
-function fakeLinux(routes: Record<string, () => Response>, opts: { unpack?: (dest: string, strip: number) => string[]; avx2?: boolean; musl?: boolean; arch?: string } = {}) {
+function fakeLinux(routes: Record<string, () => Response>, opts: { unpack?: (dest: string, strip: number) => string[]; avx2?: boolean; musl?: boolean; arch?: string; escape?: string } = {}) {
   const files = new Map<string, Uint8Array>()
   const links = new Map<string, string>()
   const modes = new Map<string, number>()
@@ -22,6 +22,7 @@ function fakeLinux(routes: Record<string, () => Response>, opts: { unpack?: (des
   const lines: string[] = []
   const untars: Array<[string, string, number]> = []
   const under = (p: string) => (f: string) => f === p || f.startsWith(p + "/")
+  const ops: string[] = []
   const deps: LinuxBuiltinDeps = {
     home: "/home/u",
     arch: opts.arch ?? "x64",
@@ -41,17 +42,27 @@ function fakeLinux(routes: Record<string, () => Response>, opts: { unpack?: (des
       mkdir: () => {},
       write: (p, b) => { files.set(p, b) },
       rename: (from, to) => {
+        ops.push(`rename ${from} -> ${to}`)
         for (const [f, b] of [...files]) if (under(from)(f)) { files.delete(f); files.set(to + f.slice(from.length), b) }
       },
       remove: (p) => { for (const f of [...files.keys()]) if (under(p)(f)) files.delete(f); links.delete(p) },
       chmod: (p, m) => { modes.set(p, m) },
+      symlink: (target, path) => { links.set(path, target) },
+      contained: () => opts.escape ?? null,
+    },
+    linkFs: {
+      kind: (p) => (links.has(p) ? "symlink" : [...files.keys()].some(under(p)) ? "other" : "missing"),
+      exists: (p) => (links.has(p) ? [...files.keys()].some(under(links.get(p)!)) : [...files.keys()].some(under(p))),
+      readlink: (p) => links.get(p)!,
+      mkdir: () => {},
+      unlink: (p) => { links.delete(p) },
       symlink: (target, path) => { links.set(path, target) },
     },
     log: (l) => lines.push(l),
     now: () => 42,
     pid: 7,
   }
-  return { deps, files, links, modes, fetched, lines, untars }
+  return { deps, files, links, modes, fetched, lines, untars, ops }
 }
 
 describe("Cursor on Linux without curl", () => {
@@ -73,6 +84,51 @@ describe("Cursor on Linux without curl", () => {
     expect(l.untars[0]![2]).toBe(1) // the package has one top-level dir
     expect([...l.files.keys()].some((f) => f.includes(".tmp-"))).toBe(false)
     expect(l.lines.join("\n")).toContain("publishes no checksum")
+  })
+
+  test("Grok's `agent` (a link outside Cursor's versions) and a plain file are left alone and logged", async () => {
+    const l = fakeLinux({ [CURSOR_INSTALL_SCRIPT]: () => new Response(script), [TGZ]: () => new Response(new Uint8Array([9])) }, { unpack: () => ["cursor-agent"] })
+    l.files.set("/home/u/.grok/bin/grok", new Uint8Array([1]))
+    l.links.set("/home/u/.local/bin/agent", "/home/u/.grok/bin/grok")
+    await installCursorLinux(l.deps)
+    expect(l.links.get("/home/u/.local/bin/agent")).toBe("/home/u/.grok/bin/grok")
+    expect(l.links.get("/home/u/.local/bin/cursor-agent")).toContain("/versions/2026.10.01-e373342/cursor-agent")
+    expect(l.lines.join("\n")).toContain("Not linking /home/u/.local/bin/agent")
+
+    const f = fakeLinux({ [CURSOR_INSTALL_SCRIPT]: () => new Response(script), [TGZ]: () => new Response(new Uint8Array([9])) }, { unpack: () => ["cursor-agent"] })
+    f.files.set("/home/u/.local/bin/agent", new Uint8Array([7]))
+    await installCursorLinux(f.deps)
+    expect(f.files.get("/home/u/.local/bin/agent")).toEqual(new Uint8Array([7]))
+    expect(f.lines.join("\n")).toContain("in the way")
+  })
+
+  test("an older Cursor version's links are ours and move to the new one", async () => {
+    const l = fakeLinux({ [CURSOR_INSTALL_SCRIPT]: () => new Response(script), [TGZ]: () => new Response(new Uint8Array([9])) }, { unpack: () => ["cursor-agent"] })
+    l.links.set("/home/u/.local/bin/agent", "/home/u/.local/share/cursor-agent/versions/2026.09.18-old/cursor-agent")
+    l.links.set("/home/u/.local/bin/cursor-agent", "/home/u/.local/share/cursor-agent/versions/2026.09.18-old/cursor-agent")
+    await installCursorLinux(l.deps)
+    const want = "/home/u/.local/share/cursor-agent/versions/2026.10.01-e373342/cursor-agent"
+    expect(l.links.get("/home/u/.local/bin/agent")).toBe(want)
+    expect(l.links.get("/home/u/.local/bin/cursor-agent")).toBe(want)
+  })
+
+  test("reinstalling the same version swaps atomically: the old copy is set aside first", async () => {
+    const final = "/home/u/.local/share/cursor-agent/versions/2026.10.01-e373342"
+    const l = fakeLinux({ [CURSOR_INSTALL_SCRIPT]: () => new Response(script), [TGZ]: () => new Response(new Uint8Array([9])) }, { unpack: () => ["cursor-agent"] })
+    l.files.set(`${final}/cursor-agent`, new Uint8Array([1]))
+    await installCursorLinux(l.deps)
+    const renames = l.ops.filter((o) => o.startsWith("rename"))
+    expect(renames[0]).toMatch(new RegExp(`^rename ${final} -> .*\\.old-`))
+    expect(renames[1]).toMatch(new RegExp(`\\.tmp-.* -> ${final}$`))
+    expect([...l.files.keys()].some((f) => f.includes(".old-") || f.includes(".tmp-"))).toBe(false)
+  })
+
+  test("a package reaching outside its folder is refused before anything moves", async () => {
+    const l = fakeLinux({ [CURSOR_INSTALL_SCRIPT]: () => new Response(script), [TGZ]: () => new Response(new Uint8Array([9])) }, { unpack: () => ["cursor-agent"], escape: "x -> /etc" })
+    const err = await installCursorLinux(l.deps).catch((e) => e)
+    expect(String(err)).toContain("reaches outside its folder")
+    expect(l.links.size).toBe(0)
+    expect(l.files.size).toBe(0)
   })
 
   test("a package without cursor-agent is refused and leaves nothing", async () => {
@@ -120,6 +176,13 @@ describe("OpenCode on Linux without curl", () => {
     expect(String(err)).toContain("checksum mismatch")
     expect(l.untars).toEqual([])
     expect(l.files.size).toBe(0)
+  })
+
+  test("an archive reaching outside its folder is refused", async () => {
+    const l = fakeLinux({ [OPENCODE_LATEST_RELEASE_API]: release(`sha256:${sha(TGZ)}`), [URL_]: () => new Response(TGZ) }, { unpack: () => ["opencode"], escape: "../evil" })
+    const err = await installOpenCodeLinux(l.deps).catch((e) => e)
+    expect(String(err)).toContain("reaches outside its folder")
+    expect(l.files.has("/home/u/.opencode/bin/opencode")).toBe(false)
   })
 
   test("no published digest: refused before downloading", async () => {

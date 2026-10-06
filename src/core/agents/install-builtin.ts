@@ -11,6 +11,7 @@
 // Both put their dir on the user PATH in the registry (de-duplicated), the way MinGit does; the
 // broker's own PATH already carries both dirs (bin-dirs.ts), so detection needs no restart.
 import { win32 as winPath } from "path"
+import { isInUse } from "./archive-guard"
 import {
   METADATA_TIMEOUT_MS, OPENCODE_RELEASE_API, assertOpenCodeAssetUrl, httpsBytes, httpsGet,
 } from "./download"
@@ -98,6 +99,7 @@ export const installOpenCodeWindows: BuiltinInstaller = async (deps) => {
     verify: (staging) => (deps.fs.exists(winPath.join(staging, "opencode.exe")) ? null : `no opencode.exe in ${assetName}`),
     fs: deps.fs,
     stamp: stampOf(deps),
+    inUseName: "OpenCode",
   })
   deps.log(`Installed ${winPath.join(root, "opencode.exe")}.`)
   await addDirToUserPath(deps, root)
@@ -125,6 +127,7 @@ export const installGrokWindows: BuiltinInstaller = async (deps) => {
     deps.fs.rename(tmp, exe)
   } catch (err) {
     try { deps.fs.remove(tmp) } catch {}
+    if (isInUse(err)) throw new Error("Grok is in use. Close running Grok sessions and try again.")
     throw new Error(`couldn't write ${exe}: ${err instanceof Error ? err.message : String(err)}`)
   }
   deps.log(`Installed ${exe}.`)

@@ -8,6 +8,7 @@ import { createHash } from "crypto"
 import { execFile } from "child_process"
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "fs"
 import { win32 as winPath } from "path"
+import { findEscape, isInUse } from "../agents/archive-guard"
 
 /** The file operations a per-user install needs. Paths are Windows paths. */
 export interface UserInstallFs {
@@ -16,6 +17,8 @@ export interface UserInstallFs {
   write: (p: string, b: Uint8Array) => void
   rename: (from: string, to: string) => void
   remove: (p: string) => void
+  /** The first unpacked entry escaping [dir] (zip-slip, a symlink out), or null. Real fs only. */
+  contained?: (dir: string) => string | null
 }
 
 export const realUserInstallFs: UserInstallFs = {
@@ -24,6 +27,7 @@ export const realUserInstallFs: UserInstallFs = {
   write: (p, b) => writeFileSync(p, b),
   rename: (from, to) => renameSync(from, to),
   remove: (p) => rmSync(p, { recursive: true, force: true }),
+  contained: (dir) => findEscape(dir),
 }
 
 export function sha256Hex(bytes: Uint8Array): string {
@@ -117,6 +121,8 @@ export async function stageZipInto(opts: {
   verify: (staging: string) => string | null
   fs: UserInstallFs
   stamp: string
+  /** What runs from [root], for "Close running <name> sessions" when Windows holds it open. */
+  inUseName?: string
 }): Promise<void> {
   const { fs, root, stamp } = opts
   const parent = winPath.dirname(root)
@@ -126,15 +132,27 @@ export async function stageZipInto(opts: {
     fs.mkdir(staging)
     fs.write(zip, opts.zipBytes)
     await opts.extract(zip, staging)
+    const escape = fs.contained?.(staging)
+    if (escape) throw new Error(`the archive reaches outside its folder (${escape}); refusing it`)
     const refusal = opts.verify(staging)
     if (refusal) throw new Error(refusal)
-    if (fs.exists(root)) {
-      const old = winPath.join(parent, `${opts.stagingPrefix}.old-${stamp}`)
-      fs.rename(root, old)
-      fs.rename(staging, root)
-      try { fs.remove(old) } catch {}
-    } else {
-      fs.rename(staging, root)
+    try {
+      if (fs.exists(root)) {
+        const old = winPath.join(parent, `${opts.stagingPrefix}.old-${stamp}`)
+        fs.rename(root, old)
+        try {
+          fs.rename(staging, root)
+        } catch (err) {
+          try { fs.rename(old, root) } catch {} // put the previous install back
+          throw err
+        }
+        try { fs.remove(old) } catch {}
+      } else {
+        fs.rename(staging, root)
+      }
+    } catch (err) {
+      if (opts.inUseName && isInUse(err)) throw new Error(`${opts.inUseName} is in use. Close running ${opts.inUseName} sessions and try again.`)
+      throw err
     }
   } catch (err) {
     try { fs.remove(staging) } catch {}

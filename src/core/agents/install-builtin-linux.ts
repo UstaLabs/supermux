@@ -16,6 +16,8 @@ import { execFile } from "child_process"
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "fs"
 import { posix } from "path"
 import { sha256Hex } from "../windows/user-install"
+import { findEscape } from "./archive-guard"
+import { linkIntoLocalBin, realLinkFs, type LinkFs } from "./local-bin"
 import { METADATA_TIMEOUT_MS, OPENCODE_RELEASE_API, assertOpenCodeAssetUrl, httpsBytes, httpsGet } from "./download"
 
 export interface LinuxBuiltinDeps {
@@ -38,7 +40,11 @@ export interface LinuxBuiltinDeps {
     remove: (p: string) => void
     chmod: (p: string, mode: number) => void
     symlink: (target: string, path: string) => void
+    /** The first unpacked entry escaping [dir] (zip-slip, a symlink out), or null. */
+    contained: (dir: string) => string | null
   }
+  /** The ~/.local/bin links (never clobbering someone else's file or link). */
+  linkFs: LinkFs
   log: (line: string) => void
   now?: () => number
   pid?: number
@@ -72,7 +78,8 @@ export const installCursorLinux: LinuxBuiltinInstaller = async (deps) => {
   const bytes = await httpsBytes(deps.fetch, url)
   deps.log(`Cursor publishes no checksum (its own installer checks none): checked HTTPS only. SHA-256 ${deps.sha256(bytes)}.`)
 
-  const versions = posix.join(deps.home, ".local", "share", "cursor-agent", "versions")
+  const versionsRel = ".local/share/cursor-agent/versions"
+  const versions = posix.join(deps.home, versionsRel)
   const stamp = stampOf(deps)
   const tmp = posix.join(versions, `.tmp-${version}-${stamp}`)
   const archive = `${tmp}.tar.gz`
@@ -81,23 +88,37 @@ export const installCursorLinux: LinuxBuiltinInstaller = async (deps) => {
   try {
     deps.fs.write(archive, bytes)
     await deps.untar(archive, tmp, 1)
+    const escape = deps.fs.contained(tmp)
+    if (escape) throw new Error(`the Cursor package reaches outside its folder (${escape}); refusing it`)
     if (!deps.fs.exists(posix.join(tmp, "cursor-agent"))) throw new Error("no cursor-agent in the Cursor package")
-    deps.fs.remove(final)
-    deps.fs.rename(tmp, final)
+    // Swap by rename, the previous copy set aside first: a crash leaves one whole version.
+    if (deps.fs.exists(final)) {
+      const old = posix.join(versions, `.old-${version}-${stamp}`)
+      deps.fs.rename(final, old)
+      try {
+        deps.fs.rename(tmp, final)
+      } catch (err) {
+        try { deps.fs.rename(old, final) } catch {}
+        throw err
+      }
+      try { deps.fs.remove(old) } catch {}
+    } else {
+      deps.fs.rename(tmp, final)
+    }
   } catch (err) {
     try { deps.fs.remove(tmp) } catch {}
     throw err
   } finally {
     try { deps.fs.remove(archive) } catch {}
   }
-  const bin = posix.join(deps.home, ".local", "bin")
-  deps.fs.mkdir(bin)
+  // cursor-agent (what supermux runs) and Cursor's `agent` alias. Grok also ships an `agent`: one
+  // that isn't ours (a file, or a link outside Cursor's versions dir) is left alone and logged.
+  const target = `${versionsRel}/${version}/cursor-agent`
   for (const name of ["cursor-agent", "agent"]) {
-    const link = posix.join(bin, name)
-    deps.fs.remove(link)
-    deps.fs.symlink(posix.join(final, "cursor-agent"), link)
+    const line = linkIntoLocalBin(deps.home, { name, target, ownedUnder: versionsRel }, deps.linkFs)
+    if (line) deps.log(line)
   }
-  deps.log(`Installed ${posix.join(bin, "cursor-agent")} -> ${posix.join(final, "cursor-agent")}.`)
+  deps.log(`Installed Cursor ${version} in ${final}.`)
 }
 
 interface ReleaseAsset { name?: string; browser_download_url?: string; digest?: string | null }
@@ -133,6 +154,8 @@ export const installOpenCodeLinux: LinuxBuiltinInstaller = async (deps) => {
   try {
     deps.fs.write(archive, bytes)
     await deps.untar(archive, staging, 0)
+    const escape = deps.fs.contained(staging)
+    if (escape) throw new Error(`${assetName} reaches outside its folder (${escape}); refusing it`)
     const exe = posix.join(staging, "opencode")
     if (!deps.fs.exists(exe)) throw new Error(`no opencode in ${assetName}`)
     deps.fs.chmod(exe, 0o755)
@@ -180,6 +203,8 @@ export function realLinuxBuiltinDeps(home: string): Omit<LinuxBuiltinDeps, "log"
       remove: (p) => rmSync(p, { recursive: true, force: true }),
       chmod: (p, mode) => chmodSync(p, mode),
       symlink: (target, path) => symlinkSync(target, path),
+      contained: (dir) => findEscape(dir),
     },
+    linkFs: realLinkFs,
   }
 }
