@@ -8,6 +8,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -736,6 +737,57 @@ class AgentSettingsScreenTest {
         }
         onNodeWithText("Installation failed.").assertIsDisplayed()
         onNodeWithText("Retry installation").assertIsDisplayed()
+    }
+
+    @Test fun install_failed_shows_exit_code_reason_and_the_last_20_log_lines() = runComposeUiTest {
+        val started = AtomicReference(false)
+        val log = (1..30).joinToString("\n") { "line $it" }
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(
+                    agentStatuses = {
+                        listOf(AgentInstallStatus(kind = "grok", installed = false, authed = false))
+                    },
+                    agentStartInstall = {
+                        started.set(true)
+                        AgentInstallJob(state = "running")
+                    },
+                    agentPollInstall = {
+                        if (!started.get()) null
+                        else AgentInstallJob(
+                            state = "failed",
+                            log = log,
+                            exitCode = 1,
+                            error = "the Grok download is only 4096 bytes; refusing it",
+                        )
+                    },
+                )()
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("agent_install_start_grok").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("agent_install_error_grok").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithText("Installation failed (exit code 1). The Grok download is only 4096 bytes; refusing it").assertIsDisplayed()
+        val shown = (11..30).joinToString("\n") { "line $it" }
+        onNodeWithTag("agent_install_log_grok").assertTextEquals(shown)
+    }
+
+    @Test fun install_log_tail_and_failure_message() {
+        assertEquals("b\nc", installLogTail("a\nb\nc\n\n", lines = 2))
+        assertEquals("", installLogTail(""))
+        assertEquals("Installation failed.", installFailureMessage(AgentInstallJob(state = "failed")))
+        assertEquals(
+            "Installation failed. Grok can't be installed on this OS.",
+            installFailureMessage(AgentInstallJob(state = "failed", error = "Grok can't be installed on this OS.")),
+        )
+        assertEquals("Installation failed (exit code 3).", installFailureMessage(AgentInstallJob(state = "failed", exitCode = 3)))
     }
 
     // ── mutation result handling ────────────────────────────────────────────────────────────────

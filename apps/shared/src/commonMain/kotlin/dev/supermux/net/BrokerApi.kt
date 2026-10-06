@@ -1082,6 +1082,8 @@ data class AgentInstallJob(
     val state: String = "", // "running" | "done" | "failed"
     val log: String = "",
     val exitCode: Int? = null,
+    /** Why it failed, in a sentence (e.g. "not supported on Windows"); null while running or done. */
+    val error: String? = null,
 )
 
 /** State of an in-progress agent CLI login (POST/GET /agents/<kind>/login).
