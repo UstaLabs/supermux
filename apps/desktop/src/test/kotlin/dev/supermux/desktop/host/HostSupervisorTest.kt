@@ -77,6 +77,7 @@ private class Harness(
     var bundledFn: suspend () -> String? = { BUNDLED }
     var lateBundledFn: suspend () -> String? = { BUNDLED }
     var lateReads = 0
+    var killedReads = 0
     /** Runs inside startChild, before the child is returned (e.g. to cancel the caller). */
     var onStart: () -> Unit = {}
     /** The next children start already dead (they never become healthy). */
@@ -94,6 +95,7 @@ private class Harness(
         packaged = { packaged },
         bundledBuild = { bundledFn() },
         lateBundledBuild = { lateReads++; lateBundledFn() },
+        killBundledReads = { killedReads++ },
         startChild = { l ->
             events += "startChild"
             launches += l
@@ -1123,6 +1125,29 @@ class HostSupervisorTest {
         assertFalse(h.bootstrapped())
         assertTrue(h.logs().any { it.startsWith("background read: bundled build still unknown after 180.0 s") }, h.logs().toString())
         assertEquals(running, h.sup.status.value)
+    }
+
+    @Test fun quitDuringTheBackgroundReadKillsItsProbeAndUpdatesNothing() = runTest {
+        val h = slowFirstRead(this) { delay(40_000); BUNDLED }
+        h.sup.ensure()
+        advanceTimeBy(10_000)
+        h.sup.quit()
+        assertEquals(1, h.killedReads)
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertFalse(h.bootstrapped())
+        assertTrue(h.logs().none { it.startsWith("update (after the background read)") }, h.logs().toString())
+    }
+
+    @Test fun aBackgroundReadWhileHostingWasTurnedOffSaysWhyItDoesNothing() = runTest {
+        val h = slowFirstRead(this) { delay(40_000); BUNDLED }
+        h.sup.ensure()
+        h.saved = h.saved.copy(hosting = false)
+        h.sup.setHosting(false)
+        advanceTimeBy(41_000)
+        runCurrent()
+        assertTrue(h.logs().any { it == "background read: not updating (hosting is off)" }, h.logs().toString())
+        assertEquals(0, h.env.ran.count { it.getOrNull(1) == "bootstrap" })
     }
 
     @Test fun aKnownBundledBuildAtLaunchStartsNoBackgroundRead() = runTest {

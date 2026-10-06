@@ -55,6 +55,8 @@ class HostSupervisor(
     private val lateBundledBuild: suspend () -> String? = {
         BrokerVersion.defaultBundledBuild(stateDir, BrokerVersion.LATE_READ_BUDGET_MS)
     },
+    /** Kills a `<broker> version` probe still running (e.g. the background read) when the app quits. */
+    private val killBundledReads: () -> Unit = { BrokerVersion.killProbes() },
     internal val startChild: (ChildLaunch) -> ChildHandle = ::defaultStartChild,
     internal val processes: ProcessTable = SystemProcessTable,
     /** The app's own environment; the child gets it minus [isInheritedServiceKey], plus [brokerEnv]. */
@@ -408,6 +410,8 @@ class HostSupervisor(
         }
         try {
             quitting = true
+            lateReadJob?.cancel()
+            runCatching { killBundledReads() }
             stopWatch()
             abandonQuestion()
             val c = child
@@ -555,7 +559,10 @@ class HostSupervisor(
      * apply the update once, on this launch, under [lock] — the same UpdateOwn path a launch takes.
      */
     private fun lateBundledRead(running: String?) {
-        if (lateReadJob?.isActive == true) return
+        if (lateReadJob?.isActive == true) {
+            log("bundled build unknown at launch; a background read is already running")
+            return
+        }
         log("bundled build unknown at launch; reading it in the background (up to ${BrokerVersion.LATE_READ_BUDGET_MS / 1000} s)")
         val started = now()
         lateReadJob = scope.launch {
@@ -569,7 +576,15 @@ class HostSupervisor(
             guarded("late update") {
                 lock.withLock {
                     val prefs = _prefs.value
-                    if (quitting || !prefs.hosting || pending != null) return@withLock
+                    if (quitting || !prefs.hosting || pending != null) {
+                        val why = when {
+                            quitting -> "the app is quitting"
+                            !prefs.hosting -> "hosting is off"
+                            else -> "a question to the user is open"
+                        }
+                        log("background read: not updating ($why)")
+                        return@withLock
+                    }
                     bundled = b
                     if (updateTried) {
                         log("already restarted for an update on this launch; keeping the running build")

@@ -67,6 +67,7 @@ object BrokerVersion {
         return try {
             p = ProcessBuilder(broker.toString(), "version")
                 .redirectError(ProcessBuilder.Redirect.DISCARD).start()
+            liveProbes += p
             // A child that hangs without closing stdout would block the read below forever:
             // kill it after 10 s so the read sees EOF.
             val proc = p
@@ -93,6 +94,7 @@ object BrokerVersion {
             null
         } finally {
             watchdog?.interrupt()
+            if (p != null) liveProbes -= p
             if (p?.isAlive == true) p.destroyForcibly()
         }
     }
@@ -121,6 +123,17 @@ object BrokerVersion {
                 else HostBinaries.materialize(src, stateDir.resolve("desktop-assets/probe"), name, executable = true)
                 BrokerVersion.readBundledBuild(exe, killAfterMs = (budgetMs - 5_000).coerceAtLeast(1_000))
             }
+        }
+    }
+
+    /** Every `<broker> version` child still running ([readBundledBuild]), for [killProbes]. */
+    private val liveProbes: MutableSet<Process> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** Kill every running `<broker> version` probe (the app is quitting); its read then returns null. */
+    fun killProbes() {
+        for (p in liveProbes.toList()) {
+            p.destroyForcibly()
+            liveProbes -= p
         }
     }
 

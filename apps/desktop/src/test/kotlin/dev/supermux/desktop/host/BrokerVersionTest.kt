@@ -36,4 +36,20 @@ class BrokerVersionTest {
         assertTrue(BrokerVersion.isNewer(found = "1.0.0-alpha.beta", bundled = "1.0.0-alpha.1"))
     @Test fun overflowIsNotNewerAndDoesNotThrow() =
         assertFalse(BrokerVersion.isNewer(found = "99999999999.0.0", bundled = "1.0.0"))
+
+    @Test fun killProbesEndsARunningVersionProbe() {
+        val script = kotlin.io.path.createTempFile("slow-broker", ".sh")
+        java.nio.file.Files.writeString(script, "#!/bin/sh\nsleep 30\n")
+        script.toFile().setExecutable(true)
+        var result: String? = "unset"
+        val t = Thread { result = BrokerVersion.readBundledBuild(script, killAfterMs = 60_000) }
+        val started = System.currentTimeMillis()
+        t.start()
+        Thread.sleep(500)
+        BrokerVersion.killProbes()
+        t.join(10_000)
+        kotlin.test.assertFalse(t.isAlive, "the probe read is still blocked")
+        kotlin.test.assertNull(result)
+        kotlin.test.assertTrue(System.currentTimeMillis() - started < 10_000)
+    }
 }
