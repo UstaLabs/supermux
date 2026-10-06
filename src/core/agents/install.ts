@@ -14,7 +14,7 @@ import { spawn as defaultSpawn, type ChildProcess } from "child_process"
 import { homedir } from "os"
 import { agentDisplayName, type AgentKind } from "../../shared/agents"
 import { makeLogger } from "../../shared/log"
-import { windowsPowerShellPath } from "../windows/user-install"
+import { addToUserPath, windowsPowerShellPath } from "../windows/user-install"
 import { withAgentBinDirs, withNodeBinDirs } from "./bin-dirs"
 import { BUILTIN_INSTALLERS, realBuiltinDeps, type BuiltinInstallDeps } from "./install-builtin"
 
@@ -25,6 +25,9 @@ export type InstallShell = "bash" | "powershell" | "builtin"
 export interface InstallRecipe {
   shell: InstallShell
   script: string
+  /** Windows: a dir (may use %VARS%) to put on the user PATH after a successful install, for a
+   * vendor installer that leaves it to the user. */
+  userPathDir?: string
 }
 export type InstallOs = "posix" | "win32"
 
@@ -41,7 +44,8 @@ export const INSTALL_RECIPES: Record<InstallOs, Record<AgentKind, InstallRecipe 
     grok: { shell: "bash", script: "curl -fsSL https://x.ai/cli/install.sh | bash" },
   },
   win32: {
-    claude: { shell: "powershell", script: "irm https://claude.ai/install.ps1 | iex" },
+    // claude's installer only TELLS the user to add %USERPROFILE%\.local\bin to PATH by hand.
+    claude: { shell: "powershell", script: "irm https://claude.ai/install.ps1 | iex", userPathDir: "%USERPROFILE%\\.local\\bin" },
     codex: { shell: "powershell", script: "$env:CODEX_NON_INTERACTIVE='1'; irm https://chatgpt.com/codex/install.ps1 | iex" },
     cursor: { shell: "powershell", script: "irm 'https://cursor.com/install?win32=true' | iex" },
     opencode: { shell: "builtin", script: "opencode-windows" },
@@ -172,6 +176,15 @@ export function startInstall(kind: AgentKind, deps: InstallDeps): { job: Install
       if (settled) return
       settled = true
       job.exitCode = code
+      if (code === 0 && recipe.userPathDir && platform === "win32") {
+        const machine = deps.builtin ?? realBuiltinDeps(deps.env ?? process.env)
+        try {
+          const wrote = await addToUserPath(machine, recipe.userPathDir, machine.env)
+          if (wrote) append(`Added ${recipe.userPathDir} to your PATH.\n`)
+        } catch (err) {
+          append(`Couldn't add ${recipe.userPathDir} to your PATH: ${err instanceof Error ? err.message : String(err)}\n`)
+        }
+      }
       try {
         await deps.refreshPath?.()
       } catch (err) {

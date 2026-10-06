@@ -51,7 +51,11 @@ describe("recipe selection", () => {
   })
 
   test("Windows: PowerShell scripts for claude/codex/cursor, builtin for opencode/grok", () => {
-    expect(installRecipeFor("claude", "win32")).toEqual({ shell: "powershell", script: "irm https://claude.ai/install.ps1 | iex" })
+    expect(installRecipeFor("claude", "win32")).toEqual({
+      shell: "powershell",
+      script: "irm https://claude.ai/install.ps1 | iex",
+      userPathDir: "%USERPROFILE%\\.local\\bin",
+    })
     expect(installRecipeFor("codex", "win32")).toEqual({
       shell: "powershell",
       script: "$env:CODEX_NON_INTERACTIVE='1'; irm https://chatgpt.com/codex/install.ps1 | iex",
@@ -237,6 +241,56 @@ describe("job lifecycle", () => {
     expect(job.state).toBe("failed")
     expect(job.exitCode).toBe(1)
     expect(job.log).toContain("HTTP 503")
+  })
+})
+
+describe("Windows user PATH after an installer that leaves it to the user (claude)", () => {
+  function machine(userPath: string | null) {
+    const writes: string[] = []
+    const builtin = {
+      env: WIN_ENV,
+      arch: "x64",
+      fetch: fetch,
+      sha256: () => "",
+      extract: async () => {},
+      fs: { exists: () => false, mkdir: () => {}, write: () => {}, rename: () => {}, remove: () => {} },
+      readUserPath: async () => userPath,
+      writeUserPath: async (v: string) => { writes.push(v) },
+    } satisfies Omit<BuiltinInstallDeps, "log">
+    return { builtin, writes }
+  }
+
+  test("a successful claude install adds %USERPROFILE%\\.local\\bin once", async () => {
+    const m = machine("C:\\Tools")
+    const child = fakeChild()
+    const { job, done } = startInstall("claude", { platform: "win32", env: WIN_ENV, builtin: m.builtin, spawn: () => child, isInstalled: () => true })
+    end(child, 0)
+    await done
+    expect(m.writes).toEqual(["C:\\Tools;%USERPROFILE%\\.local\\bin"])
+    expect(job.log).toContain("to your PATH")
+  })
+
+  test("already there (expanded form): nothing written; a failed install never touches PATH", async () => {
+    const m = machine("C:\\Users\\t\\.local\\bin")
+    const c1 = fakeChild()
+    const r1 = startInstall("claude", { platform: "win32", env: WIN_ENV, builtin: m.builtin, spawn: () => c1, isInstalled: () => true })
+    end(c1, 0)
+    await r1.done
+    const c2 = fakeChild()
+    const r2 = startInstall("claude", { platform: "win32", env: WIN_ENV, builtin: machine(null).builtin, spawn: () => c2, isInstalled: () => false })
+    end(c2, 1)
+    await r2.done
+    expect(m.writes).toEqual([])
+    expect(r2.job.log).not.toContain("PATH")
+  })
+
+  test("macOS/Linux never touch a registry", async () => {
+    const m = machine(null)
+    const child = fakeChild()
+    const { done } = startInstall("claude", { platform: "darwin", env: { PATH: "/usr/bin" }, home: "/Users/u", builtin: m.builtin, spawn: () => child, isInstalled: () => true })
+    end(child, 0)
+    await done
+    expect(m.writes).toEqual([])
   })
 })
 
