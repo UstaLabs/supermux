@@ -1,4 +1,5 @@
 // src/main.ts
+import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
 import { WhatsAppChannel } from "./channels/whatsapp"
 import { WebChannel } from "./channels/web"
@@ -824,6 +825,10 @@ const sessionManager = new SessionManager(registry, {
   backend: {
     runtimeTargetIdOf,
     kill: (targetId) => sessionBackend.kill(targetId),
+    windowOwner: async (targetId) => {
+      const pid = await sessionBackend.livePid(targetId)
+      return pid ? paneSessionId(pid) : null
+    },
   },
   cleanup: {
     terminals: { killAllForSession: (name) => terminalManager.killAllForSession(name) },

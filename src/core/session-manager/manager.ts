@@ -88,6 +88,12 @@ export type SessionManagerPorts = {
     /** Heals a missing tmux_window_id via a name→id resolve; lives in main.ts because the resume paths use it too. */
     runtimeTargetIdOf(s: { id: string; name: string; tmux_window_id?: string }): Promise<string | null>
     kill(targetId: string): Promise<void>
+    /** The broker session id the window's agent was started for (its pane's MUX_SESSION_ID), or
+     *  null when there is no such window or it can't be read. When present, a stored window id is
+     *  only killed if it is this session's: tmux reuses ids after its server restarts, so a stale id
+     *  can address another session's window. Window NAMES don't work for this: a renamed session's
+     *  window keeps its old name. */
+    windowOwner?(targetId: string): Promise<string | null>
   }
   /** Per-session teardown collaborators (the kill/unregister ladder). */
   cleanup: {
@@ -1267,6 +1273,16 @@ export class SessionManager {
     let wid: string | null = null
     try { wid = await this.ports.backend.runtimeTargetIdOf({ id: session.id, name: session.name, tmux_window_id: session.tmux_window_id ?? undefined }) } catch { return }
     if (!wid) return
+    if (this.ports.backend.windowOwner) {
+      let owner: string | null = null
+      try { owner = await this.ports.backend.windowOwner(wid) } catch { owner = null }
+      if (owner !== session.id) {
+        // Not provably this session's window (gone, unreadable, or a reused id): never kill it.
+        log.warn("claude_tmux_window_not_owned", { name: session.name, window: wid, owner })
+        if (owner !== null) this.registry.sessions.setTmuxWindowId(session.id, undefined)
+        return
+      }
+    }
     try {
       await this.ports.backend.kill(wid)
       log.info("claude_tmux_window_retired", { name: session.name, window: wid })
@@ -1415,6 +1431,8 @@ export class SessionManager {
       // Only sessions that were running: a suspended one stays asleep and resumes lazily on its
       // next message (resumeSuspended), so boot never starts agents nobody is using.
       if (s.status === "suspended") continue
+      // A draft has no conversation yet; its agent starts when it is first sent.
+      if (s.user_status === "draft") continue
       const work = this.resumeOneAtBoot(s)
       let timer: ReturnType<typeof setTimeout> | undefined
       const timedOut = await Promise.race([

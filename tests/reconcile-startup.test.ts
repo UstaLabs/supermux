@@ -107,3 +107,13 @@ test("reconcileOnStartup leaves Core Claude sessions active", async () => {
   expect(registry.resolveName("corey")?.status).toBe("active")
   expect(registry.resolveName("tmuxy")?.status).toBe("suspended")
 })
+
+// A suspended row stays suspended at startup even if its stored window id has a live pane: tmux
+// reuses ids after its server restarts, so that pane can be another session's (dry run 2026-10-06).
+test("reconcileOnStartup never wakes a suspended row through a live pane", async () => {
+  const registry = new Registry(db)
+  const s = registry.register({ id: "sus-1", name: "personal-7", workdir: "/x", pid: 0, agent: "claude", core: false, tmux_window_id: "@0" } as never)
+  registry.sessions.suspend(s.id)
+  await reconcileOnStartup({ registry, bindSocket: async () => {}, supervisor: fakeSupervisor(), isAlive: () => false, livePanePid: async () => 777 })
+  expect(registry.resolveName("personal-7")?.status).toBe("suspended")
+})

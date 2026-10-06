@@ -83,3 +83,15 @@ test("resumeAtBoot leaves suspended sessions asleep and resumes the active ones"
   expect(manager.adapterFor("sleep-1")).toBeUndefined()
   expect(registry.get("sleep-1")?.status).toBe("suspended")
 })
+
+// A draft has no conversation yet: its agent starts when it is first sent. Starting one at boot
+// left an orphaned agent behind once the draft was sent (dry run 2026-10-06).
+test("resumeAtBoot does not start an agent for a draft", async () => {
+  const { registry, manager } = build()
+  const workdir = mkdtempSync(join(tmpDir, "wd-"))
+  registry.sessions.register({ id: "draft-1", name: "drafty", workdir, pid: 0, agent: "claude", core: true, user_status: "draft" } as never)
+  expect(registry.get("draft-1")?.user_status).toBe("draft")
+  await manager.resumeAtBoot()
+  expect(fake.opens).toHaveLength(0)
+  expect(manager.adapterFor("draft-1")).toBeUndefined()
+})

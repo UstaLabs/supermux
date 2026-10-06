@@ -17,6 +17,7 @@
  * the live paths; run it only inside a read-only sandbox (see run-boot-sim.sh), where every write
  * a prepare attempts fails with EROFS and is reported.
  */
+import { paneSessionId } from "../../src/core/session-manager/pane-owner"
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
@@ -145,6 +146,8 @@ const ports = fakePorts(db)
 ports.backend = {
   runtimeTargetIdOf: (s) => ensureWindowId(s, { tmuxSession: "mux", resolve: (g, n) => backend.resolve(g, n), persist: (id, wid) => registry.sessions.setTmuxWindowId(id, wid) }),
   kill: (id) => backend.kill(id),
+  // As main.ts: the pane's MUX_SESSION_ID (read-only /proc of the REAL pane pid from the snapshot).
+  windowOwner: async (id) => { const pid = await backend.livePid(id); return pid ? paneSessionId(pid) : null },
 }
 ports.resume.sessionBackend = backend as never
 ports.resume.tmuxSession = "mux"

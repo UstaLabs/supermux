@@ -292,6 +292,9 @@ export async function reconcileOnStartup(deps: {
   for (const s of deps.registry.list()) {
     if (alive(s.pid)) continue
     if (isDraftSession(s)) continue
+    // Already suspended: stays so (it wakes on its next message). Never revive it through a stored
+    // window id, since tmux reuses ids after its server restarts and the pane may be another session's.
+    if (s.status === "suspended") continue
     // PA special-case: leave the stale row in place so ensurePersonalAssistants'
     // own respawn path runs (single source of truth for the PA lifecycle).
     if (s.role === "personal_assistant") continue
