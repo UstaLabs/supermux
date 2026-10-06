@@ -242,7 +242,9 @@ describe("workspace terminal cutover: what still uses tmux, and why", () => {
       // that added them. Historical schema, not a live dependency of the workspace path.
       ["agent session records", ["src/core/storage/migrations/index.ts"]],
       // main.ts's preflight and the spawn path: the broker telling a user tmux is missing.
-      ["broker wiring", ["src/main.ts", "src/shared/preflight.ts"]],
+      // requirement.ts: once git appears it pushes the fixed PATH into tmux's global env, so
+      // new agent windows lose the no-git shim (agent-side; workspace terminals are zmx).
+      ["broker wiring", ["src/core/git/requirement.ts", "src/main.ts", "src/shared/preflight.ts"]],
       ["portable binary staging", [
         "scripts/build-portable-tmux.sh",
         "scripts/stage-desktop-binaries.sh",

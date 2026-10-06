@@ -36,6 +36,20 @@ test("Cursor prefers cursor-agent then wraps the official agent.cmd fallback", a
   expect(calls[0].options.env.USERPROFILE).toBe("C:\\Mux\\cursor")
 })
 
+test("Cursor never launches Grok's agent.exe as its alias", async () => {
+  const calls: any[] = []
+  const runner = makeRealCursorRunner({
+    home: "C:\\Mux\\cursor", authEnv: { Path: "C:\\Users\\u\\.grok\\bin" }, platform: "win32",
+    fileExists: (path) => path.toLowerCase() === "c:\\users\\u\\.grok\\bin\\agent.exe",
+    spawn: (command, args, options) => {
+      calls.push({ command, args, options })
+      return fakeChild((child) => queueMicrotask(() => child.emit("exit", 0)))
+    },
+  })
+  await runner(["--print", "hi"], () => {}, () => {}, undefined)
+  expect(String(calls[0].command).toLowerCase()).not.toContain(".grok")
+})
+
 test("OpenCode runs a ps1 shim through PowerShell while preserving server argv", async () => {
   const calls: any[] = []
   const configHome = mkdtempSync(join(tmpdir(), "mux-win-opencode-"))

@@ -2,6 +2,7 @@ import { spawn as defaultSpawn, type ChildProcess } from "child_process"
 import type { CursorRunner } from "./adapter"
 import { makeLogger } from "../../../shared/log"
 import { resolveCommand, spawnCommand, type FileExists } from "../../process/launcher"
+import { isGrokAgentPath } from "../detect"
 
 const log = makeLogger("agents/cursor/runner")
 
@@ -23,7 +24,9 @@ export function makeRealCursorRunner(opts: {
       const platform = opts.platform ?? process.platform
       const shouldResolve = !opts.spawn || opts.platform !== undefined || opts.fileExists !== undefined
       const command = shouldResolve
-        ? (resolveCommand(["cursor-agent"], env, platform, { fileExists: opts.fileExists }) ?? "cursor-agent")
+        ? (resolveCommand(["cursor-agent"], env, platform, { fileExists: opts.fileExists }) ??
+          cursorAgentAlias(resolveCommand(["agent"], env, platform, { fileExists: opts.fileExists })) ??
+          "cursor-agent")
         : "cursor-agent"
       const child = spawnCommand(command, args, {
         platform, fileExists: opts.fileExists, spawn: (opts.spawn ?? defaultSpawn) as never,
@@ -77,4 +80,9 @@ export function makeRealCursorRunner(opts: {
       })
     })
   }
+}
+
+/** Cursor's official `agent` alias (agent.cmd on Windows), unless that `agent` is Grok's. */
+function cursorAgentAlias(resolved: string | null): string | null {
+  return resolved && !isGrokAgentPath(resolved) ? resolved : null
 }

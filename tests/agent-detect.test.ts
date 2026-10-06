@@ -48,6 +48,24 @@ test("detectAgent accepts Cursor's official agent.exe alias after cursor-agent",
   expect(seen).toEqual(["cursor-agent", "agent"])
 })
 
+test("detectAgent rejects Grok's `agent` as Cursor (Grok ships an agent binary too)", () => {
+  const probes: DetectProbes = {
+    hasBinary: (b) => b === "agent",
+    resolveBinary: (b) => (b === "agent" ? "/home/u/.grok/bin/agent" : null),
+    fileExists: () => false,
+  }
+  expect(detectAgent("cursor", probes, PATHS).installed).toBe(false)
+})
+
+test("detectAgent accepts Cursor's own `agent` when it resolves outside .grok", () => {
+  const probes: DetectProbes = {
+    hasBinary: (b) => b === "agent",
+    resolveBinary: (b) => (b === "agent" ? "C:\\Users\\u\\AppData\\Local\\cursor-agent\\agent.cmd" : null),
+    fileExists: () => false,
+  }
+  expect(detectAgent("cursor", probes, PATHS).installed).toBe(true)
+})
+
 test("authCredPath uses native Windows credential roots", () => {
   const paths = {
     home: "C:\\Users\\u",

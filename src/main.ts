@@ -104,7 +104,7 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chm
 import { randomBytes, randomUUID } from "crypto"
 import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
-import { spawnCommand } from "./core/process/launcher"
+import { resolveCommand, spawnCommand } from "./core/process/launcher"
 import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/preflight"
 import { detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
 import { sessionCapabilities } from "./core/agents/capabilities"
@@ -440,7 +440,7 @@ const agentHasCredential = (kind: AgentKind): boolean =>
   hasStoredCredential(kind, settings.getAppConfig(appConfigEnv))
 /** Every agent kind's install/auth status — GET /agents/status and the /agents/models catalog. */
 const detectAgentStatuses = () => detectAllAgents(
-  { hasBinary, fileExists: existsSync, hasCredential: agentHasCredential },
+  { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync, hasCredential: agentHasCredential },
   {
     home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
     appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
@@ -1505,7 +1505,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // One install job per agent; "installed" is re-probed (binary on PATH) after
   // the installer exits. Referenced lazily by the startAgentInstall closures.
   const installManager = createInstallManager({
-    isInstalled: (kind) => detectAgent(kind, { hasBinary, fileExists: existsSync }, { home: homedir() }).installed,
+    isInstalled: (kind) => detectAgent(kind, { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }, { home: homedir() }).installed,
     // Windows: an installer that set the user PATH (codex, cursor, …) changed only the registry —
     // fold its dirs into ours so detection and new sessions/terminals see the agent, no restart.
     refreshPath: async () => {
