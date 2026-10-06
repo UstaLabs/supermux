@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -373,6 +374,7 @@ fun SessionListScreen(
     }
 
     var menuExpanded by remember { mutableStateOf(false) }
+    var organizeProjectsOpen by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<SessionInfo?>(null) }
     var renameWorkspaceTarget by remember { mutableStateOf<WorkspaceDto?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -1291,6 +1293,9 @@ fun SessionListScreen(
                         onNavigate = nav,
                         onAddHost = onAddHost,
                         onNewProject = onNewProject,
+                        onOrganizeProjects = if (visibleProjects.size > 1) {
+                            { organizeProjectsOpen = true }
+                        } else null,
                     )
                 }
             },
@@ -1311,6 +1316,15 @@ fun SessionListScreen(
 
 
     // ── Dialogs ───────────────────────────────────────────────────────────────────────────────
+    if (organizeProjectsOpen) {
+        OrganizeProjectsDialog(
+            projects = visibleProjects,
+            hosts = hosts,
+            loadImage = cachedProjectImage,
+            onSave = onReorderProjects,
+            onDismiss = { organizeProjectsOpen = false },
+        )
+    }
     renameTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { renameTarget = null },
@@ -1693,6 +1707,7 @@ private fun OverflowNav(
     onNavigate: (String) -> Unit,
     onAddHost: () -> Unit,
     onNewProject: (() -> Unit)? = null,
+    onOrganizeProjects: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     Box {
@@ -1714,6 +1729,11 @@ private fun OverflowNav(
             onNewProject?.let { newProject ->
                 NavItem("New project", Icons.Filled.CreateNewFolder, "nav_new_project") {
                     onExpandedChange(false); newProject()
+                }
+            }
+            onOrganizeProjects?.let { organize ->
+                NavItem("Organize projects", Icons.Filled.SwapVert, "nav_organize_projects") {
+                    onExpandedChange(false); organize()
                 }
             }
             NavItem("Archived", Icons.Filled.Archive, "nav_archived") {
