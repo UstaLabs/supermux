@@ -109,7 +109,7 @@ import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/
 import { detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
 import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
-import { withAgentBinDirs } from "./core/agents/bin-dirs"
+import { refreshPathFromRegistry, withAgentBinDirs } from "./core/agents/bin-dirs"
 import {
   GitInstaller, GitRequiredError, GitRequirementMonitor, GIT_REQUIRED_MESSAGE, bunWhich, readRegistryPath,
   setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
@@ -1506,6 +1506,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // the installer exits. Referenced lazily by the startAgentInstall closures.
   const installManager = createInstallManager({
     isInstalled: (kind) => detectAgent(kind, { hasBinary, fileExists: existsSync }, { home: homedir() }).installed,
+    // Windows: an installer that set the user PATH (codex, cursor, …) changed only the registry —
+    // fold its dirs into ours so detection and new sessions/terminals see the agent, no restart.
+    refreshPath: async () => {
+      const added = await refreshPathFromRegistry(process.env, readRegistryPath)
+      if (added.length) log.info("agent_install_path_refreshed", { added })
+    },
     // A new agent joins the launcher's catalog: discover its models, then announce either way.
     onSettled: (kind) => {
       void refreshAgentModels(kind).finally(() => announceAgentModelsChanged([kind]))
