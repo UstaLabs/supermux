@@ -467,12 +467,9 @@ fun PhoneWorkspacePanes(
             .getOrNull()
             ?.also { thumbnails[id] = it }
     }
-    // The tab being LEFT is still composed (just hidden), and its layer still holds its last frame.
-    var lastSelected by remember(current.id) { mutableStateOf<String?>(null) }
-    LaunchedEffect(tabs.selectedId) {
-        lastSelected?.takeIf { it != tabs.selectedId }?.let { snapshot(it) }
-        lastSelected = tabs.selectedId
-    }
+    // Snapshots are taken only when the grid opens, of the tab on screen. A capture on LEAVING a
+    // tab came from a view already hidden, which could re-lay itself out (insets) before the
+    // capture — its picture then sat ~50dp off the live view and jumped when the live view took over.
     LaunchedEffect(tabs.viewIds) { thumbnails.keys.retainAll(tabs.viewIds.toSet()) }
 
     // Chrome's container transform: opening the grid shrinks the page you were on into its own
@@ -481,6 +478,7 @@ fun PhoneWorkspacePanes(
     // the full page, 1 is its card's thumbnail.
     var morph by remember(current.id) { mutableStateOf<TabMorph?>(null) }
     val morphProgress = remember(current.id) { Animatable(0f) }
+    val morphAlpha = remember(current.id) { Animatable(1f) }
     val gridAlpha = remember(current.id) { Animatable(0f) }
     var root by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var page by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -501,6 +499,7 @@ fun PhoneWorkspacePanes(
         morphJob = scope.launch {
             val bmp = id?.let { snapshot(it) }
             morphProgress.snapTo(0f)
+            morphAlpha.snapTo(1f)
             gridAlpha.snapTo(0f)
             if (id != null && bmp != null) morph = TabMorph(id, bmp)
             switcherOpen = true
@@ -524,8 +523,14 @@ fun PhoneWorkspacePanes(
             val bmp = id?.let { thumbnails[it] }
             if (id != null && bmp != null && thumbSlots[id]?.isAttached == true) {
                 morph = TabMorph(id, bmp)
+                morphAlpha.snapTo(1f)
                 morphProgress.snapTo(1f)
                 morphProgress.animateTo(0f, tween(SWITCHER_MORPH_MS, easing = FastOutSlowInEasing))
+                // Landed: show the live view under the picture and fade the picture off it, so
+                // whatever changed since the snapshot (a new message) blends in instead of jumping.
+                switcherOpen = false
+                hideUnderGrid = false
+                morphAlpha.animateTo(0f, tween(SWITCHER_HANDOFF_MS))
             } else {
                 gridAlpha.animateTo(0f, tween(SWITCHER_FADE_MS))
             }
@@ -666,6 +671,8 @@ fun PhoneWorkspacePanes(
         morph?.let { m ->
             TabMorphOverlay(
                 bitmap = m.bitmap,
+                background = MaterialTheme.colorScheme.surfaceContainerLow,
+                alpha = { morphAlpha.value },
                 progress = { morphProgress.value },
                 root = { root },
                 from = { page },
@@ -713,6 +720,7 @@ fun PhoneWorkspacePanes(
 /** Chrome's page ⇄ card morph and the grid's fade, measured off a screen recording of it. */
 private const val SWITCHER_MORPH_MS = 260
 private const val SWITCHER_FADE_MS = 160
+private const val SWITCHER_HANDOFF_MS = 120
 
 /** Phone add: reveal an existing singleton, else post a new view (optimistic, no layout PATCH). */
 internal fun addPhoneView(

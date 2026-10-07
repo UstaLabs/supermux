@@ -82,6 +82,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
@@ -383,7 +384,8 @@ private fun TabCard(
                     Image(
                         thumbnail,
                         contentDescription = null,
-                        contentScale = ContentScale.Crop,
+                        // Width-fit from the top, exactly as the morph draws it (see TabMorphOverlay).
+                        contentScale = ContentScale.FillWidth,
                         alignment = Alignment.TopCenter,
                         modifier = Modifier.fillMaxSize().testTag("tab-thumb-$id"),
                     )
@@ -422,12 +424,14 @@ internal class TabMorph(val id: String, val bitmap: ImageBitmap)
 @Composable
 internal fun TabMorphOverlay(
     bitmap: ImageBitmap,
+    background: Color,
     progress: () -> Float,
+    alpha: () -> Float = { 1f },
     root: () -> LayoutCoordinates?,
     from: () -> LayoutCoordinates?,
     to: () -> LayoutCoordinates?,
 ) {
-    Canvas(Modifier.fillMaxSize().testTag("tab_morph")) {
+    Canvas(Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha() }.testTag("tab_morph")) {
         val r = root()?.takeIf { it.isAttached } ?: return@Canvas
         val a = from()?.takeIf { it.isAttached }?.let { r.localBoundingBoxOf(it, clipBounds = false) } ?: return@Canvas
         val b = to()?.takeIf { it.isAttached }?.let { r.localBoundingBoxOf(it, clipBounds = false) } ?: return@Canvas
@@ -435,18 +439,21 @@ internal fun TabMorphOverlay(
         val rect: Rect = lerp(a, b, p)
         if (rect.width < 1f || rect.height < 1f) return@Canvas
         val corner = lerp(0f, THUMB_CORNER.toPx(), p)
-        // ContentScale.Crop + Alignment.TopCenter, as the card's Image does.
-        val scale = maxOf(rect.width / bitmap.width, rect.height / bitmap.height)
-        val srcW = (rect.width / scale).coerceAtMost(bitmap.width.toFloat())
+        // Fit the WIDTH and pin the top, as the card's Image does — never scale to fill. A
+        // snapshot is not always the page's exact shape (taken with the keyboard up, say), and
+        // scaling it to fill blew the page up a few percent, so the live view then visibly shrank
+        // into place. Width-fit lands 1:1 on the page; any height difference is just clipped or
+        // left as background.
+        val scale = rect.width / bitmap.width
         val srcH = (rect.height / scale).coerceAtMost(bitmap.height.toFloat())
-        val srcX = ((bitmap.width - srcW) / 2f).roundToInt()
         clipPath(Path().apply { addRoundRect(RoundRect(rect, CornerRadius(corner))) }) {
+            drawRect(background, topLeft = rect.topLeft, size = rect.size)
             drawImage(
                 bitmap,
-                srcOffset = IntOffset(srcX, 0),
-                srcSize = IntSize(srcW.roundToInt(), srcH.roundToInt()),
+                srcOffset = IntOffset.Zero,
+                srcSize = IntSize(bitmap.width, srcH.roundToInt()),
                 dstOffset = IntOffset(rect.left.roundToInt(), rect.top.roundToInt()),
-                dstSize = IntSize(rect.width.roundToInt(), rect.height.roundToInt()),
+                dstSize = IntSize(rect.width.roundToInt(), (srcH * scale).roundToInt()),
             )
         }
     }
