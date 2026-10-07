@@ -590,11 +590,20 @@ fun ChatPanel(
         snapshotFlow { chromeFraction }.collect { if (it < 1f) listState.scrollBy(100_000f) }
     }
 
+    // The WHOLE panel accepts dropped files, not just the composer card: a drop on the transcript
+    // stages into the composer through the same funnel (the card highlights while dragging).
+    val dropState = remember(session.id) { ComposerDropState() }
+
     Column(
         modifier
             .fillMaxSize()
             .background(cs.surfaceContainerLow)
             .onSizeChanged { panelWidth = with(density) { it.width.toDp() } }
+            .externalFileDropTarget(
+                enabled = actions.upload != null,
+                onDragOver = { dropState.dragOver = it },
+                onFiles = { dropState.deliver(it) },
+            )
             .testTag(TestIds.CHAT_VIEW),
     ) {
         if (showHeader) {
@@ -725,6 +734,7 @@ fun ChatPanel(
                 placeholder = DEFAULT_COMPOSER_PLACEHOLDER,
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
+                dropState = dropState,
                 externalDictate = externalDictate,
                 onExternalDictateConsumed = onExternalDictateConsumed,
                 pasteImageRequestNonce = pasteImageRequestNonce,

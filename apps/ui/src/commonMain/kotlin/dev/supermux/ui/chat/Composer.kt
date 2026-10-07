@@ -85,6 +85,7 @@ import androidx.compose.material3.MaterialTheme
 
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -553,6 +554,12 @@ fun Composer(
     placeholder: String = DEFAULT_COMPOSER_PLACEHOLDER,
     externalAttach: ComposerExternalAttach? = null,
     onExternalAttachConsumed: () -> Unit = {},
+    /**
+     * Set when the HOST owns the external-file drop target for a larger surface (the whole chat
+     * panel). The composer then installs no target of its own, highlights on the host's drag state
+     * and receives the host's drops through the same [stage] funnel. Null = the card is its own target.
+     */
+    dropState: ComposerDropState? = null,
     externalDictate: ComposerExternalDictate? = null,
     onExternalDictateConsumed: () -> Unit = {},
     models: ModelsResponse? = null,
@@ -917,7 +924,8 @@ fun Composer(
     // Where Ctrl/Cmd+V means "paste an image" (desktop's Edit ▸ Paste image accelerator): only here.
     androidx.compose.runtime.LaunchedEffect(inputFocused) { ChatInputFocus.report(inputInteraction, inputFocused) }
     androidx.compose.runtime.DisposableEffect(inputInteraction) { onDispose { ChatInputFocus.report(inputInteraction, false) } }
-    var dragOver by remember(sessionKey) { mutableStateOf(false) }
+    var ownDragOver by remember(sessionKey) { mutableStateOf(false) }
+    val dragOver = dropState?.dragOver ?: ownDragOver
 
     val cardShape = RoundedCornerShape(Radii.lg + 8.dp) // ~24dp — matches the mock capsule
     // Touch-only: the whole border animates primary-tinted on focus (the launcher's card). Read
@@ -942,6 +950,16 @@ fun Composer(
 
     // Attach is bound by EITHER seam: a live upload (chat) or pre-spawn staging (the launcher).
     val attachBound = onUpload != null || staging != null
+
+    // A host-owned drop target (the whole chat panel) delivers into this composer's stage funnel.
+    val stageFilesLatest by rememberUpdatedState<(List<PickedFile>) -> Unit> { stageFiles(it) }
+    if (dropState != null) {
+        DisposableEffect(dropState, attachBound) {
+            val sink: (List<PickedFile>) -> Unit = { stageFilesLatest(it) }
+            if (attachBound) dropState.sink = sink
+            onDispose { if (dropState.sink === sink) dropState.sink = null }
+        }
+    }
     val stagedFiles = staging?.files.orEmpty()
     val largeSend = chrome.largeTouchSend && !pointer
 
@@ -1423,8 +1441,8 @@ fun Composer(
         modifier
             .fillMaxWidth()
             .externalFileDropTarget(
-                enabled = attachBound,
-                onDragOver = { dragOver = it },
+                enabled = attachBound && dropState == null,
+                onDragOver = { ownDragOver = it },
                 onFiles = { stageFiles(it) },
             ),
     ) {
