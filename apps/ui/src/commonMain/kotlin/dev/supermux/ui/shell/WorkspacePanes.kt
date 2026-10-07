@@ -9,6 +9,15 @@
 // The pane CONTENT is one `ViewHost` call for every width; only the chrome around it differs.
 package dev.supermux.ui.shell
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.ui.graphics.TransformOrigin
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -449,6 +458,10 @@ fun PhoneWorkspacePanes(
     // count button, and each card shows the frame its view last drew.
     var switcherOpen by remember(current.id) { mutableStateOf(false) }
     val thumbnails = remember(current.id) { mutableStateMapOf<String, ImageBitmap>() }
+    // Chrome's zoom: the grid grows out of / shrinks into the card it pivots on. Card centres are
+    // remembered from the last time the grid was laid out; before that, the first card's spot.
+    val cardOrigins = remember(current.id) { mutableMapOf<String, TransformOrigin>() }
+    var zoomOrigin by remember(current.id) { mutableStateOf(TransformOrigin(0.27f, 0.25f)) }
     val layers = remember(current.id) { mutableMapOf<String, GraphicsLayer>() }
     suspend fun snapshot(id: String) {
         val layer = layers[id] ?: return
@@ -468,10 +481,22 @@ fun PhoneWorkspacePanes(
     val anyUnread = tabs.viewIds.any { viewsById[it].tabUnread(it == tabs.selectedId, unreadSessions) }
     val tabsButton = PhoneTabsButton(tabs.viewIds.size, anyUnread) {
         // Open first; the hidden view's layer still holds its last frame, so the card catches up.
+        tabs.selectedId?.let { cardOrigins[it] }?.let { zoomOrigin = it }
         switcherOpen = true
         tabs.selectedId?.let { id -> scope.launch { snapshot(id) } }
     }
     if (switcherOpen && tabs.viewIds.isEmpty()) switcherOpen = false
+    // The view under the grid stays on screen until the grid has fully covered it, so opening
+    // reads as a zoom rather than a cut to an empty page.
+    var hideUnderGrid by remember(current.id) { mutableStateOf(false) }
+    LaunchedEffect(switcherOpen) {
+        if (switcherOpen) {
+            delay(SWITCHER_ZOOM_MS.toLong())
+            hideUnderGrid = true
+        } else {
+            hideUnderGrid = false
+        }
+    }
     BackHandler(enabled = switcherOpen) { switcherOpen = false }
 
     Box(modifier.fillMaxSize().testTag("phone_workspace_tabs")) {
@@ -537,7 +562,7 @@ fun PhoneWorkspacePanes(
                         // Android actual is still exactly the alpha hide this used to be. Hidden
                         // under the switcher too, for the same reason: a platform view would draw
                         // over the grid.
-                        KeepAlivePanel(visible = id == tabs.selectedId && !switcherOpen) {
+                        KeepAlivePanel(visible = id == tabs.selectedId && !hideUnderGrid) {
                             CompositionLocalProvider(LocalPhoneTabsButton provides tabsButton) {
                             Box(Modifier.fillMaxSize().recordInto(layer)) {
                             WorkspacePaneContent(
@@ -564,7 +589,13 @@ fun PhoneWorkspacePanes(
             }
         }
     }
-        if (switcherOpen) {
+        AnimatedVisibility(
+            visible = switcherOpen,
+            enter = fadeIn(tween(SWITCHER_ZOOM_MS)) +
+                scaleIn(tween(SWITCHER_ZOOM_MS, easing = FastOutSlowInEasing), initialScale = 1.6f, transformOrigin = zoomOrigin),
+            exit = fadeOut(tween(SWITCHER_ZOOM_MS)) +
+                scaleOut(tween(SWITCHER_ZOOM_MS, easing = FastOutSlowInEasing), targetScale = 1.6f, transformOrigin = zoomOrigin),
+        ) {
             PhoneTabSwitcher(
                 viewIds = tabs.viewIds,
                 selectedId = tabs.selectedId,
@@ -573,9 +604,11 @@ fun PhoneWorkspacePanes(
                 unread = { id -> viewsById[id].tabUnread(id == tabs.selectedId, unreadSessions) },
                 thumbnails = thumbnails,
                 onSelect = { id ->
+                    cardOrigins[id]?.let { zoomOrigin = it }
                     app.setActiveView(current.id, id)
                     switcherOpen = false
                 },
+                onCardPlaced = { id, origin -> cardOrigins[id] = origin },
                 onClose = { id -> viewsById[id]?.let { closeOrConfirm(it) } },
                 onAdd = { showAdd = true },
                 onDismiss = { switcherOpen = false },
@@ -627,6 +660,9 @@ fun PhoneWorkspacePanes(
         )
     }
 }
+
+/** How long the switcher's zoom in/out takes — Chrome's is about this quick. */
+private const val SWITCHER_ZOOM_MS = 240
 
 /** Phone add: reveal an existing singleton, else post a new view (optimistic, no layout PATCH). */
 internal fun addPhoneView(

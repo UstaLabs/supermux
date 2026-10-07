@@ -12,6 +12,18 @@
 package dev.supermux.ui.shell
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -100,7 +112,7 @@ fun PhoneTabCountButton(button: PhoneTabsButton, modifier: Modifier = Modifier) 
     val cs = MaterialTheme.colorScheme
     Box(
         modifier
-            .size(44.dp)
+            .size(40.dp)
             .clip(CircleShape)
             .clickable(onClick = button.onOpen)
             .semantics { contentDescription = "${button.count} tabs" }
@@ -108,13 +120,13 @@ fun PhoneTabCountButton(button: PhoneTabsButton, modifier: Modifier = Modifier) 
         contentAlignment = Alignment.Center,
     ) {
         Box(
-            Modifier.size(22.dp).border(1.75.dp, cs.onSurface, RoundedCornerShape(6.dp)),
+            Modifier.size(19.dp).border(1.5.dp, cs.onSurface, RoundedCornerShape(5.dp)),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 if (button.count > 99) ":D" else button.count.toString(),
                 color = cs.onSurface,
-                fontSize = if (button.count > 9) 10.sp else 12.sp,
+                fontSize = if (button.count > 9) 9.sp else 11.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
             )
@@ -124,7 +136,7 @@ fun PhoneTabCountButton(button: PhoneTabsButton, modifier: Modifier = Modifier) 
                 Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 8.dp, end = 8.dp)
-                    .size(8.dp)
+                    .size(7.dp)
                     .background(LocalSemantics.current.success, CircleShape)
                     .testTag("phone_tabs_button_dot"),
             )
@@ -172,37 +184,41 @@ internal fun PhoneTabSwitcher(
     onAdd: () -> Unit,
     onDismiss: () -> Unit,
     cardMenu: @Composable (id: String, content: @Composable () -> Unit) -> Unit,
+    /** Where each card's centre sits, as a fraction of the switcher — the zoom in/out pivots on it. */
+    onCardPlaced: (id: String, origin: TransformOrigin) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
+    var root by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val grid = rememberLazyGridState(initialFirstVisibleItemIndex = viewIds.indexOf(selectedId).coerceAtLeast(0))
     Column(
         modifier
             .fillMaxSize()
             .background(cs.surfaceContainer)
+            .onGloballyPositioned { root = it }
             .statusBarsPadding()
             .testTag("phone_tab_switcher"),
     ) {
         Row(
-            Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp),
+            Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(14.dp))
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(cs.primary)
                     .clickable(onClick = onAdd)
                     .testTag("phone_add_view"),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.Add, contentDescription = "Add view", tint = cs.onPrimary)
+                Icon(Icons.Filled.Add, contentDescription = "Add view", tint = cs.onPrimary, modifier = Modifier.size(22.dp))
             }
             Text(
                 if (viewIds.size == 1) "1 tab" else "${viewIds.size} tabs",
-                style = MaterialTheme.typography.titleMedium,
-                color = cs.onSurface,
-                modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
+                style = MaterialTheme.typography.titleSmall,
+                color = cs.onSurfaceVariant,
+                modifier = Modifier.weight(1f).padding(horizontal = 14.dp),
             )
             TextButton(onClick = onDismiss, modifier = Modifier.testTag("phone_tabs_done")) { Text("Done") }
         }
@@ -225,7 +241,12 @@ internal fun PhoneTabSwitcher(
                         thumbnail = thumbnails[id],
                         onOpen = { onSelect(id) },
                         onClose = { onClose(id) },
-                        modifier = Modifier.animateItem(),
+                        modifier = Modifier.animateItem().onGloballyPositioned { c ->
+                            val r = root ?: return@onGloballyPositioned
+                            if (!r.isAttached || r.size.width == 0 || r.size.height == 0) return@onGloballyPositioned
+                            val centre = r.localPositionOf(c, Offset(c.size.width / 2f, c.size.height / 2f))
+                            onCardPlaced(id, TransformOrigin(centre.x / r.size.width, centre.y / r.size.height))
+                        },
                     )
                 }
             }
@@ -249,7 +270,11 @@ private fun TabCard(
     val scope = rememberCoroutineScope()
     val swipe = remember(id) { Animatable(0f) }
     val density = LocalDensity.current
-    val frame = if (selected) cs.primary else cs.surfaceContainerHighest
+    val frame = if (selected) cs.primary else cs.surfaceContainerHigh
+    // Chrome's press: the card gives a little under the thumb.
+    val press = remember { MutableInteractionSource() }
+    val pressed by press.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(if (pressed) 0.96f else 1f, spring(stiffness = Spring.StiffnessMediumLow))
     val onFrame = if (selected) cs.onPrimary else cs.onSurface
     BoxWithConstraints(modifier.fillMaxWidth().aspectRatio(0.74f)) {
         val widthPx = with(density) { maxWidth.toPx() }
@@ -257,7 +282,11 @@ private fun TabCard(
             Modifier
                 .fillMaxSize()
                 .offset { IntOffset(swipe.value.roundToInt(), 0) }
-                .graphicsLayer { alpha = 1f - (abs(swipe.value) / widthPx).coerceIn(0f, 0.8f) }
+                .graphicsLayer {
+                    alpha = 1f - (abs(swipe.value) / widthPx).coerceIn(0f, 0.8f)
+                    scaleX = pressScale
+                    scaleY = pressScale
+                }
                 // Swipe sideways to close, as in Chrome. Past a third of the card it goes; short of
                 // that it springs back. It also springs back after a close the caller had to ASK
                 // about (a running agent, unsaved edits) — the card stays if the answer is no.
@@ -274,44 +303,44 @@ private fun TabCard(
                         }
                     },
                 )
-                .clip(RoundedCornerShape(18.dp))
+                .clip(RoundedCornerShape(16.dp))
                 .background(frame)
-                .clickable(onClick = onOpen)
+                .clickable(interactionSource = press, indication = null, onClick = onOpen)
                 .testTag("tab-card-$id"),
         ) {
             Row(
-                Modifier.fillMaxWidth().height(40.dp).padding(start = 12.dp),
+                Modifier.fillMaxWidth().height(34.dp).padding(start = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(icon, contentDescription = null, tint = onFrame, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
+                Icon(icon, contentDescription = null, tint = onFrame, modifier = Modifier.size(13.dp))
+                Spacer(Modifier.width(6.dp))
                 if (unread) {
-                    Box(Modifier.size(7.dp).background(LocalSemantics.current.success, CircleShape).testTag("tab-dot-$id"))
+                    Box(Modifier.size(6.dp).background(LocalSemantics.current.success, CircleShape).testTag("tab-dot-$id"))
                     Spacer(Modifier.width(6.dp))
                 }
                 Text(
                     title,
                     color = onFrame,
                     fontFamily = MonoFontFamily,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
                 Box(
-                    Modifier.size(40.dp).clickable(onClick = onClose).testTag("tab-close-$id"),
+                    Modifier.size(32.dp).clickable(onClick = onClose).testTag("tab-close-$id"),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Filled.Close, contentDescription = "Close $title", tint = onFrame, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Filled.Close, contentDescription = "Close $title", tint = onFrame, modifier = Modifier.size(15.dp))
                 }
             }
             Box(
                 Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(start = 4.dp, end = 4.dp, bottom = 4.dp)
-                    .clip(RoundedCornerShape(14.dp))
+                    .padding(start = 3.dp, end = 3.dp, bottom = 3.dp)
+                    .clip(RoundedCornerShape(13.dp))
                     .background(cs.surface),
                 contentAlignment = Alignment.Center,
             ) {
@@ -324,7 +353,7 @@ private fun TabCard(
                         modifier = Modifier.fillMaxSize().testTag("tab-thumb-$id"),
                     )
                 } else {
-                    Icon(icon, contentDescription = null, tint = cs.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(40.dp))
+                    Icon(icon, contentDescription = null, tint = cs.onSurfaceVariant.copy(alpha = 0.4f), modifier = Modifier.size(28.dp))
                 }
             }
         }
