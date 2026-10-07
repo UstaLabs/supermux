@@ -8,16 +8,28 @@
 //   ASC_API_ISSUER_ID       the issuer id
 // Optional env:
 //   TESTFLIGHT_BUNDLE_ID    app to look up (default dev.supermux.app)
-//   TESTFLIGHT_GROUP        internal beta group to attach to (default "Smoke Test")
+//   TESTFLIGHT_GROUP        beta group(s) to attach to, comma-separated (default "Smoke Test")
+//   TESTFLIGHT_WHATS_NEW    "What to Test" text (required by Apple for external groups)
 //   TESTFLIGHT_ASSIGN_TIMEOUT_SEC   how long to wait for processing (default 1800)
 //
 // Waits for the build App Store Connect just received to finish PROCESSING, then attaches it
-// to the internal tester group. `altool --upload-app` alone does NOT make a build installable:
+// to every named tester group. `altool --upload-app` alone does NOT make a build installable:
 // a VALID build that belongs to no beta group never appears in anyone's TestFlight app. This
 // is the step that ends the upload → actually-on-your-phone gap.
 //
 // Matching is by the EXACT CFBundleVersion string. ASC sorts `version` lexically ("9" > "10"),
 // so "take the newest build" is wrong — we filter for the one number this run uploaded.
+//
+// Internal vs external groups differ in one big way, and that difference is the whole reason
+// this script grew past a single attach call:
+//   - INTERNAL group ("Smoke Test"): attach and the testers have it. No Apple review, ever.
+//   - EXTERNAL group ("Developer Beta", public link): Apple gates it behind Beta App Review,
+//     and refuses the submission unless the build carries a "What to Test" note. So for any
+//     external target we set the note FIRST, attach, then file the review submission. Only the
+//     first build of a MARKETING_VERSION train is really reviewed; later builds on the same
+//     train normally clear immediately, which is what keeps fast iteration fast.
+
+import { ascFromEnv, fail } from "./lib/asc"
 
 const buildNumber = process.argv[2]
 if (!buildNumber) {
@@ -25,99 +37,46 @@ if (!buildNumber) {
   process.exit(1)
 }
 
-const keyId = requireEnv("ASC_API_KEY_ID")
-const issuerId = requireEnv("ASC_API_ISSUER_ID")
-const p8Base64 = requireEnv("ASC_API_KEY_P8_BASE64")
+const asc = ascFromEnv()
 const bundleId = process.env.TESTFLIGHT_BUNDLE_ID || "dev.supermux.app"
-const groupName = process.env.TESTFLIGHT_GROUP || "Smoke Test"
+const groupNames = (process.env.TESTFLIGHT_GROUP || "Smoke Test")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean)
+const whatsNewOverride = process.env.TESTFLIGHT_WHATS_NEW?.trim()
 const timeoutSec = Number(process.env.TESTFLIGHT_ASSIGN_TIMEOUT_SEC || 1800)
 const pollIntervalMs = 20_000
 
-function requireEnv(name: string): string {
-  const v = process.env[name]
-  if (!v) {
-    console.error(`missing required env ${name}`)
-    process.exit(1)
-  }
-  return v
-}
+if (groupNames.length === 0) fail("TESTFLIGHT_GROUP resolved to no group names")
 
-function base64url(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-}
-
-// ES256 JWT signed with the ASC key. WebCrypto's ECDSA output is already the raw r||s pair
-// JOSE wants, so no DER unwrapping is needed.
-async function mintToken(): Promise<string> {
-  const pem = Buffer.from(p8Base64, "base64").toString("utf8")
-  const der = Buffer.from(pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, ""), "base64")
-  const key = await crypto.subtle.importKey(
-    "pkcs8",
-    der,
-    { name: "ECDSA", namedCurve: "P-256" },
-    false,
-    ["sign"],
-  )
-  const now = Math.floor(Date.now() / 1000)
-  const header = base64url(Buffer.from(JSON.stringify({ alg: "ES256", kid: keyId, typ: "JWT" })))
-  const payload = base64url(
-    Buffer.from(JSON.stringify({ iss: issuerId, iat: now, exp: now + 900, aud: "appstoreconnect-v1" })),
-  )
-  const signingInput = `${header}.${payload}`
-  const sig = await crypto.subtle.sign(
-    { name: "ECDSA", hash: "SHA-256" },
-    key,
-    Buffer.from(signingInput),
-  )
-  return `${signingInput}.${base64url(new Uint8Array(sig))}`
-}
-
-type ApiResult = { status: number; body: any }
-
-async function api(method: string, path: string, body?: unknown): Promise<ApiResult> {
-  // The token is minted per call: polling can outlive a single token's 15-minute life.
-  const res = await fetch(`https://api.appstoreconnect.apple.com${path}`, {
-    method,
-    headers: {
-      authorization: `Bearer ${await mintToken()}`,
-      "content-type": "application/json",
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  const text = await res.text()
-  return { status: res.status, body: text ? JSON.parse(text) : {} }
-}
-
-function fail(message: string, result?: ApiResult): never {
-  console.error(message)
-  if (result) console.error(`HTTP ${result.status} ${JSON.stringify(result.body).slice(0, 600)}`)
-  process.exit(1)
-}
-
-const appsRes = await api("GET", `/v1/apps?filter%5BbundleId%5D=${encodeURIComponent(bundleId)}&limit=1`)
-if (appsRes.status !== 200) fail(`could not look up app ${bundleId}`, appsRes)
-const appId: string | undefined = appsRes.body.data?.[0]?.id
-if (!appId) fail(`no App Store Connect app for bundle id ${bundleId}`)
+const appId = await asc.appId(bundleId)
 console.log(`app ${bundleId} = ${appId}`)
 
-const groupsRes = await api("GET", `/v1/apps/${appId}/betaGroups?limit=200`)
+const groupsRes = await asc.api("GET", `/v1/apps/${appId}/betaGroups?limit=200`)
 if (groupsRes.status !== 200) fail("could not list beta groups", groupsRes)
-const groups: any[] = groupsRes.body.data ?? []
-const group = groups.find((g) => g.attributes?.name?.toLowerCase() === groupName.toLowerCase())
-if (!group) {
-  fail(
-    `no beta group named "${groupName}" (found: ${groups.map((g) => g.attributes?.name).join(", ") || "none"}).` +
-      " Create it in App Store Connect, or set TESTFLIGHT_GROUP.",
-  )
+const allGroups: any[] = groupsRes.body.data ?? []
+
+const targets = groupNames.map((name) => {
+  const group = allGroups.find((g) => g.attributes?.name?.toLowerCase() === name.toLowerCase())
+  if (!group) {
+    fail(
+      `no beta group named "${name}" (found: ${allGroups.map((g) => g.attributes?.name).join(", ") || "none"}).` +
+        " Create it with scripts/testflight-external-setup.ts or in App Store Connect, or set TESTFLIGHT_GROUP.",
+    )
+  }
+  return group
+})
+for (const g of targets) {
+  console.log(`group "${g.attributes.name}" = ${g.id} (internal=${g.attributes.isInternalGroup})`)
 }
-console.log(`group "${group.attributes.name}" = ${group.id} (internal=${group.attributes.isInternalGroup})`)
+const externalTargets = targets.filter((g) => g.attributes?.isInternalGroup === false)
 
 // A build stays PROCESSING for several minutes after the upload returns; it cannot be attached
 // until it is VALID. Poll for this exact build number rather than whatever is newest.
 const deadline = Date.now() + timeoutSec * 1000
 let buildId: string | undefined
 while (true) {
-  const res = await api(
+  const res = await asc.api(
     "GET",
     `/v1/builds?filter%5Bapp%5D=${appId}&filter%5Bversion%5D=${encodeURIComponent(buildNumber)}&limit=1`,
   )
@@ -139,15 +98,90 @@ while (true) {
   await new Promise((r) => setTimeout(r, pollIntervalMs))
 }
 
-const attach = await api("POST", `/v1/betaGroups/${group.id}/relationships/builds`, {
-  data: [{ type: "builds", id: buildId }],
-})
-// 409 = already attached (a re-run of this job), which is the state we wanted anyway.
-if (attach.status !== 204 && attach.status !== 200 && attach.status !== 409) {
-  fail(`could not attach build ${buildNumber} to "${group.attributes.name}"`, attach)
+// Apple rejects an external beta submission whose build has no "What to Test" localization, so
+// this runs before the attach rather than after it. Internal-only runs skip it: the note is
+// optional there, and writing one would be a pointless extra call on every build.
+if (externalTargets.length > 0) {
+  const locRes = await asc.api("GET", `/v1/builds/${buildId}/betaBuildLocalizations?limit=200`)
+  if (locRes.status !== 200) fail(`could not list "What to Test" localizations for build ${buildNumber}`, locRes)
+  const existing = (locRes.body.data ?? []).find((l: any) => l.attributes?.locale === "en-US")
+  // Re-running the job must not clobber a hand-written note with the generic fallback, so an
+  // existing note is only replaced when this run was given an explicit one.
+  if (existing && !whatsNewOverride) {
+    console.log(
+      `"What to Test" already set on build ${buildNumber} — leaving it (set TESTFLIGHT_WHATS_NEW to replace)`,
+    )
+  } else {
+    const whatsNew = whatsNewOverride || `Build ${buildNumber}`
+    const write = existing
+      ? await asc.api("PATCH", `/v1/betaBuildLocalizations/${existing.id}`, {
+          data: { type: "betaBuildLocalizations", id: existing.id, attributes: { whatsNew } },
+        })
+      : await asc.api("POST", "/v1/betaBuildLocalizations", {
+          data: {
+            type: "betaBuildLocalizations",
+            attributes: { locale: "en-US", whatsNew },
+            relationships: { build: { data: { type: "builds", id: buildId } } },
+          },
+        })
+    if (write.status !== 200 && write.status !== 201) {
+      fail(`could not set "What to Test" on build ${buildNumber}`, write)
+    }
+    console.log(`"What to Test" set on build ${buildNumber}: ${whatsNew.split("\n")[0]}`)
+  }
 }
-console.log(
-  attach.status === 409
-    ? `build ${buildNumber} was already on "${group.attributes.name}"`
-    : `attached build ${buildNumber} to "${group.attributes.name}" — testers can install it now`,
-)
+
+for (const group of targets) {
+  const attach = await asc.api("POST", `/v1/betaGroups/${group.id}/relationships/builds`, {
+    data: [{ type: "builds", id: buildId }],
+  })
+  // 409 = already attached (a re-run of this job), which is the state we wanted anyway.
+  if (attach.status !== 204 && attach.status !== 200 && attach.status !== 409) {
+    fail(`could not attach build ${buildNumber} to "${group.attributes.name}"`, attach)
+  }
+  console.log(
+    attach.status === 409
+      ? `build ${buildNumber} was already on "${group.attributes.name}"`
+      : `attached build ${buildNumber} to "${group.attributes.name}"${
+          group.attributes.isInternalGroup ? " — testers can install it now" : " — pending beta review"
+        }`,
+  )
+}
+
+// External testers only see the build once Apple clears it. Re-submitting a build that is already
+// in the queue is rejected with 422 INVALID_QC_STATE (not the 409 you would expect), so rather than
+// pattern-matching Apple's error codes, any rejection is resolved by asking what submission the
+// build actually has: one already on file means the re-run did its job. No submission at all is
+// worth failing the job over — the internal group already has the build, so a red run means "the
+// public lane is stuck", which is exactly the thing you want to find out about immediately.
+if (externalTargets.length > 0) {
+  const submit = await asc.api("POST", "/v1/betaAppReviewSubmissions", {
+    data: {
+      type: "betaAppReviewSubmissions",
+      relationships: { build: { data: { type: "builds", id: buildId } } },
+    },
+  })
+  if (submit.status === 201) {
+    console.log(`build ${buildNumber} submitted for Beta App Review`)
+  } else {
+    const existing = await asc.api(
+      "GET",
+      `/v1/betaAppReviewSubmissions?filter%5Bbuild%5D=${encodeURIComponent(buildId)}`,
+    )
+    const state: string | undefined = existing.body.data?.[0]?.attributes?.betaReviewState
+    if (!state) {
+      fail(
+        `could not submit build ${buildNumber} for Beta App Review.` +
+          " If this complains about missing review details or a beta app description," +
+          " run scripts/testflight-external-setup.ts once.",
+        submit,
+      )
+    }
+    console.log(`build ${buildNumber} is already in Beta App Review (${state})`)
+  }
+
+  for (const group of externalTargets) {
+    const link = group.attributes?.publicLink
+    if (link) console.log(`public TestFlight link for "${group.attributes.name}": ${link}`)
+  }
+}
