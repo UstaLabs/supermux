@@ -9,15 +9,14 @@
 // The pane CONTENT is one `ViewHost` call for every width; only the chrome around it differs.
 package dev.supermux.ui.shell
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.ui.graphics.TransformOrigin
-import kotlinx.coroutines.delay
+import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import kotlinx.coroutines.Job
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -458,18 +457,15 @@ fun PhoneWorkspacePanes(
     // count button, and each card shows the frame its view last drew.
     var switcherOpen by remember(current.id) { mutableStateOf(false) }
     val thumbnails = remember(current.id) { mutableStateMapOf<String, ImageBitmap>() }
-    // Chrome's zoom: the grid grows out of / shrinks into the card it pivots on. Card centres are
-    // remembered from the last time the grid was laid out; before that, the first card's spot.
-    val cardOrigins = remember(current.id) { mutableMapOf<String, TransformOrigin>() }
-    var zoomOrigin by remember(current.id) { mutableStateOf(TransformOrigin(0.27f, 0.25f)) }
     val layers = remember(current.id) { mutableMapOf<String, GraphicsLayer>() }
-    suspend fun snapshot(id: String) {
-        val layer = layers[id] ?: return
-        if (layer.size.width <= 0 || layer.size.height <= 0) return
+    suspend fun snapshot(id: String): ImageBitmap? {
+        val layer = layers[id] ?: return null
+        if (layer.size.width <= 0 || layer.size.height <= 0) return null
         // Bounded: a thumbnail is a nicety, and a capture that never returns must not hold anything up.
-        runCatching { withTimeoutOrNull(500) { layer.toImageBitmap() } }
-            .onSuccess { bmp -> bmp?.let { thumbnails[id] = it } }
+        return runCatching { withTimeoutOrNull(250) { layer.toImageBitmap() } }
             .onFailure { println("[PhoneTabSwitcher] snapshot $id failed: $it") }
+            .getOrNull()
+            ?.also { thumbnails[id] = it }
     }
     // The tab being LEFT is still composed (just hidden), and its layer still holds its last frame.
     var lastSelected by remember(current.id) { mutableStateOf<String?>(null) }
@@ -478,28 +474,71 @@ fun PhoneWorkspacePanes(
         lastSelected = tabs.selectedId
     }
     LaunchedEffect(tabs.viewIds) { thumbnails.keys.retainAll(tabs.viewIds.toSet()) }
-    val anyUnread = tabs.viewIds.any { viewsById[it].tabUnread(it == tabs.selectedId, unreadSessions) }
-    val tabsButton = PhoneTabsButton(tabs.viewIds.size, anyUnread) {
-        // Open first; the hidden view's layer still holds its last frame, so the card catches up.
-        tabs.selectedId?.let { cardOrigins[it] }?.let { zoomOrigin = it }
-        switcherOpen = true
-        tabs.selectedId?.let { id -> scope.launch { snapshot(id) } }
-    }
-    if (switcherOpen && tabs.viewIds.isEmpty()) switcherOpen = false
-    // The view under the grid stays on screen until the grid has fully covered it, so opening
-    // reads as a zoom rather than a cut to an empty page.
+
+    // Chrome's container transform: opening the grid shrinks the page you were on into its own
+    // card; picking a card grows that card back into the page. Only that one tab moves — the grid
+    // fades in behind it and otherwise holds still. [morph] is the tab in flight; progress 0 is
+    // the full page, 1 is its card's thumbnail.
+    var morph by remember(current.id) { mutableStateOf<TabMorph?>(null) }
+    val morphProgress = remember(current.id) { Animatable(0f) }
+    val gridAlpha = remember(current.id) { Animatable(0f) }
+    var root by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var page by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val thumbSlots = remember(current.id) { mutableMapOf<String, LayoutCoordinates>() }
+    // The live view under the grid is hidden once something opaque covers it, so a platform view
+    // (iOS UIKitView) can never draw over the grid.
     var hideUnderGrid by remember(current.id) { mutableStateOf(false) }
-    LaunchedEffect(switcherOpen) {
-        if (switcherOpen) {
-            delay(SWITCHER_ZOOM_MS.toLong())
+    var morphJob by remember { mutableStateOf<Job?>(null) }
+
+    fun openSwitcher() {
+        if (switcherOpen || tabs.viewIds.isEmpty()) return
+        val id = tabs.selectedId
+        morphJob?.cancel()
+        morphJob = scope.launch {
+            val bmp = id?.let { snapshot(it) }
+            morphProgress.snapTo(0f)
+            gridAlpha.snapTo(0f)
+            if (id != null && bmp != null) morph = TabMorph(id, bmp)
+            switcherOpen = true
+            // The card the page lands in has to be laid out before it can be aimed at.
+            withFrameNanos {}
+            withFrameNanos {}
             hideUnderGrid = true
-        } else {
-            hideUnderGrid = false
+            launch { gridAlpha.animateTo(1f, tween(SWITCHER_FADE_MS)) }
+            if (morph != null) morphProgress.animateTo(1f, tween(SWITCHER_MORPH_MS, easing = FastOutSlowInEasing))
+            morph = null
         }
     }
-    BackHandler(enabled = switcherOpen) { switcherOpen = false }
 
-    Box(modifier.fillMaxSize().testTag("phone_workspace_tabs")) {
+    /** Grow [id]'s card back into the page and leave the grid on it (Done and Back pick the current tab). */
+    fun pickTab(id: String?) {
+        if (!switcherOpen) return
+        id?.takeIf { it != tabs.selectedId }?.let { app.setActiveView(current.id, it) }
+        morphJob?.cancel()
+        morphJob = scope.launch {
+            val bmp = id?.let { thumbnails[it] }
+            if (id != null && bmp != null && thumbSlots[id]?.isAttached == true) {
+                morph = TabMorph(id, bmp)
+                morphProgress.snapTo(1f)
+                morphProgress.animateTo(0f, tween(SWITCHER_MORPH_MS, easing = FastOutSlowInEasing))
+            } else {
+                gridAlpha.animateTo(0f, tween(SWITCHER_FADE_MS))
+            }
+            switcherOpen = false
+            hideUnderGrid = false
+            morph = null
+        }
+    }
+
+    val anyUnread = tabs.viewIds.any { viewsById[it].tabUnread(it == tabs.selectedId, unreadSessions) }
+    val tabsButton = PhoneTabsButton(tabs.viewIds.size, anyUnread) { openSwitcher() }
+    if (switcherOpen && tabs.viewIds.isEmpty()) {
+        switcherOpen = false
+        hideUnderGrid = false
+    }
+    BackHandler(enabled = switcherOpen) { pickTab(tabs.selectedId) }
+
+    Box(modifier.fillMaxSize().onGloballyPositioned { root = it }.testTag("phone_workspace_tabs")) {
     Column(Modifier.fillMaxSize()) {
         val selectedView = tabs.selectedId?.let { viewsById[it] }
         if (tabs.viewIds.isNotEmpty()) {
@@ -541,7 +580,7 @@ fun PhoneWorkspacePanes(
         // Keep the last 3 visited views composed (hidden) so WebView/terminal PTY survive tab
         // switches. Evict LRU beyond 3 — more would pin too many WebViews on a phone.
         val retained = rememberVisitedWorkspaces(tabs.selectedId, liveIds, maxSize = 3)
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { page = it }) {
             if (retained.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("No views", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -589,13 +628,7 @@ fun PhoneWorkspacePanes(
             }
         }
     }
-        AnimatedVisibility(
-            visible = switcherOpen,
-            enter = fadeIn(tween(SWITCHER_ZOOM_MS)) +
-                scaleIn(tween(SWITCHER_ZOOM_MS, easing = FastOutSlowInEasing), initialScale = 1.6f, transformOrigin = zoomOrigin),
-            exit = fadeOut(tween(SWITCHER_ZOOM_MS)) +
-                scaleOut(tween(SWITCHER_ZOOM_MS, easing = FastOutSlowInEasing), targetScale = 1.6f, transformOrigin = zoomOrigin),
-        ) {
+        if (switcherOpen) {
             PhoneTabSwitcher(
                 viewIds = tabs.viewIds,
                 selectedId = tabs.selectedId,
@@ -603,15 +636,14 @@ fun PhoneWorkspacePanes(
                 titleFor = { id -> viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
                 unread = { id -> viewsById[id].tabUnread(id == tabs.selectedId, unreadSessions) },
                 thumbnails = thumbnails,
-                onSelect = { id ->
-                    cardOrigins[id]?.let { zoomOrigin = it }
-                    app.setActiveView(current.id, id)
-                    switcherOpen = false
-                },
-                onCardPlaced = { id, origin -> cardOrigins[id] = origin },
+                onSelect = { id -> pickTab(id) },
+                // The tab in flight is drawn by the morph; its card's own picture waits for it.
+                hiddenThumbId = morph?.id,
+                onThumbPlaced = { id, coords -> thumbSlots[id] = coords },
+                modifier = Modifier.graphicsLayer { alpha = gridAlpha.value },
                 onClose = { id -> viewsById[id]?.let { closeOrConfirm(it) } },
                 onAdd = { showAdd = true },
-                onDismiss = { switcherOpen = false },
+                onDismiss = { pickTab(tabs.selectedId) },
                 cardMenu = { id, content ->
                     TabLongPressMenu(
                         enabled = !LocalContextMenuAvailable.current,
@@ -624,6 +656,15 @@ fun PhoneWorkspacePanes(
                 },
             )
         }
+        morph?.let { m ->
+            TabMorphOverlay(
+                bitmap = m.bitmap,
+                progress = { morphProgress.value },
+                root = { root },
+                from = { page },
+                to = { thumbSlots[m.id] },
+            )
+        }
     }
 
     if (showAdd) {
@@ -633,6 +674,7 @@ fun PhoneWorkspacePanes(
                     onClick = {
                         showAdd = false
                         switcherOpen = false
+                        hideUnderGrid = false
                         addPhoneView(current, ws, app, kind)
                     },
                     modifier = Modifier.fillMaxWidth().testTag("tab-add-view-${kind.tag}"),
@@ -661,8 +703,9 @@ fun PhoneWorkspacePanes(
     }
 }
 
-/** How long the switcher's zoom in/out takes — Chrome's is about this quick. */
-private const val SWITCHER_ZOOM_MS = 240
+/** Chrome's page ⇄ card morph and the grid's fade, measured off a screen recording of it. */
+private const val SWITCHER_MORPH_MS = 260
+private const val SWITCHER_FADE_MS = 160
 
 /** Phone add: reveal an existing singleton, else post a new view (optimistic, no layout PATCH). */
 internal fun addPhoneView(

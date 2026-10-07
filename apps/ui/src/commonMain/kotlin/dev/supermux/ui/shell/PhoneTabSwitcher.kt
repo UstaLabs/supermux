@@ -20,8 +20,15 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.lerp
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.util.lerp
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.foundation.Image
@@ -184,18 +191,18 @@ internal fun PhoneTabSwitcher(
     onAdd: () -> Unit,
     onDismiss: () -> Unit,
     cardMenu: @Composable (id: String, content: @Composable () -> Unit) -> Unit,
-    /** Where each card's centre sits, as a fraction of the switcher — the zoom in/out pivots on it. */
-    onCardPlaced: (id: String, origin: TransformOrigin) -> Unit = { _, _ -> },
+    /** A card whose picture is drawn elsewhere for now (the tab morphing in or out of it). */
+    hiddenThumbId: String? = null,
+    /** Each card's thumbnail slot, so the morph can aim at it. */
+    onThumbPlaced: (id: String, coords: LayoutCoordinates) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    var root by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val grid = rememberLazyGridState(initialFirstVisibleItemIndex = viewIds.indexOf(selectedId).coerceAtLeast(0))
     Column(
         modifier
             .fillMaxSize()
             .background(cs.surfaceContainer)
-            .onGloballyPositioned { root = it }
             .statusBarsPadding()
             .testTag("phone_tab_switcher"),
     ) {
@@ -241,12 +248,9 @@ internal fun PhoneTabSwitcher(
                         thumbnail = thumbnails[id],
                         onOpen = { onSelect(id) },
                         onClose = { onClose(id) },
-                        modifier = Modifier.animateItem().onGloballyPositioned { c ->
-                            val r = root ?: return@onGloballyPositioned
-                            if (!r.isAttached || r.size.width == 0 || r.size.height == 0) return@onGloballyPositioned
-                            val centre = r.localPositionOf(c, Offset(c.size.width / 2f, c.size.height / 2f))
-                            onCardPlaced(id, TransformOrigin(centre.x / r.size.width, centre.y / r.size.height))
-                        },
+                        thumbHidden = id == hiddenThumbId,
+                        onThumbPlaced = { onThumbPlaced(id, it) },
+                        modifier = Modifier.animateItem(),
                     )
                 }
             }
@@ -264,6 +268,8 @@ private fun TabCard(
     thumbnail: ImageBitmap?,
     onOpen: () -> Unit,
     onClose: () -> Unit,
+    thumbHidden: Boolean = false,
+    onThumbPlaced: (LayoutCoordinates) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -340,7 +346,9 @@ private fun TabCard(
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(start = 3.dp, end = 3.dp, bottom = 3.dp)
-                    .clip(RoundedCornerShape(13.dp))
+                    .onGloballyPositioned(onThumbPlaced)
+                    .graphicsLayer { alpha = if (thumbHidden) 0f else 1f }
+                    .clip(RoundedCornerShape(THUMB_CORNER))
                     .background(cs.surface),
                 contentAlignment = Alignment.Center,
             ) {
@@ -373,3 +381,46 @@ private fun Modifier.pointerInputHorizontalSwipe(key: Any, onDrag: (Float) -> Un
             )
         },
     )
+
+private val THUMB_CORNER = 13.dp
+
+/** The tab in flight between the page and its card. */
+internal class TabMorph(val id: String, val bitmap: ImageBitmap)
+
+/**
+ * Draws [bitmap] in a rounded rect that runs from [from]'s bounds (progress 0, the full page) to
+ * [to]'s (progress 1, the card's thumbnail slot), cropped top-centre exactly as the card crops it,
+ * so the hand-off at either end is seamless. Every rect is read at draw time, in [root]'s space.
+ */
+@Composable
+internal fun TabMorphOverlay(
+    bitmap: ImageBitmap,
+    progress: () -> Float,
+    root: () -> LayoutCoordinates?,
+    from: () -> LayoutCoordinates?,
+    to: () -> LayoutCoordinates?,
+) {
+    Canvas(Modifier.fillMaxSize().testTag("tab_morph")) {
+        val r = root()?.takeIf { it.isAttached } ?: return@Canvas
+        val a = from()?.takeIf { it.isAttached }?.let { r.localBoundingBoxOf(it, clipBounds = false) } ?: return@Canvas
+        val b = to()?.takeIf { it.isAttached }?.let { r.localBoundingBoxOf(it, clipBounds = false) } ?: return@Canvas
+        val p = progress()
+        val rect: Rect = lerp(a, b, p)
+        if (rect.width < 1f || rect.height < 1f) return@Canvas
+        val corner = lerp(0f, THUMB_CORNER.toPx(), p)
+        // ContentScale.Crop + Alignment.TopCenter, as the card's Image does.
+        val scale = maxOf(rect.width / bitmap.width, rect.height / bitmap.height)
+        val srcW = (rect.width / scale).coerceAtMost(bitmap.width.toFloat())
+        val srcH = (rect.height / scale).coerceAtMost(bitmap.height.toFloat())
+        val srcX = ((bitmap.width - srcW) / 2f).roundToInt()
+        clipPath(Path().apply { addRoundRect(RoundRect(rect, CornerRadius(corner))) }) {
+            drawImage(
+                bitmap,
+                srcOffset = IntOffset(srcX, 0),
+                srcSize = IntSize(srcW.roundToInt(), srcH.roundToInt()),
+                dstOffset = IntOffset(rect.left.roundToInt(), rect.top.roundToInt()),
+                dstSize = IntSize(rect.width.roundToInt(), rect.height.roundToInt()),
+            )
+        }
+    }
+}
