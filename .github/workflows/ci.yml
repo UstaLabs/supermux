@@ -635,7 +635,7 @@ jobs:
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.wire == 'true'
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 90   # + the grammar build (~20 min uncached)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -670,6 +670,23 @@ jobs:
       # Xcode 26.6: the scheme listed no simulator at all, and a fixed "iPhone 17, OS=latest"
       # destination failed with exit 70). Use any available iPhone simulator, downloading the
       # iOS platform only when there is none.
+      # The native editor's grammars: :editor-syntax's iosSimulatorArm64 cinterop links the static
+      # libsupermux_syntax.a, which only editor-syntax/native/build.sh (on a Mac, Xcode clang)
+      # produces — release.yml builds every target in its editor-syntax-natives job; this lane
+      # needs just the simulator one. Same grammar cache key as that job.
+      - name: Cache the grammar sources and generated tables
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/editor-syntax/build/src
+            apps/editor-syntax/build/gen
+          key: editor-syntax-${{ hashFiles('apps/editor-syntax/native/*.lock.json', 'apps/editor-syntax/tools/**', 'apps/editor-syntax/native/src/**') }}
+      - name: Build the editor grammars (ios-simulator-arm64)
+        working-directory: apps/editor-syntax
+        run: |
+          bash native/fetch.sh
+          bash native/build.sh gen
+          bash native/build.sh ios-simulator-arm64
       - name: Pick an iPhone simulator
         id: sim
         run: |
