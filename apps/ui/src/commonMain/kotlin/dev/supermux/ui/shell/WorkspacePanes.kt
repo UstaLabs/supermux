@@ -32,6 +32,8 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -507,8 +509,23 @@ fun PhoneWorkspacePanes(
     // the moment the pick lands and flashes behind the growing thumbnail.
     var picking by remember(current.id) { mutableStateOf<Pair<String, String?>?>(null) }
 
+    // The keyboard belongs to the tab being left: any switch (grid, swipe, or the selection moving
+    // some other way) puts it away and takes focus out of the field so it does not pop back.
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
+    fun dropKeyboard() {
+        focus.clearFocus(force = true)
+        keyboard?.hide()
+    }
+    var keyboardTabSeen by remember(current.id) { mutableStateOf(tabs.selectedId) }
+    LaunchedEffect(tabs.selectedId) {
+        if (tabs.selectedId != keyboardTabSeen) dropKeyboard()
+        keyboardTabSeen = tabs.selectedId
+    }
+
     fun openSwitcher() {
         if (switcherOpen || tabs.viewIds.isEmpty()) return
+        dropKeyboard()
         val id = tabs.selectedId
         morphJob?.cancel()
         morphJob = scope.launch {
@@ -585,7 +602,10 @@ fun PhoneWorkspacePanes(
         val next = swipeX.value + dx
         val neighbour = ids.getOrNull(if (next < 0f) idx + 1 else idx - 1)
         // Starting: picture the page as it is now, so swiping back to it later has something to show.
-        if (swipeX.value == 0f && swipeTo == null) selectedNow?.let { id -> scope.launch { snapshot(id) } }
+        if (swipeX.value == 0f && swipeTo == null) {
+            dropKeyboard()
+            selectedNow?.let { id -> scope.launch { snapshot(id) } }
+        }
         swipeTo = neighbour
         // No tab that way: rubber-band, a quarter of the width at most.
         val x = if (neighbour == null) (swipeX.value + dx * 0.3f).coerceIn(-w / 4f, w / 4f) else next.coerceIn(-w, w)
