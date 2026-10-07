@@ -17,6 +17,17 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import kotlinx.coroutines.Job
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.flow.first
+import kotlin.math.abs
+import kotlin.math.sign
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -549,8 +560,97 @@ fun PhoneWorkspacePanes(
     }
     BackHandler(enabled = switcherOpen) { pickTab(tabs.selectedId) }
 
+    // Chrome's toolbar swipe: drag sideways on the header row and the page follows the finger
+    // while the neighbouring tab slides in beside it. [swipeX] is the live page's offset;
+    // [swipeTo] the neighbour being revealed; after a committed swipe [handoffId] holds the
+    // neighbour's picture in place while it fades into the live view (as the grid's hand-off does).
+    val swipeX = remember(current.id) { Animatable(0f) }
+    var swipeTo by remember(current.id) { mutableStateOf<String?>(null) }
+    var handoffId by remember(current.id) { mutableStateOf<String?>(null) }
+    val handoffAlpha = remember(current.id) { Animatable(1f) }
+    val selectedNow by rememberUpdatedState(tabs.selectedId)
+    val idsNow by rememberUpdatedState(tabs.viewIds)
+    val pageWidth = { page?.takeIf { it.isAttached }?.size?.width?.toFloat() ?: 0f }
+
+    fun swipeDrag(dx: Float) {
+        val w = pageWidth().takeIf { it > 0f } ?: return
+        val ids = idsNow
+        val idx = ids.indexOf(selectedNow)
+        val next = swipeX.value + dx
+        val neighbour = ids.getOrNull(if (next < 0f) idx + 1 else idx - 1)
+        swipeTo = neighbour
+        // No tab that way: rubber-band, a quarter of the width at most.
+        val x = if (neighbour == null) (swipeX.value + dx * 0.3f).coerceIn(-w / 4f, w / 4f) else next.coerceIn(-w, w)
+        scope.launch { swipeX.snapTo(x) }
+    }
+
+    fun swipeEnd(velocity: Float) {
+        val w = pageWidth()
+        val target = swipeTo
+        val x = swipeX.value
+        val commit = target != null && w > 0f &&
+            (abs(x) > w * SWIPE_COMMIT_FRACTION || (abs(velocity) > SWIPE_FLING_PX_S && sign(velocity) == sign(x)))
+        scope.launch {
+            if (!commit || target == null) {
+                swipeX.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow))
+                swipeTo = null
+                return@launch
+            }
+            swipeX.animateTo(if (x < 0f) -w else w, tween(SWITCHER_SWIPE_MS, easing = FastOutSlowInEasing), velocity)
+            handoffAlpha.snapTo(1f)
+            handoffId = target
+            app.setActiveView(current.id, target)
+            withTimeoutOrNull(800) { snapshotFlow { selectedNow }.first { it == target } }
+            swipeTo = null
+            swipeX.snapTo(0f)
+            withFrameNanos {}
+            handoffAlpha.animateTo(0f, tween(SWITCHER_HANDOFF_MS))
+            handoffId = null
+        }
+    }
+
+    val density = LocalDensity.current
+    val statusTop = WindowInsets.statusBars.getTop(density).toFloat()
+    val swipeZone = with(density) { SWIPE_ZONE.toPx() }
+    val swipeShift = Modifier.graphicsLayer { translationX = swipeX.value }
+
     Box(modifier.fillMaxSize().onGloballyPositioned { root = it }.testTag("phone_workspace_tabs")) {
-    Column(Modifier.fillMaxSize()) {
+    Column(
+        Modifier.fillMaxSize().pointerInput(current.id) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                // Only from the header row (the chat's title bar or the slim bar), never while
+                // the grid or a morph is up, and only with somewhere to go.
+                if (switcherOpen || morph != null || handoffId != null || idsNow.size < 2) return@awaitEachGesture
+                if (down.position.y < statusTop || down.position.y > statusTop + swipeZone) return@awaitEachGesture
+                val slop = viewConfiguration.touchSlop
+                val velocity = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
+                var total = Offset.Zero
+                var dragging = false
+                while (true) {
+                    val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) break
+                    val d = change.position - change.previousPosition
+                    total += d
+                    velocity.addPosition(change.uptimeMillis, change.position)
+                    if (!dragging) {
+                        // Clearly sideways, or it is a tap / a vertical scroll and stays theirs.
+                        if (abs(total.x) > slop && abs(total.x) > abs(total.y) * 1.5f) {
+                            dragging = true
+                            selectedNow?.let { id -> scope.launch { snapshot(id) } }
+                        } else if (abs(total.y) > slop) {
+                            return@awaitEachGesture
+                        }
+                    }
+                    if (dragging) {
+                        change.consume()
+                        swipeDrag(d.x)
+                    }
+                }
+                if (dragging) swipeEnd(velocity.calculateVelocity().x)
+            }
+        },
+    ) {
         val selectedView = tabs.selectedId?.let { viewsById[it] }
         if (tabs.viewIds.isNotEmpty()) {
             // The top-most surface pads for the status bar itself (the compact shell does not —
@@ -564,7 +664,7 @@ fun PhoneWorkspacePanes(
             ) {
                 if (selectedView?.kind != "chat") {
                     Row(
-                        Modifier.fillMaxWidth().height(44.dp).padding(start = 16.dp, end = 4.dp)
+                        swipeShift.fillMaxWidth().height(44.dp).padding(start = 16.dp, end = 4.dp)
                             .testTag("phone_workspace_bar"),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -591,7 +691,7 @@ fun PhoneWorkspacePanes(
         // Keep the last 3 visited views composed (hidden) so WebView/terminal PTY survive tab
         // switches. Evict LRU beyond 3 — more would pin too many WebViews on a phone.
         val retained = rememberVisitedWorkspaces(tabs.selectedId, liveIds, maxSize = 3)
-        Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { page = it }) {
+        Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { page = it }.then(swipeShift)) {
             if (retained.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("No views", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -668,6 +768,19 @@ fun PhoneWorkspacePanes(
                 },
             )
         }
+        (swipeTo ?: handoffId)?.let { nid ->
+            val handoff = swipeTo == null
+            SwipeNeighbour(
+                view = viewsById[nid],
+                title = viewsById[nid]?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
+                bitmap = thumbnails[nid],
+                offsetX = {
+                    if (handoff) 0f
+                    else swipeX.value + if (swipeX.value < 0f) pageWidth() else -pageWidth()
+                },
+                alpha = { if (handoff) handoffAlpha.value else 1f },
+            )
+        }
         morph?.let { m ->
             TabMorphOverlay(
                 bitmap = m.bitmap,
@@ -721,6 +834,11 @@ fun PhoneWorkspacePanes(
 private const val SWITCHER_MORPH_MS = 260
 private const val SWITCHER_FADE_MS = 160
 private const val SWITCHER_HANDOFF_MS = 120
+private const val SWITCHER_SWIPE_MS = 200
+/** How far down from the status bar a header swipe may start: the 44dp header plus a little. */
+private val SWIPE_ZONE = 52.dp
+private const val SWIPE_COMMIT_FRACTION = 0.33f
+private const val SWIPE_FLING_PX_S = 1200f
 
 /** Phone add: reveal an existing singleton, else post a new view (optimistic, no layout PATCH). */
 internal fun addPhoneView(

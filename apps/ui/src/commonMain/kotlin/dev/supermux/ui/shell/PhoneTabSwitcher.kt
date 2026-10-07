@@ -458,3 +458,64 @@ internal fun TabMorphOverlay(
         }
     }
 }
+
+/**
+ * The tab sliding in beside the page during a header swipe: its last snapshot (width-fit from the
+ * top, like a card), or — never captured on this device — its kind icon and title. A non-chat
+ * view gets the slim title bar above it, as the live view has.
+ */
+@Composable
+internal fun SwipeNeighbour(
+    view: ViewDto?,
+    title: String,
+    bitmap: ImageBitmap?,
+    offsetX: () -> Float,
+    alpha: () -> Float,
+) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .graphicsLayer {
+                translationX = offsetX()
+                this.alpha = alpha()
+            }
+            .background(cs.surfaceContainerLow)
+            .testTag("tab_swipe_neighbour"),
+    ) {
+        if (view?.kind != "chat") {
+            Row(
+                Modifier.fillMaxWidth().height(44.dp).padding(start = 16.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(view.switcherIcon(), contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                Text(
+                    title,
+                    fontFamily = MonoFontFamily,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+                )
+            }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            if (bitmap != null) {
+                Image(
+                    bitmap,
+                    contentDescription = null,
+                    contentScale = ContentScale.FillWidth,
+                    alignment = Alignment.TopCenter,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(view.switcherIcon(), contentDescription = null, tint = cs.onSurfaceVariant.copy(alpha = 0.4f), modifier = Modifier.size(36.dp))
+                    Spacer(Modifier.height(10.dp))
+                    Text(title, color = cs.onSurfaceVariant, fontFamily = MonoFontFamily, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
