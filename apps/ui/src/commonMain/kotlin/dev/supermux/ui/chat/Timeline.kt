@@ -102,6 +102,7 @@ import androidx.compose.ui.window.DialogProperties
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.ToolStatus
 import dev.supermux.chat.chatTimeLabel
+import dev.supermux.chat.isRedactedReasoning
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
 import dev.supermux.proto.Attachment
@@ -847,9 +848,21 @@ internal fun isAgentTask(event: ActivityEvent): Boolean {
 @Composable
 private fun ReasoningCard(event: ActivityEvent) {
     val cs = MaterialTheme.colorScheme
-    val redacted = event.redacted == true || event.title?.contains("redacted", ignoreCase = true) == true
+    // A redacted row only reaches here while it is the live tail of a running turn (mergeTimeline
+    // drops it once anything follows), so it is a spinner, not a "(redacted)" label.
+    if (event.isRedactedReasoning) {
+        Row(
+            Modifier.fillMaxWidth().testTag("activity-reasoning").padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+        ) {
+            CircularProgressIndicator(Modifier.size(12.dp), color = cs.onSurfaceVariant, strokeWidth = 1.5.dp)
+            Text("Thinking…", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+        }
+        return
+    }
     var expanded by remember { mutableStateOf(false) }
-    val canExpand = !redacted && !event.detail.isNullOrBlank()
+    val canExpand = !event.detail.isNullOrBlank()
     Column(
         Modifier
             .fillMaxWidth()
@@ -858,7 +871,7 @@ private fun ReasoningCard(event: ActivityEvent) {
             .padding(vertical = 2.dp),
     ) {
         Text(
-            if (redacted) "Thinking (redacted)" else "Thinking…",
+            "Thinking…",
             style = MaterialTheme.typography.labelMedium,
             color = cs.onSurfaceVariant,
         )
