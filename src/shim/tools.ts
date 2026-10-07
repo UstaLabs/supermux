@@ -4,20 +4,21 @@ export type { AgentKind } from "../shared/agents"
 
 const OUTBOUND_TOOLS = [
   {
-    name: "reply",
-    // No chat_id: the agent does not choose the destination. The broker routes
-    // the reply to the chat this session last heard from (core/routing/reply-target).
-    description: "Send a reply to the user. The broker delivers it to the chat this session is talking to — you do not name a destination. Args: text, optional reply_to/files/keyboard/format.",
+    name: "attach",
+    // Files only: an agent's assistant text is streamed to the user as its reply, so there is no
+    // text-sending tool. No chat_id: the broker routes to the chat this session last heard from
+    // (core/routing/reply-target).
+    description: "Send file attachments (image, video, recording, document, etc.) to the user. " +
+      "REQUIRED: files[] with at least one local filesystem path; text is an optional caption. " +
+      "Your normal assistant output is already relayed to the user — do not use this for plain text. " +
+      "The broker picks the destination — do not name one.",
     inputSchema: {
       type: "object",
       properties: {
-        text: { type: "string" },
-        reply_to: { type: "string" },
         files: { type: "array", items: { type: "string" } },
-        keyboard: { type: "array", items: { type: "string" } },
-        format: { type: "string", enum: ["text", "markdownv2"] },
+        text: { type: "string" },
       },
-      required: ["text"],
+      required: ["files"],
     },
   },
   {
@@ -152,13 +153,6 @@ export const RPC_TOOLS = [
 const RPC_NAMES = new Set(RPC_TOOLS.map(t => t.name))
 const RPC_OP = { resolve: "rpc_resolve", reject: "rpc_reject" } as const
 
-const REPLY_FOR_STREAMED_AGENTS =
-  "Deliver a file attachment to the user (image, video, recording, etc.). " +
-  "REQUIRED: files[] with at least one local filesystem path; text is an optional caption (may be empty). " +
-  "Use ONLY when sending files — your normal assistant output is relayed automatically; " +
-  "do not call reply for plain text (the broker rejects text-only reply from codex/cursor). " +
-  "Args: text, files[]. The broker picks the destination — do not name one."
-
 const ALL = [...OUTBOUND_TOOLS, ...ORCHESTRATION_TOOLS]
 const OUTBOUND_NAMES = new Set(OUTBOUND_TOOLS.map(t => t.name))
 
@@ -168,12 +162,9 @@ type ToolCaller = {
   callOrchestration: (op: ToolOperation) => Promise<ToolCallResult>
 }
 
-export function listTools(agentKind: AgentKind = AgentKind.Claude, rpcOnly = false) {
+export function listTools(rpcOnly = false) {
   if (rpcOnly) return RPC_TOOLS
-  if (agentKind === AgentKind.Claude) return ALL
-  return ALL.map((t) =>
-    t.name === "reply" ? { ...t, description: REPLY_FOR_STREAMED_AGENTS } : t,
-  )
+  return ALL
 }
 
 export type ToolRoute = { kind: "outbound" | "orchestration"; op: string }
@@ -191,12 +182,12 @@ export function toolRoute(name: string, rpcOnly = false): ToolRoute | undefined 
 
 /**
  * A broker handler result as the MCP tool result the agent sees. The ONE mapping for both
- * transports: ok:false → isError with the error text; reply → "sent" / "sent (id: …)"; anything
+ * transports: ok:false → isError with the error text; attach → "sent" / "sent (id: …)"; anything
  * else → JSON of the value ("ok" when there is none).
  */
 export function toolResult(name: string, result: ToolCallResult, rpcOnly = false): { isError?: boolean; content: Array<{ type: "text"; text: string }> } {
   if (!result.ok) return { isError: true, content: [{ type: "text", text: result.error ?? "unknown error" }] }
-  if (!rpcOnly && name === "reply") {
+  if (!rpcOnly && name === "attach") {
     const value = result.value
     const id = value && typeof value === "object" && "message_id" in value ? value.message_id : undefined
     return { content: [{ type: "text", text: id != null ? `sent (id: ${id})` : "sent" }] }

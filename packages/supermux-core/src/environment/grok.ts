@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
 import { grokCredentialExpiry, promoteCredential } from "./credentials.js"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
@@ -46,25 +46,6 @@ command = ${tomlStr(server.command)}
 args = [${args}]
 enabled = true
 ${envBlock}`
-}
-
-function writeGrokInstructions(workdir: string, body: string): string {
-  const agents = join(workdir, "AGENTS.md")
-  const st = lstatSafe(agents)
-  const target = st && !st.isSymbolicLink() ? "AGENTS.override.md" : "AGENTS.md"
-  const path = join(workdir, target)
-  writeFileNoFollow(path, body, 0o644)
-  excludeFromGit(workdir, target)
-  return path
-}
-
-function excludeFromGit(workdir: string, rel: string): void {
-  const infoDir = join(workdir, ".git", "info")
-  if (!existsSync(infoDir)) return
-  const excludePath = join(infoDir, "exclude")
-  const current = existsSync(excludePath) ? readFileSync(excludePath, "utf8") : ""
-  if (current.split("\n").includes(rel)) return
-  appendFileSync(excludePath, (current.endsWith("\n") || current === "" ? "" : "\n") + rel + "\n", "utf8")
 }
 
 function grokEnv(home: string, authPath: string, platform: NodeJS.Platform): Record<string, string> {
@@ -137,8 +118,5 @@ function finishGrok(
   writeFileNoFollow(configPath, renderGrokConfig(spec), 0o600)
   chmodSync(configPath, 0o600)
   files.push(configPath)
-  if (spec.instructions !== null) {
-    files.push(writeGrokInstructions(spec.workdir, spec.instructions))
-  }
   return { env, files, credentials }
 }

@@ -21,7 +21,7 @@ test("cursor unknown stem -> capitalized stem", () => {
   expect(normalizeToolName("cursor", "fooBarToolCall")).toBe("FooBar")
 })
 test("mcp__ names extract the tool segment", () => {
-  expect(normalizeToolName("opencode", "mcp__mux-shim__reply")).toBe("Reply")
+  expect(normalizeToolName("opencode", "mcp__mux-shim__attach")).toBe("Attach")
   expect(normalizeToolName("opencode", "mcp__mux-shim__spawn_session")).toBe("Spawn_session")
   expect(normalizeToolName("opencode", "mcp__github__list_issues")).toBe("List_issues")
 })

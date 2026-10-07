@@ -1,21 +1,12 @@
-import {
-  appendFileSync,
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs"
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join, posix, win32 } from "node:path"
 import { cursorCredentialFreshness, promoteIfNewer, releaseSessionCredential } from "./credentials.js"
 import { ensureSharedCursorRuntime } from "./cursor-runtime.js"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { CursorEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
-import { copyFileReplace, writeFileNoFollow } from "./write.js"
+import { copyFileReplace } from "./write.js"
 
 const CURSOR_DIR_FILES = ["cli-config.json", "agent-cli-state.json"]
-const RULE_REL_POSIX = ".cursor/rules/mux.mdc"
-const FRONTMATTER = "---\ndescription: supermux session rules\nalwaysApply: true\n---\n\n"
 
 function pathJoin(platform: NodeJS.Platform): (...parts: string[]) => string {
   return platform === "win32" ? win32.join : posix.join
@@ -31,24 +22,6 @@ function renderCursorMcp(servers: McpServerSpec[]): string {
     mcpServers[server.name] = { command: server.command, args: server.args, env: server.env }
   }
   return JSON.stringify({ mcpServers }, null, 2)
-}
-
-function excludeFromGit(workdir: string, rel: string): void {
-  const infoDir = join(workdir, ".git", "info")
-  if (!existsSync(infoDir)) return
-  const excludePath = join(infoDir, "exclude")
-  const current = existsSync(excludePath) ? readFileSync(excludePath, "utf8") : ""
-  if (current.split("\n").includes(rel)) return
-  appendFileSync(excludePath, (current.endsWith("\n") || current === "" ? "" : "\n") + rel + "\n", "utf8")
-}
-
-function writeCursorInstructions(workdir: string, body: string): string {
-  const rulesDir = join(workdir, ".cursor", "rules")
-  mkdirSync(rulesDir, { recursive: true })
-  const dest = join(workdir, ".cursor", "rules", "mux.mdc")
-  writeFileNoFollow(dest, FRONTMATTER + body, 0o644)
-  excludeFromGit(workdir, RULE_REL_POSIX)
-  return dest
 }
 
 function isolatedEnv(home: string, platform: NodeJS.Platform): Record<string, string> {
@@ -159,10 +132,6 @@ export async function prepareCursorEnvironment(spec: CursorEnvironmentSpec): Pro
   writeFileSync(mcpPath, renderCursorMcp(spec.mcpServers), { encoding: "utf8", mode: 0o600 })
   chmodSync(mcpPath, 0o600)
   files.push(mcpPath)
-
-  if (spec.instructions !== null) {
-    files.push(writeCursorInstructions(spec.workdir, spec.instructions))
-  }
 
   return { env, files, credentials }
 }

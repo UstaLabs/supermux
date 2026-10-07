@@ -285,10 +285,12 @@ async function probeClaude() {
   mkdirSync(folder, { recursive: true })
   symlinkSync(join(src, "probe-plugin-b"), join(folder, "probe-plugin-b"))
   const log = join(dir, "mcp-probe.log"), subLog = join(dir, "mcp-probesub.log"), log2 = join(dir, "mcp-probe2.log")
+  const instrFile = join(dir, "session", "instructions.md")
+  mkdirSync(dirname(instrFile), { recursive: true })
+  writeFileSync(instrFile, `Session probe instructions. The instruction probe token is ${W.instr}. When asked for the instruction probe token, reply with it.`)
   const prepared = await prepareClaudeEnvironment({
     home: join(dir, "session"), workdir: work, mcpServers: [mcpSpec("probe", log, W.mcp, W.late), mcpSpec("probesub", subLog, W.sub)], skillsPaths: [],
-    instructions: `Session probe instructions. The instruction probe token is ${W.instr}. When asked for the instruction probe token, reply with it.`,
-    pluginDirs: [wrap, pluginA, folder], addDirs: [], systemPromptFiles: [], strictMcp: true, nativeMemory: false, coreReplyContract: false,
+    pluginDirs: [wrap, pluginA, folder], addDirs: [], systemPromptFiles: [instrFile], strictMcp: true, nativeMemory: false,
   })
   const env = { ...baseEnv(), ...prepared.env, CLAUDE_CONFIG_DIR: join(dir, "config"), CLAUDE_CODE_OAUTH_TOKEN: token }
   mkdirSync(env.CLAUDE_CONFIG_DIR, { recursive: true })
@@ -383,7 +385,7 @@ async function probeClaude() {
       }
     }
     if (want(8)) {
-      writeFileSync(join(dir, "session", "instructions.md"), `Session probe instructions. The instruction probe token is ${W.instrFile}. When asked for the instruction probe token, reply with it.`)
+      writeFileSync(instrFile, `Session probe instructions. The instruction probe token is ${W.instrFile}. When asked for the instruction probe token, reply with it.`)
       const res = await step(agent, "8", "change instructions", "apply_flag_settings", () => control({ subtype: "apply_flag_settings", settings: { appendSystemPrompt: `Updated probe instructions: the NEW instruction probe token is ${W.instrFlag}.` } }))
       const r = await step(agent, "8", "change instructions", "apply_flag_settings", () => ask("List every instruction probe token that appears in your system prompt or instructions right now, newest last. Reply with the tokens only. Do not use tools."))
       if (r !== undefined) {
@@ -414,7 +416,7 @@ async function probeCodex() {
   const W = { instr: word(), skillExtra: word(), skillHome: word(), pluginA: word(), mcp: word(), sub: word(), late: word(), skillNew: word(), pluginC: word(), mcp2: word(), instrNew: word() }
   const log = join(dir, "mcp-probe.log"), subLog = join(dir, "mcp-probesub.log"), log2 = join(dir, "mcp-probe2.log")
   await prepareCodexEnvironment({
-    home: codexHome, workdir: work, mcpServers: [mcpSpec("probe", log, W.mcp, W.late), mcpSpec("probesub", subLog, W.sub)], skillsPaths: [], instructions: null,
+    home: codexHome, workdir: work, mcpServers: [mcpSpec("probe", log, W.mcp, W.late), mcpSpec("probesub", subLog, W.sub)], skillsPaths: [],
     credentials: { apiKey: null, canonicalHome: join(HOME, ".codex"), account: true }, nativeMemory: false,
   })
   // MCP tool calls need approval unless the policy can ask; child threads read the policy from config.
@@ -806,7 +808,7 @@ async function probeCursor() {
   const homeSkillWord = word(), linkedSkillWord = word(), agentsSkillWord = word()
   const home = join(f.dir, "home")
   await prepareCursorEnvironment({
-    home, workdir: f.work, mcpServers: [], skillsPaths: [], instructions: null, sharedRuntime: null, platform: process.platform,
+    home, workdir: f.work, mcpServers: [], skillsPaths: [], sharedRuntime: null, platform: process.platform,
     credentials: { apiKey: null, userCursorDir: join(HOME, ".cursor"), userConfigDir: join(HOME, ".config") },
   })
   // Instruction channels that are not the repo: a plugin carrying rules/, user rules in the session HOME,
@@ -896,7 +898,7 @@ async function probeGrok() {
   copyFileSync(join(HOME, ".grok", "auth.json"), authCopy)
   chmodSync(authCopy, 0o600)
   const spec = (skillsPaths: string[]) => ({
-    home, workdir: f.work, mcpServers: [], skillsPaths, instructions: null,
+    home, workdir: f.work, mcpServers: [], skillsPaths,
     credentials: { canonicalAuthPath: authCopy }, autoUpdate: false, importClaudeConfig: false, platform: process.platform,
   })
   const prepared = await prepareGrokEnvironment(spec([f.skillsRoot]))
@@ -943,19 +945,28 @@ async function probeOpenCode() {
   copyFileSync(join(HOME, ".local", "share", "opencode", "auth.json"), join(data, "opencode", "auth.json"))
   chmodSync(join(data, "opencode", "auth.json"), 0o600)
   const configHome = join(f.dir, "xdg-config")
-  const prepare = (instr: string, skillsPaths: string[]) => prepareOpenCodeEnvironment({
-    home: join(f.dir, "session"), workdir: f.work, mcpServers: [], skillsPaths, instructions: `Session probe instructions. The instruction probe token is ${instr}.`,
-    configHome, provider: null, pluginPaths: [], permissions: { edit: "allow", bash: "allow", webfetch: "allow" },
-  })
+  // Instructions the way the core's OpenCode adapter delivers them: config `instructions` in a
+  // session-private OPENCODE_CONFIG file (the environment library no longer writes instructions).
+  const instrFile = join(f.dir, "session", "instructions.md"), instrConfig = join(f.dir, "session", "opencode.json")
+  const prepare = (instr: string, skillsPaths: string[]) => {
+    // Written synchronously: phase B calls this right before spawning the new process.
+    mkdirSync(dirname(instrFile), { recursive: true })
+    writeFileSync(instrFile, `Session probe instructions. The instruction probe token is ${instr}.`)
+    writeFileSync(instrConfig, JSON.stringify({ instructions: [instrFile] }, null, 2) + "\n")
+    return prepareOpenCodeEnvironment({
+      home: join(f.dir, "session"), workdir: f.work, mcpServers: [], skillsPaths,
+      configHome, provider: null, pluginPaths: [], permissions: { edit: "allow", bash: "allow", webfetch: "allow" },
+    })
+  }
   const prepared = await prepare(I.instr, [f.skillsRoot, join(f.pluginA, "skills")])
-  const env = { ...baseEnv(), ...prepared.env, XDG_DATA_HOME: data, XDG_STATE_HOME: join(f.dir, "xdg-state"), XDG_CACHE_HOME: join(f.dir, "xdg-cache") }
+  const env = { ...baseEnv(), ...prepared.env, OPENCODE_CONFIG: instrConfig, XDG_DATA_HOME: data, XDG_STATE_HOME: join(f.dir, "xdg-state"), XDG_CACHE_HOME: join(f.dir, "xdg-cache") }
   await runAcp({
     agent, work: f.work, dir: f.dir, W, logs: f.logs, mcp: f.mcp, model: MODELS.opencode,
     launch: phase => {
       if (phase === "B") void prepare(I.instrB, [f.skillsRoot, join(f.pluginA, "skills"), f.skillsRootB, join(f.pluginC, "skills")])
       return { command: "opencode", args: ["acp", "--print-logs", "--log-level", "ERROR"], env }
     },
-    instructions: phase => [{ label: "config `instructions` (session XDG_CONFIG_HOME)", word: phase === "A" ? I.instr : I.instrB }],
+    instructions: phase => [{ label: "config `instructions` (session OPENCODE_CONFIG)", word: phase === "A" ? I.instr : I.instrB }],
     skills: [
       { label: "skills", name: "probe-skill-alpha", word: W.skill, phase: "A", mechanism: "config skills.paths" },
       { label: "plugin (mapped: skills/ → skills.paths)", name: "probe-plugin-a-skill", word: W.pluginA, phase: "A", mechanism: "plugin's skills/ added to skills.paths" },

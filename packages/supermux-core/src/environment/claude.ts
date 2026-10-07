@@ -25,20 +25,12 @@ export async function prepareClaudeEnvironment(spec: ClaudeEnvironmentSpec): Pro
     "systemPromptFiles",
     "strictMcp",
     "nativeMemory",
-    "coreReplyContract",
   ])
   validateMcpServerNames(spec.mcpServers)
   ensureHome(spec.home)
   const files: string[] = []
   const args: string[] = []
 
-  if (spec.instructions !== null) {
-    const dest = join(spec.home, "instructions.md")
-    writeFileNoFollow(dest, spec.instructions, 0o600)
-    chmodSync(dest, 0o600)
-    files.push(dest)
-    args.push("--append-system-prompt-file", dest)
-  }
   for (const path of spec.systemPromptFiles) {
     args.push("--append-system-prompt-file", path)
   }
@@ -59,6 +51,5 @@ export async function prepareClaudeEnvironment(spec: ClaudeEnvironmentSpec): Pro
   }
 
   const env: Record<string, string> = spec.nativeMemory ? {} : { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" }
-  if (spec.coreReplyContract) env.MUX_CORE = "1"
   return { env, files, credentials: "none", args }
 }

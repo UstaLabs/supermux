@@ -1,11 +1,11 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from "fs"
+import { rmSync } from "fs"
 import { join } from "path"
 import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { codex, type CodexOptions } from "../../../../packages/supermux-core/src/codex/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareCodexEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
 import { CODEX_CONTEXT } from "../../../../packages/supermux-core/src/context/agents.js"
-import { codexInstructions } from "./preamble-writer"
+import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
@@ -18,27 +18,14 @@ import { isSystemAccount } from "../../accounts/broker-accounts"
 const log = makeLogger("agents/codex/core-host")
 
 /**
- * Sessions created before C3 got their instructions from <CODEX_HOME>/AGENTS.md, which Codex
- * re-reads on every launch, also on thread/resume (scripts/codex-agents-md-probe.ts:
- * rewritten → the resumed thread sees the new text; removed → it sees none). The core gives
- * instructions as thread/start developerInstructions, i.e. only to threads it creates. So such a
- * session keeps the file, now holding its creation snapshot (fixed from its first C3 launch on);
- * a session created by C3 must NOT have it (it would see the instructions twice), so a file left
- * in a reused session home is removed. This marker (holding the session id: homes are keyed by
- * name) says which kind the home belongs to.
+ * Instructions reach Codex only as thread/start developerInstructions (session context). Before
+ * C3 they were written to <CODEX_HOME>/AGENTS.md, which Codex re-reads on every launch; a file (and
+ * its marker) left in a reused session home would show a session its instructions twice, so they
+ * are removed on prepare.
  */
-const AGENTS_MD_MARKER = ".supermux-agents-md-session"
-
-function syncLegacyAgentsMd(home: string, sessionId: string, legacy: boolean, text: string): void {
-  const marker = join(home, AGENTS_MD_MARKER)
-  const agentsMd = join(home, "AGENTS.md")
-  if (legacy) {
-    writeFileSync(agentsMd, text, { mode: 0o600 })
-    writeFileSync(marker, sessionId, { mode: 0o600 })
-    return
-  }
-  rmSync(agentsMd, { force: true })
-  rmSync(marker, { force: true })
+function removeLegacyAgentsMd(home: string): void {
+  rmSync(join(home, "AGENTS.md"), { force: true })
+  rmSync(join(home, ".supermux-agents-md-session"), { force: true })
 }
 
 export type CodexDriverFactory = (options: CodexOptions, overrides: SessionConfiguration) => AgentDriver
@@ -124,8 +111,7 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
   if (!options.stateDirectory) throw new Error("stateDirectory is required")
   const stateDirectory = options.stateDirectory
   const factory = options.driverFactory
-  let host: Host | undefined
-  host = createHost({
+  const host = createHost({
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "codex",
@@ -176,25 +162,17 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
         workdir: extra.workdir,
         mcpServers: [],
         skillsPaths: [],
-        instructions: null,
         // On an account the adapter injects the credential; the session gets no copy.
         credentials: isSystemAccount(registration.account)
           ? { apiKey: process.env.OPENAI_API_KEY ?? null, canonicalHome: join(HOME, ".codex") }
           : { apiKey: null, canonicalHome: join(HOME, ".codex"), account: true },
         nativeMemory: false,
       })
-      const generated = codexInstructions({ sessionName: extra.sessionName, workdir: extra.workdir })
-      const record = await host!.core.sessions.get(extra.sessionId)
-      const marker = join(extra.sessionHome, AGENTS_MD_MARKER)
-      const markedLegacy = existsSync(marker) && readFileSync(marker, "utf8") === extra.sessionId
-      // Pre-C3: a core record without snapshot / context, or a native thread not yet in the core.
-      const legacy = markedLegacy || (record ? record.createdInstructions === undefined && record.context === undefined : extra.nativeSessionId !== undefined)
-      syncLegacyAgentsMd(extra.sessionHome, extra.sessionId, legacy, record?.createdInstructions ?? generated)
-      if (legacy && !markedLegacy) log.info("codex_legacy_agents_md", { session: extra.sessionId })
+      removeLegacyAgentsMd(extra.sessionHome)
       return {
         env: prepared.env,
         context: {
-          instructions: generated,
+          instructions: sessionInstructions({ agent: "codex", sessionName: extra.sessionName, workdir: extra.workdir }),
           plugins: sessionPlugins("codex", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("codex", extra.sessionId, extra.sessionName)],
         },

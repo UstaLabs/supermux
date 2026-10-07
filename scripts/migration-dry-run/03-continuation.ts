@@ -214,8 +214,6 @@ function prepareCodex(row: Record<string, any>, work: string, name: string) {
   const rel = src.slice(sessions.length + 1).split(row.agent_session_id).join(newId)
   mkdirSync(join(home, "sessions", dirname(rel)), { recursive: true })
   writeFileSync(join(home, "sessions", rel), readFileSync(src, "utf8").split(row.agent_session_id).join(newId).split(row.workdir).join(work))
-  // A pre-C3 Codex home holds AGENTS.md (no marker): copy it so the legacy-instructions branch runs as on the host.
-  if (existsSync(join(row.agent_home, "AGENTS.md"))) copyFileSync(join(row.agent_home, "AGENTS.md"), join(home, "AGENTS.md"))
   return { original: fileState(src), copyId: newId, home }
 }
 
