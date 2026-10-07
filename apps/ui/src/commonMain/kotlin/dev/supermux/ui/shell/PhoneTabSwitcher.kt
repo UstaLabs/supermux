@@ -69,7 +69,9 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Monitor
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -126,17 +128,36 @@ fun PhoneTabCountButton(button: PhoneTabsButton, modifier: Modifier = Modifier) 
             .testTag("phone_tabs_button"),
         contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier.size(19.dp).border(1.5.dp, cs.onSurface, RoundedCornerShape(5.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                if (button.count > 99) ":D" else button.count.toString(),
-                color = cs.onSurface,
-                fontSize = if (button.count > 9) 9.sp else 11.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
+        // A pile of tabs: a muted card peeking out behind the one with the number on it. The front
+        // card is filled with the header's own colour so it hides the back card's corner.
+        Box(Modifier.size(22.dp)) {
+            Box(
+                Modifier
+                    .offset(x = 5.dp, y = 1.dp)
+                    .size(16.dp)
+                    .border(1.25.dp, cs.onSurfaceVariant.copy(alpha = 0.45f), RoundedCornerShape(4.5.dp)),
             )
+            Box(
+                Modifier
+                    .offset(x = 1.dp, y = 4.dp)
+                    .size(18.dp)
+                    .background(cs.surfaceContainerLow, RoundedCornerShape(5.dp))
+                    .border(1.5.dp, cs.onSurface, RoundedCornerShape(5.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (button.count > 99) ":D" else button.count.toString(),
+                    color = cs.onSurface,
+                    fontSize = if (button.count > 9) 9.sp else 10.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    // Optically centred: trim the line box to the glyphs, or the digit sits low.
+                    style = LocalTextStyle.current.copy(
+                        lineHeight = 10.sp,
+                        lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both),
+                    ),
+                )
+            }
         }
         if (button.unread) {
             Box(
