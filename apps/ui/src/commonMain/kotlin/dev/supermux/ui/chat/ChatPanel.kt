@@ -448,8 +448,8 @@ fun ChatPanel(
     val messages = state.messages
     val activity = state.activity
     val subagents = state.subagents
-    val timelineItems = remember(messages, activity, hideTools, subagents) {
-        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents)
+    val timelineItems = remember(messages, activity, hideTools, subagents, working) {
+        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents, working = working)
     }
     // LazyColumn throws (and freezes the whole Compose UI) on a duplicate key, so make every key
     // unique even if two items ever resolve to the same id: later duplicates get a #n suffix.
