@@ -392,9 +392,10 @@ class SupermuxAppNavTest {
         // One view in the workspace, so exactly ONE close affordance — the stacked `text` + `icon`
         // arrangement this replaced drew the close button on a line of its own.
         assertEquals(1, onAllNodesWithContentDescription("Close ", substring = true).fetchSemanticsNodes().size)
-        // One line: 48dp for the tab, plus the status inset, which is 0 in a test window. The
-        // stacked arrangement was ~72dp.
-        assertEquals(48.dp, onNodeWithTag("phone_workspace_tab_strip").getBoundsInRoot().height)
+        // One line: the shared PaneTabStrip's fixed 32dp (f776cf36 — desktop's strip at every
+        // width; touch only widens the chips and the +), plus the status inset, which is 0 in a
+        // test window. The stacked arrangement was ~72dp.
+        assertEquals(32.dp, onNodeWithTag("phone_workspace_tab_strip").getBoundsInRoot().height)
     }
 }
 

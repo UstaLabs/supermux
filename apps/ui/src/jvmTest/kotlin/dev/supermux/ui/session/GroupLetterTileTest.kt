@@ -10,6 +10,8 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.SupermuxTheme
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -23,11 +25,17 @@ class GroupLetterTileTest {
      * This guards the desktop renderer only. The bug it was written for was iOS-specific: with the
      * default line height, SF's metrics put the letter ~3pt low (22px above vs 12px below at 3x),
      * while this JVM render was already centred. The iOS check was a simulator screenshot.
+     *
+     * Rendered inside [SupermuxTheme], as the tile is in the app, so the glyph comes from the
+     * bundled Geist face: outside the theme it fell back to the machine's sans (Noto here, DejaVu
+     * on the CI runner), whose different metrics moved the ink by more than a pixel on CI.
      */
     @Test
     fun theLetterInkIsCentredInTheTile() = runComposeUiTest {
         setContent {
-            Box(Modifier.testTag("tile")) { GroupLetterTile("S", Color(0xFF3A5F8A), 18.dp) }
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box(Modifier.testTag("tile")) { GroupLetterTile("S", Color(0xFF3A5F8A), 18.dp) }
+            }
         }
         val px = onNodeWithTag("tile").captureToImage().toPixelMap()
         var top = Int.MAX_VALUE; var bottom = -1; var left = Int.MAX_VALUE; var right = -1
