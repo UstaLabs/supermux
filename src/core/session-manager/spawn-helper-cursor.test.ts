@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { join } from "path"
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
@@ -53,8 +53,11 @@ afterEach(async () => {
 })
 
 describe("Cursor spawn", () => {
+  // Per TEST, not once at collection: the restore below runs after every test, so a key set
+  // only in the describe body was gone from the second test on, which then fell through to the
+  // developer's real ~/.config/cursor/auth.json (and failed on CI, which has none).
   const prevKey = process.env.CURSOR_API_KEY
-  process.env.CURSOR_API_KEY = "test-key"
+  beforeEach(() => { process.env.CURSOR_API_KEY = "test-key" })
   afterEach(() => {
     if (prevKey === undefined) delete process.env.CURSOR_API_KEY
     else process.env.CURSOR_API_KEY = prevKey
