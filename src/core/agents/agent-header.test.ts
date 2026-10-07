@@ -1,61 +1,48 @@
 import { test, expect } from "bun:test"
 import { buildAgentHeader } from "./agent-header"
+import { AgentKind } from "../../shared/agents"
 
-test("header names the session", () => {
-  const h = buildAgentHeader({ name: "alpha", role: "worker", workdir: "/srv/app" })
-  expect(h).toContain('"alpha"')
+const worker = (agent: AgentKind = AgentKind.Codex) => buildAgentHeader({ name: "alpha", role: "worker", workdir: "/srv/app", agent })
+
+test("header names the session and says to answer with that name", () => {
+  expect(worker()).toContain('You are "alpha"')
+  expect(worker()).toContain('answer "alpha"')
 })
 
-test("header states the worker role", () => {
-  const h = buildAgentHeader({ name: "alpha", role: "worker", workdir: "/srv/app" })
-  expect(h.toLowerCase()).toContain("worker")
+test("header states the role", () => {
+  expect(worker().toLowerCase()).toContain("worker")
+  expect(buildAgentHeader({ name: "ana", role: "main", workdir: "/srv/app", agent: AgentKind.Claude }).toLowerCase()).toContain("personal-assistant")
 })
 
-test("header states the personal-assistant role for main", () => {
-  const h = buildAgentHeader({ name: "ana", role: "main", workdir: "/srv/app" })
-  expect(h.toLowerCase()).toContain("personal-assistant")
+test("header: text is the reply, every turn ends with text, files go through attach", () => {
+  const h = worker()
+  expect(h.toLowerCase()).toContain("normal assistant output is your reply")
+  expect(h).toContain("end every turn with a text message")
+  expect(h).toContain("`attach`")
+  expect(h).toContain("files[]")
 })
 
-test("header tells streamed agents reply is file-only", () => {
-  const h = buildAgentHeader({ name: "alpha", role: "worker", workdir: "/srv/app" })
-  expect(h.toLowerCase()).toContain("reply tool")
-  expect(h.toLowerCase()).toContain("only")
-  expect(h.toLowerCase()).toContain("files[]")
-  expect(h.toLowerCase()).toContain("normal assistant output")
-})
-
-test("header memory rule is relevance-triggered, not every-task", () => {
-  const h = buildAgentHeader({ name: "alpha", role: "worker", workdir: "/srv/app" })
-  expect(h).toContain("domains/")
+test("header memory rule is relevance-triggered and digest-first", () => {
+  const h = worker()
   expect(h.toLowerCase()).toContain("when your task touches")
-  expect(h.toLowerCase()).not.toContain("every task")
+  expect(h).toContain("domains/<topic>.digest.md")
+  expect(h).toContain("Never edit `*.digest.md`")
 })
 
 test("header includes the working directory for scope", () => {
-  const h = buildAgentHeader({ name: "alpha", role: "worker", workdir: "/srv/app" })
-  expect(h).toContain("/srv/app")
+  expect(worker()).toContain("/srv/app")
 })
 
-test("header points skills at the plugin host, namespaced <plugin>:<name>", () => {
-  const h = buildAgentHeader({ name: "alpha", role: "worker", workdir: "/srv/app" })
-  expect(h).toContain("plugin")
-  expect(h).toContain("<plugin>:<name>")
-  // The retired hand-managed skills path must be gone.
-  expect(h).not.toContain("~/.mux/skills/")
+test("skills rule is per agent: Skill tool, skill tool, SKILL.md, or none for cursor", () => {
+  expect(worker(AgentKind.Claude)).toContain("Skill tool")
+  expect(worker(AgentKind.OpenCode)).toContain("native `skill` tool")
+  expect(worker(AgentKind.Codex)).toContain("SKILL.md")
+  expect(worker(AgentKind.Codex)).toContain("<plugin>:<name>")
+  expect(worker(AgentKind.Codex).toLowerCase()).toContain("never claim")
+  expect(worker(AgentKind.Cursor)).not.toContain("SKILLS:")
 })
 
-test("header tells the agent to actually read SKILL.md and never fake applying a skill", () => {
-  // Codex/Cursor have no Skill tool — the load-bearing instruction is to READ
-  // the SKILL.md file, not pretend. Regression guard for the codex-3 fake.
-  const h = buildAgentHeader({ name: "alpha", role: "worker", workdir: "/srv/app" })
-  expect(h).toContain("SKILL.md")
-  expect(h.toLowerCase()).toContain("never claim")
-})
-
-test("worker header nudges the agent to rename its session; main does not", () => {
-  const worker = buildAgentHeader({ name: "alpha", role: "worker", workdir: "/srv/app" })
-  expect(worker).toContain("rename_session")
-  expect(worker).toContain('"alpha"')
-  const main = buildAgentHeader({ name: "ana", role: "main", workdir: "/srv/app" })
-  expect(main).not.toContain("rename_session")
+test("worker header nudges the agent to rename its session; a PA does not", () => {
+  expect(worker()).toContain("rename_session")
+  expect(buildAgentHeader({ name: "ana", role: "personal_assistant", workdir: "/srv/app", agent: AgentKind.Claude })).not.toContain("rename_session")
 })

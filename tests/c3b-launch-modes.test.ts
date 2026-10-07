@@ -20,6 +20,12 @@ const { setMuxShimMode } = await import("../src/core/mux-tools/mode")
 const c3a = JSON.parse(readFileSync(join(import.meta.dirname, "c3-launch", "c3a.json"), "utf8")) as Record<string, any>
 const s = scratchLayout(root)
 afterAll(() => setMuxShimMode("external"))
+/** Intended since C3a (2026-10-07): one shared instructions builder for every agent (new text);
+ *  Claude no longer gets --add-dir <prompts> or MUX_CORE=1 (the retired reply hook's switch). */
+function sinceC3a(agent: string): string[] {
+  if (agent === "cursor") return CURSOR_C3
+  return agent === "claude" ? ["args", "env.MUX_CORE", "instructions.text"] : ["instructions.text"]
+}
 /** Every capture is a NEW session (a second capture in the same state would be a resume). */
 function fresh(agent: string, role: string): void {
   for (const dir of [join(root, "core", agent, role), join(root, "agents", agent, role), join(root, `work-${agent}-${role}`)]) rmSync(dir, { recursive: true, force: true })
@@ -30,13 +36,8 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
     setMuxShimMode("external")
     fresh(agent, role)
     const after = await effectiveLaunch(agent, role, s)
-    if (agent === "cursor") {
-      expect(diffKeys(c3a[`${agent}/${role}`], after)).toEqual(CURSOR_C3)
-      expect(after.mcpServers).toEqual(c3a[`${agent}/${role}`].mcpServers)
-      return
-    }
-    expect(diffKeys(c3a[`${agent}/${role}`], after)).toEqual([])
-    expect(after).toEqual(c3a[`${agent}/${role}`])
+    expect(diffKeys(c3a[`${agent}/${role}`], after)).toEqual(sinceC3a(agent))
+    expect(after.mcpServers).toEqual(c3a[`${agent}/${role}`].mcpServers)
   })
 }
 
@@ -48,7 +49,7 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
     fresh(agent, role)
     const after = await effectiveLaunch(agent, role, s)
     const before = c3a[`${agent}/${role}`]
-    expect(diffKeys(before, after)).toEqual(agent === "cursor" ? [...CURSOR_C3, "mcpServers"].sort() : ["mcpServers"])
+    expect(diffKeys(before, after)).toEqual([...sinceC3a(agent), "mcpServers"].sort())
     const others = (list: any[]) => list.filter((server) => server.name !== "mux-shim")
     expect(others(after.mcpServers)).toEqual(others(before.mcpServers))
     const shim: any[] = after.mcpServers.filter((server: any) => server.name === "mux-shim")

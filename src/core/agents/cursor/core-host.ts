@@ -4,7 +4,7 @@ import { cursor, type CursorOptions } from "../../../../packages/supermux-core/s
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareCursorEnvironment, sharedCursorDir } from "../../../../packages/supermux-core/src/environment/index.js"
 import { cursorContext } from "../../../../packages/supermux-core/src/context/agents.js"
-import { cursorInstructions } from "./preamble-writer"
+import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
@@ -167,7 +167,6 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
         workdir: extra.workdir,
         mcpServers: [],
         skillsPaths: [],
-        instructions: null,
         // On an account the adapter injects the credential; the session gets no auth.json copy.
         credentials: {
           apiKey: isSystemAccount(registration.account) ? process.env.CURSOR_API_KEY ?? null : null,
@@ -185,7 +184,7 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
       return {
         env: prepared.env,
         context: {
-          instructions: cursorInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
+          instructions: sessionInstructions({ agent: "cursor", sessionName: extra.sessionName, workdir: extra.workdir }),
           plugins: sessionPlugins("cursor", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("cursor", extra.sessionId, extra.sessionName)],
         },

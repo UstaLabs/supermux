@@ -441,7 +441,7 @@ export class SessionManager {
   }
 
   /**
-   * An outbound tool call (reply, react, edit_message, download_attachment) from session
+   * An outbound tool call (attach, react, edit_message, download_attachment) from session
    * `fromSession`. Shared by the external shim's socket and the broker's host MCP server
    * (src/core/mux-tools): the caller's identity is the socket's bound session id or the host
    * server's ctx.sessionId, never anything the agent says.
@@ -456,34 +456,21 @@ export class SessionManager {
       return a ? { channelName: a.channel, chat_id: a.chatId } : { channelName: "", chat_id: rawChatId }
     }
     try {
-      if (op.name === "reply") {
-        const adapter = this.runtimes.get(fromSession)?.adapter
+      if (op.name === "attach") {
+        // Files only, for every agent kind: assistant text is streamed to the user as the
+        // reply, so a text-only call would just duplicate it.
         const files = optionalStringArrayArg(op.args, "files")
-        const hasFiles = !!files?.length
-        // Claude uses reply for all user-facing output. Codex/cursor normally
-        // stream assistant text, but allow reply when delivering outbound files
-        // (e.g. screen recordings) that cannot be attached via the text stream.
-        if (!adapter || (adapter.kind !== "claude" && !hasFiles)) {
-          const kind = adapter?.kind ?? "unknown"
-          const hint = kind === "codex" || kind === "cursor"
-            ? " — use your normal assistant output for text; reply is only for files[]"
-            : ""
-          return { ok: false, error: `reply not allowed from agent kind ${kind}${hint}` }
+        if (!files?.length) {
+          return { ok: false, error: "attach needs files[] — your normal assistant output is already your reply" }
         }
-        // Synchronously await onAssistantMessage so the shim's reply tool
+        // Synchronously await onAssistantMessage so the shim's attach tool
         // call doesn't return until the channel send completes.
-        // NOTE: `chat_id` is deliberately NOT read off op.args. The agent does
-        // not choose the destination — onAssistantMessage resolves it from the
-        // chat this session last heard from. Sessions running an older shim
-        // still send the argument; ignoring it is safe, because that value is
-        // the inbound chat_id, which is exactly what the router returns.
+        // The agent does not choose the destination — onAssistantMessage
+        // resolves it from the chat this session last heard from.
         try {
           const r = await this.ports.outbound.onAssistantMessage(fromSession, {
-            text: stringArg(op.args, "text"),
-            reply_to: optionalStringArg(op.args, "reply_to"),
+            text: optionalStringArg(op.args, "text") ?? "",
             files,
-            format: optionalFormatArg(op.args, "format"),
-            keyboard: optionalStringArrayArg(op.args, "keyboard"),
           })
           if (!r.ok) return { ok: false, error: r.error }
           return { ok: true, value: { message_id: undefined } }

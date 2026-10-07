@@ -102,11 +102,10 @@ function prepareExtra(opts: {
  * separate handle and no pid to track — the row is registered with pid 0 and
  * adapter.stop() is the kill.
  *
- * MCP + skills live in the session-private config.toml (mux-shim). Grok does
- * not take MCP servers inline via ACP session/new. The identity preamble is
- * AGENTS.md in the workdir (git-excluded, override-safe). sessionHome is the
- * redirected HOME plus agent_home for resume. Private-home writes run in the
- * host prepare hook, after admission. */
+ * Instructions, plugins and MCP servers reach grok through the core's session
+ * context (session/new rules, --plugin-dir, ACP mcpServers); nothing is written
+ * to the workdir. sessionHome is the redirected HOME plus agent_home for resume.
+ * Private-home writes run in the host prepare hook, after admission. */
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const base = args.requestedName ?? deriveName(args.workdir)
   const name = args.pa ? base : ensureUnique(base, deps.registry.takenNames())

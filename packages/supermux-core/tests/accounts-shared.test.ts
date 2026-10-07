@@ -214,7 +214,7 @@ test("environment: account mode gives codex and cursor sessions no credential co
   const past = new Date(Date.now() - 60_000)
   await utimes(join(canonicalHome, "auth.json"), past, past)
   const codex = await prepareCodexEnvironment({
-    home, workdir: base, mcpServers: [], skillsPaths: [], instructions: null,
+    home, workdir: base, mcpServers: [], skillsPaths: [],
     credentials: { apiKey: null, canonicalHome, account: true }, nativeMemory: false,
   })
   expect(codex.credentials).toBe("account")
@@ -230,7 +230,7 @@ test("environment: account mode gives codex and cursor sessions no credential co
   await writeFile(join(userCursorDir, "cli-config.json"), "{}")
   const cursorHome = join(base, "cursor-session")
   const cursor = await prepareCursorEnvironment({
-    home: cursorHome, workdir: base, mcpServers: [], skillsPaths: [], instructions: null,
+    home: cursorHome, workdir: base, mcpServers: [], skillsPaths: [],
     credentials: { apiKey: null, userCursorDir, userConfigDir, account: true }, sharedRuntime: null, platform: "linux",
   })
   expect(cursor.credentials).toBe("account")

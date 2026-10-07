@@ -1,9 +1,8 @@
-// C3: Codex instructions. A session created by C3 gets them as thread/start developerInstructions
-// and must have no <CODEX_HOME>/AGENTS.md (Codex re-reads that file on every launch, so a stale
-// one in a reused, name-keyed home would add a second set). A session from before C3 (a native
-// thread / core record without a snapshot) keeps the file, holding its creation snapshot.
+// Codex instructions come only from the session context (thread/start developerInstructions).
+// A <CODEX_HOME>/AGENTS.md left by the pre-C3 broker is removed on every launch: Codex re-reads
+// that file, so it would add a second, stale set of instructions.
 import { afterAll, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 
@@ -44,24 +43,18 @@ test("a new session: developerInstructions, and a stale AGENTS.md in its reused 
   expect(existsSync(join(home, "AGENTS.md"))).toBe(false)
 })
 
-test("a pre-C3 session keeps AGENTS.md with its snapshot, fixed from its first C3 launch on", async () => {
+test("a pre-C3 session's AGENTS.md and marker are removed too", async () => {
   const home = join(root, "agents", "codex", "legacy")
   mkdirSync(home, { recursive: true })
   writeFileSync(join(home, "AGENTS.md"), "what the old broker regenerated on every launch")
+  writeFileSync(join(home, ".supermux-agents-md-session"), "old-1")
   const work = mkdtempSync(join(root, "wd-"))
-  const state = join(root, "state-legacy")
   const opens: Opened[] = []
+  const h = host(join(root, "state-legacy"), opens)
   const extra = { sessionHome: home, sessionName: "legacy", sessionId: "old-1", workdir: work, cwd: work, nativeSessionId: "thread-old" }
-  const first = host(state, opens)
-  await first.register({ id: "old-1", env: {}, extra }).start({ cwd: work, nativeSessionId: "thread-old" })
-  await first.close({ agents: "shutdown" })
-  const snapshot = readFileSync(join(home, "AGENTS.md"), "utf8")
-  expect(snapshot).toContain('"legacy"')
+  await h.register({ id: "old-1", env: {}, extra }).start({ cwd: work, nativeSessionId: "thread-old" })
+  await h.close({ agents: "shutdown" })
   expect(opens[0]!.resumeId).toBe("thread-old")
-  // The broker's text changes later (here: another session name in the header); the file keeps the snapshot.
-  const second = host(state, opens)
-  await second.register({ id: "old-1", env: {}, extra: { ...extra, sessionName: "renamed" } }).start({ cwd: work })
-  await second.close({ agents: "shutdown" })
-  expect(readFileSync(join(home, "AGENTS.md"), "utf8")).toBe(snapshot)
-  expect(opens[1]!.sessionContext!.instructions).toBe(snapshot)
+  expect(existsSync(join(home, "AGENTS.md"))).toBe(false)
+  expect(existsSync(join(home, ".supermux-agents-md-session"))).toBe(false)
 })

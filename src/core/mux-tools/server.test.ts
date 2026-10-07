@@ -76,7 +76,7 @@ describe("mux-shim host server: tool list", () => {
     test(`${agent}: tools/list is exactly the shim's listTools(${agent}) (names, descriptions, JSON schemas)`, async () => {
       const c = await connect(agent, "s1")
       const listed = (await c.request("tools/list")).result.tools
-      expect(listed).toEqual(listTools(agent).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })))
+      expect(listed).toEqual(listTools().map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })))
     })
   }
 
@@ -86,11 +86,13 @@ describe("mux-shim host server: tool list", () => {
     expect(listed).toEqual(RPC_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })))
   })
 
-  test("Claude's reply is the full reply; streamed agents get the files-only description", async () => {
-    const claude = (await (await connect(AgentKind.Claude, "s1")).request("tools/list")).result.tools.find((t: any) => t.name === "reply")
-    const codex = (await (await connect(AgentKind.Codex, "s1")).request("tools/list")).result.tools.find((t: any) => t.name === "reply")
-    expect(claude.description).toStartWith("Send a reply to the user.")
-    expect(codex.description).toStartWith("Deliver a file attachment to the user")
+  test("every agent kind gets the same files-only attach tool and no reply tool", async () => {
+    const claude = (await (await connect(AgentKind.Claude, "s1")).request("tools/list")).result.tools
+    const codex = (await (await connect(AgentKind.Codex, "s1")).request("tools/list")).result.tools
+    expect(claude).toEqual(codex)
+    expect(claude.find((t: any) => t.name === "reply")).toBeUndefined()
+    const attach = claude.find((t: any) => t.name === "attach")
+    expect(attach.inputSchema.required).toEqual(["files"])
   })
 })
 
@@ -112,17 +114,14 @@ describe("mux-shim host server: calls through the shared handlers", () => {
     expect(t.registry.get(t.worker.id)!.name).toBe("Better Name")
   })
 
-  test("reply: Claude text → sent; a streamed agent's text-only reply is refused with the exact text; with files it is sent", async () => {
+  test("attach: files are sent for any agent kind; a call without files is refused with the exact text", async () => {
     const t = setup(); cleanups.push(t.unbind)
-    // The handler reads the session's adapter kind (the runtime registry), as on the socket path.
-    t.m.registerRuntime(t.pa.id, { kind: AgentKind.Claude, adapter: { kind: "claude" } as any })
     const claude = await connect(AgentKind.Claude, t.pa.id)
-    expect(await call(claude, "reply", { text: "hello" })).toEqual({ content: [{ type: "text", text: "sent" }] })
-    t.m.registerRuntime(t.worker.id, { kind: AgentKind.Codex, adapter: { kind: "codex" } as any })
+    expect(await call(claude, "attach", { text: "hello", files: [] })).toEqual({ isError: true, content: [{ type: "text", text: "attach needs files[] — your normal assistant output is already your reply" }] })
+    expect(await call(claude, "attach", { files: ["/tmp/a.png"], text: "cap" })).toEqual({ content: [{ type: "text", text: "sent" }] })
     const codex = await connect(AgentKind.Codex, t.worker.id)
-    expect(await call(codex, "reply", { text: "hi" })).toEqual({ isError: true, content: [{ type: "text", text: "reply not allowed from agent kind codex — use your normal assistant output for text; reply is only for files[]" }] })
-    expect(await call(codex, "reply", { text: "", files: ["/tmp/x.png"] })).toEqual({ content: [{ type: "text", text: "sent" }] })
-    expect(t.replies.map(r => [r.id, r.text, r.files])).toEqual([[t.pa.id, "hello", undefined], [t.worker.id, "", ["/tmp/x.png"]]])
+    expect(await call(codex, "attach", { files: ["/tmp/x.png"] })).toEqual({ content: [{ type: "text", text: "sent" }] })
+    expect(t.replies.map(r => [r.id, r.text, r.files])).toEqual([[t.pa.id, "cap", ["/tmp/a.png"]], [t.worker.id, "", ["/tmp/x.png"]]])
   })
 
   test("an unknown session: the same errors the socket path gives", async () => {
@@ -130,7 +129,6 @@ describe("mux-shim host server: calls through the shared handlers", () => {
     const ghost = await connect(AgentKind.Claude, "no-such-session")
     expect((await call(ghost, "rename_session", { name: "x" })).content[0].text).toBe("unknown session")
     expect((await call(ghost, "spawn_session", { workdir: "/tmp" })).content[0].text).toBe("permission denied (can_orchestrate=false)")
-    expect((await call(ghost, "reply", { text: "x" })).content[0].text).toBe("reply not allowed from agent kind unknown")
   })
 
   test("rpc: resolve settles the request through agentRpc", async () => {
@@ -148,9 +146,9 @@ describe("mux-shim host server: calls through the shared handlers", () => {
 
 describe("result mapping is identical to the external shim's callTool", () => {
   const cases: Array<[string, { ok: boolean; value?: unknown; error?: string }, boolean]> = [
-    ["reply", { ok: true, value: { message_id: undefined } }, false],
-    ["reply", { ok: true, value: { message_id: "42" } }, false],
-    ["reply", { ok: false, error: "no chat" }, false],
+    ["attach", { ok: true, value: { message_id: undefined } }, false],
+    ["attach", { ok: true, value: { message_id: "42" } }, false],
+    ["attach", { ok: false, error: "no chat" }, false],
     ["react", { ok: true, value: { ok: 1 } }, false],
     ["list_sessions", { ok: true, value: [{ name: "a" }] }, false],
     ["kill_session", { ok: true, value: "killed" }, false],
@@ -168,7 +166,7 @@ describe("result mapping is identical to the external shim's callTool", () => {
         orchestration: async (_id, op) => { ops.push(["orchestration", op]); return result },
       })
       cleanups.push(unbind)
-      const args = name === "reply" ? { text: "t" } : name === "react" ? { chat_id: "c", message_id: "m", emoji: "e" } : name === "spawn_session" ? { workdir: "/w" } : name === "kill_session" || name === "mute_session" ? { name: "n", muted: true } : name === "get_active" ? { chat_id: "c" } : name === "resolve" ? { request_id: "r", data: {} } : name === "reject" ? { request_id: "r", error: "e" } : {}
+      const args = name === "attach" ? { files: ["/f"] } : name === "react" ? { chat_id: "c", message_id: "m", emoji: "e" } : name === "spawn_session" ? { workdir: "/w" } : name === "kill_session" || name === "mute_session" ? { name: "n", muted: true } : name === "get_active" ? { chat_id: "c" } : name === "resolve" ? { request_id: "r", data: {} } : name === "reject" ? { request_id: "r", error: "e" } : {}
       const host = await call(await connect(AgentKind.Claude, "s1", rpcOnly), name, args)
       const shimOps: any[] = []
       const shim = await callTool({ name, arguments: args }, {

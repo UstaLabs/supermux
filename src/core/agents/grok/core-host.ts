@@ -4,7 +4,7 @@ import { grok, type GrokOptions } from "../../../../packages/supermux-core/src/a
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareGrokEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
 import { grokContext } from "../../../../packages/supermux-core/src/context/agents.js"
-import { grokInstructions } from "./preamble-writer"
+import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
@@ -119,7 +119,6 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
         workdir: extra.workdir,
         mcpServers: [],
         skillsPaths: [],
-        instructions: null,
         credentials: { canonicalAuthPath: join(HOME, ".grok", "auth.json") },
         autoUpdate: false,
         importClaudeConfig: false,
@@ -128,7 +127,7 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
       return {
         env: prepared.env,
         context: {
-          instructions: grokInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
+          instructions: sessionInstructions({ agent: "grok", sessionName: extra.sessionName, workdir: extra.workdir }),
           plugins: sessionPlugins("grok", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("grok", extra.sessionId, extra.sessionName)],
         },

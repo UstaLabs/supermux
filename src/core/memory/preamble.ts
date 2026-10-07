@@ -3,87 +3,31 @@ import { join } from "path"
 import { getMuxHome, initMux } from "./init"
 import { rebuildIndex } from "./rebuild"
 import type { AgentRole } from "./injector"
-import { buildNamingRule } from "../session-manager/naming"
 
-export function buildMemoryPreamble(role: AgentRole, name?: string, workdir?: string): string {
+function readTrimmed(path: string | undefined): string {
+  return path && existsSync(path) ? readFileSync(path, "utf8").trim() : ""
+}
+
+/**
+ * The memory part of a session's instructions: the live domain index, then (PA only) the soul,
+ * then the workdir's focus. The rules for reading/writing memory live in the agent header and
+ * environment.md; this only carries the data.
+ */
+export function buildMemoryPreamble(role: AgentRole, workdir?: string): string {
   const home = getMuxHome()
   if (!existsSync(join(home, "agents.md"))) initMux(home)
   rebuildIndex(home)
-  const agentsIndex = readFileSync(join(home, "agents.md"), "utf8").trim()
-
-  const lines: string[] = []
-
-  // Identity FIRST, and stated emphatically. Claude's base system prompt says
-  // "You are Claude Code", so without an explicit override it answers "Claude
-  // Code" to "what's your name?". The broker named this session (the user picks
-  // the PA's name in the wizard); make Claude actually own that name. codex/
-  // cursor get their name via buildAgentHeader; Claude only gets this preamble.
-  const named = name ? `"${name}", ` : ""
-  if (name) {
-    lines.push(
-      `Your name is "${name}" — the user chose it for this session. When asked ` +
-        `your name, answer "${name}" (not "Claude" or "Claude Code").`,
-      "",
-    )
-  }
-
-  lines.push("# Shared Memory System", "")
+  const lines = [readFileSync(join(home, "agents.md"), "utf8").trim()]
 
   if (role === "main" || role === "personal_assistant") {
-    lines.push(`You are ${named}the main agent (personal assistant).`)
-  } else {
-    lines.push(`You are ${named}a worker agent.`)
+    // A workdir soul.md overrides the shared one (mux:new-personal-agent writes it).
+    const soul = readTrimmed(workdir && join(workdir, "soul.md")) || readTrimmed(join(home, "soul.md"))
+    if (soul) lines.push("", "# Your soul", "", soul)
+    lines.push("", `As the personal assistant, also read the files in \`${home}/personal/\` for the user's identity and preferences. Workers do not receive these.`)
   }
 
-  lines.push("")
-  lines.push(`Your shared memory lives at \`${home}\`. Available knowledge domains:`)
-  lines.push("")
-  lines.push(agentsIndex)
-  lines.push("")
-  lines.push(
-    `Read \`${home}/domains/<topic>.digest.md\` first for a domain's current ` +
-      `truth (\`<topic>.md\` holds the dated history). Use the \`memory_search\`, ` +
-      `\`find_sessions\`, and \`read_session\` tools to search knowledge and past ` +
-      `sessions. Write durable findings by appending under a ` +
-      `\`## Title (YYYY-MM-DD)\` heading in \`domains/<topic>.md\` (or ` +
-      `\`domains/_inbox.md\` if unsure). Never edit \`*.digest.md\`.`
-  )
-
-  if (role === "main" || role === "personal_assistant") {
-    const workdirSoul = workdir && existsSync(join(workdir, "soul.md"))
-      ? readFileSync(join(workdir, "soul.md"), "utf8").trim()
-      : ""
-    if (workdirSoul) {
-      lines.push("")
-      lines.push(workdirSoul)
-      lines.push("")
-      lines.push(
-        `Also read the files in \`${home}/personal/\` for the user's identity and preferences.`
-      )
-    } else {
-      lines.push("")
-      lines.push(
-        `As the personal assistant, also read \`${home}/soul.md\` and the files in ` +
-          `\`${home}/personal/\` for the user's identity and preferences. ` +
-          `Workers do not receive these.`
-      )
-    }
-  }
-
-  if (workdir && existsSync(join(workdir, "focus.md"))) {
-    const focus = readFileSync(join(workdir, "focus.md"), "utf8").trim()
-    if (focus) {
-      lines.push("")
-      lines.push("# Current Focus")
-      lines.push("")
-      lines.push(focus)
-    }
-  }
-
-  if (role !== "main" && name) {
-    lines.push("")
-    lines.push(buildNamingRule(name))
-  }
+  const focus = readTrimmed(workdir && join(workdir, "focus.md"))
+  if (focus) lines.push("", "# Current Focus", "", focus)
 
   lines.push("")
   return lines.join("\n")

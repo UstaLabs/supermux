@@ -151,6 +151,6 @@ describe("Claude core spawn", () => {
     expect(args).toContain("--strict-mcp-config")
     // The rpc servers are session-context servers (the core adds --mcp-config <ctx>/mcp.json).
     expect(child.opens[0]?.sessionContext?.mcpServers).toEqual([{ name: "mux-rpc", command: "bun", args: ["run", "shim.ts"], env: { MUX_RPC_ONLY: "1" } }])
-    expect(child.claudeCalls[0]?.options.env?.MUX_CORE).toBe("1")
+    expect(child.claudeCalls[0]?.options.env?.MUX_CORE).toBeUndefined()
   })
 })
