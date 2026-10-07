@@ -3,12 +3,37 @@
 // The base is desktop's `shell/DetachedWorkspaceWindow.kt` `WorkspacePanes` — the full `PaneHost`
 // tree with drag/tear-out, the file tab, the add button, the walkthrough wiring and the pending
 // chat view's launcher. Android's tablet workspace was the same thing with fewer affordances, so
-// it simply gained them. Android's PHONE workspace — a flattened `ScrollableTabRow` over the
+// it simply gained them. Android's PHONE workspace — every view behind one count button and a card grid (PhoneTabSwitcher.kt), over the
 // broker's view order, which never PATCHes the layout (D2/D3) — is the Compact branch below.
 //
 // The pane CONTENT is one `ViewHost` call for every width; only the chrome around it differs.
 package dev.supermux.ui.shell
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import kotlinx.coroutines.Job
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.flow.first
+import kotlin.math.abs
+import kotlin.math.sign
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -40,6 +65,13 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.backhandler.BackHandler
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -105,6 +137,7 @@ import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.ui.terminal.liveViewTitle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 
 
@@ -376,14 +409,14 @@ fun WorkspacePanes(
 }
 
 /**
- * The Compact workspace body: every view of the workspace flattened into one scrollable tab row.
+ * The Compact workspace body: every view of the workspace behind one count button and a card grid.
  *
  * Android's `PhoneWorkspace`, unchanged in behaviour — the tab order and the selection come from
  * the BROKER (`workspace.layout` document order + `activeViewId`), and nothing here ever PATCHes a
  * layout: a phone has no splits to describe (D2/D3). The last three visited views stay composed so
  * a WebView or a PTY survives a tab switch.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun PhoneWorkspacePanes(
     current: WorkspaceDto,
@@ -437,89 +470,285 @@ fun PhoneWorkspacePanes(
             bulkQueue.addAll(ids.filterNot { it in bulkQueue })
         }
 
-    Column(modifier.fillMaxSize().testTag("phone_workspace_tabs")) {
+    // The switcher (see PhoneTabSwitcher.kt) replaced the tab strip: the views live behind one
+    // count button, and each card shows the frame its view last drew.
+    var switcherOpen by remember(current.id) { mutableStateOf(false) }
+    val thumbnails = remember(current.id) { mutableStateMapOf<String, ImageBitmap>() }
+    val layers = remember(current.id) { mutableMapOf<String, GraphicsLayer>() }
+    suspend fun snapshot(id: String): ImageBitmap? {
+        val layer = layers[id] ?: return null
+        if (layer.size.width <= 0 || layer.size.height <= 0) return null
+        // Bounded: a thumbnail is a nicety, and a capture that never returns must not hold anything up.
+        return runCatching { withTimeoutOrNull(250) { layer.toImageBitmap() } }
+            .onFailure { println("[PhoneTabSwitcher] snapshot $id failed: $it") }
+            .getOrNull()
+            ?.also { thumbnails[id] = it }
+    }
+    // Snapshots are taken only when the grid opens, of the tab on screen. A capture on LEAVING a
+    // tab came from a view already hidden, which could re-lay itself out (insets) before the
+    // capture — its picture then sat ~50dp off the live view and jumped when the live view took over.
+    LaunchedEffect(tabs.viewIds) { thumbnails.keys.retainAll(tabs.viewIds.toSet()) }
+
+    // Chrome's container transform: opening the grid shrinks the page you were on into its own
+    // card; picking a card grows that card back into the page. Only that one tab moves — the grid
+    // fades in behind it and otherwise holds still. [morph] is the tab in flight; progress 0 is
+    // the full page, 1 is its card's thumbnail.
+    var morph by remember(current.id) { mutableStateOf<TabMorph?>(null) }
+    val morphProgress = remember(current.id) { Animatable(0f) }
+    val morphAlpha = remember(current.id) { Animatable(1f) }
+    val gridAlpha = remember(current.id) { Animatable(0f) }
+    var root by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var page by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val thumbSlots = remember(current.id) { mutableMapOf<String, LayoutCoordinates>() }
+    // The live view under the grid is hidden once something opaque covers it, so a platform view
+    // (iOS UIKitView) can never draw over the grid.
+    var hideUnderGrid by remember(current.id) { mutableStateOf(false) }
+    var morphJob by remember { mutableStateOf<Job?>(null) }
+    // While a picked card grows into the page the grid keeps showing the OLD selection, and the
+    // picked card's own frame is hidden: otherwise its header flips to the selected (teal) fill
+    // the moment the pick lands and flashes behind the growing thumbnail.
+    var picking by remember(current.id) { mutableStateOf<Pair<String, String?>?>(null) }
+
+    // The keyboard belongs to the tab being left: any switch (grid, swipe, or the selection moving
+    // some other way) puts it away and takes focus out of the field so it does not pop back.
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
+    fun dropKeyboard() {
+        focus.clearFocus(force = true)
+        keyboard?.hide()
+    }
+    var keyboardTabSeen by remember(current.id) { mutableStateOf(tabs.selectedId) }
+    LaunchedEffect(tabs.selectedId) {
+        if (tabs.selectedId != keyboardTabSeen) dropKeyboard()
+        keyboardTabSeen = tabs.selectedId
+    }
+
+    fun openSwitcher() {
+        if (switcherOpen || tabs.viewIds.isEmpty()) return
+        dropKeyboard()
+        val id = tabs.selectedId
+        morphJob?.cancel()
+        morphJob = scope.launch {
+            val bmp = id?.let { snapshot(it) }
+            morphProgress.snapTo(0f)
+            morphAlpha.snapTo(1f)
+            gridAlpha.snapTo(0f)
+            if (id != null && bmp != null) morph = TabMorph(id, bmp)
+            switcherOpen = true
+            // The card the page lands in has to be laid out before it can be aimed at.
+            withFrameNanos {}
+            withFrameNanos {}
+            hideUnderGrid = true
+            launch { gridAlpha.animateTo(1f, tween(SWITCHER_FADE_MS)) }
+            if (morph != null) morphProgress.animateTo(1f, tween(SWITCHER_MORPH_MS, easing = FastOutSlowInEasing))
+            morph = null
+        }
+    }
+
+    /** Grow [id]'s card back into the page and leave the grid on it (Done and Back pick the current tab). */
+    fun pickTab(id: String?) {
+        if (!switcherOpen) return
+        if (id != null) picking = id to tabs.selectedId
+        id?.takeIf { it != tabs.selectedId }?.let { app.setActiveView(current.id, it) }
+        morphJob?.cancel()
+        morphJob = scope.launch {
+            val bmp = id?.let { thumbnails[it] }
+            if (id != null && bmp != null && thumbSlots[id]?.isAttached == true) {
+                morph = TabMorph(id, bmp)
+                morphAlpha.snapTo(1f)
+                morphProgress.snapTo(1f)
+                morphProgress.animateTo(0f, tween(SWITCHER_MORPH_MS, easing = FastOutSlowInEasing))
+                // Landed: show the live view under the picture and fade the picture off it, so
+                // whatever changed since the snapshot (a new message) blends in instead of jumping.
+                switcherOpen = false
+                hideUnderGrid = false
+                morphAlpha.animateTo(0f, tween(SWITCHER_HANDOFF_MS))
+            } else {
+                gridAlpha.animateTo(0f, tween(SWITCHER_FADE_MS))
+            }
+            switcherOpen = false
+            hideUnderGrid = false
+            morph = null
+            picking = null
+        }
+    }
+
+    val anyUnread = tabs.viewIds.any { viewsById[it].tabUnread(it == tabs.selectedId, unreadSessions) }
+    val tabsButton = PhoneTabsButton(tabs.viewIds.size, anyUnread) { openSwitcher() }
+    if (switcherOpen && tabs.viewIds.isEmpty()) {
+        switcherOpen = false
+        hideUnderGrid = false
+    }
+    BackHandler(enabled = switcherOpen) { pickTab(tabs.selectedId) }
+
+    // Chrome's tab swipe, over the whole page: a sideways drag moves the page with the finger
+    // while the neighbouring tab slides in beside it. Anything that scrolls sideways itself (a
+    // wide code block, a table, the editor) gets the drag first; only what it leaves over at its
+    // end — the nested-scroll remainder — moves the tab. [swipeX] is the live page's offset;
+    // [swipeTo] the neighbour being revealed; after a committed swipe [handoffId] holds the
+    // neighbour's picture in place while it fades into the live view (as the grid's hand-off does).
+    val swipeX = remember(current.id) { Animatable(0f) }
+    var swipeTo by remember(current.id) { mutableStateOf<String?>(null) }
+    var handoffId by remember(current.id) { mutableStateOf<String?>(null) }
+    val handoffAlpha = remember(current.id) { Animatable(1f) }
+    val selectedNow by rememberUpdatedState(tabs.selectedId)
+    val idsNow by rememberUpdatedState(tabs.viewIds)
+    val pageWidth = { page?.takeIf { it.isAttached }?.size?.width?.toFloat() ?: 0f }
+
+    fun swipeDrag(dx: Float) {
+        val w = pageWidth().takeIf { it > 0f } ?: return
+        val ids = idsNow
+        val idx = ids.indexOf(selectedNow)
+        val next = swipeX.value + dx
+        val neighbour = ids.getOrNull(if (next < 0f) idx + 1 else idx - 1)
+        // Starting: picture the page as it is now, so swiping back to it later has something to show.
+        if (swipeX.value == 0f && swipeTo == null) {
+            dropKeyboard()
+            selectedNow?.let { id -> scope.launch { snapshot(id) } }
+        }
+        swipeTo = neighbour
+        // No tab that way: rubber-band, a quarter of the width at most.
+        val x = if (neighbour == null) (swipeX.value + dx * 0.3f).coerceIn(-w / 4f, w / 4f) else next.coerceIn(-w, w)
+        scope.launch { swipeX.snapTo(x) }
+    }
+
+    fun swipeEnd(velocity: Float) {
+        val w = pageWidth()
+        val target = swipeTo
+        val x = swipeX.value
+        val commit = target != null && w > 0f &&
+            (abs(x) > w * SWIPE_COMMIT_FRACTION || (abs(velocity) > SWIPE_FLING_PX_S && sign(velocity) == sign(x)))
+        scope.launch {
+            if (!commit || target == null) {
+                swipeX.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow))
+                swipeTo = null
+                return@launch
+            }
+            swipeX.animateTo(if (x < 0f) -w else w, tween(SWITCHER_SWIPE_MS, easing = FastOutSlowInEasing), velocity)
+            handoffAlpha.snapTo(1f)
+            handoffId = target
+            app.setActiveView(current.id, target)
+            withTimeoutOrNull(800) { snapshotFlow { selectedNow }.first { it == target } }
+            swipeTo = null
+            swipeX.snapTo(0f)
+            withFrameNanos {}
+            handoffAlpha.animateTo(0f, tween(SWITCHER_HANDOFF_MS))
+            handoffId = null
+        }
+    }
+
+    val density = LocalDensity.current
+    val statusTop = WindowInsets.statusBars.getTop(density).toFloat()
+    val swipeShift = Modifier.graphicsLayer { translationX = swipeX.value }
+    fun canSwipe() = !switcherOpen && morph == null && handoffId == null && idsNow.size > 1
+    // A scrollable that has hit its end hands the rest of the drag up here.
+    val swipeNested = remember(current.id) {
+        object : NestedScrollConnection {
+            var active = false
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // Already mid-swipe: the page takes the drag (both ways) until it is back at rest,
+                // so the child does not start scrolling again under a half-moved page.
+                if (!active || source != NestedScrollSource.UserInput || available.x == 0f) return Offset.Zero
+                swipeDrag(available.x)
+                return Offset(available.x, 0f)
+            }
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput || available.x == 0f) return Offset.Zero
+                if (!active && (!canSwipe() || abs(available.x) < abs(available.y))) return Offset.Zero
+                active = true
+                swipeDrag(available.x)
+                return Offset(available.x, 0f)
+            }
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (!active) return Velocity.Zero
+                active = false
+                swipeEnd(available.x)
+                return Velocity(available.x, 0f)
+            }
+        }
+    }
+
+    Box(modifier.fillMaxSize().onGloballyPositioned { root = it }.testTag("phone_workspace_tabs")) {
+    Column(
+        Modifier.fillMaxSize().pointerInput(current.id) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
+                // Anywhere below the status bar, never while the grid or a morph is up, and only
+                // with somewhere to go. FINAL pass: whatever the page's own content does with the
+                // drag (a scrollable, a text selection, a button) comes first, and only a drag
+                // nobody consumed is a tab swipe.
+                if (!canSwipe() || down.position.y < statusTop) return@awaitEachGesture
+                val slop = viewConfiguration.touchSlop
+                val velocity = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
+                var total = Offset.Zero
+                var dragging = false
+                while (true) {
+                    val change = awaitPointerEvent(PointerEventPass.Final).changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) break
+                    // Someone below owns this drag (it scrolled, or it is selecting text); a
+                    // scrollable at its end reaches the swipe through [swipeNested] instead.
+                    if (!dragging && change.isConsumed) return@awaitEachGesture
+                    val d = change.position - change.previousPosition
+                    total += d
+                    velocity.addPosition(change.uptimeMillis, change.position)
+                    if (!dragging) {
+                        // Clearly sideways, or it is a tap / a vertical scroll and stays theirs.
+                        if (abs(total.x) > slop && abs(total.x) > abs(total.y) * 1.5f) {
+                            dragging = true
+                        } else if (abs(total.y) > slop) {
+                            return@awaitEachGesture
+                        }
+                    }
+                    if (dragging) {
+                        change.consume()
+                        swipeDrag(d.x)
+                    }
+                }
+                if (dragging) swipeEnd(velocity.calculateVelocity().x)
+            }
+        },
+    ) {
+        val selectedView = tabs.selectedId?.let { viewsById[it] }
         if (tabs.viewIds.isNotEmpty()) {
-            // The strip is the TOP-MOST surface on a phone when a workspace has views: the compact
-            // branch of the shell does not pad for the system bars (only the tablet frame does —
-            // "the phone-layer screens do it themselves"), and this strip is a phone-layer screen
-            // that was not doing it. On iOS that put the tab row and its close/add/overflow buttons
-            // underneath the status bar and the Dynamic Island, where they are not merely ugly but
-            // UNTAPPABLE — the island does not forward touches — so a session in a workspace could
-            // be opened and then never left. The pad is on the Row and not the Column so that a
-            // workspace with no strip is unchanged and cannot end up padded twice by the pane
-            // below, which pads for itself.
-            // ONE surface for the whole strip, painted on the Row and BEFORE the inset pad, so it
-            // reaches both the right edge and up under the status bar. Three things were wrong
-            // when this was left to `ScrollableTabRow`'s default container:
-            //
-            //  1. The overflow button is a SIBLING of the tab row, not one of its tabs, so the
-            //     tab row's own background stopped short of it and the button sat on the page
-            //     background — the strip read as a block that did not reach the right edge.
-            //  2. `statusBarsPadding()` was applied outside the coloured area, so the status bar
-            //     kept the page colour and the strip looked like it was floating below it.
-            //  3. `surface` is the `card` token (L 0.995 — effectively white) against an L 0.955
-            //     page. The desktop strip has always used `surfaceContainerLow` (the `chat`
-            //     token); the phone strip only ever used `surface` by not asking.
-            //
-            // `Color.Transparent` on the tab row rather than the same colour, so there is exactly
-            // one painter and the selected-tab indicator cannot end up on a second surface.
-            Row(
+            // The top-most surface pads for the status bar itself (the compact shell does not —
+            // on iOS a bar under the Dynamic Island is UNTAPPABLE). A chat draws its own header
+            // and gets the count button there; every other view gets a slim bar holding it.
+            Column(
                 Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .statusBarsPadding()
-                    .testTag("phone_workspace_tab_strip"),
-                verticalAlignment = Alignment.CenterVertically,
+                    .statusBarsPadding(),
             ) {
-                // Desktop's strip, not M3's `ScrollableTabRow`: one tab component at every width.
-                PaneTabStrip(
-                    viewIds = tabs.viewIds,
-                    activeViewId = tabs.selectedId ?: "",
-                    titleFor = { id -> viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
-                    onSelect = { id -> app.setActiveView(current.id, id) },
-                    onClose = { id -> viewsById[id]?.let { closeOrConfirm(it) } },
-                    modifier = Modifier.weight(1f),
-                    // Touch: long-press a tab for "Move to New Window" (see the wide strip).
-                    tabSlot = { id, state ->
-                        TabLongPressMenu(
-                            enabled = !LocalContextMenuAvailable.current,
-                            itemId = id,
-                            onMoveToNewWindow = windowsSeam?.let { w -> { w.tearOutTab(id) } },
-                            bulkEntries = { bulkEntries(id) },
-                        ) {
-                            RowContextMenu(items = { bulkEntries(id) }) {
-                            DefaultTabChip(
-                                itemId = id,
-                                title = viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
-                                state = state,
-                                dot = if (viewsById[id].tabUnread(state.selected, unreadSessions)) LocalSemantics.current.success else null,
-                                labelFont = MonoFontFamily,
-                                onClose = { vid -> viewsById[vid]?.let { closeOrConfirm(it) } },
-                            )
-                            }
-                        }
-                    },
-                    addSlot = {
-                        // As roomy as a touch tab chip, so the + is as easy to hit as a tab.
-                        Box(
-                            Modifier
-                                .width(64.dp)
-                                .fillMaxHeight()
-                                .clickable { showAdd = true }
-                                .testTag("phone_add_view"),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = "Add view", modifier = Modifier.size(20.dp))
-                        }
-                    },
-                )
+                if (selectedView?.kind != "chat") {
+                    Row(
+                        swipeShift.fillMaxWidth().height(44.dp).padding(start = 16.dp, end = 4.dp)
+                            .testTag("phone_workspace_bar"),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            selectedView.switcherIcon(),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            selectedView?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
+                            fontFamily = MonoFontFamily,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+                        )
+                        PhoneTabCountButton(tabsButton)
+                    }
+                }
             }
         }
         val liveIds = tabs.viewIds.toSet()
         // Keep the last 3 visited views composed (hidden) so WebView/terminal PTY survive tab
         // switches. Evict LRU beyond 3 — more would pin too many WebViews on a phone.
         val retained = rememberVisitedWorkspaces(tabs.selectedId, liveIds, maxSize = 3)
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { page = it }.then(swipeShift).nestedScroll(swipeNested)) {
             if (retained.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("No views", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -528,12 +757,21 @@ fun PhoneWorkspacePanes(
                 retained.forEach { id ->
                     if (viewsById[id] == null) return@forEach
                     key(id) {
+                        val layer = rememberGraphicsLayer()
+                        DisposableEffect(id, layer) {
+                            layers[id] = layer
+                            onDispose { if (layers[id] === layer) layers.remove(id) }
+                        }
                         // KeepAlivePanel (the expect/actual container), NOT the alpha modifier: a
                         // retained pane can hold a platform view the host's compositor draws
                         // OUTSIDE the Compose layer — a `UIKitView`'s child on iOS, a heavyweight
                         // SwingPanel on desktop — and neither is hidden by alpha. The
-                        // Android actual is still exactly the alpha hide this used to be.
-                        KeepAlivePanel(visible = id == tabs.selectedId) {
+                        // Android actual is still exactly the alpha hide this used to be. Hidden
+                        // under the switcher too, for the same reason: a platform view would draw
+                        // over the grid.
+                        KeepAlivePanel(visible = id == tabs.selectedId && !hideUnderGrid) {
+                            CompositionLocalProvider(LocalPhoneTabsButton provides tabsButton) {
+                            Box(Modifier.fillMaxSize().recordInto(layer)) {
                             WorkspacePaneContent(
                                 viewId = id,
                                 hostId = ui.windows.mainHostId,
@@ -550,10 +788,66 @@ fun PhoneWorkspacePanes(
                                 onWalkthroughSessionId = { walkthroughSessionId = it },
                                 onCloseCandidate = { v -> v?.let { closeOrConfirm(it) } },
                             )
+                            }
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+        if (switcherOpen) {
+            PhoneTabSwitcher(
+                viewIds = tabs.viewIds,
+                selectedId = picking?.let { it.second } ?: tabs.selectedId,
+                viewFor = { viewsById[it] },
+                titleFor = { id -> viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
+                unread = { id -> viewsById[id].tabUnread(id == tabs.selectedId, unreadSessions) },
+                thumbnails = thumbnails,
+                onSelect = { id -> pickTab(id) },
+                // The tab in flight is drawn by the morph; its card's own picture waits for it.
+                hiddenThumbId = morph?.id,
+                hiddenCardId = picking?.first,
+                onThumbPlaced = { id, coords -> thumbSlots[id] = coords },
+                modifier = Modifier.graphicsLayer { alpha = gridAlpha.value },
+                onClose = { id -> viewsById[id]?.let { closeOrConfirm(it) } },
+                onAdd = { showAdd = true },
+                onDismiss = { pickTab(tabs.selectedId) },
+                cardMenu = { id, content ->
+                    TabLongPressMenu(
+                        enabled = !LocalContextMenuAvailable.current,
+                        itemId = id,
+                        onMoveToNewWindow = windowsSeam?.let { w -> { w.tearOutTab(id) } },
+                        bulkEntries = { bulkEntries(id) },
+                    ) {
+                        RowContextMenu(items = { bulkEntries(id) }) { content() }
+                    }
+                },
+            )
+        }
+        (swipeTo ?: handoffId)?.let { nid ->
+            val handoff = swipeTo == null
+            SwipeNeighbour(
+                view = viewsById[nid],
+                title = viewsById[nid]?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
+                bitmap = thumbnails[nid],
+                offsetX = {
+                    if (handoff) 0f
+                    else swipeX.value + if (swipeX.value < 0f) pageWidth() else -pageWidth()
+                },
+                alpha = { if (handoff) handoffAlpha.value else 1f },
+            )
+        }
+        morph?.let { m ->
+            TabMorphOverlay(
+                bitmap = m.bitmap,
+                background = MaterialTheme.colorScheme.surfaceContainerLow,
+                alpha = { morphAlpha.value },
+                progress = { morphProgress.value },
+                root = { root },
+                from = { page },
+                to = { thumbSlots[m.id] },
+            )
         }
     }
 
@@ -563,6 +857,8 @@ fun PhoneWorkspacePanes(
                 TextButton(
                     onClick = {
                         showAdd = false
+                        switcherOpen = false
+                        hideUnderGrid = false
                         addPhoneView(current, ws, app, kind)
                     },
                     modifier = Modifier.fillMaxWidth().testTag("tab-add-view-${kind.tag}"),
@@ -590,6 +886,14 @@ fun PhoneWorkspacePanes(
         )
     }
 }
+
+/** Chrome's page ⇄ card morph and the grid's fade, measured off a screen recording of it. */
+private const val SWITCHER_MORPH_MS = 260
+private const val SWITCHER_FADE_MS = 160
+private const val SWITCHER_HANDOFF_MS = 120
+private const val SWITCHER_SWIPE_MS = 200
+private const val SWIPE_COMMIT_FRACTION = 0.33f
+private const val SWIPE_FLING_PX_S = 1200f
 
 /** Phone add: reveal an existing singleton, else post a new view (optimistic, no layout PATCH). */
 internal fun addPhoneView(
@@ -831,7 +1135,7 @@ internal fun Modifier.longPress(key: Any?, onLongPress: () -> Unit): Modifier = 
  * strip's bulk closes. [enabled] false (a host with right-click) is a plain passthrough.
  */
 @Composable
-private fun TabLongPressMenu(
+internal fun TabLongPressMenu(
     enabled: Boolean,
     itemId: String,
     onMoveToNewWindow: (() -> Unit)?,

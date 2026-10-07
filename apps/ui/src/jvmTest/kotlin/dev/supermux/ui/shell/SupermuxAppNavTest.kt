@@ -26,7 +26,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.width
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.navigationevent.NavigationEvent
@@ -373,14 +372,10 @@ class SupermuxAppNavTest {
     }
 
     /**
-     * The phone tab strip is ONE line, with ONE close button per tab.
-     *
-     * M3's `text` + `icon` slots stack vertically, which spent ~72dp of a phone screen and put the
-     * close button ABOVE its own label; the strip moved to the generic `Tab` overload and lays the
-     * title and its close button out itself. Pinned here because that overload also opts out of
-     * `TabBaselineLayout`, so nothing but this file decides the height any more.
+     * A phone workspace has no tab strip: its views live behind ONE count button (Chrome's `[1]`)
+     * in the chat header, which opens the full-screen card grid; tapping a card goes back to it.
      */
-    @Test fun compact_the_workspace_tab_strip_is_one_line_per_tab() = runComposeUiTest {
+    @Test fun compact_the_workspace_tabs_live_behind_a_count_button_and_a_card_grid() = runComposeUiTest {
         val ui = ShellUiState().apply { selectedId = "s1" }
         val app = oneWorkspaceStore()
         setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
@@ -388,13 +383,23 @@ class SupermuxAppNavTest {
         }
         waitForIdle()
 
-        onNodeWithTag("phone_workspace_tab_strip").assertIsDisplayed()
-        // One view in the workspace, so exactly ONE close affordance — the stacked `text` + `icon`
-        // arrangement this replaced drew the close button on a line of its own.
+        onNodeWithTag("phone_workspace_tab_strip").assertDoesNotExist()
+        // A chat draws its own header, so it carries the button and no extra bar is added.
+        onNodeWithTag("phone_workspace_bar").assertDoesNotExist()
+        onNodeWithTag("phone_tabs_button").assertIsDisplayed()
+        onNodeWithTag("phone_tab_switcher").assertDoesNotExist()
+
+        onNodeWithTag("phone_tabs_button").performClick()
+        waitForIdle()
+        onNodeWithTag("phone_tab_switcher").assertIsDisplayed()
+        onNodeWithTag("phone_add_view").assertIsDisplayed()
+        // One view, so one card with exactly one close affordance.
+        onNodeWithTag("tab-card-v1").assertIsDisplayed()
         assertEquals(1, onAllNodesWithContentDescription("Close ", substring = true).fetchSemanticsNodes().size)
-        // One line: 48dp for the tab, plus the status inset, which is 0 in a test window. The
-        // stacked arrangement was ~72dp.
-        assertEquals(48.dp, onNodeWithTag("phone_workspace_tab_strip").getBoundsInRoot().height)
+
+        onNodeWithTag("tab-card-v1").performClick()
+        waitForIdle()
+        onNodeWithTag("phone_tab_switcher").assertDoesNotExist()
     }
 }
 
