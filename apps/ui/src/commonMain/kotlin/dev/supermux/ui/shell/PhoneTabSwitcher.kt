@@ -133,13 +133,15 @@ fun PhoneTabCountButton(button: PhoneTabsButton, modifier: Modifier = Modifier) 
         Box(Modifier.size(22.dp)) {
             Box(
                 Modifier
-                    .offset(x = 5.dp, y = 1.dp)
+                    .offset(x = 7.dp, y = (-1).dp)
                     .size(16.dp)
                     .border(1.25.dp, cs.onSurfaceVariant.copy(alpha = 0.45f), RoundedCornerShape(4.5.dp)),
             )
             Box(
                 Modifier
-                    .offset(x = 1.dp, y = 4.dp)
+                    // Centred in the 22dp box, so the card with the number lines up with the
+                    // row's other icons; the back card is what sticks out (up and right).
+                    .offset(x = 2.dp, y = 2.dp)
                     .size(18.dp)
                     .background(cs.surfaceContainerLow, RoundedCornerShape(5.dp))
                     .border(1.5.dp, cs.onSurface, RoundedCornerShape(5.dp)),
