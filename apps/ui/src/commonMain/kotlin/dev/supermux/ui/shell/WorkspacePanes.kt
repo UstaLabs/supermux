@@ -489,6 +489,10 @@ fun PhoneWorkspacePanes(
     // (iOS UIKitView) can never draw over the grid.
     var hideUnderGrid by remember(current.id) { mutableStateOf(false) }
     var morphJob by remember { mutableStateOf<Job?>(null) }
+    // While a picked card grows into the page the grid keeps showing the OLD selection, and the
+    // picked card's own frame is hidden: otherwise its header flips to the selected (teal) fill
+    // the moment the pick lands and flashes behind the growing thumbnail.
+    var picking by remember(current.id) { mutableStateOf<Pair<String, String?>?>(null) }
 
     fun openSwitcher() {
         if (switcherOpen || tabs.viewIds.isEmpty()) return
@@ -513,6 +517,7 @@ fun PhoneWorkspacePanes(
     /** Grow [id]'s card back into the page and leave the grid on it (Done and Back pick the current tab). */
     fun pickTab(id: String?) {
         if (!switcherOpen) return
+        if (id != null) picking = id to tabs.selectedId
         id?.takeIf { it != tabs.selectedId }?.let { app.setActiveView(current.id, it) }
         morphJob?.cancel()
         morphJob = scope.launch {
@@ -527,6 +532,7 @@ fun PhoneWorkspacePanes(
             switcherOpen = false
             hideUnderGrid = false
             morph = null
+            picking = null
         }
     }
 
@@ -631,7 +637,7 @@ fun PhoneWorkspacePanes(
         if (switcherOpen) {
             PhoneTabSwitcher(
                 viewIds = tabs.viewIds,
-                selectedId = tabs.selectedId,
+                selectedId = picking?.let { it.second } ?: tabs.selectedId,
                 viewFor = { viewsById[it] },
                 titleFor = { id -> viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
                 unread = { id -> viewsById[id].tabUnread(id == tabs.selectedId, unreadSessions) },
@@ -639,6 +645,7 @@ fun PhoneWorkspacePanes(
                 onSelect = { id -> pickTab(id) },
                 // The tab in flight is drawn by the morph; its card's own picture waits for it.
                 hiddenThumbId = morph?.id,
+                hiddenCardId = picking?.first,
                 onThumbPlaced = { id, coords -> thumbSlots[id] = coords },
                 modifier = Modifier.graphicsLayer { alpha = gridAlpha.value },
                 onClose = { id -> viewsById[id]?.let { closeOrConfirm(it) } },

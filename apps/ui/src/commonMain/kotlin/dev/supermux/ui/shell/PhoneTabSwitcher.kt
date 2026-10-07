@@ -216,6 +216,8 @@ internal fun PhoneTabSwitcher(
     cardMenu: @Composable (id: String, content: @Composable () -> Unit) -> Unit,
     /** A card whose picture is drawn elsewhere for now (the tab morphing in or out of it). */
     hiddenThumbId: String? = null,
+    /** A card hidden outright — frame, header and all (the one growing back into the page). */
+    hiddenCardId: String? = null,
     /** Each card's thumbnail slot, so the morph can aim at it. */
     onThumbPlaced: (id: String, coords: LayoutCoordinates) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
@@ -272,6 +274,7 @@ internal fun PhoneTabSwitcher(
                         onOpen = { onSelect(id) },
                         onClose = { onClose(id) },
                         thumbHidden = id == hiddenThumbId,
+                        hidden = id == hiddenCardId,
                         onThumbPlaced = { onThumbPlaced(id, it) },
                         modifier = Modifier.animateItem(),
                     )
@@ -292,6 +295,7 @@ private fun TabCard(
     onOpen: () -> Unit,
     onClose: () -> Unit,
     thumbHidden: Boolean = false,
+    hidden: Boolean = false,
     onThumbPlaced: (LayoutCoordinates) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -312,7 +316,7 @@ private fun TabCard(
                 .fillMaxSize()
                 .offset { IntOffset(swipe.value.roundToInt(), 0) }
                 .graphicsLayer {
-                    alpha = 1f - (abs(swipe.value) / widthPx).coerceIn(0f, 0.8f)
+                    alpha = if (hidden) 0f else 1f - (abs(swipe.value) / widthPx).coerceIn(0f, 0.8f)
                     scaleX = pressScale
                     scaleY = pressScale
                 }
