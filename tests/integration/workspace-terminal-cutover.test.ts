@@ -127,11 +127,24 @@ describe("workspace terminal cutover: every host binds the shared factory", () =
   ]
 
   for (const [host, path] of hosts) {
-    test(`${host} returns SharedTerminal from terminalView()`, () => {
+    test(`${host} binds the shared Ghostty factory in terminalView()`, () => {
       const source = read(path)
       expect(source).toContain("import dev.supermux.ui.terminal.SharedTerminal")
-      expect(source).toMatch(/override fun terminalView\(\)\s*:\s*TerminalViewFactory\s*=\s*SharedTerminal/)
       expect(source).not.toContain("UnavailableTerminalViewFactory")
+      const bound = source.match(/override fun terminalView\(\)\s*:\s*TerminalViewFactory\s*=\s*(\w+)/)?.[1]
+      if (bound === "SharedTerminal") return
+      // The one sanctioned variation: the browser can only read clipboard text inside the user's
+      // own `paste` event, so it binds the SAME factory class with its clipboard swapped and
+      // nothing else — no wasm URL of its own (the package default is already the hashed asset,
+      // see `SharedTerminal`'s KDoc), no other renderer.
+      expect(host).toBe("web")
+      expect(bound).toBeDefined()
+      const ctor = source.match(
+        new RegExp(`val ${bound}\\s*:\\s*TerminalViewFactory\\s*=\\s*GhosttyTerminalViewFactory\\(([^\\n]*)\\)\\s*$`, "m"),
+      )?.[1]
+      expect(ctor).toBeDefined()
+      expect(ctor!.trim()).toMatch(/^clipboardOf\s*=/)
+      expect(ctor).not.toContain("wasmAssetUrl")
     })
   }
 
@@ -257,6 +270,14 @@ describe("workspace terminal cutover: what still uses tmux, and why", () => {
         "scripts/shadow-broker.sh",
         "scripts/test-broker-seed.ts",
         "scripts/test-broker.sh",
+      ]],
+      // The dry run of moving a live host onto the core branch: it reads the `tmux_window_id`
+      // column of a copied database and a `tmux list-windows` capture taken beforehand, and never
+      // runs tmux itself. Agent session records again, seen from an offline script.
+      ["core migration dry run", [
+        "scripts/migration-dry-run/01-migrate-copy.ts",
+        "scripts/migration-dry-run/02-boot-sim.ts",
+        "scripts/migration-dry-run/03-continuation.ts",
       ]],
     ]
     const groupOf = new Map<string, string>()
