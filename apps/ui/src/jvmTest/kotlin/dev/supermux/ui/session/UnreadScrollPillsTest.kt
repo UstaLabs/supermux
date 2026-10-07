@@ -14,6 +14,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.SessionInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -139,6 +140,27 @@ class UnreadScrollPillsTest {
         val row = onNodeWithTag(WorkspaceListTestIds.row("w30"), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val off = kotlin.math.abs(row.center.y - list.center.y)
         assertTrue(off < row.height, "row centre $off px from the list's centre")
+    }
+
+    @Test
+    fun aMutedUnreadSessionShowsNoPill() = runComposeUiTest {
+        setContent {
+            SessionListScreen(
+                modifier = Modifier.height(400.dp),
+                workspaces = ws,
+                sessions = listOf(SessionInfo(id = "s28", name = "Workspace 28", workdir = "/home/u", agent = "claude", mute = true)),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                lastBySession = mapOf(
+                    "s28" to LogEntry(id = "m", ts = "2026-09-21T08:00:00Z", direction = "outbound", text = "hi"),
+                ),
+                lastRead = ws.associate { it.primarySessionId!! to "2026-09-21T07:00:00Z" },
+                initialGroupByProject = false,
+            )
+        }
+        onNodeWithTag(UnreadPillTestIds.ABOVE).assertDoesNotExist()
+        onNodeWithTag(UnreadPillTestIds.BELOW).assertDoesNotExist()
     }
 
     @Test

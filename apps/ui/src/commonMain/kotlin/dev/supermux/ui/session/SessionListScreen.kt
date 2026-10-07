@@ -1177,31 +1177,36 @@ fun SessionListScreen(
 
     // ── Offscreen unread pills ────────────────────────────────────────────────────────────────
     // Row keys of every unread row this list can emit (session rows use several key prefixes, one
-    // per section; workspace rows two). A COLLAPSED project emits no rows, so its header stands in
-    // for them — the pill still counts it, and a tap expands it (see scrollToUnread).
+    // per section; workspace rows two); muted sessions are left out. A COLLAPSED project emits no
+    // rows, so its header stands in for them — the pill still counts it, and a tap expands it (see
+    // scrollToUnread).
     // Row key → dismissal token (key + newest unread message ts): a pill dismissed on this state
     // comes back once the row gets another message.
     val unreadRowTokens: Map<String, String> = remember(
         useWorkspaces, visibleWorkspaces, visibleSessions, lastBySession, lastRead, agentState, activeId,
-        groups, sessionGroups, collapsedPaths,
+        groups, sessionGroups, collapsedPaths, sessionById,
     ) {
+        // A muted session still shows its dot, but never pulls the pills toward it.
+        fun pillUnread(sid: String) = sessionUnread(sid) && sessionById[sid]?.mute != true
+        fun pillWorkspaceUnread(w: WorkspaceDto) =
+            !(openWorkspaceByWorkspaceId && w.id == activeId) && w.chatSessionIds().any(::pillUnread)
         fun token(key: String, sids: List<String>) =
-            "$key@" + sids.filter(::sessionUnread).maxOf { lastBySession[it]?.ts.orEmpty() }
+            "$key@" + sids.filter(::pillUnread).maxOf { lastBySession[it]?.ts.orEmpty() }
         if (useWorkspaces) {
-            val rows = visibleWorkspaces.filter(::workspaceUnread).flatMap { w ->
+            val rows = visibleWorkspaces.filter(::pillWorkspaceUnread).flatMap { w ->
                 listOf("ws:${w.id}", "flat:pa:${w.id}").map { it to token(it, w.chatSessionIds()) }
             }
             val headers = groups.filter { it.key in collapsedPaths }.mapNotNull { g ->
-                val sids = g.workspaces.filter(::workspaceUnread).flatMap { it.chatSessionIds() }
+                val sids = g.workspaces.filter(::pillWorkspaceUnread).flatMap { it.chatSessionIds() }
                 if (sids.isEmpty()) null else "h:${g.key}".let { it to token(it, sids) }
             }
             rows + headers
         } else {
-            val rows = visibleSessions.filter { sessionUnread(it.id) }.flatMap { s ->
+            val rows = visibleSessions.filter { pillUnread(it.id) }.flatMap { s ->
                 UNREAD_SESSION_KEY_PREFIXES.map { p -> (p + s.id).let { it to token(it, listOf(s.id)) } }
             }
             val headers = sessionGroups.filter { it.workdir in collapsedPaths }.mapNotNull { g ->
-                val sids = g.allSessions().map { it.id }.filter(::sessionUnread)
+                val sids = g.allSessions().map { it.id }.filter(::pillUnread)
                 if (sids.isEmpty()) null else "group:header:${g.workdir}".let { it to token(it, sids) }
             }
             rows + headers
