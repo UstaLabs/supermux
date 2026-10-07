@@ -408,6 +408,8 @@ private fun ChatViewPane(
                     )
                 },
                 headerActions = {
+                    // A phone workspace's tab switcher lives here, Chrome-style, beside the ⋮.
+                    LocalPhoneTabsButton.current?.let { PhoneTabCountButton(it) }
                     OverflowMenu(
                         session = session,
                         onRename = { name -> actions.rename(sessionId, name) },

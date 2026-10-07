@@ -3,7 +3,7 @@
 // The base is desktop's `shell/DetachedWorkspaceWindow.kt` `WorkspacePanes` — the full `PaneHost`
 // tree with drag/tear-out, the file tab, the add button, the walkthrough wiring and the pending
 // chat view's launcher. Android's tablet workspace was the same thing with fewer affordances, so
-// it simply gained them. Android's PHONE workspace — a flattened `ScrollableTabRow` over the
+// it simply gained them. Android's PHONE workspace — every view behind one count button and a card grid (PhoneTabSwitcher.kt), over the
 // broker's view order, which never PATCHes the layout (D2/D3) — is the Compact branch below.
 //
 // The pane CONTENT is one `ViewHost` call for every width; only the chrome around it differs.
@@ -40,6 +40,13 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.backhandler.BackHandler
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -105,6 +112,7 @@ import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.ui.terminal.liveViewTitle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 
 
@@ -376,14 +384,14 @@ fun WorkspacePanes(
 }
 
 /**
- * The Compact workspace body: every view of the workspace flattened into one scrollable tab row.
+ * The Compact workspace body: every view of the workspace behind one count button and a card grid.
  *
  * Android's `PhoneWorkspace`, unchanged in behaviour — the tab order and the selection come from
  * the BROKER (`workspace.layout` document order + `activeViewId`), and nothing here ever PATCHes a
  * layout: a phone has no splits to describe (D2/D3). The last three visited views stay composed so
  * a WebView or a PTY survives a tab switch.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun PhoneWorkspacePanes(
     current: WorkspaceDto,
@@ -437,82 +445,71 @@ fun PhoneWorkspacePanes(
             bulkQueue.addAll(ids.filterNot { it in bulkQueue })
         }
 
-    Column(modifier.fillMaxSize().testTag("phone_workspace_tabs")) {
+    // The switcher (see PhoneTabSwitcher.kt) replaced the tab strip: the views live behind one
+    // count button, and each card shows the frame its view last drew.
+    var switcherOpen by remember(current.id) { mutableStateOf(false) }
+    val thumbnails = remember(current.id) { mutableStateMapOf<String, ImageBitmap>() }
+    val layers = remember(current.id) { mutableMapOf<String, GraphicsLayer>() }
+    suspend fun snapshot(id: String) {
+        val layer = layers[id] ?: return
+        if (layer.size.width <= 0 || layer.size.height <= 0) return
+        // Bounded: a thumbnail is a nicety, and a capture that never returns must not hold anything up.
+        runCatching { withTimeoutOrNull(500) { layer.toImageBitmap() } }
+            .onSuccess { bmp -> bmp?.let { thumbnails[id] = it } }
+            .onFailure { println("[PhoneTabSwitcher] snapshot $id failed: $it") }
+    }
+    // The tab being LEFT is still composed (just hidden), and its layer still holds its last frame.
+    var lastSelected by remember(current.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(tabs.selectedId) {
+        lastSelected?.takeIf { it != tabs.selectedId }?.let { snapshot(it) }
+        lastSelected = tabs.selectedId
+    }
+    LaunchedEffect(tabs.viewIds) { thumbnails.keys.retainAll(tabs.viewIds.toSet()) }
+    val anyUnread = tabs.viewIds.any { viewsById[it].tabUnread(it == tabs.selectedId, unreadSessions) }
+    val tabsButton = PhoneTabsButton(tabs.viewIds.size, anyUnread) {
+        // Open first; the hidden view's layer still holds its last frame, so the card catches up.
+        switcherOpen = true
+        tabs.selectedId?.let { id -> scope.launch { snapshot(id) } }
+    }
+    if (switcherOpen && tabs.viewIds.isEmpty()) switcherOpen = false
+    BackHandler(enabled = switcherOpen) { switcherOpen = false }
+
+    Box(modifier.fillMaxSize().testTag("phone_workspace_tabs")) {
+    Column(Modifier.fillMaxSize()) {
+        val selectedView = tabs.selectedId?.let { viewsById[it] }
         if (tabs.viewIds.isNotEmpty()) {
-            // The strip is the TOP-MOST surface on a phone when a workspace has views: the compact
-            // branch of the shell does not pad for the system bars (only the tablet frame does —
-            // "the phone-layer screens do it themselves"), and this strip is a phone-layer screen
-            // that was not doing it. On iOS that put the tab row and its close/add/overflow buttons
-            // underneath the status bar and the Dynamic Island, where they are not merely ugly but
-            // UNTAPPABLE — the island does not forward touches — so a session in a workspace could
-            // be opened and then never left. The pad is on the Row and not the Column so that a
-            // workspace with no strip is unchanged and cannot end up padded twice by the pane
-            // below, which pads for itself.
-            // ONE surface for the whole strip, painted on the Row and BEFORE the inset pad, so it
-            // reaches both the right edge and up under the status bar. Three things were wrong
-            // when this was left to `ScrollableTabRow`'s default container:
-            //
-            //  1. The overflow button is a SIBLING of the tab row, not one of its tabs, so the
-            //     tab row's own background stopped short of it and the button sat on the page
-            //     background — the strip read as a block that did not reach the right edge.
-            //  2. `statusBarsPadding()` was applied outside the coloured area, so the status bar
-            //     kept the page colour and the strip looked like it was floating below it.
-            //  3. `surface` is the `card` token (L 0.995 — effectively white) against an L 0.955
-            //     page. The desktop strip has always used `surfaceContainerLow` (the `chat`
-            //     token); the phone strip only ever used `surface` by not asking.
-            //
-            // `Color.Transparent` on the tab row rather than the same colour, so there is exactly
-            // one painter and the selected-tab indicator cannot end up on a second surface.
-            Row(
+            // The top-most surface pads for the status bar itself (the compact shell does not —
+            // on iOS a bar under the Dynamic Island is UNTAPPABLE). A chat draws its own header
+            // and gets the count button there; every other view gets a slim bar holding it.
+            Column(
                 Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .statusBarsPadding()
-                    .testTag("phone_workspace_tab_strip"),
-                verticalAlignment = Alignment.CenterVertically,
+                    .statusBarsPadding(),
             ) {
-                // Desktop's strip, not M3's `ScrollableTabRow`: one tab component at every width.
-                PaneTabStrip(
-                    viewIds = tabs.viewIds,
-                    activeViewId = tabs.selectedId ?: "",
-                    titleFor = { id -> viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
-                    onSelect = { id -> app.setActiveView(current.id, id) },
-                    onClose = { id -> viewsById[id]?.let { closeOrConfirm(it) } },
-                    modifier = Modifier.weight(1f),
-                    // Touch: long-press a tab for "Move to New Window" (see the wide strip).
-                    tabSlot = { id, state ->
-                        TabLongPressMenu(
-                            enabled = !LocalContextMenuAvailable.current,
-                            itemId = id,
-                            onMoveToNewWindow = windowsSeam?.let { w -> { w.tearOutTab(id) } },
-                            bulkEntries = { bulkEntries(id) },
-                        ) {
-                            RowContextMenu(items = { bulkEntries(id) }) {
-                            DefaultTabChip(
-                                itemId = id,
-                                title = viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
-                                state = state,
-                                dot = if (viewsById[id].tabUnread(state.selected, unreadSessions)) LocalSemantics.current.success else null,
-                                labelFont = MonoFontFamily,
-                                onClose = { vid -> viewsById[vid]?.let { closeOrConfirm(it) } },
-                            )
-                            }
-                        }
-                    },
-                    addSlot = {
-                        // As roomy as a touch tab chip, so the + is as easy to hit as a tab.
-                        Box(
-                            Modifier
-                                .width(64.dp)
-                                .fillMaxHeight()
-                                .clickable { showAdd = true }
-                                .testTag("phone_add_view"),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = "Add view", modifier = Modifier.size(20.dp))
-                        }
-                    },
-                )
+                if (selectedView?.kind != "chat") {
+                    Row(
+                        Modifier.fillMaxWidth().height(44.dp).padding(start = 16.dp, end = 4.dp)
+                            .testTag("phone_workspace_bar"),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            selectedView.switcherIcon(),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            selectedView?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
+                            fontFamily = MonoFontFamily,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+                        )
+                        PhoneTabCountButton(tabsButton)
+                    }
+                }
             }
         }
         val liveIds = tabs.viewIds.toSet()
@@ -528,12 +525,21 @@ fun PhoneWorkspacePanes(
                 retained.forEach { id ->
                     if (viewsById[id] == null) return@forEach
                     key(id) {
+                        val layer = rememberGraphicsLayer()
+                        DisposableEffect(id, layer) {
+                            layers[id] = layer
+                            onDispose { if (layers[id] === layer) layers.remove(id) }
+                        }
                         // KeepAlivePanel (the expect/actual container), NOT the alpha modifier: a
                         // retained pane can hold a platform view the host's compositor draws
                         // OUTSIDE the Compose layer — a `UIKitView`'s child on iOS, a heavyweight
                         // SwingPanel on desktop — and neither is hidden by alpha. The
-                        // Android actual is still exactly the alpha hide this used to be.
-                        KeepAlivePanel(visible = id == tabs.selectedId) {
+                        // Android actual is still exactly the alpha hide this used to be. Hidden
+                        // under the switcher too, for the same reason: a platform view would draw
+                        // over the grid.
+                        KeepAlivePanel(visible = id == tabs.selectedId && !switcherOpen) {
+                            CompositionLocalProvider(LocalPhoneTabsButton provides tabsButton) {
+                            Box(Modifier.fillMaxSize().recordInto(layer)) {
                             WorkspacePaneContent(
                                 viewId = id,
                                 hostId = ui.windows.mainHostId,
@@ -550,10 +556,40 @@ fun PhoneWorkspacePanes(
                                 onWalkthroughSessionId = { walkthroughSessionId = it },
                                 onCloseCandidate = { v -> v?.let { closeOrConfirm(it) } },
                             )
+                            }
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+        if (switcherOpen) {
+            PhoneTabSwitcher(
+                viewIds = tabs.viewIds,
+                selectedId = tabs.selectedId,
+                viewFor = { viewsById[it] },
+                titleFor = { id -> viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
+                unread = { id -> viewsById[id].tabUnread(id == tabs.selectedId, unreadSessions) },
+                thumbnails = thumbnails,
+                onSelect = { id ->
+                    app.setActiveView(current.id, id)
+                    switcherOpen = false
+                },
+                onClose = { id -> viewsById[id]?.let { closeOrConfirm(it) } },
+                onAdd = { showAdd = true },
+                onDismiss = { switcherOpen = false },
+                cardMenu = { id, content ->
+                    TabLongPressMenu(
+                        enabled = !LocalContextMenuAvailable.current,
+                        itemId = id,
+                        onMoveToNewWindow = windowsSeam?.let { w -> { w.tearOutTab(id) } },
+                        bulkEntries = { bulkEntries(id) },
+                    ) {
+                        RowContextMenu(items = { bulkEntries(id) }) { content() }
+                    }
+                },
+            )
         }
     }
 
@@ -563,6 +599,7 @@ fun PhoneWorkspacePanes(
                 TextButton(
                     onClick = {
                         showAdd = false
+                        switcherOpen = false
                         addPhoneView(current, ws, app, kind)
                     },
                     modifier = Modifier.fillMaxWidth().testTag("tab-add-view-${kind.tag}"),
@@ -831,7 +868,7 @@ internal fun Modifier.longPress(key: Any?, onLongPress: () -> Unit): Modifier = 
  * strip's bulk closes. [enabled] false (a host with right-click) is a plain passthrough.
  */
 @Composable
-private fun TabLongPressMenu(
+internal fun TabLongPressMenu(
     enabled: Boolean,
     itemId: String,
     onMoveToNewWindow: (() -> Unit)?,
