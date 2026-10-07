@@ -28,6 +28,10 @@ import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.flow.first
 import kotlin.math.abs
 import kotlin.math.sign
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -560,8 +564,10 @@ fun PhoneWorkspacePanes(
     }
     BackHandler(enabled = switcherOpen) { pickTab(tabs.selectedId) }
 
-    // Chrome's toolbar swipe: drag sideways on the header row and the page follows the finger
-    // while the neighbouring tab slides in beside it. [swipeX] is the live page's offset;
+    // Chrome's tab swipe, over the whole page: a sideways drag moves the page with the finger
+    // while the neighbouring tab slides in beside it. Anything that scrolls sideways itself (a
+    // wide code block, a table, the editor) gets the drag first; only what it leaves over at its
+    // end — the nested-scroll remainder — moves the tab. [swipeX] is the live page's offset;
     // [swipeTo] the neighbour being revealed; after a committed swipe [handoffId] holds the
     // neighbour's picture in place while it fades into the live view (as the grid's hand-off does).
     val swipeX = remember(current.id) { Animatable(0f) }
@@ -578,6 +584,8 @@ fun PhoneWorkspacePanes(
         val idx = ids.indexOf(selectedNow)
         val next = swipeX.value + dx
         val neighbour = ids.getOrNull(if (next < 0f) idx + 1 else idx - 1)
+        // Starting: picture the page as it is now, so swiping back to it later has something to show.
+        if (swipeX.value == 0f && swipeTo == null) selectedNow?.let { id -> scope.launch { snapshot(id) } }
         swipeTo = neighbour
         // No tab that way: rubber-band, a quarter of the width at most.
         val x = if (neighbour == null) (swipeX.value + dx * 0.3f).coerceIn(-w / 4f, w / 4f) else next.coerceIn(-w, w)
@@ -611,25 +619,55 @@ fun PhoneWorkspacePanes(
 
     val density = LocalDensity.current
     val statusTop = WindowInsets.statusBars.getTop(density).toFloat()
-    val swipeZone = with(density) { SWIPE_ZONE.toPx() }
     val swipeShift = Modifier.graphicsLayer { translationX = swipeX.value }
+    fun canSwipe() = !switcherOpen && morph == null && handoffId == null && idsNow.size > 1
+    // A scrollable that has hit its end hands the rest of the drag up here.
+    val swipeNested = remember(current.id) {
+        object : NestedScrollConnection {
+            var active = false
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // Already mid-swipe: the page takes the drag (both ways) until it is back at rest,
+                // so the child does not start scrolling again under a half-moved page.
+                if (!active || source != NestedScrollSource.UserInput || available.x == 0f) return Offset.Zero
+                swipeDrag(available.x)
+                return Offset(available.x, 0f)
+            }
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput || available.x == 0f) return Offset.Zero
+                if (!active && (!canSwipe() || abs(available.x) < abs(available.y))) return Offset.Zero
+                active = true
+                swipeDrag(available.x)
+                return Offset(available.x, 0f)
+            }
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (!active) return Velocity.Zero
+                active = false
+                swipeEnd(available.x)
+                return Velocity(available.x, 0f)
+            }
+        }
+    }
 
     Box(modifier.fillMaxSize().onGloballyPositioned { root = it }.testTag("phone_workspace_tabs")) {
     Column(
         Modifier.fillMaxSize().pointerInput(current.id) {
             awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                // Only from the header row (the chat's title bar or the slim bar), never while
-                // the grid or a morph is up, and only with somewhere to go.
-                if (switcherOpen || morph != null || handoffId != null || idsNow.size < 2) return@awaitEachGesture
-                if (down.position.y < statusTop || down.position.y > statusTop + swipeZone) return@awaitEachGesture
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
+                // Anywhere below the status bar, never while the grid or a morph is up, and only
+                // with somewhere to go. FINAL pass: whatever the page's own content does with the
+                // drag (a scrollable, a text selection, a button) comes first, and only a drag
+                // nobody consumed is a tab swipe.
+                if (!canSwipe() || down.position.y < statusTop) return@awaitEachGesture
                 val slop = viewConfiguration.touchSlop
                 val velocity = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
                 var total = Offset.Zero
                 var dragging = false
                 while (true) {
-                    val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+                    val change = awaitPointerEvent(PointerEventPass.Final).changes.firstOrNull { it.id == down.id } ?: break
                     if (!change.pressed) break
+                    // Someone below owns this drag (it scrolled, or it is selecting text); a
+                    // scrollable at its end reaches the swipe through [swipeNested] instead.
+                    if (!dragging && change.isConsumed) return@awaitEachGesture
                     val d = change.position - change.previousPosition
                     total += d
                     velocity.addPosition(change.uptimeMillis, change.position)
@@ -637,7 +675,6 @@ fun PhoneWorkspacePanes(
                         // Clearly sideways, or it is a tap / a vertical scroll and stays theirs.
                         if (abs(total.x) > slop && abs(total.x) > abs(total.y) * 1.5f) {
                             dragging = true
-                            selectedNow?.let { id -> scope.launch { snapshot(id) } }
                         } else if (abs(total.y) > slop) {
                             return@awaitEachGesture
                         }
@@ -691,7 +728,7 @@ fun PhoneWorkspacePanes(
         // Keep the last 3 visited views composed (hidden) so WebView/terminal PTY survive tab
         // switches. Evict LRU beyond 3 — more would pin too many WebViews on a phone.
         val retained = rememberVisitedWorkspaces(tabs.selectedId, liveIds, maxSize = 3)
-        Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { page = it }.then(swipeShift)) {
+        Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { page = it }.then(swipeShift).nestedScroll(swipeNested)) {
             if (retained.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("No views", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -835,8 +872,6 @@ private const val SWITCHER_MORPH_MS = 260
 private const val SWITCHER_FADE_MS = 160
 private const val SWITCHER_HANDOFF_MS = 120
 private const val SWITCHER_SWIPE_MS = 200
-/** How far down from the status bar a header swipe may start: the 44dp header plus a little. */
-private val SWIPE_ZONE = 52.dp
 private const val SWIPE_COMMIT_FRACTION = 0.33f
 private const val SWIPE_FLING_PX_S = 1200f
 
