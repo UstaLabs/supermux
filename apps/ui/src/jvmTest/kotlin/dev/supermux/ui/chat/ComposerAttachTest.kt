@@ -308,6 +308,30 @@ class ComposerAttachTest {
         onNodeWithTag("composer-send").assertIsEnabled()
     }
 
+    // ── host-owned drop target (the whole chat panel accepts files) ─────────────
+    // A drop the HOST receives (anywhere over the panel) is delivered into the composer's own stage
+    // funnel: a chip appears exactly as for a drop on the card. With no composer listening, deliver
+    // reports false so nothing is silently swallowed.
+    @Test fun dropState_deliver_stagesChipInComposer() = runComposeUiTest {
+        val drop = ComposerDropState()
+        assertFalse(drop.deliver(listOf(picked(tempFile("early.txt")))))
+        setPlatformContent(FakePlatform()) {
+            Composer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, _ -> "file-drop-1" },
+                dropState = drop,
+            )
+        }
+        waitForIdle()
+        runOnIdle { assertTrue(drop.deliver(listOf(picked(tempFile("dropped.txt"))))) }
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("composer-chip").fetchSemanticsNodes().size == 1 }
+    }
+
     // ── externalAttach (M4d-T3, the SM_CHAT_ATTACH headless hook's wiring) ──────
     // Delivering a ComposerExternalAttach drives the SAME stageFiles()+sendWith() funnel a human
     // Attach-then-Send would: a chip appears (Uploading → Done), then the requested text is sent with
