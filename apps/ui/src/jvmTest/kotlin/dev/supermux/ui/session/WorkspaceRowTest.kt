@@ -129,6 +129,8 @@ class WorkspaceRowTest {
         onNodeWithText("Fix it").assertIsDisplayed()
         // The path is the group header's; the row does not repeat it on any host.
         onNodeWithText("…/projects/app").assertDoesNotExist()
+        // Nor the touch card's text git badge: git state is the status rail's colour, as on desktop.
+        onNodeWithText("+2 ·1").assertDoesNotExist()
     }
 
     @Test fun touchRow_overflowMenuOffersRenameAndNewChatHere() = runComposeUiTest {
